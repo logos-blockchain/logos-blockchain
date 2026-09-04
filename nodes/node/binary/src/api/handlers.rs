@@ -10,7 +10,6 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse as _, Response},
 };
-use futures::FutureExt as _;
 use lb_api_service::http::{
     DynError, blend,
     consensus::{self, Cryptarchia, leader::LeaderClaimResponseBody},
@@ -1485,19 +1484,27 @@ where
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
+        + Send
         + Sync
         + Display
         + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
 {
-    let api_blocks =
-        mantle::get_immutable_blocks(&handle, query.slot_from, query.slot_to).map(|blocks| {
-            let api_blocks = blocks?
-                .into_iter()
-                .map(ApiBlockOwned::from)
-                .collect::<Vec<_>>();
-            Ok::<Vec<ApiBlockOwned<Unverified, StandardMode>>, DynError>(api_blocks)
-        });
+    let api_blocks = async {
+        let blocks = mantle::get_immutable_blocks::<
+            SignedOps<Unverified, StandardMode>,
+            StorageBackend,
+            RuntimeServiceId,
+        >(&handle, query.slot_from, query.slot_to)
+        .await?;
+
+        let api_blocks = blocks
+            .into_iter()
+            .map(ApiBlockOwned::from)
+            .collect::<Vec<_>>();
+        Ok::<Vec<ApiBlockOwned<Unverified, StandardMode>>, DynError>(api_blocks)
+    };
     make_request_and_return_response!(api_blocks)
 }
 
