@@ -48,7 +48,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use super::handlers::{
     add_tx, blend_info, blend_pending_transactions, blend_tx, block, block_events,
-    blocks_range_stream, blocks_stream, cryptarchia_headers, cryptarchia_info,
+    blocks_range_stream, blocks_stream, chain_id, cryptarchia_headers, cryptarchia_info,
     cryptarchia_lib_stream, dial_peer, get_gas_prices, get_sdp_declarations, get_sdp_snapshot,
     immutable_blocks, libp2p_info, mantle_metrics, mantle_status, mempool_view, time_info,
     transaction, version, wallet,

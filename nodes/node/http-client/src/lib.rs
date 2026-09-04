@@ -3,7 +3,6 @@ use std::sync::Arc;
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
 pub use lb_chain_service::{ChainServiceInfo, CryptarchiaInfo, PhaseTag, Slot, State};
-pub use lb_core::events::{Event, Events, TxEventPayload};
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
     header::{ContentId, HeaderId},
@@ -14,12 +13,17 @@ use lb_core::{
     proofs::leader_proof::Groth16LeaderProof,
     sdp::{DeclarationId, DeclarationMessage},
 };
+pub use lb_core::{
+    events::{Event, Events, TxEventPayload},
+    mantle::transactions::genesis_tx::ChainId,
+};
 use lb_groth16::fr_to_bytes;
 pub use lb_http_api_common::TimeInfo;
 use lb_http_api_common::{
     MAX_BLOCKS_STREAM_BLOCKS, MAX_BLOCKS_STREAM_CHUNK_SIZE,
     bodies::{
         blend::JoinBlendRequestBody,
+        chain::ChainIdResponseBody,
         mantle::GasPricesResponseBody,
         wallet::{
             balance::WalletBalanceResponseBody,
@@ -30,9 +34,9 @@ use lb_http_api_common::{
     },
     paths::{
         BLEND_DISPERSE_TRANSACTION, BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS,
-        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO,
-        CRYPTARCHIA_LIB_STREAM, LEADER_CLAIM_VOUCHERS, MANTLE_GAS_PRICES, MEMPOOL_ADD_TX,
-        NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
+        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_ID, CHANNEL,
+        CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_CLAIM_VOUCHERS, MANTLE_GAS_PRICES,
+        MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
         wallet::{BALANCE, FUND, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -356,6 +360,17 @@ impl CommonHttpClient {
             .join(NODE_VERSION.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.get::<(), String>(request_url, None).await
+    }
+
+    /// Get the chain ID the node runs on. Fixed by the node's deployment
+    /// settings, so the value never changes for a given node.
+    pub async fn chain_id(&self, base_url: Url) -> Result<ChainId, Error> {
+        let request_url = base_url
+            .join(CHAIN_ID.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), ChainIdResponseBody>(request_url, None)
+            .await
+            .map(|body| body.chain_id)
     }
 
     /// Get consensus info (tip, height, etc.)

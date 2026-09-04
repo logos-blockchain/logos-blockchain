@@ -11,7 +11,7 @@ use lb_core::{
     mantle::{
         NoteId, SignedOps,
         ledger::verification_mode::StandardMode,
-        transactions::{hash::TxHash, states::VerificationState},
+        transactions::{genesis_tx::ChainId, hash::TxHash, states::VerificationState},
     },
     sdp::{Declaration, DeclarationId, Locator},
 };
@@ -71,6 +71,15 @@ impl NodeHttpClient {
             http_client: CommonHttpClient::new(basic_auth),
             timeout: Duration::from_secs(15),
         }
+    }
+
+    /// The chain ID the node was deployed on.
+    pub async fn chain_id(&self) -> Result<ChainId, Error> {
+        self.with_timeout(
+            "Chain ID request",
+            self.http_client.chain_id(self.base_url.clone()),
+        )
+        .await
     }
 
     pub async fn consensus_info(&self) -> Result<ChainServiceInfo, Error> {

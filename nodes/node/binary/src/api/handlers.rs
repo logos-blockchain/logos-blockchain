@@ -41,6 +41,7 @@ use lb_http_api_common::{
     TimeInfo,
     bodies::{
         blend::JoinBlendRequestBody,
+        chain::ChainIdResponseBody,
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
         mantle::GasPricesResponseBody,
         wallet::{
@@ -488,6 +489,26 @@ where
 )]
 pub async fn version() -> Response {
     Json(crate::version::node_version()).into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = paths::CHAIN_ID,
+    responses(
+        (status = 200, description = "The chain this node runs on", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn chain_id() -> Response {
+    let Some(chain_id) = crate::config::deployment::chain_id() else {
+        return ApiError::internal_message("Chain ID has not been recorded for this process")
+            .into_response();
+    };
+
+    Json(ChainIdResponseBody {
+        chain_id: chain_id.clone(),
+    })
+    .into_response()
 }
 
 #[derive(Deserialize)]

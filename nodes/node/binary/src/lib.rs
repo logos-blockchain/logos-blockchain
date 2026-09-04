@@ -139,6 +139,11 @@ pub fn run_node_from_config(
     config: RunConfig,
     handle: Option<runtime::Handle>,
 ) -> Result<Overwatch<RuntimeServiceId>, DynError> {
+    // The chain ID is fixed by the deployment. Record it before the deployment
+    // config is consumed below, so the API and the C bindings can serve it
+    // without a round trip to the chain service.
+    config::deployment::record_chain_id(config.deployment.chain_id());
+
     let blend_rewards_params = config.deployment.blend_reward_params();
 
     // The PoW mining service must use the same acceptance window as consensus;
