@@ -4239,6 +4239,7 @@ dependencies = [
  "logos-blockchain-groth16",
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
+ "logos-blockchain-network-service",
  "logos-blockchain-node",
  "logos-blockchain-pow-service",
  "logos-blockchain-time-service",
