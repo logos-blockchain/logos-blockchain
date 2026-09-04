@@ -3,5 +3,5 @@ entropy_sources:
   - "0000000000000000000000000000000000000000000000000000000000000001"
 
 # === PER-RELEASE: edit on every release ===
-chain_id: "0.2.1"
-genesis_time: "2026-08-05T09:00:00Z"
+chain_id: "0.2.4"
+genesis_time: "2026-09-04T12:30:00Z"
