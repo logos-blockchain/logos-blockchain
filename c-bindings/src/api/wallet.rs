@@ -32,7 +32,7 @@ use lb_node::{
     RuntimeServiceId,
     generic_services::{CryptarchiaService, WalletService as NodeWalletService},
 };
-use lb_wallet_service::{ClaimableVoucherInfo, TipResponse, api::WalletApi};
+use lb_wallet_service::{ClaimableVoucherInfo, TipResponse, UtxoWithKeyId, api::WalletApi};
 use overwatch::services::status::ServiceStatus;
 
 use crate::{
@@ -42,6 +42,7 @@ use crate::{
         types::{
             claimable_vouchers::{ClaimableVoucher, ClaimableVouchers},
             known_addresses::KnownAddresses,
+            leader_aged_notes::{LeaderAgedNote, LeaderAgedNotes},
             value::Value,
             wallet_notes::{WalletNote, WalletNotes},
         },
@@ -587,6 +588,118 @@ pub unsafe extern "C" fn get_wallet_notes(
         )),
         Err(status) => FfiWalletNotesResult::err(status),
     }
+}
+
+/// Gets the wallet notes that are aged enough to take part in the leadership
+/// lottery.
+///
+/// This is a synchronous wrapper around [`WalletApi::get_leader_aged_notes`].
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+/// - `tip`: The header ID to query at, or `None` for the current tip.
+///
+/// # Returns
+///
+/// A [`Result`] containing the resolved tip and the eligible UTXOs on success,
+/// or an [`OperationStatus`] error on failure.
+pub(crate) fn get_leader_aged_notes_sync(
+    node: &LogosBlockchainNode,
+    tip: Option<CoreHeaderId>,
+) -> StatusResult<TipResponse<Vec<UtxoWithKeyId>>> {
+    node.get_runtime_handle().block_on(async {
+        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
+            node.get_overwatch_handle(),
+        )
+        .await;
+        api.get_leader_aged_notes(tip).await.map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Failed to get leader aged notes: {error:?}"),
+            )
+        })
+    })
+}
+
+pub type FfiLeaderAgedNotesResult = FfiStatusResult<LeaderAgedNotes>;
+
+/// Reports which of the wallet's notes are old enough to take part in the
+/// leadership lottery, i.e. whether this node can currently win a slot.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance.
+/// - `optional_tip`: An optional pointer to the header ID to query at. If null,
+///   the current tip is used.
+///
+/// # Returns
+///
+/// A [`FfiLeaderAgedNotesResult`] containing the tip and the eligible notes on
+/// success, or an [`OperationStatus`] error on failure. A successful result
+/// with `len == 0` means the node has no eligible notes at that tip. Note IDs
+/// and public keys are in little-endian format.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. The caller
+/// must ensure that all pointers are valid, and must free the returned
+/// [`LeaderAgedNotes`] with [`free_leader_aged_notes`] exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn get_leader_aged_notes(
+    node: *const LogosBlockchainNode,
+    optional_tip: *const HeaderId,
+) -> FfiLeaderAgedNotesResult {
+    return_error_if_null_pointer!(node);
+    let node = unsafe { &*node };
+    let tip = if optional_tip.is_null() {
+        None
+    } else {
+        Some(CoreHeaderId::from(unsafe { *optional_tip }))
+    };
+
+    let TipResponse { tip, response } =
+        unwrap_or_return_error!(get_leader_aged_notes_sync(node, tip));
+
+    let mut total_value: Value = 0;
+    let notes: Vec<LeaderAgedNote> = response
+        .into_iter()
+        .map(|utxo| {
+            total_value = total_value.saturating_add(utxo.utxo.note.value);
+            LeaderAgedNote {
+                id: fr_to_bytes(utxo.utxo.id().as_fr()),
+                value: utxo.utxo.note.value,
+                public_key: fr_to_bytes(&utxo.utxo.note.pk.into()),
+            }
+        })
+        .collect();
+
+    let len = notes.len();
+    let notes_ptr = Box::leak(notes.into_boxed_slice()).as_mut_ptr();
+
+    FfiLeaderAgedNotesResult::ok(LeaderAgedNotes {
+        tip: tip.into(),
+        notes: notes_ptr,
+        len,
+        total_value,
+    })
+}
+
+/// Frees the memory allocated for a [`LeaderAgedNotes`] structure.
+///
+/// # Safety
+///
+/// This function is unsafe because it reconstructs a boxed slice from a raw
+/// pointer. The caller must only pass values returned by
+/// [`get_leader_aged_notes`] and must call this exactly once per result.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_leader_aged_notes(notes: LeaderAgedNotes) -> OperationStatus {
+    if notes.notes.is_null() {
+        return OperationStatus::OK;
+    }
+    let notes = unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(notes.notes, notes.len)) };
+    drop(notes);
+    OperationStatus::OK
 }
 
 /// Frees the memory allocated for a [`WalletNotes`] structure.

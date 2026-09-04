@@ -1788,7 +1788,9 @@ where
 }
 
 pub mod wallet {
+    use lb_core::mantle::Value;
     use lb_http_api_common::bodies::wallet::{
+        aged_notes::{LeaderAgedNoteResponseBody, LeaderAgedNotesResponseBody},
         fund::{WalletFundRequestBody, WalletFundResponseBody},
         sign::{
             WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody,
@@ -1844,6 +1846,55 @@ pub mod wallet {
             Ok(lb_wallet_service::TipResponse { response: None, .. }) => {
                 ApiError::NotFound("The requested address could not be found in the wallet".into())
                     .into_response()
+            }
+            Err(error) => ApiError::internal(error).into_response(),
+        }
+    }
+
+    #[utoipa::path(
+    get,
+    path = paths::LEADER_AGED_NOTES,
+    responses(
+        (status = 200, description = "Get the wallet notes eligible to lead"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+    )]
+    pub async fn get_leader_aged_notes<WalletService, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Query(query): Query<TipQuery>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData + 'static,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+    {
+        let wallet_relay = match get_relay::<WalletService, _>(&handle).await {
+            Ok(relay) => relay,
+            Err(error) => return error.into_response(),
+        };
+        let wallet_api = WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay);
+
+        match wallet_api.get_leader_aged_notes(query.tip).await {
+            Ok(lb_wallet_service::TipResponse { tip, response }) => {
+                let notes: Vec<_> = response
+                    .into_iter()
+                    .map(|utxo| LeaderAgedNoteResponseBody {
+                        note_id: utxo.utxo.id(),
+                        value: utxo.utxo.note.value,
+                        public_key: utxo.utxo.note.pk,
+                    })
+                    .collect();
+                let total_value = notes
+                    .iter()
+                    .map(|note| note.value)
+                    .fold(0, Value::saturating_add);
+
+                LeaderAgedNotesResponseBody {
+                    tip,
+                    count: notes.len(),
+                    total_value,
+                    notes,
+                }
+                .into_response()
             }
             Err(error) => ApiError::internal(error).into_response(),
         }
