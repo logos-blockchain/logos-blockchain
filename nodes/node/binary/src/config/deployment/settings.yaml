@@ -2,7 +2,7 @@ blend:
   common:
     num_blend_layers: 1
     minimum_network_size: 2
-    protocol_name: /logos-blockchain-testnet-0.2.1/blend/1.0.0
+    protocol_name: /logos-blockchain-testnet-0.2.4/blend/1.0.0
     data_replication_factor: 1
   core:
     scheduler:
@@ -14,9 +14,9 @@ blend:
     normalization_constant: 1.03
     activity_threshold_sensitivity: 1
 network:
-  kademlia_protocol_name: /logos-blockchain-testnet-0.2.1/kad/1.0.0
-  identify_protocol_name: /logos-blockchain-testnet-0.2.1/identify/1.0.0
-  chain_sync_protocol_name: /logos-blockchain-testnet-0.2.1/chainsync/1.0.0
+  kademlia_protocol_name: /logos-blockchain-testnet-0.2.4/kad/1.0.0
+  identify_protocol_name: /logos-blockchain-testnet-0.2.4/identify/1.0.0
+  chain_sync_protocol_name: /logos-blockchain-testnet-0.2.4/chainsync/1.0.0
 cryptarchia:
   epoch_config:
     epoch_stake_distribution_stabilization: 3
@@ -35,13 +35,13 @@ cryptarchia:
     min_stake:
       threshold: 1000000000
       timestamp: 0
-  gossipsub_protocol: /logos-blockchain-testnet-0.2.1/cryptarchia/1.0.0
+  gossipsub_protocol: /logos-blockchain-testnet-0.2.4/cryptarchia/1.0.0
   genesis_block:
     header:
       version: Bedrock
       parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
       slot: 0
-      block_root: '8dfa1c877bdf3d25f91adcc3c910c3b5d3253f369d2cc1df05110c01a32ba3f3'
+      block_root: ee2e7fbfac16bacd8e1b4d51bf9da7587b5e3254d203b5f22a15eb8f79d88649
       proof_of_leadership:
         proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
         entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
@@ -334,7 +334,7 @@ cryptarchia:
         - opcode: 17
           payload:
             channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
-            inscription: '05302e322e3190fb726a2d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a'
+            inscription: '05302e322e34c8b99a6a2d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a'
             parent: '0000000000000000000000000000000000000000000000000000000000000000'
             signer: '0000000000000000000000000000000000000000000000000000000000000000'
         - opcode: 32
@@ -403,4 +403,4 @@ cryptarchia:
 time:
   slot_duration: '1.000000000'
 mempool:
-  pubsub_topic: /logos-blockchain-testnet-0.2.1/mempool/1.0.0
+  pubsub_topic: /logos-blockchain-testnet-0.2.4/mempool/1.0.0
