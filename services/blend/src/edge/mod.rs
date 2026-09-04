@@ -264,7 +264,7 @@ where
                 minimum_network_size: settings.minimum_network_size,
                 time: settings.time,
                 data_replication_factor: settings.data_replication_factor,
-                blend_failure_fallback: settings.blend_failure_fallback,
+                abstain_on_failure: settings.abstain_on_failure,
                 max_blend_delay_in_rounds: settings.max_blend_delay_in_rounds,
             },
             &overwatch_handle,
@@ -363,14 +363,14 @@ where
     // An edge node reaches the same verdict as a core node and reacts the same way,
     // only later: it sees none of the network's traffic, so the deadline is all it
     // has. `None` when the operator has turned the fallback off.
-    let mut failure_detector = if settings.blend_failure_fallback {
+    let mut failure_detector = if settings.abstain_on_failure {
+        None
+    } else {
         Some(FailureDetector::new(
             settings.max_data_message_delay_in_rounds(),
             settings.time.round_duration,
             network_adapter.observe_broadcasts().await,
         ))
-    } else {
-        None
     };
 
     loop {

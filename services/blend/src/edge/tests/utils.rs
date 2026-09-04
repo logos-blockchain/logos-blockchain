@@ -27,7 +27,7 @@ use crate::{
         tests::test_blend_epoch_state,
     },
     message::NetworkMessage,
-    settings::{TimingSettings, max_data_message_delay_in_rounds, round_duration_in_seconds},
+    settings::{TimingSettings, max_data_message_delay_in_rounds},
     test_utils::{
         crypto::mock_blend_proof,
         epoch::OncePolStreamProvider,
@@ -66,11 +66,8 @@ pub const TEST_BLEND_LAYERS: NonZeroU64 = NonZeroU64::new(1).unwrap();
 /// `T_D` for the tests, in rounds: the very derivation the service makes from
 /// the settings above, so the tests wait exactly as long as the code they
 /// exercise and the two cannot drift apart.
-pub const TEST_DELIVERY_DEADLINE: NonZeroU64 = max_data_message_delay_in_rounds(
-    TEST_BLEND_LAYERS,
-    TEST_MAX_BLEND_DELAY,
-    round_duration_in_seconds(TEST_ROUND),
-);
+pub const TEST_DELIVERY_DEADLINE: NonZeroU64 =
+    max_data_message_delay_in_rounds(TEST_BLEND_LAYERS, TEST_MAX_BLEND_DELAY);
 
 pub async fn spawn_run(
     local_node: NodeId,
@@ -145,7 +142,7 @@ pub fn settings(
         minimum_network_size: NonZeroU64::new(minimum_network_size).unwrap(),
         cover: CoverTrafficSettings::default(),
         data_replication_factor: 0,
-        blend_failure_fallback: true,
+        abstain_on_failure: false,
         max_blend_delay_in_rounds: TEST_MAX_BLEND_DELAY,
     }
 }

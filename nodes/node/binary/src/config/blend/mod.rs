@@ -71,7 +71,7 @@ impl ServiceConfig {
                         .rounds_per_epoch(slots_per_epoch, &slot_duration),
                 },
                 data_replication_factor: self.deployment.common.data_replication_factor,
-                blend_failure_fallback: self.user.blend_failure_fallback,
+                abstain_on_failure: self.user.abstain_on_failure,
             },
             core: CoreSettings {
                 backend: Libp2pCoreBlendBackendSettings {

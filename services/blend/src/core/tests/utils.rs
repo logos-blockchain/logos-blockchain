@@ -112,7 +112,7 @@ pub fn settings<BackendSettings>(
         num_blend_layers: NonZeroU64::try_from(1).unwrap(),
         minimum_network_size,
         data_replication_factor,
-        blend_failure_fallback: true,
+        abstain_on_failure: false,
         activity_threshold_sensitivity: 1,
     }
 }

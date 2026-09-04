@@ -254,11 +254,11 @@ pub struct BlendArgs {
     pub blend_secret_key_id: Option<KeyId>,
 
     #[clap(
-        long = "no-blend-fallback",
-        env = "BLEND_NO_FAILURE_FALLBACK",
+        long = "blend-abstain-on-failure",
+        env = "BLEND_ABSTAIN_ON_FAILURE",
         default_value_t = false
     )]
-    pub no_blend_fallback: bool,
+    pub abstain_on_failure: bool,
 }
 
 #[derive(Parser, Debug, Default, Clone, Copy)]
@@ -482,11 +482,11 @@ pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
         blend_addr,
         blend_signing_key_id,
         blend_secret_key_id,
-        no_blend_fallback,
+        abstain_on_failure,
     } = blend_args;
 
-    if no_blend_fallback {
-        blend.disable_blend_failure_fallback();
+    if abstain_on_failure {
+        blend.abstain_on_failure();
     }
 
     if let Some(addr) = blend_addr {
