@@ -56,6 +56,7 @@ macro_rules! api_routes {
             post lb_http_api_common::paths::POW_CLAIM => crate::api::handlers::pow_claim, pow_claim::<PoWService, RuntimeServiceId>;
             get lb_http_api_common::paths::POW_CLAIMABLE_REWARDS => crate::api::handlers::pow_claimable_rewards, pow_claimable_rewards::<PoWService, RuntimeServiceId>;
             get lb_http_api_common::paths::LEADER_CLAIM_VOUCHERS => crate::api::handlers::wallet::get_claimable_vouchers, wallet::get_claimable_vouchers::<WalletService, _>;
+            get lb_http_api_common::paths::LEADER_AGED_NOTES => crate::api::handlers::wallet::get_leader_aged_notes, wallet::get_leader_aged_notes::<WalletService, _>;
             get lb_http_api_common::paths::wallet::BALANCE => crate::api::handlers::wallet::get_balance, wallet::get_balance::<WalletService, _>;
             get lb_http_api_common::paths::MANTLE_GAS_PRICES => crate::api::handlers::get_gas_prices, get_gas_prices::<RuntimeServiceId>;
             post lb_http_api_common::paths::wallet::TRANSACTIONS_TRANSFER_FUNDS => crate::api::handlers::wallet::post_transactions_transfer_funds, wallet::post_transactions_transfer_funds::<WalletService, MempoolStorageAdapter, _>;

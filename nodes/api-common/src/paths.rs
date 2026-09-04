@@ -28,6 +28,7 @@ pub const POW_CLAIM: &str = "/pow/claim";
 pub const POW_CLAIMABLE_REWARDS: &str = "/pow/rewards/claimable";
 pub const LEADER_CLAIM: &str = "/leader/claim";
 pub const LEADER_CLAIM_VOUCHERS: &str = "/leader/claim/vouchers";
+pub const LEADER_AGED_NOTES: &str = "/leader/aged-notes";
 
 // TODO: change prefix to `/chain` since `Block` is defined outside of
 // Cryptarchia

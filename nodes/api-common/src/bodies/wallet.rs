@@ -87,6 +87,73 @@ pub mod claimable_vouchers {
     }
 }
 
+pub mod aged_notes {
+    use axum::{
+        http::StatusCode,
+        response::{IntoResponse, Response},
+    };
+    use lb_core::{
+        header::HeaderId,
+        mantle::{NoteId, Value},
+    };
+    use lb_key_management_system_keys::keys::ZkPublicKey;
+    use lb_log_targets::api;
+    use serde::{Deserialize, Serialize};
+    use tracing::error;
+
+    const LOG_TARGET: &str = api::http::wallet::AGED_NOTES;
+
+    /// One wallet-owned UTXO old enough to take part in the leadership
+    /// lottery.
+    #[derive(Serialize, Deserialize)]
+    pub struct LeaderAgedNoteResponseBody {
+        pub note_id: NoteId,
+        pub value: Value,
+        /// The wallet address holding the note.
+        pub public_key: ZkPublicKey,
+    }
+
+    /// The wallet's UTXOs that are eligible to lead at `tip`.
+    ///
+    /// A note is eligible when it is present in the epoch's aged UTXO
+    /// snapshot — the same stake distribution the leadership proof is built
+    /// against — and its public key is one the wallet holds a key for. An
+    /// empty `notes` means this node cannot win a slot at `tip`: either it
+    /// owns no notes, or none of them have aged into the current epoch's
+    /// snapshot yet.
+    ///
+    /// The set is reported unfiltered. The leader service additionally skips
+    /// the faucet UTXO when a `faucet_pk` is configured, which only matters on
+    /// a faucet node.
+    #[derive(Serialize, Deserialize)]
+    pub struct LeaderAgedNotesResponseBody {
+        pub tip: HeaderId,
+        pub notes: Vec<LeaderAgedNoteResponseBody>,
+        /// Number of eligible notes. `notes.len()`, repeated so a caller can
+        /// answer "am I eligible?" without walking the list.
+        pub count: usize,
+        /// Total value staked across `notes`, saturating.
+        pub total_value: Value,
+    }
+
+    impl IntoResponse for LeaderAgedNotesResponseBody {
+        fn into_response(self) -> Response {
+            let json = serde_json::to_string(&self).unwrap_or_else(|e| {
+                error!(
+                    target: LOG_TARGET,
+                    "LeaderAgedNotesResponseBody serialization failed: {e}"
+                );
+                // We panic here because this should never happen, and if it does, it's a
+                // critical error that we want to be immediately visible during
+                // development and testing.
+                panic!("LeaderAgedNotesResponseBody serialization failed: {e}")
+            });
+
+            (StatusCode::OK, json).into_response()
+        }
+    }
+}
+
 pub mod transfer_funds {
     use axum::{
         http::StatusCode,
