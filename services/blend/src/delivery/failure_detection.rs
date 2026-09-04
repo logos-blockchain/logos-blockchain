@@ -23,7 +23,7 @@ use crate::{
 
 struct BlendedPayloadDetails {
     released_at: Round,
-    broadcasted: bool,
+    delivered: bool,
 }
 
 pub struct FailureDetector {
@@ -66,13 +66,13 @@ impl FailureDetector {
             .and_modify(|blended| blended.released_at = released_at)
             .or_insert(BlendedPayloadDetails {
                 released_at,
-                broadcasted: false,
+                delivered: false,
             });
     }
 
     fn mark_payload_as_delivered(&mut self, payload: &BlendPayload) {
         if let Some(blended) = self.unacknowledged_blended_payloads.get_mut(payload) {
-            blended.broadcasted = true;
+            blended.delivered = true;
         }
     }
 
@@ -92,7 +92,7 @@ impl FailureDetector {
         expired
             .into_iter()
             // Only yield the ones that have not already been seen in the meanwhile.
-            .filter_map(|(payload, blended)| (!blended.broadcasted).then_some(payload))
+            .filter_map(|(payload, blended)| (!blended.delivered).then_some(payload))
             .collect()
     }
 
@@ -100,6 +100,12 @@ impl FailureDetector {
     #[must_use]
     pub fn outstanding_payloads_count(&self) -> usize {
         self.unacknowledged_blended_payloads.len()
+    }
+
+    fn nothing_left_to_broadcast(&self) -> bool {
+        self.unacknowledged_blended_payloads
+            .values()
+            .all(|blended| blended.delivered)
     }
 
     /// Waits out the delivery deadlines this node still owes, broadcasting in
@@ -112,14 +118,12 @@ impl FailureDetector {
     {
         loop {
             let expired = poll_fn(|cx| {
-                if self.unacknowledged_blended_payloads.is_empty() {
+                if self.nothing_left_to_broadcast() {
                     return Poll::Ready(None);
                 }
                 match self.poll_next_unpin(cx) {
                     Poll::Ready(expired) => Poll::Ready(expired),
-                    Poll::Pending if self.unacknowledged_blended_payloads.is_empty() => {
-                        Poll::Ready(None)
-                    }
+                    Poll::Pending if self.nothing_left_to_broadcast() => Poll::Ready(None),
                     Poll::Pending => Poll::Pending,
                 }
             })
@@ -186,6 +190,7 @@ mod tests {
             test_utils::{DEADLINE, ROUND, proposal, transaction, until},
         },
         message::BlendPayload,
+        test_utils::dispatcher::TestPayloadDispatcher,
     };
 
     /// An edge sender, the instant its round clock started, and the handle that
@@ -372,6 +377,31 @@ mod tests {
                 .await
                 .is_empty(),
             "the proposal is on the chain; a later copy of it is not a reason to reveal it"
+        );
+    }
+
+    /// Everything outstanding has been seen on the channel, so nothing is left
+    /// that the wait could hand over: it has no reason to sit out the rounds
+    /// those payloads have left.
+    #[tokio::test(start_paused = true)]
+    async fn waiting_out_the_deadlines_ends_once_nothing_can_be_broadcast() {
+        let (mut detection, start, channel) = watching();
+        let (dispatcher, mut broadcasting_channel) = TestPayloadDispatcher::new();
+        detection.mark_payload_as_blended(proposal());
+        channel.send(proposal()).expect("the watch is listening");
+        // One round in, so the delivery has landed and the deadline has not.
+        assert!(until(&mut detection, start, 1).await.is_empty());
+
+        tokio::time::timeout(
+            ROUND,
+            detection.drain_pending_message_queue::<_, ()>(&dispatcher),
+        )
+        .await
+        .expect("a set of nothing but delivered payloads has nothing left to wait for");
+
+        assert!(
+            broadcasting_channel.dispatched.try_recv().is_err(),
+            "the payload was delivered, so nothing is owed a broadcast in the clear"
         );
     }
 }
