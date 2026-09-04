@@ -131,11 +131,3 @@ where
         self.backend.send(message).await;
     }
 }
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("Network is too small: {0}")]
-    NetworkIsTooSmall(usize),
-    #[error("Local node is a core node")]
-    LocalIsCoreNode,
-}

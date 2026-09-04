@@ -10,7 +10,7 @@ use overwatch::{
 };
 use tracing::{debug, error, info};
 
-use crate::modes::{Error, LOG_TARGET};
+use crate::orchestrator::{Error, LOG_TARGET};
 
 pub struct OnDemandServiceMode<Service, RuntimeServiceId>
 where

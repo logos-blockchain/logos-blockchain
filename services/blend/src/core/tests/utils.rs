@@ -401,13 +401,8 @@ pub fn new_crypto_processor<CorePoQGenerator>(
     MockCoreAndLeaderProofsGenerator,
     MockProofsVerifier,
 > {
-    let minimum_network_size = u64::try_from(epoch_info.membership.size())
-        .expect("membership size must fit into u64")
-        .try_into()
-        .expect("minimum_network_size must be non-zero");
-    CoreCryptographicProcessor::try_new_with_core_condition_check(
+    CoreCryptographicProcessor::new(
         epoch_info.membership.clone(),
-        minimum_network_size,
         settings,
         PoQVerificationInputsMinusSigningKey {
             core: epoch_info.poq_core_public_inputs,
@@ -417,7 +412,6 @@ pub fn new_crypto_processor<CorePoQGenerator>(
         core_poq_generator,
         epoch_info.epoch,
     )
-    .expect("crypto processor must be created successfully")
 }
 
 /// The [`BackendEpochInfo`] the service hands to the backend for an epoch,

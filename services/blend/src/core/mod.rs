@@ -77,6 +77,10 @@ use overwatch::{
 };
 use rand::{RngCore, SeedableRng as _, seq::SliceRandom as _};
 use rand_chacha::ChaCha20Rng;
+use service_components::{
+    BackendSettingsOf, ChainNetworkOfComponents, Components, MempoolOfComponents,
+    NetworkBackendOfComponents, NetworkSettingsOf, RecoveryStateOf,
+};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
@@ -87,14 +91,14 @@ use crate::{
         epoch_stages::{
             retiring::RetiringEpoch,
             running::{
-                Components, CurrentEpoch, CurrentEpochDuringTransition, CurrentEpochEvent,
-                DuringTransitionEvent,
+                Components as EpochComponents, CurrentEpoch, CurrentEpochDuringTransition,
+                CurrentEpochEvent, DuringTransitionEvent,
             },
             transitioning::TransitioningEpoch,
         },
         kms::{KmsPoQAdapter, PreloadKMSBackendCorePoQGenerator},
         processor::{
-            CoreCryptographicProcessor as CurrentEpochCryptographicProcessor, Error,
+            CoreCryptographicProcessor as CurrentEpochCryptographicProcessor,
             ReceiverCryptographicProcessor,
         },
         scheduler::SchedulerWrapper,
@@ -107,6 +111,7 @@ use crate::{
     kms::PreloadKmsService,
     membership::{self, ZkInfo, chain::BlendEpochState},
     message::{BlendPayload, ProcessedMessage, ServiceMessage},
+    mode::Mode,
     pending::{
         EncapsulationResult, LocalEncapsulation, MessageKind, NextLocalMessage, PendingProposals,
         PendingTransactions, next_local_message, resolve_encapsulation,
@@ -118,7 +123,7 @@ pub mod dispatcher;
 pub mod kms;
 pub mod settings;
 
-pub(super) mod service_components;
+pub mod service_components;
 
 mod delivery;
 mod epoch_stages;
@@ -141,130 +146,106 @@ type OldEpochCryptographicProcessor<ProofsVerifier> =
 /// independent of each other. For example, the blend backend can use the
 /// libp2p network stack, while the network adapter can use the other network
 /// backend.
-pub struct BlendService<
-    Backend,
-    NodeId,
-    Dispatcher,
-    SdpService,
-    ProofsGenerator,
-    ProofsVerifier,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
-    StateStorage,
-    RuntimeServiceId,
-> where
-    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
-    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
-    StateStorage: RecoveryBackendTrait<
+pub struct BlendService<Core, RuntimeServiceId>
+where
+    Core: Components<
             RuntimeServiceId,
-            State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
-        > + Send
-        + Sync,
+            Backend: BlendBackend<
+                Core::NodeId,
+                ChaCha20Rng,
+                Core::ProofsVerifier,
+                RuntimeServiceId,
+            >,
+            Dispatcher: PayloadDispatcher<RuntimeServiceId>,
+            StateStorage: RecoveryBackendTrait<
+                RuntimeServiceId,
+                State = RecoveryStateOf<Core, RuntimeServiceId>,
+            > + Send
+                              + Sync,
+        >,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    last_saved_state: Option<ServiceState<Backend::Settings, Dispatcher::Settings>>,
-    _phantom: PhantomData<(
-        Backend,
-        SdpService,
-        ProofsGenerator,
-        TimeBackend,
-        ChainService,
-        PolInfoProvider,
-        StateStorage,
-    )>,
+    last_saved_state: Option<
+        ServiceState<
+            BackendSettingsOf<Core, RuntimeServiceId>,
+            NetworkSettingsOf<Core, RuntimeServiceId>,
+        >,
+    >,
+    _phantom: PhantomData<fn() -> Core>,
 }
 
-impl<
-    Backend,
-    NodeId,
-    Dispatcher,
-    SdpService,
-    ProofsGenerator,
-    ProofsVerifier,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
-    StateStorage,
-    RuntimeServiceId,
-> ServiceData
-    for BlendService<
-        Backend,
-        NodeId,
-        Dispatcher,
-        SdpService,
-        ProofsGenerator,
-        ProofsVerifier,
-        TimeBackend,
-        ChainService,
-        PolInfoProvider,
-        StateStorage,
-        RuntimeServiceId,
-    >
+impl<Core, RuntimeServiceId> ServiceData for BlendService<Core, RuntimeServiceId>
 where
-    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
-    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
-    StateStorage: RecoveryBackendTrait<
+    Core: Components<
             RuntimeServiceId,
-            State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
-        > + Send
-        + Sync,
+            Backend: BlendBackend<
+                Core::NodeId,
+                ChaCha20Rng,
+                Core::ProofsVerifier,
+                RuntimeServiceId,
+            >,
+            Dispatcher: PayloadDispatcher<RuntimeServiceId>,
+            StateStorage: RecoveryBackendTrait<
+                RuntimeServiceId,
+                State = RecoveryStateOf<Core, RuntimeServiceId>,
+            > + Send
+                              + Sync,
+        >,
 {
-    type Settings = StartingBlendConfig<Backend::Settings, Dispatcher::Settings>;
-    type State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>;
-    type StateOperator = RecoveryOperator<StateStorage>;
-    type Message = ServiceMessage<NodeId>;
+    type Settings = StartingBlendConfig<
+        BackendSettingsOf<Core, RuntimeServiceId>,
+        NetworkSettingsOf<Core, RuntimeServiceId>,
+    >;
+    type State = RecoveryStateOf<Core, RuntimeServiceId>;
+    type StateOperator = RecoveryOperator<Core::StateStorage>;
+    type Message = ServiceMessage<Core::NodeId>;
 }
 
 #[async_trait]
-impl<
-    Backend,
-    NodeId,
-    Dispatcher,
-    SdpService,
-    ProofsGenerator,
-    ProofsVerifier,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
-    StateStorage,
-    RuntimeServiceId,
-> ServiceCore<RuntimeServiceId>
-    for BlendService<
-        Backend,
-        NodeId,
-        Dispatcher,
-        SdpService,
-        ProofsGenerator,
-        ProofsVerifier,
-        TimeBackend,
-        ChainService,
-        PolInfoProvider,
-        StateStorage,
-        RuntimeServiceId,
-    >
+impl<Core, RuntimeServiceId> ServiceCore<RuntimeServiceId> for BlendService<Core, RuntimeServiceId>
 where
-    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
-    NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
-    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
-    ProofsGenerator:
-        CoreLeaderAndPowProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
-    SdpService: ServiceData<Message = SdpMessage> + Send,
-    ProofsVerifier: ProofsVerifierTrait + Send + Sync,
-    TimeBackend: lb_time_service::backends::TimeBackend + Send,
-    ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
-    PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
-    StateStorage: RecoveryBackendTrait<
+    Core: Components<
             RuntimeServiceId,
-            State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
-        > + Send
-        + Sync,
-    RuntimeServiceId: AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
-        + AsServiceId<Dispatcher::MempoolService>
-        + AsServiceId<Dispatcher::ChainNetworkService>
-        + AsServiceId<SdpService>
-        + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
-        + AsServiceId<ChainService>
+            NodeId: membership::node_id::TryFrom
+                        + Clone
+                        + Debug
+                        + Send
+                        + Eq
+                        + Hash
+                        + Sync
+                        + 'static,
+            Backend: BlendBackend<
+                Core::NodeId,
+                ChaCha20Rng,
+                Core::ProofsVerifier,
+                RuntimeServiceId,
+            > + Send
+                         + Sync,
+            Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+            ProofsGenerator: CoreLeaderAndPowProofsGenerator<
+                PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>,
+            > + Send,
+            SdpService: ServiceData<Message = SdpMessage> + Send,
+            ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+            TimeBackend: lb_time_service::backends::TimeBackend + Send,
+            ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+            PolInfoProvider: PolInfoProviderTrait<
+                RuntimeServiceId,
+                Stream: Send + Unpin + 'static,
+            > + Send,
+            StateStorage: RecoveryBackendTrait<
+                RuntimeServiceId,
+                State = RecoveryStateOf<Core, RuntimeServiceId>,
+            > + Send
+                              + Sync,
+        >,
+    RuntimeServiceId: AsServiceId<
+            NetworkService<NetworkBackendOfComponents<Core, RuntimeServiceId>, RuntimeServiceId>,
+        > + AsServiceId<MempoolOfComponents<Core, RuntimeServiceId>>
+        + AsServiceId<ChainNetworkOfComponents<Core, RuntimeServiceId>>
+        + AsServiceId<Core::SdpService>
+        + AsServiceId<TimeService<Core::TimeBackend, RuntimeServiceId>>
+        + AsServiceId<Core::ChainService>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
         + AsServiceId<Self>
         + Clone
@@ -325,7 +306,7 @@ where
             Some(Duration::from_mins(1)),
             NetworkService<_, _>,
             TimeService<_, _>,
-            SdpService,
+            Core::SdpService,
             PreloadKmsService<_>
         )
         .await?;
@@ -336,14 +317,14 @@ where
                 .await
                 .expect("Relay with network service should be available.");
             let mempool_relay = overwatch_handle
-                .relay::<Dispatcher::MempoolService>()
+                .relay::<MempoolOfComponents<Core, RuntimeServiceId>>()
                 .await
                 .expect("Relay with mempool service should be available.");
             let chain_network_relay = overwatch_handle
-                .relay::<Dispatcher::ChainNetworkService>()
+                .relay::<ChainNetworkOfComponents<Core, RuntimeServiceId>>()
                 .await
                 .expect("Relay with chain network service should be available.");
-            Dispatcher::new(
+            <Core::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::new(
                 network_relay,
                 mempool_relay,
                 chain_network_relay,
@@ -386,17 +367,21 @@ where
                 .expect("Failed to retrieve non-ephemeral signing key from KMS.")
         };
 
-        let public_epoch_stream =
-            membership::chain::subscribe::<ChainService, NodeId, TimeBackend, RuntimeServiceId>(
-                overwatch_handle,
-                non_ephemeral_signing_key.public_key(),
-                Some(zk_public_key),
-                "blend_core_service",
-            )
-            .await;
+        let public_epoch_stream = membership::chain::subscribe::<
+            Core::ChainService,
+            Core::NodeId,
+            Core::TimeBackend,
+            RuntimeServiceId,
+        >(
+            overwatch_handle,
+            non_ephemeral_signing_key.public_key(),
+            Some(zk_public_key),
+            "blend_core_service",
+        )
+        .await;
 
         let sdp_relay = overwatch_handle
-            .relay::<SdpService>()
+            .relay::<Core::SdpService>()
             .await
             .expect("Relay with SDP service should be available.");
 
@@ -424,11 +409,11 @@ where
             mut backend,
             mut rng,
         ) = initialize::<
-            NodeId,
-            Backend,
-            Dispatcher,
-            ProofsGenerator,
-            ProofsVerifier,
+            Core::NodeId,
+            Core::Backend,
+            Core::Dispatcher,
+            Core::ProofsGenerator,
+            Core::ProofsVerifier,
             KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
             RuntimeServiceId,
         >(
@@ -452,7 +437,8 @@ where
 
         // Initialize more components that can be successfully created after
         // `notify_ready()`.
-        let secret_pol_info_stream = post_initialize::<PolInfoProvider, _>(overwatch_handle).await;
+        let secret_pol_info_stream =
+            post_initialize::<Core::PolInfoProvider, _>(overwatch_handle).await;
 
         let mut blend_messages = backend.listen_to_incoming_messages();
 
@@ -741,9 +727,8 @@ where
         KmsAdapter::CorePoQGenerator,
         ProofsGenerator,
         ProofsVerifier,
-    >::try_new_with_core_condition_check(
+    >::new(
         current_epoch_public_info.membership.clone(),
-        blend_config.minimum_network_size,
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: blend_config.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: blend_config.num_blend_layers,
@@ -752,10 +737,9 @@ where
         },
         current_epoch_poq_verification_inputs,
         current_epoch_core_poq_generator
-            .expect("Core PoQ generator must be present at startup: the proxy service only launches CoreMode when the node is part of the core membership."),
+            .expect("The orchestrator only starts core mode when this node is a core member, so its `PoQ` generator was built."),
         current_epoch_public_info.epoch,
-    )
-    .expect("The initial membership should satisfy the core node condition");
+    );
 
     let message_scheduler = SchedulerWrapper::new_with_initial_messages(
         SchedulerEpochInfo {
@@ -1397,7 +1381,7 @@ async fn rotate<
     RuntimeServiceId,
 >(
     new_epoch_info: MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>,
-    components: Components<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
+    components: EpochComponents<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
     latest_secret_pol_info: &mut Option<PolEpochInfo>,
     blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &mut Backend,
@@ -1762,6 +1746,25 @@ where
                 epoch: new_epoch_info.epoch,
             };
 
+            if Mode::choose(&new_epoch_info.membership, settings.minimum_network_size) != Mode::Core
+            {
+                tracing::info!(target: LOG_TARGET, "New membership no longer calls for core mode. Retiring.");
+                return HandleEpochEventOutput::Retiring {
+                    retiring_epoch: Box::new(RetiringEpoch::new(
+                        TransitioningEpoch::new(
+                            old_cryptographic_processor,
+                            current_scheduler
+                                .rotate_epoch(
+                                    new_scheduler_epoch_info,
+                                    settings.scheduler_settings(),
+                                )
+                                .1,
+                        ),
+                        old_epoch_blending_token_collector,
+                    )),
+                };
+            }
+
             let Some(core_poq_generator) = new_core_poq_generator else {
                 tracing::info!(target: LOG_TARGET, "Local node is not part of new membership. Retiring from core.");
                 return HandleEpochEventOutput::Retiring {
@@ -1780,10 +1783,9 @@ where
                 };
             };
 
-            let new_processor: CurrentEpochCryptographicProcessor<_, _, _, ProofsVerifier> =
-                match CurrentEpochCryptographicProcessor::try_new_with_core_condition_check(
+            let mut new_processor: CurrentEpochCryptographicProcessor<_, _, _, ProofsVerifier> =
+                CurrentEpochCryptographicProcessor::new(
                     new_epoch_info.membership.clone(),
-                    settings.minimum_network_size,
                     EpochCryptographicProcessorSettings {
                         non_ephemeral_encryption_key: settings
                             .non_ephemeral_signing_key
@@ -1795,41 +1797,20 @@ where
                     new_poq_verification_inputs,
                     core_poq_generator,
                     new_epoch_info.epoch,
-                ) {
-                    Ok(mut new_processor) => {
-                        if current_secret_info
-                            .as_ref()
-                            .is_some_and(|secret| secret.epoch == new_epoch_info.epoch)
-                        {
-                            // We consume the stream by `take()`ing only if the epochs match.
-                            let current_secret_info = current_secret_info
-                                .take()
-                                .expect("Secret PoL info presence checked above.");
-                            new_processor.set_epoch_private(
-                                current_secret_info.winning_pol_info_stream,
-                                new_epoch_info.epoch,
-                            );
-                        }
-                        new_processor
-                    }
-                    Err(e @ (Error::LocalIsNotCoreNode | Error::NetworkIsTooSmall(_))) => {
-                        tracing::info!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
-                        return HandleEpochEventOutput::Retiring {
-                            retiring_epoch: Box::new(RetiringEpoch::new(
-                                TransitioningEpoch::new(
-                                    old_cryptographic_processor,
-                                    current_scheduler
-                                        .rotate_epoch(
-                                            new_scheduler_epoch_info,
-                                            settings.scheduler_settings(),
-                                        )
-                                        .1,
-                                ),
-                                old_epoch_blending_token_collector,
-                            )),
-                        };
-                    }
-                };
+                );
+            if current_secret_info
+                .as_ref()
+                .is_some_and(|secret| secret.epoch == new_epoch_info.epoch)
+            {
+                // We consume the stream by `take()`ing only if the epochs match.
+                let current_secret_info = current_secret_info
+                    .take()
+                    .expect("Secret PoL info presence checked above.");
+                new_processor.set_epoch_private(
+                    current_secret_info.winning_pol_info_stream,
+                    new_epoch_info.epoch,
+                );
+            }
 
             let (new_scheduler, old_scheduler) = current_scheduler
                 .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings());

@@ -2,6 +2,7 @@ use ::core::num::NonZeroU64;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    broadcast::settings::StartingBlendConfig as BroadcastConfig,
     core::settings::{SchedulerSettings, StartingBlendConfig as CoreConfig},
     edge::settings::StartingBlendConfig as EdgeConfig,
 };
@@ -105,6 +106,32 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
             // waits out is the one a core node's schedule implies, so it takes the
             // same delay bound the core scheduler is configured with.
             max_blend_delay_in_rounds: delayer.maximum_release_delay_in_rounds,
+        }
+    }
+}
+
+impl<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>
+    From<Settings<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>>
+    for BroadcastConfig<NetworkSettings>
+{
+    fn from(
+        Settings {
+            common:
+                CommonSettings {
+                    minimum_network_size,
+                    time,
+                    non_ephemeral_signing_key_id,
+                    broadcast,
+                    ..
+                },
+            ..
+        }: Settings<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>,
+    ) -> Self {
+        Self {
+            network: broadcast,
+            time,
+            non_ephemeral_signing_key_id,
+            minimum_network_size,
         }
     }
 }

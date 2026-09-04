@@ -1,134 +1,68 @@
 use rand_chacha::ChaCha20Rng;
-use tokio::sync::oneshot;
 
-use crate::{
-    core::{BlendService, backends::BlendBackend, dispatcher::PayloadDispatcher},
-    message::{BlendPayload, NetworkInfo, ServiceMessage},
+use crate::core::{
+    backends::BlendBackend, dispatcher::PayloadDispatcher, state::RecoveryServiceState,
 };
 
-/// Helper trait to help the Blend proxy service rely on the concrete types of
-/// the core Blend service without having to specify all the generics the core
-/// service expects.
-pub trait ServiceComponents<RuntimeServiceId> {
-    type PayloadDispatcher: PayloadDispatcher<RuntimeServiceId>;
-    type BackendSettings;
+pub trait Components<RuntimeServiceId> {
+    /// How this node is identified in a membership.
     type NodeId;
-    type Rng;
+    /// The libp2p behaviour a core node listens and blends with.
+    type Backend;
+    /// Blend's exit door: where a fully decapsulated payload goes.
+    type Dispatcher;
+    /// Where an activity proof is submitted at the end of an epoch.
+    type SdpService;
+    /// Supplies this node's proofs across all three quota branches.
     type ProofsGenerator;
+    /// Checks the proofs on an incoming message. Core-only: no other mode
+    /// receives one.
+    type ProofsVerifier;
+    /// Where slot ticks come from.
+    type TimeBackend;
+    /// Where membership and epoch state come from.
+    type ChainService;
+    /// Where this node's winning-slot `PoL` info comes from.
+    type PolInfoProvider;
+    /// Where the recovery state is persisted between runs.
+    type StateStorage;
 }
 
-impl<
-    Backend,
-    NodeId,
-    Network,
-    SdpAdapter,
-    ProofsGenerator,
-    ProofsVerifier,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
-    StateStorage,
-    RuntimeServiceId,
-> ServiceComponents<RuntimeServiceId>
-    for BlendService<
-        Backend,
-        NodeId,
-        Network,
-        SdpAdapter,
-        ProofsGenerator,
-        ProofsVerifier,
-        TimeBackend,
-        ChainService,
-        PolInfoProvider,
-        StateStorage,
-        RuntimeServiceId,
-    >
-where
-    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
-    Network: PayloadDispatcher<RuntimeServiceId>,
-    StateStorage: lb_services_utils::overwatch::recovery::RecoveryBackend<
-            RuntimeServiceId,
-            State = crate::core::state::RecoveryServiceState<Backend::Settings, Network::Settings>,
-        > + Send
-        + Sync,
-{
-    type PayloadDispatcher = Network;
-    type BackendSettings = Backend::Settings;
-    type NodeId = NodeId;
-    type Rng = ChaCha20Rng;
-    type ProofsGenerator = ProofsGenerator;
-}
-
-pub type NetworkBackendOfService<Service, RuntimeServiceId> =
-    <<Service as ServiceComponents<RuntimeServiceId>>::PayloadDispatcher as PayloadDispatcher<
-        RuntimeServiceId,
-    >>::Backend;
-pub type BlendBackendSettingsOfService<Service, RuntimeServiceId> =
-    <Service as ServiceComponents<RuntimeServiceId>>::BackendSettings;
-
-/// The settings the core service's network adapter needs in order to
-/// republish a message — deployment configuration, never carried in a payload.
-/// The mempool service the core service's dispatcher hands transactions to.
-pub type MempoolOfService<Service, RuntimeServiceId> = <<Service as ServiceComponents<
-    RuntimeServiceId,
->>::PayloadDispatcher as PayloadDispatcher<RuntimeServiceId>>::MempoolService;
-
-pub type ChainNetworkOfService<Service, RuntimeServiceId> = <<Service as ServiceComponents<
-    RuntimeServiceId,
->>::PayloadDispatcher as PayloadDispatcher<RuntimeServiceId>>::ChainNetworkService;
-
-pub type PayloadDispatcherSettingsOfService<Service, RuntimeServiceId> =
-    <<Service as ServiceComponents<RuntimeServiceId>>::PayloadDispatcher as PayloadDispatcher<
+/// The deployment settings the core backend is built from.
+pub type BackendSettingsOf<Core, RuntimeServiceId> =
+    <<Core as Components<RuntimeServiceId>>::Backend as BlendBackend<
+        <Core as Components<RuntimeServiceId>>::NodeId,
+        ChaCha20Rng,
+        <Core as Components<RuntimeServiceId>>::ProofsVerifier,
         RuntimeServiceId,
     >>::Settings;
 
-pub trait MessageComponents<NodeId> {
-    type Payload;
+/// The deployment settings the dispatcher republishes through.
+pub type NetworkSettingsOf<Core, RuntimeServiceId> =
+    <<Core as Components<RuntimeServiceId>>::Dispatcher as PayloadDispatcher<
+        RuntimeServiceId,
+    >>::Settings;
 
-    fn into_payload(self) -> Self::Payload;
+/// The recovery state this service persists, as the storage backend sees it.
+pub type RecoveryStateOf<Core, RuntimeServiceId> = RecoveryServiceState<
+    BackendSettingsOf<Core, RuntimeServiceId>,
+    NetworkSettingsOf<Core, RuntimeServiceId>,
+>;
 
-    /// Try to extract a network info request from the message.
-    /// Returns `Ok(sender)` if the message is a `NetworkInfo` request,
-    /// or `Err(self)` if it is not.
-    fn try_into_network_info_request(
-        self,
-    ) -> Result<oneshot::Sender<Option<NetworkInfo<NodeId>>>, Self>
-    where
-        Self: Sized;
+/// The network backend the dispatcher republishes through.
+pub type NetworkBackendOfComponents<Core, RuntimeServiceId> = <<Core as Components<
+    RuntimeServiceId,
+>>::Dispatcher as PayloadDispatcher<
+    RuntimeServiceId,
+>>::Backend;
 
-    /// Try to extract a pending-transactions request from the message.
-    /// Returns `Ok(sender)` if the message is a pending-transactions request,
-    /// or `Err(self)` if it is not.
-    fn try_into_pending_transactions_request(self) -> Result<oneshot::Sender<Vec<Vec<u8>>>, Self>
-    where
-        Self: Sized;
-}
+/// The mempool service the dispatcher hands transactions to.
+pub type MempoolOfComponents<Core, RuntimeServiceId> =
+    <<Core as Components<RuntimeServiceId>>::Dispatcher as PayloadDispatcher<
+        RuntimeServiceId,
+    >>::MempoolService;
 
-impl<NodeId> MessageComponents<NodeId> for ServiceMessage<NodeId> {
-    type Payload = BlendPayload;
-
-    fn into_payload(self) -> Self::Payload {
-        match self {
-            Self::Blend(message) => message,
-            Self::GetNetworkInfo { .. } | Self::GetPendingTransactions { .. } => {
-                panic!("Request messages should be handled before calling into_payload")
-            }
-        }
-    }
-
-    fn try_into_network_info_request(
-        self,
-    ) -> Result<oneshot::Sender<Option<NetworkInfo<NodeId>>>, Self> {
-        match self {
-            Self::GetNetworkInfo { reply } => Ok(reply),
-            other @ (Self::Blend(_) | Self::GetPendingTransactions { .. }) => Err(other),
-        }
-    }
-
-    fn try_into_pending_transactions_request(self) -> Result<oneshot::Sender<Vec<Vec<u8>>>, Self> {
-        match self {
-            Self::GetPendingTransactions { reply } => Ok(reply),
-            other @ (Self::Blend(_) | Self::GetNetworkInfo { .. }) => Err(other),
-        }
-    }
-}
+/// The chain-network service the dispatcher observes broadcasts through.
+pub type ChainNetworkOfComponents<Core, RuntimeServiceId> = <<Core as Components<
+    RuntimeServiceId,
+>>::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::ChainNetworkService;
