@@ -131,7 +131,9 @@ pub enum LedgerError<Id> {
     MissingTransferGenesis(),
     #[error("Fees don't cover the minimal execution base fee cost")]
     InsufficientExecutionFee,
-    #[error("The execution gas of the block ({gas:?}) exceeds the maximum limit ({limit:?}")]
+    #[error("The execution gas of the transaction ({gas:?}) exceeds the block limit ({limit:?})")]
+    TooMuchTransactionExecutionGas { gas: Gas, limit: Gas },
+    #[error("The execution gas of the block ({gas:?}) exceeds the maximum limit ({limit:?})")]
     TooMuchExecutionGas { gas: Gas, limit: Gas },
     #[error("Storage fees aren't equal to the storage fee of the current epoch")]
     InvalidStoragePrice,
@@ -240,7 +242,143 @@ pub struct LedgerState {
     mantle_ledger: MantleLedger,
 }
 
+/// Block-wide gas and fee totals collected before block finalization.
+#[derive(Clone, Debug)]
+struct BlockTotals {
+    total_execution_gas: Gas,
+    total_storage_gas: Gas,
+    total_fee_burned: GasCost,
+    total_fee_tip: GasCost,
+}
+
+impl Default for BlockTotals {
+    fn default() -> Self {
+        Self {
+            total_execution_gas: 0.into(),
+            total_storage_gas: 0.into(),
+            total_fee_burned: 0.into(),
+            total_fee_tip: 0.into(),
+        }
+    }
+}
+
+impl BlockTotals {
+    fn try_add<Id>(
+        self,
+        execution_gas: Gas,
+        storage_gas: Gas,
+        fee_burned: GasCost,
+        fee_tip: GasCost,
+    ) -> Result<Self, LedgerError<Id>> {
+        if execution_gas > EXECUTION_GAS_LIMIT {
+            return Err(LedgerError::TooMuchTransactionExecutionGas {
+                gas: execution_gas,
+                limit: EXECUTION_GAS_LIMIT,
+            });
+        }
+
+        let total_execution_gas = self.total_execution_gas.checked_add(execution_gas)?;
+        if total_execution_gas > EXECUTION_GAS_LIMIT {
+            return Err(LedgerError::TooMuchExecutionGas {
+                gas: total_execution_gas,
+                limit: EXECUTION_GAS_LIMIT,
+            });
+        }
+
+        Ok(Self {
+            total_execution_gas,
+            total_storage_gas: self.total_storage_gas.checked_add(storage_gas)?,
+            total_fee_burned: self.total_fee_burned.checked_add(fee_burned)?,
+            total_fee_tip: self.total_fee_tip.checked_add(fee_tip)?,
+        })
+    }
+}
+
+/// Ledger state and block-wide accounting while transactions are applied.
+///
+/// Transactions can be attempted incrementally. Block rewards and fee markets
+/// are updated only when [`Self::finish`] is called.
+#[derive(Clone, Debug)]
+pub struct PendingBlockState {
+    ledger_state: LedgerState,
+    gas_prices: GasPrices,
+    totals: BlockTotals,
+}
+
+impl PendingBlockState {
+    /// Returns the ledger state after the transactions accepted so far, before
+    /// block-wide finalization.
+    #[must_use]
+    pub const fn ledger_state(&self) -> &LedgerState {
+        &self.ledger_state
+    }
+
+    /// Attempts to apply one transaction and update the block-wide accounting.
+    pub fn try_apply_transaction<Tx, Id, Profile: GasProfile>(
+        mut self,
+        config: &Config,
+        tx: &Tx,
+    ) -> Result<(Self, Vec<TxEvent>, DeferredZkpVerifications), LedgerError<Id>>
+    where
+        Tx: PreverifiedMantleTransaction + TxGasCalculator<Context = GasPrices> + Clone,
+    {
+        let (ledger_state, balance, events, deferred_zkps) = self
+            .ledger_state
+            .try_apply_tx::<_, _, Profile>(config, tx.clone())?;
+        self.ledger_state = ledger_state;
+
+        let total_gas_cost = tx.total_gas_cost::<Profile>(&self.gas_prices)?;
+        tracing::debug!(
+            target: LOG_TARGET,
+            balance,
+            total_gas_cost = total_gas_cost.into_inner(),
+            storage_gas_price = ?self.gas_prices.storage_gas_price,
+            execution_gas_price = ?self.gas_prices.execution_base_gas_price,
+            "tx balance check"
+        );
+
+        if balance < Balance::from(total_gas_cost.into_inner()) {
+            return Err(LedgerError::InsufficientBalance);
+        }
+
+        let execution_gas = tx.execution_gas_consumption::<Profile>(&self.gas_prices)?;
+        let storage_gas = tx.storage_gas_consumption(&self.gas_prices)?;
+        let fee_burned =
+            GasCost::calculate(execution_gas, self.gas_prices.execution_base_gas_price)?
+                .checked_add(tx.storage_gas_cost(&self.gas_prices)?)?;
+        let fee_tip = GasCost::from(balance as Value).checked_sub(fee_burned)?;
+
+        self.totals = self
+            .totals
+            .try_add(execution_gas, storage_gas, fee_burned, fee_tip)?;
+
+        Ok((self, events, deferred_zkps))
+    }
+
+    /// Applies block-wide rewards and fee-market updates exactly once.
+    pub fn finish<Id>(self) -> Result<LedgerState, LedgerError<Id>> {
+        let mut ledger_state = self
+            .ledger_state
+            .compute_block_rewards(self.totals.total_fee_burned, self.totals.total_fee_tip)?;
+        ledger_state = ledger_state.update_execution_market(self.totals.total_execution_gas);
+        ledger_state = ledger_state.add_storage_gas_consumed(self.totals.total_storage_gas)?;
+        Ok(ledger_state)
+    }
+}
+
 impl LedgerState {
+    /// Starts applying transactions for one block without finalizing after each
+    /// transaction.
+    #[must_use]
+    pub fn begin_pending_block(self) -> PendingBlockState {
+        let gas_prices = self.get_gas_prices();
+        PendingBlockState {
+            ledger_state: self,
+            gas_prices,
+            totals: BlockTotals::default(),
+        }
+    }
+
     fn try_update<Tx, LeaderProof, Id, Profile>(
         self,
         block_id: Id,
@@ -464,81 +602,26 @@ impl LedgerState {
 
     /// Apply the contents of an update to the ledger state.
     pub fn try_apply_contents<Tx, Id, Profile: GasProfile>(
-        mut self,
+        self,
         config: &Config,
         txs: impl Iterator<Item = Tx>,
     ) -> Result<(Self, Vec<TxEvent>, DeferredZkpVerifications), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTransaction + TxGasCalculator<Context = GasPrices> + Clone,
     {
-        let mut total_block_execution_gas: Gas = 0.into();
-        let mut total_block_storage_gas: Gas = 0.into();
-        let mut total_fee_burned: GasCost = 0.into();
-        let mut total_fee_tip: GasCost = 0.into();
+        let mut pending_block_state = self.begin_pending_block();
         let mut tx_events = Vec::new();
         let mut deferred_zkps = DeferredZkpVerifications::new();
 
         for tx in txs {
-            let balance;
-            let events;
-            let deferred;
-            (self, balance, events, deferred) =
-                self.try_apply_tx::<_, _, Profile>(config, tx.clone())?;
+            let (next_pending_block_state, events, deferred) =
+                pending_block_state.try_apply_transaction::<_, Id, Profile>(config, &tx)?;
+            pending_block_state = next_pending_block_state;
             tx_events.extend(events);
             deferred_zkps.extend(deferred);
-
-            let gas_prices = GasPrices {
-                execution_base_gas_price: *self.cryptarchia_ledger.execution_base_fee(),
-                storage_gas_price: *self.cryptarchia_ledger.storage_gas_price(),
-            };
-            // Check the transaction is balanced
-            let total_gas_cost = tx.total_gas_cost::<Profile>(&gas_prices)?;
-            tracing::debug!(
-                target: LOG_TARGET,
-                balance,
-                total_gas_cost = total_gas_cost.into_inner(),
-                storage_gas_price = ?self.cryptarchia_ledger.storage_gas_price(),
-                execution_gas_price = ?self.cryptarchia_ledger.execution_base_fee(),
-                "tx balance check"
-            );
-
-            // Check that the transaction at least pays for the base execution fee and
-            // storage
-            if balance < Balance::from(total_gas_cost.into_inner()) {
-                return Err(LedgerError::InsufficientBalance);
-            }
-
-            // Update the total of fee burned and tipped in the block
-            let tx_fee_burned = GasCost::calculate(
-                tx.execution_gas_consumption::<Profile>(&gas_prices)?,
-                gas_prices.execution_base_gas_price,
-            )?
-            .checked_add(tx.storage_gas_cost(&gas_prices)?)?;
-
-            let tx_fee_tip = GasCost::from(balance as Value).checked_sub(tx_fee_burned)?;
-            total_fee_burned = total_fee_burned.checked_add(tx_fee_burned)?;
-            total_fee_tip = total_fee_tip.checked_add(tx_fee_tip)?;
-            total_block_execution_gas = total_block_execution_gas
-                .checked_add(tx.execution_gas_consumption::<Profile>(&gas_prices)?)?;
-            total_block_storage_gas =
-                total_block_storage_gas.checked_add(tx.storage_gas_consumption(&gas_prices)?)?;
-
-            // Check that the block is not exceeding the Gas limit
-            if total_block_execution_gas > EXECUTION_GAS_LIMIT {
-                return Err(LedgerError::TooMuchExecutionGas {
-                    gas: total_block_execution_gas,
-                    limit: EXECUTION_GAS_LIMIT,
-                });
-            }
         }
-        // Compute Block rewards and give tips
-        self = self.compute_block_rewards(total_fee_burned, total_fee_tip)?;
-        // Update Execution market state
-        self = self.update_execution_market(total_block_execution_gas);
-        // Accumulate storage gas consumed so the storage market can update the
-        // price at the next epoch rotation.
-        self = self.add_storage_gas_consumed(total_block_storage_gas)?;
-        Ok((self, tx_events, deferred_zkps))
+        let ledger_state = pending_block_state.finish()?;
+        Ok((ledger_state, tx_events, deferred_zkps))
     }
 
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config) -> Self {
@@ -1081,6 +1164,111 @@ mod tests {
             .cryptarchia_ledger
             .clone()
             .set_execution_base_fee(new_execution.into());
+    }
+
+    #[test]
+    fn block_totals_distinguish_transaction_and_cumulative_gas_limits() {
+        let oversized_transaction_gas = EXECUTION_GAS_LIMIT.checked_add(1.into()).unwrap();
+        let error = BlockTotals::default()
+            .try_add::<HeaderId>(oversized_transaction_gas, 0.into(), 0.into(), 0.into())
+            .unwrap_err();
+        assert_eq!(
+            error,
+            LedgerError::TooMuchTransactionExecutionGas {
+                gas: oversized_transaction_gas,
+                limit: EXECUTION_GAS_LIMIT,
+            }
+        );
+
+        let totals = BlockTotals::default()
+            .try_add::<HeaderId>(EXECUTION_GAS_LIMIT, 0.into(), 0.into(), 0.into())
+            .unwrap();
+
+        let error = totals
+            .try_add::<HeaderId>(1.into(), 0.into(), 0.into(), 0.into())
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            LedgerError::TooMuchExecutionGas {
+                gas: EXECUTION_GAS_LIMIT.checked_add(1.into()).unwrap(),
+                limit: EXECUTION_GAS_LIMIT,
+            }
+        );
+    }
+
+    #[test]
+    fn pending_block_defers_block_updates_until_finish() {
+        let config = config();
+        let (first_key, first_utxo) = utxo_with_sk();
+        let (second_key, second_utxo) = utxo_with_sk();
+        let first_tx = create_tx(vec![first_utxo.id()], Vec::new(), &[first_key])
+            .preverify()
+            .unwrap();
+        let second_tx = create_tx(vec![second_utxo.id()], Vec::new(), &[second_key])
+            .preverify()
+            .unwrap();
+        let mut ledger = LedgerState::from_utxos([first_utxo, second_utxo], &config);
+        update_ledger_prices(&mut ledger, 1, 1);
+
+        let initial_pending_rewards = ledger.mantle_ledger.leaders.get_pending_rewards();
+        let initial_storage_gas = ledger.cryptarchia_ledger.storage_gas_consumed_in_epoch();
+        let expected_storage_gas = first_tx
+            .storage_gas_consumption(&ledger.get_gas_prices())
+            .unwrap()
+            .checked_add(
+                second_tx
+                    .storage_gas_consumption(&ledger.get_gas_prices())
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let mut pending_block_state = ledger.begin_pending_block();
+        for tx in [&first_tx, &second_tx] {
+            let (next_pending_block_state, _events, _) = pending_block_state
+                .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(&config, tx)
+                .unwrap();
+            assert_eq!(
+                next_pending_block_state
+                    .ledger_state()
+                    .mantle_ledger
+                    .leaders
+                    .get_pending_rewards(),
+                initial_pending_rewards,
+            );
+            assert_eq!(
+                next_pending_block_state
+                    .ledger_state()
+                    .cryptarchia_ledger
+                    .storage_gas_consumed_in_epoch(),
+                initial_storage_gas,
+            );
+            pending_block_state = next_pending_block_state;
+        }
+
+        assert!(
+            !pending_block_state
+                .ledger_state()
+                .latest_utxos()
+                .contains(&first_utxo.id())
+        );
+        assert!(
+            !pending_block_state
+                .ledger_state()
+                .latest_utxos()
+                .contains(&second_utxo.id())
+        );
+
+        let finalized_state = pending_block_state.finish::<HeaderId>().unwrap();
+        assert_eq!(
+            finalized_state
+                .cryptarchia_ledger
+                .storage_gas_consumed_in_epoch(),
+            expected_storage_gas,
+        );
+        assert!(
+            finalized_state.mantle_ledger.leaders.get_pending_rewards() > initial_pending_rewards
+        );
     }
 
     enum Key {
