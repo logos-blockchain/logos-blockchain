@@ -197,7 +197,7 @@ pub enum WalletMsg {
     },
     GetClaimableVouchers {
         tip: Option<HeaderId>,
-        resp_tx: Sender<Result<TipResponse<Vec<ClaimableVoucherInfo>>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<ClaimableVouchersInfo>, WalletServiceError>>,
     },
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
@@ -238,6 +238,36 @@ struct LeaderClaimTxRequest {
 pub struct ClaimableVoucherInfo {
     pub commitment: VoucherCm,
     pub nullifier: VoucherNullifier,
+}
+
+/// The vouchers a wallet can claim right now, and what they are worth.
+#[derive(Debug)]
+pub struct ClaimableVouchersInfo {
+    /// Vouchers with a proven path at the queried tip and no claim already in
+    /// flight. Vouchers reserved by a pending claim are excluded.
+    pub vouchers: Vec<ClaimableVoucherInfo>,
+    /// What a single voucher pays out at the queried tip.
+    ///
+    /// The ledger splits the claimable reward pool evenly across every
+    /// unclaimed voucher on the chain, so this is the same for each of
+    /// `vouchers` and it moves as other leaders claim or as a new epoch adds
+    /// to the pool. It is a snapshot, not a guarantee of what a claim
+    /// submitted now will settle for.
+    pub reward_amount: Value,
+    /// `reward_amount` times the number of claimable `vouchers`: what this
+    /// wallet could claim in total at the queried tip.
+    pub total_claimable: Value,
+}
+
+impl ClaimableVouchersInfo {
+    const fn new(vouchers: Vec<ClaimableVoucherInfo>, reward_amount: Value) -> Self {
+        let total_claimable = reward_amount.saturating_mul(vouchers.len() as Value);
+        Self {
+            vouchers,
+            reward_amount,
+            total_claimable,
+        }
+    }
 }
 
 impl WalletMsg {
@@ -1252,7 +1282,7 @@ where
 
     async fn get_claimable_vouchers(
         tip: Option<HeaderId>,
-        resp_tx: Sender<Result<TipResponse<Vec<ClaimableVoucherInfo>>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<ClaimableVouchersInfo>, WalletServiceError>>,
         state: &ServiceState<'_>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
@@ -1263,16 +1293,31 @@ where
                 return;
             }
         };
+
+        // The per-voucher payout is a property of the ledger at `tip`, not of
+        // the wallet, and it is the same figure the leader claim transaction
+        // is built with.
+        let reward_amount = match Self::ledger_state_at(tip, cryptarchia).await {
+            Ok(ledger_state) => ledger_state.mantle_ledger().leader_reward_amount(),
+            Err(err) => {
+                Self::send_err(resp_tx, err);
+                return;
+            }
+        };
+
         let response = state.claimable_vouchers(tip).map(|vouchers| TipResponse {
             tip,
-            response: vouchers
-                .available
-                .into_iter()
-                .map(|voucher| ClaimableVoucherInfo {
-                    commitment: voucher.commitment,
-                    nullifier: voucher.nullifier,
-                })
-                .collect(),
+            response: ClaimableVouchersInfo::new(
+                vouchers
+                    .available
+                    .into_iter()
+                    .map(|voucher| ClaimableVoucherInfo {
+                        commitment: voucher.commitment,
+                        nullifier: voucher.nullifier,
+                    })
+                    .collect(),
+                reward_amount,
+            ),
         });
 
         if resp_tx.send(response).is_err() {

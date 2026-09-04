@@ -1874,6 +1874,7 @@ pub mod wallet {
         match wallet_api.get_claimable_vouchers(query.tip).await {
             Ok(lb_wallet_service::TipResponse { tip, response }) => {
                 let vouchers = response
+                    .vouchers
                     .into_iter()
                     .map(|voucher| ClaimableVoucherInfoResponseBody {
                         commitment: voucher.commitment,
@@ -1881,7 +1882,13 @@ pub mod wallet {
                     })
                     .collect();
 
-                WalletClaimableVouchersResponseBody { tip, vouchers }.into_response()
+                WalletClaimableVouchersResponseBody {
+                    tip,
+                    vouchers,
+                    reward_amount: response.reward_amount,
+                    total_claimable: response.total_claimable,
+                }
+                .into_response()
             }
             Err(error) => ApiError::internal(error).into_response(),
         }
