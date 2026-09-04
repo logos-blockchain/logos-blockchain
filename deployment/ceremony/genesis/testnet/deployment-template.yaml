@@ -58,9 +58,9 @@ cryptarchia:
       # it from the consensus schedule as `10k`, which is 1200 at
       # `security_param: 120`.
       epoch_reward_genesis: 25000000
-      # A larger seed starts the difficulty *harder*; 0 is the most permissive
-      # start this construction admits.
-      initial_difficulty_seed: 0
+      # Genesis `d_reward`, as the exponent n in p / 2^n — the same form as
+      # the Blend `base_difficulty` above. Fixed by the specification.
+      initial_difficulty: 26
       ema_smoothing_factor: 9
       ema_smoothing_precision: 10
       # One claim per block: claims are transactions, and the per-block
