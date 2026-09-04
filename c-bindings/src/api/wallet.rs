@@ -32,7 +32,7 @@ use lb_node::{
     RuntimeServiceId,
     generic_services::{CryptarchiaService, WalletService as NodeWalletService},
 };
-use lb_wallet_service::{ClaimableVoucherInfo, TipResponse, api::WalletApi};
+use lb_wallet_service::{ClaimableVouchersInfo, TipResponse, api::WalletApi};
 use overwatch::services::status::ServiceStatus;
 
 use crate::{
@@ -264,7 +264,7 @@ pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) -> Oper
 pub(crate) fn get_claimable_vouchers_sync(
     node: &LogosBlockchainNode,
     tip: Option<CoreHeaderId>,
-) -> StatusResult<TipResponse<Vec<ClaimableVoucherInfo>>> {
+) -> StatusResult<TipResponse<ClaimableVouchersInfo>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         if let Err(status) = node
@@ -321,8 +321,12 @@ pub unsafe extern "C" fn get_claimable_vouchers(
     };
 
     let response = unwrap_or_return_error!(get_claimable_vouchers_sync(node, tip));
-    let vouchers: Vec<ClaimableVoucher> = response
-        .response
+    let TipResponse {
+        tip,
+        response: info,
+    } = response;
+    let vouchers: Vec<ClaimableVoucher> = info
+        .vouchers
         .into_iter()
         .map(|voucher| {
             let nullifier = voucher.nullifier.into();
@@ -337,9 +341,11 @@ pub unsafe extern "C" fn get_claimable_vouchers(
     let vouchers_ptr = Box::leak(vouchers.into_boxed_slice()).as_mut_ptr();
 
     FfiClaimableVouchersResult::ok(ClaimableVouchers {
-        tip: response.tip.into(),
+        tip: tip.into(),
         vouchers: vouchers_ptr,
         len,
+        reward_amount: info.reward_amount,
+        total_claimable: info.total_claimable,
     })
 }
 
