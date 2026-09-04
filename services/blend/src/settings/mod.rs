@@ -1,4 +1,4 @@
-use ::core::{num::NonZeroU64, time::Duration};
+use ::core::num::NonZeroU64;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -37,7 +37,7 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
                     num_blend_layers,
                     data_replication_factor,
                     broadcast,
-                    blend_failure_fallback,
+                    abstain_on_failure,
                 },
             core:
                 CoreSettings {
@@ -61,7 +61,7 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
             data_replication_factor,
             activity_threshold_sensitivity,
             network: broadcast,
-            blend_failure_fallback,
+            abstain_on_failure,
         }
     }
 }
@@ -80,7 +80,7 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
                     num_blend_layers,
                     data_replication_factor,
                     broadcast,
-                    blend_failure_fallback,
+                    abstain_on_failure,
                     ..
                 },
             edge: EdgeSettings { backend },
@@ -100,7 +100,7 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
             cover,
             data_replication_factor,
             network: broadcast,
-            blend_failure_fallback,
+            abstain_on_failure,
             // An edge node has no release schedule of its own, but the deadline it
             // waits out is the one a core node's schedule implies, so it takes the
             // same delay bound the core scheduler is configured with.
@@ -109,32 +109,30 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
     }
 }
 
-#[must_use]
-pub const fn round_duration_in_seconds(round_duration: Duration) -> NonZeroU64 {
-    match NonZeroU64::new(round_duration.as_secs()) {
-        Some(seconds) => seconds,
-        None => panic!("Round duration must be at least one second."),
-    }
-}
+/// `η`: the network absorption of one hop, the rounds a message spends crossing
+/// the network between two blend nodes.
+const NETWORK_ABSORPTION_IN_ROUNDS: u64 = 2;
 
+/// `T_M`: the message traversal time, which is what a sender waits for its
+/// payload to appear on the broadcasting channel before treating the message
+/// carrying it as lost.
+///
+/// A message crosses `ß` blend nodes, each of which holds it for at most the
+/// maximal blending delay `∆max`, and the network carries it for the absorption
+/// `η` of one hop:
+///
+/// `T_M = ß · (∆max + η)`
 #[must_use]
 pub const fn max_data_message_delay_in_rounds(
     num_blend_layers: NonZeroU64,
     max_blend_delay_in_rounds: NonZeroU64,
-    round_duration_in_seconds: NonZeroU64,
 ) -> NonZeroU64 {
-    let dissemination_delay_in_rounds = Duration::from_secs(1)
-        .as_secs()
-        .div_ceil(round_duration_in_seconds.get());
     match NonZeroU64::new(
-        num_blend_layers
-            .get()
-            .saturating_mul(
-                max_blend_delay_in_rounds
-                    .get()
-                    .saturating_add(dissemination_delay_in_rounds),
-            )
-            .saturating_add(dissemination_delay_in_rounds),
+        num_blend_layers.get().saturating_mul(
+            max_blend_delay_in_rounds
+                .get()
+                .saturating_add(NETWORK_ABSORPTION_IN_ROUNDS),
+        ),
     ) {
         Some(delay) => delay,
         // Not `expect`, to keep this a `const fn`.

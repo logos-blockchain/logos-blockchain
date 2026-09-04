@@ -72,7 +72,7 @@ impl ServiceConfig {
                 broadcast: Libp2pBroadcastSettings {
                     topic: cryptarchia_deployment.gossipsub_protocol.clone(),
                 },
-                blend_failure_fallback: self.user.blend_failure_fallback,
+                abstain_on_failure: self.user.abstain_on_failure,
                 recovery_data,
                 time: TimingSettings {
                     epoch_transition_period: self

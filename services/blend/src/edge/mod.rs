@@ -264,7 +264,7 @@ where
                 time: settings.time,
                 data_replication_factor: settings.data_replication_factor,
                 pow_mining_pool: new_mining_pool(),
-                blend_failure_fallback: settings.blend_failure_fallback,
+                abstain_on_failure: settings.abstain_on_failure,
                 max_blend_delay_in_rounds: settings.max_blend_delay_in_rounds,
             },
             payload_dispatcher,
@@ -371,14 +371,14 @@ where
 
     // `None` when the operator has turned the fallback off, which records
     // nothing, watches nothing and can reveal nothing.
-    let mut failure_detection = if settings.blend_failure_fallback {
+    let mut failure_detection = if settings.abstain_on_failure {
+        None
+    } else {
         Some(FailureDetector::new(
             settings.max_data_message_delay_in_rounds(),
             settings.time.round_duration,
             payload_dispatcher.observe_broadcasts().await,
         ))
-    } else {
-        None
     };
 
     loop {

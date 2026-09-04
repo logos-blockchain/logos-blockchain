@@ -4,7 +4,7 @@ use core::{
     marker::PhantomData,
 };
 
-use futures::{StreamExt as _, stream, stream::BoxStream};
+use futures::{Stream, StreamExt as _, stream, stream::BoxStream};
 use lb_chain_network_service::Message as ChainNetworkMsg;
 use lb_core::{
     codec::DeserializeOp,
@@ -76,6 +76,48 @@ async fn broadcast_block_proposal(network_relay: &NetworkRelay, topic: String, p
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamType {
+    Proposals,
+    Transactions,
+}
+
+impl AsRef<str> for StreamType {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Proposals => "block proposals",
+            Self::Transactions => "transactions",
+        }
+    }
+}
+
+/// The observations of `subscription`, up to the moment it lags.
+///
+/// A missed observation is a delivery this node cannot see, and a delivery it
+/// cannot see is a payload it reveals. Carrying on past a lag would hand an
+/// adversary a way to force those reveals by flooding the node into one — the
+/// cheaper of the two to flood being the transactions — so the stream ends
+/// instead, and the detection that reads it stops with it.
+fn stop_observing_on_lag<Observed>(
+    subscription: BroadcastStream<Observed>,
+    observed_type: StreamType,
+) -> impl Stream<Item = Observed> + Send
+where
+    Observed: Clone + Send + 'static,
+{
+    subscription
+        .take_while(move |subscribed| {
+            ready(match subscribed {
+                Ok(_) => true,
+                Err(BroadcastStreamRecvError::Lagged(missed)) => {
+                    tracing::error!(target: LOG_TARGET, "Missed {missed} {observed_type}; a delivery can no longer be told from a loss, so the direct broadcast is disabled for the rest of this run.", observed_type = observed_type.as_ref());
+                    false
+                }
+            })
+        })
+        .filter_map(|subscribed| ready(subscribed.ok()))
+}
+
 async fn observe_block_proposals<Tx>(
     chain_network_relay: ChainNetworkRelay<Tx>,
 ) -> BoxStream<'static, BlendPayload>
@@ -95,19 +137,13 @@ where
         return stream::empty().boxed();
     };
 
-    BroadcastStream::new(received)
+    stop_observing_on_lag(BroadcastStream::new(received), StreamType::Proposals)
         .filter_map(|proposal| {
-            ready(match proposal {
-                // Encoded the way it was handed to Blend, so that the two are the same
-                // bytes and comparing them is all the sender has to do. One that does
-                // not fit a payload is one Blend cannot have carried, so it is not a
-                // delivery this node is waiting on.
-                Ok(proposal) => BlendPayload::try_from_proposal(&proposal).ok(),
-                Err(BroadcastStreamRecvError::Lagged(missed)) => {
-                    tracing::warn!(target: LOG_TARGET, "Missed {missed} received proposals; a delivered proposal may be broadcast directly anyway.");
-                    None
-                }
-            })
+            // Encoded the way it was handed to Blend, so that the two are the same
+            // bytes and comparing them is all the sender has to do. One that does
+            // not fit a payload is one Blend cannot have carried, so it is not a
+            // delivery this node is waiting on.
+            ready(BlendPayload::try_from_proposal(&proposal).ok())
         })
         .boxed()
 }
@@ -172,18 +208,13 @@ where
         return stream::empty().boxed();
     };
 
-    BroadcastStream::new(accepted)
+    stop_observing_on_lag(BroadcastStream::new(accepted), StreamType::Transactions)
         .filter_map(|transaction| {
-            ready(match transaction {
-                // Encoded the way it was handed to Blend, so that the two are the same
-                // bytes and comparing them is all the sender has to do. If it cannot fit into the maximum size Blend allows, it means the tx was not sent with Blend in the first place.
-                Ok(transaction) => BlendPayload::try_from_transaction(&transaction)
-                    .ok(),
-                Err(BroadcastStreamRecvError::Lagged(missed)) => {
-                    tracing::warn!(target: LOG_TARGET, "Missed {missed} accepted transactions; a delivered transaction may be broadcast directly anyway.");
-                    None
-                }
-            })
+            // Encoded the way it was handed to Blend, so that the two are the same
+            // bytes and comparing them is all the sender has to do. If it cannot fit into
+            // the maximum size Blend allows, it means the tx was not sent with Blend in the
+            // first place.
+            ready(BlendPayload::try_from_transaction(&transaction).ok())
         })
         .boxed()
 }

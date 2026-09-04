@@ -7,7 +7,7 @@ use rayon::ThreadPool;
 
 use crate::{
     core::settings::CoverTrafficSettings,
-    settings::{TimingSettings, max_data_message_delay_in_rounds, round_duration_in_seconds},
+    settings::{TimingSettings, max_data_message_delay_in_rounds},
 };
 
 #[derive(Clone, Debug)]
@@ -22,7 +22,7 @@ pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
     pub data_replication_factor: u64,
     pub max_blend_delay_in_rounds: NonZeroU64,
     pub network: NetworkSettings,
-    pub blend_failure_fallback: bool,
+    pub abstain_on_failure: bool,
 }
 
 /// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
@@ -38,7 +38,7 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub data_replication_factor: u64,
     pub pow_mining_pool: Arc<ThreadPool>,
     pub max_blend_delay_in_rounds: NonZeroU64,
-    pub blend_failure_fallback: bool,
+    pub abstain_on_failure: bool,
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {
@@ -67,10 +67,6 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
 
     #[must_use]
     pub const fn max_data_message_delay_in_rounds(&self) -> NonZeroU64 {
-        max_data_message_delay_in_rounds(
-            self.num_blend_layers,
-            self.max_blend_delay_in_rounds,
-            round_duration_in_seconds(self.time.round_duration),
-        )
+        max_data_message_delay_in_rounds(self.num_blend_layers, self.max_blend_delay_in_rounds)
     }
 }

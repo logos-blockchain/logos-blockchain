@@ -112,7 +112,7 @@ pub fn settings<BackendSettings>(
         data_replication_factor,
         activity_threshold_sensitivity: 1,
         pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
-        blend_failure_fallback: true,
+        abstain_on_failure: false,
     }
 }
 

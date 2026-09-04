@@ -19,5 +19,5 @@ pub struct CommonSettings<BroadcastSettings> {
     pub recovery_data: RecoveryData,
     pub data_replication_factor: u64,
     pub broadcast: BroadcastSettings,
-    pub blend_failure_fallback: bool,
+    pub abstain_on_failure: bool,
 }

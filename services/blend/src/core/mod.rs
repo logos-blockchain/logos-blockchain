@@ -412,7 +412,7 @@ where
             data_replication_factor: blend_config.data_replication_factor,
             activity_threshold_sensitivity: blend_config.activity_threshold_sensitivity,
             pow_mining_pool: new_mining_pool(),
-            blend_failure_fallback: blend_config.blend_failure_fallback,
+            abstain_on_failure: blend_config.abstain_on_failure,
         };
         let (
             mut remaining_epoch_stream,
@@ -456,14 +456,14 @@ where
 
         let mut blend_messages = backend.listen_to_incoming_messages();
 
-        let mut failure_detector = if running_blend_config.blend_failure_fallback {
+        let mut failure_detector = if running_blend_config.abstain_on_failure {
+            None
+        } else {
             Some(FailureDetector::new(
                 running_blend_config.max_data_message_delay_in_rounds(),
                 running_blend_config.time.round_duration,
                 payload_dispatcher.observe_broadcasts().await,
             ))
-        } else {
-            None
         };
 
         // Run the main event loop while the node is a core node across multiple

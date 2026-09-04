@@ -32,7 +32,7 @@ use crate::{
     },
     epoch_info::PolInfoProvider,
     message::ServiceMessage,
-    settings::{TimingSettings, max_data_message_delay_in_rounds, round_duration_in_seconds},
+    settings::{TimingSettings, max_data_message_delay_in_rounds},
     test_utils::{
         crypto::mock_blend_proof,
         dispatcher::{TestBroadcastingChannel, TestPayloadDispatcher},
@@ -57,11 +57,8 @@ const TEST_MAX_BLEND_DELAY: NonZeroU64 = NonZeroU64::new(5).unwrap();
 /// the two settings above, so the tests wait exactly as long as the code they
 /// exercise and the two cannot drift apart. Pick a different deadline by
 /// changing one of those, never by restating this.
-pub const TEST_DELIVERY_DEADLINE: NonZeroU64 = max_data_message_delay_in_rounds(
-    TEST_BLEND_LAYERS,
-    TEST_MAX_BLEND_DELAY,
-    round_duration_in_seconds(TEST_ROUND),
-);
+pub const TEST_DELIVERY_DEADLINE: NonZeroU64 =
+    max_data_message_delay_in_rounds(TEST_BLEND_LAYERS, TEST_MAX_BLEND_DELAY);
 
 pub struct MockLeaderProofsGenerator;
 
@@ -102,7 +99,7 @@ pub async fn spawn_run(
         local_node,
         minimal_network_size,
         initial_membership,
-        true,
+        false,
     )
     .await
 }
@@ -117,7 +114,7 @@ pub async fn spawn_run_without_direct_broadcast(
         local_node,
         minimal_network_size,
         initial_membership,
-        false,
+        true,
     )
     .await
 }
@@ -129,7 +126,7 @@ pub async fn spawn_run_with_pol<PolProvider>(
     local_node: NodeId,
     minimal_network_size: u64,
     initial_membership: Option<Membership<NodeId>>,
-    blend_failure_fallback: bool,
+    abstain_on_failure: bool,
 ) -> RunningEdgeService
 where
     PolProvider: PolInfoProvider<usize, Stream: Unpin + Send> + Send + 'static,
@@ -149,7 +146,7 @@ where
         .map(|membership| test_blend_epoch_state(0.into(), membership));
 
     let mut settings = settings(local_node, minimal_network_size, node_id_sender);
-    settings.blend_failure_fallback = blend_failure_fallback;
+    settings.abstain_on_failure = abstain_on_failure;
     let (payload_dispatcher, broadcasting_channel) = TestPayloadDispatcher::new();
     let join_handle = tokio::spawn(async move {
         Box::pin(run::<
@@ -186,7 +183,7 @@ pub fn settings(
     msg_sender: NodeIdSender,
 ) -> BlendConfig<NodeIdSender> {
     BlendConfig {
-        blend_failure_fallback: true,
+        abstain_on_failure: false,
         time: TimingSettings {
             rounds_per_epoch: NonZeroU64::new(1).unwrap(),
             round_duration: TEST_ROUND,

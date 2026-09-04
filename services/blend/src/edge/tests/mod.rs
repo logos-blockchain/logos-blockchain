@@ -522,7 +522,7 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_blended() {
         local_node,
         1,
         Some(membership(&[core_node], local_node)),
-        true,
+        false,
     )
     .await;
 
