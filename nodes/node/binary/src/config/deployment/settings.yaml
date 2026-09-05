@@ -2,7 +2,7 @@ blend:
   common:
     num_blend_layers: 1
     minimum_network_size: 2
-    protocol_name: /logos-blockchain-testnet-0.2.4/blend/1.0.0
+    protocol_name: /logos-blockchain-dst-0.2.4/blend/1.0.0
     data_replication_factor: 1
   core:
     scheduler:
@@ -14,9 +14,9 @@ blend:
     normalization_constant: 1.03
     activity_threshold_sensitivity: 1
 network:
-  kademlia_protocol_name: /logos-blockchain-testnet-0.2.4/kad/1.0.0
-  identify_protocol_name: /logos-blockchain-testnet-0.2.4/identify/1.0.0
-  chain_sync_protocol_name: /logos-blockchain-testnet-0.2.4/chainsync/1.0.0
+  kademlia_protocol_name: /logos-blockchain-dst-0.2.4/kad/1.0.0
+  identify_protocol_name: /logos-blockchain-dst-0.2.4/identify/1.0.0
+  chain_sync_protocol_name: /logos-blockchain-dst-0.2.4/chainsync/1.0.0
 cryptarchia:
   epoch_config:
     epoch_stake_distribution_stabilization: 3
@@ -35,13 +35,13 @@ cryptarchia:
     min_stake:
       threshold: 1000000000
       timestamp: 0
-  gossipsub_protocol: /logos-blockchain-testnet-0.2.4/cryptarchia/1.0.0
+  gossipsub_protocol: /logos-blockchain-dst-0.2.4/cryptarchia/1.0.0
   genesis_block:
     header:
       version: Bedrock
       parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
       slot: 0
-      block_root: ee2e7fbfac16bacd8e1b4d51bf9da7587b5e3254d203b5f22a15eb8f79d88649
+      block_root: '8d05496259b19d25d0ef859912adc2950e931bb6e0166fd3a4ad1f1364046662'
       proof_of_leadership:
         proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
         entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
@@ -55,320 +55,174 @@ cryptarchia:
           payload:
             inputs: []
             outputs:
-            - value: 100000000000000
-              pk: '376ee6dc1fdb8ee8ae315aa1046c636121bd1133e83adf0de3c2fafa41b4ac1c'
-            - value: 200000000000000
-              pk: '859d98b2eb9f6253bf908ca2b1fc445b517b7cb5e7b6280e2c1da4f19304c71d'
-            - value: 200000000000000
-              pk: '17f531bfab29cef706b1c6ca26d23ad9aa8906f7965237312a36ca502761241b'
             - value: 1000000000
-              pk: '6b2bcd3029fba573cff0c332dc4de7430faf5e261383d693d8dbb5b97665660a'
+              pk: '39bb61f07f58342844a724029b09a59a87b677668d493f6e5b0a96877696a103'
             - value: 100000000000000
-              pk: b1c7d3eff60e03588e9f9a4a21a15faecd0406b21f81d3c90a50a42d2253cc0d
-            - value: 200000000000000
-              pk: '7215983b8b7440c7bc61a8252f1d6cb5f6cd2c8e098b9dc17a43145af93d1900'
-            - value: 200000000000000
-              pk: '3738bd8f382d7227b7f6339e49ebb65d1a046188361216e60d17a256fac1dc00'
-            - value: 1000000000
-              pk: ae9a47f76c9a2c00c40310cc82a1da9f5292af9ee223b898c38478c85fd39515
+              pk: '375e0e86b2a21057ee2b81ccca450168f707f4940e44548ae298f91e822e5416'
             - value: 100000000000000
-              pk: dc3d17f010bf7742e5df5257df434a6e5f8dcbb95549ea6fe571c27cd75c4901
-            - value: 200000000000000
-              pk: '670b1a36742173c0310ec3ffb352afe8430d938619334ce57a8fb2bcd24dca1e'
-            - value: 200000000000000
-              pk: e03ad89b26f2321916f78c3e02abc693879341dcf0427cde62f0793f7944c20c
-            - value: 1000000000
-              pk: '4114009ea9da81c5fcb680eca33129fb3fe166af733d25a23ac2da567ee84c19'
+              pk: aa8f5b0c159a5b175707ec53a219b2f79d350c7ece5dd56a21fbdef2fce14115
             - value: 100000000000000
-              pk: '9e14d1a30241297fb0133e3f3ffd72dce7363b4b680ce7953849dec5b46aac15'
-            - value: 200000000000000
-              pk: '605199d3e793d342f1f0457c0ada288efc61d455e3b576e70af14b1651a08c06'
-            - value: 200000000000000
-              pk: '2cf55928c4bfe673b2395100c377c70aa716791233b680ba7775e9b589311b0b'
+              pk: e802a554cbce0d627dc414da50301c7cd2bc18ae0cea5f2d711d1432bffeef29
             - value: 1000000000
-              pk: '4d705c711b7c99fc041576c0c5412934cd86f3369d88c9f451e786c0e396fb1c'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
-            - value: 8000000000000
-              pk: '5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04'
+              pk: '6154fb3287ac916c137b1dc48778568b866e94d51df7cc73a91e5b41a1fb4d10'
+            - value: 100000000000000
+              pk: a70cbb09fa653c18b01bb9502d888d1c5b7236accf714abdf0801391ee14290e
+            - value: 100000000000000
+              pk: fa39d7576641186e768642488272e375cda5204d96b01207594bad40f5a9230e
+            - value: 100000000000000
+              pk: dd7cafe82e6964838e6231e26635de9fd44736c7fde56e11ab19e543f5df3806
+            - value: 1000000000
+              pk: '9c4d0ae84b7be51546d7ab49358b3aca83b7515616cfc467a64882075236590b'
+            - value: 100000000000000
+              pk: e99fed1e14f2bfc88e887ae5805ad5d8bed3d5c40d3553caf8d0e96b16187906
+            - value: 100000000000000
+              pk: '73199c19c5c6f0a673f699692458eda1db04c884b83476ad3b2f730cb7542025'
+            - value: 100000000000000
+              pk: '7d99db5d56bbecb88731b0a3022bd7c798d6bc32d356754eaf119661eb40d814'
+            - value: 1000000000
+              pk: e1b54ca0e2c8aad1f6b3d7cf96a6a05c5f3a6cfe3081de5bbd3fd2519ce0541c
+            - value: 100000000000000
+              pk: '7f195eec3a10a029ec5f6a8eb37409709cf1e7b81d90ac405880b105620c0d0e'
+            - value: 100000000000000
+              pk: d232410c52c74535fa4bc03395d28c1b4f8df6f8f2e555f0d00fad3912d3060f
+            - value: 100000000000000
+              pk: e17ecb2f90a043c5da7e46f2062b51a3d42b84a074e2502c8f99b3b999e7041e
+            - value: 1000000000
+              pk: '4246026de45998ffca6bbdf2dbe1a946797ce8adaaa9f699ee611fa7566baa24'
+            - value: 100000000000000
+              pk: a071f773a2d9188cdff52e7298b2c79a1ee546f1eb208aba8f19ef314242b207
+            - value: 100000000000000
+              pk: '604b505ff0a99877b8f7cf762c85e0a809c23c760533484373b09e3680eeb705'
+            - value: 100000000000000
+              pk: '69c4a4f903f0a3bc9bb1b585fad702c762d49f358d6741f5e351be1b04232b1f'
+            - value: 1000000000
+              pk: '383d97116f25d74f504258e13b7e1bc203451d4717a8762ab3a9a52d1db07503'
+            - value: 100000000000000
+              pk: '3d30ee15beb4dcf4de943114c09f231b3b9fc6743559bc839d878cedad9a761a'
+            - value: 100000000000000
+              pk: '09dadcbb0c419e5020103544198d9cf9b7029ec37458f551d164bd56103cf407'
+            - value: 100000000000000
+              pk: '2c90b7ac8c29036b6b724d9e1ae29fe98c15da4f71f38cd88dd1d2d66500241e'
+            - value: 1000000000
+              pk: dc4155f641e9e08318cefc0e53a03fcfe7a1f675b7ecae7d3a707dd855c42605
+            - value: 100000000000000
+              pk: '52c9f849dd02880f335b0c3b5d4578b083388a46ac48a0c36e418477761b8125'
+            - value: 100000000000000
+              pk: '4929dfc7114702a8191c74048657a15e83c05e996d6b5916092268dd9f871922'
+            - value: 100000000000000
+              pk: '6114ae8f3b9d21e6b20e42ee5ebbf93fc825fda59264593cba229769527d6203'
+            - value: 1000000000
+              pk: '89b9ef8982fafc3deacc922a55120a2555925a785e45d49e2668c649dadb3726'
+            - value: 100000000000000
+              pk: '814d298afca15f7cbc8cf6dde4449a9c5d5176aba351d199f58f98eb6c2c5e27'
+            - value: 100000000000000
+              pk: '98ee4d3a42824c63fda439252833aef365d300388989669e5d3ae406207be520'
+            - value: 100000000000000
+              pk: '9ee2096f12f25822624eead64cb09d9bd6ff8c4fd38b7b9cb2f2cbedd2a40724'
+            - value: 1000000000
+              pk: e67a1756c7a10a49cfa9220ef35eb6f7513aaf75481fbf0cd68c8b6e90847015
+            - value: 100000000000000
+              pk: a27e9f3f322137f915a322fff6adff7b888d01f413a1045f0d45649097eaa408
+            - value: 100000000000000
+              pk: '27379f8d9d8f838c26c55a46360e2000490e3aa2d490aa383659731eb6e2e909'
+            - value: 100000000000000
+              pk: b8616611cbeb9d7d6a4c1ba23fa4f43475ba8f24f9033e61336875b003142409
+            - value: 1000000000
+              pk: bdcb3f48f9ba2bbd78ccb5231d2670f66d8ffba57d50c095051d42c546e42911
+            - value: 100000000000000
+              pk: '4c48a546292d792592cc07d146c7dd24e976acb1df350a78d52045e48047aa0e'
+            - value: 100000000000000
+              pk: e8269b6124e767cc19334a866ec956c2752b9565c63e24974409a36598fae117
+            - value: 100000000000000
+              pk: b142dec2c8db4f609de63c783676ee7f5995356805d414bb32ff9a6761b9ab0f
             - value: 18446744073709551615
-              pk: c2a6a4a0981d5bdcf8ddeb8d7934fd8c5510efeb1053f613b45871670b6f7b19
+              pk: '3956ddb6ed8cb0b002f9839bfecd1d31f852594b46c3dee8d72df926be3bb625'
         - opcode: 17
           payload:
             channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
-            inscription: '05302e322e34c8b99a6a2d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a'
+            inscription: '09302e322e342d64737420e89b6a2d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a'
             parent: '0000000000000000000000000000000000000000000000000000000000000000'
             signer: '0000000000000000000000000000000000000000000000000000000000000000'
         - opcode: 32
           payload:
             service_type: BN
             locators:
-            - /ip4/65.109.51.37/udp/3400/quic-v1
-            provider_id: '59c662860b737f4e2515599adb3434856db8070b373a449ff66955ad3da6b473'
-            zk_id: '6b2bcd3029fba573cff0c332dc4de7430faf5e261383d693d8dbb5b97665660a'
-            locked_note_id: '44e03d8e7c4e4df2ccbbc2ec06862688610b558a7ef5466ad7ce8b656341d826'
+            - /ip4/185.181.228.123/udp/32222/quic-v1
+            provider_id: '24a4fb2742762094b06af9ebbd83cfc34307212a6b236626376738827ab3b4e2'
+            zk_id: '39bb61f07f58342844a724029b09a59a87b677668d493f6e5b0a96877696a103'
+            locked_note_id: b4c3edfe85fe6e7581902a5a189a20876f1ffb9923cefd0b8fe74a62ad6f6b0c
         - opcode: 32
           payload:
             service_type: BN
             locators:
-            - /ip4/65.109.51.37/udp/3401/quic-v1
-            provider_id: '7fce82aa171b349a40f2a98ce9a05b5db62415adfd3ab4ffea6f214443d5909d'
-            zk_id: ae9a47f76c9a2c00c40310cc82a1da9f5292af9ee223b898c38478c85fd39515
-            locked_note_id: '4f992361ddeee887907e5ec3ef3105bbfc04665519342ce4618a04c07a9bab14'
+            - /ip4/185.181.228.123/udp/32223/quic-v1
+            provider_id: '0cbe1e994bc878a5e65a6b064bdf90763e36bdb86e2d5a1fc7f7614d4902c1cc'
+            zk_id: '6154fb3287ac916c137b1dc48778568b866e94d51df7cc73a91e5b41a1fb4d10'
+            locked_note_id: e8c47c283b2dfffd37bfe52637310548a238dd02925b9dff4887133cb8300e17
         - opcode: 32
           payload:
             service_type: BN
             locators:
-            - /ip4/65.109.51.37/udp/3402/quic-v1
-            provider_id: da8060ee71506bcbf1ac50973ad6dedc3a6cae69139b9d12bfd9c80c4785f6b0
-            zk_id: '4114009ea9da81c5fcb680eca33129fb3fe166af733d25a23ac2da567ee84c19'
-            locked_note_id: da256d2a4934ad2d87bc16e44750af8fa257bdc00d92f2866f027b41bf580e1e
+            - /ip4/185.181.228.123/udp/32224/quic-v1
+            provider_id: f9808ca993f439d327bc0dd5fda808373a39f2542e400666703b0a5ccabea8c0
+            zk_id: '9c4d0ae84b7be51546d7ab49358b3aca83b7515616cfc467a64882075236590b'
+            locked_note_id: '52ce604eb5ed87bfeeb14552b82fe45e571aedb584684084853c8ec6e6678412'
         - opcode: 32
           payload:
             service_type: BN
             locators:
-            - /ip4/65.109.51.37/udp/50002/quic-v1
-            provider_id: f6807fc50fbd4ef5f7fe1aaef037ee78d23233e60de802da36bfbb64215800fe
-            zk_id: '4d705c711b7c99fc041576c0c5412934cd86f3369d88c9f451e786c0e396fb1c'
-            locked_note_id: '3727cd76de980d961911a4926bd5b0d42b67327fa06920cb96f47fe2b54a1d01'
+            - /ip4/185.181.228.123/udp/32225/quic-v1
+            provider_id: a803b035acd64f9c431dff6e74b586cb6f5167ba7d65aa7e488424a68d7eea58
+            zk_id: e1b54ca0e2c8aad1f6b3d7cf96a6a05c5f3a6cfe3081de5bbd3fd2519ce0541c
+            locked_note_id: '59567e88074697abfc0dcfc3e6ce2d2a0c8880b2a8eac414eb6f78ebef363309'
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/185.181.228.123/udp/32226/quic-v1
+            provider_id: '1397abf96a05862d79f5c8741b637677c471183449070a619ba5e32571cb1fff'
+            zk_id: '4246026de45998ffca6bbdf2dbe1a946797ce8adaaa9f699ee611fa7566baa24'
+            locked_note_id: e59e0e99726a2900b3a3cb74976e2f8decbbec8e80387dd6f7350a143612270c
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/185.181.228.123/udp/32227/quic-v1
+            provider_id: ff5267a0f3407f867dfb23770fd8ba0d2e7a165ff983b51045b171092cb19558
+            zk_id: '383d97116f25d74f504258e13b7e1bc203451d4717a8762ab3a9a52d1db07503'
+            locked_note_id: '5e204bc48d4deb3fb102fdc76ea1c9976148e3f911944267a6d0b014410b190f'
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/185.181.228.123/udp/32228/quic-v1
+            provider_id: '67ad9e9eb4a596ba756856062f6f594e3e67e6bab98a4cc16dae24387dfd94b0'
+            zk_id: dc4155f641e9e08318cefc0e53a03fcfe7a1f675b7ecae7d3a707dd855c42605
+            locked_note_id: '22df4474bc7b46fea40fbad405e1cbc646c295c4dbb5f1c3d55919a1970be915'
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/185.181.228.123/udp/32229/quic-v1
+            provider_id: '8160df93e1dcdc15780dbd9e64eff4c3db774e9c2ceeaa880b9785148c69649a'
+            zk_id: '89b9ef8982fafc3deacc922a55120a2555925a785e45d49e2668c649dadb3726'
+            locked_note_id: d12ef4e01d3362e1607a0fdb2a80bf7b09b32c44ae721c5f317a0721bcd94a05
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/185.181.228.123/udp/32230/quic-v1
+            provider_id: ca63e4372292951c2d7a4c48ac2e6358f8ff0043454021797498b512e9040cd2
+            zk_id: e67a1756c7a10a49cfa9220ef35eb6f7513aaf75481fbf0cd68c8b6e90847015
+            locked_note_id: '31eed270fd46bd8bc9ed630137155b52c819e2bfe9ff1641079f0a84e984c02e'
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/185.181.228.123/udp/32231/quic-v1
+            provider_id: '131e3fb72cc8fc1163f48e528413bf5eda937e5a1667c5dfa40322897982ab2e'
+            zk_id: bdcb3f48f9ba2bbd78ccb5231d2670f66d8ffba57d50c095051d42c546e42911
+            locked_note_id: b1321c1a55054615ebbeb5b940097f2b626f0a74f0ced54be649ec16058c3213
       ops_proofs:
       - !ZkSig
         pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
@@ -399,8 +253,44 @@ cryptarchia:
           pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
           pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
         ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
-  faucet_pk: c2a6a4a0981d5bdcf8ddeb8d7934fd8c5510efeb1053f613b45871670b6f7b19
+      - !ZkAndEd25519Sigs
+        zk_sig:
+          pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+          pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+          pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+        ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      - !ZkAndEd25519Sigs
+        zk_sig:
+          pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+          pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+          pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+        ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      - !ZkAndEd25519Sigs
+        zk_sig:
+          pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+          pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+          pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+        ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      - !ZkAndEd25519Sigs
+        zk_sig:
+          pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+          pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+          pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+        ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      - !ZkAndEd25519Sigs
+        zk_sig:
+          pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+          pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+          pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+        ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      - !ZkAndEd25519Sigs
+        zk_sig:
+          pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+          pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+          pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+        ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+  faucet_pk: '3956ddb6ed8cb0b002f9839bfecd1d31f852594b46c3dee8d72df926be3bb625'
 time:
   slot_duration: '1.000000000'
 mempool:
-  pubsub_topic: /logos-blockchain-testnet-0.2.4/mempool/1.0.0
+  pubsub_topic: /logos-blockchain-dst-0.2.4/mempool/1.0.0

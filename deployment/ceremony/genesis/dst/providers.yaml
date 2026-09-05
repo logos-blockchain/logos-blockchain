@@ -1,0 +1,50 @@
+- provider_id: 24a4fb2742762094b06af9ebbd83cfc34307212a6b236626376738827ab3b4e2
+  zk_id: 39bb61f07f58342844a724029b09a59a87b677668d493f6e5b0a96877696a103
+  locators:
+    - /ip4/185.181.228.123/udp/32222/quic-v1
+  service_type: BN
+- provider_id: 0cbe1e994bc878a5e65a6b064bdf90763e36bdb86e2d5a1fc7f7614d4902c1cc
+  zk_id: 6154fb3287ac916c137b1dc48778568b866e94d51df7cc73a91e5b41a1fb4d10
+  locators:
+    - /ip4/185.181.228.123/udp/32223/quic-v1
+  service_type: BN
+- provider_id: f9808ca993f439d327bc0dd5fda808373a39f2542e400666703b0a5ccabea8c0
+  zk_id: 9c4d0ae84b7be51546d7ab49358b3aca83b7515616cfc467a64882075236590b
+  locators:
+    - /ip4/185.181.228.123/udp/32224/quic-v1
+  service_type: BN
+- provider_id: a803b035acd64f9c431dff6e74b586cb6f5167ba7d65aa7e488424a68d7eea58
+  zk_id: e1b54ca0e2c8aad1f6b3d7cf96a6a05c5f3a6cfe3081de5bbd3fd2519ce0541c
+  locators:
+    - /ip4/185.181.228.123/udp/32225/quic-v1
+  service_type: BN
+- provider_id: 1397abf96a05862d79f5c8741b637677c471183449070a619ba5e32571cb1fff
+  zk_id: 4246026de45998ffca6bbdf2dbe1a946797ce8adaaa9f699ee611fa7566baa24
+  locators:
+    - /ip4/185.181.228.123/udp/32226/quic-v1
+  service_type: BN
+- provider_id: ff5267a0f3407f867dfb23770fd8ba0d2e7a165ff983b51045b171092cb19558
+  zk_id: 383d97116f25d74f504258e13b7e1bc203451d4717a8762ab3a9a52d1db07503
+  locators:
+    - /ip4/185.181.228.123/udp/32227/quic-v1
+  service_type: BN
+- provider_id: 67ad9e9eb4a596ba756856062f6f594e3e67e6bab98a4cc16dae24387dfd94b0
+  zk_id: dc4155f641e9e08318cefc0e53a03fcfe7a1f675b7ecae7d3a707dd855c42605
+  locators:
+    - /ip4/185.181.228.123/udp/32228/quic-v1
+  service_type: BN
+- provider_id: 8160df93e1dcdc15780dbd9e64eff4c3db774e9c2ceeaa880b9785148c69649a
+  zk_id: 89b9ef8982fafc3deacc922a55120a2555925a785e45d49e2668c649dadb3726
+  locators:
+    - /ip4/185.181.228.123/udp/32229/quic-v1
+  service_type: BN
+- provider_id: ca63e4372292951c2d7a4c48ac2e6358f8ff0043454021797498b512e9040cd2
+  zk_id: e67a1756c7a10a49cfa9220ef35eb6f7513aaf75481fbf0cd68c8b6e90847015
+  locators:
+    - /ip4/185.181.228.123/udp/32230/quic-v1
+  service_type: BN
+- provider_id: 131e3fb72cc8fc1163f48e528413bf5eda937e5a1667c5dfa40322897982ab2e
+  zk_id: bdcb3f48f9ba2bbd78ccb5231d2670f66d8ffba57d50c095051d42c546e42911
+  locators:
+    - /ip4/185.181.228.123/udp/32231/quic-v1
+  service_type: BN
