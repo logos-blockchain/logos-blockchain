@@ -138,7 +138,6 @@ pub async fn start_node(
         .with_peers(startup_settings.peer_selection)
         .with_persist_dir(persist_dir)
         .create_patch(move |mut config: RunConfig| {
-            let declared_blend_address = config.user.blend.core.backend.listening_address.clone();
             prepare_config_patch(
                 &mut config,
                 startup_settings.join_external_network,
@@ -151,6 +150,7 @@ pub async fn start_node(
                 startup_settings.tokio_console_node.as_ref(),
                 &scenario_wallet_key_ids,
             )?;
+            let declared_blend_address = config.user.blend.core.backend.listening_address.clone();
             blend_relays.configure_provider(
                 &relay_node_name,
                 &mut config,

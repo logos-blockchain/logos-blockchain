@@ -407,6 +407,12 @@ struct BackendSession {
     task: JoinHandle<()>,
 }
 
+impl Drop for BackendSession {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 impl RelayTask {
     async fn run(mut self) {
         let mut buffer = vec![0u8; UDP_BUFFER_SIZE];
@@ -668,6 +674,20 @@ mod tests {
             .metadata("NODE_1")
             .expect("first metadata query should succeed")
             .expect("first relay metadata should exist");
+        let backend = UdpSocket::bind(first_metadata.backend_addr)
+            .await
+            .expect("backend should bind");
+        let client = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("client should bind");
+        client
+            .send_to(b"create-backend-session", first_metadata.declared_addr)
+            .await
+            .expect("client datagram should send");
+        timeout(Duration::from_secs(1), backend.recv_from(&mut [0; 64]))
+            .await
+            .expect("backend should receive before timeout")
+            .expect("backend receive should succeed");
 
         assert!(
             !registry

@@ -471,7 +471,7 @@ struct EpochObservationConfig<'a> {
     start_epoch: u32,
     target_epoch: u32,
     poll_interval: Duration,
-    timeout_secs: u64,
+    deadline: Instant,
 }
 
 struct EpochTransitionLog<'a> {
@@ -534,9 +534,9 @@ pub async fn observe_epoch_transitions(
     let timeout_secs = observation_timeout_secs(&settings, transition_count);
     let poll_interval = observation_poll_interval(&settings);
 
-    let initial_deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     let initial_observation = loop {
-        if Instant::now() >= initial_deadline {
+        if Instant::now() >= deadline {
             return Err(StepError::Timeout {
                 message: format!(
                     "Step `{step}` timed out querying the Time service on `{node_name}` before observing epoch transitions"
@@ -614,7 +614,7 @@ pub async fn observe_epoch_transitions(
             start_epoch,
             target_epoch,
             poll_interval,
-            timeout_secs,
+            deadline,
         },
     )
     .await
@@ -652,14 +652,13 @@ async fn wait_for_epoch_transitions(
     initial_observation: NodeDiagnosticObservation,
     observation: EpochObservationConfig<'_>,
 ) -> StepResult {
-    let deadline = Instant::now() + Duration::from_secs(observation.timeout_secs);
     let start_epoch = observation.start_epoch;
     let mut current_observed_epoch = start_epoch;
     let mut last_clock_slot = initial_observation.time_info.current_slot;
     let geometry = DiagnosticGeometry::from_settings(settings);
     let mut completed_checkpoints = BTreeSet::new();
     loop {
-        if Instant::now() >= deadline {
+        if Instant::now() >= observation.deadline {
             return Err(StepError::Timeout {
                 message: format!(
                     "Step `{step}` timed out waiting for epoch {target_epoch} on `{node_name}`; start epoch={start_epoch}, last epoch={current_observed_epoch}, last clock slot={last_clock_slot}",
