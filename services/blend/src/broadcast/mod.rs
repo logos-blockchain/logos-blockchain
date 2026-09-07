@@ -198,9 +198,9 @@ where
 /// Answers queries and puts payloads on the wire until the membership calls for
 /// another mode.
 ///
-/// The stopping condition is [`Mode::choose`] — the same function the
-/// orchestrator uses to decide what to start, so the two cannot disagree about
-/// what this node should be doing.
+/// The stopping condition is [`ModeMembership::resolve`] — the same function
+/// the orchestrator uses to decide what to start, so the two cannot disagree
+/// about what this node should be doing.
 async fn run<NodeId, Dispatcher, RuntimeServiceId>(
     inbound_relay: &mut (impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin),
     membership_stream: &mut (impl Stream<Item = EpochEvent<MembershipInfo<NodeId>>> + Send + Unpin),
