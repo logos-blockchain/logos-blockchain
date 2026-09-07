@@ -182,9 +182,6 @@ impl SequencerClient {
     }
 
     /// Build and fund an atomic withdraw bundle for external multi-sig signing.
-    ///
-    /// Async counterpart of
-    /// [`super::SequencerHandle::prepare_atomic_withdraw`].
     pub async fn prepare_atomic_withdraw(
         &self,
         inscribe: Inscription,
@@ -202,8 +199,6 @@ impl SequencerClient {
     }
 
     /// Build and fund a pin-deposit bundle for external multi-sig signing.
-    ///
-    /// Async counterpart of [`super::SequencerHandle::prepare_pin_deposit`].
     pub async fn prepare_pin_deposit(
         &self,
         inscribe: Inscription,
@@ -220,8 +215,6 @@ impl SequencerClient {
 
     /// Submit a [`PreparedAtomicBundle`] with its externally-collected
     /// signatures.
-    ///
-    /// Async counterpart of [`super::SequencerHandle::submit_atomic_bundle`].
     pub async fn submit_atomic_bundle(
         &self,
         prepared: PreparedAtomicBundle,

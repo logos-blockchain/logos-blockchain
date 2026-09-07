@@ -207,55 +207,35 @@ where
     }
 }
 
-/// Phase of a deposit's multi-sig lifecycle, keyed on the shared bus.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum MultiSigPhase {
     Pin,
     Withdraw,
 }
 
-/// A bundle's identity on the bus: its own signing payload (the bundle tx
-/// hash). Because the multi-sig signature covers the whole bundle — including
-/// each proposer's own turn-gated inscription — every proposer's bundle is a
-/// distinct transaction with a distinct payload, so the payload is its natural
-/// identifier. No proposer tag needed.
+/// A bundle's identity: its own signing payload. Distinct per proposer, since
+/// each bundle carries that proposer's own inscription.
 type BundleId = Vec<u8>;
 
-/// A proposed bundle plus the signatures gathered for it, addressed by its
-/// [`BundleId`]. Lives on the shared [`MultiSigBus`].
 pub struct MultiSigRound {
     prepared: Arc<PreparedAtomicBundle>,
     signatures: Vec<IndexedSignature>,
-    /// Deposit this bundle belongs to — lets any sequencer prune it from the
-    /// shared bus once the deposit is fully withdrawn.
     op_id: Hash,
 }
 
-/// Shared signature collection: every sequencer's signer task records its
-/// signature for a proposed bundle here, and the proposer reads it back to
-/// submit once a threshold is gathered.
+/// Signatures gathered per bundle; the proposer reads it back to submit.
 pub type MultiSigBus = Arc<Mutex<HashMap<BundleId, MultiSigRound>>>;
 
-/// Bundle-announcement channel: a proposer broadcasts each prepared bundle so
-/// every sequencer's signer task can sign it, off the block-processing path.
-/// The test's stand-in for the gossip a real zone uses to exchange signatures —
-/// signing reacts to a peer's announcement, not to the local block event.
+/// Fanout channel proposers announce bundles on and signers read — the test's
+/// stand-in for gossip, so signing reacts to announcements, not block events.
 pub type BundleAnnounce = broadcast::Sender<Arc<PreparedAtomicBundle>>;
 
-/// Multi-sig counterpart of [`start_deposit_lifecycle_policy`]: every sequencer
-/// runs this same policy, with no turn logic at all. Each reacts to an observed
-/// deposit by preparing *its own* pin (then withdraw) bundle and dropping it on
-/// the shared `bus`; every accredited sequencer signs every bundle it sees
-/// in-loop via `sign_prepared_bundle`; each submits *its own* bundle once
-/// `transfer_threshold` signatures are collected. The SDK holds each submission
-/// until that sequencer's write turn, so whichever turn lands first wins, and
-/// note-consumption invalidates the losers — observed on the next block as
-/// `pinned`/`withdrawn`, which stops everyone else.
-///
-/// Drives one task per sequencer with a `select!` over two inputs: the SDK
-/// event stream (chain reactions) and the announcement bus (signing). A real
-/// zone's sequencer has exactly this shape — chain and gossip multiplexed in a
-/// single owner of the sequencer.
+/// Multi-sig counterpart of [`start_deposit_lifecycle_policy`], with no turn
+/// logic: each sequencer proposes its own bundles, everyone signs every bundle,
+/// each submits its own. The SDK holds a submission until that sequencer's
+/// turn, so one lands and note-consumption kills the losers. One task per
+/// sequencer, `select!`ing the SDK event stream (chain) against the
+/// announcement bus (signing) — the shape a real zone's sequencer has.
 pub fn start_multisig_lifecycle_policy(
     mut sequencer: ZoneSequencer<ZoneNodeHttpClient>,
     withdraw_outputs: Vec<u64>,
@@ -264,9 +244,8 @@ pub fn start_multisig_lifecycle_policy(
     announce: BundleAnnounce,
     signing_key: Ed25519Key,
 ) -> PolicyRuntime {
-    // Grab the SDK subscriptions before moving the sequencer into the task
-    // (mirrors `runner::spawn`, which we bypass here to drive the extra
-    // `select!` arm for the signing bus).
+    // Subscriptions taken before the sequencer moves into the task (what
+    // `runner::spawn` does; bypassed here for the extra `select!` arm).
     let checkpoint_rx = sequencer.subscribe_checkpoint();
     let ready_rx = sequencer.subscribe_ready();
     let channel_view_rx = sequencer.subscribe_channel_view();
@@ -290,12 +269,9 @@ pub fn start_multisig_lifecycle_policy(
     let task = tokio::spawn(async move {
         loop {
             tokio::select! {
-                // Chain reactions: reconcile canonical state, then drive.
                 event = sequencer.next_event() => {
                     policy.on_event(&mut sequencer, &event).await;
                 }
-                // Signing bus: a peer (or we) announced a bundle — sign it now,
-                // off the block path. Exits when every announcer has dropped.
                 announced = announcements.recv() => match announced {
                     Ok(bundle) => policy.sign_announced(&bundle),
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
@@ -321,20 +297,14 @@ struct MultiSigLifecyclePolicy {
     withdraw_outputs: Vec<u64>,
     recipient: ZkPublicKey,
     bus: MultiSigBus,
-    /// Announces our proposed bundles to every sequencer (including us).
     announce: BundleAnnounce,
-    /// This sequencer's key, for signing announced bundles.
     signing_key: Ed25519Key,
-    /// Bundles we have already signed (sign each once).
     signed: HashSet<BundleId>,
     deposits: HashMap<Hash, DepositLifecycleState>,
-    /// The bundle this sequencer itself proposed for each work item — the one
-    /// it submits (its inscription is signed by, and turn-gated to,
-    /// itself).
+    /// The bundle we ourselves proposed per work item — the one we submit.
     mine: HashMap<(Hash, MultiSigPhase), BundleId>,
 }
 
-/// Prepare (fund + build) the pin bundle for a deposit; `None` on failure.
 async fn prepare_pin<Node>(
     sequencer: &mut ZoneSequencer<Node>,
     op_id: &Hash,
@@ -356,8 +326,6 @@ where
     }
 }
 
-/// Prepare (fund + build) the atomic-withdraw bundle for a deposit; `None` on
-/// failure.
 async fn prepare_withdraw<Node>(
     sequencer: &mut ZoneSequencer<Node>,
     op_id: &Hash,
@@ -389,9 +357,7 @@ where
     }
 }
 
-/// Record a freshly prepared bundle on the shared bus, remember it as this
-/// sequencer's own for the given work item, and announce it so every
-/// sequencer's signer task signs it.
+/// Record our prepared bundle on the bus, mark it ours, and announce it.
 fn open_round(
     bus: &MultiSigBus,
     announce: &BundleAnnounce,
@@ -410,16 +376,14 @@ fn open_round(
         },
     );
     mine.insert(work, id);
-    // Inserted before announcing, so every signer sees the round to record into.
-    // Best-effort: `send` errors only once every signer task has exited (test
-    // teardown), never during normal operation.
+    // Insert before announcing so every signer sees the round. Best-effort:
+    // errors only once all signer tasks have exited (teardown).
     drop(announce.send(prepared));
 }
 
-/// Submit the bundle identified by `id` if it has gathered a threshold of
-/// signatures; `true` when submitted. No turn check: the SDK holds the posted
-/// tx until this sequencer's own write turn (the only turn its inscription is
-/// valid in), so we submit as soon as it is ready.
+/// Submit the bundle if it has a threshold of signatures. No turn check: the
+/// SDK holds the posted tx until our own write turn (the only one it is valid
+/// in).
 fn submit_ready<Node>(sequencer: &mut ZoneSequencer<Node>, bus: &MultiSigBus, id: &BundleId) -> bool
 where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
@@ -491,17 +455,10 @@ impl MultiSigLifecyclePolicy {
                 .map(|note| note.note_id)
                 .collect()
         };
-        // Signing happens off this loop, in each sequencer's `run_bundle_signer`
-        // task, reacting to bundle announcements rather than block events.
-
-        // React to canonical state, no turn logic: while the deposit note is on
-        // our branch and unpinned, drive the pin; once pinned and the note is
-        // consumed, drive the withdraw. "Drive" = prepare *our own* bundle if we
-        // have none yet, else submit it once it has a threshold of signatures
-        // and mark the phase done optimistically. Reconcile above reverts the
-        // flag if the phase orphans, so we drive again. Every sequencer does
-        // this for its own bundle; the SDK posts each in its own turn and
-        // note-consumption leaves exactly one winner.
+        // Drive off canonical state: pin while the note is on-branch and
+        // unpinned, then withdraw once pinned and the note is consumed. "Drive" =
+        // prepare our own bundle if we have none, else submit it and set the flag
+        // optimistically; reconcile above clears it on orphan so we drive again.
         for (op_id, state) in deposits.iter_mut() {
             if state.notes.is_empty() {
                 continue;
@@ -530,8 +487,7 @@ impl MultiSigLifecyclePolicy {
             }
         }
 
-        // Once a deposit is fully withdrawn, drop its bundles from the shared
-        // bus (any sequencer's pass prunes them for everyone).
+        // Drop a deposit's bundles once it is fully withdrawn.
         let withdrawn: HashSet<Hash> = deposits
             .iter()
             .filter(|(_, state)| state.withdrawn)
@@ -545,9 +501,7 @@ impl MultiSigLifecyclePolicy {
         }
     }
 
-    /// Sign an announced bundle once with our own key and record the signature
-    /// on the shared bus for the proposer to collect. Pure crypto — no chain
-    /// state — so it runs on the signing-bus `select!` arm, not the block path.
+    /// Sign an announced bundle once with our key and record it on the bus.
     fn sign_announced(&mut self, prepared: &PreparedAtomicBundle) {
         let id = prepared.sign_payload.clone();
         if !self.signed.insert(id.clone()) {

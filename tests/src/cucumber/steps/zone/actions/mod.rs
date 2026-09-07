@@ -26,8 +26,7 @@ use super::{
     PolicyRuntime, PublishDeadline, ZoneAccountBalances, ZoneDeposit, ZoneTestError,
     build_zone_deposit, build_zone_deposit_from_values, ensure_zone_transactions_included,
     errors::{log_step_error, zone_step_error},
-    keygen, prepare_zone_pin_deposit, prepare_zone_withdraw, publish_atomic_zone_withdraw,
-    publish_message_with_retry,
+    keygen, publish_atomic_zone_withdraw, publish_message_with_retry,
     runner::{Event, PublishResult, SequencerCheckpoint, SequencerClient},
     sequencer_config, sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
     start_custom_republish_policy, start_deposit_lifecycle_policy, start_deposit_withdraw_policy,
@@ -147,11 +146,10 @@ mod publishing;
 mod sequencer;
 
 pub(super) use channel::{
-    assert_zone_funding_wallet_note, prepare_zone_atomic_pin, prepare_zone_atomic_withdraw,
     prepare_zone_channel_config, publish_atomic_zone_withdraw_transaction,
-    remember_published_zone_message, save_zone_checkpoint, sign_prepared_zone_bundle,
-    sign_prepared_zone_channel_config, stop_zone_sequencer, submit_atomic_zone_deposit_transaction,
-    submit_prepared_zone_bundle, submit_prepared_zone_channel_config, submit_zone_channel_config,
+    remember_published_zone_message, save_zone_checkpoint, sign_prepared_zone_channel_config,
+    stop_zone_sequencer, submit_atomic_zone_deposit_transaction,
+    submit_prepared_zone_channel_config, submit_zone_channel_config,
     submit_zone_channel_split_transaction, submit_zone_deposit_transaction,
     submit_zone_multi_deposit_transaction, submit_zone_withdraw_transaction,
 };

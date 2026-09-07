@@ -2,14 +2,8 @@ use lb_core::mantle::transactions::Ops;
 
 use super::*;
 
-/// Builds the funding transfer that creates the note consumed by an atomic
-/// zone deposit.
-/// Generous fee margin for the atomic `[Transfer, Deposit, Inscribe]`
-/// transaction. The mandatory fee (execution + size-based storage gas) is
-/// roughly 2k and varies with input count and change-note presence, so a
-/// tight margin intermittently underfunds the tx — which is permanently
-/// invalid and silently evicted at block assembly. Matches
-/// `MAX_ZONE_DEPOSIT_TX_FEE`; the excess above the mandatory fee is a tip.
+/// Generous fee margin: the mandatory fee varies with input count and change,
+/// and an underfunded atomic deposit tx is silently evicted at block assembly.
 const ATOMIC_DEPOSIT_FEE_MARGIN: u64 = 10_000;
 
 pub(super) fn build_atomic_deposit_transfer(
@@ -31,8 +25,7 @@ pub(super) fn build_atomic_deposit_transfer(
     Ok(funded_transfer.into_parts())
 }
 
-/// Points the channel deposit at the note created by the atomic funding
-/// transfer, keeping both operations in the same transaction.
+/// Points the channel deposit at the note created by the funding transfer.
 pub(super) fn build_atomic_deposit_op(
     channel_id: ChannelId,
     metadata: Metadata,
@@ -53,12 +46,8 @@ pub(super) fn build_atomic_deposit_op(
     })
 }
 
-/// Submits a channel withdraw signed by the active zone sequencer and publishes
-/// the withdraw inscription as part of the same SDK flow.
-///
-/// The withdraw pays a single note of `amount` back to `funding_public_key`
-/// (self-withdraw). Inputs are selected automatically by the SDK
-/// (`WithdrawInputs::Auto`, best-fit largest-first, capped at 255 inputs).
+/// Self-withdraw of a single note of `amount` back to `funding_public_key`,
+/// published with its inscription in one SDK flow. Inputs auto-selected.
 pub async fn submit_zone_withdraw(
     client: &SequencerClient,
     _channel_id: ChannelId,
@@ -102,23 +91,17 @@ pub async fn submit_zone_withdraw(
     })
 }
 
-/// Result of publishing an atomic inscription+withdraw bundle. Carries every
-/// withdraw op produced by the SDK (one per `WithdrawArg`, in submission
-/// order) so a multi-withdraw scenario can match each by its outputs.
+/// Carries every withdraw op the SDK produced (one per `WithdrawArg`, in
+/// submission order) so a multi-withdraw scenario can match each by its
+/// outputs.
 pub struct ZoneAtomicWithdrawSubmission {
     pub withdraws: Vec<ChannelWithdrawOp>,
     pub publish: PublishResult,
 }
 
-/// Publishes an atomic inscription+withdraw bundle through the runner.
-/// Returns every withdraw op (with the nonce filled by the SDK) from the
-/// publish call's return value, so downstream cucumber assertions can
-/// match each withdraw by its outputs.
-///
 /// `outputs_per_arg` carries one entry per `WithdrawArg`; each inner `Vec`
-/// becomes that arg's `Outputs` (one `Note::new(amount, funding_pk)` per
-/// listed amount). Exercises the SDK API at full width: multiple args, with
-/// any arg able to carry multiple output notes.
+/// becomes that arg's `Outputs` (one `Note::new(amount, funding_pk)` per listed
+/// amount), exercising the SDK API at full width.
 pub async fn publish_atomic_zone_withdraw(
     client: &SequencerClient,
     funding_public_key: ZkPublicKey,
@@ -171,48 +154,6 @@ pub async fn publish_atomic_zone_withdraw(
     })
 }
 
-/// Multi-sig counterpart of [`submit_zone_withdraw`]: build and fund the atomic
-/// withdraw bundle for external `transfer_threshold` signing and return it. The
-/// withdraw pays a single note of `amount` back to `funding_public_key`
-/// (self-withdraw); inputs are selected automatically (`WithdrawInputs::Auto`).
-pub async fn prepare_zone_withdraw(
-    client: &SequencerClient,
-    funding_public_key: ZkPublicKey,
-    amount: Value,
-    inscription_data: Inscription,
-) -> Result<PreparedAtomicBundle, ZoneTestError> {
-    client
-        .prepare_atomic_withdraw(
-            inscription_data,
-            vec![WithdrawArg {
-                outputs: Outputs::new([Note::new(amount, funding_public_key)]),
-            }],
-            WithdrawInputs::Auto,
-        )
-        .await
-        .map_err(|error| ZoneTestError::SubmitWithdraw {
-            message: error.to_string(),
-        })
-}
-
-/// Multi-sig counterpart of the reactive pin: build and fund the atomic
-/// `[inscribe, transfer]` bundle that re-creates `consumed_notes` (a deposit's
-/// channel notes) for external `transfer_threshold` signing.
-pub async fn prepare_zone_pin_deposit(
-    client: &SequencerClient,
-    consumed_notes: Vec<NoteId>,
-    inscription_data: Inscription,
-) -> Result<PreparedAtomicBundle, ZoneTestError> {
-    client
-        .prepare_pin_deposit(inscription_data, consumed_notes)
-        .await
-        .map_err(|error| ZoneTestError::SubmitWithdraw {
-            message: error.to_string(),
-        })
-}
-
-/// Asks the node wallet service to sign a Mantle transaction for the requested
-/// ZK keys.
 pub(super) async fn sign_tx_zk(
     node_url: &Url,
     ops: &Ops,

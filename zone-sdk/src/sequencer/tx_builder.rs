@@ -88,12 +88,9 @@ pub(super) fn attach_transfer_proof(
     Ok(channel_proofs)
 }
 
-/// Build per-op proofs for an atomic channel bundle
-/// (`[inscribe, transfer, withdraw]` or `[inscribe, transfer]`). Every
-/// `ChannelTransfer`/`ChannelWithdraw` op carries the same `channel_proof`
-/// (all sign the same funded tx hash), the inscription op carries
-/// `inscribe_sig` (the single round-robin sequencer's signature), and the fee
-/// transfer — when the transaction was funded — carries the wallet's proof.
+/// Build per-op proofs for an atomic channel bundle: transfer/withdraw ops all
+/// share `channel_proof`, the inscription carries `inscribe_sig`, and the fee
+/// transfer (when funded) carries `transfer_proof`.
 pub(super) fn assemble_atomic_bundle_ops_proofs(
     tx: &impl MantleTx,
     inscribe_sig: Ed25519Signature,
@@ -131,12 +128,9 @@ pub(super) fn assemble_atomic_bundle_ops_proofs(
     Ok(ops_proofs)
 }
 
-/// Assemble a fully-signed atomic bundle from a funded tx, the preparing
-/// sequencer's inscription signature, the collected accredited-key signatures
-/// for the transfer/withdraw ops, and the fee-transfer proof.
-///
-/// `signatures` must be indexed against the channel's `accredited_keys` and
-/// strictly ascending by index — exactly `transfer_threshold` of them.
+/// Assemble a fully-signed atomic bundle. `signatures` must be indexed against
+/// the channel's `accredited_keys`, strictly ascending, exactly
+/// `transfer_threshold` of them.
 pub(super) fn assemble_atomic_bundle_tx(
     tx: Ops,
     inscribe_sig: Ed25519Signature,
@@ -154,16 +148,9 @@ pub(super) fn assemble_atomic_bundle_tx(
         .map_err(|error| Error::Network(format!("failed to assemble atomic bundle tx: {error:?}")))
 }
 
-/// Sign a prepared multi-sig payload with `signing_key`, returning the
-/// [`IndexedSignature`] pairing `signing_key`'s position in `accredited_keys`
-/// with its signature over `sign_payload`.
-///
-/// Pure crypto — no chain state or live sequencer — so a channel participant
-/// (or a zone's gossip task) can sign a
-/// [`crate::sequencer::PreparedAtomicBundle`]
-/// or [`crate::sequencer::PreparedChannelConfig`] it received out of band with
-/// only its own key and the prepared object's public `accredited_keys` /
-/// `sign_payload`. Errors if `signing_key` is not in `accredited_keys`.
+/// Sign a prepared multi-sig payload with `signing_key`, returning its
+/// [`IndexedSignature`] against `accredited_keys`. Errors if `signing_key` is
+/// not in `accredited_keys`.
 pub fn sign_prepared(
     signing_key: &Ed25519Key,
     accredited_keys: &[Ed25519PublicKey],

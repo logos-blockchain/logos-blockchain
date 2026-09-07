@@ -501,9 +501,8 @@ async fn step_zone_indexer_exact_reactive_lifecycle(
     deposit_alias: String,
     timeout_seconds: u64,
 ) -> StepResult {
-    // Rebuild the exact pin/withdraw payloads the reactive policy would post for
-    // this deposit's op_id, then assert each appears in the indexer exactly once
-    // — no missing phase, and no surviving duplicate from a benign double-publish.
+    // Assert each reactive-policy payload for this op_id appears exactly once:
+    // no missing phase, no surviving duplicate from a benign double-publish.
     let op_id = log_step_error(step, world.zone.resolve_submitted_deposit(&deposit_alias))?
         .0
         .op_id();

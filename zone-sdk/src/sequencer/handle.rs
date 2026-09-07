@@ -267,15 +267,11 @@ where
             .await
     }
 
-    /// Build and fund an atomic withdraw bundle for external multi-sig signing.
-    ///
-    /// The multi-sig counterpart of [`Self::publish_atomic_withdraw`]: instead
-    /// of self-signing, it hands back a [`PreparedAtomicBundle`] carrying the
-    /// funded tx, the `sign_payload` each accredited key must sign, and the
-    /// channel's current accredited keys / `transfer_threshold`. The caller
-    /// collects a signature from each required key holder over `sign_payload`,
-    /// then submits via [`Self::submit_atomic_bundle`]. The bundled inscription
-    /// is turn-gated, so prepare and submit from the current-turn sequencer.
+    /// Build and fund an atomic withdraw bundle for external multi-sig signing
+    /// — the multi-sig counterpart of [`Self::publish_atomic_withdraw`].
+    /// Collect signatures over `sign_payload` and submit via
+    /// [`Self::submit_atomic_bundle`]; the bundled inscription is turn-gated,
+    /// so prepare and submit from the current-turn sequencer.
     pub async fn prepare_atomic_withdraw(
         &mut self,
         inscribe: Inscription,
@@ -301,13 +297,11 @@ where
     }
 
     /// Submit a [`PreparedAtomicBundle`] with its externally-collected
-    /// `transfer_threshold` signatures.
+    /// signatures.
     ///
     /// `signatures` must be indexed against
     /// [`PreparedAtomicBundle::accredited_keys`] and strictly ascending by
-    /// index. Assembles the fully-signed bundle and enqueues it for posting;
-    /// the returned [`PublishReceipt`] reflects the queued state, not a network
-    /// acknowledgement. Handles both atomic-withdraw and pin-deposit bundles.
+    /// index. Handles both atomic-withdraw and pin-deposit bundles.
     pub fn submit_atomic_bundle(
         &mut self,
         prepared: PreparedAtomicBundle,
@@ -319,11 +313,8 @@ where
     /// Sign a prepared config with this sequencer's own key, returning its
     /// [`IndexedSignature`] — the counterparty half of the multi-sig flow.
     ///
-    /// Pure local crypto: no chain state, no drive-loop round-trip. A
-    /// sequencer that receives a [`PreparedChannelConfig`] out-of-band (e.g.
-    /// over gossip) signs it here and returns its signature to the preparer,
-    /// who collects a threshold of them for [`Self::submit_channel_config`].
-    /// Errors if this sequencer's key is not in the prepared accredited set.
+    /// Pure local crypto; errors if this sequencer's key is not in the prepared
+    /// accredited set.
     pub fn sign_prepared_config(
         &self,
         prepared: &PreparedChannelConfig,

@@ -1,13 +1,11 @@
 use super::{
-    CucumberWorld, Step, StepResult, assert_zone_funding_wallet_note, prepare_zone_atomic_pin,
-    prepare_zone_atomic_withdraw, prepare_zone_channel_config,
-    publish_atomic_zone_withdraw_transaction, save_zone_checkpoint, sign_prepared_zone_bundle,
+    CucumberWorld, Step, StepResult, prepare_zone_channel_config,
+    publish_atomic_zone_withdraw_transaction, save_zone_checkpoint,
     sign_prepared_zone_channel_config, single_column_table, start_named_sequencer_with_startup,
-    submit_atomic_zone_deposit_transaction, submit_prepared_zone_bundle,
-    submit_prepared_zone_channel_config, submit_zone_channel_config,
-    submit_zone_channel_split_transaction, submit_zone_deposit_transaction,
-    submit_zone_multi_deposit_transaction, submit_zone_withdraw_transaction, when,
-    zone_atomic_withdraw_rows, zone_config_row,
+    submit_atomic_zone_deposit_transaction, submit_prepared_zone_channel_config,
+    submit_zone_channel_config, submit_zone_channel_split_transaction,
+    submit_zone_deposit_transaction, submit_zone_multi_deposit_transaction,
+    submit_zone_withdraw_transaction, when, zone_atomic_withdraw_rows, zone_config_row,
 };
 
 #[when(expr = "I save current checkpoint of sequencer {string} as {string}")]
@@ -165,74 +163,6 @@ async fn step_submit_prepared_zone_channel_config(
     transaction_alias: String,
 ) -> StepResult {
     submit_prepared_zone_channel_config(world, step, &sequencer_alias, transaction_alias).await
-}
-
-#[when(expr = "sequencer {string} prepares zone withdraw transaction {string} of {int}")]
-async fn step_prepare_zone_atomic_withdraw(
-    world: &mut CucumberWorld,
-    step: &Step,
-    sequencer_alias: String,
-    transaction_alias: String,
-    amount: u64,
-) -> StepResult {
-    prepare_zone_atomic_withdraw(world, step, &sequencer_alias, transaction_alias, amount).await
-}
-
-#[when(
-    expr = "sequencer {string} prepares zone pin deposit transaction {string} for deposit {string}"
-)]
-async fn step_prepare_zone_atomic_pin(
-    world: &mut CucumberWorld,
-    step: &Step,
-    sequencer_alias: String,
-    transaction_alias: String,
-    deposit_alias: String,
-) -> StepResult {
-    prepare_zone_atomic_pin(
-        world,
-        step,
-        &sequencer_alias,
-        transaction_alias,
-        deposit_alias,
-    )
-    .await
-}
-
-#[when(expr = "sequencer {string} signs prepared zone bundle {string}")]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Cucumber string captures are provided as owned `String`s"
-)]
-fn step_sign_prepared_zone_bundle(
-    world: &mut CucumberWorld,
-    step: &Step,
-    signer_alias: String,
-    transaction_alias: String,
-) -> StepResult {
-    sign_prepared_zone_bundle(world, step, &signer_alias, transaction_alias)
-}
-
-#[when(expr = "sequencer {string} submits prepared zone bundle {string}")]
-async fn step_submit_prepared_zone_bundle(
-    world: &mut CucumberWorld,
-    step: &Step,
-    sequencer_alias: String,
-    transaction_alias: String,
-) -> StepResult {
-    submit_prepared_zone_bundle(world, step, &sequencer_alias, transaction_alias).await
-}
-
-#[cucumber::then(
-    expr = "the funding wallet of {string} contains a note of value {int} in {int} seconds"
-)]
-async fn step_funding_wallet_contains_note(
-    world: &mut CucumberWorld,
-    step: &Step,
-    sequencer_alias: String,
-    value: u64,
-    timeout_secs: u64,
-) -> StepResult {
-    assert_zone_funding_wallet_note(world, step, &sequencer_alias, value, timeout_secs).await
 }
 
 #[when(expr = "sequencer {string} submits zone config transaction:")]

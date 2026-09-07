@@ -279,14 +279,10 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
-  # End-to-end multi-sig, driven entirely by the sequencers' own drive loops.
-  # Three sequencers run the reactive multi-sig lifecycle policy and rotate the
-  # write turn. They set up the channel config (single-signer -> 2-of-2 -> 2-of-3
-  # with turn rotation), then a deposit fires and everything else reacts: the
-  # current turn-holder prepares the pin (then the withdraw), all accredited
-  # sequencers sign it in-loop, the turn-holder submits at threshold — exchanging
-  # signatures over the shared bus (LEZ's gossipsub stand-in). No step signs on
-  # another sequencer's behalf, and the ledger orphans any benign double-publish.
+  # End-to-end multi-sig driven by the sequencers' own drive loops: three
+  # sequencers run the reactive lifecycle policy, escalate the config
+  # single-signer -> 2-of-2 -> 2-of-3, then a deposit fires and they pin and
+  # withdraw it under 2-of-3, exchanging signatures over the shared bus.
   Scenario: Multi-sig deposit lifecycle reacts across independent sequencers
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -299,18 +295,14 @@ Feature: Zone SDK
     And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
     And I do a coin split for "WALLET_1A" of 3 UTXOs valued at 5 LGO tokens each
-    # 1. Every sequencer runs its own drive loop + the reactive policy, sharing
-    #    one signature bus. Each observed deposit is withdrawn to outputs "3".
+    # Each sequencer runs its own drive loop + policy, sharing one bus.
     And I start multi-sig lifecycle zone sequencers with withdraw outputs "3":
       | alias |
       | SEQ_A |
       | SEQ_B |
       | SEQ_C |
-    # 2. Set up the config: claim single-signer, escalate to 2-of-2, then to
-    #    2-of-3 with a rotating write turn. The timeframe (15 slots) is large
-    #    enough for a full prepare -> gather-signatures -> submit round to land
-    #    within one turn, yet still rotates several times over the deposit
-    #    lifecycle so pin and withdraw can be driven by different turn-holders.
+    # Config: single-signer -> 2-of-2 -> 2-of-3. Timeframe 15 lets a full
+    # prepare -> sign -> submit round land within a turn while still rotating.
     And sequencer "SEQ_A" prepares zone config transaction "CHANNEL_CONFIG_1" with threshold 1 authorizing:
       | alias |
       | SEQ_A |
@@ -332,16 +324,10 @@ Feature: Zone SDK
     And sequencer "SEQ_A" signs prepared zone config transaction "CHANNEL_CONFIG_3"
     And sequencer "SEQ_B" submits prepared zone config transaction "CHANNEL_CONFIG_3"
     Then zone transaction "CHANNEL_CONFIG_3" is finalized in 180 seconds
-    # 3. Fire the deposit — the only external trigger. The sequencers react on
-    #    their own: pin the deposited 5, then withdraw 3 under 2-of-3 signing.
+    # Fire the deposit — the only external trigger; the sequencers react.
     When I submit zone deposit transaction "DEPOSIT_1" into channel of "SEQ_A" of 5 with metadata "Mint 5 to channel"
-    # 4. Assert exactly the expected reactive outcome — not more, not less:
-    #    exactly one pin and one withdraw finalized in the indexer (a benign
-    #    double-publish leaves no surviving duplicate), and the channel holds
-    #    exactly the value-2 change note. Together these prove the deposited 5
-    #    was pinned and then 3 withdrawn off-channel (2 change kept) under 2-of-3
-    #    signing — the recipient credit is the released value-3, verified here by
-    #    its removal from the channel rather than a node-side wallet scan.
+    # Exactly one pin + one withdraw finalized (no surviving double-publish), and
+    # the channel keeps only the value-2 change: proves 5 pinned, 3 withdrawn.
     Then the zone indexer returns exactly one finalized pin and withdraw for deposit "DEPOSIT_1" in 300 seconds
     And the channel wallet of "SEQ_A" has exactly 1 finalized and 0 unfinalized notes in 120 seconds
     And the channel wallet of "SEQ_A" contains a finalized note of value 2 in 120 seconds

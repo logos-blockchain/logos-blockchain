@@ -65,8 +65,8 @@ use crate::{
         steps::{
             tokio_console::profile::TokioConsoleProfile,
             zone::runner::{
-                Event, IndexedSignature, InscriptionId, PreparedAtomicBundle,
-                PreparedChannelConfig, SequencerCheckpoint, SequencerClient, TxStatusUpdate,
+                Event, IndexedSignature, InscriptionId, PreparedChannelConfig, SequencerCheckpoint,
+                SequencerClient, TxStatusUpdate,
             },
         },
         utils::{make_builder, shared_host_bin_path},
@@ -241,8 +241,6 @@ pub struct ZoneState {
     latest_checkpoints: HashMap<String, SequencerCheckpoint>,
     prepared_configs: HashMap<String, PreparedChannelConfig>,
     prepared_config_signatures: HashMap<String, Vec<IndexedSignature>>,
-    prepared_bundles: HashMap<String, PreparedAtomicBundle>,
-    prepared_bundle_signatures: HashMap<String, Vec<IndexedSignature>>,
     sequencer_startups: HashMap<String, ZoneSequencerStartup>,
     observed_mempool_pending: HashMap<String, HashSet<InscriptionId>>,
     sorted_total_payloads: Option<usize>,
@@ -589,33 +587,6 @@ impl ZoneState {
             .unwrap_or_default()
     }
 
-    pub fn remember_prepared_bundle(&mut self, alias: String, prepared: PreparedAtomicBundle) {
-        self.prepared_bundles.insert(alias, prepared);
-    }
-
-    pub fn prepared_bundle(&self, alias: &str) -> Result<&PreparedAtomicBundle, StepError> {
-        self.prepared_bundles
-            .get(alias)
-            .ok_or(StepError::LogicalError {
-                message: format!("No prepared zone bundle '{alias}'"),
-            })
-    }
-
-    pub fn add_prepared_bundle_signature(&mut self, alias: String, signature: IndexedSignature) {
-        self.prepared_bundle_signatures
-            .entry(alias)
-            .or_default()
-            .push(signature);
-    }
-
-    #[must_use]
-    pub fn prepared_bundle_signatures(&self, alias: &str) -> Vec<IndexedSignature> {
-        self.prepared_bundle_signatures
-            .get(alias)
-            .cloned()
-            .unwrap_or_default()
-    }
-
     pub fn set_latest_checkpoint_for(
         &mut self,
         sequencer_alias: &str,
@@ -885,8 +856,6 @@ impl ZoneState {
         self.latest_checkpoints.clear();
         self.prepared_configs.clear();
         self.prepared_config_signatures.clear();
-        self.prepared_bundles.clear();
-        self.prepared_bundle_signatures.clear();
         self.expected_custom_payloads.clear();
     }
 

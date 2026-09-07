@@ -198,8 +198,7 @@ pub(super) enum ActorRequest {
         response_tx: oneshot::Sender<Result<PreparedChannelConfig, Error>>,
     },
     SubmitChannelConfig {
-        // Boxed: `PreparedChannelConfig` is much larger than the other
-        // variants' payloads, so keep it off the enum's inline footprint.
+        // Boxed: much larger than the other variants' payloads.
         prepared: Box<PreparedChannelConfig>,
         signatures: Vec<IndexedSignature>,
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
@@ -819,10 +818,7 @@ where
         ))
     }
 
-    /// Single-signer atomic withdraw: prepare the bundle, self-sign it as the
-    /// sole `transfer_threshold == 1` signer, and submit. Multi-sig channels
-    /// use [`Self::do_prepare_atomic_withdraw`] +
-    /// [`Self::do_submit_atomic_bundle`].
+    /// Single-signer atomic withdraw: prepare, self-sign, and submit.
     pub(super) async fn do_publish_atomic_withdraw(
         &mut self,
         inscribe: Inscription,
@@ -839,11 +835,9 @@ where
 
     /// Build and fund an atomic `[inscribe, transfer, withdraw]` bundle for
     /// external multi-sig signing, without mutating state. The
-    /// transfer/withdraw ops are authorized by `transfer_threshold`
-    /// accredited-key signatures over
-    /// [`PreparedAtomicBundle::sign_payload`], collected out-of-band and passed
-    /// to [`Self::do_submit_atomic_bundle`]; the bundled inscription is signed
-    /// here by this (current-turn) sequencer.
+    /// transfer/withdraw ops are signed out-of-band (`transfer_threshold`
+    /// accredited keys over [`PreparedAtomicBundle::sign_payload`]); the
+    /// inscription is signed here.
     #[expect(
         clippy::needless_pass_by_ref_mut,
         reason = "&mut self keeps the async future Send; a &self future would require Sync"
@@ -863,8 +857,6 @@ where
             ));
         }
 
-        // Recipient notes, concatenated across the withdraw args in order, plus
-        // the total value they release.
         let recipient_outputs: Vec<Note> = withdraws
             .iter()
             .flat_map(|w| w.outputs.iter().copied())
@@ -893,8 +885,7 @@ where
             tx_hash,
             op: withdraw_op,
         }];
-        // The recipient notes the bundle releases — carried so an orphaned
-        // bundle can be re-issued from its report.
+        // Carried so an orphaned bundle can be re-issued from its report.
         let outputs = Outputs::try_new(recipient_outputs)
             .map_err(|e| Error::Network(format!("invalid withdraw outputs: {e:?}")))?;
 
@@ -920,10 +911,7 @@ where
         ))
     }
 
-    /// Build the transfer + withdraw ops for an atomic withdraw: select the
-    /// channel notes that cover `amount`, transfer them to the recipient keys
-    /// (with change back to the funding key when they overpay), and release the
-    /// freshly-created recipient notes.
+    /// Build the transfer + withdraw ops for an atomic withdraw.
     fn build_transfer_and_withdraw(
         &self,
         recipient_outputs: &[Note],
@@ -950,9 +938,8 @@ where
             Error::Network("selected channel notes underfund the withdrawal".into())
         })?;
 
-        // Transfer outputs: the recipient notes, then a change note when the
-        // inputs overpay. Change routes to `change_pk` if configured, else back
-        // to the funding key.
+        // Recipient notes, plus a change note (to `change_pk`, else the funding
+        // key) when the inputs overpay.
         let change_pk = self.config.funding.change_pk.unwrap_or(funding_pk);
         let mut transfer_outputs = recipient_outputs.to_vec();
         if change > 0 {
@@ -966,9 +953,8 @@ where
                 .map_err(|e| Error::Network(format!("invalid transfer outputs: {e:?}")))?,
         };
 
-        // The withdraw releases exactly the recipient notes the transfer
-        // created: the first `recipient_outputs.len()` utxos in output order. A
-        // trailing change note, if any, stays in the channel.
+        // Release exactly the transfer's recipient notes: the first
+        // `recipient_outputs.len()` utxos in output order; change stays in-channel.
         let recipient_note_ids: Vec<_> = transfer_op
             .utxos()
             .take(recipient_outputs.len())
@@ -983,9 +969,7 @@ where
         Ok((transfer_op, withdraw_op))
     }
 
-    /// Single-signer pin deposit: prepare, self-sign, submit. Multi-sig
-    /// channels use [`Self::do_prepare_pin_deposit`] +
-    /// [`Self::do_submit_atomic_bundle`].
+    /// Single-signer pin deposit: prepare, self-sign, and submit.
     pub(super) async fn do_publish_pin_deposit(
         &mut self,
         inscribe: Inscription,
@@ -1002,9 +986,6 @@ where
     /// Build and fund an atomic `[inscribe, transfer]` pin-deposit bundle for
     /// external multi-sig signing: the transfer consumes the named deposited
     /// notes (re-creating each 1:1), gating the inscription on the deposit.
-    /// Multi-sig counterpart of [`Self::do_publish_pin_deposit`]; see
-    /// [`Self::do_prepare_atomic_withdraw`] for the signing/submission
-    /// contract.
     #[expect(
         clippy::needless_pass_by_ref_mut,
         reason = "&mut self keeps the async future Send; a &self future would require Sync"
@@ -1024,7 +1005,6 @@ where
         }
 
         let transfer_op = self.build_deposit_transfer(&consumed_notes)?;
-        // The bounded input set is exactly what the transfer consumes.
         let consumed_inputs = transfer_op.inputs.clone();
 
         let (ops, parent, msg_id) =
@@ -1055,9 +1035,8 @@ where
         ))
     }
 
-    /// Resolve this sequencer's accredited-key index for a single-signer atomic
-    /// bundle, rejecting channels that require multi-sig (`transfer_threshold >
-    /// 1`).
+    /// Resolve this sequencer's accredited-key index, rejecting channels that
+    /// require multi-sig (`transfer_threshold > 1`).
     fn own_key_index_for_single_sig(&self, op: &str) -> Result<ChannelKeyIndex, Error> {
         let channel_state = self.channel_state.as_ref().ok_or_else(|| {
             Error::Network(format!(
@@ -1075,9 +1054,8 @@ where
         find_own_key_index(channel_state, &self.signing_key)
     }
 
-    /// Prefix an inscription op onto the fund-moving ops of an atomic bundle,
-    /// returning the ops in execution order plus the inscription's parent and
-    /// message id.
+    /// Prefix an inscription op onto the bundle's fund-moving ops, returning
+    /// them in execution order plus the inscription's parent and message id.
     fn wrap_bundle_ops(&self, inscribe: &Inscription, mut ops: Vec<Op>) -> (Vec<Op>, MsgId, MsgId) {
         let parent = self.compute_publish_parent();
         let inscription_op = InscriptionOp {
@@ -1091,9 +1069,8 @@ where
         (ops, parent, msg_id)
     }
 
-    /// Assemble a [`PreparedAtomicBundle`], reading the channel's current
-    /// accredited keys / `transfer_threshold` (whom the caller collects
-    /// signatures from) and the `sign_payload` those keys must sign.
+    /// Assemble a [`PreparedAtomicBundle`], capturing the channel's current
+    /// accredited keys / `transfer_threshold` and the `sign_payload` to sign.
     fn build_prepared_bundle(
         &self,
         funded: (Ops, Option<OpProof>),
@@ -1130,9 +1107,8 @@ where
     }
 
     /// Assemble a [`PreparedAtomicBundle`] with its externally-collected
-    /// `transfer_threshold` signatures and submit it — the shared tail of both
-    /// the single-sig publish paths and the multi-sig submit path (tracking,
-    /// queueing, checkpoint, tx status), keyed on the bundle's inscription tip.
+    /// signatures and submit it — the shared tail of the single-sig and
+    /// multi-sig paths (tracking, queueing, checkpoint, tx status).
     pub(super) fn do_submit_atomic_bundle(
         &mut self,
         prepared: PreparedAtomicBundle,
@@ -1220,11 +1196,9 @@ where
         Ok((PublishResult { tx }, checkpoint))
     }
 
-    /// Sign a prepared multi-sig payload (from a `PreparedChannelConfig` or
-    /// `PreparedAtomicBundle`) with this sequencer's own key, returning its
-    /// `IndexedSignature` — the counterparty half of the prepare → sign →
-    /// submit flow. The index is this sequencer's position in the prepared
-    /// `accredited_keys`; errors if its key is not accredited.
+    /// Sign a prepared multi-sig payload with this sequencer's own key,
+    /// returning its `IndexedSignature`. The index is this sequencer's position
+    /// in the prepared `accredited_keys`; errors if its key is not accredited.
     pub(super) fn do_sign_prepared(
         &self,
         accredited_keys: &[Ed25519PublicKey],
@@ -1234,8 +1208,7 @@ where
     }
 
     /// Consume the named deposited notes and re-create each 1:1; errors if a
-    /// note is not in the tracked channel-note set (deposit not on this
-    /// branch).
+    /// note is not in the tracked channel-note set.
     fn build_deposit_transfer(
         &self,
         consumed_notes: &[NoteId],

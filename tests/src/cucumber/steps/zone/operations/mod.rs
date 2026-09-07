@@ -251,10 +251,7 @@ mod policies;
 mod transactions;
 
 use atomic::{build_atomic_deposit_op, build_atomic_deposit_transfer, sign_tx_zk};
-pub(super) use atomic::{
-    prepare_zone_pin_deposit, prepare_zone_withdraw, publish_atomic_zone_withdraw,
-    submit_zone_withdraw,
-};
+pub(super) use atomic::{publish_atomic_zone_withdraw, submit_zone_withdraw};
 pub(super) use custom_policy::{CustomRepublishDeps, start_custom_republish_policy};
 pub(super) use deposit_policy::{
     BundleAnnounce, MultiSigBus, pin_payload, start_deposit_lifecycle_policy,

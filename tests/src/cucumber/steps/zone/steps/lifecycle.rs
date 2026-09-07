@@ -115,9 +115,7 @@ async fn step_start_multisig_lifecycle_sequencers(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let aliases = single_column_table(step, "alias", "zone sequencer aliases")?;
-    // Shared across every sequencer: `bus` accumulates signatures; `announce` is
-    // the fanout channel proposers publish bundles on and signer tasks read —
-    // the test's stand-in for gossip. Each sequencer keeps its own clone.
+    // Shared gossip stand-in: `bus` holds signatures, `announce` fans out bundles.
     let bus = MultiSigBus::default();
     let (announce, _): (BundleAnnounce, _) = tokio::sync::broadcast::channel(256);
     for alias in aliases {
