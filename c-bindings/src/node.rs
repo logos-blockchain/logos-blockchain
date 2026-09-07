@@ -1,6 +1,7 @@
 use std::{
     ffi::{CStr, CString, c_char, c_void},
     mem::ManuallyDrop,
+    ptr,
 };
 
 use lb_core::mantle::transactions::genesis_tx::ChainId;
@@ -28,29 +29,42 @@ pub struct LogosBlockchainNode {
     // The chain ID of the deployment this node was started with. It is fixed
     // for the node's lifetime, so it is captured here at construction instead
     // of being queried from a running service. Owned by this struct; freed on
-    // drop.
+    // drop. Null when the chain ID cannot be represented as a C string, which
+    // `get_chain_id` reports as an error rather than failing node start.
     chain_id: *mut c_char,
 }
 
 impl LogosBlockchainNode {
     pub fn new(overwatch: LogosBlockchainOverwatch, runtime: Runtime, chain_id: &ChainId) -> Self {
+        // A `ChainId` is only bounded and UTF-8, so nothing stops it from
+        // carrying an interior NUL that no C string can hold. That is a broken
+        // deployment rather than a reason to refuse to run, so the node starts
+        // either way and `get_chain_id` is the one that reports the problem.
+        let chain_id = CString::new(<_ as AsRef<str>>::as_ref(chain_id)).map_or_else(
+            |error| {
+                logging::error!(
+                    "new",
+                    "Chain ID {chain_id} cannot be represented as a C string: {error}. \
+                     `get_chain_id` will fail for this node."
+                );
+                ptr::null_mut()
+            },
+            CString::into_raw,
+        );
+
         Self {
             // Box the complex types and convert to opaque pointers
             overwatch: Box::into_raw(Box::new(overwatch)).cast::<c_void>(),
             runtime: Box::into_raw(Box::new(runtime)).cast::<c_void>(),
-            // A `ChainId` is a bounded, non-empty string, and the genesis
-            // encoding it comes from cannot carry an interior NUL, so this
-            // conversion cannot fail.
-            chain_id: CString::new(<_ as AsRef<str>>::as_ref(chain_id))
-                .expect("A `ChainId` never contains an interior NUL byte")
-                .into_raw(),
+            chain_id,
         }
     }
 
-    /// The chain ID of the deployment this node runs, borrowed from the node.
+    /// The chain ID of the deployment this node runs, borrowed from the node,
+    /// or `None` when it is not representable as a C string.
     #[must_use]
-    pub(crate) const fn chain_id(&self) -> &CStr {
-        unsafe { CStr::from_ptr(self.chain_id) }
+    pub(crate) fn chain_id(&self) -> Option<&CStr> {
+        (!self.chain_id.is_null()).then(|| unsafe { CStr::from_ptr(self.chain_id) })
     }
 
     // Helper methods to safely access the inner types
@@ -85,7 +99,9 @@ impl LogosBlockchainNode {
         let this = ManuallyDrop::new(self);
         let overwatch = unsafe { Box::from_raw(this.overwatch.cast::<LogosBlockchainOverwatch>()) };
         let runtime = unsafe { Box::from_raw(this.runtime.cast::<Runtime>()) };
-        drop(unsafe { CString::from_raw(this.chain_id) });
+        if !this.chain_id.is_null() {
+            drop(unsafe { CString::from_raw(this.chain_id) });
+        }
         (overwatch, runtime)
     }
 
@@ -123,14 +139,11 @@ impl Drop for LogosBlockchainNode {
                 "Attempted to drop a null tokio runtime pointer. This is a bug"
             );
         }
-        if self.chain_id.is_null() {
-            logging::error!(
-                "drop",
-                "Attempted to drop a null chain ID pointer. This is a bug"
-            );
-        }
         drop(unsafe { Box::from_raw(self.overwatch.cast::<LogosBlockchainOverwatch>()) });
         drop(unsafe { Box::from_raw(self.runtime.cast::<Runtime>()) });
-        drop(unsafe { CString::from_raw(self.chain_id) });
+        // A null chain ID is a represented state, not a bug: see `new`.
+        if !self.chain_id.is_null() {
+            drop(unsafe { CString::from_raw(self.chain_id) });
+        }
     }
 }

@@ -23,7 +23,9 @@ pub type FfiGetChainIdResult = FfiStatusResult<*mut c_char>;
 /// # Returns
 ///
 /// A [`FfiGetChainIdResult`] containing a pointer to an allocated C string on
-/// success, or an [`OperationStatus`] error on failure.
+/// success, or an [`OperationStatus`] error on failure. A chain ID that cannot
+/// be represented as a C string — one carrying an interior NUL byte — fails
+/// with [`OperationStatusCode::RuntimeError`].
 ///
 /// # Safety
 ///
@@ -40,10 +42,17 @@ pub unsafe extern "C" fn get_chain_id(node: *const LogosBlockchainNode) -> FfiGe
     return_error_if_null_pointer!(node);
     let node = unsafe { &*node };
 
+    let Some(chain_id) = node.chain_id() else {
+        return FfiGetChainIdResult::err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            "The chain ID of this deployment cannot be represented as a C string.",
+        ));
+    };
+
     // Hand the caller its own copy: the node keeps ownership of its own string
     // for as long as it lives, and the caller frees this one with
     // `free_cstring`.
-    match CString::new(node.chain_id().to_bytes()) {
+    match CString::new(chain_id.to_bytes()) {
         Ok(chain_id) => FfiGetChainIdResult::ok(chain_id.into_raw()),
         Err(error) => FfiGetChainIdResult::err(OperationStatus::error(
             OperationStatusCode::RuntimeError,
