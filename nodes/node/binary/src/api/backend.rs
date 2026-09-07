@@ -231,6 +231,9 @@ where
 
         let app = app
             .with_state(handle.clone())
+            // The chain ID is a constant of the deployment, so it rides along
+            // as a request extension instead of a service round trip.
+            .layer(axum::Extension(self.settings.chain_id.clone()))
             .layer(axum::middleware::from_fn(http_metrics_middleware))
             .layer(axum::extract::DefaultBodyLimit::max(
                 self.settings.max_body_size,

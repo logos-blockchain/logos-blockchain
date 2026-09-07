@@ -139,10 +139,10 @@ pub fn run_node_from_config(
     config: RunConfig,
     handle: Option<runtime::Handle>,
 ) -> Result<Overwatch<RuntimeServiceId>, DynError> {
-    // The chain ID is fixed by the deployment. Record it before the deployment
-    // config is consumed below, so the API and the C bindings can serve it
-    // without a round trip to the chain service.
-    config::deployment::record_chain_id(config.deployment.chain_id());
+    // Read before the deployment settings are consumed piecewise below. The
+    // chain ID is fixed by the deployment, so the API backend is handed it up
+    // front rather than querying a service for a value that cannot change.
+    let chain_id = config.deployment.chain_id();
 
     let blend_rewards_params = config.deployment.blend_reward_params();
 
@@ -218,6 +218,7 @@ pub fn run_node_from_config(
 
     let api_config = ApiConfig {
         user: config.user.api,
+        chain_id,
     };
 
     let http_config = api_config.backend_settings();

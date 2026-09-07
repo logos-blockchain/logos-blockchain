@@ -5,7 +5,7 @@ use std::{
 
 use ::libp2p::PeerId;
 use axum::{
-    Json,
+    Extension, Json,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse as _, Response},
@@ -33,6 +33,7 @@ use lb_core::{
         traits::Hashable,
         transactions::{
             MantleTxBuilder,
+            genesis_tx::ChainId,
             states::{Preverified, Unverified},
         },
     },
@@ -491,24 +492,18 @@ pub async fn version() -> Response {
     Json(crate::version::node_version()).into_response()
 }
 
+/// The chain ID is fixed by the deployment the node was built with, so it is
+/// handed to the API backend in its settings and served straight from the
+/// request extensions. There is no failure path.
 #[utoipa::path(
     get,
     path = paths::CHAIN_ID,
     responses(
         (status = 200, description = "The chain this node runs on", body = String),
-        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn chain_id() -> Response {
-    let Some(chain_id) = crate::config::deployment::chain_id() else {
-        return ApiError::internal_message("Chain ID has not been recorded for this process")
-            .into_response();
-    };
-
-    Json(ChainIdResponseBody {
-        chain_id: chain_id.clone(),
-    })
-    .into_response()
+pub async fn chain_id(Extension(chain_id): Extension<ChainId>) -> Response {
+    Json(ChainIdResponseBody { chain_id }).into_response()
 }
 
 #[derive(Deserialize)]
