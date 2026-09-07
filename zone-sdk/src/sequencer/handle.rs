@@ -11,7 +11,10 @@ use lb_core::{
 use lb_key_management_system_service::keys::Ed25519Signature;
 
 use super::{
-    types::{ChannelWalletView, Error, PreparedChannelConfig, WithdrawArg, WithdrawInputs},
+    types::{
+        ChannelWalletView, Error, PreparedAtomicBundle, PreparedChannelConfig, WithdrawArg,
+        WithdrawInputs,
+    },
     zone_sequencer::ZoneSequencer,
 };
 use crate::{adapter, sequencer::zone_sequencer::PublishReceipt};
@@ -262,6 +265,82 @@ where
         self.sequencer
             .do_publish_pin_deposit(inscribe, consumed_notes)
             .await
+    }
+
+    /// Build and fund an atomic withdraw bundle for external multi-sig signing.
+    ///
+    /// The multi-sig counterpart of [`Self::publish_atomic_withdraw`]: instead
+    /// of self-signing, it hands back a [`PreparedAtomicBundle`] carrying the
+    /// funded tx, the `sign_payload` each accredited key must sign, and the
+    /// channel's current accredited keys / `transfer_threshold`. The caller
+    /// collects a signature from each required key holder over `sign_payload`,
+    /// then submits via [`Self::submit_atomic_bundle`]. The bundled inscription
+    /// is turn-gated, so prepare and submit from the current-turn sequencer.
+    pub async fn prepare_atomic_withdraw(
+        &mut self,
+        inscribe: Inscription,
+        withdraws: Vec<WithdrawArg>,
+        inputs: WithdrawInputs,
+    ) -> Result<PreparedAtomicBundle, Error> {
+        self.sequencer
+            .do_prepare_atomic_withdraw(inscribe, withdraws, inputs)
+            .await
+    }
+
+    /// Build and fund a pin-deposit bundle for external multi-sig signing — the
+    /// multi-sig counterpart of [`Self::publish_pin_deposit`]. See
+    /// [`Self::prepare_atomic_withdraw`] for the signing/submission contract.
+    pub async fn prepare_pin_deposit(
+        &mut self,
+        inscribe: Inscription,
+        consumed_notes: Vec<NoteId>,
+    ) -> Result<PreparedAtomicBundle, Error> {
+        self.sequencer
+            .do_prepare_pin_deposit(inscribe, consumed_notes)
+            .await
+    }
+
+    /// Submit a [`PreparedAtomicBundle`] with its externally-collected
+    /// `transfer_threshold` signatures.
+    ///
+    /// `signatures` must be indexed against
+    /// [`PreparedAtomicBundle::accredited_keys`] and strictly ascending by
+    /// index. Assembles the fully-signed bundle and enqueues it for posting;
+    /// the returned [`PublishReceipt`] reflects the queued state, not a network
+    /// acknowledgement. Handles both atomic-withdraw and pin-deposit bundles.
+    pub fn submit_atomic_bundle(
+        &mut self,
+        prepared: PreparedAtomicBundle,
+        signatures: Vec<IndexedSignature>,
+    ) -> Result<PublishReceipt, Error> {
+        self.sequencer.do_submit_atomic_bundle(prepared, signatures)
+    }
+
+    /// Sign a prepared config with this sequencer's own key, returning its
+    /// [`IndexedSignature`] — the counterparty half of the multi-sig flow.
+    ///
+    /// Pure local crypto: no chain state, no drive-loop round-trip. A
+    /// sequencer that receives a [`PreparedChannelConfig`] out-of-band (e.g.
+    /// over gossip) signs it here and returns its signature to the preparer,
+    /// who collects a threshold of them for [`Self::submit_channel_config`].
+    /// Errors if this sequencer's key is not in the prepared accredited set.
+    pub fn sign_prepared_config(
+        &self,
+        prepared: &PreparedChannelConfig,
+    ) -> Result<IndexedSignature, Error> {
+        self.sequencer
+            .do_sign_prepared(&prepared.accredited_keys, &prepared.sign_payload)
+    }
+
+    /// Sign a prepared atomic bundle (withdraw or pin-deposit) with this
+    /// sequencer's own key — the bundle counterpart of
+    /// [`Self::sign_prepared_config`], feeding [`Self::submit_atomic_bundle`].
+    pub fn sign_prepared_bundle(
+        &self,
+        prepared: &PreparedAtomicBundle,
+    ) -> Result<IndexedSignature, Error> {
+        self.sequencer
+            .do_sign_prepared(&prepared.accredited_keys, &prepared.sign_payload)
     }
 
     /// The channel's tracked note set — see [`ZoneSequencer::channel_wallet`].

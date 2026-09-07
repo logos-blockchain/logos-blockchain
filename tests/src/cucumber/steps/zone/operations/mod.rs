@@ -57,9 +57,9 @@ use tracing::warn;
 
 use super::runner::{
     self, ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, FundingConfig,
-    InscriptionId, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
-    SequencerCheckpoint, SequencerClient, SequencerConfig, TurnNotification, TxStatus,
-    TxStatusUpdate, WithdrawArg, WithdrawInputs,
+    InscriptionId, InscriptionInfo, PendingTx, PreparedAtomicBundle, PublishResult,
+    SequencerChannelView, SequencerCheckpoint, SequencerClient, SequencerConfig, TurnNotification,
+    TxStatus, TxStatusUpdate, WithdrawArg, WithdrawInputs,
 };
 
 /// Inscriptions in the just-finalized txs — the permanent, settled part of the
@@ -251,9 +251,15 @@ mod policies;
 mod transactions;
 
 use atomic::{build_atomic_deposit_op, build_atomic_deposit_transfer, sign_tx_zk};
-pub(super) use atomic::{publish_atomic_zone_withdraw, submit_zone_withdraw};
+pub(super) use atomic::{
+    prepare_zone_pin_deposit, prepare_zone_withdraw, publish_atomic_zone_withdraw,
+    submit_zone_withdraw,
+};
 pub(super) use custom_policy::{CustomRepublishDeps, start_custom_republish_policy};
-pub(super) use deposit_policy::{start_deposit_lifecycle_policy, start_deposit_withdraw_policy};
+pub(super) use deposit_policy::{
+    BundleAnnounce, MultiSigBus, pin_payload, start_deposit_lifecycle_policy,
+    start_deposit_withdraw_policy, start_multisig_lifecycle_policy, withdraw_payload,
+};
 pub(super) use observation::{
     balance_update_payload, collect_indexed_messages, collect_indexed_messages_exactly_once,
     ensure_zone_transactions_included, keygen, parse_balance_payload, publish_message_with_retry,

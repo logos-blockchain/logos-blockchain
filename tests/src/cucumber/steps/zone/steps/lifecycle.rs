@@ -1,11 +1,11 @@
 use super::{
-    CucumberWorld, DriveMode, Duration, Step, StepError, StepResult, ZoneSequencerStartup, given,
-    initialize_zone_indexer, log_step_error, parse_optional_submit_depth,
-    register_zone_sequencers_with_shared_key, single_column_table,
-    start_deposit_reaction_sequencer, start_deposit_withdraw_sequencer, start_named_sequencer,
-    start_named_sequencer_with_startup, start_nodes_with_zone_resources, stop_zone_sequencer,
-    wait_for_lib_advance, when, zone_account_balances, zone_node_resource_rows,
-    zone_sequencer_start_rows, zone_step_error,
+    BundleAnnounce, CucumberWorld, DriveMode, Duration, MultiSigBus, Step, StepError, StepResult,
+    ZoneSequencerStartup, given, initialize_zone_indexer, log_step_error,
+    parse_optional_submit_depth, register_zone_sequencers_with_shared_key, single_column_table,
+    start_deposit_reaction_sequencer, start_deposit_withdraw_sequencer,
+    start_multisig_lifecycle_sequencer, start_named_sequencer, start_named_sequencer_with_startup,
+    start_nodes_with_zone_resources, stop_zone_sequencer, wait_for_lib_advance, when,
+    zone_account_balances, zone_node_resource_rows, zone_sequencer_start_rows, zone_step_error,
 };
 
 #[given("I start nodes with wallet and sequencer resources:")]
@@ -93,6 +93,45 @@ async fn step_start_zone_sequencer_deposit_reaction(
         })
         .collect::<Result<Vec<_>, _>>()?;
     start_deposit_reaction_sequencer(world, step, &sequencer_alias, withdraw_outputs).await
+}
+
+#[cucumber::when(
+    expr = "I start multi-sig lifecycle zone sequencers with withdraw outputs {string}:"
+)]
+async fn step_start_multisig_lifecycle_sequencers(
+    world: &mut CucumberWorld,
+    step: &Step,
+    outputs: String,
+) -> StepResult {
+    let withdraw_outputs = outputs
+        .split(',')
+        .map(|amount| {
+            amount
+                .trim()
+                .parse::<u64>()
+                .map_err(|error| StepError::InvalidArgument {
+                    message: format!("invalid withdraw output amount '{amount}': {error}"),
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let aliases = single_column_table(step, "alias", "zone sequencer aliases")?;
+    // Shared across every sequencer: `bus` accumulates signatures; `announce` is
+    // the fanout channel proposers publish bundles on and signer tasks read —
+    // the test's stand-in for gossip. Each sequencer keeps its own clone.
+    let bus = MultiSigBus::default();
+    let (announce, _): (BundleAnnounce, _) = tokio::sync::broadcast::channel(256);
+    for alias in aliases {
+        start_multisig_lifecycle_sequencer(
+            world,
+            step,
+            &alias,
+            withdraw_outputs.clone(),
+            std::sync::Arc::clone(&bus),
+            announce.clone(),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 #[when(

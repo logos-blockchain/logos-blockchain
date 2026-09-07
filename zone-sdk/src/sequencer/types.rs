@@ -21,7 +21,7 @@ use lb_core::{
         transactions::{Ops, TxHash, states::Unverified},
     },
 };
-use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
+use lb_key_management_system_service::keys::{Ed25519PublicKey, Ed25519Signature, ZkPublicKey};
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -108,6 +108,65 @@ pub struct PreparedChannelConfig {
     /// `accredited_keys` must sign for the config to be valid. `0` for an
     /// unclaimed channel.
     pub signing_threshold: u16,
+}
+
+/// A funded atomic channel bundle awaiting external multi-sig signatures.
+///
+/// The multi-sig counterpart of [`publish_atomic_withdraw`] /
+/// [`publish_pin_deposit`]: instead of signing the fund-moving ops with the
+/// sequencer's own key, [`prepare_atomic_withdraw`] /
+/// [`prepare_pin_deposit`] hand back this value carrying the funded tx, the
+/// `sign_payload` each accredited key must sign, and the channel's current
+/// accredited keys / `transfer_threshold`. The caller collects a signature
+/// from each required key holder over `sign_payload`, assembles an
+/// ascending-by-index `Vec<IndexedSignature>`, and submits via
+/// [`submit_atomic_bundle`]. Because the bundled inscription is turn-gated,
+/// the bundle must be prepared and submitted by the sequencer whose turn it
+/// is; that sequencer's inscription signature is carried opaquely.
+///
+/// `tx`, `transfer_proof`, `inscribe_sig`, and the bundle metadata are opaque
+/// to the caller — they carry straight back into submission.
+///
+/// [`publish_atomic_withdraw`]: super::SequencerHandle::publish_atomic_withdraw
+/// [`publish_pin_deposit`]: super::SequencerHandle::publish_pin_deposit
+/// [`prepare_atomic_withdraw`]: super::SequencerHandle::prepare_atomic_withdraw
+/// [`prepare_pin_deposit`]: super::SequencerHandle::prepare_pin_deposit
+/// [`submit_atomic_bundle`]: super::SequencerHandle::submit_atomic_bundle
+#[derive(Debug, Clone)]
+pub struct PreparedAtomicBundle {
+    pub(crate) tx: Ops,
+    pub(crate) transfer_proof: Option<OpProof>,
+    /// The preparing sequencer's inscription signature — the inscription is
+    /// authorized by the single round-robin sequencer, not the threshold.
+    pub(crate) inscribe_sig: Ed25519Signature,
+    pub(crate) parent: MsgId,
+    pub(crate) msg_id: MsgId,
+    pub(crate) inscribe: Inscription,
+    pub(crate) signer: Ed25519PublicKey,
+    pub(crate) kind: PreparedBundleKind,
+    /// The exact bytes each accredited key must sign (the funded tx hash's
+    /// signing bytes).
+    pub sign_payload: Vec<u8>,
+    /// The channel's current accredited keys, in index order. Each collected
+    /// signature must be indexed by this key's position here.
+    pub accredited_keys: Vec<Ed25519PublicKey>,
+    /// The channel's current `transfer_threshold` — how many of the
+    /// `accredited_keys` must sign to authorize the transfer/withdraw ops.
+    pub signing_threshold: u16,
+}
+
+/// The op-specific tail of a [`PreparedAtomicBundle`], carried back into
+/// submission so the pending entry is tracked exactly as the single-sig path
+/// would.
+#[derive(Debug, Clone)]
+pub enum PreparedBundleKind {
+    AtomicWithdraw {
+        withdraws: Vec<WithdrawInfo>,
+        outputs: Outputs,
+    },
+    PinDeposit {
+        consumed_notes: Inputs,
+    },
 }
 
 /// One withdraw to bundle atomically with an inscription.

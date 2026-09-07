@@ -1,15 +1,17 @@
+use lb_core::mantle::ops::OpId as _;
+
 use super::{
     CONCURRENT_DUPLICATE_SETTLE_SECS, CucumberWorld, DEFAULT_ZONE_SEQUENCER, Duration, HashMap,
     HashSet, Inscription, Step, StepError, StepResult, TxSource, TxStatus, assert_sorted_outcome,
     collect_indexed_messages, collect_indexed_messages_exactly_once,
     ensure_zone_transactions_included, log_step_error, make_inscription, parse_balance_payload,
-    scan_indexer_for_payloads, single_column_table, wait_for_channel_transfer_input_count,
-    wait_for_channel_wallet_counts, wait_for_channel_wallet_note, wait_for_deposit,
-    wait_for_exact_indexed_payload_count,
+    pin_payload, scan_indexer_for_payloads, single_column_table,
+    wait_for_channel_transfer_input_count, wait_for_channel_wallet_counts,
+    wait_for_channel_wallet_note, wait_for_deposit, wait_for_exact_indexed_payload_count,
     wait_for_finalized_deposit_via_sequencer_and_collect_mempool_pending,
     wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pending,
     wait_for_indexer_unordered, wait_for_transactions_finalized, wait_for_tx_status_lifecycle,
-    wait_for_withdraw, wait_until_sorted_conflict_settles, zone_step_error,
+    wait_for_withdraw, wait_until_sorted_conflict_settles, withdraw_payload, zone_step_error,
 };
 
 #[cucumber::then(expr = "all zone messages are safe in {int} seconds")]
@@ -484,6 +486,35 @@ fn ensure_indexed_payloads_match_once(
     }
 
     Ok(())
+}
+
+#[cucumber::then(
+    expr = "the zone indexer returns exactly one finalized pin and withdraw for deposit {string} in {int} seconds"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_zone_indexer_exact_reactive_lifecycle(
+    world: &mut CucumberWorld,
+    step: &Step,
+    deposit_alias: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    // Rebuild the exact pin/withdraw payloads the reactive policy would post for
+    // this deposit's op_id, then assert each appears in the indexer exactly once
+    // — no missing phase, and no surviving duplicate from a benign double-publish.
+    let op_id = log_step_error(step, world.zone.resolve_submitted_deposit(&deposit_alias))?
+        .0
+        .op_id();
+    let indexer = log_step_error(step, world.zone.indexer())?;
+    let duration = Duration::from_secs(timeout_seconds);
+    wait_for_exact_indexed_payload_count(indexer, pin_payload(&op_id), 1, duration)
+        .await
+        .map_err(|error| zone_step_error(step, &error))?;
+    wait_for_exact_indexed_payload_count(indexer, withdraw_payload(&op_id), 1, duration)
+        .await
+        .map_err(|error| zone_step_error(step, &error))
 }
 
 #[cucumber::then(

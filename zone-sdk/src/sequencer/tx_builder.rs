@@ -17,7 +17,7 @@ use lb_core::{
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_http_api_common::bodies::wallet::fund::WalletFundRequestBody;
-use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
+use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
 
 use super::types::{Error, FundingConfig};
 use crate::adapter;
@@ -88,35 +88,28 @@ pub(super) fn attach_transfer_proof(
     Ok(channel_proofs)
 }
 
-/// Build per-op proofs for a single-signer atomic channel bundle
-/// (`publish_atomic_withdraw`'s `[inscribe, transfer, withdraw]` or
-/// `publish_pin_deposit`'s `[inscribe, transfer]`). The same
-/// single-signer `ChannelMultiSigProof` is reused for every `ChannelTransfer`
-/// and `ChannelWithdraw` op (all sign the same tx hash with the same key), the
-/// inscription op carries an `Ed25519Sig` proof and the fee transfer — when
-/// the transaction was funded — carries the wallet's proof.
-pub(super) fn build_atomic_bundle_ops_proofs(
+/// Build per-op proofs for an atomic channel bundle
+/// (`[inscribe, transfer, withdraw]` or `[inscribe, transfer]`). Every
+/// `ChannelTransfer`/`ChannelWithdraw` op carries the same `channel_proof`
+/// (all sign the same funded tx hash), the inscription op carries
+/// `inscribe_sig` (the single round-robin sequencer's signature), and the fee
+/// transfer — when the transaction was funded — carries the wallet's proof.
+pub(super) fn assemble_atomic_bundle_ops_proofs(
     tx: &impl MantleTx,
-    own_key_index: ChannelKeyIndex,
-    own_sig: Ed25519Signature,
+    inscribe_sig: Ed25519Signature,
+    channel_proof: &ChannelMultiSigProof,
     transfer_proof: Option<&OpProof>,
 ) -> Result<OpProofs, Error> {
-    let channel_proof =
-        ChannelMultiSigProof::try_new([IndexedSignature::new(own_key_index, own_sig)].into())
-            .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
     let mut ops_proofs = OpProofs::empty();
     for op in tx.op_refs() {
         match op {
-            // Channel transfers (recipient/change or re-created deposit notes)
-            // and withdraws (releasing recipient notes) are single-signer
-            // multi-sig proofs over the same funded tx hash.
             OpRef::ChannelTransfer(_) | OpRef::ChannelWithdraw(_) => {
                 ops_proofs
                     .try_push(OpProof::ChannelMultiSigProof(channel_proof.clone()))
                     .map_err(|e| Error::Network(format!("too many operation proofs: {e:?}")))?;
             }
             OpRef::ChannelInscribe(_) => ops_proofs
-                .try_push(OpProof::Ed25519Sig(own_sig))
+                .try_push(OpProof::Ed25519Sig(inscribe_sig))
                 .map_err(|e| Error::Network(format!("too many operation proofs: {e:?}")))?,
             OpRef::Transfer(_) => match transfer_proof {
                 Some(proof) => ops_proofs
@@ -136,6 +129,57 @@ pub(super) fn build_atomic_bundle_ops_proofs(
         }
     }
     Ok(ops_proofs)
+}
+
+/// Assemble a fully-signed atomic bundle from a funded tx, the preparing
+/// sequencer's inscription signature, the collected accredited-key signatures
+/// for the transfer/withdraw ops, and the fee-transfer proof.
+///
+/// `signatures` must be indexed against the channel's `accredited_keys` and
+/// strictly ascending by index — exactly `transfer_threshold` of them.
+pub(super) fn assemble_atomic_bundle_tx(
+    tx: Ops,
+    inscribe_sig: Ed25519Signature,
+    signatures: Vec<IndexedSignature>,
+    transfer_proof: Option<&OpProof>,
+) -> Result<SignedOps<Unverified, StandardMode>, Error> {
+    let signatures = signatures
+        .try_into()
+        .map_err(|e| Error::Network(format!("too many atomic-bundle signatures: {e:?}")))?;
+    let channel_proof = ChannelMultiSigProof::try_new(signatures)
+        .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
+    let ops_proofs =
+        assemble_atomic_bundle_ops_proofs(&tx, inscribe_sig, &channel_proof, transfer_proof)?;
+    SignedOps::from_parts(tx, ops_proofs)
+        .map_err(|error| Error::Network(format!("failed to assemble atomic bundle tx: {error:?}")))
+}
+
+/// Sign a prepared multi-sig payload with `signing_key`, returning the
+/// [`IndexedSignature`] pairing `signing_key`'s position in `accredited_keys`
+/// with its signature over `sign_payload`.
+///
+/// Pure crypto — no chain state or live sequencer — so a channel participant
+/// (or a zone's gossip task) can sign a
+/// [`crate::sequencer::PreparedAtomicBundle`]
+/// or [`crate::sequencer::PreparedChannelConfig`] it received out of band with
+/// only its own key and the prepared object's public `accredited_keys` /
+/// `sign_payload`. Errors if `signing_key` is not in `accredited_keys`.
+pub fn sign_prepared(
+    signing_key: &Ed25519Key,
+    accredited_keys: &[Ed25519PublicKey],
+    sign_payload: &[u8],
+) -> Result<IndexedSignature, Error> {
+    let own_pk = signing_key.public_key();
+    let index = accredited_keys
+        .iter()
+        .position(|key| *key == own_pk)
+        .ok_or_else(|| Error::Network("key not in the prepared accredited set".into()))?;
+    let index = ChannelKeyIndex::try_from(index)
+        .map_err(|_| Error::Network("accredited key index exceeds u16".into()))?;
+    Ok(IndexedSignature::new(
+        index,
+        signing_key.sign_payload(sign_payload),
+    ))
 }
 
 /// Find the position of the SDK's public key in the channel's `accredited_keys`

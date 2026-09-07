@@ -171,6 +171,46 @@ pub async fn publish_atomic_zone_withdraw(
     })
 }
 
+/// Multi-sig counterpart of [`submit_zone_withdraw`]: build and fund the atomic
+/// withdraw bundle for external `transfer_threshold` signing and return it. The
+/// withdraw pays a single note of `amount` back to `funding_public_key`
+/// (self-withdraw); inputs are selected automatically (`WithdrawInputs::Auto`).
+pub async fn prepare_zone_withdraw(
+    client: &SequencerClient,
+    funding_public_key: ZkPublicKey,
+    amount: Value,
+    inscription_data: Inscription,
+) -> Result<PreparedAtomicBundle, ZoneTestError> {
+    client
+        .prepare_atomic_withdraw(
+            inscription_data,
+            vec![WithdrawArg {
+                outputs: Outputs::new([Note::new(amount, funding_public_key)]),
+            }],
+            WithdrawInputs::Auto,
+        )
+        .await
+        .map_err(|error| ZoneTestError::SubmitWithdraw {
+            message: error.to_string(),
+        })
+}
+
+/// Multi-sig counterpart of the reactive pin: build and fund the atomic
+/// `[inscribe, transfer]` bundle that re-creates `consumed_notes` (a deposit's
+/// channel notes) for external `transfer_threshold` signing.
+pub async fn prepare_zone_pin_deposit(
+    client: &SequencerClient,
+    consumed_notes: Vec<NoteId>,
+    inscription_data: Inscription,
+) -> Result<PreparedAtomicBundle, ZoneTestError> {
+    client
+        .prepare_pin_deposit(inscription_data, consumed_notes)
+        .await
+        .map_err(|error| ZoneTestError::SubmitWithdraw {
+            message: error.to_string(),
+        })
+}
+
 /// Asks the node wallet service to sign a Mantle transaction for the requested
 /// ZK keys.
 pub(super) async fn sign_tx_zk(

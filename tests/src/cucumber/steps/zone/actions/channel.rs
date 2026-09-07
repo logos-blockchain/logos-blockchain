@@ -4,8 +4,9 @@ use super::{
     StepResult, TxHash, Utxo, WalletInfo, WalletReservedInputs, ZONE_CHANNEL_DEPOSIT_THRESHOLD,
     ZONE_CHANNEL_WITHDRAW_THRESHOLD, ZoneDeposit, ZoneTestError, build_zone_deposit,
     build_zone_deposit_from_values, current_available_utxos_for_wallet, log_step_error,
-    make_inscription, publish_atomic_zone_withdraw, submit_atomic_zone_deposit,
-    submit_zone_channel_split, submit_zone_deposit, submit_zone_withdraw, timeout, zone_step_error,
+    make_inscription, prepare_zone_pin_deposit, prepare_zone_withdraw,
+    publish_atomic_zone_withdraw, submit_atomic_zone_deposit, submit_zone_channel_split,
+    submit_zone_deposit, submit_zone_withdraw, timeout, zone_step_error,
 };
 
 pub(in super::super) async fn submit_zone_channel_config(
@@ -72,6 +73,8 @@ pub(in super::super) async fn submit_zone_channel_config(
 
 /// Builds and funds the config, storing it for the per-signer steps. Reads
 /// only public keys; `threshold` sets both the config and transfer thresholds.
+/// `posting_timeframe` (in slots, 0 = no rotation) drives the round-robin write
+/// turn — set it non-zero to exercise turn rotation between sequencers.
 pub(in super::super) async fn prepare_zone_channel_config(
     world: &mut CucumberWorld,
     step: &Step,
@@ -79,6 +82,7 @@ pub(in super::super) async fn prepare_zone_channel_config(
     transaction_alias: String,
     authorized_aliases: Vec<String>,
     threshold: u16,
+    posting_timeframe: u32,
 ) -> StepResult {
     let client = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
 
@@ -90,7 +94,7 @@ pub(in super::super) async fn prepare_zone_channel_config(
     let prepared = client
         .prepare_channel_config(
             Keys::new_unchecked(authorized_keys),
-            0.into(),
+            posting_timeframe.into(),
             0.into(),
             threshold,
             threshold,
@@ -527,6 +531,159 @@ pub(in super::super) async fn submit_zone_withdraw_transaction(
     world.remember_submitted_transaction(transaction_alias, submission.publish.inscription_id());
 
     Ok(())
+}
+
+/// `prepare` half of the external multi-sig withdraw flow: build and fund the
+/// atomic `[inscribe, transfer, withdraw]` bundle (paying `amount` back to the
+/// sequencer's own funding wallet) and store it for the per-signer and submit
+/// steps. Reads only the funding public key here; no signing happens.
+pub(in super::super) async fn prepare_zone_atomic_withdraw(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    transaction_alias: String,
+    amount: u64,
+) -> StepResult {
+    let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
+    let public_key = log_step_error(step, wallet.public_key())?;
+    let client = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
+    let inscription_data = make_inscription(&format!("Burn {amount}"));
+
+    let prepared = prepare_zone_withdraw(&client, public_key, amount, inscription_data)
+        .await
+        .map_err(|error| zone_step_error(step, &error))?;
+
+    world
+        .zone
+        .remember_prepared_bundle(transaction_alias, prepared);
+
+    Ok(())
+}
+
+/// `prepare` half of the external multi-sig pin flow: build and fund the atomic
+/// `[inscribe, transfer]` bundle that re-anchors `deposit_alias`'s channel
+/// notes and store it for the per-signer and submit steps.
+pub(in super::super) async fn prepare_zone_atomic_pin(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    transaction_alias: String,
+    deposit_alias: String,
+) -> StepResult {
+    let consumed_notes = log_step_error(
+        step,
+        world.zone.resolve_deposit_channel_notes(&deposit_alias),
+    )?
+    .iter()
+    .map(Utxo::id)
+    .collect::<Vec<_>>();
+    let client = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
+    let inscription_data = make_inscription(&format!("pin deposit {deposit_alias}"));
+
+    let prepared = prepare_zone_pin_deposit(&client, consumed_notes, inscription_data)
+        .await
+        .map_err(|error| zone_step_error(step, &error))?;
+
+    world
+        .zone
+        .remember_prepared_bundle(transaction_alias, prepared);
+
+    Ok(())
+}
+
+/// One participant's independent signature over a prepared atomic bundle
+/// (withdraw or pin), using only `signer_alias`'s own key. Mirrors
+/// [`sign_prepared_zone_channel_config`].
+pub(in super::super) fn sign_prepared_zone_bundle(
+    world: &mut CucumberWorld,
+    step: &Step,
+    signer_alias: &str,
+    transaction_alias: String,
+) -> StepResult {
+    let signing_key = log_step_error(step, world.zone.sequencer_signing_key(signer_alias))?;
+    let signer_public = signing_key.public_key();
+    let prepared = log_step_error(step, world.zone.prepared_bundle(&transaction_alias))?;
+
+    let index = prepared
+        .accredited_keys
+        .iter()
+        .position(|key| *key == signer_public)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "sequencer '{signer_alias}' is not in the accredited set of prepared bundle '{transaction_alias}'",
+            ),
+        })?;
+    let index = u16::try_from(index).map_err(|_| StepError::LogicalError {
+        message: "accredited key index exceeds u16".to_owned(),
+    })?;
+    let signature = IndexedSignature::new(index, signing_key.sign_payload(&prepared.sign_payload));
+
+    world
+        .zone
+        .add_prepared_bundle_signature(transaction_alias, signature);
+
+    Ok(())
+}
+
+/// `combine` + `submit` half: gather the collected signatures, submit the
+/// fully-signed bundle (withdraw or pin), and remember its tx hash for
+/// finalization assertions.
+pub(in super::super) async fn submit_prepared_zone_bundle(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    transaction_alias: String,
+) -> StepResult {
+    let client = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
+    let prepared = log_step_error(step, world.zone.prepared_bundle(&transaction_alias))?.clone();
+    // Collected in arbitrary signer order; the proof requires strictly
+    // ascending index order, so canonicalize before submitting.
+    let mut signatures = world.zone.prepared_bundle_signatures(&transaction_alias);
+    signatures.sort_unstable();
+
+    let (result, _checkpoint) = client
+        .submit_atomic_bundle(prepared, signatures)
+        .await
+        .map_err(|error| StepError::LogicalError {
+            message: format!("Zone submit_atomic_bundle failed: {error}"),
+        })?;
+
+    world.remember_submitted_transaction(transaction_alias, result.inscription_id());
+
+    Ok(())
+}
+
+/// Poll the sequencer's funding wallet until it holds an available note of
+/// exactly `value` — the deterministic recipient-side check for a withdrawal.
+/// The withdrawn note's value is exact regardless of fees (fees are paid from
+/// other notes), so this is fee-independent as long as `value` is chosen not to
+/// collide with the wallet's other note denominations.
+pub(in super::super) async fn assert_zone_funding_wallet_note(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    value: u64,
+    timeout_secs: u64,
+) -> StepResult {
+    let wallet_name =
+        log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?.wallet_name;
+
+    timeout(Duration::from_secs(timeout_secs), async {
+        loop {
+            let utxos =
+                current_available_utxos_for_wallet(world, &step.value, &wallet_name).await?;
+            if utxos.iter().any(|utxo| utxo.note.value == value) {
+                return Ok::<(), StepError>(());
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    })
+    .await
+    .map_err(|_| StepError::LogicalError {
+        message: format!(
+            "funding wallet of '{sequencer_alias}' has no available note of value {value} within {timeout_secs}s",
+        ),
+    })?
 }
 
 /// Action wrapper for the new `publish_atomic_withdraw` SDK API. Mirrors
