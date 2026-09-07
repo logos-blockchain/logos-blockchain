@@ -10,7 +10,7 @@ use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 
 use crate::{
     core::dispatcher::PayloadDispatcher,
-    message::BlendPayload,
+    message::DataPayload,
     test_utils::mocks::{TestChainNetworkService, TestMempoolService},
 };
 
@@ -20,15 +20,15 @@ const CHANNEL_SIZE: usize = 32;
 /// control: what the node hands over is reported on one channel, and what the
 /// broadcasting channel is carrying is fed in on the other.
 pub struct TestPayloadDispatcher {
-    dispatched: mpsc::UnboundedSender<BlendPayload>,
-    broadcasting_channel: broadcast::Sender<BlendPayload>,
+    dispatched: mpsc::UnboundedSender<DataPayload>,
+    broadcasting_channel: broadcast::Sender<DataPayload>,
 }
 
 /// What a test holds on to: the payloads the node dispatched, and the handle it
 /// puts payloads on the broadcasting channel with.
 pub struct TestBroadcastingChannel {
-    pub dispatched: mpsc::UnboundedReceiver<BlendPayload>,
-    pub carrying: broadcast::Sender<BlendPayload>,
+    pub dispatched: mpsc::UnboundedReceiver<DataPayload>,
+    pub carrying: broadcast::Sender<DataPayload>,
 }
 
 impl TestPayloadDispatcher {
@@ -70,14 +70,14 @@ where
         Self::new().0
     }
 
-    async fn dispatch(&self, payload: BlendPayload) {
+    async fn dispatch(&self, payload: DataPayload) {
         drop(self.dispatched.send(payload));
     }
 
-    async fn observe_broadcasts(&self) -> BoxStream<'static, BlendPayload> {
+    async fn observe_broadcasts(&self) -> BoxStream<'static, DataPayload> {
         BroadcastStream::new(self.broadcasting_channel.subscribe())
             .filter_map(
-                async |payload: Result<BlendPayload, BroadcastStreamRecvError>| payload.ok(),
+                async |payload: Result<DataPayload, BroadcastStreamRecvError>| payload.ok(),
             )
             .boxed()
     }

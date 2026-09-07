@@ -31,7 +31,7 @@ where
     {
         let mut scheduler = EpochMessageScheduler::new(epoch_info, rng, settings);
         processed_messages.for_each(|m| scheduler.schedule_processed_message(m));
-        data_messages.for_each(|m| scheduler.queue_data_message(m));
+        data_messages.for_each(|m| scheduler.queue_data_message_and_skip_cover_message(m));
         Self { scheduler }
     }
 }

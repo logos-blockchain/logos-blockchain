@@ -1,9 +1,7 @@
 use core::fmt::{self, Debug, Formatter};
 
 pub use lb_blend::message::MAX_PAYLOAD_BODY_SIZE;
-use lb_blend::message::{
-    PayloadType, encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
-};
+use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
 use lb_codec::BinaryEncode;
 use lb_core::{
     codec::SerializeOp,
@@ -49,7 +47,7 @@ impl<InnerMessage> From<InnerMessage> for ProxyServiceMessage<InnerMessage> {
 pub enum ServiceMessage<NodeId> {
     /// To send a payload through the blend network, for the exit node to
     /// hand over to whichever local service owns that kind of payload.
-    Blend(BlendPayload),
+    Blend(DataPayload),
     /// Request the current blend network info (connected peers).
     GetNetworkInfo {
         reply: oneshot::Sender<Option<NetworkInfo<NodeId>>>,
@@ -75,8 +73,8 @@ impl<NodeId> Debug for ServiceMessage<NodeId> {
     }
 }
 
-impl<NodeId> From<BlendPayload> for ServiceMessage<NodeId> {
-    fn from(value: BlendPayload) -> Self {
+impl<NodeId> From<DataPayload> for ServiceMessage<NodeId> {
+    fn from(value: DataPayload) -> Self {
         Self::Blend(value)
     }
 }
@@ -84,12 +82,27 @@ impl<NodeId> From<BlendPayload> for ServiceMessage<NodeId> {
 /// The plaintext body of a Blend data message, tagged with what it carries.
 // TODO: Replace with strong types for each message type Blend supports.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum BlendPayload {
+pub enum DataPayload {
     BlockProposal(Vec<u8>),
     Transaction(Vec<u8>),
 }
 
-impl BlendPayload {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DataPayloadType {
+    BlockProposal,
+    Transaction,
+}
+
+impl AsRef<str> for DataPayloadType {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::BlockProposal => "block_proposal",
+            Self::Transaction => "transaction",
+        }
+    }
+}
+
+impl DataPayload {
     /// Encodes a transaction for blending, refusing one that could never fit.
     // TODO: This will go once we move away from `Vec<u8>` and into strong types
     // for each message type Blend supports. Then we can also implement `TryFrom`
@@ -128,10 +141,10 @@ impl BlendPayload {
 
     /// The wire discriminant this payload travels under.
     #[must_use]
-    pub const fn payload_type(&self) -> PayloadType {
+    pub const fn payload_type(&self) -> DataPayloadType {
         match self {
-            Self::BlockProposal(_) => PayloadType::BlockProposal,
-            Self::Transaction(_) => PayloadType::Transaction,
+            Self::BlockProposal(_) => DataPayloadType::BlockProposal,
+            Self::Transaction(_) => DataPayloadType::Transaction,
         }
     }
 
@@ -171,12 +184,12 @@ pub enum ProposalNotBlendable {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ProcessedMessage {
-    Decapsulated(BlendPayload),
+    Decapsulated(DataPayload),
     Encapsulated(Box<EncapsulatedMessageWithVerifiedPublicHeader>),
 }
 
-impl From<BlendPayload> for ProcessedMessage {
-    fn from(value: BlendPayload) -> Self {
+impl From<DataPayload> for ProcessedMessage {
+    fn from(value: DataPayload) -> Self {
         Self::Decapsulated(value)
     }
 }

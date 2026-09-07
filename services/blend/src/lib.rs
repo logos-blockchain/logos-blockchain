@@ -49,7 +49,7 @@ use crate::{
         chain::BlendEpochState,
         node_id::{self, TryFrom as _},
     },
-    message::{BlendPayload, ProxyServiceMessage},
+    message::{DataPayload, ProxyServiceMessage},
     settings::Settings,
 };
 
@@ -107,7 +107,7 @@ impl<CoreService, EdgeService, SdpService, RuntimeServiceId> ServiceCore<Runtime
     for BlendService<CoreService, EdgeService, SdpService, RuntimeServiceId>
 where
     CoreService: ServiceData<
-            Message: MessageComponents<CoreService::NodeId, Payload: Into<BlendPayload>>
+            Message: MessageComponents<CoreService::NodeId, Payload: Into<DataPayload>>
                          + Send
                          + Sync
                          + 'static,

@@ -18,7 +18,7 @@ use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
     LOG_TARGET, core::dispatcher::PayloadDispatcher, delivery::broadcast_undelivered_messages,
-    message::BlendPayload,
+    message::DataPayload,
 };
 
 struct BlendedPayloadDetails {
@@ -30,9 +30,9 @@ pub struct FailureDetector {
     maximum_blending_delay: NonZeroU64,
     rounds_clock: IntervalStream,
     current_round: Round,
-    payload_broadcasts: Fuse<BoxStream<'static, BlendPayload>>,
+    payload_broadcasts: Fuse<BoxStream<'static, DataPayload>>,
     /// Messages sent out via Blend, up to the round their deadline passes.
-    unacknowledged_blended_payloads: HashMap<BlendPayload, BlendedPayloadDetails>,
+    unacknowledged_blended_payloads: HashMap<DataPayload, BlendedPayloadDetails>,
 }
 
 impl FailureDetector {
@@ -40,7 +40,7 @@ impl FailureDetector {
     pub fn new(
         maximum_blending_delay: NonZeroU64,
         round_duration: Duration,
-        payload_broadcasts: BoxStream<'static, BlendPayload>,
+        payload_broadcasts: BoxStream<'static, DataPayload>,
     ) -> Self {
         let clock = {
             let mut clock = interval(round_duration);
@@ -56,7 +56,7 @@ impl FailureDetector {
         }
     }
 
-    pub fn mark_payload_as_blended(&mut self, payload: BlendPayload) {
+    pub fn mark_payload_as_blended(&mut self, payload: DataPayload) {
         let released_at = self.current_round;
         self.unacknowledged_blended_payloads
             .entry(payload)
@@ -70,13 +70,13 @@ impl FailureDetector {
             });
     }
 
-    fn mark_payload_as_delivered(&mut self, payload: &BlendPayload) {
+    fn mark_payload_as_delivered(&mut self, payload: &DataPayload) {
         if let Some(blended) = self.unacknowledged_blended_payloads.get_mut(payload) {
             blended.delivered = true;
         }
     }
 
-    fn take_expired_payloads(&mut self, now: Round) -> Vec<BlendPayload> {
+    fn take_expired_payloads(&mut self, now: Round) -> Vec<DataPayload> {
         let (expired, still_waiting): (HashMap<_, _>, HashMap<_, _>) =
             take(&mut self.unacknowledged_blended_payloads)
                 .into_iter()
@@ -137,7 +137,7 @@ impl FailureDetector {
 }
 
 impl Stream for FailureDetector {
-    type Item = Vec<BlendPayload>;
+    type Item = Vec<DataPayload>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
@@ -189,7 +189,7 @@ mod tests {
             FailureDetector,
             test_utils::{DEADLINE, ROUND, proposal, transaction, until},
         },
-        message::BlendPayload,
+        message::DataPayload,
         test_utils::dispatcher::TestPayloadDispatcher,
     };
 
@@ -198,7 +198,7 @@ mod tests {
     fn watching() -> (
         FailureDetector,
         Instant,
-        mpsc::UnboundedSender<BlendPayload>,
+        mpsc::UnboundedSender<DataPayload>,
     ) {
         let (channel, broadcasts) = mpsc::unbounded_channel();
         let detection = FailureDetector::new(
@@ -275,14 +275,14 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_transaction_does_not_answer_for_a_proposal_of_the_same_bytes() {
         let (mut detection, start, channel) = watching();
-        detection.mark_payload_as_blended(BlendPayload::BlockProposal(b"same".into()));
+        detection.mark_payload_as_blended(DataPayload::BlockProposal(b"same".into()));
         channel
-            .send(BlendPayload::Transaction(b"same".into()))
+            .send(DataPayload::Transaction(b"same".into()))
             .expect("the watch is listening");
 
         assert_eq!(
             until(&mut detection, start, DEADLINE.get() + 2).await,
-            vec![BlendPayload::BlockProposal(b"same".into())],
+            vec![DataPayload::BlockProposal(b"same".into())],
             "what a payload is, is part of what identifies it"
         );
     }

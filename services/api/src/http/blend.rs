@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 
-use lb_blend_service::message::{BlendPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage};
+use lb_blend_service::message::{DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage};
 use lb_core::codec::{DeserializeOp, SerializeOp};
 use lb_network_service::backends::libp2p::PeerId;
 use overwatch::services::{AsServiceId, ServiceData};
@@ -71,7 +71,7 @@ where
 {
     // Encoded the same way the mempool gossips transactions, so that whichever
     // node exits this one decodes what it expects.
-    let payload = BlendPayload::try_from_transaction(&transaction)?;
+    let payload = DataPayload::try_from_transaction(&transaction)?;
     let relay = handle.relay::<BlendService>().await?;
 
     relay
