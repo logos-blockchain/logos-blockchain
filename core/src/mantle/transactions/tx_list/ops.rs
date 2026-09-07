@@ -207,7 +207,7 @@ impl OpRefs<'_> {
     ) -> Result<Gas, GasOverflow> {
         let mut thresholds = RunningThresholds::new(context);
         let mut total = Gas::new(0);
-        for op in self.iter() {
+        for op in self {
             total = total.checked_add(contextual_op_execution_gas::<Profile>(*op, &thresholds)?)?;
             thresholds.apply(*op);
         }

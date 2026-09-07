@@ -24,7 +24,7 @@ pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasCon
 
     let mut thresholds = RunningThresholds::new(context);
     let mut ops_proofs_size = 0;
-    for op in op_refs.iter() {
+    for op in op_refs {
         ops_proofs_size += match op {
             // Ed25519SigProof = Ed25519Signature
             OpRef::ChannelInscribe(_) => ED25519_SIGNATURE_SIZE,
@@ -44,7 +44,8 @@ pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasCon
             OpRef::SDPWithdraw(_)
             | OpRef::SDPActive(_)
             | OpRef::LeaderClaim(_)
-            | OpRef::Transfer(_) => COMPRESSED_PROOF_SIZE,
+            | OpRef::Transfer(_)
+            | OpRef::ChannelDeposit(_) => COMPRESSED_PROOF_SIZE,
 
             // ChannelMultiSigProof
             OpRef::ChannelWithdraw(operation) => calculate_channel_multi_sig_proof_byte_size(
@@ -56,8 +57,6 @@ pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasCon
                 thresholds.transfer(&operation.channel_id),
             ),
 
-            // ZkSigProof = ZkSignature = Groth16
-            OpRef::ChannelDeposit(_) => COMPRESSED_PROOF_SIZE,
             OpRef::ClaimPowReward(_) => 0, // no proof
         };
         thresholds.apply(*op);

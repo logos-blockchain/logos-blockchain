@@ -1349,7 +1349,7 @@ mod tests {
     fn test_channel_config_operation() {
         let test_config = config();
         let state = LedgerState::from_utxos([utxo()], &test_config);
-        let (signing_key, verifying_key) = create_test_keys();
+        let (_, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([3; 32]);
 
         let config_op = ChannelConfigOp {
@@ -1362,21 +1362,7 @@ mod tests {
             transfer_threshold: 1,
         };
 
-        let config_tx = Ops::from([Op::ChannelConfig(config_op.clone())]);
-        let config_tx_hash = config_tx.hash();
-        let config_proof = ChannelMultiSigProof::try_new(
-            [IndexedSignature::new(
-                0,
-                signing_key.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
-            )]
-            .into(),
-        )
-        .unwrap();
-
-        let tx = create_signed_tx(
-            Op::ChannelConfig(config_op),
-            &Key::MultiSequencer(config_proof),
-        );
+        let tx = create_genesis_config_tx(config_op);
         let result = state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, tx);
         assert!(result.is_ok());
 
