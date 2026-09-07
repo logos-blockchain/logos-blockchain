@@ -1,4 +1,5 @@
 pub mod blend;
+pub mod chain;
 pub mod channel;
 pub mod config;
 pub mod cryptarchia;
