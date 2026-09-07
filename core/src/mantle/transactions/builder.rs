@@ -239,7 +239,9 @@ impl MantleTxBuilder {
         }
 
         let build = self.clone().build()?;
-        Ok(build.minimum_total_gas_cost::<G>(&context.gas_context)?)
+        Ok(build
+            .by_ref()
+            .minimum_total_gas_cost::<G>(&context.gas_context)?)
     }
 
     pub fn funding_delta<G: GasProfile>(

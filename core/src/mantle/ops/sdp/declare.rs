@@ -5,10 +5,10 @@ use super::{SDPDeclareOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        Note, Value,
+        Note,
         batch::DeferredZkpVerification,
         channel::Channels,
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation,
@@ -17,7 +17,7 @@ use crate::{
         ops::{SignedOperation, ZkAndEd25519Proof},
         transactions::{
             hash::TxHashView,
-            states::{Preverified, Unverified, VerificationState, Verified},
+            states::{Preverified, Unverified, Verified},
         },
     },
     sdp::{Declaration, MinStake, service_notes::ServiceNotes},
@@ -274,14 +274,6 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<SDPDeclareO
         context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         SDPDeclareValidationExt::execute(self.operation(), context)
-    }
-}
-
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOperation<SDPDeclareOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
     }
 }
 

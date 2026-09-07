@@ -28,11 +28,10 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        TxGasCalculator,
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
-        traits::{PreverifiedMantleTransaction, SignedMantleTx},
-        transactions::{GasPrices, states::Preverified},
+        traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
+        transactions::states::Preverified,
     },
     sdp::{Declaration, DeclarationId},
 };
@@ -410,7 +409,7 @@ impl Cryptarchia {
         current_slot: Slot,
     ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>, Events), Error>
     where
-        Tx: PreverifiedMantleTransaction + TxGasCalculator<Context = GasPrices> + Clone,
+        Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
         let outcome = self.try_apply_block_with_state_retention(block, current_slot)?;
         self.prune_ledger_states(outcome.pruned_blocks.all());
@@ -429,7 +428,7 @@ impl Cryptarchia {
         current_slot: Slot,
     ) -> Result<TryApplyBlockOutcome, Error>
     where
-        Tx: PreverifiedMantleTransaction + TxGasCalculator<Context = GasPrices> + Clone,
+        Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
         let header = block.header();
         let id = header.id();
@@ -653,7 +652,7 @@ impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -832,7 +831,7 @@ impl<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq

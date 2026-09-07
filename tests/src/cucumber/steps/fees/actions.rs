@@ -1,7 +1,11 @@
 //! Actions behind the fee-market steps: building and submitting fee-paying
 //! transactions and recording per-block gas prices.
 
-use std::{collections::HashSet, num::NonZero, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZero,
+    time::Duration,
+};
 
 use cucumber::gherkin::Step;
 use futures::{StreamExt as _, future::join_all};
@@ -10,10 +14,13 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedOps,
-        gas::{GasCost, MainnetGasProfile, TxGasCalculator as _},
+        gas::{GasCost, MainnetGasProfile},
         ledger::verification_mode::StandardMode,
         traits::Hashable as _,
-        transactions::{GasPrices, OpProofs, builder::MantleTxBuilder, states::Preverified},
+        transactions::{
+            GasPrices, OpProofs, builder::MantleTxBuilder, states::Preverified,
+            tx_list::ops::OpsGasContext,
+        },
     },
 };
 use lb_http_api_common::{
@@ -192,8 +199,10 @@ fn record_prepared_priority_fee(
     prices: &GasPrices,
     priority_fee_percent: u64,
 ) -> Result<PreparedPriorityFee, StepError> {
+    let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
     let initial_mandatory_fee = signed_tx
-        .total_gas_cost::<MainnetGasProfile>(prices)
+        .op_refs()
+        .minimum_total_gas_cost::<MainnetGasProfile>(&gas_context)
         .map_err(|source| StepError::StepFail {
             message: format!(
                 "Step `{}` error: initial mandatory fee calculation failed: {source}",

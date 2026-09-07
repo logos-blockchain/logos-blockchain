@@ -82,22 +82,90 @@ pub struct OpsContext {
     pub leader_reward_amount: Value,
 }
 
+/// The Execution Gas of an Operation, derived from the Operation and the
+/// channel state it is validated against. The proof is never an input.
+pub fn op_execution_gas<Profile: GasProfile>(
+    op: OpRef<'_>,
+    channels: &Channels,
+) -> Result<Gas, GasOverflow> {
+    // A channel that does not exist yet has no accredited key, so its
+    // threshold is 0.
+    let threshold = match op {
+        OpRef::ChannelConfig(operation) => channels
+            .channels
+            .get(&operation.channel)
+            .map_or(0, |channel| channel.configuration_threshold),
+        OpRef::ChannelWithdraw(operation) => channels
+            .channels
+            .get(&operation.channel_id)
+            .map_or(0, |channel| channel.transfer_threshold),
+        OpRef::ChannelTransfer(operation) => channels
+            .channels
+            .get(&operation.channel_id)
+            .map_or(0, |channel| channel.transfer_threshold),
+        _ => return Ok(op.gas_cost::<Profile>()),
+    };
+
+    op.gas_cost::<Profile>().checked_mul(Value::from(threshold))
+}
+
+// The thresholds an Operation is verified against
+pub struct RunningThresholds<'a> {
+    context: &'a OpsGasContext,
+    transfer_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+    configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+}
+
+impl<'a> RunningThresholds<'a> {
+    #[must_use]
+    pub fn new(context: &'a OpsGasContext) -> Self {
+        Self {
+            context,
+            transfer_thresholds: HashMap::new(),
+            configuration_thresholds: HashMap::new(),
+        }
+    }
+
+    // A channel that does not exist yet has no accredited key, so its threshold
+    // is 0.
+    #[must_use]
+    pub fn transfer(&self, channel_id: &ChannelId) -> ChannelKeyIndex {
+        self.transfer_thresholds
+            .get(channel_id)
+            .copied()
+            .or_else(|| self.context.transfer_threshold(channel_id))
+            .unwrap_or(0)
+    }
+
+    #[must_use]
+    pub fn configuration(&self, channel_id: &ChannelId) -> ChannelKeyIndex {
+        self.configuration_thresholds
+            .get(channel_id)
+            .copied()
+            .or_else(|| self.context.configuration_threshold(channel_id))
+            .unwrap_or(0)
+    }
+
+    // Call once the Operation has been priced: a `ChannelConfig` is itself
+    // verified against the thresholds in force before it.
+    pub fn apply(&mut self, op: OpRef<'_>) {
+        if let OpRef::ChannelConfig(operation) = op {
+            self.transfer_thresholds
+                .insert(operation.channel, operation.transfer_threshold);
+            self.configuration_thresholds
+                .insert(operation.channel, operation.configuration_threshold);
+        }
+    }
+}
+
 fn contextual_op_execution_gas<Profile: GasProfile>(
-    op: &Op,
-    context: &OpsGasContext,
+    op: OpRef<'_>,
+    thresholds: &RunningThresholds,
 ) -> Result<Gas, GasOverflow> {
     let multiplier = match op {
-        // Existing channels require the `configuration_threshold` proofs.
-        // For new channels, the ledger skips proof verification. So, use 0.
-        Op::ChannelConfig(operation) => context
-            .configuration_threshold(&operation.channel)
-            .unwrap_or(0),
-        Op::ChannelWithdraw(operation) => context
-            .transfer_threshold(&operation.channel_id)
-            .unwrap_or(0),
-        Op::ChannelTransfer(operation) => context
-            .transfer_threshold(&operation.channel_id)
-            .unwrap_or(0),
+        OpRef::ChannelConfig(operation) => thresholds.configuration(&operation.channel),
+        OpRef::ChannelWithdraw(operation) => thresholds.transfer(&operation.channel_id),
+        OpRef::ChannelTransfer(operation) => thresholds.transfer(&operation.channel_id),
         _ => return Ok(op.gas_cost::<Profile>()),
     };
 
@@ -112,11 +180,13 @@ impl Ops {
     pub fn by_ref(&self) -> OpRefs<'_> {
         TxList(self.0.map_ref(OpRef::from))
     }
+}
 
+impl OpRefs<'_> {
     /// Predicts the minimum total gas cost of the transaction once signed.
     ///
-    /// See [`minimum_signed_transaction_size`] for why this doesn't implement
-    /// [`crate::mantle::TxGasCalculator`] which calculates an exact gas cost.
+    /// See [`minimum_signed_transaction_size`] for why this is a minimum, not
+    /// an exact gas cost.
     pub fn minimum_total_gas_cost<Profile: GasProfile>(
         &self,
         context: &OpsGasContext,
@@ -135,9 +205,13 @@ impl Ops {
         &self,
         context: &OpsGasContext,
     ) -> Result<Gas, GasOverflow> {
-        self.iter()
-            .map(|op| contextual_op_execution_gas::<Profile>(op, context))
-            .try_fold(Gas::from(0), |total, gas| total.checked_add(gas?))
+        let mut thresholds = RunningThresholds::new(context);
+        let mut total = Gas::new(0);
+        for op in self.iter() {
+            total = total.checked_add(contextual_op_execution_gas::<Profile>(*op, &thresholds)?)?;
+            thresholds.apply(*op);
+        }
+        Ok(total)
     }
 
     /// Predicts the minimum storage gas cost of the transaction once signed.
@@ -153,7 +227,7 @@ impl Ops {
     /// Predicts the minimum serialized size of the transaction once signed.
     #[must_use]
     fn minimum_signed_serialized_size(&self, context: &OpsGasContext) -> u64 {
-        minimum_signed_transaction_size(&self.by_ref(), context) as u64
+        minimum_signed_transaction_size(self, context) as u64
     }
 }
 

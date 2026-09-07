@@ -3,13 +3,16 @@
 //! This adapter resolves scenario wallets, reads spendable state, applies
 //! fee reserves, submits signed transactions, and records reservations.
 
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use lb_core::mantle::{
-    SignedOps, TxGasCalculator as _, TxHash, Utxo,
+    SignedOps, TxHash, Utxo,
     gas::MainnetGasProfile,
     ledger::verification_mode::StandardMode,
-    transactions::{GasPrices, OpProofs, states::Preverified},
+    transactions::{GasPrices, OpProofs, states::Preverified, tx_list::ops::OpsGasContext},
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -360,12 +363,18 @@ async fn validate_signed_submissions_against_live_prices(
             message: format!("live fee validation gas price query failed: {source}"),
         })?;
     for submission in signed_submissions {
-        let required_fee = submission
-            .signed_tx()
-            .total_gas_cost::<MainnetGasProfile>(&GasPrices {
+        let gas_context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices {
                 execution_base_gas_price: prices.execution_base_gas_price,
                 storage_gas_price: prices.storage_gas_price,
-            })
+            },
+        );
+        let required_fee = submission
+            .signed_tx()
+            .op_refs()
+            .minimum_total_gas_cost::<MainnetGasProfile>(&gas_context)
             .map_err(|source| StepError::LogicalError {
                 message: format!("live fee validation failed: {source}"),
             })?

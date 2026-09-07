@@ -291,6 +291,7 @@ fn build_wallet_transaction(
         .map_err(|err| format!("failed to build provisional tx: {err}"))?;
 
     let fee = provisional_tx
+        .by_ref()
         .minimum_total_gas_cost::<MainnetGasProfile>(gas_context)?
         .into_inner();
     let output_value = input.utxo.note.value.checked_sub(fee).ok_or_else(|| {

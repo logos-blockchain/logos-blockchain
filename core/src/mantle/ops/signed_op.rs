@@ -1,7 +1,6 @@
 use crate::mantle::{
-    GasProfile, VerificationError,
+    VerificationError,
     batch::DeferredZkpVerification,
-    gas::{Gas, GasOverflow, OperationGas, SignedOperationExecutionGas as _},
     ledger::{
         ProvableOperation,
         verification_mode::{StandardMode, VerificationMode},
@@ -84,35 +83,6 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOp<State, Mode> {
             Self::LeaderClaim(signed_operation) => signed_operation.proof().into(),
             Self::Transfer(signed_operation) => signed_operation.proof().into(),
             Self::ClaimPowReward(signed_operation) => signed_operation.proof().into(),
-        }
-    }
-
-    pub fn execution_gas<Profile: GasProfile>(&self) -> Result<Gas, GasOverflow>
-    where
-        InscriptionOp: OperationGas<Profile>,
-        ChannelConfigOp: OperationGas<Profile>,
-        DepositOp: OperationGas<Profile>,
-        ChannelWithdrawOp: OperationGas<Profile>,
-        ChannelTransferOp: OperationGas<Profile>,
-        SDPDeclareOp: OperationGas<Profile>,
-        SDPWithdrawOp: OperationGas<Profile>,
-        SDPActiveOp: OperationGas<Profile>,
-        LeaderClaimOp: OperationGas<Profile>,
-        TransferOp: OperationGas<Profile>,
-        ClaimPowRewardOp: OperationGas<Profile>,
-    {
-        match self {
-            Self::ChannelInscribe(signed_operation) => signed_operation.execution_gas::<Profile>(),
-            Self::ChannelConfig(signed_operation) => signed_operation.execution_gas::<Profile>(),
-            Self::ChannelDeposit(signed_operation) => signed_operation.execution_gas::<Profile>(),
-            Self::ChannelWithdraw(signed_operation) => signed_operation.execution_gas::<Profile>(),
-            Self::ChannelTransfer(signed_operation) => signed_operation.execution_gas::<Profile>(),
-            Self::SDPDeclare(signed_operation) => signed_operation.execution_gas::<Profile>(),
-            Self::SDPWithdraw(signed_operation) => signed_operation.execution_gas::<Profile>(),
-            Self::SDPActive(signed_operation) => signed_operation.execution_gas::<Profile>(),
-            Self::LeaderClaim(signed_operation) => signed_operation.execution_gas::<Profile>(),
-            Self::Transfer(signed_operation) => signed_operation.execution_gas::<Profile>(),
-            Self::ClaimPowReward(signed_operation) => signed_operation.execution_gas::<Profile>(),
         }
     }
 
