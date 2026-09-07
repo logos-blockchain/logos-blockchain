@@ -87,7 +87,7 @@ pub enum DataPayload {
     Transaction(Vec<u8>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum DataPayloadType {
     BlockProposal,
     Transaction,

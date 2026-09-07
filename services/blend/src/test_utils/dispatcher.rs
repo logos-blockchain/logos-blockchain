@@ -76,9 +76,7 @@ where
 
     async fn observe_broadcasts(&self) -> BoxStream<'static, DataPayload> {
         BroadcastStream::new(self.broadcasting_channel.subscribe())
-            .filter_map(
-                async |payload: Result<DataPayload, BroadcastStreamRecvError>| payload.ok(),
-            )
+            .filter_map(async |payload: Result<DataPayload, BroadcastStreamRecvError>| payload.ok())
             .boxed()
     }
 }

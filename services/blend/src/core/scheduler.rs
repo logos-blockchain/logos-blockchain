@@ -5,6 +5,8 @@ use lb_blend::scheduling::{
     message_scheduler::{ProcessedMessageScheduler as _, Settings, epoch_info::EpochInfo},
 };
 
+use crate::message::DataPayloadType;
+
 /// A wrapper around a [`MessageScheduler`] that allows creation with a set of
 /// initial messages.
 pub struct SchedulerWrapper<Rng, ProcessedMessage, DataMessage> {
@@ -27,11 +29,18 @@ where
     ) -> Self
     where
         ProcessedMessages: Iterator<Item = ProcessedMessage>,
-        DataMessages: Iterator<Item = DataMessage>,
+        DataMessages: Iterator<Item = (DataMessage, DataPayloadType)>,
     {
         let mut scheduler = EpochMessageScheduler::new(epoch_info, rng, settings);
         processed_messages.for_each(|m| scheduler.schedule_processed_message(m));
-        data_messages.for_each(|m| scheduler.queue_data_message_and_skip_cover_message(m));
+        data_messages.for_each(|(message, payload_type)| match payload_type {
+            DataPayloadType::BlockProposal => {
+                scheduler.queue_data_message_and_skip_cover_message(message);
+            }
+            DataPayloadType::Transaction => {
+                scheduler.queue_data_message_without_skipping_cover_message(message);
+            }
+        });
         Self { scheduler }
     }
 }

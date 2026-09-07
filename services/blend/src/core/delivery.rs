@@ -136,11 +136,7 @@ mod tests {
 
     /// A core sender, the instant its round clock started, and the handle that
     /// puts payloads on the broadcasting channel it watches.
-    fn new_failure_monitor() -> (
-        FailureDetector,
-        Instant,
-        mpsc::UnboundedSender<DataPayload>,
-    ) {
+    fn new_failure_monitor() -> (FailureDetector, Instant, mpsc::UnboundedSender<DataPayload>) {
         let (channel, broadcasts) = mpsc::unbounded_channel();
         let detection = FailureDetector::new(
             DEADLINE,

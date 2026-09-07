@@ -2031,7 +2031,7 @@ where
             }
         }
         assert_eq!(
-            state_updater.add_unsent_data_message(wrapped_message.clone()),
+            state_updater.add_unsent_data_message(wrapped_message.clone(), payload_type),
             Ok(()),
             "There should not be another copy of the same locally-generated encapsulated data message: {wrapped_message:?}."
         );
