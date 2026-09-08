@@ -471,7 +471,7 @@ mod tests {
     use crate::mantle::{
         Note, NoteId, Op, OpProof, SignedOps, Utxo, VerificationError,
         channel::{Channels, Error},
-        gas::MainnetGasProfile,
+        gas::{MainnetGasProfile, TxGasCalculator as _},
         ledger::{Inputs, Outputs, OutputsError, verification_mode::StandardMode},
         ops::{
             channel::{
@@ -482,7 +482,7 @@ mod tests {
         },
         traits::Hashable as _,
         transactions::{
-            GasPrices, OpProofs, op_execution_gas,
+            GasPrices, OpProofs,
             states::{Preverified, Unverified},
             tx_list::{
                 ops::OpsGasContext,
@@ -544,7 +544,7 @@ mod tests {
 
         let gas = mantle_tx
             .by_ref()
-            .minimum_execution_gas_consumption::<MainnetGasProfile>(&context)
+            .execution_gas_consumption::<MainnetGasProfile>(&context)
             .unwrap();
 
         let expected_config_gas = u64::from(config_threshold) * 56;
@@ -576,12 +576,18 @@ mod tests {
         let deposit_op = Op::ChannelDeposit(create_deposit_op(deposit_channel));
         let withdraw_op = Op::ChannelWithdraw(create_withdraw_op(withdraw_channel));
 
-        let config_gas =
-            op_execution_gas::<MainnetGasProfile>(config_op.by_ref(), &channels).unwrap();
-        let deposit_gas =
-            op_execution_gas::<MainnetGasProfile>(deposit_op.by_ref(), &channels).unwrap();
-        let withdraw_gas =
-            op_execution_gas::<MainnetGasProfile>(withdraw_op.by_ref(), &channels).unwrap();
+        let config_gas = config_op
+            .by_ref()
+            .execution_gas::<MainnetGasProfile>(&channels)
+            .unwrap();
+        let deposit_gas = deposit_op
+            .by_ref()
+            .execution_gas::<MainnetGasProfile>(&channels)
+            .unwrap();
+        let withdraw_gas = withdraw_op
+            .by_ref()
+            .execution_gas::<MainnetGasProfile>(&channels)
+            .unwrap();
 
         assert_eq!(config_gas.into_inner(), 3 * 56);
         assert_eq!(deposit_gas.into_inner(), 590);
@@ -595,8 +601,10 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let config_op = Op::ChannelConfig(create_config_op(ChannelId::from([9; 32]), &signing_key));
 
-        let gas =
-            op_execution_gas::<MainnetGasProfile>(config_op.by_ref(), &Channels::new()).unwrap();
+        let gas = config_op
+            .by_ref()
+            .execution_gas::<MainnetGasProfile>(&Channels::new())
+            .unwrap();
 
         assert_eq!(gas.into_inner(), 0);
     }

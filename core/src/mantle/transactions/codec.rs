@@ -5,6 +5,7 @@ use lb_key_management_system_keys::keys::ED25519_SIGNATURE_SIZE;
 use crate::{
     mantle::{
         OpRef,
+        gas::ThresholdSource as _,
         transactions::tx_list::{
             OpRefs,
             ops::{OpsGasContext, RunningThresholds},
@@ -22,45 +23,47 @@ use crate::{
 pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasContext) -> usize {
     let encoded_ops_size = op_refs.encoded_length();
 
-    let mut thresholds = RunningThresholds::new(context);
-    let mut ops_proofs_size = 0;
-    for op in op_refs {
-        ops_proofs_size += match op {
-            // Ed25519SigProof = Ed25519Signature
-            OpRef::ChannelInscribe(_) => ED25519_SIGNATURE_SIZE,
+    let (_, ops_proofs_size) = op_refs.iter().fold(
+        (RunningThresholds::new(context), 0),
+        |(mut thresholds, total), op| {
+            let proof_size = match op {
+                // Ed25519SigProof = Ed25519Signature
+                OpRef::ChannelInscribe(_) => ED25519_SIGNATURE_SIZE,
 
-            // ChannelMultiSigProof
-            //
-            // The ledger enforces exactly `configuration_threshold` proofs,
-            // which is 0 for a channel that does not exist yet.
-            OpRef::ChannelConfig(operation) => calculate_channel_multi_sig_proof_byte_size(
-                thresholds.configuration(&operation.channel),
-            ),
+                // ChannelMultiSigProof
+                //
+                // The ledger enforces exactly `configuration_threshold` proofs,
+                // which is 0 for a channel that does not exist yet.
+                OpRef::ChannelConfig(operation) => calculate_channel_multi_sig_proof_byte_size(
+                    thresholds.configuration_threshold(&operation.channel),
+                ),
 
-            // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
-            OpRef::SDPDeclare(_) => COMPRESSED_PROOF_SIZE + ED25519_SIGNATURE_SIZE,
+                // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
+                OpRef::SDPDeclare(_) => COMPRESSED_PROOF_SIZE + ED25519_SIGNATURE_SIZE,
 
-            // ZkSigProof = ZkSignature = ProofOfClaimProof = Groth16
-            OpRef::SDPWithdraw(_)
-            | OpRef::SDPActive(_)
-            | OpRef::LeaderClaim(_)
-            | OpRef::Transfer(_)
-            | OpRef::ChannelDeposit(_) => COMPRESSED_PROOF_SIZE,
+                // ZkSigProof = ZkSignature = ProofOfClaimProof = Groth16
+                OpRef::SDPWithdraw(_)
+                | OpRef::SDPActive(_)
+                | OpRef::LeaderClaim(_)
+                | OpRef::Transfer(_)
+                | OpRef::ChannelDeposit(_) => COMPRESSED_PROOF_SIZE,
 
-            // ChannelMultiSigProof
-            OpRef::ChannelWithdraw(operation) => calculate_channel_multi_sig_proof_byte_size(
-                thresholds.transfer(&operation.channel_id),
-            ),
+                // ChannelMultiSigProof
+                OpRef::ChannelWithdraw(operation) => calculate_channel_multi_sig_proof_byte_size(
+                    thresholds.transfer_threshold(&operation.channel_id),
+                ),
 
-            // ChannelMultiSigProof
-            OpRef::ChannelTransfer(operation) => calculate_channel_multi_sig_proof_byte_size(
-                thresholds.transfer(&operation.channel_id),
-            ),
+                // ChannelMultiSigProof
+                OpRef::ChannelTransfer(operation) => calculate_channel_multi_sig_proof_byte_size(
+                    thresholds.transfer_threshold(&operation.channel_id),
+                ),
 
-            OpRef::ClaimPowReward(_) => 0, // no proof
-        };
-        thresholds.apply(*op);
-    }
+                OpRef::ClaimPowReward(_) => 0, // no proof
+            };
+            thresholds.apply(*op);
+            (thresholds, total + proof_size)
+        },
+    );
 
     encoded_ops_size + ops_proofs_size
 }

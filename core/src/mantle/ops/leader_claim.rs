@@ -14,7 +14,7 @@ use crate::{
     mantle::{
         Note, Utxo, Value,
         batch::DeferredZkpVerification,
-        gas::{Gas, MainnetGasProfile, OperationGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation,
@@ -193,6 +193,8 @@ impl ProvableOperation for LeaderClaimOp {
 impl OperationGas<MainnetGasProfile> for LeaderClaimOp {
     const GAS_COST: Gas = Gas::new(580);
 }
+
+impl OpGasCalculator<MainnetGasProfile> for LeaderClaimOp {}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<LeaderClaimOp, Unverified, StandardMode>

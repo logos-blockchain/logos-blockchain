@@ -3,7 +3,7 @@ use serde::{Serialize, Serializer};
 
 use crate::mantle::{
     GasProfile, Op,
-    gas::{Gas, OperationGas},
+    gas::{Gas, GasOverflow, OpGasCalculator, OperationGas, ThresholdSource},
     ledger::ProvableOperation,
     ops::{
         channel::{
@@ -41,6 +41,17 @@ where
     T::GAS_COST
 }
 
+fn execution_gas_of<T, Profile>(
+    op: &T,
+    thresholds: &impl ThresholdSource,
+) -> Result<Gas, GasOverflow>
+where
+    T: OpGasCalculator<Profile>,
+    Profile: GasProfile,
+{
+    op.execution_gas(thresholds)
+}
+
 const fn code_of<T>(_op: &T) -> u8
 where
     T: ProvableOperation,
@@ -63,6 +74,25 @@ impl OpRef<'_> {
             Self::LeaderClaim(op) => gas_cost_of(op),
             Self::Transfer(op) => gas_cost_of(op),
             Self::ClaimPowReward(op) => gas_cost_of(op),
+        }
+    }
+
+    pub fn execution_gas<Profile: GasProfile>(
+        &self,
+        thresholds: &impl ThresholdSource,
+    ) -> Result<Gas, GasOverflow> {
+        match self {
+            Self::ChannelInscribe(op) => execution_gas_of(*op, thresholds),
+            Self::ChannelConfig(op) => execution_gas_of(*op, thresholds),
+            Self::ChannelDeposit(op) => execution_gas_of(*op, thresholds),
+            Self::ChannelWithdraw(op) => execution_gas_of(*op, thresholds),
+            Self::ChannelTransfer(op) => execution_gas_of(*op, thresholds),
+            Self::SDPDeclare(op) => execution_gas_of(*op, thresholds),
+            Self::SDPWithdraw(op) => execution_gas_of(*op, thresholds),
+            Self::SDPActive(op) => execution_gas_of(*op, thresholds),
+            Self::LeaderClaim(op) => execution_gas_of(*op, thresholds),
+            Self::Transfer(op) => execution_gas_of(*op, thresholds),
+            Self::ClaimPowReward(op) => execution_gas_of(*op, thresholds),
         }
     }
 

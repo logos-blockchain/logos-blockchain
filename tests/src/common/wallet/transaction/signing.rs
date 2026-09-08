@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use lb_core::mantle::{
     NoteId, Op, OpProof, OpRef, SignedOps, TxHash,
-    gas::MainnetGasProfile,
+    gas::{MainnetGasProfile, TxGasCalculator as _},
     traits::Hashable as _,
     transactions::{MantleTxBuilder, OpProofs, Ops, tx_list::ops::OpsContext},
 };
@@ -33,7 +33,7 @@ pub(super) fn sign_prepared_wallet_transaction(
     let signed_tx = SignedOps::from_parts(mantle_tx, op_proofs)?.preverify()?;
     let mandatory_fee_at_preparation = signed_tx
         .op_refs()
-        .minimum_total_gas_cost::<MainnetGasProfile>(&context.gas_context)?
+        .total_gas_cost::<MainnetGasProfile>(&context.gas_context)?
         .into_inner();
     let output_total = signed_tx
         .op_refs()

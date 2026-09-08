@@ -5,7 +5,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::mantle::Value;
+use crate::mantle::{
+    Value,
+    ops::channel::{ChannelId, ChannelKeyIndex},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Gas(Value);
@@ -107,6 +110,28 @@ impl Display for GasCost {
     }
 }
 
+// The gas cost of a whole transaction, summed from its Operations. How exact it
+// is follows the context: a live state answers what the ledger will charge, a
+// snapshot only what it would charge were the transaction included right now.
+pub trait TxGasCalculator {
+    type Context;
+
+    /// Returns the gas cost of this transaction.
+    fn total_gas_cost<Profile: GasProfile>(
+        &self,
+        context: &Self::Context,
+    ) -> Result<GasCost, GasOverflow>;
+
+    fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow>;
+
+    fn execution_gas_consumption<Profile: GasProfile>(
+        &self,
+        context: &Self::Context,
+    ) -> Result<Gas, GasOverflow>;
+
+    fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow>;
+}
+
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 #[error("Gas overflow")]
 pub struct GasOverflow;
@@ -127,4 +152,22 @@ pub trait OperationGas<Profile: GasProfile> {
 
 impl<T: OperationGas<Profile>, Profile: GasProfile> OperationGas<Profile> for &T {
     const GAS_COST: Gas = T::GAS_COST;
+}
+
+// Where an Operation reads the threshold it is verified against. The ledger
+// answers from the live channels, the wallet from what it predicts them to be.
+pub trait ThresholdSource {
+    // A channel that does not exist yet accredits no key, so both thresholds
+    // are 0.
+    fn configuration_threshold(&self, channel: &ChannelId) -> ChannelKeyIndex;
+
+    fn transfer_threshold(&self, channel: &ChannelId) -> ChannelKeyIndex;
+}
+
+// The Execution Gas of an Operation, derived from the Operation and the state
+// it is validated against EXCLUSIVELY.
+pub trait OpGasCalculator<Profile: GasProfile>: OperationGas<Profile> {
+    fn execution_gas(&self, _thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
+        Ok(Self::GAS_COST)
+    }
 }

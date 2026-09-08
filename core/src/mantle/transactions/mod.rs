@@ -19,9 +19,7 @@ pub use genesis_tx::{
     MAX_GENESIS_DECLARATIONS,
 };
 pub use hash::TxHash;
-pub use tx_list::{
-    OpProofRefs, OpProofs, OpRefs, Ops, SignedOps, TxBoundedVec, TxList, op_execution_gas,
-};
+pub use tx_list::{OpProofRefs, OpProofs, OpRefs, Ops, SignedOps, TxBoundedVec, TxList};
 pub use verification_helper::OperationVerificationHelper;
 pub use verified_ops::VerifiedOperations;
 

@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::{
     mantle::{
         GasProfile, Note, NoteId, Op, Utxo, Value,
-        gas::{GasCost, GasOverflow},
+        gas::{GasCost, GasOverflow, TxGasCalculator as _},
         ledger::{BoundedUtxos, Inputs, Outputs},
         ops::{OpRef, channel::ChannelId, transfer::TransferOp},
         traits::MantleTx as _,
@@ -216,7 +216,7 @@ impl MantleTxBuilder {
     }
 
     /// Predicts the minimum gas cost of the transaction once signed.
-    /// See [`Ops::minimum_total_gas_cost`] to understand why this is
+    /// See [`TxGasCalculator::total_gas_cost`] to understand why this is
     /// only a minimum, not an exact cost.
     pub fn minimum_gas_cost<G: GasProfile>(
         &self,
@@ -239,9 +239,7 @@ impl MantleTxBuilder {
         }
 
         let build = self.clone().build()?;
-        Ok(build
-            .by_ref()
-            .minimum_total_gas_cost::<G>(&context.gas_context)?)
+        Ok(build.by_ref().total_gas_cost::<G>(&context.gas_context)?)
     }
 
     pub fn funding_delta<G: GasProfile>(

@@ -10,7 +10,7 @@ use std::{
 use async_trait::async_trait;
 use lb_core::mantle::{
     Note, OpProof, SignedOps, Utxo,
-    gas::MainnetGasProfile,
+    gas::{MainnetGasProfile, TxGasCalculator as _},
     ledger::verification_mode::StandardMode,
     ops::OpId as _,
     traits::Hashable as _,
@@ -292,7 +292,7 @@ fn build_wallet_transaction(
 
     let fee = provisional_tx
         .by_ref()
-        .minimum_total_gas_cost::<MainnetGasProfile>(gas_context)?
+        .total_gas_cost::<MainnetGasProfile>(gas_context)?
         .into_inner();
     let output_value = input.utxo.note.value.checked_sub(fee).ok_or_else(|| {
         format!(

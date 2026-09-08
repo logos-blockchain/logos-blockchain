@@ -4,10 +4,12 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::TxEvent,
     mantle::{
-        TxHash,
+        TxHash, Value,
         batch::DeferredZkpVerification,
         channel::{Channels, Error},
-        gas::{Gas, MainnetGasProfile, OperationGas},
+        gas::{
+            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
+        },
         ledger::{
             ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation, Utxo,
             Utxos, VerifiableOperation,
@@ -69,6 +71,12 @@ impl ProvableOperation for ChannelTransferOp {
 
 impl OperationGas<MainnetGasProfile> for ChannelTransferOp {
     const GAS_COST: Gas = Gas::new(56);
+}
+
+impl OpGasCalculator<MainnetGasProfile> for ChannelTransferOp {
+    fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
+        Self::GAS_COST.checked_mul(Value::from(thresholds.transfer_threshold(&self.channel_id)))
+    }
 }
 
 impl PreverifiableOperation<StandardMode>

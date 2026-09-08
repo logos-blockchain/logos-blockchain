@@ -10,7 +10,7 @@ use std::{
 
 use lb_core::mantle::{
     SignedOps, TxHash, Utxo,
-    gas::MainnetGasProfile,
+    gas::{MainnetGasProfile, TxGasCalculator as _},
     ledger::verification_mode::StandardMode,
     transactions::{GasPrices, OpProofs, states::Preverified, tx_list::ops::OpsGasContext},
 };
@@ -374,7 +374,7 @@ async fn validate_signed_submissions_against_live_prices(
         let required_fee = submission
             .signed_tx()
             .op_refs()
-            .minimum_total_gas_cost::<MainnetGasProfile>(&gas_context)
+            .total_gas_cost::<MainnetGasProfile>(&gas_context)
             .map_err(|source| StepError::LogicalError {
                 message: format!("live fee validation failed: {source}"),
             })?

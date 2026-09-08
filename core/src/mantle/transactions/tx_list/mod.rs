@@ -11,5 +11,5 @@ pub use hash::tx_hasher;
 pub use op_proof_refs::OpProofRefs;
 pub use op_proofs::OpProofs;
 pub use op_refs::OpRefs;
-pub use ops::{Ops, op_execution_gas};
+pub use ops::Ops;
 pub use signed_ops::SignedOps;

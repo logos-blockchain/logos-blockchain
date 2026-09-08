@@ -8,7 +8,7 @@ use crate::{
         Note,
         batch::DeferredZkpVerification,
         channel::Channels,
-        gas::{Gas, MainnetGasProfile, OperationGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation,
@@ -168,6 +168,8 @@ impl ProvableOperation for SDPDeclareOp {
 impl OperationGas<MainnetGasProfile> for SDPDeclareOp {
     const GAS_COST: Gas = Gas::new(646);
 }
+
+impl OpGasCalculator<MainnetGasProfile> for SDPDeclareOp {}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<SDPDeclareOp, Unverified, StandardMode>

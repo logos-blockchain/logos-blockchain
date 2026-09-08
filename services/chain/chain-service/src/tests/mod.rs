@@ -11,7 +11,7 @@ use lb_core::{
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
-        gas::MainnetGasProfile,
+        gas::{MainnetGasProfile, TxGasCalculator as _},
         ledger::{Inputs, Outputs, verification_mode::StandardMode},
         ops::{
             leader_claim::{VoucherCm, VoucherSecret},
@@ -394,7 +394,7 @@ fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedOps<Preverif
     let gas_context = OpsGasContext::from_channels(&Channels::new(), GasPrices::default());
     let fees = transfer_tx(utxo, output_note, fake_key)
         .op_refs()
-        .minimum_total_gas_cost::<MainnetGasProfile>(&gas_context)
+        .total_gas_cost::<MainnetGasProfile>(&gas_context)
         .unwrap();
     output_note.value = utxo.note.value - fees.into_inner();
 

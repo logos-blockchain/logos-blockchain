@@ -21,7 +21,7 @@ use lb_codec::BinaryEncode as _;
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     Note, SignedOps, Utxo,
-    gas::MainnetGasProfile,
+    gas::{MainnetGasProfile, TxGasCalculator as _},
     ledger::verification_mode::{StandardMode, VerificationMode},
     ops::OpRef,
     traits::Hashable as _,
@@ -301,7 +301,7 @@ pub fn fee_surplus_at<State: VerificationState, Mode: VerificationMode>(
     let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
     let required = tx
         .op_refs()
-        .minimum_total_gas_cost::<MainnetGasProfile>(&gas_context)
+        .total_gas_cost::<MainnetGasProfile>(&gas_context)
         .map_err(|source| format!("transaction gas cost calculation failed: {source}"))?;
 
     Ok(i128::from(paid) - i128::from(required.into_inner()))

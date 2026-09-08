@@ -8,7 +8,7 @@ use crate::{
     mantle::{
         batch::DeferredZkpVerification,
         channel::{Channels, Error},
-        gas::{Gas, MainnetGasProfile, OperationGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, Inputs, InputsError, Outputs, PreverifiableOperation,
             ProvableOperation, Utxos, VerifiableOperation,
@@ -78,6 +78,8 @@ impl ProvableOperation for DepositOp {
 impl OperationGas<MainnetGasProfile> for DepositOp {
     const GAS_COST: Gas = Gas::new(590);
 }
+
+impl OpGasCalculator<MainnetGasProfile> for DepositOp {}
 
 impl PreverifiableOperation<StandardMode> for SignedOperation<DepositOp, Unverified, StandardMode> {
     type Context<'a> = ();

@@ -8,7 +8,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         batch::DeferredZkpVerification,
-        gas::{Gas, MainnetGasProfile, OperationGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
             VerifiableOperation,
@@ -43,6 +43,8 @@ impl ProvableOperation for SDPActiveOp {
 impl OperationGas<MainnetGasProfile> for SDPActiveOp {
     const GAS_COST: Gas = Gas::new(590);
 }
+
+impl OpGasCalculator<MainnetGasProfile> for SDPActiveOp {}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<SDPActiveOp, Unverified, StandardMode>

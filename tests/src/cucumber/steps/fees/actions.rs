@@ -14,7 +14,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedOps,
-        gas::{GasCost, MainnetGasProfile},
+        gas::{GasCost, MainnetGasProfile, TxGasCalculator as _},
         ledger::verification_mode::StandardMode,
         traits::Hashable as _,
         transactions::{
@@ -202,7 +202,7 @@ fn record_prepared_priority_fee(
     let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
     let initial_mandatory_fee = signed_tx
         .op_refs()
-        .minimum_total_gas_cost::<MainnetGasProfile>(&gas_context)
+        .total_gas_cost::<MainnetGasProfile>(&gas_context)
         .map_err(|source| StepError::StepFail {
             message: format!(
                 "Step `{}` error: initial mandatory fee calculation failed: {source}",

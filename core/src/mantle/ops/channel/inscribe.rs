@@ -14,7 +14,7 @@ use crate::{
     mantle::{
         batch::DeferredZkpVerification,
         channel::{ChannelState, Channels, Error},
-        gas::{Gas, MainnetGasProfile, OperationGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
@@ -97,6 +97,8 @@ impl ProvableOperation for InscriptionOp {
 impl OperationGas<MainnetGasProfile> for InscriptionOp {
     const GAS_COST: Gas = Gas::new(56);
 }
+
+impl OpGasCalculator<MainnetGasProfile> for InscriptionOp {}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<InscriptionOp, Unverified, StandardMode>

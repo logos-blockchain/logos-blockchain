@@ -8,9 +8,12 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
+        Value,
         batch::DeferredZkpVerification,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
-        gas::{Gas, MainnetGasProfile, OperationGas},
+        gas::{
+            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
+        },
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
@@ -64,6 +67,14 @@ impl ProvableOperation for ChannelConfigOp {
 
 impl OperationGas<MainnetGasProfile> for ChannelConfigOp {
     const GAS_COST: Gas = Gas::new(56);
+}
+
+impl OpGasCalculator<MainnetGasProfile> for ChannelConfigOp {
+    fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
+        Self::GAS_COST.checked_mul(Value::from(
+            thresholds.configuration_threshold(&self.channel),
+        ))
+    }
 }
 
 impl PreverifiableOperation<StandardMode>
