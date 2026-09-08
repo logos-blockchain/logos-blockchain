@@ -17,7 +17,7 @@ use lb_core::{
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_http_api_common::bodies::wallet::fund::WalletFundRequestBody;
-use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
+use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
 
 use super::types::{Error, FundingConfig};
 use crate::adapter;
@@ -333,6 +333,33 @@ pub(super) fn prepare_tx(
 
 pub(super) fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signature {
     signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref())
+}
+
+/// Produce an [`IndexedSignature`] for a prepared multi-sig artifact.
+///
+/// A pure signing primitive: signs `sign_payload` with `signing_key` and pairs
+/// it with that key's position in `accredited_keys` — the (pre-update) list the
+/// ledger verifies signatures against. It touches no sequencer or chain state,
+/// so an offline key holder can call it directly on any prepared value that
+/// carries an `accredited_keys` / `sign_payload` pair (e.g.
+/// [`super::PreparedChannelConfig`]).
+///
+/// Returns [`Error`] if `signing_key` is not among `accredited_keys`.
+pub fn sign_prepared(
+    signing_key: &Ed25519Key,
+    accredited_keys: &[Ed25519PublicKey],
+    sign_payload: &[u8],
+) -> Result<IndexedSignature, Error> {
+    let own_pk = signing_key.public_key();
+    let index = accredited_keys
+        .iter()
+        .position(|k| *k == own_pk)
+        .map(|i| i as ChannelKeyIndex)
+        .ok_or_else(|| Error::Network("signing key not in accredited_keys".into()))?;
+    Ok(IndexedSignature::new(
+        index,
+        signing_key.sign_payload(sign_payload),
+    ))
 }
 
 #[cfg(test)]
