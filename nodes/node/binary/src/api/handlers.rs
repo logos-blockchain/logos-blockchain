@@ -1788,7 +1788,6 @@ where
 }
 
 pub mod wallet {
-    use lb_core::mantle::Value;
     use lb_http_api_common::bodies::wallet::{
         aged_notes::{LeaderAgedNoteResponseBody, LeaderAgedNotesResponseBody},
         fund::{WalletFundRequestBody, WalletFundResponseBody},
@@ -1873,26 +1872,24 @@ pub mod wallet {
         };
         let wallet_api = WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay);
 
-        match wallet_api.get_leader_aged_notes(query.tip).await {
+        match wallet_api.get_leader_aged_notes_info(query.tip).await {
             Ok(lb_wallet_service::TipResponse { tip, response }) => {
-                let notes: Vec<_> = response
+                let count = response.count();
+                let notes = response
+                    .notes
                     .into_iter()
-                    .map(|utxo| LeaderAgedNoteResponseBody {
-                        note_id: utxo.utxo.id(),
-                        value: utxo.utxo.note.value,
-                        public_key: utxo.utxo.note.pk,
+                    .map(|note| LeaderAgedNoteResponseBody {
+                        note_id: note.note_id,
+                        value: note.value,
+                        public_key: note.public_key,
                     })
                     .collect();
-                let total_value = notes
-                    .iter()
-                    .map(|note| note.value)
-                    .fold(0, Value::saturating_add);
 
                 LeaderAgedNotesResponseBody {
                     tip,
-                    count: notes.len(),
-                    total_value,
                     notes,
+                    count,
+                    total_value: response.total_value,
                 }
                 .into_response()
             }

@@ -32,7 +32,7 @@ use lb_node::{
     RuntimeServiceId,
     generic_services::{CryptarchiaService, WalletService as NodeWalletService},
 };
-use lb_wallet_service::{ClaimableVoucherInfo, TipResponse, UtxoWithKeyId, api::WalletApi};
+use lb_wallet_service::{ClaimableVoucherInfo, LeaderAgedNotesInfo, TipResponse, api::WalletApi};
 use overwatch::services::status::ServiceStatus;
 
 use crate::{
@@ -593,7 +593,8 @@ pub unsafe extern "C" fn get_wallet_notes(
 /// Gets the wallet notes that are aged enough to take part in the leadership
 /// lottery.
 ///
-/// This is a synchronous wrapper around [`WalletApi::get_leader_aged_notes`].
+/// This is a synchronous wrapper around
+/// [`WalletApi::get_leader_aged_notes_info`].
 ///
 /// # Arguments
 ///
@@ -607,13 +608,13 @@ pub unsafe extern "C" fn get_wallet_notes(
 pub(crate) fn get_leader_aged_notes_sync(
     node: &LogosBlockchainNode,
     tip: Option<CoreHeaderId>,
-) -> StatusResult<TipResponse<Vec<UtxoWithKeyId>>> {
+) -> StatusResult<TipResponse<LeaderAgedNotesInfo>> {
     node.get_runtime_handle().block_on(async {
         let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
             node.get_overwatch_handle(),
         )
         .await;
-        api.get_leader_aged_notes(tip).await.map_err(|error| {
+        api.get_leader_aged_notes_info(tip).await.map_err(|error| {
             OperationStatus::error(
                 OperationStatusCode::DynError,
                 format!("Failed to get leader aged notes: {error:?}"),
@@ -661,16 +662,13 @@ pub unsafe extern "C" fn get_leader_aged_notes(
     let TipResponse { tip, response } =
         unwrap_or_return_error!(get_leader_aged_notes_sync(node, tip));
 
-    let mut total_value: Value = 0;
     let notes: Vec<LeaderAgedNote> = response
+        .notes
         .into_iter()
-        .map(|utxo| {
-            total_value = total_value.saturating_add(utxo.utxo.note.value);
-            LeaderAgedNote {
-                id: fr_to_bytes(utxo.utxo.id().as_fr()),
-                value: utxo.utxo.note.value,
-                public_key: fr_to_bytes(&utxo.utxo.note.pk.into()),
-            }
+        .map(|note| LeaderAgedNote {
+            id: fr_to_bytes(note.note_id.as_fr()),
+            value: note.value,
+            public_key: fr_to_bytes(&note.public_key.into()),
         })
         .collect();
 
@@ -681,7 +679,7 @@ pub unsafe extern "C" fn get_leader_aged_notes(
         tip: tip.into(),
         notes: notes_ptr,
         len,
-        total_value,
+        total_value: response.total_value,
     })
 }
 
