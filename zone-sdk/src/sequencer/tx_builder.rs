@@ -17,7 +17,7 @@ use lb_core::{
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_http_api_common::bodies::wallet::fund::WalletFundRequestBody;
-use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
+use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
 
 use super::types::{Error, FundingConfig};
 use crate::adapter;
@@ -335,6 +335,33 @@ pub(super) fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signa
     signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref())
 }
 
+/// Produce an [`IndexedSignature`] for a prepared multi-sig artifact.
+///
+/// A pure signing primitive: signs `sign_payload` with `signing_key` and pairs
+/// it with that key's position in `accredited_keys` — the (pre-update) list the
+/// ledger verifies signatures against. It touches no sequencer or chain state,
+/// so an offline key holder can call it directly on any prepared value that
+/// carries an `accredited_keys` / `sign_payload` pair (e.g.
+/// [`super::PreparedChannelConfig`]).
+///
+/// Returns [`Error`] if `signing_key` is not among `accredited_keys`.
+pub fn sign_prepared(
+    signing_key: &Ed25519Key,
+    accredited_keys: &[Ed25519PublicKey],
+    sign_payload: &[u8],
+) -> Result<IndexedSignature, Error> {
+    let own_pk = signing_key.public_key();
+    let index = accredited_keys
+        .iter()
+        .position(|k| *k == own_pk)
+        .map(|i| i as ChannelKeyIndex)
+        .ok_or_else(|| Error::Network("signing key not in accredited_keys".into()))?;
+    Ok(IndexedSignature::new(
+        index,
+        signing_key.sign_payload(sign_payload),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use tokio::sync::mpsc;
@@ -354,5 +381,38 @@ mod tests {
         fund_ops(&node, &funding, Vec::new()).await.unwrap();
 
         assert_eq!(priority_fees_rx.recv().await, Some(12));
+    }
+
+    #[test]
+    fn sign_prepared_indexes_by_position_and_verifies() {
+        let keys: Vec<Ed25519Key> = (1u8..=3)
+            .map(|b| Ed25519Key::from_bytes(&[b; 32]))
+            .collect();
+        let accredited: Vec<Ed25519PublicKey> = keys.iter().map(Ed25519Key::public_key).collect();
+        let payload = b"channel config sign payload";
+
+        // Signing with the middle key indexes at its position, and the
+        // signature verifies against that key over the payload.
+        let signed = sign_prepared(&keys[1], &accredited, payload).expect("signer is accredited");
+        assert_eq!(signed.channel_key_index, 1);
+        accredited[1]
+            .verify(payload, &signed.signature)
+            .expect("signature verifies against the signer's public key");
+    }
+
+    #[test]
+    fn sign_prepared_rejects_unaccredited_key() {
+        let accredited = vec![
+            Ed25519Key::from_bytes(&[1; 32]).public_key(),
+            Ed25519Key::from_bytes(&[2; 32]).public_key(),
+        ];
+        let outsider = Ed25519Key::from_bytes(&[9; 32]);
+        assert!(sign_prepared(&outsider, &accredited, b"payload").is_err());
+    }
+
+    #[test]
+    fn sign_prepared_empty_accredited_is_rejected() {
+        let key = Ed25519Key::from_bytes(&[1; 32]);
+        assert!(sign_prepared(&key, &[], b"payload").is_err());
     }
 }

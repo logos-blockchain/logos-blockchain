@@ -11,17 +11,20 @@ use lb_core::{
         gas::GasCost,
         ledger::{Inputs, NoteId, Outputs, verification_mode::StandardMode},
         ops::{
-            OpProof,
+            Op, OpProof,
             channel::{
-                ChannelId, MsgId, channel_transfer::ChannelTransferOp, deposit::Metadata,
-                inscribe::Inscription, withdraw::ChannelWithdrawOp,
+                ChannelId, MsgId, channel_transfer::ChannelTransferOp, config::ChannelConfigOp,
+                deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
             },
         },
         traits::Hashable as _,
         transactions::{Ops, TxHash, states::Unverified},
     },
+    proofs::channel_multi_sig_proof::IndexedSignature,
 };
-use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
+use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, ZkPublicKey};
+
+use super::tx_builder::sign_prepared;
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -108,6 +111,37 @@ pub struct PreparedChannelConfig {
     /// `accredited_keys` must sign for the config to be valid. `0` for an
     /// unclaimed channel.
     pub signing_threshold: u16,
+}
+
+impl PreparedChannelConfig {
+    /// The channel config this prepared tx will enact.
+    ///
+    /// Exposed so an accredited signer can inspect what it is authorizing — the
+    /// new key set and thresholds — before signing [`Self::sign_payload`],
+    /// rather than signing the opaque payload blind.
+    #[must_use]
+    pub fn proposed_config(&self) -> &ChannelConfigOp {
+        self.tx
+            .iter()
+            .find_map(|op| match op {
+                Op::ChannelConfig(config) => Some(config),
+                _ => None,
+            })
+            // Invariant: the SDK builds every prepared config as a
+            // `[CHANNEL_CONFIG, TRANSFER(fee)]` tx and the struct's `tx` is not
+            // publicly constructible, so the config op is always present.
+            .expect("a prepared channel config always carries a ChannelConfig op")
+    }
+
+    /// Sign this prepared config with `signing_key`.
+    ///
+    /// Convenience wrapper over [`sign_prepared`](super::sign_prepared) for the
+    /// common case where the signer holds the prepared value: signs
+    /// [`Self::sign_payload`] and indexes it against [`Self::accredited_keys`].
+    /// Returns [`Error`] if `signing_key` is not among the accredited keys.
+    pub fn sign_with(&self, signing_key: &Ed25519Key) -> Result<IndexedSignature, Error> {
+        sign_prepared(signing_key, &self.accredited_keys, &self.sign_payload)
+    }
 }
 
 /// One withdraw to bundle atomically with an inscription.
@@ -698,4 +732,73 @@ pub enum FinalizedOp {
     /// A channel transfer op on the channel: notes re-keyed/re-denominated
     /// under channel authority.
     ChannelTransfer(ChannelTransferInfo),
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_core::mantle::{
+        Op,
+        channel::{SlotTimeframe, SlotTimeout},
+        ops::channel::{
+            ChannelId, MsgId,
+            config::{ChannelConfigOp, Keys},
+        },
+        transactions::Ops,
+    };
+    use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
+
+    use super::{PreparedChannelConfig, sign_prepared};
+
+    fn config_op(keys: Vec<Ed25519PublicKey>) -> ChannelConfigOp {
+        ChannelConfigOp {
+            channel: ChannelId::from([7; 32]),
+            parent: MsgId::root(),
+            keys: Keys::new_unchecked(keys),
+            posting_timeframe: SlotTimeframe::from(15),
+            posting_timeout: SlotTimeout::from(3),
+            configuration_threshold: 2,
+            transfer_threshold: 2,
+        }
+    }
+
+    #[test]
+    fn proposed_config_exposes_the_built_config() {
+        let new_keys: Vec<Ed25519PublicKey> = [1u8, 2, 3]
+            .into_iter()
+            .map(|b| Ed25519Key::from_bytes(&[b; 32]).public_key())
+            .collect();
+        let op = config_op(new_keys);
+        let prepared = PreparedChannelConfig {
+            tx: Ops::new_unchecked(vec![Op::ChannelConfig(op.clone())]),
+            transfer_proof: None,
+            sign_payload: vec![0xab; 32],
+            accredited_keys: Vec::new(),
+            signing_threshold: 0,
+        };
+
+        // Decodes the enacted config straight back out of the opaque `tx`.
+        assert_eq!(prepared.proposed_config(), &op);
+    }
+
+    #[test]
+    fn sign_with_delegates_to_sign_prepared() {
+        let signer = Ed25519Key::from_bytes(&[5; 32]);
+        let accredited = vec![
+            Ed25519Key::from_bytes(&[4; 32]).public_key(),
+            signer.public_key(),
+        ];
+        let prepared = PreparedChannelConfig {
+            tx: Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited.clone()))]),
+            transfer_proof: None,
+            sign_payload: vec![0x11; 32],
+            accredited_keys: accredited.clone(),
+            signing_threshold: 2,
+        };
+
+        assert_eq!(
+            prepared.sign_with(&signer).expect("signer is accredited"),
+            sign_prepared(&signer, &accredited, &prepared.sign_payload)
+                .expect("signer is accredited"),
+        );
+    }
 }

@@ -12,7 +12,7 @@ use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
     adapter::NodeHttpClient as ZoneNodeHttpClient,
-    sequencer::{FundingConfig, IndexedSignature, ZoneSequencer},
+    sequencer::{FundingConfig, ZoneSequencer},
 };
 use tokio::{
     sync::broadcast,
