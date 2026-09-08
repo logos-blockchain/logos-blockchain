@@ -187,10 +187,6 @@ impl<R: Rewards> ServiceState<R> {
         let mut events = Vec::new();
 
         if last_epoch_state.epoch() < epoch_state.epoch() {
-            events.extend(
-                self.unlock_and_remove_withdrawn_declarations(service_notes, epoch_state.epoch()),
-            );
-
             // Update and distribute rewards
             (self.rewards, reward_utxos) = self.rewards.update_epoch(
                 last_epoch_state,
@@ -212,6 +208,11 @@ impl<R: Rewards> ServiceState<R> {
                     utxo: *utxo,
                 }
             }));
+
+            // Remove withdrawn declarations and unlock their notes.
+            events.extend(
+                self.unlock_and_remove_withdrawn_declarations(service_notes, epoch_state.epoch()),
+            );
         }
 
         (self, reward_utxos, events)
@@ -1618,7 +1619,7 @@ mod tests {
             .expect("the report attesting `withdraw_at - 1` must be accepted at `withdraw_at`");
 
         // Epoch 5 (`withdraw_at + 1`): the epoch-3 reward is distributed and
-        // the declaration removed in the same header.
+        // the declaration removed in the same header, in that order.
         let epoch5 = next_epoch_state(5.into(), &ledger, &config);
         let (ledger, effect) = ledger.try_apply_header(&config, &epoch4, &epoch5).unwrap();
         let received: Vec<&Utxo> = effect
@@ -1632,6 +1633,14 @@ mod tests {
             "the withdrawing provider must be paid for its last served epoch"
         );
         assert_eq!(received[0].note.value, income);
+        assert!(matches!(
+            effect.events.first(),
+            Some(HeaderEvent::SdpRewardDistributed { .. })
+        ));
+        assert!(matches!(
+            effect.events.last(),
+            Some(HeaderEvent::SdpNoteUnlocked { .. })
+        ));
         assert_eq!(
             count_unlock_events(
                 effect.events,
