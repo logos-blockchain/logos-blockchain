@@ -382,4 +382,37 @@ mod tests {
 
         assert_eq!(priority_fees_rx.recv().await, Some(12));
     }
+
+    #[test]
+    fn sign_prepared_indexes_by_position_and_verifies() {
+        let keys: Vec<Ed25519Key> = (1u8..=3)
+            .map(|b| Ed25519Key::from_bytes(&[b; 32]))
+            .collect();
+        let accredited: Vec<Ed25519PublicKey> = keys.iter().map(Ed25519Key::public_key).collect();
+        let payload = b"channel config sign payload";
+
+        // Signing with the middle key indexes at its position, and the
+        // signature verifies against that key over the payload.
+        let signed = sign_prepared(&keys[1], &accredited, payload).expect("signer is accredited");
+        assert_eq!(signed.channel_key_index, 1);
+        accredited[1]
+            .verify(payload, &signed.signature)
+            .expect("signature verifies against the signer's public key");
+    }
+
+    #[test]
+    fn sign_prepared_rejects_unaccredited_key() {
+        let accredited = vec![
+            Ed25519Key::from_bytes(&[1; 32]).public_key(),
+            Ed25519Key::from_bytes(&[2; 32]).public_key(),
+        ];
+        let outsider = Ed25519Key::from_bytes(&[9; 32]);
+        assert!(sign_prepared(&outsider, &accredited, b"payload").is_err());
+    }
+
+    #[test]
+    fn sign_prepared_empty_accredited_is_rejected() {
+        let key = Ed25519Key::from_bytes(&[1; 32]);
+        assert!(sign_prepared(&key, &[], b"payload").is_err());
+    }
 }
