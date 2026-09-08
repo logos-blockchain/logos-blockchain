@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::settings::timing::TimingSettings;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct CommonSettings {
+pub struct CommonSettings<BroadcastSettings> {
     /// The non-ephemeral signing key (NSK) corresponding to the public key
     /// registered in the membership (SDP).
     pub non_ephemeral_signing_key_id: KeyId,
@@ -18,4 +18,6 @@ pub struct CommonSettings {
     #[serde(skip)]
     pub recovery_data: RecoveryData,
     pub data_replication_factor: u64,
+    pub broadcast: BroadcastSettings,
+    pub abstain_on_failure: bool,
 }

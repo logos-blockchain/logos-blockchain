@@ -83,6 +83,7 @@ use tracing::{debug, error, info};
 use crate::{
     core::{
         backends::BackendEpochInfo,
+        delivery::FailureDetector,
         epoch_stages::{
             retiring::RetiringEpoch,
             running::{
@@ -100,6 +101,7 @@ use crate::{
         settings::{RunningBlendConfig, StartingBlendConfig},
         state::{RecoveryServiceState, ServiceState, StateUpdater as ServiceStateUpdater},
     },
+    delivery::{broadcast_undelivered_messages, next_undelivered_messages},
     epoch::{CoreEpochInfo, CoreEpochPublicInfo, MaybeEmptyCoreEpochInfo},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
@@ -118,6 +120,7 @@ pub mod settings;
 
 pub(super) mod service_components;
 
+mod delivery;
 mod epoch_stages;
 mod processor;
 mod scheduler;
@@ -258,6 +261,7 @@ where
         + Sync,
     RuntimeServiceId: AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
         + AsServiceId<Dispatcher::MempoolService>
+        + AsServiceId<Dispatcher::ChainNetworkService>
         + AsServiceId<SdpService>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<ChainService>
@@ -335,7 +339,16 @@ where
                 .relay::<Dispatcher::MempoolService>()
                 .await
                 .expect("Relay with mempool service should be available.");
-            Dispatcher::new(network_relay, mempool_relay, blend_config.network.clone())
+            let chain_network_relay = overwatch_handle
+                .relay::<Dispatcher::ChainNetworkService>()
+                .await
+                .expect("Relay with chain network service should be available.");
+            Dispatcher::new(
+                network_relay,
+                mempool_relay,
+                chain_network_relay,
+                blend_config.network.clone(),
+            )
         }
         .await;
 
@@ -399,6 +412,7 @@ where
             data_replication_factor: blend_config.data_replication_factor,
             activity_threshold_sensitivity: blend_config.activity_threshold_sensitivity,
             pow_mining_pool: new_mining_pool(),
+            abstain_on_failure: blend_config.abstain_on_failure,
         };
         let (
             mut remaining_epoch_stream,
@@ -442,6 +456,16 @@ where
 
         let mut blend_messages = backend.listen_to_incoming_messages();
 
+        let mut failure_detector = if running_blend_config.abstain_on_failure {
+            None
+        } else {
+            Some(FailureDetector::new(
+                running_blend_config.max_data_message_delay_in_rounds(),
+                running_blend_config.time.round_duration,
+                payload_dispatcher.observe_broadcasts().await,
+            ))
+        };
+
         // Run the main event loop while the node is a core node across multiple
         // epochs. When the node becomes a non-core node in a new epoch, the
         // epoch it is leaving behind is handed over for the retirement phase.
@@ -461,6 +485,7 @@ where
                 current_public_info,
             ),
             pending_transactions,
+            failure_detector.as_mut(),
             current_recovery_checkpoint,
         )
         .await;
@@ -479,6 +504,7 @@ where
             sdp_relay,
             rng,
             retiring_epoch,
+            failure_detector.take(),
         )
         .await;
 
@@ -843,6 +869,7 @@ async fn run_event_loop<
     rng: &mut Rng,
     current_epoch: CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
     mut pending_transactions: PendingTransactions,
+    mut failure_detector: Option<&mut FailureDetector>,
     mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> RetiringEpoch<Rng, ProofsVerifier>
 where
@@ -873,6 +900,7 @@ where
                     *current,
                     &mut pending_transactions,
                     &mut latest_secret_pol_info,
+                    failure_detector.as_deref_mut(),
                     recovery_checkpoint,
                 )
                 .await
@@ -891,6 +919,7 @@ where
                     *during_transition,
                     &mut pending_transactions,
                     &mut latest_secret_pol_info,
+                    failure_detector.as_deref_mut(),
                     recovery_checkpoint,
                 )
                 .await
@@ -1015,6 +1044,7 @@ async fn run_current_epoch<
     mut current_epoch: CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
     pending_transactions: &mut PendingTransactions,
     latest_secret_pol_info: &mut Option<PolEpochInfo>,
+    mut failure_detector: Option<&mut FailureDetector>,
     mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> StageOutcome<
     NodeId,
@@ -1040,12 +1070,15 @@ where
             Some(msg) = inbound_relay.next() => {
                 recovery_checkpoint = handle_service_message(msg, current_epoch.proposals_mut(), pending_transactions, blend_config, backend, recovery_checkpoint).await;
             }
+            Some(undelivered) = next_undelivered_messages(failure_detector.as_deref_mut()) => {
+                broadcast_undelivered_messages(undelivered.into_iter(), payload_dispatcher).await;
+            }
             Some(incoming_message) = blend_messages.next() => {
                 let (scheduler, crypto) = current_epoch.decapsulation_borrows();
                 recovery_checkpoint = handle_incoming_blend_message(incoming_message, scheduler, None, crypto.receiver(), None, recovery_checkpoint);
             }
             event = current_epoch.next_event(pending_transactions) => {
-                recovery_checkpoint = handle_current_epoch_event(event, &mut current_epoch, pending_transactions, rng, backend, payload_dispatcher, recovery_checkpoint).await;
+                recovery_checkpoint = handle_current_epoch_event(event, &mut current_epoch, pending_transactions, rng, backend, payload_dispatcher, failure_detector.as_deref_mut(), recovery_checkpoint).await;
             }
             Some(pol_secret_info) = secret_pol_info_stream.next() => {
                 apply_or_hold_secret_pol_info(pol_secret_info, &mut current_epoch, latest_secret_pol_info);
@@ -1107,6 +1140,7 @@ async fn run_during_transition<
     >,
     pending_transactions: &mut PendingTransactions,
     latest_secret_pol_info: &mut Option<PolEpochInfo>,
+    mut failure_detector: Option<&mut FailureDetector>,
     mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> StageOutcome<
     NodeId,
@@ -1132,6 +1166,9 @@ where
             Some(msg) = inbound_relay.next() => {
                 recovery_checkpoint = handle_service_message(msg, during_transition.current_mut().proposals_mut(), pending_transactions, blend_config, backend, recovery_checkpoint).await;
             }
+            Some(undelivered) = next_undelivered_messages(failure_detector.as_deref_mut()) => {
+                broadcast_undelivered_messages(undelivered.into_iter(), payload_dispatcher).await;
+            }
             Some(incoming_message) = blend_messages.next() => {
                 let (scheduler, previous_scheduler, crypto, previous_crypto) = during_transition.decapsulation_borrows();
                 recovery_checkpoint = handle_incoming_blend_message(incoming_message, scheduler, Some(previous_scheduler), crypto.receiver(), Some(previous_crypto), recovery_checkpoint);
@@ -1139,10 +1176,10 @@ where
             event = during_transition.next_event(pending_transactions) => {
                 match event {
                     DuringTransitionEvent::Current(event) => {
-                        recovery_checkpoint = handle_current_epoch_event(event, during_transition.current_mut(), pending_transactions, rng, backend, payload_dispatcher, recovery_checkpoint).await;
+                        recovery_checkpoint = handle_current_epoch_event(event, during_transition.current_mut(), pending_transactions, rng, backend, payload_dispatcher, failure_detector.as_deref_mut(), recovery_checkpoint).await;
                     }
                     DuringTransitionEvent::PreviousEpochReleaseRound(round_info, previous_epoch) => {
-                        handle_release_round_for_old_epoch(round_info, rng, backend, payload_dispatcher, previous_epoch).await;
+                        handle_release_round_for_old_epoch(round_info, rng, backend, payload_dispatcher, failure_detector.as_deref_mut(), previous_epoch).await;
                     }
                 }
             }
@@ -1154,6 +1191,12 @@ where
                     // The epoch being drained is finished with, but this one is
                     // not: `end_transition` keeps it whole, proposals and all.
                     EpochEvent::TransitionPeriodExpired => {
+                        // Its scheduler is about to go, so whatever that epoch
+                        // encapsulated and never released can no longer be sent
+                        // and is nothing left to wait on.
+                        if let Some(failure_detector) = failure_detector.as_deref_mut() {
+                            failure_detector.drop_unreleased_payloads_for_epoch(during_transition.previous_epoch());
+                        }
                         return StageOutcome::NewEpoch {
                             next: during_transition.end_transition().into(),
                             recovery_checkpoint: Box::new(complete_transition_period(backend, sdp_relay, recovery_checkpoint).await),
@@ -1215,6 +1258,7 @@ where
 
 /// Acts on something the current epoch produced, which both stages do the same
 /// way.
+#[expect(clippy::too_many_arguments, reason = "categorize args")]
 async fn handle_current_epoch_event<
     NodeId,
     Backend,
@@ -1237,6 +1281,7 @@ async fn handle_current_epoch_event<
     rng: &mut Rng,
     backend: &Backend,
     payload_dispatcher: &Dispatcher,
+    mut failure_detector: Option<&mut FailureDetector>,
     recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> ServiceState<Backend::Settings, Dispatcher::Settings>
 where
@@ -1254,8 +1299,16 @@ where
                 let (proposals, crypto_processor, scheduler) = current_epoch.scheduling_borrows();
                 match kind {
                     MessageKind::Proposal => {
+                        let payload = BlendPayload::BlockProposal(
+                            proposals
+                                .head()
+                                .expect("A proposal copy was encapsulated, so one is queued.")
+                                .to_vec(),
+                        );
                         let checkpoint = schedule_local_encapsulated_message(
                             &message,
+                            payload,
+                            failure_detector.as_deref_mut(),
                             crypto_processor,
                             scheduler,
                             recovery_checkpoint,
@@ -1266,6 +1319,7 @@ where
                     MessageKind::Transaction => handle_local_transaction(
                         &message,
                         pending_transactions,
+                        failure_detector.as_deref_mut(),
                         crypto_processor,
                         scheduler,
                         recovery_checkpoint,
@@ -1293,6 +1347,7 @@ where
                 rng,
                 backend,
                 payload_dispatcher,
+                failure_detector,
                 recovery_checkpoint,
             )
             .await
@@ -1491,6 +1546,7 @@ fn handle_local_transaction<
 >(
     encapsulation: &EncapsulatedMessageWithVerifiedPublicHeader,
     pending_transactions: &mut PendingTransactions,
+    failure_detector: Option<&mut FailureDetector>,
     cryptographic_processor: &CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1510,8 +1566,16 @@ where
     BackendSettings: Clone + Send + Sync,
     ProofsVerifier: ProofsVerifierTrait,
 {
+    let payload = BlendPayload::Transaction(
+        pending_transactions
+            .head()
+            .expect("A transaction was encapsulated, so one is queued.")
+            .to_vec(),
+    );
     let recovery_checkpoint = schedule_local_encapsulated_message(
         encapsulation,
+        payload,
+        failure_detector,
         cryptographic_processor,
         scheduler,
         current_recovery_checkpoint,
@@ -1525,6 +1589,7 @@ where
 
 /// Processes the old epoch during the epoch transition period
 /// before retiring the core service.
+#[expect(clippy::too_many_arguments, reason = "categorize args")]
 async fn retire<
     NodeId,
     Backend,
@@ -1547,6 +1612,7 @@ async fn retire<
     sdp_relay: OutboundRelay<SdpMessage>,
     mut rng: Rng,
     mut retiring_epoch: RetiringEpoch<Rng, ProofsVerifier>,
+    mut failure_detector: Option<FailureDetector>,
 ) where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
@@ -1564,13 +1630,28 @@ async fn retire<
                 handle_incoming_blend_message_from_old_epoch(incoming_message, message_scheduler, crypto_processor, blending_token_collector);
             }
             Some(round_info) = retiring_epoch.scheduler_mut().next() => {
-                handle_release_round_for_old_epoch(round_info, &mut rng, &backend, &payload_dispatcher, epoch).await;
+                handle_release_round_for_old_epoch(round_info, &mut rng, &backend, &payload_dispatcher, failure_detector.as_mut(), epoch).await;
+            }
+            Some(undelivered) = next_undelivered_messages(failure_detector.as_mut()) => {
+                broadcast_undelivered_messages(undelivered.into_iter(), &payload_dispatcher).await;
             }
             Some(EpochEvent::TransitionPeriodExpired) = remaining_epoch_stream.next() => {
+                // Its scheduler is about to go, so whatever that epoch
+                // encapsulated and never released can no longer be sent
+                // and is nothing left to wait on.
+                if let Some(failure_detector) = failure_detector.as_mut() {
+                    failure_detector.drop_unreleased_payloads_for_epoch(epoch);
+                }
                 handle_epoch_transition_expired(&mut backend, retiring_epoch.into_tokens(), &sdp_relay).await;
                 // Now the core service is no longer needed for the current (new) epoch,
                 // and the remaining epoch transition has been completed,
-                // so finishing the retirement process.
+                // so finishing the retirement process — bar the deadlines this
+                // epoch's own releases are still owed.
+                if let Some(failure_detector) = failure_detector {
+                    failure_detector
+                        .drain_pending_message_queue(&payload_dispatcher)
+                        .await;
+                }
                 return;
             }
         }
@@ -1898,6 +1979,8 @@ fn schedule_local_encapsulated_message<
     CorePoQGenerator,
 >(
     wrapped_message: &EncapsulatedMessageWithVerifiedPublicHeader,
+    payload: BlendPayload,
+    failure_detector: Option<&mut FailureDetector>,
     cryptographic_processor: &CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1918,6 +2001,9 @@ where
     ProofsVerifier: ProofsVerifierTrait,
 {
     let mut state_updater = current_recovery_checkpoint.start_updating();
+    // The epoch this message is built under, and the one whose end takes it with
+    // it if it is never released.
+    let epoch = cryptographic_processor.epoch();
 
     // Before blending the data message, we try to peel off any outer layers that
     // are addressed to us. In this case, we collect the blending tokens and we
@@ -1930,6 +2016,9 @@ where
         // The outermost layer of the data message is not for us, hence we treat this as
         // a regular data message that should be released at the next round.
         tracing::debug!(target: LOG_TARGET, "Locally generated data message does not have its outermost layer addressed to us. Sending it out as a data message...");
+        if let Some(failure_detector) = failure_detector {
+            failure_detector.mark_payload_as_encapsulated(wrapped_message.id(), payload, epoch);
+        }
         scheduler.queue_data_message(wrapped_message.clone());
         assert_eq!(
             state_updater.add_unsent_data_message(wrapped_message.clone()),
@@ -1966,11 +2055,15 @@ where
         DecapsulatedMessageType::Incompleted(remaining_encapsulated_message) => {
             tracing::trace!(target: LOG_TARGET, "Locally generated data message had the outermost {} layers addressed to this same node. Propagating only the remaining encapsulated layers.", blending_tokens.len());
             // Locally-generated message, so we know it's valid.
-            ProcessedMessage::from(
-                EncapsulatedMessageWithVerifiedPublicHeader::from_message_unchecked(
-                    *remaining_encapsulated_message,
-                ),
-            )
+            let remaining = EncapsulatedMessageWithVerifiedPublicHeader::from_message_unchecked(
+                *remaining_encapsulated_message,
+            );
+            // What goes out is the remaining layers, so that is the form whose
+            // release starts the deadline.
+            if let Some(failure_detector) = failure_detector {
+                failure_detector.mark_payload_as_encapsulated(remaining.id(), payload, epoch);
+            }
+            ProcessedMessage::from(remaining)
         }
     };
     state_updater.collect_current_epoch_tokens(blending_tokens.into_iter());
@@ -2293,6 +2386,7 @@ async fn handle_release_round<
     rng: &mut Rng,
     backend: &Backend,
     payload_dispatcher: &Dispatcher,
+    mut failure_detector: Option<&mut FailureDetector>,
     current_recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> ServiceState<Backend::Settings, Dispatcher::Settings>
 where
@@ -2319,6 +2413,11 @@ where
             if state_updater.remove_sent_data_message(data_message_to_blend).is_err() {
                 tracing::warn!(target: LOG_TARGET, "Recovered data message should be present in the recovery state but was not found.");
             }
+            // The message is on its way to every peer this round, which is where its
+            // payload's delivery deadline starts.
+            if let Some(failure_detector) = failure_detector.as_deref_mut() {
+                failure_detector.mark_encapsulated_payload_as_released(data_message_to_blend.id());
+            }
         }).map(
             |data_message_to_blend| -> BoxFuture<'_, ()> {
                 backend.publish(data_message_to_blend, current_epoch).boxed()
@@ -2330,6 +2429,7 @@ where
         backend,
         payload_dispatcher,
         Some(&mut state_updater),
+        failure_detector,
         current_epoch,
     );
 
@@ -2383,6 +2483,7 @@ async fn handle_release_round_for_old_epoch<
     rng: &mut Rng,
     backend: &Backend,
     payload_dispatcher: &Dispatcher,
+    mut failure_detector: Option<&mut FailureDetector>,
     epoch: Epoch,
 ) where
     NodeId: Eq + Hash + 'static,
@@ -2402,19 +2503,27 @@ async fn handle_release_round_for_old_epoch<
     // not tracked in the new epoch's recovery state, which was reset on rotation,
     // and they do not consume the new epoch's core quota, since they neither spend
     // it nor reach current-epoch peers.
-    let data_messages_relay_futures =
-        data_messages
-            .into_iter()
-            .map(|data_message_to_blend| -> BoxFuture<'_, ()> {
-                backend.publish(data_message_to_blend, epoch).boxed()
-            });
+    let data_messages_relay_futures = data_messages
+        .into_iter()
+        .inspect(|data_message_to_blend| {
+            if let Some(failure_detector) = failure_detector.as_deref_mut() {
+                failure_detector.mark_encapsulated_payload_as_released(data_message_to_blend.id());
+            }
+        })
+        .map(|data_message_to_blend| -> BoxFuture<'_, ()> {
+            backend.publish(data_message_to_blend, epoch).boxed()
+        })
+        // We collect because otherwise we would double borrow the failure detector.
+        .collect::<Vec<_>>();
 
     let mut futures = data_messages_relay_futures
+        .into_iter()
         .chain(build_futures_to_release_processed_messages(
             processed_messages,
             backend,
             payload_dispatcher,
             None,
+            failure_detector,
             epoch,
         ))
         .collect::<Vec<_>>();
@@ -2465,6 +2574,7 @@ fn build_futures_to_release_processed_messages<
     backend: &'fut Backend,
     payload_dispatcher: &'fut Dispatcher,
     mut state_updater: Option<&mut ServiceStateUpdater<Backend::Settings, Dispatcher::Settings>>,
+    mut failure_detector: Option<&mut FailureDetector>,
     epoch: Epoch,
 ) -> Vec<BoxFuture<'fut, ()>>
 where
@@ -2486,6 +2596,10 @@ where
                             target: LOG_TARGET,
                             "Previously processed message should be present in the recovery state but was not found."
                         );
+            }
+            if let ProcessedMessage::Encapsulated(encapsulated_message) = processed_message_to_release
+                && let Some(failure_detector) = failure_detector.as_deref_mut() {
+                failure_detector.mark_encapsulated_payload_as_released(encapsulated_message.id());
             }
         })
         .map(

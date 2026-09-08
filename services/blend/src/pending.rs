@@ -125,7 +125,8 @@ impl PendingProposals {
         self.queued.push_back((proposal, copies));
     }
 
-    fn head(&self) -> Option<&[u8]> {
+    #[must_use]
+    pub fn head(&self) -> Option<&[u8]> {
         self.queued.front().map(|(proposal, _)| proposal.as_slice())
     }
 
@@ -187,7 +188,8 @@ impl PendingTransactions {
         self.0.push_back(transaction);
     }
 
-    fn head(&self) -> Option<&[u8]> {
+    #[must_use]
+    pub fn head(&self) -> Option<&[u8]> {
         self.0.front().map(Vec::as_slice)
     }
 

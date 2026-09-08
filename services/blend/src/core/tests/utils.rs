@@ -2,7 +2,7 @@ use core::cell::RefCell;
 use std::{num::NonZeroU64, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, StreamExt as _, stream, stream::BoxStream};
 use lb_blend::{
     message::{
         crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
@@ -68,7 +68,7 @@ use crate::{
     message::{BlendPayload, NetworkInfo},
     settings::TimingSettings,
     test_utils,
-    test_utils::mempool::TestMempoolService,
+    test_utils::mocks::{TestChainNetworkService, TestMempoolService},
 };
 
 pub type NodeId = [u8; 32];
@@ -112,6 +112,7 @@ pub fn settings<BackendSettings>(
         data_replication_factor,
         activity_threshold_sensitivity: 1,
         pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+        abstain_on_failure: false,
     }
 }
 
@@ -316,6 +317,7 @@ where
     RuntimeServiceId: Send + 'static,
 {
     type Backend = TestNetworkBackend;
+    type ChainNetworkService = TestChainNetworkService<RuntimeServiceId>;
     type MempoolService = TestMempoolService<RuntimeServiceId>;
     type Settings = ();
 
@@ -324,6 +326,7 @@ where
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
         _mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
+        _chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
         _settings: Self::Settings,
     ) -> Self {
         Self
@@ -331,6 +334,10 @@ where
 
     async fn dispatch(&self, _payload: BlendPayload) {
         note_outgoing_message();
+    }
+
+    async fn observe_broadcasts(&self) -> BoxStream<'static, BlendPayload> {
+        stream::empty().boxed()
     }
 }
 

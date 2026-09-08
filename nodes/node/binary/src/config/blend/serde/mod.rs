@@ -22,6 +22,8 @@ pub struct Config {
     pub core: CoreConfig,
     #[serde(default)]
     pub edge: EdgeConfig,
+    #[serde(default)]
+    pub abstain_on_failure: bool,
 }
 
 pub struct RequiredValues {
@@ -44,6 +46,7 @@ impl Config {
                 backend: BackendConfig::default(),
             },
             edge: EdgeConfig::default(),
+            abstain_on_failure: bool::default(),
         }
     }
 
@@ -57,5 +60,9 @@ impl Config {
 
     pub fn set_secret_zk_key_id(&mut self, key_id: KeyId) {
         self.core.zk.secret_key_kms_id = key_id;
+    }
+
+    pub const fn abstain_on_failure(&mut self) {
+        self.abstain_on_failure = true;
     }
 }

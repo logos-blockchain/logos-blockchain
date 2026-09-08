@@ -71,7 +71,7 @@ where
 {
     // Encoded the same way the mempool gossips transactions, so that whichever
     // node exits this one decodes what it expects.
-    let payload = BlendPayload::transaction(transaction.to_bytes()?.to_vec())?;
+    let payload = BlendPayload::try_from_transaction(&transaction)?;
     let relay = handle.relay::<BlendService>().await?;
 
     relay

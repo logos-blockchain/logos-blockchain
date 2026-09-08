@@ -11,11 +11,12 @@ use lb_core::{
     mantle::{
         NoteId, SignedOps,
         ledger::verification_mode::StandardMode,
-        transactions::{hash::TxHash, states::VerificationState},
+        transactions::{genesis_tx::ChainId, hash::TxHash, states::VerificationState},
     },
     sdp::{Declaration, DeclarationId, Locator},
 };
 use lb_http_api_common::{
+    TimeInfo,
     bodies::{
         blend::JoinBlendRequestBody,
         mantle::GasPricesResponseBody,
@@ -74,6 +75,15 @@ impl NodeHttpClient {
         }
     }
 
+    /// The chain ID the node was deployed on.
+    pub async fn chain_id(&self) -> Result<ChainId, Error> {
+        self.with_timeout(
+            "Chain ID request",
+            self.http_client.chain_id(self.base_url.clone()),
+        )
+        .await
+    }
+
     /// The wallet notes aged enough to take part in the leadership lottery.
     /// Empty when this node cannot currently win a slot.
     pub async fn leader_aged_notes(
@@ -92,6 +102,14 @@ impl NodeHttpClient {
         self.with_timeout(
             "Consensus info request",
             self.http_client.consensus_info(self.base_url.clone()),
+        )
+        .await
+    }
+
+    pub async fn time_info(&self) -> Result<TimeInfo, Error> {
+        self.with_timeout(
+            "Time info request",
+            self.http_client.time_info(self.base_url.clone()),
         )
         .await
     }

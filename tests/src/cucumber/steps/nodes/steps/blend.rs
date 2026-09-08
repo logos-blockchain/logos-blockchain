@@ -1,5 +1,38 @@
 use super::*;
 
+#[given("Blend provider endpoints use controllable test relays")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step entrypoints must take `&mut World`"
+)]
+fn step_enable_blend_provider_relays(world: &mut CucumberWorld) -> StepResult {
+    if !world.nodes_info.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: "controllable Blend provider relays must be enabled before any node starts"
+                .to_owned(),
+        });
+    }
+    world
+        .blend_relays
+        .enable()
+        .map_err(|error| StepError::LogicalError {
+            message: format!("failed to enable controllable Blend provider relays: {error}"),
+        })
+}
+
+#[when(expr = "I make Blend unreachable on node {string}")]
+async fn step_make_blend_unreachable(world: &mut CucumberWorld, node_name: String) -> StepResult {
+    set_blend_reachability(world, &node_name, false).await
+}
+
+#[when(expr = "I restore Blend reachability on node {string}")]
+async fn step_restore_blend_reachability(
+    world: &mut CucumberWorld,
+    node_name: String,
+) -> StepResult {
+    set_blend_reachability(world, &node_name, true).await
+}
+
 #[when(
     expr = "all nodes have at least {int} blocks and converged to within {int} blocks in {int} seconds"
 )]
@@ -73,6 +106,7 @@ async fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
     world.reset_wallet_scanner_after_current_iteration().await;
     world.zone.clear();
     stop_active_manual_cluster(world)?;
+    world.blend_relays.shutdown();
 
     if let Some(snapshot_name) = world.snapshots.save.node_state.take() {
         create_snapshots_all_nodes(world, &snapshot_name)?;

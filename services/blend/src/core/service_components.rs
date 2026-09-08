@@ -73,6 +73,10 @@ pub type MempoolOfService<Service, RuntimeServiceId> = <<Service as ServiceCompo
     RuntimeServiceId,
 >>::PayloadDispatcher as PayloadDispatcher<RuntimeServiceId>>::MempoolService;
 
+pub type ChainNetworkOfService<Service, RuntimeServiceId> = <<Service as ServiceComponents<
+    RuntimeServiceId,
+>>::PayloadDispatcher as PayloadDispatcher<RuntimeServiceId>>::ChainNetworkService;
+
 pub type PayloadDispatcherSettingsOfService<Service, RuntimeServiceId> =
     <<Service as ServiceComponents<RuntimeServiceId>>::PayloadDispatcher as PayloadDispatcher<
         RuntimeServiceId,
