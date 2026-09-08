@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{
     ServiceComponents,
-    message::{BlendPayload, ProxyServiceMessage, ServiceMessage},
+    message::{DataPayload, ProxyServiceMessage, ServiceMessage},
 };
 
 /// Marker trait for the top-level blend service, used to parametrize
@@ -76,7 +76,7 @@ where
 {
     /// Publish a payload to the blend network. The exit node hands it over to
     /// whichever local service owns that kind of payload. Fire-and-forget.
-    pub async fn publish(&self, payload: BlendPayload) -> Result<(), ApiError> {
+    pub async fn publish(&self, payload: DataPayload) -> Result<(), ApiError> {
         self.relay
             .send(ServiceMessage::Blend(payload).into())
             .await

@@ -49,7 +49,7 @@ use crate::{
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
     membership::{self, chain::BlendEpochState, node_id},
-    message::{BlendPayload, NetworkInfo, ServiceMessage},
+    message::{DataPayload, NetworkInfo, ServiceMessage},
     pending::{EncapsulationResult, LocalEncapsulation, MessageKind, PendingTransactions},
 };
 
@@ -415,10 +415,10 @@ where
             }
             Some(message) = inbound_relay.next() => {
                 match message {
-                    ServiceMessage::Blend(BlendPayload::Transaction(transaction)) => {
+                    ServiceMessage::Blend(DataPayload::Transaction(transaction)) => {
                         pending_transactions.queue(transaction);
                     }
-                    ServiceMessage::Blend(BlendPayload::BlockProposal(proposal)) => {
+                    ServiceMessage::Blend(DataPayload::BlockProposal(proposal)) => {
                         let proposal_copies = NonZeroU64::new(settings.data_replication_factor.checked_add(1).expect("Data replication factor should not overflow when incremented.")).expect("Number of block proposal copies cannot be zero by definition.");
                         current_epoch.queue_proposal(proposal, proposal_copies);
                     }
@@ -442,8 +442,8 @@ where
                     EncapsulationResult::Complete(encapsulation) => {
                         let LocalEncapsulation { message, kind } = *encapsulation;
                         let payload = match kind {
-                            MessageKind::Proposal => current_epoch.proposals().head().map(|proposal| BlendPayload::BlockProposal(proposal.to_vec())),
-                            MessageKind::Transaction => pending_transactions.head().map(|transaction| BlendPayload::Transaction(transaction.to_vec())),
+                            MessageKind::Proposal => current_epoch.proposals().head().map(|proposal| DataPayload::BlockProposal(proposal.to_vec())),
+                            MessageKind::Transaction => pending_transactions.head().map(|transaction| DataPayload::Transaction(transaction.to_vec())),
                         }
                         .expect("A message was encapsulated, so the payload it carries is queued.");
                         current_epoch.send(message).await;

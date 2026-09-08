@@ -28,7 +28,7 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 
 use super::PayloadDispatcher;
-use crate::message::BlendPayload;
+use crate::message::DataPayload;
 
 const LOG_TARGET: &str = blend::service::CORE;
 
@@ -120,7 +120,7 @@ where
 
 async fn observe_block_proposals<Tx>(
     chain_network_relay: ChainNetworkRelay<Tx>,
-) -> BoxStream<'static, BlendPayload>
+) -> BoxStream<'static, DataPayload>
 where
     Tx: Send + 'static,
 {
@@ -143,7 +143,7 @@ where
             // bytes and comparing them is all the sender has to do. One that does
             // not fit a payload is one Blend cannot have carried, so it is not a
             // delivery this node is waiting on.
-            ready(BlendPayload::try_from_proposal(&proposal).ok())
+            ready(DataPayload::try_from_proposal(&proposal).ok())
         })
         .boxed()
 }
@@ -190,7 +190,7 @@ async fn submit_transaction<Item, Key>(
 
 async fn observe_transactions<Item, Key>(
     mempool_relay: MempoolRelay<Item, Key>,
-) -> BoxStream<'static, BlendPayload>
+) -> BoxStream<'static, DataPayload>
 where
     Item: Serialize + Clone + Send + 'static,
     Key: PrefixedKey<Prefix: Send> + Send + 'static,
@@ -214,7 +214,7 @@ where
             // bytes and comparing them is all the sender has to do. If it cannot fit into
             // the maximum size Blend allows, it means the tx was not sent with Blend in the
             // first place.
-            ready(BlendPayload::try_from_transaction(&transaction).ok())
+            ready(DataPayload::try_from_transaction(&transaction).ok())
         })
         .boxed()
 }
@@ -271,9 +271,9 @@ where
         }
     }
 
-    async fn dispatch(&self, payload: BlendPayload) {
+    async fn dispatch(&self, payload: DataPayload) {
         match payload {
-            BlendPayload::BlockProposal(proposal) => {
+            DataPayload::BlockProposal(proposal) => {
                 broadcast_block_proposal(
                     &self.network_relay,
                     self.settings.topic.clone(),
@@ -281,13 +281,13 @@ where
                 )
                 .await;
             }
-            BlendPayload::Transaction(transaction) => {
+            DataPayload::Transaction(transaction) => {
                 submit_transaction(&self.mempool_relay, transaction).await;
             }
         }
     }
 
-    async fn observe_broadcasts(&self) -> BoxStream<'static, BlendPayload> {
+    async fn observe_broadcasts(&self) -> BoxStream<'static, DataPayload> {
         let proposals_stream =
             stream::once(observe_block_proposals(self.chain_network_relay.clone())).flatten();
         let transactions_stream =

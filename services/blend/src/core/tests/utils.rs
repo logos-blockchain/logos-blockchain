@@ -65,7 +65,7 @@ use crate::{
         tests::RuntimeServiceId,
     },
     epoch::CoreEpochPublicInfo,
-    message::{BlendPayload, NetworkInfo},
+    message::{DataPayload, NetworkInfo},
     settings::TimingSettings,
     test_utils,
     test_utils::mocks::{TestChainNetworkService, TestMempoolService},
@@ -332,11 +332,11 @@ where
         Self
     }
 
-    async fn dispatch(&self, _payload: BlendPayload) {
+    async fn dispatch(&self, _payload: DataPayload) {
         note_outgoing_message();
     }
 
-    async fn observe_broadcasts(&self) -> BoxStream<'static, BlendPayload> {
+    async fn observe_broadcasts(&self) -> BoxStream<'static, DataPayload> {
         stream::empty().boxed()
     }
 }
