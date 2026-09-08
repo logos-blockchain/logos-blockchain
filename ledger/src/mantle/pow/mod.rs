@@ -78,19 +78,15 @@ pub struct BlendPowState {
 
 impl PowState {
     /// Create the genesis `PoW` state from `config`: pool and per-claim reward
-    /// seeded from the genesis endowment, initial difficulty derived from them,
-    /// and no claims or seen blocks yet.
+    /// seeded from the genesis endowment, difficulty taken straight from the
+    /// configured exponent, and no claims or seen blocks yet.
     #[must_use]
     pub fn from_reward_config(config: &RewardPoWConfig) -> Self {
         Self {
             reward: RewardPowState {
                 reward_pool: config.reward_pool_genesis,
                 epoch_reward: config.epoch_reward_genesis,
-                reward_difficulty: compute_new_reward_difficulty(
-                    config.initial_difficulty_seed,
-                    PowTarget::from(config.epoch_reward_genesis),
-                    config,
-                ),
+                reward_difficulty: PowTarget::from(config.initial_difficulty),
                 refill_rewards: 0,
                 nullifiers: HashTrieMapSync::new_sync(),
                 block_slots: HashTrieMapSync::new_sync(),
@@ -257,10 +253,11 @@ mod tests {
         mantle::{ledger::Utxos, transactions::hash::TxHash},
         sdp::Declarations,
     };
-    use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
+    use lb_groth16::{AdditiveGroup as _, Field as _, Fr, fr_to_bytes};
+    use num_bigint::BigUint;
 
     use super::*;
-    use crate::UtxoTree;
+    use crate::{UtxoTree, config::ModulusShift};
 
     const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
 
@@ -288,7 +285,7 @@ mod tests {
         RewardPoWConfig {
             reward_pool_genesis: POW_REWARD_POOL_GENESIS,
             epoch_reward_genesis: POW_EPOCH_REWARD_POOL_GENESIS,
-            initial_difficulty_seed: 1_000,
+            initial_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).expect("10 is non-zero"),
             target_claims_per_block: 100,
@@ -334,11 +331,33 @@ mod tests {
         let state = pow_state();
         assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS);
         assert_eq!(state.epoch_reward(), POW_EPOCH_REWARD_POOL_GENESIS);
-        // The initial difficulty is seeded too — a zero target would be an
-        // absorbing state no claim could ever satisfy.
-        assert_ne!(state.reward_difficulty(), PowTarget::default());
+        // The genesis difficulty is exactly the configured exponent, not a
+        // value derived from it. Asserting only that it is non-zero would not
+        // notice a target off by orders of magnitude, which is what deriving
+        // it from a token amount used to produce.
+        assert_eq!(
+            state.reward_difficulty(),
+            PowTarget::from(ModulusShift::new::<26>())
+        );
         assert!(state.nullifiers().is_empty());
         assert!(state.block_slots().is_empty());
+    }
+
+    /// The genesis difficulty has to be a sane fraction of the scalar field:
+    /// `p / 2^26`, which is a ~68-digit number. A token-scale value such as
+    /// the per-claim reward is ~7 digits, so a target derived from one is
+    /// unreachable by tens of orders of magnitude and no ticket ever wins.
+    /// This pins the scale rather than the exact constant.
+    #[test]
+    fn genesis_difficulty_is_field_scale_not_token_scale() {
+        let difficulty = BigUint::from_bytes_le(&fr_to_bytes(&pow_state().reward_difficulty()));
+        let field = BigUint::from_bytes_le(&fr_to_bytes(&-PowTarget::ONE));
+
+        // Within a factor of 2^27 of the whole field, and nowhere near the
+        // token amounts in `reward_config`.
+        assert!(difficulty > &field >> 27u32);
+        assert!(difficulty < field);
+        assert!(difficulty > BigUint::from(u64::MAX));
     }
 
     #[test]

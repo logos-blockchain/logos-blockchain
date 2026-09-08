@@ -145,12 +145,17 @@ pub struct PoWConfig {
 pub struct RewardPoWConfig {
     /// `R_PoW` genesis: initial balance of the reward pool.
     pub reward_pool_genesis: PowReward,
-    /// `sigma_e` genesis: initial per-claim reward, also the target the
-    /// initial `d_reward` is seeded from.
+    /// `sigma_e` genesis: initial per-claim reward.
     pub epoch_reward_genesis: PowReward,
-    /// Claim count fed to the difficulty controller to seed the initial
-    /// `d_reward` at genesis.
-    pub initial_difficulty_seed: u64,
+    /// `d_reward` at genesis, as the exponent `n` in `p / 2^n` — the same way
+    /// [`BlendPoWConfig::base_difficulty`] states the Blend threshold.
+    ///
+    /// Stated directly rather than derived: a difficulty is a fraction of the
+    /// scalar field, and the retarget controller can only ever scale a target
+    /// it is already given. Seeding it from a token amount cannot express a
+    /// field-scale value, so the chain would start ~60 orders of magnitude
+    /// too hard. Spec: 26.
+    pub initial_difficulty: ModulusShift,
     /// EMA smoothing factor `F` (weight of the prior estimate). Must not
     /// exceed [`Self::ema_smoothing_precision`].
     pub ema_smoothing_factor: u64,
@@ -178,7 +183,7 @@ pub struct RewardPoWConfig {
 struct RewardPoWConfigFields {
     reward_pool_genesis: PowReward,
     epoch_reward_genesis: PowReward,
-    initial_difficulty_seed: u64,
+    initial_difficulty: ModulusShift,
     ema_smoothing_factor: u64,
     ema_smoothing_precision: NonZeroU64,
     target_claims_per_block: u64,
@@ -195,7 +200,7 @@ impl TryFrom<RewardPoWConfigFields> for RewardPoWConfig {
         let config = Self {
             reward_pool_genesis: fields.reward_pool_genesis,
             epoch_reward_genesis: fields.epoch_reward_genesis,
-            initial_difficulty_seed: fields.initial_difficulty_seed,
+            initial_difficulty: fields.initial_difficulty,
             ema_smoothing_factor: fields.ema_smoothing_factor,
             ema_smoothing_precision: fields.ema_smoothing_precision,
             target_claims_per_block: fields.target_claims_per_block,
@@ -332,7 +337,7 @@ mod tests {
         RewardPoWConfig {
             reward_pool_genesis: 1_000_000_000,
             epoch_reward_genesis: 1_000_000,
-            initial_difficulty_seed: 1_000,
+            initial_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
             target_claims_per_block: 100,
