@@ -12,7 +12,7 @@ use std::{
 use futures::{Stream, StreamExt as _};
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
-    message::{BlendPayload, MAX_PAYLOAD_BODY_SIZE, TransactionTooLarge},
+    message::{BlendPayload, MAX_PAYLOAD_BODY_SIZE, TransactionNotBlendable},
 };
 use lb_chain_service::{
     ProcessedBlockEvent, Slot,
@@ -105,8 +105,8 @@ pub enum PoWError {
     SignTask(#[from] JoinError),
     #[error("failed to encode transaction: {0}")]
     Encode(#[from] CodecError),
-    #[error("transaction too large for a blend payload: {0}")]
-    PayloadTooLarge(#[from] TransactionTooLarge),
+    #[error("transaction cannot be carried by the blend network: {0}")]
+    NotBlendable(#[from] TransactionNotBlendable),
     #[error("failed to publish to the blend network: {0}")]
     Publish(#[from] BlendApiError),
     #[error("failed to query the chain service: {0}")]
@@ -1510,7 +1510,7 @@ where
     BlendService::NodeId: Send,
     RuntimeServiceId: Sync,
 {
-    let payload = BlendPayload::transaction(signed_tx.to_bytes()?.to_vec())?;
+    let payload = BlendPayload::try_from_transaction(&signed_tx)?;
     blend_api.publish(payload).await?;
     Ok(())
 }

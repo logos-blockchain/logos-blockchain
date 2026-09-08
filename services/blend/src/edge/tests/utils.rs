@@ -32,9 +32,33 @@ use crate::{
     },
     epoch_info::PolInfoProvider,
     message::ServiceMessage,
-    settings::TimingSettings,
-    test_utils::{crypto::mock_blend_proof, epoch::OncePolStreamProvider, membership::key},
+    settings::{TimingSettings, max_data_message_delay_in_rounds},
+    test_utils::{
+        crypto::mock_blend_proof,
+        dispatcher::{TestBroadcastingChannel, TestPayloadDispatcher},
+        epoch::OncePolStreamProvider,
+        membership::key,
+    },
 };
+
+/// The round these tests run on, which is the shortest a deployment may use.
+///
+/// The tests that sit through a whole delivery deadline are not slow for it:
+/// they run on a paused clock, which jumps to the next timer the moment every
+/// task is idle.
+pub const TEST_ROUND: Duration = Duration::from_secs(1);
+
+/// `ß_c` for the tests.
+const TEST_BLEND_LAYERS: NonZeroU64 = NonZeroU64::new(1).unwrap();
+/// `∆max` for the tests: the rounds a blend node may hold a message for.
+const TEST_MAX_BLEND_DELAY: NonZeroU64 = NonZeroU64::new(5).unwrap();
+
+/// `T_D` for the tests, in rounds: the very derivation the service makes from
+/// the two settings above, so the tests wait exactly as long as the code they
+/// exercise and the two cannot drift apart. Pick a different deadline by
+/// changing one of those, never by restating this.
+pub const TEST_DELIVERY_DEADLINE: NonZeroU64 =
+    max_data_message_delay_in_rounds(TEST_BLEND_LAYERS, TEST_MAX_BLEND_DELAY);
 
 pub struct MockLeaderProofsGenerator;
 
@@ -56,20 +80,41 @@ impl LeaderAndPowProofsGenerator for MockLeaderProofsGenerator {
     }
 }
 
+/// What [`spawn_run`] hands back: the running service, the channels that drive
+/// it, and both sides of its exit door.
+pub struct RunningEdgeService {
+    pub handle: JoinHandle<Result<(), Error>>,
+    pub epochs: mpsc::Sender<Membership<NodeId>>,
+    pub messages: mpsc::Sender<ServiceMessage<NodeId>>,
+    pub blended_to: mpsc::Receiver<NodeId>,
+    pub broadcasting_channel: TestBroadcastingChannel,
+}
+
 pub async fn spawn_run(
     local_node: NodeId,
     minimal_network_size: u64,
     initial_membership: Option<Membership<NodeId>>,
-) -> (
-    JoinHandle<Result<(), Error>>,
-    mpsc::Sender<Membership<NodeId>>,
-    mpsc::Sender<ServiceMessage<NodeId>>,
-    mpsc::Receiver<NodeId>,
-) {
+) -> RunningEdgeService {
     spawn_run_with_pol::<OncePolStreamProvider>(
         local_node,
         minimal_network_size,
         initial_membership,
+        false,
+    )
+    .await
+}
+
+/// [`spawn_run`] for a node whose operator has turned the direct broadcast off.
+pub async fn spawn_run_without_direct_broadcast(
+    local_node: NodeId,
+    minimal_network_size: u64,
+    initial_membership: Option<Membership<NodeId>>,
+) -> RunningEdgeService {
+    spawn_run_with_pol::<OncePolStreamProvider>(
+        local_node,
+        minimal_network_size,
+        initial_membership,
+        true,
     )
     .await
 }
@@ -81,12 +126,8 @@ pub async fn spawn_run_with_pol<PolProvider>(
     local_node: NodeId,
     minimal_network_size: u64,
     initial_membership: Option<Membership<NodeId>>,
-) -> (
-    JoinHandle<Result<(), Error>>,
-    mpsc::Sender<Membership<NodeId>>,
-    mpsc::Sender<ServiceMessage<NodeId>>,
-    mpsc::Receiver<NodeId>,
-)
+    abstain_on_failure: bool,
+) -> RunningEdgeService
 where
     PolProvider: PolInfoProvider<usize, Stream: Unpin + Send> + Send + 'static,
 {
@@ -104,12 +145,15 @@ where
     let epoch_stream = ReceiverStream::new(epoch_receiver)
         .map(|membership| test_blend_epoch_state(0.into(), membership));
 
-    let settings = settings(local_node, minimal_network_size, node_id_sender);
+    let mut settings = settings(local_node, minimal_network_size, node_id_sender);
+    settings.abstain_on_failure = abstain_on_failure;
+    let (payload_dispatcher, broadcasting_channel) = TestPayloadDispatcher::new();
     let join_handle = tokio::spawn(async move {
         Box::pin(run::<
             TestBackend,
             _,
             MockLeaderProofsGenerator,
+            TestPayloadDispatcher,
             PolProvider,
             _,
         >(
@@ -117,13 +161,20 @@ where
             ReceiverStream::new(msg_receiver),
             local_node,
             settings,
+            payload_dispatcher,
             &overwatch_handle(),
             || {},
         ))
         .await
     });
 
-    (join_handle, epoch_sender, msg_sender, node_id_receiver)
+    RunningEdgeService {
+        handle: join_handle,
+        epochs: epoch_sender,
+        messages: msg_sender,
+        blended_to: node_id_receiver,
+        broadcasting_channel,
+    }
 }
 
 pub fn settings(
@@ -132,14 +183,16 @@ pub fn settings(
     msg_sender: NodeIdSender,
 ) -> BlendConfig<NodeIdSender> {
     BlendConfig {
+        abstain_on_failure: false,
         time: TimingSettings {
             rounds_per_epoch: NonZeroU64::new(1).unwrap(),
-            round_duration: Duration::from_secs(1),
+            round_duration: TEST_ROUND,
             rounds_per_observation_window: NonZeroU64::new(1).unwrap(),
             epoch_transition_period: Duration::from_secs(1),
         },
         non_ephemeral_signing_key: key(local_id).0,
-        num_blend_layers: NonZeroU64::new(1).unwrap(),
+        num_blend_layers: TEST_BLEND_LAYERS,
+        max_blend_delay_in_rounds: TEST_MAX_BLEND_DELAY,
         backend: msg_sender,
         minimum_network_size: NonZeroU64::new(minimum_network_size).unwrap(),
         cover: CoverTrafficSettings::default(),

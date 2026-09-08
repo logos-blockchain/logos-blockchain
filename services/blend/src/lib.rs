@@ -36,8 +36,8 @@ use crate::{
     core::{
         dispatcher::PayloadDispatcher as PayloadDispatcherTrait,
         service_components::{
-            BlendBackendSettingsOfService, MempoolOfService, MessageComponents,
-            NetworkBackendOfService, PayloadDispatcherSettingsOfService,
+            BlendBackendSettingsOfService, ChainNetworkOfService, MempoolOfService,
+            MessageComponents, NetworkBackendOfService, PayloadDispatcherSettingsOfService,
             ServiceComponents as CoreServiceComponents,
         },
     },
@@ -55,6 +55,7 @@ use crate::{
 
 pub mod api;
 pub mod core;
+pub mod delivery;
 pub mod edge;
 pub mod epoch;
 pub mod epoch_info;
@@ -140,6 +141,7 @@ where
                 RuntimeServiceId,
             >,
         > + AsServiceId<MempoolOfService<CoreService, RuntimeServiceId>>
+        + AsServiceId<ChainNetworkOfService<CoreService, RuntimeServiceId>>
         + AsServiceId<SdpService>
         + Debug
         + Display
@@ -269,7 +271,7 @@ where
             Mode::choose(&membership, minimal_network_size),
             local_node_id.clone(),
             overwatch_handle,
-            settings.core.network.clone(),
+            settings.common.broadcast.clone(),
         )
         .await?;
 
@@ -290,7 +292,7 @@ where
                             overwatch_handle,
                             minimal_network_size,
                             local_node_id.clone(),
-                            settings.core.network.clone(),
+                            settings.common.broadcast.clone(),
                         )
                         .await?;
                 },

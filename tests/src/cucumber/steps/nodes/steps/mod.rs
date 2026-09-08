@@ -46,7 +46,7 @@ use crate::{
                 get_cryptarchia_info_all_nodes, nodes_converged, parse_genesis_wallet_tokens_row,
                 parse_mining_wallet_resources_table_row, parse_url,
                 parse_wallet_resources_table_row, poll_all_nodes_and_update_consensus_cache,
-                restart_node,
+                restart_node, set_blend_reachability,
                 snapshots::validate_snapshot_path_component,
                 start_node, start_nodes_order_respecting_dependencies, stop_node,
                 verify_genesis_wallet_resources_table_indexes,

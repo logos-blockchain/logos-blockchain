@@ -92,6 +92,10 @@ fn initialize_lb_node(
         run_config.deployment = get_deployment_config(custom_deployment_path)?;
     }
 
+    // Captured before the run config is consumed, so the node handle can answer
+    // for its chain without querying a service for a value that cannot change.
+    let chain_id = run_config.deployment.chain_id();
+
     let runtime = Runtime::new().expect("Failed to create Tokio runtime");
     let app = run_node_from_config(run_config, Some(runtime.handle().clone())).map_err(|e| {
         OperationStatus::error(
@@ -121,7 +125,7 @@ fn initialize_lb_node(
         Ok(())
     })?;
 
-    Ok(LogosBlockchainNode::new(app, runtime))
+    Ok(LogosBlockchainNode::new(app, runtime, &chain_id))
 }
 
 fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {

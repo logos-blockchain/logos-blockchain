@@ -1,4 +1,6 @@
 mod imp {
+    use lb_blend::message::PayloadType;
+
     const ACTION_PUBLISH: &str = "publish";
     const ACTION_FORWARD: &str = "forward";
 
@@ -75,6 +77,16 @@ mod imp {
     /// caught doing — an invalid `PoQ` among the reasons.
     pub fn core_peer_blocked(reason: &'static str) {
         lb_tracing::increase_counter_u64!(blend_core_peers_blocked_total, 1, reason = reason);
+    }
+
+    /// Reports a payload the Blend network failed to deliver within the
+    /// delivery deadline, and that this node therefore broadcast in the clear.
+    pub fn payload_bypassed_blend(payload_type: PayloadType) {
+        lb_tracing::increase_counter_u64!(
+            blend_payloads_bypassed_total,
+            1,
+            payload_type = payload_type.as_ref()
+        );
     }
 }
 
