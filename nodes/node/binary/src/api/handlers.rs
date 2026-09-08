@@ -5,7 +5,7 @@ use std::{
 
 use ::libp2p::PeerId;
 use axum::{
-    Json,
+    Extension, Json,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse as _, Response},
@@ -33,6 +33,7 @@ use lb_core::{
         traits::Hashable,
         transactions::{
             MantleTxBuilder,
+            genesis_tx::ChainId,
             states::{Preverified, Unverified},
         },
     },
@@ -41,6 +42,7 @@ use lb_http_api_common::{
     TimeInfo,
     bodies::{
         blend::JoinBlendRequestBody,
+        chain::ChainIdResponseBody,
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
         mantle::GasPricesResponseBody,
         wallet::{
@@ -488,6 +490,20 @@ where
 )]
 pub async fn version() -> Response {
     Json(crate::version::node_version()).into_response()
+}
+
+/// The chain ID is fixed by the deployment the node was built with, so it is
+/// handed to the API backend in its settings and served straight from the
+/// request extensions. There is no failure path.
+#[utoipa::path(
+    get,
+    path = paths::CHAIN_ID,
+    responses(
+        (status = 200, description = "The chain this node runs on", body = String),
+    )
+)]
+pub async fn chain_id(Extension(chain_id): Extension<ChainId>) -> Response {
+    Json(ChainIdResponseBody { chain_id }).into_response()
 }
 
 #[derive(Deserialize)]

@@ -26,6 +26,7 @@ use lb_key_management_system_service::{
     operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
 };
 use lb_log_targets::blend;
+use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::TimeService;
 use overwatch::{
@@ -42,6 +43,8 @@ use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
 use crate::{
+    core::dispatcher::PayloadDispatcher,
+    delivery::{FailureDetector, broadcast_undelivered_messages, next_undelivered_messages},
     edge::{current_epoch::CurrentEpoch, handlers::Error, settings::RunningBlendConfig},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
@@ -59,6 +62,7 @@ pub struct BlendService<
     Backend,
     NodeId,
     ProofsGenerator,
+    Dispatcher,
     TimeBackend,
     ChainService,
     PolInfoProvider,
@@ -66,17 +70,33 @@ pub struct BlendService<
 > where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
     NodeId: Clone,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    _phantom: PhantomData<(ProofsGenerator, TimeBackend, ChainService, PolInfoProvider)>,
+    _phantom: PhantomData<(
+        ProofsGenerator,
+        Dispatcher,
+        TimeBackend,
+        ChainService,
+        PolInfoProvider,
+    )>,
 }
 
-impl<Backend, NodeId, ProofsGenerator, TimeBackend, ChainService, PolInfoProvider, RuntimeServiceId>
-    ServiceData
+impl<
+    Backend,
+    NodeId,
+    ProofsGenerator,
+    Dispatcher,
+    TimeBackend,
+    ChainService,
+    PolInfoProvider,
+    RuntimeServiceId,
+> ServiceData
     for BlendService<
         Backend,
         NodeId,
         ProofsGenerator,
+        Dispatcher,
         TimeBackend,
         ChainService,
         PolInfoProvider,
@@ -85,20 +105,30 @@ impl<Backend, NodeId, ProofsGenerator, TimeBackend, ChainService, PolInfoProvide
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
     NodeId: Clone,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
-    type Settings = StartingBlendConfig<Backend::Settings>;
+    type Settings = StartingBlendConfig<Backend::Settings, Dispatcher::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = ServiceMessage<NodeId>;
 }
 
 #[async_trait::async_trait]
-impl<Backend, NodeId, ProofsGenerator, TimeBackend, ChainService, PolInfoProvider, RuntimeServiceId>
-    ServiceCore<RuntimeServiceId>
+impl<
+    Backend,
+    NodeId,
+    ProofsGenerator,
+    Dispatcher,
+    TimeBackend,
+    ChainService,
+    PolInfoProvider,
+    RuntimeServiceId,
+> ServiceCore<RuntimeServiceId>
     for BlendService<
         Backend,
         NodeId,
         ProofsGenerator,
+        Dispatcher,
         TimeBackend,
         ChainService,
         PolInfoProvider,
@@ -108,6 +138,7 @@ where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Send + Sync,
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
     ProofsGenerator: LeaderAndPowProofsGenerator + Send,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
@@ -115,6 +146,9 @@ where
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<ChainService>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
+        + AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
+        + AsServiceId<Dispatcher::MempoolService>
+        + AsServiceId<Dispatcher::ChainNetworkService>
         + Display
         + Debug
         + Clone
@@ -133,6 +167,10 @@ where
         })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn run(mut self) -> Result<(), overwatch::DynError> {
         let Self {
             service_resources_handle:
@@ -152,9 +190,31 @@ where
             &overwatch_handle,
             Some(Duration::from_mins(1)),
             TimeService<_, _>,
-            PreloadKmsService<_>
+            PreloadKmsService<_>,
+            NetworkService<Dispatcher::Backend, _>
         )
         .await?;
+
+        let payload_dispatcher = {
+            let network_relay = overwatch_handle
+                .relay::<NetworkService<Dispatcher::Backend, _>>()
+                .await
+                .expect("Relay with network service should be available.");
+            let mempool_relay = overwatch_handle
+                .relay::<Dispatcher::MempoolService>()
+                .await
+                .expect("Relay with mempool service should be available.");
+            let chain_network_relay = overwatch_handle
+                .relay::<Dispatcher::ChainNetworkService>()
+                .await
+                .expect("Relay with chain network service should be available.");
+            Dispatcher::new(
+                network_relay,
+                mempool_relay,
+                chain_network_relay,
+                settings.network.clone(),
+            )
+        };
 
         let kms = KmsServiceApi::<PreloadKmsService<_>, RuntimeServiceId>::new(
             overwatch_handle.relay::<PreloadKmsService<_>>().await?,
@@ -188,7 +248,7 @@ where
             )
             .await;
 
-        run::<Backend, _, ProofsGenerator, PolInfoProvider, _>(
+        run::<Backend, _, ProofsGenerator, _, PolInfoProvider, _>(
             UninitializedEpochEventStream::new(
                 public_epoch_stream,
                 settings.time.epoch_transition_period,
@@ -204,7 +264,10 @@ where
                 time: settings.time,
                 data_replication_factor: settings.data_replication_factor,
                 pow_mining_pool: new_mining_pool(),
+                abstain_on_failure: settings.abstain_on_failure,
+                max_blend_delay_in_rounds: settings.max_blend_delay_in_rounds,
             },
+            payload_dispatcher,
             &overwatch_handle,
             || {
                 status_updater.notify_ready();
@@ -245,15 +308,17 @@ where
 ///   public epoch stream.
 #[expect(
     clippy::cognitive_complexity,
+    clippy::too_many_lines,
     reason = "TODO: address this in a dedicated refactor"
 )]
-async fn run<Backend, NodeId, ProofsGenerator, PolInfoProvider, RuntimeServiceId>(
+async fn run<Backend, NodeId, ProofsGenerator, Dispatcher, PolInfoProvider, RuntimeServiceId>(
     public_epoch_stream: UninitializedEpochEventStream<
         impl Stream<Item = BlendEpochState<NodeId>> + Unpin,
     >,
     mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
     local_node_id: NodeId,
     settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
+    payload_dispatcher: Dispatcher,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     notify_ready: impl Fn(),
 ) -> Result<(), Error>
@@ -261,6 +326,7 @@ where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Sync + Send,
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
     ProofsGenerator: LeaderAndPowProofsGenerator + Send,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Unpin>,
     RuntimeServiceId: Clone + Send + Sync,
 {
@@ -303,16 +369,34 @@ where
         };
     let mut pending_transactions = PendingTransactions::new();
 
+    // `None` when the operator has turned the fallback off, which records
+    // nothing, watches nothing and can reveal nothing.
+    let mut failure_detection = if settings.abstain_on_failure {
+        None
+    } else {
+        Some(FailureDetector::new(
+            settings.max_data_message_delay_in_rounds(),
+            settings.time.round_duration,
+            payload_dispatcher.observe_broadcasts().await,
+        ))
+    };
+
     loop {
         tokio::select! {
             Some(EpochEvent::NewEpoch(new_public_epoch_info)) = remaining_public_epoch_stream.next() => {
                 match CurrentEpoch::try_new(new_public_epoch_info, &settings) {
                     Err(Error::NetworkIsTooSmall(_)) => {
                         info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
+                        if let Some(failure_detection) = failure_detection {
+                            failure_detection.drain_pending_message_queue(&payload_dispatcher).await;
+                        }
                         return Ok(());
                     }
                     Err(e) => {
                         error!(target: LOG_TARGET, "Error when handling new public epoch: {e:?}, edge service shutting down.");
+                        if let Some(failure_detection) = failure_detection {
+                            failure_detection.drain_pending_message_queue(&payload_dispatcher).await;
+                        }
                         return Err(e);
                     }
                     // The epoch this replaces takes its queued proposals with
@@ -321,6 +405,9 @@ where
                     // needs.
                     Ok(next) => current_epoch = next.with_available_secret_info(&mut current_secret_epoch_info, settings.clone(), overwatch_handle.clone()),
                 }
+            }
+            Some(undelivered_messages) = next_undelivered_messages(failure_detection.as_mut()) => {
+                broadcast_undelivered_messages(undelivered_messages.into_iter(), &payload_dispatcher).await;
             }
             Some(new_secret_pol_info) = secret_pol_info_stream.next() => {
                 current_secret_epoch_info = Some(new_secret_pol_info);
@@ -354,7 +441,15 @@ where
                 match encapsulation_result {
                     EncapsulationResult::Complete(encapsulation) => {
                         let LocalEncapsulation { message, kind } = *encapsulation;
+                        let payload = match kind {
+                            MessageKind::Proposal => current_epoch.proposals().head().map(|proposal| BlendPayload::BlockProposal(proposal.to_vec())),
+                            MessageKind::Transaction => pending_transactions.head().map(|transaction| BlendPayload::Transaction(transaction.to_vec())),
+                        }
+                        .expect("A message was encapsulated, so the payload it carries is queued.");
                         current_epoch.send(message).await;
+                        if let Some(failure_detection) = failure_detection.as_mut() {
+                            failure_detection.mark_payload_as_blended(payload);
+                        }
                         match kind {
                             MessageKind::Proposal => current_epoch.proposals_mut().mark_copy_as_sent(),
                             MessageKind::Transaction => drop(pending_transactions.mark_as_sent()),
@@ -371,6 +466,9 @@ where
                 // All input streams have terminated (e.g. disorderly shutdown).
                 // Exit cleanly instead of letting `select!` panic.
                 debug!(target: LOG_TARGET, "All input streams terminated, edge service shutting down.");
+                if let Some(failure_detection) = failure_detection {
+                    failure_detection.drain_pending_message_queue(&payload_dispatcher).await;
+                }
                 return Ok(());
             }
         }

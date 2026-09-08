@@ -19,6 +19,41 @@ pub struct TestMempoolService<RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
 }
 
+/// The same, for the chain-network service a [`PayloadDispatcher`] asks about
+/// the block proposals it receives.
+///
+/// [`PayloadDispatcher`]: crate::core::dispatcher::PayloadDispatcher
+pub struct TestChainNetworkService<RuntimeServiceId> {
+    service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
+}
+
+impl<RuntimeServiceId> ServiceData for TestChainNetworkService<RuntimeServiceId> {
+    type Settings = ();
+    type State = NoState<Self::Settings>;
+    type StateOperator = NoOperator<Self::State>;
+    type Message = ();
+}
+
+#[async_trait::async_trait]
+impl<RuntimeServiceId> ServiceCore<RuntimeServiceId> for TestChainNetworkService<RuntimeServiceId>
+where
+    RuntimeServiceId: Send,
+{
+    fn init(
+        service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
+        _initial_state: Self::State,
+    ) -> Result<Self, DynError> {
+        Ok(Self {
+            service_resources_handle,
+        })
+    }
+
+    async fn run(self) -> Result<(), DynError> {
+        self.service_resources_handle.status_updater.notify_ready();
+        pending().await
+    }
+}
+
 impl<RuntimeServiceId> ServiceData for TestMempoolService<RuntimeServiceId> {
     type Settings = ();
     type State = NoState<Self::Settings>;

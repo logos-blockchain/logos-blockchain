@@ -31,7 +31,7 @@ use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
 };
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
 
 use crate::{
     MempoolMetrics, MempoolMsg, TxsWithCommonPrefix,
@@ -42,6 +42,7 @@ use crate::{
 };
 
 const LOG_TARGET: &str = mempool::SERVICE;
+const ACCEPTED_ITEMS_BUFFER: usize = 64;
 
 type MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId> =
     overwatch::services::state::StateUpdater<
@@ -261,8 +262,15 @@ where
         )
         .await?;
 
-        self.run_event_loop(&mut pool, network_service_relay, &mut network_items)
-            .await
+        let (accepted_items_channel_sender, _) = broadcast::channel(ACCEPTED_ITEMS_BUFFER);
+
+        self.run_event_loop(
+            &mut pool,
+            network_service_relay,
+            &mut network_items,
+            &accepted_items_channel_sender,
+        )
+        .await
     }
 }
 
@@ -286,6 +294,7 @@ where
             BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>,
         >,
         network_items: &mut Box<dyn futures::Stream<Item = (Pool::Key, Pool::Item)> + Unpin + Send>,
+        accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
     ) -> Result<(), overwatch::DynError>
     where
         Pool::Settings: Send + Sync,
@@ -303,10 +312,10 @@ where
                         .get_updated_settings()
                         .network_adapter;
 
-                    Self::handle_mempool_message(pool, relay_msg, network_service_relay.clone(), state_updater, settings).await;
+                    Self::handle_mempool_message(pool, relay_msg, network_service_relay.clone(), state_updater, settings, accepted_items_channel_sender).await;
                 }
                 Some((key, item)) = network_items.next() => {
-                    Self::handle_network_item(pool, key, item, &self.service_resources_handle.state_updater).await;
+                    Self::handle_network_item(pool, key, item, &self.service_resources_handle.state_updater, accepted_items_channel_sender).await;
                 }
             }
         }
@@ -318,6 +327,7 @@ where
         network_relay: OutboundRelay<BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>>,
         state_updater: MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
         settings: NetworkAdapter::Settings,
+        accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
@@ -336,6 +346,7 @@ where
                     network_relay,
                     state_updater,
                     settings,
+                    accepted_items_channel_sender,
                 )
                 .await;
             }
@@ -367,9 +378,18 @@ where
             } => {
                 Self::handle_status_message(pool, &items, reply_channel);
             }
+            MempoolMsg::SubscribeToAccepted { reply_channel } => {
+                if reply_channel
+                    .send(accepted_items_channel_sender.subscribe())
+                    .is_err()
+                {
+                    tracing::warn!(target: LOG_TARGET, "Subscriber hung up before it could be given the accepted-item stream.");
+                }
+            }
         }
     }
 
+    #[expect(clippy::too_many_arguments, reason = "categorize args")]
     async fn handle_add_message(
         pool: &mut Pool,
         key: Pool::Key,
@@ -378,6 +398,7 @@ where
         network_relay: OutboundRelay<BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>>,
         state_updater: MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
         settings: NetworkAdapter::Settings,
+        accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
@@ -387,25 +408,25 @@ where
             return;
         }
 
-        let item_for_broadcast = item.clone();
-
-        match pool.add_item(key, item).await {
+        match pool.add_item(key, item.clone()).await {
             Ok(_id) => {
+                Self::notify_about_accepted_item(accepted_items_channel_sender, item.clone());
                 Self::handle_add_success(
                     pool,
                     &state_updater,
                     settings,
                     network_relay,
-                    item_for_broadcast,
+                    item,
                     reply_channel,
                 );
             }
             Err(MempoolError::ExistingItem) => {
                 // Tx already in pool, but since this came from a local submission
                 // (not gossip), re-gossip it so leader nodes can pick it up.
+                Self::notify_about_accepted_item(accepted_items_channel_sender, item.clone());
                 spawn("logos/mempool/transaction-regossip", async move {
                     let adapter = NetworkAdapter::new(settings, network_relay).await;
-                    adapter.send(item_for_broadcast).await;
+                    adapter.send(item).await;
                 });
                 if let Err(e) = reply_channel.send(Ok(())) {
                     tracing::debug!(target: LOG_TARGET, "Failed to send add reply: {:?}", e);
@@ -503,6 +524,15 @@ where
         }
     }
 
+    fn notify_about_accepted_item(
+        accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
+        item: Pool::Item,
+    ) {
+        if accepted_items_channel_sender.receiver_count() > 0 {
+            drop(accepted_items_channel_sender.send(item));
+        }
+    }
+
     fn validate_item_for_mempool(item: &Pool::Item) -> Result<(), MempoolError> {
         let size = item.storage_size();
         if size > MAX_BLOCK_TRANSACTIONS_SIZE {
@@ -520,6 +550,7 @@ where
         key: Pool::Key,
         item: Pool::Item,
         state_updater: &MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
+        accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
@@ -532,10 +563,12 @@ where
             return;
         }
 
+        let accepted_item = item.clone();
         if let Err(e) = pool.add_item(key, item).await {
             Self::handle_network_add_error(e);
             return;
         }
+        Self::notify_about_accepted_item(accepted_items_channel_sender, accepted_item);
 
         tracing::trace!(
             target: LOG_TARGET,
