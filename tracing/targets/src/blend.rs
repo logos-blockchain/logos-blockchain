@@ -30,11 +30,12 @@ log_targets! {
         DELAY,
     },
     service::{
+        BROADCAST,
         CORE,
         EDGE,
         EPOCH,
         MEMBERSHIP,
-        MODES,
+        ORCHESTRATOR,
         core::KMS_POQ_GENERATOR,
         edge::backend::LIBP2P,
     }

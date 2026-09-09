@@ -27,22 +27,24 @@ use crate::{
 };
 
 #[derive(Clone, Debug)]
-pub struct BlendEpochState<NodeId> {
+pub struct BlendEpochState {
     pub epoch: Epoch,
     pub nonce: Fr,
     pub aged: Fr,
     pub lottery_0: Fr,
     pub lottery_1: Fr,
     pub pow_difficulty: PowTarget,
-    pub membership_info: MembershipInfo<NodeId>,
 }
+
+/// One epoch, as a subscriber sees it: what the chain says, and who is in it.
+pub type BlendEpoch<NodeId> = (BlendEpochState, MembershipInfo<NodeId>);
 
 /// A chain-derived per-epoch state stream.
 ///
 /// Not `Sync`, since producing each item awaits a chain query; consumers only
 /// require `Send + Unpin`.
 pub type BlendEpochStateStream<NodeId> =
-    Pin<Box<dyn Stream<Item = BlendEpochState<NodeId>> + Send + 'static>>;
+    Pin<Box<dyn Stream<Item = BlendEpoch<NodeId>> + Send + 'static>>;
 
 fn log_membership_transition<NodeId>(
     component: &'static str,
@@ -200,15 +202,17 @@ where
                             slot,
                             &membership_info.membership,
                         );
-                        let item = BlendEpochState {
-                            epoch,
-                            nonce: epoch_state.nonce,
-                            aged: epoch_state.utxo_merkle_root(),
-                            lottery_0: epoch_state.lottery_0,
-                            lottery_1: epoch_state.lottery_1,
-                            pow_difficulty: epoch_state.blend_pow_difficulty,
+                        let item = (
+                            BlendEpochState {
+                                epoch,
+                                nonce: epoch_state.nonce,
+                                aged: epoch_state.utxo_merkle_root(),
+                                lottery_0: epoch_state.lottery_0,
+                                lottery_1: epoch_state.lottery_1,
+                                pow_difficulty: epoch_state.blend_pow_difficulty,
+                            },
                             membership_info,
-                        };
+                        );
                         return Some((
                             item,
                             (ticks, last_epoch, chain_api, signing_pk, zk_pk, component),
