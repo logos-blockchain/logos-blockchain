@@ -55,9 +55,12 @@ use crate::{
             settings, timing_settings, wait_for_blend_backend_event,
         },
     },
-    epoch::{CoreEpochInfo, CoreEpochPublicInfo},
+    epoch::{CoreEpochInfo, CoreEpochPublicInfo, CoreEpochStateInfo},
     epoch_info::{PolEpochInfo, PolEpochState, PolEpochStateSource},
-    membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
+    membership::{
+        MembershipInfo, ZkInfo,
+        chain::{BlendEpoch, BlendEpochState},
+    },
     message::{DataPayload, ServiceMessage},
     pending::{NextLocalMessage, PendingTransactions, next_local_message},
     test_utils::{
@@ -117,16 +120,18 @@ fn pol_state_match_detects_fingerprint_mismatch() {
 fn test_blend_epoch_state(
     epoch: u32,
     membership_info: MembershipInfo<NodeId>,
-) -> BlendEpochState<NodeId> {
-    BlendEpochState {
-        pow_difficulty: ZkHash::ZERO,
-        epoch: epoch.into(),
-        nonce: ZkHash::ZERO,
-        aged: ZkHash::ZERO,
-        lottery_0: ZkHash::ZERO,
-        lottery_1: ZkHash::ZERO,
+) -> BlendEpoch<NodeId> {
+    (
+        BlendEpochState {
+            pow_difficulty: ZkHash::ZERO,
+            epoch: epoch.into(),
+            nonce: ZkHash::ZERO,
+            aged: ZkHash::ZERO,
+            lottery_0: ZkHash::ZERO,
+            lottery_1: ZkHash::ZERO,
+        },
         membership_info,
-    }
+    )
 }
 
 /// Check if incoming encapsulated messages are properly decapsulated and
@@ -767,7 +772,7 @@ async fn test_handle_epoch_event() {
                 epoch: epoch.strict_add(1.into()),
                 ..public_info.clone()
             },
-            core_poq_generator: Some(()),
+            core_poq_generator: (),
         }
         .into(),
         &settings,
@@ -845,18 +850,14 @@ async fn test_handle_epoch_event() {
     )
     .await;
 
-    // Handle a NewEpoch event with a new too small membership,
-    // expecting Retiring output.
+    // Handle a NewEpoch event for a membership too small to blend through.
+    // The stream resolves the mode, so such an epoch arrives as `NotCore`,
+    // and the service retires on it.
     let output = handle_epoch_event(
-        CoreEpochInfo {
-            public: CoreEpochPublicInfo {
-                membership: new_membership(minimal_network_size - 1).0,
-                epoch: epoch.strict_add(2.into()),
-                ..new_epoch_info.clone()
-            },
-            core_poq_generator: Some(()),
-        }
-        .into(),
+        CoreEpochStateInfo::NotCore {
+            epoch: epoch.strict_add(2.into()),
+            epoch_nonce: ZkHash::ZERO,
+        },
         &settings,
         current_crypto_processor,
         current_scheduler,
@@ -930,7 +931,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
     let output = handle_epoch_event(
         CoreEpochInfo {
             public: new_public_info.clone(),
-            core_poq_generator: Some(()),
+            core_poq_generator: (),
         }
         .into(),
         &settings,
@@ -1040,7 +1041,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
                 epoch: epoch.strict_add(1.into()),
                 ..public_info.clone()
             },
-            core_poq_generator: Some(()),
+            core_poq_generator: (),
         }
         .into(),
         &settings,
@@ -1085,7 +1086,7 @@ async fn test_handle_epoch_event_applies_matching_secret_to_new_generator() {
 }
 
 /// Handle a `NewEpoch(Empty)` event (empty membership), expecting `Retiring`
-/// output. This exercises the `MaybeEmptyCoreEpochInfo::Empty` branch of
+/// output. This exercises the `CoreEpochStateInfo::NotCore` branch of
 /// `handle_epoch_event` directly.
 #[test_log::test(tokio::test)]
 async fn test_handle_epoch_event_empty_epoch_retires() {
@@ -1153,9 +1154,14 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     assert_eq!(retiring_epoch.epoch(), epoch);
 }
 
-/// Handle a `NewEpoch(NonEmpty)` event where membership exists but the local
-/// node is not part of it (`core_poq_generator = None`), expecting `Retiring`
-/// output.
+/// A membership the node is declared in but has no Merkle path for retires the
+/// service, exactly as an outright empty one does.
+///
+/// It used to arrive here as `NonEmpty` with a `None` `PoQ` generator, so
+/// `handle_epoch_event` had to notice. Now the epoch stream resolves the mode,
+/// and a membership with no path for this node is not core mode, so it arrives
+/// as `NotCore` — which is what this pins: the stream's answer, and the retire
+/// it produces.
 #[test_log::test(tokio::test)]
 async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
@@ -1170,7 +1176,8 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
         (),
         0,
     );
-    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
+
+    let public_info = new_epoch_info(epoch, membership, &settings);
     let crypto_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
@@ -1196,14 +1203,10 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
     let (_sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
     let output = handle_epoch_event(
-        CoreEpochInfo {
-            public: CoreEpochPublicInfo {
-                epoch: epoch.strict_add(1.into()),
-                ..public_info.clone()
-            },
-            core_poq_generator: None,
-        }
-        .into(),
+        CoreEpochStateInfo::NotCore {
+            epoch: epoch.strict_add(1.into()),
+            epoch_nonce: ZkHash::ZERO,
+        },
         &settings,
         crypto_processor,
         scheduler,
@@ -1221,9 +1224,8 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
     .await;
 
     let HandleEpochEventOutput::Retiring { retiring_epoch } = output else {
-        panic!("expected Retiring output for NonEmpty epoch without local core path");
+        panic!("expected Retiring output for an epoch without a local core path");
     };
-
     assert_eq!(retiring_epoch.epoch(), epoch);
 }
 
@@ -1585,7 +1587,6 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
     )
     .await;
 
-    let mut backend_event_receiver = backend.subscribe_to_events();
     // Run the event loop of the service in a separate task.
     let settings_cloned = settings.clone();
     let join_handle = tokio::spawn(async move {
@@ -1641,15 +1642,14 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
         .await
         .unwrap();
 
-    wait_for_blend_backend_event(
-        &mut backend_event_receiver,
-        TestBlendBackendEvent::EpochTransitionCompleted,
-    )
-    .await;
-    // The service should stop without panicking.
-    join_handle
-        .await
-        .expect("the service should stop without panic when local core path is missing");
+    // No epoch transition to wait for: a configured zk ID that is not the
+    // declared one is not something to carry on through, so the service stops
+    // by refusing the epoch and the operator gets told what to change.
+    let outcome = join_handle.await;
+    assert!(
+        outcome.is_err_and(|error| error.is_panic()),
+        "a zk ID mismatch must stop the service, not be blended through"
+    );
 }
 
 /// Verify that the proof generator produces proofs for the correct epoch,

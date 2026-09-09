@@ -25,7 +25,7 @@ use crate::{
         },
     },
     epoch_info::{PolEpochInfo, PolEpochState, PolEpochStateSource},
-    membership::chain::BlendEpochState,
+    membership::chain::{BlendEpoch, BlendEpochState},
     message::{DataPayload, ServiceMessage},
     pending::{NextLocalMessage, PendingTransactions, next_local_message},
     test_utils::{
@@ -388,16 +388,18 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
     assert_eq!(current_epoch.info().epoch, Epoch::new(3));
 }
 
-fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> BlendEpochState<NodeId> {
-    BlendEpochState {
-        pow_difficulty: ZkHash::ZERO,
-        epoch,
-        nonce: Fr::ZERO,
-        aged: Fr::ZERO,
-        lottery_0: Fr::ZERO,
-        lottery_1: Fr::ZERO,
-        membership_info: membership.into(),
-    }
+fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> BlendEpoch<NodeId> {
+    (
+        BlendEpochState {
+            pow_difficulty: ZkHash::ZERO,
+            epoch,
+            nonce: Fr::ZERO,
+            aged: Fr::ZERO,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ZERO,
+        },
+        membership.into(),
+    )
 }
 
 /// Two consecutive public epoch infos with no private in between (e.g. the
