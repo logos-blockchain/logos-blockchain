@@ -1,7 +1,4 @@
-use core::{
-    cell::{Cell, RefCell},
-    convert::Infallible,
-};
+use core::cell::{Cell, RefCell};
 
 use async_trait::async_trait;
 use lb_blend::{
@@ -75,35 +72,6 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
 
     async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
         Some(mock_blend_proof())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MockProofsVerifier;
-
-impl ProofsVerifier for MockProofsVerifier {
-    type Error = Infallible;
-
-    fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-        Self
-    }
-
-    fn verify_proof_of_quota(
-        &self,
-        proof: ProofOfQuota,
-        _signing_key: &Ed25519PublicKey,
-    ) -> Result<VerifiedProofOfQuota, Self::Error> {
-        Ok(VerifiedProofOfQuota::from_proof_of_quota_unchecked(proof))
-    }
-
-    fn verify_proof_of_selection(
-        &self,
-        proof: ProofOfSelection,
-        _inputs: &VerifyInputs,
-    ) -> Result<VerifiedProofOfSelection, Self::Error> {
-        Ok(VerifiedProofOfSelection::from_proof_of_selection_unchecked(
-            proof,
-        ))
     }
 }
 

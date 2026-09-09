@@ -48,7 +48,7 @@ use crate::{
     edge::{current_epoch::CurrentEpoch, handlers::Error, settings::RunningBlendConfig},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
-    membership::{self, chain::BlendEpochState, node_id},
+    membership::{self, chain::BlendEpoch, node_id},
     message::{DataPayload, NetworkInfo, ServiceMessage},
     pending::{EncapsulationResult, LocalEncapsulation, MessageKind, PendingTransactions},
 };
@@ -313,7 +313,7 @@ where
 )]
 async fn run<Backend, NodeId, ProofsGenerator, Dispatcher, PolInfoProvider, RuntimeServiceId>(
     public_epoch_stream: UninitializedEpochEventStream<
-        impl Stream<Item = BlendEpochState<NodeId>> + Unpin,
+        impl Stream<Item = BlendEpoch<NodeId>> + Unpin,
     >,
     mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
     local_node_id: NodeId,
@@ -337,11 +337,15 @@ where
 
     info!(
         target: LOG_TARGET,
-        members = current_epoch_info.membership_info.membership.size(),
-        local_node_index = current_epoch_info.membership_info.membership.local_index(),
-        has_zk = current_epoch_info.membership_info.zk.is_some(),
+        members = current_epoch_info.1.membership.size(),
+        local_node_index = current_epoch_info.1.membership.local_index(),
+        has_zk = current_epoch_info.1.zk.is_some(),
         "current membership is ready"
     );
+
+    let mut current_epoch: CurrentEpoch<Backend, NodeId, ProofsGenerator, RuntimeServiceId> =
+        CurrentEpoch::try_new(current_epoch_info, &settings)
+            .expect("The initial membership should satisfy the edge node condition");
 
     notify_ready();
 
@@ -353,20 +357,6 @@ where
         .expect("Should not fail to subscribe to secret PoL info stream.");
 
     let mut current_secret_epoch_info: Option<PolEpochInfo> = None;
-    // The epoch owns its proposals, so a new one takes them with it; a
-    // transaction is not slot-bound and outlives every epoch it waits through.
-    let mut current_epoch: CurrentEpoch<Backend, NodeId, ProofsGenerator, RuntimeServiceId> =
-        match CurrentEpoch::try_new(current_epoch_info, &settings) {
-            Err(Error::NetworkIsTooSmall(_)) => {
-                info!(target: LOG_TARGET, "Initial membership does not satisfy edge node condition, edge service shutting down.");
-                return Ok(());
-            }
-            Err(e) => {
-                error!(target: LOG_TARGET, "Error with the initial epoch: {e:?}, edge service shutting down.");
-                return Err(e);
-            }
-            Ok(epoch) => epoch,
-        };
     let mut pending_transactions = PendingTransactions::new();
 
     // `None` when the operator has turned the fallback off, which records
