@@ -97,6 +97,18 @@ async fn wait_for_claimable_vouchers(node: &NodeHttpClient, duration: Duration) 
             let claimable_vouchers = get_claimable_vouchers(node).await;
 
             if !claimable_vouchers.vouchers.is_empty() {
+                assert!(
+                    claimable_vouchers.reward_amount > 0,
+                    "claimable vouchers should pay a positive reward, got {}",
+                    claimable_vouchers.reward_amount,
+                );
+                let expected_total = claimable_vouchers.reward_amount
+                    * u64::try_from(claimable_vouchers.vouchers.len())
+                        .expect("voucher count should fit in u64");
+                assert_eq!(
+                    claimable_vouchers.total_claimable, expected_total,
+                    "total claimable should be reward_amount * vouchers.len()",
+                );
                 return;
             }
 
