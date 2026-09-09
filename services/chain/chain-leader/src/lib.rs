@@ -145,7 +145,7 @@ impl BlockBuilder {
         }
     }
 
-    fn try_apply_transaction(
+    fn try_add_transaction(
         self,
         tx: &SignedOps<Preverified, StandardMode>,
         ledger_config: &lb_ledger::Config,
@@ -169,7 +169,7 @@ impl BlockBuilder {
     }
 
     #[must_use]
-    fn finish(self) -> LedgerState {
+    fn into_ledger_state(self) -> LedgerState {
         self.ledger_state
     }
 }
@@ -204,7 +204,7 @@ fn select_transactions(
         for tx in std::mem::take(&mut pending) {
             match block_builder
                 .clone()
-                .try_apply_transaction(&tx, ledger_config)
+                .try_add_transaction(&tx, ledger_config)
             {
                 Ok((next_block_builder, deferred_zkps)) => match deferred_zkps.verify() {
                     Ok(()) => {
@@ -258,7 +258,7 @@ fn select_transactions(
     };
 
     TransactionSelection {
-        ledger_state: block_builder.finish(),
+        ledger_state: block_builder.into_ledger_state(),
         selected_txs,
         invalid_tx_hashes,
     }
@@ -1145,7 +1145,7 @@ mod tests {
         );
         let all_candidates_result = ledger_state
             .clone()
-            .try_apply_contents::<_, HeaderId, MainnetGasProfile>(
+            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
                 &config,
                 candidates.iter().cloned(),
             );
@@ -1166,7 +1166,10 @@ mod tests {
         let block_txs = txs_for_block(stream::iter(selection.selected_txs)).await;
         assert_eq!(block_txs.len(), CANDIDATE_COUNT - 1);
         ledger_state
-            .try_apply_contents::<_, HeaderId, MainnetGasProfile>(&config, block_txs.into_iter())
+            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
+                &config,
+                block_txs.into_iter(),
+            )
             .expect("the selected prefix must pass canonical application");
     }
 
