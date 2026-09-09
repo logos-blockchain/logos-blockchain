@@ -233,9 +233,9 @@ mod schema_conformance_tests {
 
     /// Covers the optional `commit` and `tag`, absent on non-checkout builds.
     #[test]
-    fn node_version_matches_its_schema() {
+    fn build_version_info_matches_its_schema() {
         assert_round_trip_matches_component::<lb_version::BuildVersionInfo>(
-            "NodeVersion",
+            "BuildVersionInfo",
             serde_json::json!({
                 "version": "0.3.0-rc.2",
                 "commit": "ff337d8",

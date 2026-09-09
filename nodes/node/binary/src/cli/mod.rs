@@ -28,7 +28,7 @@ use crate::{
 };
 
 /// The same value the `/version` endpoint serves, rendered the way
-/// `NodeVersion`'s `Display` prints it.
+/// `BuildVersionInfo`'s `Display` prints it.
 fn long_version() -> String {
     lb_version::build_version_info().to_string()
 }
