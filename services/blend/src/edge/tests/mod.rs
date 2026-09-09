@@ -26,7 +26,7 @@ use crate::{
     },
     epoch_info::{PolEpochInfo, PolEpochState, PolEpochStateSource},
     membership::chain::BlendEpochState,
-    message::{BlendPayload, ServiceMessage},
+    message::{DataPayload, ServiceMessage},
     pending::{NextLocalMessage, PendingTransactions, next_local_message},
     test_utils::{
         epoch::{GatedPolStreamProvider, PolGate},
@@ -57,7 +57,7 @@ async fn run_with_epoch_transition() {
 
     // A message should be forwarded to the core node 0.
     msg_sender
-        .send(BlendPayload::BlockProposal(vec![0]).into())
+        .send(DataPayload::BlockProposal(vec![0]).into())
         .await
         .expect("channel opened");
     assert_eq!(
@@ -75,7 +75,7 @@ async fn run_with_epoch_transition() {
 
     // A message should be forwarded to the core node 1.
     msg_sender
-        .send(BlendPayload::BlockProposal(vec![0]).into())
+        .send(DataPayload::BlockProposal(vec![0]).into())
         .await
         .expect("channel opened");
     assert_eq!(
@@ -104,7 +104,7 @@ async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
     } = spawn_run(local_node, 1, Some(membership(&[core_node], local_node))).await;
 
     msg_sender
-        .send(BlendPayload::BlockProposal(proposal.clone()).into())
+        .send(DataPayload::BlockProposal(proposal.clone()).into())
         .await
         .expect("channel opened");
     // It goes into the Blend network first: the direct broadcast is the last
@@ -125,7 +125,7 @@ async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
     .await
     .expect("the deadline must expire within the deadline")
     .expect("channel opened");
-    assert_eq!(broadcast, BlendPayload::BlockProposal(proposal));
+    assert_eq!(broadcast, DataPayload::BlockProposal(proposal));
 }
 
 /// [`run`] leaves a proposal alone once it has seen it on the broadcasting
@@ -143,7 +143,7 @@ async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
     } = spawn_run(local_node, 1, Some(membership(&[core_node], local_node))).await;
 
     msg_sender
-        .send(BlendPayload::BlockProposal(proposal.clone()).into())
+        .send(DataPayload::BlockProposal(proposal.clone()).into())
         .await
         .expect("channel opened");
     assert_eq!(
@@ -154,7 +154,7 @@ async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
     // Some exit node broadcast it, which is all the sender ever learns.
     broadcasting_channel
         .carrying
-        .send(BlendPayload::BlockProposal(proposal))
+        .send(DataPayload::BlockProposal(proposal))
         .expect("the service is subscribed");
 
     assert!(
@@ -187,7 +187,7 @@ async fn a_node_that_does_not_bypass_never_broadcasts_in_the_clear() {
     .await;
 
     msg_sender
-        .send(BlendPayload::BlockProposal(vec![7; 8]).into())
+        .send(DataPayload::BlockProposal(vec![7; 8]).into())
         .await
         .expect("channel opened");
     assert_eq!(
@@ -221,7 +221,7 @@ async fn a_transaction_the_network_never_delivers_is_broadcast_in_the_clear() {
     } = spawn_run(local_node, 1, Some(membership(&[core_node], local_node))).await;
 
     msg_sender
-        .send(BlendPayload::Transaction(transaction.clone()).into())
+        .send(DataPayload::Transaction(transaction.clone()).into())
         .await
         .expect("channel opened");
     assert_eq!(
@@ -236,7 +236,7 @@ async fn a_transaction_the_network_never_delivers_is_broadcast_in_the_clear() {
     .await
     .expect("the deadline must expire within the deadline")
     .expect("channel opened");
-    assert_eq!(broadcast, BlendPayload::Transaction(transaction));
+    assert_eq!(broadcast, DataPayload::Transaction(transaction));
 }
 
 /// [`run`] blends a transaction, drawing its layer proofs from the `PoW` branch
@@ -264,7 +264,7 @@ async fn run_blends_a_transaction() {
     .await;
 
     msg_sender
-        .send(BlendPayload::Transaction(vec![0]).into())
+        .send(DataPayload::Transaction(vec![0]).into())
         .await
         .expect("channel opened");
     assert_eq!(
@@ -541,7 +541,7 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_blended() {
     // The gate is shut, so there is no handler yet: this is the window the
     // proposal used to die in.
     msg_sender
-        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(
+        .send(ServiceMessage::Blend(DataPayload::BlockProposal(
             b"proposal".to_vec(),
         )))
         .await
@@ -590,14 +590,14 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     // One byte over what a payload can hold, so encapsulating it fails the same
     // way however long it waits.
     msg_sender
-        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(vec![
+        .send(ServiceMessage::Blend(DataPayload::BlockProposal(vec![
             0;
             MAX_PAYLOAD_BODY_SIZE + 1
         ])))
         .await
         .unwrap();
     msg_sender
-        .send(ServiceMessage::Blend(BlendPayload::Transaction(
+        .send(ServiceMessage::Blend(DataPayload::Transaction(
             b"transaction".to_vec(),
         )))
         .await

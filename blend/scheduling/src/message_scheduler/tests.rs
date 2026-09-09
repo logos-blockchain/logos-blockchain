@@ -213,7 +213,7 @@ async fn round_change() {
     );
     assert!(scheduler.data_messages.is_empty());
 
-    scheduler.queue_data_message(3);
+    scheduler.queue_data_message_and_skip_cover_message(3);
 
     // Poll for round `1`: cover traffic release round (prob = 1/1 = 1.0) but
     // skipped due to unprocessed data message (threshold = 1/1 = 1.0, always

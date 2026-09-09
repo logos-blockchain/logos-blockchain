@@ -200,12 +200,19 @@ where
         (new_scheduler, self.consume())
     }
 
-    /// Notify the cover message submodule that a new data message has been
-    /// generated in this epoch, which will reduce the number of cover
+    /// Mark a new data message to be released in the next round and notify the
+    /// cover message submodule that a new data message has been
+    /// generated in this epoch, which will decrement the number of cover
     /// messages generated going forward.
-    pub fn queue_data_message(&mut self, message: DataMessage) {
-        self.data_messages.push(message);
+    pub fn queue_data_message_and_skip_cover_message(&mut self, message: DataMessage) {
+        self.queue_data_message_without_skipping_cover_message(message);
         self.cover_traffic.notify_new_data_message();
+    }
+
+    /// Mark a new data message to be released in the next round, without
+    /// affecting the cover message generation schedule.
+    pub fn queue_data_message_without_skipping_cover_message(&mut self, message: DataMessage) {
+        self.data_messages.push(message);
     }
 }
 

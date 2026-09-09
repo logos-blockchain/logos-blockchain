@@ -21,7 +21,7 @@ use crate::{
         },
     },
     membership::MembershipInfo,
-    message::BlendPayload,
+    message::DataPayload,
     modes::{self, BroadcastMode, CoreMode, EdgeMode},
 };
 
@@ -51,7 +51,7 @@ impl<CoreService, EdgeService, RuntimeServiceId>
     Instance<CoreService, EdgeService, RuntimeServiceId>
 where
     CoreService: ServiceData<
-            Message: MessageComponents<CoreService::NodeId, Payload: Into<BlendPayload>>
+            Message: MessageComponents<CoreService::NodeId, Payload: Into<DataPayload>>
                          + Send
                          + Sync
                          + 'static,

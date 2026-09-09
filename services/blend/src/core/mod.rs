@@ -107,7 +107,7 @@ use crate::{
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
     membership::{self, ZkInfo, chain::BlendEpochState},
-    message::{BlendPayload, ProcessedMessage, ServiceMessage},
+    message::{DataPayload, DataPayloadType, ProcessedMessage, ServiceMessage},
     pending::{
         EncapsulationResult, LocalEncapsulation, MessageKind, NextLocalMessage, PendingProposals,
         PendingTransactions, next_local_message, resolve_encapsulation,
@@ -1233,14 +1233,14 @@ where
     NetworkSettings: Clone,
 {
     match message {
-        ServiceMessage::Blend(BlendPayload::Transaction(transaction)) => {
+        ServiceMessage::Blend(DataPayload::Transaction(transaction)) => {
             queue_transaction_for_encapsulation(
                 transaction,
                 pending_transactions,
                 recovery_checkpoint,
             )
         }
-        ServiceMessage::Blend(BlendPayload::BlockProposal(proposal)) => {
+        ServiceMessage::Blend(DataPayload::BlockProposal(proposal)) => {
             let copies = NonZeroU64::new(blend_config.data_replication_factor.strict_add(1))
                 .expect("A block proposal is always sent at least once.");
             pending_proposals.queue(proposal, copies);
@@ -1301,7 +1301,7 @@ where
                 let (proposals, crypto_processor, scheduler) = current_epoch.scheduling_borrows();
                 match kind {
                     MessageKind::Proposal => {
-                        let payload = BlendPayload::BlockProposal(
+                        let payload = DataPayload::BlockProposal(
                             proposals
                                 .head()
                                 .expect("A proposal copy was encapsulated, so one is queued.")
@@ -1573,7 +1573,7 @@ where
     BackendSettings: Clone + Send + Sync,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    let payload = BlendPayload::Transaction(
+    let payload = DataPayload::Transaction(
         pending_transactions
             .head()
             .expect("A transaction was encapsulated, so one is queued.")
@@ -1991,7 +1991,7 @@ fn schedule_local_encapsulated_message<
     CorePoQGenerator,
 >(
     wrapped_message: &EncapsulatedMessageWithVerifiedPublicHeader,
-    payload: BlendPayload,
+    payload: DataPayload,
     failure_detector: Option<&mut FailureDetector>,
     cryptographic_processor: &CurrentEpochCryptographicProcessor<
         NodeId,
@@ -2024,6 +2024,8 @@ where
         .receiver()
         .decapsulate_message_recursive(wrapped_message.clone());
 
+    let payload_type = payload.payload_type();
+
     let Ok(multi_layer_decapsulation_output) = self_decapsulation_output else {
         // The outermost layer of the data message is not for us, hence we treat this as
         // a regular data message that should be released at the next round.
@@ -2031,9 +2033,17 @@ where
         if let Some(failure_detector) = failure_detector {
             failure_detector.mark_payload_as_encapsulated(wrapped_message.id(), payload, epoch);
         }
-        scheduler.queue_data_message(wrapped_message.clone());
+        match payload_type {
+            DataPayloadType::BlockProposal => {
+                scheduler.queue_data_message_and_skip_cover_message(wrapped_message.clone());
+            }
+            DataPayloadType::Transaction => {
+                scheduler
+                    .queue_data_message_without_skipping_cover_message(wrapped_message.clone());
+            }
+        }
         assert_eq!(
-            state_updater.add_unsent_data_message(wrapped_message.clone()),
+            state_updater.add_unsent_data_message(wrapped_message.clone(), payload_type),
             Ok(()),
             "There should not be another copy of the same locally-generated encapsulated data message: {wrapped_message:?}."
         );
@@ -2050,10 +2060,10 @@ where
         DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
             let data_message = match fully_decapsulated_message.into_components() {
                 (PayloadType::BlockProposal, encoded_block_proposal) => {
-                    BlendPayload::BlockProposal(encoded_block_proposal)
+                    DataPayload::BlockProposal(encoded_block_proposal)
                 }
                 (PayloadType::Transaction, encoded_transaction) => {
-                    BlendPayload::Transaction(encoded_transaction)
+                    DataPayload::Transaction(encoded_transaction)
                 }
                 (PayloadType::Cover, _) => {
                     panic!(
@@ -2326,10 +2336,10 @@ where
         DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
             let data_message = match fully_decapsulated_message.into_components() {
                 (PayloadType::BlockProposal, encoded_block_proposal) => {
-                    BlendPayload::BlockProposal(encoded_block_proposal)
+                    DataPayload::BlockProposal(encoded_block_proposal)
                 }
                 (PayloadType::Transaction, encoded_transaction) => {
-                    BlendPayload::Transaction(encoded_transaction)
+                    DataPayload::Transaction(encoded_transaction)
                 }
                 (PayloadType::Cover, _) => {
                     tracing::trace!(target: LOG_TARGET, "Discarding received cover message.");

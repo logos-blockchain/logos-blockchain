@@ -1,5 +1,5 @@
 mod serde {
-    use std::collections::{HashSet, VecDeque};
+    use std::collections::{HashMap, HashSet, VecDeque};
 
     use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
@@ -11,7 +11,7 @@ mod serde {
 
     use crate::{
         core::state::{error, recovery_state::RecoveryServiceState, service::ServiceState},
-        message::ProcessedMessage,
+        message::{DataPayloadType, ProcessedMessage},
     };
 
     #[derive(Clone, Serialize, Deserialize)]
@@ -22,7 +22,7 @@ mod serde {
         last_seen_epoch: Epoch,
         spent_core_quota: Quota,
         unsent_processed_messages: HashSet<ProcessedMessage>,
-        unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
+        unsent_data_messages: HashMap<EncapsulatedMessageWithVerifiedPublicHeader, DataPayloadType>,
         pending_transactions: VecDeque<Vec<u8>>,
         current_epoch_token_collector: EpochBlendingTokenCollector,
         old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
@@ -84,7 +84,7 @@ mod serde {
 pub use self::service::ServiceState;
 mod service {
     use core::fmt::{self, Debug, Formatter};
-    use std::collections::{HashSet, VecDeque};
+    use std::collections::{HashMap, HashSet, VecDeque};
 
     use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
@@ -95,7 +95,7 @@ mod service {
 
     use crate::{
         core::state::{error, recovery_state::RecoveryServiceState, state_updater::StateUpdater},
-        message::ProcessedMessage,
+        message::{DataPayloadType, ProcessedMessage},
     };
 
     /// Recovery state for Blend core service.
@@ -106,7 +106,7 @@ mod service {
         /// tracked.
         spent_core_quota: Quota,
         unsent_processed_messages: HashSet<ProcessedMessage>,
-        unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
+        unsent_data_messages: HashMap<EncapsulatedMessageWithVerifiedPublicHeader, DataPayloadType>,
         /// Transactions handed over for blending that are still waiting for a
         /// `PoW` solution to back their layer proofs.
         pending_transactions: VecDeque<Vec<u8>>,
@@ -163,7 +163,10 @@ mod service {
             last_seen_epoch: Epoch,
             spent_core_quota: Quota,
             unsent_processed_messages: HashSet<ProcessedMessage>,
-            unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
+            unsent_data_messages: HashMap<
+                EncapsulatedMessageWithVerifiedPublicHeader,
+                DataPayloadType,
+            >,
             pending_transactions: VecDeque<Vec<u8>>,
             current_epoch_token_collector: EpochBlendingTokenCollector,
             old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
@@ -228,7 +231,7 @@ mod service {
                 epoch,
                 Quota::ZERO,
                 HashSet::new(),
-                HashSet::new(),
+                HashMap::new(),
                 pending_transactions,
                 current_epoch_token_collector,
                 old_epoch_token_collector,
@@ -309,7 +312,7 @@ mod service {
             Epoch,
             Quota,
             HashSet<ProcessedMessage>,
-            HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
+            HashMap<EncapsulatedMessageWithVerifiedPublicHeader, DataPayloadType>,
             VecDeque<Vec<u8>>,
             EpochBlendingTokenCollector,
             Option<OldEpochBlendingTokenCollector>,
@@ -359,8 +362,13 @@ mod service {
         pub(super) fn add_unsent_data_message(
             &mut self,
             message: EncapsulatedMessageWithVerifiedPublicHeader,
+            payload_type: DataPayloadType,
         ) -> Result<(), ()> {
-            if self.unsent_data_messages.insert(message) {
+            if self
+                .unsent_data_messages
+                .insert(message, payload_type)
+                .is_none()
+            {
                 Ok(())
             } else {
                 Err(())
@@ -371,7 +379,7 @@ mod service {
             &mut self,
             message: &EncapsulatedMessageWithVerifiedPublicHeader,
         ) -> Result<(), ()> {
-            if self.unsent_data_messages.remove(message) {
+            if self.unsent_data_messages.remove(message).is_some() {
                 Ok(())
             } else {
                 Err(())
@@ -380,7 +388,7 @@ mod service {
 
         pub const fn unsent_data_messages(
             &self,
-        ) -> &HashSet<EncapsulatedMessageWithVerifiedPublicHeader> {
+        ) -> &HashMap<EncapsulatedMessageWithVerifiedPublicHeader, DataPayloadType> {
             &self.unsent_data_messages
         }
 
@@ -417,7 +425,7 @@ mod state_updater {
 
     use crate::{
         core::state::{error, service::ServiceState},
-        message::ProcessedMessage,
+        message::{DataPayloadType, ProcessedMessage},
     };
 
     /// A state updater which gathers changes to the underlying [`ServiceState`]
@@ -500,14 +508,20 @@ mod state_updater {
         /// unsent, meaning that it has been scheduled for release but
         /// not yet released.
         ///
+        /// `payload_type` is stored alongside the message because the payload
+        /// it carries is encrypted, so a message restored from the recovery
+        /// state could otherwise not be told apart from a block proposal, and
+        /// the two types must be acted on differently.
+        ///
         /// It returns `Ok` if the message was not already present, `Err`
         /// otherwise.
         pub fn add_unsent_data_message(
             &mut self,
             message: EncapsulatedMessageWithVerifiedPublicHeader,
+            payload_type: DataPayloadType,
         ) -> Result<(), ()> {
             self.changed = true;
-            self.inner.add_unsent_data_message(message)
+            self.inner.add_unsent_data_message(message, payload_type)
         }
 
         /// Mark a new [`EncapsulatedMessageWithVerifiedPublicHeader`] as sent,

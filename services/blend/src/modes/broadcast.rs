@@ -13,7 +13,7 @@ use overwatch::{
 
 use crate::{
     core::{dispatcher::PayloadDispatcher, service_components::MessageComponents},
-    message::{BlendPayload, NetworkInfo},
+    message::{DataPayload, NetworkInfo},
     modes::Error,
 };
 
@@ -72,7 +72,7 @@ where
 {
     pub async fn handle_inbound_message<Message>(&self, message: Message) -> Result<(), Error>
     where
-        Message: MessageComponents<NodeId, Payload: Into<BlendPayload>> + Send + Sync + 'static,
+        Message: MessageComponents<NodeId, Payload: Into<DataPayload>> + Send + Sync + 'static,
     {
         match message.try_into_network_info_request() {
             Ok(reply) => {
@@ -286,7 +286,7 @@ pub mod tests {
             }
         }
 
-        async fn dispatch(&self, payload: BlendPayload) {
+        async fn dispatch(&self, payload: DataPayload) {
             debug!("Dispatching payload: {payload:?}");
             let message = payload.body().to_vec();
             self.relay
@@ -299,7 +299,7 @@ pub mod tests {
                 .unwrap();
         }
 
-        async fn observe_broadcasts(&self) -> BoxStream<'static, BlendPayload> {
+        async fn observe_broadcasts(&self) -> BoxStream<'static, DataPayload> {
             stream::empty().boxed()
         }
     }
@@ -308,10 +308,10 @@ pub mod tests {
     pub struct TestMessage(Vec<u8>);
 
     impl<NodeId> MessageComponents<NodeId> for TestMessage {
-        type Payload = BlendPayload;
+        type Payload = DataPayload;
 
         fn into_payload(self) -> Self::Payload {
-            BlendPayload::BlockProposal(self.0)
+            DataPayload::BlockProposal(self.0)
         }
 
         fn try_into_pending_transactions_request(
