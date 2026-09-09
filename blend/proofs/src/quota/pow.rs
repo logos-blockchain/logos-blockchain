@@ -21,7 +21,6 @@
 //! rather than only to prose.
 
 use core::num::NonZeroU64;
-use std::sync::LazyLock;
 
 use lb_groth16::{AdditiveGroup as _, Fr, fr_from_bytes};
 use rand::RngCore;
@@ -35,12 +34,6 @@ use crate::{ZkHash, ZkHashExt as _, quota::inputs::prove::private::ProofOfWorkQu
 /// value is a *harder* puzzle.
 pub type PowTarget = Fr;
 
-const DOMAIN_SEPARATION_TAG: [u8; 12] = *b"BLEND_POW_V1";
-static DOMAIN_SEPARATION_TAG_FR: LazyLock<ZkHash> = LazyLock::new(|| {
-    fr_from_bytes(&DOMAIN_SEPARATION_TAG[..])
-        .expect("DST for the Blend PoW ticket calculation must be correct.")
-});
-
 /// The value a candidate nonce derives, which a solution must place below the
 /// epoch's [`PowTarget`] to be admitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +42,7 @@ pub struct PowTicket(ZkHash);
 impl PowTicket {
     #[must_use]
     pub fn derive(epoch_nonce: ZkHash, pow_nonce: ZkHash) -> Self {
-        Self([*DOMAIN_SEPARATION_TAG_FR, epoch_nonce, pow_nonce].hash())
+        Self([pow_nonce, epoch_nonce].hash())
     }
 
     #[must_use]
@@ -122,8 +115,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use const_hex::FromHex as _;
-    use lb_groth16::{Field as _, fr_from_bytes_unchecked};
+    use lb_groth16::Field as _;
     use num_bigint::BigUint;
     use rand::rngs::OsRng;
 
@@ -131,21 +123,12 @@ mod tests {
         ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, Quota,
         fixtures::valid_proof_of_work_quota_inputs,
         inputs::prove::{PublicInputs, private::ProofOfWorkQuotaInputs},
-        pow::{DOMAIN_SEPARATION_TAG_FR, PowTarget, PowTicket, solve_puzzle},
+        pow::{PowTarget, PowTicket, solve_puzzle},
     };
 
     /// The largest field element, `p - 1`, as an integer.
     fn largest_target() -> BigUint {
         (-PowTarget::ONE).into()
-    }
-
-    #[test]
-    fn pow_ticket_dst_encoding() {
-        // Blend spec: <https://github.com/logos-co/logos-lips/pull/400>
-        assert_eq!(
-            *DOMAIN_SEPARATION_TAG_FR,
-            fr_from_bytes_unchecked(&<[u8; 12]>::from_hex("0x424c454e445f504f575f5631").unwrap()),
-        );
     }
 
     /// The fixture is a solution the circuit accepts, so the ticket this module

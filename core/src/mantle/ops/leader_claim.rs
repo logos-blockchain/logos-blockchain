@@ -14,7 +14,7 @@ use crate::{
     mantle::{
         Note, Utxo, Value,
         batch::DeferredZkpVerification,
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation,
@@ -23,7 +23,7 @@ use crate::{
         ops::{OpId, SignedOperation},
         transactions::{
             hash::{TxHash, TxHashView},
-            states::{Preverified, Unverified, VerificationState, Verified},
+            states::{Preverified, Unverified, Verified},
         },
     },
     proofs::leader_claim_proof::{
@@ -194,6 +194,8 @@ impl OperationGas<MainnetGasProfile> for LeaderClaimOp {
     const GAS_COST: Gas = Gas::new(580);
 }
 
+impl OpGasCalculator<MainnetGasProfile> for LeaderClaimOp {}
+
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<LeaderClaimOp, Unverified, StandardMode>
 {
@@ -285,14 +287,6 @@ impl<Mode: VerificationMode> ExecutableOperation
                 },
             )],
         ))
-    }
-}
-
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOperation<LeaderClaimOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
     }
 }
 

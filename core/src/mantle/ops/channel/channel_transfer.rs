@@ -7,7 +7,9 @@ use crate::{
         TxHash, Value,
         batch::DeferredZkpVerification,
         channel::{Channels, Error},
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{
+            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
+        },
         ledger::{
             ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation, Utxo,
             Utxos, VerifiableOperation,
@@ -20,7 +22,7 @@ use crate::{
         transactions::{
             OperationVerificationHelper,
             hash::TxHashView,
-            states::{Preverified, Unverified, VerificationState, Verified},
+            states::{Preverified, Unverified, Verified},
         },
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -63,14 +65,18 @@ pub struct ChannelTransferExecutionContext {
 }
 
 impl ProvableOperation for ChannelTransferOp {
-    // `SignedOperationExecutionGas::gas_multiplier` below reads this proof's
-    // signature count. If this changes, update that too.
     type Proof = ChannelMultiSigProof;
     const CODE: u8 = 0x14;
 }
 
 impl OperationGas<MainnetGasProfile> for ChannelTransferOp {
     const GAS_COST: Gas = Gas::new(56);
+}
+
+impl OpGasCalculator<MainnetGasProfile> for ChannelTransferOp {
+    fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
+        Self::GAS_COST.checked_mul(Value::from(thresholds.transfer_threshold(&self.channel_id)))
+    }
 }
 
 impl PreverifiableOperation<StandardMode>
@@ -195,16 +201,6 @@ impl<Mode: VerificationMode> ExecutableOperation
         }
 
         Ok((context, Vec::new()))
-    }
-}
-
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOperation<ChannelTransferOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        let signature_count = self.proof().signatures().len();
-        Value::try_from(signature_count)
-            .expect("Channel multi-signature proofs are bound to u16::MAX signatures.")
     }
 }
 

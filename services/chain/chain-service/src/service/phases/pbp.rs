@@ -6,10 +6,9 @@ use lb_core::{
     block::Block,
     events::Events,
     mantle::{
-        TxGasCalculator,
         ledger::verification_mode::StandardMode,
-        traits::{PreverifiedMantleTransaction, SignedMantleTx},
-        transactions::{GasPrices, states::Preverified},
+        traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
+        transactions::states::Preverified,
     },
 };
 use lb_cryptarchia_engine::{PrunedBlocks, Slot};
@@ -45,7 +44,7 @@ impl<Tx, Storage, RuntimeServiceId> Service<ProlongedBootstrapPeriod, Tx, Storag
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq

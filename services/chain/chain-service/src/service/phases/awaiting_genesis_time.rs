@@ -8,10 +8,9 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        TxGasCalculator,
         ledger::verification_mode::StandardMode,
-        traits::{GenesisTx as _, PreverifiedMantleTransaction, SignedMantleTx},
-        transactions::{GasPrices, states::Preverified},
+        traits::{GenesisTx as _, PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
+        transactions::states::Preverified,
     },
 };
 use lb_cryptarchia_engine::Slot;
@@ -57,7 +56,7 @@ impl<Tx, Storage, RuntimeServiceId> Service<AwaitingGenesisTime, Tx, Storage, Ru
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq

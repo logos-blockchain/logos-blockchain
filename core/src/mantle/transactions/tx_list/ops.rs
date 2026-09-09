@@ -9,12 +9,13 @@ use crate::{
     mantle::{
         GasProfile, Op, OpRef, TxHash, Value,
         channel::Channels,
-        gas::{Gas, GasCost, GasOverflow},
+        gas::{Gas, GasCost, GasOverflow, TxGasCalculator},
         ops::channel::{ChannelId, ChannelKeyIndex},
         traits::{Hashable, MantleTx, StorageSize, hashable},
         transactions::{
             GasPrices,
             codec::minimum_signed_transaction_size,
+            thresholds::RunningThresholds,
             tx_list::{
                 OpRefs,
                 common::{TxBoundedVec, TxList},
@@ -82,29 +83,6 @@ pub struct OpsContext {
     pub leader_reward_amount: Value,
 }
 
-fn contextual_op_execution_gas<Profile: GasProfile>(
-    op: &Op,
-    context: &OpsGasContext,
-) -> Result<Gas, GasOverflow> {
-    let multiplier = match op {
-        // Existing channels require the `configuration_threshold` proofs.
-        // For new channels, the ledger skips proof verification. So, use 0.
-        Op::ChannelConfig(operation) => context
-            .configuration_threshold(&operation.channel)
-            .unwrap_or(0),
-        Op::ChannelWithdraw(operation) => context
-            .transfer_threshold(&operation.channel_id)
-            .unwrap_or(0),
-        Op::ChannelTransfer(operation) => context
-            .transfer_threshold(&operation.channel_id)
-            .unwrap_or(0),
-        _ => return Ok(op.gas_cost::<Profile>()),
-    };
-
-    op.gas_cost::<Profile>()
-        .checked_mul(Value::from(multiplier))
-}
-
 pub type Ops = TxList<Op>;
 
 impl Ops {
@@ -112,48 +90,52 @@ impl Ops {
     pub fn by_ref(&self) -> OpRefs<'_> {
         TxList(self.0.map_ref(OpRef::from))
     }
+}
 
-    /// Predicts the minimum total gas cost of the transaction once signed.
-    ///
-    /// See [`minimum_signed_transaction_size`] for why this doesn't implement
-    /// [`crate::mantle::TxGasCalculator`] which calculates an exact gas cost.
-    pub fn minimum_total_gas_cost<Profile: GasProfile>(
+impl TxGasCalculator for OpRefs<'_> {
+    type Context = OpsGasContext;
+
+    fn total_gas_cost<Profile: GasProfile>(
         &self,
-        context: &OpsGasContext,
+        context: &Self::Context,
     ) -> Result<GasCost, GasOverflow> {
-        let execution_gas = self.minimum_execution_gas_consumption::<Profile>(context)?;
+        let execution_gas = self.execution_gas_consumption::<Profile>(context)?;
         let execution_gas_cost =
             GasCost::calculate(execution_gas, context.gas_prices.execution_base_gas_price)?;
-        let storage_gas_cost = self.minimum_storage_gas_cost(context)?;
+        let storage_gas_cost = self.storage_gas_cost(context)?;
 
         execution_gas_cost.checked_add(storage_gas_cost)
     }
 
-    /// Predicts the minimum execution gas the transaction will consume once
-    /// signed.
-    pub fn minimum_execution_gas_consumption<Profile: GasProfile>(
-        &self,
-        context: &OpsGasContext,
-    ) -> Result<Gas, GasOverflow> {
-        self.iter()
-            .map(|op| contextual_op_execution_gas::<Profile>(op, context))
-            .try_fold(Gas::from(0), |total, gas| total.checked_add(gas?))
-    }
-
-    /// Predicts the minimum storage gas cost of the transaction once signed.
-    /// See [`minimum_signed_transaction_size`] for why this is a
-    /// minimum, not an exact value.
-    fn minimum_storage_gas_cost(&self, context: &OpsGasContext) -> Result<GasCost, GasOverflow> {
+    fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow> {
         GasCost::calculate(
-            self.minimum_signed_serialized_size(context).into(),
+            self.storage_gas_consumption(context)?,
             context.gas_prices.storage_gas_price,
         )
     }
 
-    /// Predicts the minimum serialized size of the transaction once signed.
-    #[must_use]
-    fn minimum_signed_serialized_size(&self, context: &OpsGasContext) -> u64 {
-        minimum_signed_transaction_size(&self.by_ref(), context) as u64
+    fn execution_gas_consumption<Profile: GasProfile>(
+        &self,
+        context: &Self::Context,
+    ) -> Result<Gas, GasOverflow> {
+        // The thresholds carry across the fold: an Operation is priced against
+        // the ones in force before it, then moves them for the ones after.
+        self.iter()
+            .try_fold(
+                (RunningThresholds::new(context), Gas::new(0)),
+                |(mut thresholds, total), op| {
+                    let total = total.checked_add(op.execution_gas::<Profile>(&thresholds)?)?;
+                    thresholds.apply(*op);
+                    Ok((thresholds, total))
+                },
+            )
+            .map(|(_, total)| total)
+    }
+
+    fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow> {
+        Ok(Gas::new(
+            minimum_signed_transaction_size(self, context) as u64
+        ))
     }
 }
 

@@ -857,13 +857,13 @@ pub mod tests {
         mantle::{
             Note, Op,
             OpProof::ZkSig,
-            SignedOps, TxGasCalculator as _,
+            SignedOps,
             gas::MainnetGasProfile,
             ledger::{Inputs, Outputs},
             ops::{ZkAndEd25519Proof, leader_claim::VoucherCm, sdp::SDPDeclareOp},
             traits::Hashable as _,
             transactions::{
-                GasPrices, OpProofs, Ops,
+                OpProofs, Ops,
                 states::{Preverified, Unverified},
             },
         },
@@ -2003,13 +2003,12 @@ pub mod tests {
         let output_note = Note::new(200, output_note_sk.to_public_key());
 
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (tx, transfer_op, transfer_proof) = create_tx_with_transfer(
+        let (_tx, transfer_op, transfer_proof) = create_tx_with_transfer(
             &[(&note_sk, &input_utxo), (&note_sk, &input_utxo)],
             vec![output_note],
         );
         let signed_operation =
             SignedOperation::new(transfer_op, transfer_proof).into_state_trusted();
-        let _fees = tx.total_gas_cost::<MainnetGasProfile>(&GasPrices::new(0, 0));
 
         let result = ledger_state.try_apply_transfer::<(), MainnetGasProfile>(signed_operation);
 
@@ -2032,12 +2031,11 @@ pub mod tests {
         let output_note2 = Note::new(3000, output_note2_sk.to_public_key());
 
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (tx, transfer_op, transfer_proof) =
+        let (_tx, transfer_op, transfer_proof) =
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
 
         let signed_operation =
             SignedOperation::new(transfer_op, transfer_proof).into_state_trusted();
-        let _fees = tx.total_gas_cost::<MainnetGasProfile>(&GasPrices::new(0, 0));
         let (new_state, balance, events) = ledger_state
             .try_apply_transfer::<(), MainnetGasProfile>(signed_operation)
             .unwrap();
@@ -2061,7 +2059,7 @@ pub mod tests {
         assert!(new_state.utxos.contains(&output_utxo2.id()));
 
         // The new outputs can be spent in future transactions
-        let (tx, transfer_op, transfer_proof) = create_tx_with_transfer(
+        let (_tx, transfer_op, transfer_proof) = create_tx_with_transfer(
             &[
                 (&output_note1_sk, &output_utxo1),
                 (&output_note2_sk, &output_utxo2),
@@ -2071,7 +2069,6 @@ pub mod tests {
 
         let signed_operation =
             SignedOperation::new(transfer_op, transfer_proof).into_state_trusted();
-        let _fees = tx.total_gas_cost::<MainnetGasProfile>(&GasPrices::new(0, 0));
         let (final_state, final_balance, events) = new_state
             .try_apply_transfer::<(), MainnetGasProfile>(signed_operation)
             .unwrap();
@@ -2183,12 +2180,11 @@ pub mod tests {
         };
 
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (tx, transfer_op, transfer_proof) =
+        let (_tx, transfer_op, transfer_proof) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![]);
 
         let signed_operation =
             SignedOperation::new(transfer_op, transfer_proof).into_state_trusted();
-        let _fees = tx.total_gas_cost::<MainnetGasProfile>(&GasPrices::new(0, 0));
         let result = ledger_state.try_apply_transfer::<(), MainnetGasProfile>(signed_operation);
         assert!(result.is_ok());
 

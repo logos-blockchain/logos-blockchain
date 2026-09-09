@@ -1,7 +1,7 @@
 use super::{
-    AtomicZoneDepositRequest, CucumberWorld, Duration, Ed25519Key, IndexedSignature, Inscription,
-    Keys, Metadata, PublishDeadline, PublishResult, SequencerCheckpoint, Step, StepError,
-    StepResult, TxHash, Utxo, WalletInfo, WalletReservedInputs, ZONE_CHANNEL_DEPOSIT_THRESHOLD,
+    AtomicZoneDepositRequest, CucumberWorld, Duration, Ed25519Key, Inscription, Keys, Metadata,
+    PublishDeadline, PublishResult, SequencerCheckpoint, Step, StepError, StepResult, TxHash, Utxo,
+    WalletInfo, WalletReservedInputs, ZONE_CHANNEL_DEPOSIT_THRESHOLD,
     ZONE_CHANNEL_WITHDRAW_THRESHOLD, ZoneDeposit, ZoneTestError, build_zone_deposit,
     build_zone_deposit_from_values, current_available_utxos_for_wallet, log_step_error,
     make_inscription, publish_atomic_zone_withdraw, submit_atomic_zone_deposit,
@@ -89,7 +89,7 @@ pub(in super::super) async fn prepare_zone_channel_config(
 
     let prepared = client
         .prepare_channel_config(
-            Keys::new_unchecked(authorized_keys),
+            Keys::new_unchecked(authorized_keys.clone()),
             0.into(),
             0.into(),
             threshold,
@@ -99,6 +99,22 @@ pub(in super::super) async fn prepare_zone_channel_config(
         .map_err(|error| StepError::LogicalError {
             message: format!("Zone prepare_channel_config failed: {error}"),
         })?;
+
+    // Read the funded config back the way a remote signer would (via
+    // `proposed_config`) and confirm the SDK encoded exactly the key set and
+    // thresholds we requested — i.e. inspect the config before it is signed.
+    let proposed = prepared.proposed_config();
+    let proposed_keys = proposed.keys.iter().copied().collect::<Vec<_>>();
+    if proposed_keys != authorized_keys
+        || proposed.configuration_threshold != threshold
+        || proposed.transfer_threshold != threshold
+    {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "prepared config '{transaction_alias}' does not match the requested keys/thresholds",
+            ),
+        });
+    }
 
     world
         .zone
@@ -116,22 +132,18 @@ pub(in super::super) fn sign_prepared_zone_channel_config(
     transaction_alias: String,
 ) -> StepResult {
     let signing_key = log_step_error(step, world.zone.sequencer_signing_key(signer_alias))?;
-    let signer_public = signing_key.public_key();
     let prepared = log_step_error(step, world.zone.prepared_config(&transaction_alias))?;
 
-    let index = prepared
-        .accredited_keys
-        .iter()
-        .position(|key| *key == signer_public)
-        .ok_or_else(|| StepError::LogicalError {
+    // `prepare_zone_channel_config` already verified `proposed_config()` against
+    // the requested key set; a real remote signer would run that same check
+    // here before signing rather than trusting the preparer.
+    let signature = prepared
+        .sign_with(signing_key)
+        .map_err(|error| StepError::LogicalError {
             message: format!(
-                "sequencer '{signer_alias}' is not in the accredited set of prepared config '{transaction_alias}'",
+                "signing prepared config '{transaction_alias}' as '{signer_alias}' failed: {error}",
             ),
         })?;
-    let index = u16::try_from(index).map_err(|_| StepError::LogicalError {
-        message: "accredited key index exceeds u16".to_owned(),
-    })?;
-    let signature = IndexedSignature::new(index, signing_key.sign_payload(&prepared.sign_payload));
 
     world
         .zone

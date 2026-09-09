@@ -32,7 +32,7 @@ use lb_node::{
     RuntimeServiceId,
     generic_services::{CryptarchiaService, WalletService as NodeWalletService},
 };
-use lb_wallet_service::{ClaimableVoucherInfo, LeaderAgedNotesInfo, TipResponse, api::WalletApi};
+use lb_wallet_service::{ClaimableVouchersInfo, LeaderAgedNotesInfo, TipResponse, api::WalletApi};
 use overwatch::services::status::ServiceStatus;
 
 use crate::{
@@ -265,7 +265,7 @@ pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) -> Oper
 pub(crate) fn get_claimable_vouchers_sync(
     node: &LogosBlockchainNode,
     tip: Option<CoreHeaderId>,
-) -> StatusResult<TipResponse<Vec<ClaimableVoucherInfo>>> {
+) -> StatusResult<TipResponse<ClaimableVouchersInfo>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         if let Err(status) = node
@@ -322,8 +322,12 @@ pub unsafe extern "C" fn get_claimable_vouchers(
     };
 
     let response = unwrap_or_return_error!(get_claimable_vouchers_sync(node, tip));
-    let vouchers: Vec<ClaimableVoucher> = response
-        .response
+    let TipResponse {
+        tip,
+        response: info,
+    } = response;
+    let vouchers: Vec<ClaimableVoucher> = info
+        .vouchers
         .into_iter()
         .map(|voucher| {
             let nullifier = voucher.nullifier.into();
@@ -338,9 +342,11 @@ pub unsafe extern "C" fn get_claimable_vouchers(
     let vouchers_ptr = Box::leak(vouchers.into_boxed_slice()).as_mut_ptr();
 
     FfiClaimableVouchersResult::ok(ClaimableVouchers {
-        tip: response.tip.into(),
+        tip: tip.into(),
         vouchers: vouchers_ptr,
         len,
+        reward_amount: info.reward_amount,
+        total_claimable: info.total_claimable,
     })
 }
 
@@ -1433,14 +1439,16 @@ pub(crate) fn channel_deposit_sync(
         // 5. Assemble [transfer, deposit] in order and sign both ops with a single ZK
         //    signature by the funding key (which owns every input).
         //
-        //    NOTE: we deliberately sign with `sign_tx_with_zk` (explicit keys) rather
-        //    than the usual `WalletApi::sign_tx`. `sign_tx` resolves each op's input
-        //    public keys from the *committed* ledger state, but the deposit consumes
-        //    the note this same transaction's transfer creates (it is not on-chain
-        //    yet), so `sign_tx` would fail with `MissingInputNote`. Both the transfer
-        //    inputs and the deposit's input note are owned by `funding_public_key`, so
-        //    one signature over the tx hash satisfies both op proofs. Do not "simplify"
-        //    this to `sign_tx`.
+        //    NOTE: we deliberately sign with `sign_tx_with_zk` (explicit keys)
+        // rather    than the usual `WalletApi::sign_tx`. `sign_tx`
+        // resolves each op's input    public keys from the *committed*
+        // ledger state, but the deposit consumes    the note this same
+        // transaction's transfer creates (it is not on-chain
+        //    yet), so `sign_tx` would fail with `MissingInputNote`. Both the
+        // transfer    inputs and the deposit's input note are owned by
+        // `funding_public_key`, so    one signature over the tx hash
+        // satisfies both op proofs. Do not "simplify"    this to
+        // `sign_tx`.
         let tx = Ops::from([Op::Transfer(transfer), Op::ChannelDeposit(deposit)]);
         let tx_hash = tx.hash();
         let user_sig = api

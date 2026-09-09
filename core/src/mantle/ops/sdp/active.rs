@@ -7,9 +7,8 @@ use super::{SDPActiveOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        Value,
         batch::DeferredZkpVerification,
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
             VerifiableOperation,
@@ -18,7 +17,7 @@ use crate::{
         ops::SignedOperation,
         transactions::{
             hash::TxHashView,
-            states::{Preverified, Unverified, VerificationState, Verified},
+            states::{Preverified, Unverified, Verified},
         },
     },
 };
@@ -44,6 +43,8 @@ impl ProvableOperation for SDPActiveOp {
 impl OperationGas<MainnetGasProfile> for SDPActiveOp {
     const GAS_COST: Gas = Gas::new(590);
 }
+
+impl OpGasCalculator<MainnetGasProfile> for SDPActiveOp {}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<SDPActiveOp, Unverified, StandardMode>
@@ -71,10 +72,11 @@ impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverif
             return Err(SdpError::DeclarationNotFound(operation.declaration_id));
         };
 
-        // Check the declaration hasn't been withdrawn
-        // (Return error if `scheduled_withdrawal_epoch` epoch has passed)
+        // Check the declaration hasn't been withdrawn.
+        // The report attesting `withdraw_at - 1` is due during `withdraw_at`,
+        // so the message is valid while the current epoch is at most `withdraw_at`.
         if let Some(withdraw_at) = declaration.withdraw_at
-            && withdraw_at <= context.epoch
+            && withdraw_at < context.epoch
         {
             return Err(SdpError::DeclarationWithdrawn {
                 declaration_id: operation.declaration_id,
@@ -131,10 +133,85 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<SDPActiveOp
     }
 }
 
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOperation<SDPActiveOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
+#[cfg(test)]
+mod tests {
+    use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+    use lb_cryptarchia_engine::Epoch;
+    use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkSignature};
+    use num_bigint::BigUint;
+
+    use super::{SDPActiveOp, SDPActiveValidationContext, SdpError};
+    use crate::{
+        mantle::{
+            ledger::{Declarations, VerifiableOperation as _, verification_mode::StandardMode},
+            ops::{SignedOperation, sdp::SDPDeclareOp},
+            transactions::{
+                hash::{TxHash, TxHashView},
+                states::Preverified,
+            },
+        },
+        sdp::{ActivityMetadata, Declaration, ServiceType, blend::ActivityProof},
+    };
+
+    const WITHDRAW_AT: Epoch = Epoch::new(5);
+
+    /// The report attesting `withdraw_at - 1` is due during `withdraw_at`,
+    /// so an active message included at `withdraw_at` must be accepted.
+    #[test]
+    fn accepts_active_message_at_withdraw_at() {
+        verify_active_at(WITHDRAW_AT).unwrap();
+    }
+
+    #[test]
+    fn rejects_active_message_after_withdraw_at() {
+        assert!(matches!(
+            verify_active_at(WITHDRAW_AT.strict_add(Epoch::new(1))),
+            Err(SdpError::DeclarationWithdrawn { .. })
+        ));
+    }
+
+    /// Verifies an active message at `epoch` against a declaration whose
+    /// `withdraw_at` is [`WITHDRAW_AT`].
+    fn verify_active_at(epoch: Epoch) -> Result<(), SdpError> {
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+        let declare_op = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locators: vec!["/ip4/1.1.1.1/udp/0".parse().unwrap()]
+                .try_into()
+                .unwrap(),
+            provider_id: signing_key.public_key().into(),
+            zk_id: ZkKey::from(BigUint::from(1u64)).to_public_key(),
+            service_note_id: Fr::ZERO.into(),
+        };
+        let mut declaration = Declaration::new(Epoch::new(0), &declare_op);
+        declaration.withdraw_at = Some(WITHDRAW_AT);
+        let declarations = Declarations::new_sync().insert(declare_op.id(), declaration);
+
+        let active_op = SDPActiveOp {
+            declaration_id: declare_op.id(),
+            nonce: 1,
+            metadata: ActivityMetadata::Blend(Box::new(ActivityProof {
+                epoch: Epoch::new(0),
+                signing_key: signing_key.public_key(),
+                proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]).into(),
+                proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0; _]).into(),
+            })),
+        };
+        let signed_operation: SignedOperation<SDPActiveOp, Preverified, StandardMode> =
+            SignedOperation::new(
+                active_op,
+                ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+            )
+            .into_state_trusted();
+
+        let tx_hash_view = TxHashView::from(TxHash::default());
+        signed_operation
+            .verify(&SDPActiveValidationContext {
+                declarations: &declarations,
+                tx_hash_view: &tx_hash_view,
+                epoch,
+            })
+            .map(|_| ())
     }
 }

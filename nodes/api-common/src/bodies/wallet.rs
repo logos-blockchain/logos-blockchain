@@ -49,7 +49,10 @@ pub mod claimable_vouchers {
     };
     use lb_core::{
         header::HeaderId,
-        mantle::ops::leader_claim::{VoucherCm, VoucherNullifier},
+        mantle::{
+            Value,
+            ops::leader_claim::{VoucherCm, VoucherNullifier},
+        },
     };
     use lb_log_targets::api;
     use serde::{Deserialize, Serialize};
@@ -67,6 +70,16 @@ pub mod claimable_vouchers {
     pub struct WalletClaimableVouchersResponseBody {
         pub tip: HeaderId,
         pub vouchers: Vec<ClaimableVoucherInfoResponseBody>,
+        /// What a single voucher pays out at `tip`.
+        ///
+        /// The reward pool is split evenly across every unclaimed voucher on
+        /// the chain, so this is the same for each entry in `vouchers` and it
+        /// moves as other leaders claim. It is a snapshot at `tip`, not a
+        /// guarantee of what a claim submitted now will settle for.
+        pub reward_amount: Value,
+        /// `reward_amount` times the number of `vouchers`: what this wallet
+        /// could claim in total at `tip`.
+        pub total_claimable: Value,
     }
 
     impl IntoResponse for WalletClaimableVouchersResponseBody {

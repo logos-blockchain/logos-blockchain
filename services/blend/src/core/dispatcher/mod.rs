@@ -5,7 +5,7 @@ use lb_network_service::{NetworkService, backends::NetworkBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::message::BlendPayload;
+use crate::message::DataPayload;
 
 pub mod libp2p;
 
@@ -38,8 +38,8 @@ pub trait PayloadDispatcher<RuntimeServiceId> {
     ) -> Self;
 
     /// Deliver a decapsulated payload to the local service that owns it.
-    async fn dispatch(&self, payload: BlendPayload);
+    async fn dispatch(&self, payload: DataPayload);
 
     /// Return a stream of payloads appearing on the broadcasting channel.
-    async fn observe_broadcasts(&self) -> BoxStream<'static, BlendPayload>;
+    async fn observe_broadcasts(&self) -> BoxStream<'static, DataPayload>;
 }

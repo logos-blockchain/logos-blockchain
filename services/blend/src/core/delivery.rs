@@ -13,7 +13,7 @@ use lb_chain_service::Epoch;
 use crate::{
     core::{LOG_TARGET, dispatcher::PayloadDispatcher},
     delivery::FailureDetector as InnerFailureDetector,
-    message::BlendPayload,
+    message::DataPayload,
 };
 
 /// Wrapper around [`crate::delivery::FailureDetector`] that adds support for
@@ -21,7 +21,7 @@ use crate::{
 pub struct FailureDetector {
     inner: InnerFailureDetector,
     /// Payloads encapsulated and waiting to be blended.
-    encapsulated: HashMap<MessageIdentifier, (Epoch, BlendPayload)>,
+    encapsulated: HashMap<MessageIdentifier, (Epoch, DataPayload)>,
 }
 
 impl FailureDetector {
@@ -29,7 +29,7 @@ impl FailureDetector {
     pub fn new(
         maximum_blending_delay: NonZeroU64,
         round_duration: Duration,
-        payload_broadcasts: BoxStream<'static, BlendPayload>,
+        payload_broadcasts: BoxStream<'static, DataPayload>,
     ) -> Self {
         Self {
             inner: InnerFailureDetector::new(
@@ -47,7 +47,7 @@ impl FailureDetector {
     pub fn mark_payload_as_encapsulated(
         &mut self,
         id: MessageIdentifier,
-        payload: BlendPayload,
+        payload: DataPayload,
         epoch: Epoch,
     ) {
         assert!(
@@ -127,7 +127,7 @@ mod tests {
     use crate::{
         core::delivery::FailureDetector,
         delivery::test_utils::{DEADLINE, ROUND, proposal, transaction, until},
-        message::BlendPayload,
+        message::DataPayload,
     };
 
     /// Rounds a message spends waiting on the proofs that back it, before it is
@@ -136,11 +136,7 @@ mod tests {
 
     /// A core sender, the instant its round clock started, and the handle that
     /// puts payloads on the broadcasting channel it watches.
-    fn new_failure_monitor() -> (
-        FailureDetector,
-        Instant,
-        mpsc::UnboundedSender<BlendPayload>,
-    ) {
+    fn new_failure_monitor() -> (FailureDetector, Instant, mpsc::UnboundedSender<DataPayload>) {
         let (channel, broadcasts) = mpsc::unbounded_channel();
         let detection = FailureDetector::new(
             DEADLINE,

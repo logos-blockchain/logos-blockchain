@@ -7,7 +7,9 @@ use crate::{
         TxHash, Value,
         batch::DeferredZkpVerification,
         channel::{Channels, Error},
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{
+            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
+        },
         ledger::{
             ExecutableOperation, Inputs, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation,
@@ -20,7 +22,7 @@ use crate::{
         transactions::{
             OperationVerificationHelper,
             hash::TxHashView,
-            states::{Preverified, Unverified, VerificationState, Verified},
+            states::{Preverified, Unverified, Verified},
         },
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -55,14 +57,18 @@ pub struct WithdrawExecutionContext {
 }
 
 impl ProvableOperation for ChannelWithdrawOp {
-    // `SignedOperationExecutionGas::gas_multiplier` below reads this proof's
-    // signature count. If this changes, update that too.
     type Proof = ChannelMultiSigProof;
     const CODE: u8 = 0x13;
 }
 
 impl OperationGas<MainnetGasProfile> for ChannelWithdrawOp {
     const GAS_COST: Gas = Gas::new(56);
+}
+
+impl OpGasCalculator<MainnetGasProfile> for ChannelWithdrawOp {
+    fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
+        Self::GAS_COST.checked_mul(Value::from(thresholds.transfer_threshold(&self.channel_id)))
+    }
 }
 
 impl PreverifiableOperation<StandardMode>
@@ -167,16 +173,6 @@ impl<Mode: VerificationMode> ExecutableOperation
         }
 
         Ok((context, Vec::new()))
-    }
-}
-
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOperation<ChannelWithdrawOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        let signature_count = self.proof().signatures().len();
-        Value::try_from(signature_count)
-            .expect("Channel multi-signature proofs are bound to u16::MAX signatures.")
     }
 }
 
