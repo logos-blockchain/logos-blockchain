@@ -3,7 +3,7 @@ use serde::{Serialize, Serializer};
 
 use crate::mantle::{
     GasProfile, Op,
-    gas::{Gas, GasOverflow, OpGasCalculator, OperationGas, ThresholdSource},
+    gas::{Gas, GasOverflow, OpGasCalculator as _, OperationGas, ThresholdSource},
     ledger::ProvableOperation,
     ops::{
         channel::{
@@ -41,17 +41,6 @@ where
     T::GAS_COST
 }
 
-fn execution_gas_of<T, Profile>(
-    op: &T,
-    thresholds: &impl ThresholdSource,
-) -> Result<Gas, GasOverflow>
-where
-    T: OpGasCalculator<Profile>,
-    Profile: GasProfile,
-{
-    op.execution_gas(thresholds)
-}
-
 const fn code_of<T>(_op: &T) -> u8
 where
     T: ProvableOperation,
@@ -82,17 +71,17 @@ impl OpRef<'_> {
         thresholds: &impl ThresholdSource,
     ) -> Result<Gas, GasOverflow> {
         match self {
-            Self::ChannelInscribe(op) => execution_gas_of(*op, thresholds),
-            Self::ChannelConfig(op) => execution_gas_of(*op, thresholds),
-            Self::ChannelDeposit(op) => execution_gas_of(*op, thresholds),
-            Self::ChannelWithdraw(op) => execution_gas_of(*op, thresholds),
-            Self::ChannelTransfer(op) => execution_gas_of(*op, thresholds),
-            Self::SDPDeclare(op) => execution_gas_of(*op, thresholds),
-            Self::SDPWithdraw(op) => execution_gas_of(*op, thresholds),
-            Self::SDPActive(op) => execution_gas_of(*op, thresholds),
-            Self::LeaderClaim(op) => execution_gas_of(*op, thresholds),
-            Self::Transfer(op) => execution_gas_of(*op, thresholds),
-            Self::ClaimPowReward(op) => execution_gas_of(*op, thresholds),
+            Self::ChannelInscribe(op) => op.execution_gas(thresholds),
+            Self::ChannelConfig(op) => op.execution_gas(thresholds),
+            Self::ChannelDeposit(op) => op.execution_gas(thresholds),
+            Self::ChannelWithdraw(op) => op.execution_gas(thresholds),
+            Self::ChannelTransfer(op) => op.execution_gas(thresholds),
+            Self::SDPDeclare(op) => op.execution_gas(thresholds),
+            Self::SDPWithdraw(op) => op.execution_gas(thresholds),
+            Self::SDPActive(op) => op.execution_gas(thresholds),
+            Self::LeaderClaim(op) => op.execution_gas(thresholds),
+            Self::Transfer(op) => op.execution_gas(thresholds),
+            Self::ClaimPowReward(op) => op.execution_gas(thresholds),
         }
     }
 

@@ -6,9 +6,9 @@ use crate::{
     mantle::{
         OpRef,
         gas::ThresholdSource as _,
-        transactions::tx_list::{
-            OpRefs,
-            ops::{OpsGasContext, RunningThresholds},
+        transactions::{
+            thresholds::RunningThresholds,
+            tx_list::{OpRefs, ops::OpsGasContext},
         },
     },
     proofs::channel_multi_sig_proof::codec::calculate_channel_multi_sig_proof_byte_size,
