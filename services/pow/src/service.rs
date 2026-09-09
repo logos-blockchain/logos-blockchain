@@ -12,7 +12,7 @@ use std::{
 use futures::{Stream, StreamExt as _};
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
-    message::{BlendPayload, MAX_PAYLOAD_BODY_SIZE, TransactionNotBlendable},
+    message::{DataPayload, MAX_PAYLOAD_BODY_SIZE, TransactionNotBlendable},
 };
 use lb_chain_service::{
     ProcessedBlockEvent, Slot,
@@ -1510,7 +1510,7 @@ where
     BlendService::NodeId: Send,
     RuntimeServiceId: Sync,
 {
-    let payload = BlendPayload::try_from_transaction(&signed_tx)?;
+    let payload = DataPayload::try_from_transaction(&signed_tx)?;
     blend_api.publish(payload).await?;
     Ok(())
 }

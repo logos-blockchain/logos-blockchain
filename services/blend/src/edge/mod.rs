@@ -48,8 +48,8 @@ use crate::{
     edge::{current_epoch::CurrentEpoch, handlers::Error, settings::RunningBlendConfig},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
-    membership::{self, chain::BlendEpochState, node_id},
-    message::{BlendPayload, NetworkInfo, ServiceMessage},
+    membership::{self, chain::BlendEpoch, node_id},
+    message::{DataPayload, NetworkInfo, ServiceMessage},
     pending::{EncapsulationResult, LocalEncapsulation, MessageKind, PendingTransactions},
 };
 
@@ -313,7 +313,7 @@ where
 )]
 async fn run<Backend, NodeId, ProofsGenerator, Dispatcher, PolInfoProvider, RuntimeServiceId>(
     public_epoch_stream: UninitializedEpochEventStream<
-        impl Stream<Item = BlendEpochState<NodeId>> + Unpin,
+        impl Stream<Item = BlendEpoch<NodeId>> + Unpin,
     >,
     mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
     local_node_id: NodeId,
@@ -337,11 +337,15 @@ where
 
     info!(
         target: LOG_TARGET,
-        members = current_epoch_info.membership_info.membership.size(),
-        local_node_index = current_epoch_info.membership_info.membership.local_index(),
-        has_zk = current_epoch_info.membership_info.zk.is_some(),
+        members = current_epoch_info.1.membership.size(),
+        local_node_index = current_epoch_info.1.membership.local_index(),
+        has_zk = current_epoch_info.1.zk.is_some(),
         "current membership is ready"
     );
+
+    let mut current_epoch: CurrentEpoch<Backend, NodeId, ProofsGenerator, RuntimeServiceId> =
+        CurrentEpoch::try_new(current_epoch_info, &settings)
+            .expect("The initial membership should satisfy the edge node condition");
 
     notify_ready();
 
@@ -353,20 +357,6 @@ where
         .expect("Should not fail to subscribe to secret PoL info stream.");
 
     let mut current_secret_epoch_info: Option<PolEpochInfo> = None;
-    // The epoch owns its proposals, so a new one takes them with it; a
-    // transaction is not slot-bound and outlives every epoch it waits through.
-    let mut current_epoch: CurrentEpoch<Backend, NodeId, ProofsGenerator, RuntimeServiceId> =
-        match CurrentEpoch::try_new(current_epoch_info, &settings) {
-            Err(Error::NetworkIsTooSmall(_)) => {
-                info!(target: LOG_TARGET, "Initial membership does not satisfy edge node condition, edge service shutting down.");
-                return Ok(());
-            }
-            Err(e) => {
-                error!(target: LOG_TARGET, "Error with the initial epoch: {e:?}, edge service shutting down.");
-                return Err(e);
-            }
-            Ok(epoch) => epoch,
-        };
     let mut pending_transactions = PendingTransactions::new();
 
     // `None` when the operator has turned the fallback off, which records
@@ -415,10 +405,10 @@ where
             }
             Some(message) = inbound_relay.next() => {
                 match message {
-                    ServiceMessage::Blend(BlendPayload::Transaction(transaction)) => {
+                    ServiceMessage::Blend(DataPayload::Transaction(transaction)) => {
                         pending_transactions.queue(transaction);
                     }
-                    ServiceMessage::Blend(BlendPayload::BlockProposal(proposal)) => {
+                    ServiceMessage::Blend(DataPayload::BlockProposal(proposal)) => {
                         let proposal_copies = NonZeroU64::new(settings.data_replication_factor.checked_add(1).expect("Data replication factor should not overflow when incremented.")).expect("Number of block proposal copies cannot be zero by definition.");
                         current_epoch.queue_proposal(proposal, proposal_copies);
                     }
@@ -442,8 +432,8 @@ where
                     EncapsulationResult::Complete(encapsulation) => {
                         let LocalEncapsulation { message, kind } = *encapsulation;
                         let payload = match kind {
-                            MessageKind::Proposal => current_epoch.proposals().head().map(|proposal| BlendPayload::BlockProposal(proposal.to_vec())),
-                            MessageKind::Transaction => pending_transactions.head().map(|transaction| BlendPayload::Transaction(transaction.to_vec())),
+                            MessageKind::Proposal => current_epoch.proposals().head().map(|proposal| DataPayload::BlockProposal(proposal.to_vec())),
+                            MessageKind::Transaction => pending_transactions.head().map(|transaction| DataPayload::Transaction(transaction.to_vec())),
                         }
                         .expect("A message was encapsulated, so the payload it carries is queued.");
                         current_epoch.send(message).await;

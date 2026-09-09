@@ -3,19 +3,19 @@ use core::{num::NonZeroU64, time::Duration};
 use futures::{Stream, StreamExt as _};
 use tokio::time::Instant;
 
-use crate::message::BlendPayload;
+use crate::message::DataPayload;
 
 pub const ROUND: Duration = Duration::from_secs(1);
 pub const DEADLINE: NonZeroU64 = NonZeroU64::new(6).unwrap();
 
 #[must_use]
-pub fn proposal() -> BlendPayload {
-    BlendPayload::BlockProposal(b"proposal".to_vec())
+pub fn proposal() -> DataPayload {
+    DataPayload::BlockProposal(b"proposal".to_vec())
 }
 
 #[must_use]
-pub fn transaction() -> BlendPayload {
-    BlendPayload::Transaction(b"transaction".to_vec())
+pub fn transaction() -> DataPayload {
+    DataPayload::Transaction(b"transaction".to_vec())
 }
 
 /// Turns the clock until `round`, collecting whatever expired on the way.
@@ -25,9 +25,9 @@ pub async fn until<Detection>(
     detection: &mut Detection,
     start: Instant,
     round: u64,
-) -> Vec<BlendPayload>
+) -> Vec<DataPayload>
 where
-    Detection: Stream<Item = Vec<BlendPayload>> + Unpin,
+    Detection: Stream<Item = Vec<DataPayload>> + Unpin,
 {
     let stop = start + ROUND * u32::try_from(round).expect("The tests turn few rounds.");
     let mut expired = Vec::new();

@@ -1,7 +1,7 @@
 use futures::{Stream, StreamExt as _, future::join_all};
 
 pub use self::failure_detection::FailureDetector;
-use crate::{LOG_TARGET, core::dispatcher::PayloadDispatcher, message::BlendPayload, metrics};
+use crate::{LOG_TARGET, core::dispatcher::PayloadDispatcher, message::DataPayload, metrics};
 
 mod failure_detection;
 
@@ -16,9 +16,9 @@ pub mod test_utils;
 /// rather than firing.
 pub async fn next_undelivered_messages<Detection>(
     failure_detection: Option<&mut Detection>,
-) -> Option<Vec<BlendPayload>>
+) -> Option<Vec<DataPayload>>
 where
-    Detection: Stream<Item = Vec<BlendPayload>> + Unpin + Send,
+    Detection: Stream<Item = Vec<DataPayload>> + Unpin + Send,
 {
     match failure_detection {
         Some(failure_detection) => failure_detection.next().await,
@@ -33,7 +33,7 @@ pub async fn broadcast_undelivered_messages<Dispatcher, UndeliveredPayloads, Run
     payload_dispatcher: &Dispatcher,
 ) where
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
-    UndeliveredPayloads: ExactSizeIterator<Item = BlendPayload> + Send,
+    UndeliveredPayloads: ExactSizeIterator<Item = DataPayload> + Send,
 {
     // TODO: Once we switch to a well-defined API for blending payloads, we can and
     // should show the relevant details for each payload that failed. E.g., for
@@ -44,7 +44,7 @@ pub async fn broadcast_undelivered_messages<Dispatcher, UndeliveredPayloads, Run
         undelivered.len()
     );
     join_all(undelivered.into_iter().map(|payload| {
-        metrics::payload_bypassed_blend(payload.payload_type());
+        metrics::data_payload_bypassed_blend(payload.payload_type());
         payload_dispatcher.dispatch(payload)
     }))
     .await;

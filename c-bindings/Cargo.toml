@@ -19,6 +19,7 @@ lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-network-service            = { workspace = true }
 lb-node                       = { workspace = true }
 lb-pow-service                = { workspace = true }
 lb-time-service               = { workspace = true }
