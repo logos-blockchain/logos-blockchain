@@ -23,6 +23,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         OpRef, SignedOps,
+        batch::DeferredZkpVerifications,
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         traits::{Hashable, MantleTx, SignedMantleTx, StorageSize},
@@ -32,7 +33,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
-use lb_ledger::{LedgerState, PendingBlockState};
+use lb_ledger::{GasAndFees, LedgerState};
 use lb_log_targets::chain;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
@@ -128,9 +129,54 @@ enum AssemblyState {
     GasCapacityReached,
 }
 
-/// Result of applying mempool candidates to the pending block state.
+/// Ledger state, gas, and fees for a proposal under construction.
+#[derive(Clone)]
+struct BlockBuilder {
+    ledger_state: LedgerState,
+    gas_and_fees: GasAndFees,
+}
+
+impl BlockBuilder {
+    #[must_use]
+    fn new(ledger_state: LedgerState) -> Self {
+        Self {
+            ledger_state,
+            gas_and_fees: GasAndFees::default(),
+        }
+    }
+
+    fn try_apply_transaction(
+        self,
+        tx: &SignedOps<Preverified, StandardMode>,
+        ledger_config: &lb_ledger::Config,
+    ) -> Result<(Self, DeferredZkpVerifications), lb_ledger::LedgerError<HeaderId>> {
+        let Self {
+            ledger_state,
+            gas_and_fees,
+        } = self;
+        let (ledger_state, tx_gas_and_fees, _events, deferred_zkps) =
+            ledger_state
+                .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(ledger_config, tx)?;
+        let gas_and_fees = gas_and_fees.checked_add::<HeaderId>(tx_gas_and_fees)?;
+
+        Ok((
+            Self {
+                ledger_state,
+                gas_and_fees,
+            },
+            deferred_zkps,
+        ))
+    }
+
+    #[must_use]
+    fn finish(self) -> LedgerState {
+        self.ledger_state
+    }
+}
+
+/// Result of selecting mempool candidates for a block proposal.
 struct TransactionSelection {
-    pending_block_state: PendingBlockState,
+    ledger_state: LedgerState,
     selected_txs: Vec<SignedOps<Preverified, StandardMode>>,
     invalid_tx_hashes: Vec<TxHash>,
 }
@@ -140,7 +186,7 @@ struct TransactionSelection {
     reason = "Dependency retries and distinct invalid, proof, and block-capacity outcomes"
 )]
 fn select_transactions(
-    mut pending_block_state: PendingBlockState,
+    mut block_builder: BlockBuilder,
     mut pending: Vec<SignedOps<Preverified, StandardMode>>,
     ledger_config: &lb_ledger::Config,
 ) -> TransactionSelection {
@@ -156,28 +202,26 @@ fn select_transactions(
         let mut still_pending = Vec::with_capacity(pending.len());
 
         for tx in std::mem::take(&mut pending) {
-            match pending_block_state
+            match block_builder
                 .clone()
-                .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(ledger_config, &tx)
+                .try_apply_transaction(&tx, ledger_config)
             {
-                Ok((next_pending_block_state, _events, deferred_zkps)) => {
-                    match deferred_zkps.verify() {
-                        Ok(()) => {
-                            pending_block_state = next_pending_block_state;
-                            selected_txs.push(tx);
-                            assembly_state = AssemblyState::Progress;
-                        }
-                        Err(err) => {
-                            tracing::trace!(
-                                target: LOG_TARGET,
-                                tx = ?tx.hash(),
-                                %err,
-                                "deferred ZKP verification failed during block assembly",
-                            );
-                            still_pending.push(tx);
-                        }
+                Ok((next_block_builder, deferred_zkps)) => match deferred_zkps.verify() {
+                    Ok(()) => {
+                        block_builder = next_block_builder;
+                        selected_txs.push(tx);
+                        assembly_state = AssemblyState::Progress;
                     }
-                }
+                    Err(err) => {
+                        tracing::trace!(
+                            target: LOG_TARGET,
+                            tx = ?tx.hash(),
+                            %err,
+                            "deferred ZKP verification failed during block assembly",
+                        );
+                        still_pending.push(tx);
+                    }
+                },
                 Err(err @ lb_ledger::LedgerError::TooMuchExecutionGas { .. }) => {
                     tracing::trace!(
                         target: LOG_TARGET,
@@ -214,7 +258,7 @@ fn select_transactions(
     };
 
     TransactionSelection {
-        pending_block_state,
+        ledger_state: block_builder.finish(),
         selected_txs,
         invalid_tx_hashes,
     }
@@ -766,19 +810,15 @@ where
                 &uncle_headers.slots(),
                 ledger_config,
             )?;
-        let pending_block_state = ledger_state.begin_pending_block();
+        let block_builder = BlockBuilder::new(ledger_state);
 
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
         let TransactionSelection {
-            pending_block_state,
+            ledger_state,
             selected_txs,
             invalid_tx_hashes,
-        } = select_transactions(
-            pending_block_state,
-            tx_stream.collect().await,
-            ledger_config,
-        );
+        } = select_transactions(block_builder, tx_stream.collect().await, ledger_config);
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays
@@ -794,7 +834,7 @@ where
 
         let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
         if tracing::enabled!(Level::DEBUG) {
-            log_sdp_activity_selected_for_proposal(&block, pending_block_state.ledger_state());
+            log_sdp_activity_selected_for_proposal(&block, &ledger_state);
         }
 
         info!(
@@ -1118,11 +1158,8 @@ mod tests {
             "individual gas: {individual_gas:?}, error: {all_candidates_error:?}"
         );
 
-        let selection = select_transactions(
-            ledger_state.clone().begin_pending_block(),
-            candidates,
-            &config,
-        );
+        let selection =
+            select_transactions(BlockBuilder::new(ledger_state.clone()), candidates, &config);
         assert_eq!(selection.selected_txs.len(), CANDIDATE_COUNT - 1);
         assert!(selection.invalid_tx_hashes.is_empty());
 
