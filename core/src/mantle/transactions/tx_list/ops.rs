@@ -117,13 +117,23 @@ impl<'a> RunningThresholds<'a> {
                     .insert(operation.channel, operation.configuration_threshold);
             }
             // An inscription creates the channel when it does not exist yet.
-            OpRef::ChannelInscribe(operation) if !self.channel_exists(&operation.channel_id) => {
-                self.transfer_thresholds
-                    .insert(operation.channel_id, DEFAULT_TRANSFER_THRESHOLD);
-                self.configuration_thresholds
-                    .insert(operation.channel_id, 1);
+            OpRef::ChannelInscribe(operation) => {
+                if !self.channel_exists(&operation.channel_id) {
+                    self.transfer_thresholds
+                        .insert(operation.channel_id, DEFAULT_TRANSFER_THRESHOLD);
+                    self.configuration_thresholds
+                        .insert(operation.channel_id, 1);
+                }
             }
-            _ => {}
+            OpRef::ChannelDeposit(_)
+            | OpRef::ChannelWithdraw(_)
+            | OpRef::ChannelTransfer(_)
+            | OpRef::SDPDeclare(_)
+            | OpRef::SDPWithdraw(_)
+            | OpRef::SDPActive(_)
+            | OpRef::LeaderClaim(_)
+            | OpRef::Transfer(_)
+            | OpRef::ClaimPowReward(_) => {}
         }
     }
 }
