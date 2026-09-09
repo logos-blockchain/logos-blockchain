@@ -256,6 +256,7 @@ fn prepare_world_for_scenario(
     );
 
     world.set_scenario_base_dir(&scenario_dir, &deployer);
+    world.set_scenario_name(scenario_name);
     world.apply_deployment_config_override_path();
 
     let started_at_ns = SystemTime::now()

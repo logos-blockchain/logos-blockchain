@@ -96,12 +96,14 @@ struct PublicPeerConsensusSnapshot {
     stats: SyncTargetStats,
 }
 
+mod blend_relay;
 mod consensus;
 mod lifecycle;
 mod resources;
 mod snapshots;
 mod synchronization;
 
+pub use blend_relay::{BlendRelayRegistry, set_blend_reachability};
 pub use consensus::{
     ensure_all_nodes_agree_on_lib, nodes_converged, poll_all_nodes_and_update_consensus_cache,
 };

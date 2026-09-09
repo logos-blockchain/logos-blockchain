@@ -527,11 +527,22 @@ async fn step_restart_node(
     step: &Step,
     node_name: String,
 ) -> StepResult {
-    restart_node(world, &step.value, &node_name).await?;
-    if world.blend_diagnostics.observation_count > 0 {
-        world.blend_diagnostics.stopped_nodes.remove(&node_name);
+    let diagnostic_restart = world.blend_diagnostics.observation_count > 0;
+    let previous_phase = world.blend_diagnostics.phase;
+    if diagnostic_restart {
         world.blend_diagnostics.phase =
             Some(crate::cucumber::world::BlendDiagnosticPhase::Recovery);
+    }
+
+    if let Err(error) = restart_node(world, &step.value, &node_name).await {
+        if diagnostic_restart {
+            world.blend_diagnostics.phase = previous_phase;
+        }
+        return Err(error);
+    }
+
+    if diagnostic_restart {
+        world.blend_diagnostics.stopped_nodes.remove(&node_name);
     }
     Ok(())
 }

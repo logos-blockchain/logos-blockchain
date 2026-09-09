@@ -3,7 +3,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     core::{BlendService, backends::BlendBackend, dispatcher::PayloadDispatcher},
-    message::{BlendPayload, NetworkInfo, ServiceMessage},
+    message::{DataPayload, NetworkInfo, ServiceMessage},
 };
 
 /// Helper trait to help the Blend proxy service rely on the concrete types of
@@ -105,7 +105,7 @@ pub trait MessageComponents<NodeId> {
 }
 
 impl<NodeId> MessageComponents<NodeId> for ServiceMessage<NodeId> {
-    type Payload = BlendPayload;
+    type Payload = DataPayload;
 
     fn into_payload(self) -> Self::Payload {
         match self {

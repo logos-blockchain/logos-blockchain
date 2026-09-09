@@ -194,11 +194,11 @@ async fn sdp_ops_e2e() {
         .withdraw_at
         .expect("withdraw_at must be set after withdraw tx is accepted");
 
-    // Wait for the snapshot finalization delay to pass. At the `withdrawn`
-    // epoch the service note is unlocked and the declaration is removed.
+    // Wait until the `withdraw_at + 1` epoch has started: in its first block
+    // the service note is unlocked and the declaration is removed.
     wait_for_tip_slot(
         &node0,
-        (u64::from(withdraw_epoch.strict_add(Epoch::new(1)).into_inner()) * slots_per_epoch).into(),
+        (u64::from(withdraw_epoch.strict_add(Epoch::new(2)).into_inner()) * slots_per_epoch).into(),
         Duration::from_mins(3),
     )
     .await

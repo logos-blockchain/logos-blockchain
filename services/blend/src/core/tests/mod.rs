@@ -52,7 +52,7 @@ use crate::{
     epoch::{CoreEpochInfo, CoreEpochPublicInfo},
     epoch_info::PolEpochInfo,
     membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
-    message::{BlendPayload, ServiceMessage},
+    message::{DataPayload, ServiceMessage},
     pending::{NextLocalMessage, PendingTransactions, next_local_message},
     test_utils::{
         crypto::{
@@ -2265,7 +2265,7 @@ async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
         spawn_core_watching_the_broadcasting_channel().await;
 
     inbound_message_sender
-        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(
+        .send(ServiceMessage::Blend(DataPayload::BlockProposal(
             proposal.clone(),
         )))
         .await
@@ -2275,7 +2275,7 @@ async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
         .await
         .expect("the deadline should have expired by now")
         .expect("the service should still be running");
-    assert_eq!(broadcast, BlendPayload::BlockProposal(proposal));
+    assert_eq!(broadcast, DataPayload::BlockProposal(proposal));
 }
 
 /// Seeing the proposal come out of the Blend network is what cancels the direct
@@ -2287,7 +2287,7 @@ async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
         spawn_core_watching_the_broadcasting_channel().await;
 
     inbound_message_sender
-        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(
+        .send(ServiceMessage::Blend(DataPayload::BlockProposal(
             proposal.clone(),
         )))
         .await
@@ -2298,7 +2298,7 @@ async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
     sleep(deadline / 2).await;
     broadcasting_channel
         .carrying
-        .send(BlendPayload::BlockProposal(proposal))
+        .send(DataPayload::BlockProposal(proposal))
         .expect("the service is subscribed");
 
     assert!(
@@ -2413,7 +2413,7 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
     // The gate is shut, so the leadership branch has nothing to give: this is the
     // window the proposal used to die in.
     inbound_message_sender
-        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(
+        .send(ServiceMessage::Blend(DataPayload::BlockProposal(
             b"proposal".to_vec(),
         )))
         .await
@@ -2552,7 +2552,7 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
 
     // Queued under epoch 0, and released on a round that has not come yet.
     inbound_message_sender
-        .send(ServiceMessage::Blend(BlendPayload::Transaction(
+        .send(ServiceMessage::Blend(DataPayload::Transaction(
             b"transaction".to_vec(),
         )))
         .await
@@ -2696,14 +2696,14 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     // One byte over what a payload can hold, so encapsulating it fails the same
     // way however long it waits.
     inbound_message_sender
-        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(vec![
+        .send(ServiceMessage::Blend(DataPayload::BlockProposal(vec![
             0;
             MAX_PAYLOAD_BODY_SIZE + 1
         ])))
         .await
         .unwrap();
     inbound_message_sender
-        .send(ServiceMessage::Blend(BlendPayload::Transaction(
+        .send(ServiceMessage::Blend(DataPayload::Transaction(
             b"transaction".to_vec(),
         )))
         .await
@@ -2826,13 +2826,13 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
     // The transaction goes in first, so if the loop blocked on mining, the
     // proposal queued behind it could never get out.
     inbound_message_sender
-        .send(ServiceMessage::Blend(BlendPayload::Transaction(
+        .send(ServiceMessage::Blend(DataPayload::Transaction(
             b"transaction".to_vec(),
         )))
         .await
         .unwrap();
     inbound_message_sender
-        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(
+        .send(ServiceMessage::Blend(DataPayload::BlockProposal(
             b"proposal".to_vec(),
         )))
         .await

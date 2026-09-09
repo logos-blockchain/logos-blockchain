@@ -143,8 +143,8 @@ pub enum TxEventPayload {
 /// Events emitted while processing a block header
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HeaderEvent {
-    /// A service note has been unlocked because its declaration's
-    /// `withdraw_at` epoch has been reached.
+    /// A service note has been unlocked because the epoch after its
+    /// declaration's `withdraw_at` has been reached.
     SdpNoteUnlocked {
         note_id: NoteId,
         service_type: ServiceType,
