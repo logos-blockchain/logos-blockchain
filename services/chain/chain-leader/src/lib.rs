@@ -191,6 +191,7 @@ fn select_transactions(
     ledger_config: &lb_ledger::Config,
 ) -> TransactionSelection {
     let mut selected_txs = Vec::new();
+    let mut invalid_tx_hashes = Vec::new();
 
     // A transaction may only become valid once another transaction it depends
     // on has already been applied. Repeatedly attempt to apply the pending
@@ -232,6 +233,15 @@ fn select_transactions(
                     assembly_state = AssemblyState::GasCapacityReached;
                     break;
                 }
+                Err(err @ lb_ledger::LedgerError::TooMuchTransactionExecutionGas { .. }) => {
+                    tracing::trace!(
+                        target: LOG_TARGET,
+                        tx = ?tx.hash(),
+                        %err,
+                        "transaction execution gas exceeds the block limit",
+                    );
+                    invalid_tx_hashes.push(tx.hash());
+                }
                 Err(err) => {
                     tracing::trace!(
                         target: LOG_TARGET,
@@ -251,11 +261,9 @@ fn select_transactions(
     // this block's ledger state and can be evicted from the mempool. If assembly
     // stopped at the gas limit, unprocessed transactions are not invalid and
     // must remain in the mempool.
-    let invalid_tx_hashes = if matches!(assembly_state, AssemblyState::GasCapacityReached) {
-        Vec::new()
-    } else {
-        pending.iter().map(Hashable::hash).collect()
-    };
+    if !matches!(assembly_state, AssemblyState::GasCapacityReached) {
+        invalid_tx_hashes.extend(pending.iter().map(Hashable::hash));
+    }
 
     TransactionSelection {
         ledger_state: block_builder.into_ledger_state(),
@@ -1075,13 +1083,14 @@ mod tests {
         ops: Ops,
         channel_signing_key: &Ed25519Key,
         funding_key: &ZkKey,
+        signature_count: usize,
     ) -> SignedOps<Preverified, StandardMode> {
         let tx_hash = ops.hash();
         let zk_signature =
             ZkKey::multi_sign(std::slice::from_ref(funding_key), &tx_hash.to_fr()).unwrap();
         let channel_signature =
             channel_signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
-        let channel_signatures = (0..HIGH_GAS_CONFIG_SIGNATURES)
+        let channel_signatures = (0..signature_count)
             .map(|index| IndexedSignature::new(index as u16, channel_signature))
             .collect::<Vec<_>>()
             .try_into()
@@ -1105,7 +1114,12 @@ mod tests {
     ) -> (Utxo, SignedOps<Preverified, StandardMode>) {
         let (funding_utxo, ops) =
             build_high_execution_gas_ops(transaction_index, channel_signing_key, funding_key);
-        let transaction = sign_high_execution_gas_ops(ops, channel_signing_key, funding_key);
+        let transaction = sign_high_execution_gas_ops(
+            ops,
+            channel_signing_key,
+            funding_key,
+            HIGH_GAS_CONFIG_SIGNATURES,
+        );
 
         (funding_utxo, transaction)
     }
@@ -1171,6 +1185,41 @@ mod tests {
                 block_txs.into_iter(),
             )
             .expect("the selected prefix must pass canonical application");
+    }
+
+    #[test]
+    fn oversized_transaction_is_evicted_without_stopping_selection() {
+        const OVERSIZED_SIGNATURES: usize = 60_000;
+
+        let config = leadership::test_config();
+        let channel_signing_key = Ed25519Key::from_bytes(&[7; 32]);
+        let funding_key = ZkKey::zero();
+        let (oversized_utxo, oversized_ops) =
+            build_high_execution_gas_ops(0, &channel_signing_key, &funding_key);
+        let oversized_tx = sign_high_execution_gas_ops(
+            oversized_ops,
+            &channel_signing_key,
+            &funding_key,
+            OVERSIZED_SIGNATURES,
+        );
+        let oversized_hash = oversized_tx.hash();
+        let (valid_utxo, valid_tx) =
+            high_execution_gas_transaction(1, &channel_signing_key, &funding_key);
+        let ledger_state = LedgerState::from_utxos([oversized_utxo, valid_utxo], &config);
+
+        assert!(matches!(
+            BlockBuilder::new(ledger_state.clone()).try_add_transaction(&oversized_tx, &config),
+            Err(lb_ledger::LedgerError::TooMuchTransactionExecutionGas { .. })
+        ));
+
+        let selection = select_transactions(
+            BlockBuilder::new(ledger_state),
+            vec![oversized_tx, valid_tx.clone()],
+            &config,
+        );
+
+        assert_eq!(selection.selected_txs, vec![valid_tx]);
+        assert_eq!(selection.invalid_tx_hashes, vec![oversized_hash]);
     }
 
     #[tokio::test]
