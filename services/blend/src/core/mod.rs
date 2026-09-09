@@ -94,7 +94,7 @@ use crate::{
         },
         kms::{KmsPoQAdapter, PreloadKMSBackendCorePoQGenerator},
         processor::{
-            CoreCryptographicProcessor as CurrentEpochCryptographicProcessor, Error,
+            CoreCryptographicProcessor as CurrentEpochCryptographicProcessor,
             ReceiverCryptographicProcessor,
         },
         scheduler::SchedulerWrapper,
@@ -102,11 +102,15 @@ use crate::{
         state::{RecoveryServiceState, ServiceState, StateUpdater as ServiceStateUpdater},
     },
     delivery::{broadcast_undelivered_messages, next_undelivered_messages},
-    epoch::{CoreEpochInfo, CoreEpochPublicInfo, MaybeEmptyCoreEpochInfo},
+    epoch::{CoreEpochInfo, CoreEpochPublicInfo, CoreEpochStateInfo, MismatchedZkId},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
-    membership::{self, ZkInfo, chain::BlendEpochState},
+    membership::{
+        self,
+        chain::{BlendEpoch, BlendEpochState},
+    },
     message::{DataPayload, DataPayloadType, ProcessedMessage, ServiceMessage},
+    mode::{CoreMembership, ModeMembership},
     pending::{
         EncapsulationResult, LocalEncapsulation, MessageKind, NextLocalMessage, PendingProposals,
         PendingTransactions, next_local_message, resolve_encapsulation,
@@ -529,7 +533,7 @@ async fn initialize<
     RuntimeServiceId,
 >(
     blend_config: RunningBlendConfig<Backend::Settings>,
-    public_epoch_stream: impl Stream<Item = BlendEpochState<NodeId>> + Send + Unpin + 'static,
+    public_epoch_stream: impl Stream<Item = BlendEpoch<NodeId>> + Send + Unpin + 'static,
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     kms_adapter: KmsAdapter,
     sdp_relay: &OutboundRelay<SdpMessage>,
@@ -539,7 +543,7 @@ async fn initialize<
     >,
     release_delay_rng: ChaCha20Rng,
 ) -> (
-    impl Stream<Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, KmsAdapter::CorePoQGenerator>>>
+    impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, KmsAdapter::CorePoQGenerator>>>
     + Unpin
     + Send
     + 'static,
@@ -574,38 +578,45 @@ where
         let config = blend_config.clone();
         let zk_sk_id = config.zk.secret_key_kms_id.clone();
         public_epoch_stream.map(
-            move |BlendEpochState {
-                      aged,
-                      epoch,
-                      lottery_0,
-                      lottery_1,
-                      membership_info,
-                      nonce,
-                      pow_difficulty,
-                  }| {
-                // This can be empty in case of an empty membership set.
-                let Some(ZkInfo {
-                    root,
-                    core_and_path_selectors,
-                }) = membership_info.zk
+            move |(
+                BlendEpochState {
+                    aged,
+                    epoch,
+                    lottery_0,
+                    lottery_1,
+                    nonce,
+                    pow_difficulty,
+                },
+                membership_info,
+            )| {
+                let membership_size = membership_info.membership.size();
+                let zk_path = membership_info
+                    .zk
+                    .as_ref()
+                    .and_then(|zk| zk.core_and_path_selectors);
+
+                let ModeMembership::Core(CoreMembership {
+                    membership,
+                    zk_root,
+                }) = ModeMembership::resolve(membership_info, config.minimum_network_size)
                 else {
-                    return MaybeEmptyCoreEpochInfo::Empty {
+                    return Ok(CoreEpochStateInfo::NotCore {
                         epoch,
                         epoch_nonce: nonce,
-                    };
+                    });
                 };
-                // `None` when the local node is not part of the epoch membership. This can
-                // happen when the node transitions from core to edge mode.
-                let core_poq_generator = core_and_path_selectors.map(|selectors| {
-                    kms_adapter.core_poq_generator(zk_sk_id.clone(), Box::new(selectors))
-                });
-                CoreEpochInfo {
+                let Some(core_and_path_selectors) = zk_path else {
+                    return Err(MismatchedZkId);
+                };
+                let core_poq_generator = kms_adapter
+                    .core_poq_generator(zk_sk_id.clone(), Box::new(core_and_path_selectors));
+                Ok(CoreEpochInfo {
                     public: CoreEpochPublicInfo {
                         poq_core_public_inputs: CoreInputs {
-                            quota: config.epoch_core_quota(membership_info.membership.size()),
-                            zk_root: root,
+                            quota: config.epoch_core_quota(membership_size),
+                            zk_root,
                         },
-                        membership: membership_info.membership,
+                        membership,
                         epoch,
                         poq_leadership_public_inputs: LeaderInputs {
                             pol_ledger_aged: aged,
@@ -621,7 +632,7 @@ where
                     },
                     core_poq_generator,
                 }
-                .into()
+                .into())
             },
         )
     }
@@ -632,10 +643,25 @@ where
     )
     .await
     .map(|(epoch_info, remaining_epoch_stream)| {
-        let MaybeEmptyCoreEpochInfo::NonEmpty(core_epoch_info) = epoch_info else {
+        let CoreEpochStateInfo::Core(core_epoch_info) =
+            epoch_info.unwrap_or_else(|error| panic!("{error}"))
+        else {
             panic!("First retrieved epoch for Blend core startup must be available.");
         };
-        (core_epoch_info, remaining_epoch_stream.fork())
+        (
+            core_epoch_info,
+            // Refused out here, not in the stream's own `map`: that runs
+            // while `fork_stream` holds its lock, so a panic under it
+            // poisons the lock and the unwind panics again in
+            // `Forked::drop`, aborting instead of unwinding. `Forked`
+            // has released the lock by the time this runs.
+            remaining_epoch_stream.fork().map(|event| match event {
+                EpochEvent::NewEpoch(epoch) => {
+                    EpochEvent::NewEpoch(epoch.unwrap_or_else(|error| panic!("{error}")))
+                }
+                EpochEvent::TransitionPeriodExpired => EpochEvent::TransitionPeriodExpired,
+            }),
+        )
     })
     .expect("The current epoch info must be available.");
 
@@ -741,9 +767,8 @@ where
         KmsAdapter::CorePoQGenerator,
         ProofsGenerator,
         ProofsVerifier,
-    >::try_new_with_core_condition_check(
+    >::new(
         current_epoch_public_info.membership.clone(),
-        blend_config.minimum_network_size,
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: blend_config.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: blend_config.num_blend_layers,
@@ -751,11 +776,9 @@ where
             spent_core_quota,
         },
         current_epoch_poq_verification_inputs,
-        current_epoch_core_poq_generator
-            .expect("Core PoQ generator must be present at startup: the proxy service only launches CoreMode when the node is part of the core membership."),
+        current_epoch_core_poq_generator,
         current_epoch_public_info.epoch,
-    )
-    .expect("The initial membership should satisfy the core node condition");
+    );
 
     let message_scheduler = SchedulerWrapper::new_with_initial_messages(
         SchedulerEpochInfo {
@@ -858,9 +881,7 @@ async fn run_event_loop<
          ),
     mut secret_pol_info_stream: impl Stream<Item = PolEpochInfo> + Send + Unpin,
     remaining_epoch_stream: &mut (
-             impl Stream<Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>>
-             + Unpin
-             + Send
+             impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
          ),
     blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &mut Backend,
@@ -1032,9 +1053,7 @@ async fn run_current_epoch<
          ),
     secret_pol_info_stream: &mut (impl Stream<Item = PolEpochInfo> + Send + Unpin),
     remaining_epoch_stream: &mut (
-             impl Stream<Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>>
-             + Unpin
-             + Send
+             impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
          ),
     blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &mut Backend,
@@ -1122,9 +1141,7 @@ async fn run_during_transition<
          ),
     secret_pol_info_stream: &mut (impl Stream<Item = PolEpochInfo> + Send + Unpin),
     remaining_epoch_stream: &mut (
-             impl Stream<Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>>
-             + Unpin
-             + Send
+             impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
          ),
     blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &mut Backend,
@@ -1396,7 +1413,7 @@ async fn rotate<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    new_epoch_info: MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>,
+    new_epoch_info: CoreEpochStateInfo<NodeId, CorePoQGenerator>,
     components: Components<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
     latest_secret_pol_info: &mut Option<PolEpochInfo>,
     blend_config: &RunningBlendConfig<Backend::Settings>,
@@ -1604,7 +1621,7 @@ async fn retire<
     + Send
     + 'static,
     mut remaining_epoch_stream: impl Stream<
-        Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>,
+        Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>,
     > + Send
     + Unpin,
     mut backend: Backend,
@@ -1677,7 +1694,7 @@ async fn handle_epoch_event<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    new_epoch_info: MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>,
+    new_epoch_info: CoreEpochStateInfo<NodeId, CorePoQGenerator>,
     settings: &RunningBlendConfig<Backend::Settings>,
     current_cryptographic_processor: CurrentEpochCryptographicProcessor<
         NodeId,
@@ -1710,9 +1727,9 @@ where
     Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
 {
     match new_epoch_info {
-        MaybeEmptyCoreEpochInfo::NonEmpty(core_epoch_info) => {
+        CoreEpochStateInfo::Core(core_epoch_info) => {
             let CoreEpochInfo {
-                core_poq_generator: new_core_poq_generator,
+                core_poq_generator,
                 public: new_epoch_info,
             } = *core_epoch_info;
             // Once a new epoch starts, the old epoch's proving is useless: retiring
@@ -1762,28 +1779,9 @@ where
                 epoch: new_epoch_info.epoch,
             };
 
-            let Some(core_poq_generator) = new_core_poq_generator else {
-                tracing::info!(target: LOG_TARGET, "Local node is not part of new membership. Retiring from core.");
-                return HandleEpochEventOutput::Retiring {
-                    retiring_epoch: Box::new(RetiringEpoch::new(
-                        TransitioningEpoch::new(
-                            old_cryptographic_processor,
-                            current_scheduler
-                                .rotate_epoch(
-                                    new_scheduler_epoch_info,
-                                    settings.scheduler_settings(),
-                                )
-                                .1,
-                        ),
-                        old_epoch_blending_token_collector,
-                    )),
-                };
-            };
-
-            let new_processor: CurrentEpochCryptographicProcessor<_, _, _, ProofsVerifier> =
-                match CurrentEpochCryptographicProcessor::try_new_with_core_condition_check(
+            let mut new_processor: CurrentEpochCryptographicProcessor<_, _, _, ProofsVerifier> =
+                CurrentEpochCryptographicProcessor::new(
                     new_epoch_info.membership.clone(),
-                    settings.minimum_network_size,
                     EpochCryptographicProcessorSettings {
                         non_ephemeral_encryption_key: settings
                             .non_ephemeral_signing_key
@@ -1795,41 +1793,20 @@ where
                     new_poq_verification_inputs,
                     core_poq_generator,
                     new_epoch_info.epoch,
-                ) {
-                    Ok(mut new_processor) => {
-                        if current_secret_info
-                            .as_ref()
-                            .is_some_and(|secret| secret.epoch == new_epoch_info.epoch)
-                        {
-                            // We consume the stream by `take()`ing only if the epochs match.
-                            let current_secret_info = current_secret_info
-                                .take()
-                                .expect("Secret PoL info presence checked above.");
-                            new_processor.set_epoch_private(
-                                current_secret_info.winning_pol_info_stream,
-                                new_epoch_info.epoch,
-                            );
-                        }
-                        new_processor
-                    }
-                    Err(e @ (Error::LocalIsNotCoreNode | Error::NetworkIsTooSmall(_))) => {
-                        tracing::info!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
-                        return HandleEpochEventOutput::Retiring {
-                            retiring_epoch: Box::new(RetiringEpoch::new(
-                                TransitioningEpoch::new(
-                                    old_cryptographic_processor,
-                                    current_scheduler
-                                        .rotate_epoch(
-                                            new_scheduler_epoch_info,
-                                            settings.scheduler_settings(),
-                                        )
-                                        .1,
-                                ),
-                                old_epoch_blending_token_collector,
-                            )),
-                        };
-                    }
-                };
+                );
+            if current_secret_info
+                .as_ref()
+                .is_some_and(|secret| secret.epoch == new_epoch_info.epoch)
+            {
+                // We consume the stream by `take()`ing only if the epochs match.
+                let current_secret_info = current_secret_info
+                    .take()
+                    .expect("Secret PoL info presence checked above.");
+                new_processor.set_epoch_private(
+                    current_secret_info.winning_pol_info_stream,
+                    new_epoch_info.epoch,
+                );
+            }
 
             let (new_scheduler, old_scheduler) = current_scheduler
                 .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings());
@@ -1854,8 +1831,8 @@ where
                 new_recovery_checkpoint: Box::new(new_recovery_checkpoint),
             }
         }
-        MaybeEmptyCoreEpochInfo::Empty { epoch, epoch_nonce } => {
-            tracing::info!(target: LOG_TARGET, "New epoch event received, but no epoch info is available due to empty membership set.");
+        CoreEpochStateInfo::NotCore { epoch, epoch_nonce } => {
+            tracing::info!(target: LOG_TARGET, "New epoch no longer calls for core mode. Retiring.");
             let old_cryptographic_processor = current_cryptographic_processor.rotate_epoch();
             let (_, _, _, _, _, current_epoch_blending_token_collector, _, _) =
                 current_recovery_checkpoint.into_components();
