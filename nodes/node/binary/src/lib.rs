@@ -3,7 +3,6 @@ pub mod cli;
 pub mod config;
 pub mod generic_services;
 pub mod panic;
-pub mod version;
 
 pub mod global_allocators;
 

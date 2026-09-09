@@ -58,6 +58,7 @@ members = [
   "nodes/api-common",
   "nodes/node/binary",
   "nodes/node/http-client",
+  "nodes/version",
   "services/api",
   "services/blend",
   "services/chain/broadcast-service",
@@ -160,6 +161,7 @@ lb-tracing-service                 = { default-features = false, package = "logo
 lb-tx-service                      = { default-features = false, package = "logos-blockchain-tx-service", path = "./services/tx-service" }
 lb-utils                           = { default-features = false, package = "logos-blockchain-utils", path = "./utils" }
 lb-utxotree                        = { default-features = false, package = "logos-blockchain-utxotree", path = "merkle/utxotree" }
+lb-version                         = { default-features = false, package = "logos-blockchain-version", path = "./nodes/version" }
 lb-wallet                          = { default-features = false, package = "logos-blockchain-wallet", path = "./wallet" }
 lb-wallet-service                  = { default-features = false, package = "logos-blockchain-wallet-service", path = "./services/wallet" }
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }

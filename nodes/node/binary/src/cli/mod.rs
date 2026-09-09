@@ -25,35 +25,12 @@ use crate::{
         update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
         update_tracing,
     },
-    version::{HEAD_COMMIT_HASH, HEAD_TAG_NAME, PKG_VERSION, PROFILE, RUSTC_VERSION, TARGET},
 };
 
+/// The same value the `/version` endpoint serves, rendered the way
+/// `NodeVersion`'s `Display` prints it.
 fn long_version() -> String {
-    let head_commit_hash = HEAD_COMMIT_HASH;
-    let head_tag_name = HEAD_TAG_NAME;
-    let pkg_version = PKG_VERSION;
-    let target = TARGET;
-    let profile = PROFILE;
-    let rustc_version = RUSTC_VERSION;
-
-    let commit_line = match (head_commit_hash, head_tag_name) {
-        (commit_hash, tag_name) if !commit_hash.is_empty() && !tag_name.is_empty() => {
-            format!("commit:  {commit_hash} (tag {tag_name})")
-        }
-        (commit_hash, _) if !commit_hash.is_empty() => {
-            format!("commit:  {commit_hash}")
-        }
-        _ => "commit:  unknown".to_owned(),
-    };
-
-    format!(
-        "\
-{pkg_version}
-{commit_line}
-target:  {target}
-profile: {profile}
-rustc:   {rustc_version}"
-    )
+    lb_version::build_version_info().to_string()
 }
 
 #[derive(Parser, Debug)]

@@ -44,6 +44,7 @@ use lb_http_api_common::{
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
 use lb_log_targets::http_client;
+use lb_version::BuildVersionInfo;
 use log::warn;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -354,12 +355,12 @@ impl CommonHttpClient {
         self.post(request_url, declaration).await
     }
 
-    /// Get the version of the node, e.g. `0.1.2 (abcdefaa)`.
-    pub async fn get_node_version(&self, base_url: Url) -> Result<String, Error> {
+    /// Get the version and build provenance of the node.
+    pub async fn get_node_version(&self, base_url: Url) -> Result<BuildVersionInfo, Error> {
         let request_url = base_url
             .join(NODE_VERSION.trim_start_matches('/'))
             .map_err(Error::Url)?;
-        self.get::<(), String>(request_url, None).await
+        self.get::<(), BuildVersionInfo>(request_url, None).await
     }
 
     /// Get the chain ID the node runs on. Fixed by the node's deployment

@@ -71,6 +71,7 @@ use lb_tx_service::{
     MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
 };
+use lb_version::BuildVersionInfo;
 use lb_wallet_service::api::{WalletApi, WalletServiceData};
 use overwatch::{
     overwatch::handle::OverwatchHandle,
@@ -485,11 +486,11 @@ where
     get,
     path = paths::NODE_VERSION,
     responses(
-        (status = 200, description = "Version of the running node, e.g. `0.1.2 (abcdefaa)`", body = String),
+        (status = 200, description = "Version and build provenance of the running node", body = BuildVersionInfo),
     )
 )]
 pub async fn version() -> Response {
-    Json(crate::version::node_version()).into_response()
+    Json(lb_version::build_version_info()).into_response()
 }
 
 /// The chain ID is fixed by the deployment the node was built with, so it is
