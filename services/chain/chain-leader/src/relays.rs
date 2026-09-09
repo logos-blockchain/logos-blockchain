@@ -4,7 +4,11 @@ use std::fmt::Debug;
 use lb_chain_service::api::CryptarchiaServiceData;
 use lb_core::{
     header::HeaderId,
-    mantle::{traits::MantleTxWithProofs, transactions::hash::TxHash},
+    mantle::{
+        ledger::verification_mode::StandardMode,
+        traits::SignedMantleTx,
+        transactions::{hash::TxHash, states::Preverified},
+    },
 };
 use lb_storage_service::StorageService;
 use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend as TimeBackendTrait};
@@ -50,7 +54,7 @@ where
         + Send
         + Sync
         + 'static
-        + MantleTxWithProofs,
+        + SignedMantleTx<Preverified, StandardMode>,
     Mempool::Settings: Clone,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
         + Send

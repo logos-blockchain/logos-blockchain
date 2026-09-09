@@ -112,7 +112,7 @@ where
     Buffered::new(
         stream::iter(quota.values_range_from(starting_key_index))
         .map(move |key_index| {
-            let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
+            let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_chacha_rng();
             let proof_of_quota_generator = proof_of_quota_generator.clone();
 
             // Spawn eagerly here (outside `async move`) so the task starts as soon as the

@@ -56,6 +56,7 @@ mod tests {
     use lb_groth16::AdditiveGroup as _;
 
     use super::*;
+    use crate::config::ModulusShift;
 
     /// A [`RewardPoWConfig`] with the difficulty controller set to
     /// `F/P = factor/precision` and `T = target_claims_per_block`. The other
@@ -69,7 +70,7 @@ mod tests {
         RewardPoWConfig {
             reward_pool_genesis: 1_000_000_000,
             epoch_reward_genesis: 1_000_000,
-            initial_difficulty_seed: 1_000,
+            initial_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: factor,
             ema_smoothing_precision: NonZeroU64::new(precision)
                 .expect("test precision is non-zero"),
@@ -77,7 +78,6 @@ mod tests {
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
             target_claim_per_block: NonZeroU64::MIN,
-            expected_blocks_per_epoch: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
         }
     }

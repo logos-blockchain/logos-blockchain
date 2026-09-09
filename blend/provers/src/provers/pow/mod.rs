@@ -176,7 +176,7 @@ fn spawn_layer_proof(
     solution: ProofOfWorkQuotaInputs,
 ) -> impl Future<Output = BlendLayerProof> + Send {
     let task = CancellableHandle::new(spawn_blocking("logos/blend/pow-poq-blocking", move || {
-        let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
+        let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_chacha_rng();
         let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
             &PublicInputs {
                 signing_key: ephemeral_signing_key.public_key().into_inner(),

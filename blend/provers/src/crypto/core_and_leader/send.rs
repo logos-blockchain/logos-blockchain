@@ -101,6 +101,7 @@ where
         spent_core_quota: Quota,
     ) -> Self {
         tracing::trace!(
+            target: LOG_TARGET,
             "Creating epoch cryptographic processor with public info {public_info:?} and epoch {epoch:?}, resuming core key indices from {spent_core_quota}"
         );
 
@@ -240,7 +241,7 @@ where
             // Map retrieved indices to the nodes' public keys.
             .enumerate()
             .inspect(|(layer, (proof, node_index))| {
-                tracing::trace!("Encapsulating layer {layer:?} of message type {payload_type:?} for node at index {node_index:?} with proof with public key and key nullifier: ({:?}, {:?}). Local node index: {:?}", proof.ephemeral_signing_key.public_key(), hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), self.membership.local_index());
+                tracing::trace!(target: LOG_TARGET, "Encapsulating layer {layer:?} of message type {payload_type:?} for node at index {node_index:?} with proof with public key and key nullifier: ({:?}, {:?}). Local node index: {:?}", proof.ephemeral_signing_key.public_key(), hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), self.membership.local_index());
             })
             .map(|(_, (proof, node_index))| {
                 (

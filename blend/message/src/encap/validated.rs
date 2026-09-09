@@ -5,7 +5,9 @@ use lb_blend_proofs::{
     selection::inputs::VerifyInputs,
 };
 use lb_codec::BinaryEncode;
-use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, X25519PrivateKey};
+use lb_key_management_system_keys::keys::{
+    Ed25519PublicKey, UnsecuredEd25519Key, X25519PrivateKey,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -82,6 +84,11 @@ impl EncapsulatedMessageWithVerifiedSignature {
     #[must_use]
     pub const fn id(&self) -> MessageIdentifier {
         self.public_header_with_verified_signature.id()
+    }
+
+    #[must_use]
+    pub const fn signing_key(&self) -> &Ed25519PublicKey {
+        self.public_header_with_verified_signature.signing_key()
     }
 
     #[cfg(any(feature = "unsafe-test-functions", test))]
@@ -165,7 +172,7 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
                     payload_body,
                     encapsulation_layers,
                 )?,
-                UnsecuredEd25519Key::generate_with_blake_rng(),
+                UnsecuredEd25519Key::generate_with_chacha_rng(),
                 VerifiedProofOfQuota::from_bytes_unchecked(random_sized_bytes()),
             ),
             |(part, signing_key, proof_of_quota), (i, input)| {
@@ -216,6 +223,11 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
     #[must_use]
     pub const fn id(&self) -> MessageIdentifier {
         self.validated_public_header.id()
+    }
+
+    #[must_use]
+    pub const fn signing_key(&self) -> &Ed25519PublicKey {
+        self.validated_public_header.signing_key()
     }
 
     /// Decapsulates the message using the provided key.

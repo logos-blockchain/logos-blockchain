@@ -210,12 +210,12 @@ impl Deref for TestEncapsulatedMessageWithEpoch {
 }
 
 fn generate_valid_inputs(epoch: Epoch) -> Vec<EncapsulationInput> {
-    repeat_with(UnsecuredEd25519Key::generate_with_blake_rng)
+    repeat_with(UnsecuredEd25519Key::generate_with_chacha_rng)
         .take(NUM_BLEND_LAYERS as usize)
         .map(|recipient_signing_key| {
             let proofs = epoch_based_mock_blend_proof(epoch);
             EncapsulationInput::try_new(
-                UnsecuredEd25519Key::generate_with_blake_rng(),
+                UnsecuredEd25519Key::generate_with_chacha_rng(),
                 &recipient_signing_key.public_key(),
                 proofs.proof_of_quota,
                 proofs.proof_of_selection,
@@ -238,6 +238,6 @@ fn epoch_based_mock_blend_proof(epoch: Epoch) -> BlendLayerProof {
             bytes[..epoch_bytes.len()].copy_from_slice(&epoch_bytes);
             bytes
         }),
-        ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
+        ephemeral_signing_key: UnsecuredEd25519Key::generate_with_chacha_rng(),
     }
 }

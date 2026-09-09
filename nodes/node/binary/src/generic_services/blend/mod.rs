@@ -15,7 +15,8 @@ use lb_time_service::backends::NtpTimeBackend;
 use libp2p::PeerId;
 
 use crate::generic_services::{
-    CryptarchiaService, MempoolNetworkAdapter, MempoolPool, SdpService, blend::pol::PolInfoProvider,
+    ChainNetworkService, CryptarchiaService, MempoolNetworkAdapter, MempoolPool, SdpService,
+    blend::pol::PolInfoProvider,
 };
 
 pub(crate) mod pol;
@@ -26,6 +27,7 @@ pub type BlendPayloadDispatcher<RuntimeServiceId> =
     lb_blend_service::core::dispatcher::libp2p::Libp2pPayloadDispatcher<
         MempoolNetworkAdapter<RuntimeServiceId>,
         MempoolPool<RuntimeServiceId>,
+        ChainNetworkService<RuntimeServiceId>,
         RuntimeServiceId,
     >;
 
@@ -72,7 +74,7 @@ impl LeaderProofsGenerator for MockLeaderProofsGenerator {
         Some(BlendLayerProof {
             proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
             proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
-            ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
+            ephemeral_signing_key: UnsecuredEd25519Key::generate_with_chacha_rng(),
         })
     }
 }
@@ -81,6 +83,7 @@ pub type BlendEdgeService<RuntimeServiceId> = lb_blend_service::edge::BlendServi
     lb_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
     PeerId,
     RealLeaderAndPowProofsGenerator,
+    BlendPayloadDispatcher<RuntimeServiceId>,
     NtpTimeBackend,
     CryptarchiaService<RuntimeServiceId>,
     PolInfoProvider,

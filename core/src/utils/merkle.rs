@@ -38,20 +38,17 @@ mod tests {
         Note, Op,
         ledger::{Inputs, Outputs},
         ops::transfer::TransferOp,
-        transactions::mantle_tx::RawMantleTx,
+        transactions::tx_list::Ops,
     };
 
-    fn create_random_tx(seed: u32) -> RawMantleTx {
-        RawMantleTx(
-            [Op::Transfer(TransferOp::new(
-                Inputs::empty(),
-                Outputs::new([Note {
-                    value: seed.into(),
-                    pk: ZkPublicKey::zero(),
-                }]),
-            ))]
-            .into(),
-        )
+    fn create_random_tx(seed: u32) -> Ops {
+        Ops::from([Op::Transfer(TransferOp::new(
+            Inputs::empty(),
+            Outputs::new([Note {
+                value: seed.into(),
+                pk: ZkPublicKey::zero(),
+            }]),
+        ))])
     }
 
     #[test]
@@ -77,7 +74,7 @@ mod tests {
 
     #[test]
     fn test_root_empty_elements() {
-        let txs: Vec<RawMantleTx> = vec![];
+        let txs: Vec<Ops> = vec![];
         let result = calculate_transactions_root(&txs);
 
         let expected = [0u8; 32];

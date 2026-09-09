@@ -12,9 +12,14 @@ use lb_chain_service::{
 use lb_core::{
     block::Block,
     header::HeaderId,
-    mantle::{traits::MantleTxWithProofs, transactions::hash::TxHash},
+    mantle::{
+        ledger::verification_mode::StandardMode,
+        traits::SignedMantleTx,
+        transactions::{hash::TxHash, states::Preverified},
+    },
 };
 use lb_cryptarchia_sync::GetTipResponse;
+use lb_log_targets::chain;
 use lb_tx_service::backend::RecoverableMempool;
 use overwatch::DynError;
 use tracing::{debug, error, info, trace, warn};
@@ -23,6 +28,8 @@ use crate::{
     Error as ChainError, IbdConfig, OrphanConfig, mempool::adapter::MempoolAdapter,
     network::NetworkAdapter, sync::orphan_handler::OrphanBlocksDownloader,
 };
+
+const LOG_TARGET: &str = chain::network::bootstrap::IBD;
 
 pub trait IbdBlockProcessor<B> {
     async fn info(&self) -> Result<CryptarchiaInfo, Error>;
@@ -33,7 +40,7 @@ pub trait IbdBlockProcessor<B> {
 pub struct ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
     RuntimeServiceId: Send + Sync,
@@ -46,7 +53,7 @@ impl<Cryptarchia, Mempool, RuntimeServiceId> IbdBlockProcessor<Block<Cryptarchia
     for ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
     RuntimeServiceId: Send + Sync,
@@ -127,11 +134,12 @@ where
         orphan_config: &OrphanConfig,
     ) -> Result<BlockProcessor, Error> {
         if config.peers.is_empty() {
-            warn!("Skipping IBD as no peers are configured");
+            warn!(target: LOG_TARGET, "Skipping IBD as no peers are configured");
             return Ok(self.block_processor);
         }
 
         info!(
+            target: LOG_TARGET,
             "Starting Initial Block Download with {} peers",
             config.peers.len()
         );
@@ -168,7 +176,7 @@ where
         loop {
             let unsynced_tips = self.collect_unsynced_tips(&config).await?;
             if unsynced_tips.is_empty() {
-                info!("IBD complete: all configured peer tips are present in the local tree");
+                info!(target: LOG_TARGET, "IBD complete: all configured peer tips are present in the local tree");
                 return Ok(());
             }
             let info = self.block_processor.info().await?;
@@ -187,7 +195,7 @@ where
         &mut self,
         downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
     ) {
-        debug!("draining downloads");
+        debug!(target: LOG_TARGET, "draining downloads");
 
         // Use `timeout` because `downloader.next()` can stall forever if a
         // download fails and leaves the queue empty.
@@ -202,18 +210,18 @@ where
                     Err(Error::BlockProcessing(ChainError::Cryptarchia(
                         lb_chain_service::api::ApiError::AlreadyApplied(header_id),
                     ))) => {
-                        debug!(?header_id, "block already applied; continuing");
+                        debug!(target: LOG_TARGET, ?header_id, "block already applied; continuing");
                     }
                     Err(err) => {
-                        warn!(?err, "failed to process block; cancelling the download");
+                        warn!(target: LOG_TARGET, ?err, "failed to process block; cancelling the download");
                         downloader.cancel_active_download();
                     }
                 },
                 Ok(None) => {
-                    debug!("orphan downloader returned None; re-checking should_poll");
+                    debug!(target: LOG_TARGET, "orphan downloader returned None; re-checking should_poll");
                 }
                 Err(_) => {
-                    trace!("drain timed out; re-checking should_poll");
+                    trace!(target: LOG_TARGET, "drain timed out; re-checking should_poll");
                 }
             }
         }
@@ -226,11 +234,13 @@ where
         &self,
         config: &IbdConfig<NetAdapter::PeerId>,
     ) -> Result<HashSet<HeaderId>, Error> {
-        debug!("collecting unsynced tips from {} peers", config.peers.len());
+        debug!(target: LOG_TARGET, "collecting unsynced tips from {} peers", config.peers.len());
 
         let tips = fetch_tips_with_retry(&self.network, config)
             .await
-            .inspect_err(|_| error!("no configured peer returned a tip this round"))?;
+            .inspect_err(
+                |_| error!(target: LOG_TARGET, "no configured peer returned a tip this round"),
+            )?;
 
         Ok(try_join_all(tips.into_iter().map(async |tip| {
             self.block_processor
@@ -272,7 +282,7 @@ where
                 .with_max_times(config.tips_fetch_max_attempts)
                 .with_jitter(),
         )
-        .notify(|_, delay| debug!("tip fetch returned no tips; retrying in {delay:?}"))
+        .notify(|_, delay| debug!(target: LOG_TARGET, "tip fetch returned no tips; retrying in {delay:?}"))
         .await
 }
 
@@ -296,7 +306,7 @@ where
             Err(e) => Err(e),
         };
         result
-            .inspect_err(|e| warn!("failed to fetch tip from {peer:?}: {e}"))
+            .inspect_err(|e| warn!(target: LOG_TARGET, "failed to fetch tip from {peer:?}: {e}"))
             .ok()
     }))
     .await
@@ -321,9 +331,9 @@ fn enqueue_tips<NetAdapter, RuntimeServiceId>(
 {
     for tip in tips {
         if let Err(e) = downloader.enqueue_orphan(tip, None, info.tip, info.lib) {
-            debug!("failed to enqueue tip {tip:?}: {e}");
+            debug!(target: LOG_TARGET, "failed to enqueue tip {tip:?}: {e}");
         } else {
-            debug!("enqueued tip {tip:?} for download");
+            debug!(target: LOG_TARGET, "enqueued tip {tip:?} for download");
         }
     }
 }
@@ -947,14 +957,13 @@ mod tests {
         RewardPoWConfig {
             reward_pool_genesis: 1_000_000_000,
             epoch_reward_genesis: 1_000_000,
-            initial_difficulty_seed: 1_000,
+            initial_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
             target_claims_per_block: 100,
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
             target_claim_per_block: NonZeroU64::MIN,
-            expected_blocks_per_epoch: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).unwrap(),
         }
     }

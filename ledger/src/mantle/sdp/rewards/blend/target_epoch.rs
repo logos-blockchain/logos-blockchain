@@ -109,6 +109,7 @@ where
         .map_err(|_| Error::InvalidProof)?;
 
         tracing::trace!(
+            target: LOG_TARGET,
             "Verifying activity proof {:?} with epoch randomness: {:?}",
             verified_proof.token().signing_key(),
             current_epoch_state.epoch_randomness()

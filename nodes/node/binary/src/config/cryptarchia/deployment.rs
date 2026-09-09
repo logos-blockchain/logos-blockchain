@@ -4,10 +4,12 @@ use std::collections::HashMap;
 use lb_chain_service::Epoch;
 use lb_core::{
     block::genesis::GenesisBlock,
+    mantle::{traits::GenesisTx as _, transactions::genesis_tx::ChainId},
     sdp::{InactivityPeriod, MinStake, ServiceType},
 };
 use lb_cryptarchia_engine::{
-    Config as ConsensusConfig, average_slots_for_blocks, base_period_length, time::epoch_length,
+    Config as ConsensusConfig, average_slots_for_blocks, base_period_length,
+    expected_blocks_per_epoch, time::epoch_length,
 };
 use lb_groth16::ModulusShift;
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -31,6 +33,15 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// The chain this deployment targets, read off the genesis inscription.
+    #[must_use]
+    pub fn chain_id(&self) -> ChainId {
+        self.genesis_block
+            .genesis_tx()
+            .cryptarchia_parameter()
+            .chain_id
+    }
+
     #[must_use]
     pub const fn slots_per_epoch(&self) -> u64 {
         epoch_length(
@@ -48,6 +59,14 @@ impl Settings {
             self.slot_activation_coeff,
         )
         .get()
+    }
+
+    /// `N_b`: the number of blocks an epoch is expected to produce, derived
+    /// from the schedule rather than configured. The `PoW` payout rate is
+    /// denominated in it — see `lb_ledger::config::Config`.
+    #[must_use]
+    pub const fn expected_blocks_per_epoch(&self) -> NonZeroU64 {
+        expected_blocks_per_epoch(self.slots_per_epoch(), self.slot_activation_coeff)
     }
 
     #[must_use]

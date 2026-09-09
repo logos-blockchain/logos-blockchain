@@ -13,7 +13,8 @@ use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
 use crate::{
-    ChainServiceInfo, ConsensusMsg, CryptarchiaInfo, LibUpdate, ProcessedBlockEvent, Query,
+    ChainServiceInfo, ConsensusMsg, CryptarchiaInfo, EpochStateQueryResult, LibUpdate,
+    ProcessedBlockEvent, Query,
 };
 
 pub trait CryptarchiaServiceData:
@@ -202,6 +203,34 @@ where
         self.relay
             .send(
                 Query::GetEpochState {
+                    slot,
+                    reply_channel,
+                }
+                .into(),
+            )
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending GetEpochState"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetEpochState resp"))
+        })
+    }
+
+    /// Get the epoch state and the exact chain tip/LIB used to synthesize it.
+    ///
+    /// Requesting this richer result also registers its source for stale-source
+    /// correlation if that tip later leaves the canonical chain.
+    pub async fn get_epoch_state_with_source(
+        &self,
+        slot: Slot,
+    ) -> Result<Result<EpochStateQueryResult, crate::Error>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(
+                Query::GetEpochStateWithSource {
                     slot,
                     reply_channel,
                 }

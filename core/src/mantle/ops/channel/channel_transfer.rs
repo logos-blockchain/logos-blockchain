@@ -11,13 +11,17 @@ use crate::{
         ledger::{
             ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation, Utxo,
             Utxos, VerifiableOperation,
-            verification_mode::{self, VerificationMode},
+            verification_mode::{StandardMode, VerificationMode},
         },
         ops::{
-            OpId, SignedOp,
+            OpId, SignedOperation,
             channel::{ChannelId, verification::verify_channel_multi_sig},
         },
-        transactions::{OperationVerificationHelper, hash::TxHashView, states::VerificationState},
+        transactions::{
+            OperationVerificationHelper,
+            hash::TxHashView,
+            states::{Preverified, Unverified, VerificationState, Verified},
+        },
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::service_notes::ServiceNotes,
@@ -62,42 +66,47 @@ impl ProvableOperation for ChannelTransferOp {
     // `SignedOperationExecutionGas::gas_multiplier` below reads this proof's
     // signature count. If this changes, update that too.
     type Proof = ChannelMultiSigProof;
+    const CODE: u8 = 0x14;
 }
 
 impl OperationGas<MainnetGasProfile> for ChannelTransferOp {
     const GAS_COST: Gas = Gas::new(56);
 }
 
-impl PreverifiableOperation<verification_mode::StandardMode> for ChannelTransferOp {
+impl PreverifiableOperation<StandardMode>
+    for SignedOperation<ChannelTransferOp, Unverified, StandardMode>
+{
     type Context<'a> = ();
     type Error = Error;
 
-    fn preverify(
-        &self,
-        _proof: &Self::Proof,
-        _context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error> {
+    fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        let operation = self.operation();
+
         // Ensure the inputs is non-empty
-        self.inputs.preverify()?;
+        operation.inputs.preverify()?;
 
         // Check that the outputs are valid
-        self.outputs.validate()?;
+        operation.outputs.validate()?;
 
         Ok(())
     }
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp {
+impl VerifiableOperation<StandardMode>
+    for SignedOperation<ChannelTransferOp, Preverified, StandardMode>
+{
     type Context<'a> = ChannelTransferValidationContext<'a>;
     type Error = Error;
 
     fn verify(
         &self,
-        proof: &Self::Proof,
         context: &Self::Context<'_>,
     ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+        let operation = self.operation();
+        let proof = self.proof();
+
         verify_channel_multi_sig(
-            &self.channel_id,
+            &operation.channel_id,
             proof,
             context.tx_hash_view.as_bytes(),
             context.helper,
@@ -110,22 +119,22 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp 
             context
                 .channels
                 .channels
-                .get(&self.channel_id)
+                .get(&operation.channel_id)
                 .ok_or(Error::ChannelNotFound {
-                    channel_id: self.channel_id,
+                    channel_id: operation.channel_id,
                 })?;
 
         // Check that the inputs are valid and belong to the channel
-        self.inputs.validate_in_channel(
+        operation.inputs.validate_in_channel(
             context.service_notes,
             context.channels,
-            &self.channel_id,
+            &operation.channel_id,
             context.utxos,
         )?;
 
         // Check the balance is preserved
-        let input_amount = self.inputs.amount(context.utxos)?;
-        let output_amount = self.outputs.amount()?;
+        let input_amount = operation.inputs.amount(context.utxos)?;
+        let output_amount = operation.outputs.amount()?;
         if input_amount != output_amount {
             return Err(Error::UnbalancedTransfer);
         }
@@ -134,7 +143,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp 
         let signatures = proof.signatures();
         if signatures.len() != channel.transfer_threshold as usize {
             return Err(Error::ThresholdUnmet {
-                channel_id: self.channel_id,
+                channel_id: operation.channel_id,
                 threshold: channel.transfer_threshold,
                 actual: signatures.len(),
             });
@@ -157,7 +166,9 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp 
     }
 }
 
-impl ExecutableOperation for ChannelTransferOp {
+impl<Mode: VerificationMode> ExecutableOperation
+    for SignedOperation<ChannelTransferOp, Verified, Mode>
+{
     type Context<'a> = ChannelTransferExecutionContext;
     type Error = Error;
 
@@ -165,20 +176,22 @@ impl ExecutableOperation for ChannelTransferOp {
         &self,
         mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
+        let operation = self.operation();
+
         // Remove the inputs from the ledger and from the channel.
-        context.utxos = self.inputs.execute(context.utxos)?;
-        for note_id in self.inputs.iter() {
+        context.utxos = operation.inputs.execute(context.utxos)?;
+        for note_id in operation.inputs.iter() {
             context.channels = context
                 .channels
-                .unregister_channel_note(note_id, &self.channel_id)?;
+                .unregister_channel_note(note_id, &operation.channel_id)?;
         }
 
         // Add the outputs to the ledger and register them as channel notes.
-        context.utxos = self.outputs.execute(context.utxos, self);
-        for utxo in self.utxos() {
+        context.utxos = operation.outputs.execute(context.utxos, operation);
+        for utxo in operation.utxos() {
             context.channels = context
                 .channels
-                .register_channel_note(&utxo.id(), &self.channel_id)?;
+                .register_channel_note(&utxo.id(), &operation.channel_id)?;
         }
 
         Ok((context, Vec::new()))
@@ -186,7 +199,7 @@ impl ExecutableOperation for ChannelTransferOp {
 }
 
 impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<ChannelTransferOp, State, Mode>
+    for SignedOperation<ChannelTransferOp, State, Mode>
 {
     fn gas_multiplier(&self) -> Value {
         let signature_count = self.proof().signatures().len();
@@ -210,9 +223,10 @@ mod test {
             outputs: Outputs::new([Note::new(100, ZkPublicKey::zero())]),
         };
         let proof = ChannelMultiSigProof::try_new([].into()).unwrap();
+        let signed_operation = SignedOperation::new(channel_transfer, proof);
 
         assert_eq!(
-            channel_transfer.preverify(&proof, &()),
+            signed_operation.preverify(&()),
             Err(Error::Inputs(InputsError::EmptyInputs))
         );
     }
@@ -227,9 +241,10 @@ mod test {
             outputs: Outputs::empty(),
         };
         let proof = ChannelMultiSigProof::try_new([].into()).unwrap();
+        let signed_operation = SignedOperation::new(channel_transfer, proof);
 
         assert_eq!(
-            channel_transfer.preverify(&proof, &()),
+            signed_operation.preverify(&()),
             Err(Error::Inputs(InputsError::EmptyInputs))
         );
     }

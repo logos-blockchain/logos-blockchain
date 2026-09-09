@@ -15,6 +15,7 @@ use lb_core::{
     mantle::{Utxo, Value},
     sdp::{ActivityMetadata, ProviderId, ServiceParameters},
 };
+use lb_log_targets::ledger;
 use lb_utils::math::PositiveF64;
 use tracing::debug;
 
@@ -29,7 +30,7 @@ use crate::{
     },
 };
 
-const LOG_TARGET: &str = "ledger::mantle::sdp::rewards::blend";
+const LOG_TARGET: &str = ledger::mantle::sdp::rewards::BLEND;
 
 /// Tracks Blend rewards based on activity proofs submitted by providers.
 /// Activity proofs for the epoch `E-1` must be submitted during epoch `E`.

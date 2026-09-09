@@ -2,13 +2,15 @@ use std::collections::HashMap;
 
 use lb_common_http_client::Error as HttpClientError;
 use lb_core::mantle::{
-    Op, OpProof, SignedMantleTx, TxHash, Utxo,
+    Op, OpProof, SignedOps, TxHash, Utxo,
     gas::MainnetGasProfile,
+    ledger::verification_mode::StandardMode,
     ops::channel::{ChannelId, ChannelKeyIndex},
     traits::Hashable as _,
     transactions::{
-        GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext, OpsProofs,
+        GasPrices, MantleTxBuilder, OpProofs,
         states::Unverified,
+        tx_list::ops::{OpsContext, OpsGasContext},
     },
 };
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount};
@@ -44,7 +46,7 @@ enum DirectWalletSourceError {
 /// genesis gas prices.
 #[expect(
     clippy::implicit_hasher,
-    reason = "The thresholds map is forwarded to MantleTxGasContext, which requires the default hasher."
+    reason = "The thresholds map is forwarded to OpsGasContext, which requires the default hasher."
 )]
 pub async fn funded_signed_tx(
     node: &NodeHttpClient,
@@ -53,18 +55,14 @@ pub async fn funded_signed_tx(
     transfer_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     op: Op,
     op_proof: impl FnOnce(TxHash) -> OpProof,
-) -> (SignedMantleTx<Unverified>, u64) {
+) -> (SignedOps<Unverified, StandardMode>, u64) {
     let funding_source =
         current_wallet_funding_source(node, genesis_utxos, funding_account.clone())
             .await
             .expect("funding wallet source should sync from chain");
 
-    let tx_context = MantleTxContext {
-        gas_context: MantleTxGasContext::new(
-            transfer_thresholds,
-            HashMap::new(),
-            GasPrices::default(),
-        ),
+    let tx_context = OpsContext {
+        gas_context: OpsGasContext::new(transfer_thresholds, HashMap::new(), GasPrices::default()),
         leader_reward_amount: 0,
     };
     let tx_builder = MantleTxBuilder::new()
@@ -86,7 +84,9 @@ pub async fn funded_signed_tx(
         transfer_proofs_for_funded_wallet_tx(&mantle_tx, &funding_account.secret_key)
             .expect("transfer proofs should build"),
     );
-    let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::try_from(proofs).unwrap());
+    let op_proofs = OpProofs::try_from(proofs).unwrap();
+    let signed_tx =
+        SignedOps::from_parts(mantle_tx, op_proofs).expect("op proofs should match the ops");
 
     (signed_tx, fee)
 }

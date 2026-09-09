@@ -28,9 +28,11 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
+        TxGasCalculator,
         gas::MainnetGasProfile,
-        traits::{MantleTxWithProofs, PreverifiedMantleTx},
-        transactions::GasPrices,
+        ledger::verification_mode::StandardMode,
+        traits::{PreverifiedMantleTransaction, SignedMantleTx},
+        transactions::{GasPrices, states::Preverified},
     },
     sdp::{Declaration, DeclarationId},
 };
@@ -38,6 +40,7 @@ use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
+use lb_log_targets::chain;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
     overwatch::{RecoveryData, RecoveryOperator},
@@ -83,7 +86,7 @@ use crate::{
 // Limit the number of blocks returned by GetHeaders
 const SERVICE_ID: &str = "Chain";
 
-pub(crate) const LOG_TARGET: &str = "chain::service";
+pub(crate) const LOG_TARGET: &str = chain::service::ROOT;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -196,6 +199,12 @@ pub enum Query {
         slot: Slot,
         reply_channel: oneshot::Sender<Result<EpochState, Error>>,
     },
+    /// Returns the epoch state and registers the exact chain source for stale
+    /// source correlation when that source later leaves the canonical chain.
+    GetEpochStateWithSource {
+        slot: Slot,
+        reply_channel: oneshot::Sender<Result<EpochStateQueryResult, Error>>,
+    },
     GetEpochConfig {
         reply_channel: oneshot::Sender<(
             lb_cryptarchia_engine::EpochConfig,
@@ -242,6 +251,23 @@ pub struct CryptarchiaInfo {
     pub slot: Slot,
     pub height: u64,
     pub state: State,
+}
+
+/// The epoch state returned by a chain query together with the exact
+/// Cryptarchia view from which it was synthesized.
+///
+/// Keeping the source metadata beside the state prevents diagnostic callers
+/// from issuing a second, racy `Info` query after receiving the epoch state.
+#[derive(Debug, Clone)]
+pub struct EpochStateQueryResult {
+    pub requested_slot: Slot,
+    pub requested_epoch: Epoch,
+    pub epoch_state: EpochState,
+    pub source_tip_id: HeaderId,
+    pub source_tip_slot: Slot,
+    pub source_tip_height: u64,
+    pub source_lib_id: HeaderId,
+    pub source_lib_slot: Slot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -301,6 +327,13 @@ pub struct Cryptarchia {
     pub ledger: lb_ledger::Ledger<HeaderId>,
     pub consensus: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
     pub genesis_id: HeaderId,
+}
+
+pub(crate) struct TryApplyBlockOutcome {
+    pub(crate) pruned_blocks: PrunedBlocks<HeaderId>,
+    pub(crate) reorged_blocks: ReorgedBlocks<HeaderId>,
+    pub(crate) newly_canonical_blocks: Vec<HeaderId>,
+    pub(crate) events: Events,
 }
 
 impl Cryptarchia {
@@ -370,13 +403,33 @@ impl Cryptarchia {
     }
 
     /// Try to apply a block to the chain.
-    fn try_apply_block<'tx, Tx>(
+    #[cfg(test)]
+    fn try_apply_block<Tx>(
         &mut self,
-        block: &Block<Tx>,
+        block: Block<Tx>,
         current_slot: Slot,
     ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>, Events), Error>
     where
-        Tx: PreverifiedMantleTx + 'tx + MantleTxWithProofs<Context = GasPrices>,
+        Tx: PreverifiedMantleTransaction + TxGasCalculator<Context = GasPrices> + Clone,
+    {
+        let outcome = self.try_apply_block_with_state_retention(block, current_slot)?;
+        self.prune_ledger_states(outcome.pruned_blocks.all());
+        Ok((
+            outcome.pruned_blocks,
+            outcome.reorged_blocks,
+            outcome.events,
+        ))
+    }
+
+    /// Apply a block while retaining pruned ledger states until the caller has
+    /// observed any canonical transition represented by the result.
+    pub(crate) fn try_apply_block_with_state_retention<Tx>(
+        &mut self,
+        block: Block<Tx>,
+        current_slot: Slot,
+    ) -> Result<TryApplyBlockOutcome, Error>
+    where
+        Tx: PreverifiedMantleTransaction + TxGasCalculator<Context = GasPrices> + Clone,
     {
         let header = block.header();
         let id = header.id();
@@ -396,7 +449,12 @@ impl Cryptarchia {
         }
 
         // A block is valid only if every uncle it carries is valid.
-        self.verify_uncles(block)?;
+        self.verify_uncles(&block)?;
+
+        let block_uncle_headers_slots = block.uncle_headers().slots();
+        let leader_proof = header.leader_proof().clone();
+
+        let transactions = block.into_transactions();
 
         // Apply the block to the ledger, and batch-verify ZK proofs.
         // This ledger update is not finalized yet, and will be committed only after
@@ -407,9 +465,9 @@ impl Cryptarchia {
                 id,
                 parent,
                 slot,
-                header.leader_proof(),
-                &block.uncle_headers().slots(),
-                block.transactions_iter(),
+                &leader_proof,
+                &block_uncle_headers_slots,
+                transactions.into_iter(),
             )
             .map_err(|err| match err {
                 lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
@@ -420,9 +478,9 @@ impl Cryptarchia {
             })?
             .verify_batch_proofs()?;
 
-        let (pruned_blocks, reorged_blocks) = self
+        let outcome = self
             .consensus
-            .receive_block(id, parent, slot, block.uncle_headers().slots())
+            .receive_block_with_canonical_change(id, parent, slot, block_uncle_headers_slots)
             .map_err(|err| match err {
                 lb_cryptarchia_engine::Error::ParentMissing(parent) => Error::ParentMissing {
                     parent,
@@ -433,18 +491,40 @@ impl Cryptarchia {
 
         let events = self.ledger.commit_update(update);
 
-        // Prune the ledger states of all the pruned blocks.
-        self.prune_ledger_states(pruned_blocks.all());
-
         metrics::emit_consensus_metrics(&self.consensus, &self.ledger);
         metrics::emit_block_imported_metric();
-        Ok((pruned_blocks, reorged_blocks, events))
+        Ok(TryApplyBlockOutcome {
+            pruned_blocks: outcome.pruned_blocks,
+            reorged_blocks: outcome.reorged_blocks,
+            newly_canonical_blocks: outcome.newly_canonical_blocks,
+            events,
+        })
     }
 
     fn epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, Error> {
-        let tip = self.tip();
-        let state = self.ledger.state(&tip).expect("no state for tip");
-        Ok(state.epoch_state_for_slot(slot, self.ledger.config())?)
+        Ok(self.epoch_state_for_slot_with_source(slot)?.epoch_state)
+    }
+
+    fn epoch_state_for_slot_with_source(&self, slot: Slot) -> Result<EpochStateQueryResult, Error> {
+        let tip = self.tip_branch();
+        let lib = self.lib_branch();
+        let state = self.ledger.state(&tip.id()).expect("no state for tip");
+        let config = self.ledger.config();
+        let epoch_state = state.epoch_state_for_slot(slot, config)?;
+        let requested_epoch = config
+            .epoch_config
+            .epoch(slot, config.consensus_config.base_period_length());
+
+        Ok(EpochStateQueryResult {
+            requested_slot: slot,
+            requested_epoch,
+            epoch_state,
+            source_tip_id: tip.id(),
+            source_tip_slot: tip.slot(),
+            source_tip_height: tip.length(),
+            source_lib_id: lib.id(),
+            source_lib_slot: lib.slot(),
+        })
     }
 
     /// Remove the ledger states associated with blocks that have been pruned by
@@ -452,7 +532,10 @@ impl Cryptarchia {
     ///
     /// Details on which blocks are pruned can be found in the
     /// [`lb_cryptarchia_engine::Cryptarchia::receive_block`].
-    fn prune_ledger_states<'a>(&'a mut self, blocks: impl Iterator<Item = &'a HeaderId>) {
+    pub(crate) fn prune_ledger_states<'a>(
+        &'a mut self,
+        blocks: impl Iterator<Item = &'a HeaderId>,
+    ) {
         let mut pruned_states_count = 0usize;
         for block in blocks {
             if self.ledger.prune_state_at(block) {
@@ -537,7 +620,7 @@ impl From<GenesisBlock> for StartingState {
 #[expect(clippy::allow_attributes_without_reason)]
 pub struct CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
-    Tx: PreverifiedMantleTx + Clone + Eq + Debug,
+    Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     TimeBackend: lb_time_service::backends::TimeBackend,
@@ -551,7 +634,7 @@ where
 impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceData
     for CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
-    Tx: PreverifiedMantleTx + Clone + Eq + Debug,
+    Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     TimeBackend: lb_time_service::backends::TimeBackend,
@@ -568,8 +651,9 @@ where
 impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
     for CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
-    Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+    Tx: PreverifiedMantleTransaction
+        + SignedMantleTx<Preverified, StandardMode>
+        + TxGasCalculator<Context = GasPrices>
         + Debug
         + Clone
         + Eq
@@ -736,7 +820,7 @@ where
         // 1. Probably related to too many generics.
         // 2. It seems `span` requires a `const` string literal.
         run_service
-            .instrument(span!(Level::TRACE, SERVICE_ID))
+            .instrument(span!(target: LOG_TARGET, Level::TRACE, SERVICE_ID))
             .await;
 
         Ok(())
@@ -746,8 +830,9 @@ where
 impl<Tx, Storage, TimeBackend, RuntimeServiceId>
     CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
-    Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+    Tx: PreverifiedMantleTransaction
+        + SignedMantleTx<Preverified, StandardMode>
+        + TxGasCalculator<Context = GasPrices>
         + Debug
         + Clone
         + Eq
@@ -767,6 +852,7 @@ where
     fn notify_service_ready(&self) {
         self.service_resources_handle.status_updater.notify_ready();
         info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
@@ -924,7 +1010,7 @@ where
             }
         };
         if let Err(e) = new_block_subscription_sender.send(init_event) {
-            debug!("No new-block subscribers to notify: {e}");
+            debug!(target: LOG_TARGET, "No new-block subscribers to notify: {e}");
         }
 
         // Phase 1: Collect and load blocks in (LIB, tip].
@@ -961,9 +1047,9 @@ where
             )
             .await
             {
-                Ok((new_pruned_blocks, _)) => {
+                Ok(outcome) => {
                     debug!(target: LOG_TARGET, "{}/{} blocks applied during initialization", i + 1, n_blocks);
-                    pruned_blocks.extend(&new_pruned_blocks);
+                    pruned_blocks.extend(&outcome.pruned_blocks);
                 }
                 Err(e) => {
                     error!(target: LOG_TARGET, "Error processing block: {:?}", e);

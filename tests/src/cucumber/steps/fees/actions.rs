@@ -9,10 +9,11 @@ use lb_common_http_client::ApiBlock;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
+        SignedOps,
         gas::{GasCost, MainnetGasProfile, TxGasCalculator as _},
+        ledger::verification_mode::StandardMode,
         traits::Hashable as _,
-        transactions::{GasPrices, builder::MantleTxBuilder, states::Preverified},
+        transactions::{GasPrices, OpProofs, builder::MantleTxBuilder, states::Preverified},
     },
 };
 use lb_http_api_common::{
@@ -158,7 +159,7 @@ async fn fund_self_transfer(
 fn assemble_funded_transaction(
     response: WalletFundResponseBody,
     step: &Step,
-) -> Result<SignedMantleTx<Preverified>, StepError> {
+) -> Result<SignedOps<Preverified, StandardMode>, StepError> {
     let transfer_proof = response
         .transfer_proof
         .ok_or_else(|| StepError::LogicalError {
@@ -167,7 +168,14 @@ fn assemble_funded_transaction(
                 step.value
             ),
         })?;
-    SignedMantleTx::new(response.funded_tx, [transfer_proof].into())
+    let op_proofs = OpProofs::from([transfer_proof]);
+    SignedOps::from_parts(response.funded_tx, op_proofs)
+        .map_err(|error| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: percentage-funded self-transfer failed to assemble: {error}",
+                step.value
+            ),
+        })?
         .preverify()
         .map_err(|source| StepError::StepFail {
             message: format!(
@@ -180,7 +188,7 @@ fn assemble_funded_transaction(
 fn record_prepared_priority_fee(
     world: &CucumberWorld,
     step: &Step,
-    signed_tx: &SignedMantleTx<Preverified>,
+    signed_tx: &SignedOps<Preverified, StandardMode>,
     prices: &GasPrices,
     priority_fee_percent: u64,
 ) -> Result<PreparedPriorityFee, StepError> {

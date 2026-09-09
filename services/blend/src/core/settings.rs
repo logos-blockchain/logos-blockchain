@@ -8,7 +8,7 @@ use lb_utils::math::PositiveF64;
 use rayon::ThreadPool;
 use serde::{Deserialize, Serialize};
 
-use crate::settings::TimingSettings;
+use crate::settings::{TimingSettings, max_data_message_delay_in_rounds};
 
 #[derive(Clone, Debug)]
 pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
@@ -24,6 +24,7 @@ pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
     /// `R_c`: replication factor for data messages.
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
+    pub abstain_on_failure: bool,
 }
 
 /// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
@@ -40,6 +41,7 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
     pub pow_mining_pool: Arc<ThreadPool>,
+    pub abstain_on_failure: bool,
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {
@@ -83,6 +85,14 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
             rounds_per_epoch: self.time.rounds_per_epoch,
             num_blend_layers: self.num_blend_layers,
         }
+    }
+
+    #[must_use]
+    pub const fn max_data_message_delay_in_rounds(&self) -> NonZeroU64 {
+        max_data_message_delay_in_rounds(
+            self.num_blend_layers,
+            self.scheduler.delayer.maximum_release_delay_in_rounds,
+        )
     }
 }
 

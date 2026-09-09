@@ -7,8 +7,10 @@ use lb_core::{
     block::Block,
     events::Events,
     mantle::{
-        traits::{MantleTxWithProofs, PreverifiedMantleTx},
-        transactions::GasPrices,
+        TxGasCalculator,
+        ledger::verification_mode::StandardMode,
+        traits::{PreverifiedMantleTransaction, SignedMantleTx},
+        transactions::{GasPrices, states::Preverified},
     },
 };
 use lb_cryptarchia_sync::{GetTipResponse, ProviderResponse};
@@ -35,8 +37,9 @@ impl Debug for Following {
 
 impl<Tx, Storage, RuntimeServiceId> Service<Following, Tx, Storage, RuntimeServiceId>
 where
-    Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+    Tx: PreverifiedMantleTransaction
+        + SignedMantleTx<Preverified, StandardMode>
+        + TxGasCalculator<Context = GasPrices>
         + Debug
         + Clone
         + Eq

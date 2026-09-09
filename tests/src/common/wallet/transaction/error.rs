@@ -28,4 +28,6 @@ pub enum WalletTransactionError {
     FeeAccounting,
     #[error(transparent)]
     BoundedError(#[from] BoundedError),
+    #[error("Mantle transaction error: {0}")]
+    SignedOpsError(#[from] lb_core::mantle::transactions::tx_list::signed_ops::Error),
 }

@@ -8,8 +8,10 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        traits::{GenesisTx as _, MantleTxWithProofs, PreverifiedMantleTx},
-        transactions::GasPrices,
+        TxGasCalculator,
+        ledger::verification_mode::StandardMode,
+        traits::{GenesisTx as _, PreverifiedMantleTransaction, SignedMantleTx},
+        transactions::{GasPrices, states::Preverified},
     },
 };
 use lb_cryptarchia_engine::Slot;
@@ -53,8 +55,9 @@ impl Debug for AwaitingGenesisTime {
 
 impl<Tx, Storage, RuntimeServiceId> Service<AwaitingGenesisTime, Tx, Storage, RuntimeServiceId>
 where
-    Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+    Tx: PreverifiedMantleTransaction
+        + SignedMantleTx<Preverified, StandardMode>
+        + TxGasCalculator<Context = GasPrices>
         + Debug
         + Clone
         + Eq
@@ -105,6 +108,7 @@ where
             slot_timer,
             state_recording_timer,
             prolonged_bootstrap_period,
+            epoch_state_query_sources: crate::service::EpochStateQuerySourceTracker::default(),
         }
     }
 

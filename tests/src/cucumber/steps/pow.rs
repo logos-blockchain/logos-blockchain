@@ -1,7 +1,7 @@
 use std::{collections::HashSet, time::Duration};
 
 use cucumber::{gherkin::Step, then, when};
-use lb_core::mantle::{Op, traits::Hashable as _, transactions::hash::TxHash};
+use lb_core::mantle::{OpRef, traits::Hashable as _, transactions::hash::TxHash};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_testing_framework::NodeHttpClient;
 use tokio::time::{Instant, sleep};
@@ -127,23 +127,45 @@ async fn step_claim_pow_rewards(
             warn!(target: TARGET, "Step `{}` error: {e}", step.value);
         })?;
 
+    // Nodes carry no claim address in their configuration, so the request
+    // names the mining wallet recorded when the node was started.
+    let claim_address = world
+        .mining_claim_addresses
+        .get(&node_name)
+        .copied()
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("no mining claim address recorded for node `{node_name}`"),
+        })?;
+
     // The node only produces a claim transaction once it has mined at least one
     // winning ticket, so poll `claim` until it submits one (or we time out).
     let deadline = Duration::from_secs(timeout_seconds);
     let started = Instant::now();
+    // A claim can come back empty (nothing mined yet) or fail outright (the
+    // node could not build or publish the transaction). Only the first is
+    // worth waiting out, so the last error is carried to the timeout: a node
+    // that keeps refusing to claim should say why, not report "no rewards".
+    let mut last_error: Option<String> = None;
     let tx_hash = loop {
-        match node.claim_pow_rewards().await {
+        match node.claim_pow_rewards(Some(claim_address)).await {
             Ok(Some(tx_hash)) => break tx_hash,
             Ok(None) => {}
             Err(e) => {
                 warn!(target: TARGET, "PoW claim attempt on node `{node_name}` failed: {e}");
+                last_error = Some(e.to_string());
             }
         }
 
         if started.elapsed() >= deadline {
             return Err(StepError::Timeout {
-                message: format!(
-                    "node `{node_name}` produced no claimable PoW rewards within {timeout_seconds} seconds"
+                message: last_error.map_or_else(
+                    || format!(
+                        "node `{node_name}` produced no claimable PoW rewards within {timeout_seconds} seconds"
+                    ),
+                    |e| format!(
+                        "node `{node_name}` failed to claim within {timeout_seconds} seconds; \
+                        last error: {e}"
+                    ),
                 ),
             });
         }
@@ -221,9 +243,9 @@ async fn claim_reward_credited_to(
         |block| {
             let tx = block.transactions.iter().find(|tx| tx.hash() == tx_hash)?;
             let credited = tx
-                .ops_with_proof()
-                .filter_map(|(op, _proof)| match op {
-                    Op::Transfer(transfer) => Some(transfer),
+                .op_refs_iter()
+                .filter_map(|op| match op {
+                    OpRef::Transfer(transfer) => Some(transfer),
                     _ => None,
                 })
                 .flat_map(|transfer| transfer.outputs.iter())
@@ -238,6 +260,78 @@ async fn claim_reward_credited_to(
     credited.ok_or_else(|| StepError::LogicalError {
         message: format!("claim transaction {tx_hash:?} was not found on the chain"),
     })
+}
+
+/// Counts the `ClaimPowReward` ops the landed claim transaction carried.
+async fn claims_in_transaction(node: &NodeHttpClient, tx_hash: TxHash) -> Result<usize, StepError> {
+    let tip = node.consensus_info().await?.cryptarchia_info.tip;
+    let mut scanned_blocks = HashSet::new();
+
+    let claims = scan_chain_until(
+        tip,
+        &mut scanned_blocks,
+        |header_id| {
+            let node = node.clone();
+            async move { node.block(&header_id).await.ok().flatten() }
+        },
+        |block| {
+            let tx = block.transactions.iter().find(|tx| tx.hash() == tx_hash)?;
+            Some(
+                tx.op_refs_iter()
+                    .filter(|op| matches!(op, OpRef::ClaimPowReward(_)))
+                    .count(),
+            )
+        },
+    )
+    .await;
+
+    claims.ok_or_else(|| StepError::LogicalError {
+        message: format!("claim transaction {tx_hash:?} was not found on the chain"),
+    })
+}
+
+/// Asserts a claim transaction batched at least `minimum` rewards.
+///
+/// A node with a backlog of tickets batches as many as its caps allow, so this
+/// is what distinguishes a working batch from one that quietly shrank to a
+/// single claim. It also pins the transport bug this scenario exists for: a
+/// batch capped only by the op budget serializes past what a Blend payload
+/// carries, so it never reaches a block at all and this step finds no
+/// transaction.
+#[when(expr = "claim {string} batched at least {int} PoW rewards on node {string}")]
+#[then(expr = "claim {string} batched at least {int} PoW rewards on node {string}")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_claim_batched_at_least(
+    world: &mut CucumberWorld,
+    step: &Step,
+    claim_alias: String,
+    minimum: usize,
+    node_name: String,
+) -> StepResult {
+    let tx_hash = world.resolve_submitted_transaction(&claim_alias)?;
+    let node = world
+        .resolve_node_http_client(&node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        })?;
+
+    let claims = claims_in_transaction(&node, tx_hash).await?;
+    if claims < minimum {
+        return Err(StepError::StepFail {
+            message: format!(
+                "claim `{claim_alias}` batched {claims} PoW reward(s), expected at least {minimum}"
+            ),
+        });
+    }
+
+    info!(
+        target: TARGET,
+        "Claim `{claim_alias}` batched {claims} PoW reward(s) (>= {minimum})"
+    );
+    Ok(())
 }
 
 #[when(
@@ -270,8 +364,8 @@ async fn step_wallet_balance_increased_by_claim_reward(
         .ok_or_else(|| StepError::LogicalError {
             message: format!("wallet '{wallet_name}' not found in world state"),
         })?;
-    // The reward beneficiary is this wallet's public key, which is what the
-    // miner's `claim_address` was pointed at.
+    // The reward beneficiary is this wallet's public key, which is the address
+    // the claim request named.
     let claim_address = wallet.public_key()?;
     let node = world.resolve_node_http_client(&wallet.node_name)?;
 

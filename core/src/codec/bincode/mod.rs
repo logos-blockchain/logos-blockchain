@@ -30,6 +30,7 @@ pub static OPTIONS: LazyLock<BincodeOptions> = LazyLock::new(|| {
 
 // Serialization functions
 use bytes::Bytes;
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::codec::{Error as WireError, Result};
@@ -40,6 +41,18 @@ pub fn serialize<T: Serialize>(item: &T) -> Result<Bytes> {
         .serialize(&item)
         .map_err(|e| WireError::Serialize(Box::new(e)))?
         .into())
+}
+
+/// Serialize an object while enforcing a maximum encoded size.
+pub fn serialize_bounded<T: Serialize, const MAX: usize>(
+    item: &T,
+) -> Result<UpperBoundedVec<u8, MAX>> {
+    let bytes = OPTIONS
+        .with_limit(MAX as u64)
+        .serialize(item)
+        .map_err(|e| WireError::Serialize(Box::new(e)))?;
+
+    UpperBoundedVec::try_from(bytes).map_err(|e| WireError::Serialize(Box::new(e)))
 }
 
 /// Get the serialized size of an object without actually serializing it

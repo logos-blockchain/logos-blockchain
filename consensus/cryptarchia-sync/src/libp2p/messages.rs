@@ -1,9 +1,15 @@
 use std::collections::HashSet;
 
-use lb_core::header::HeaderId;
+use lb_core::{
+    codec::{BoundedSerializeOp, UpperBoundedVec},
+    header::HeaderId,
+};
 use serde::{Deserialize, Deserializer, Serialize, de::Visitor};
 
-use crate::{BlocksUnavailableReason, SerialisedBlock, libp2p::provider::MAX_ADDITIONAL_BLOCKS};
+use crate::{
+    BlocksUnavailableReason, SerialisedBlock,
+    libp2p::{MAX_MSG_LEN, provider::MAX_ADDITIONAL_BLOCKS},
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum RequestMessage {
@@ -11,6 +17,10 @@ pub enum RequestMessage {
     DownloadBlocksRequest(DownloadBlocksRequest),
     /// A request to get the tip of the peer.
     GetTip,
+}
+
+impl BoundedSerializeOp for RequestMessage {
+    type Bytes = UpperBoundedVec<u8, MAX_MSG_LEN>;
 }
 
 /// A request to initiate block downloading from a peer.
@@ -126,6 +136,10 @@ pub enum DownloadBlocksResponse {
     NoMoreBlocks,
     /// A response indicating that the request failed.
     Failure(BlocksUnavailableReason),
+}
+
+impl BoundedSerializeOp for DownloadBlocksResponse {
+    type Bytes = UpperBoundedVec<u8, MAX_MSG_LEN>;
 }
 
 #[cfg(test)]

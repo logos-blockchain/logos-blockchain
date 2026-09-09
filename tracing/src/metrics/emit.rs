@@ -3,10 +3,13 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
 };
 
+use lb_log_targets::tracing as log_targets;
 use opentelemetry::{
     KeyValue, Value, global,
     metrics::{AsyncInstrument, Counter, Gauge, Histogram, Meter},
 };
+
+const LOG_TARGET: &str = log_targets::METRICS;
 
 fn meter() -> Meter {
     global::meter("logos-blockchain-node")
@@ -120,7 +123,7 @@ macro_rules! get_instrument {
                     .clone(),
             ),
             Err(e) => {
-                tracing::error!("Instrument '{}' lock poisoned: {:?}", $name, e);
+                tracing::error!(target: LOG_TARGET, "Instrument '{}' lock poisoned: {:?}", $name, e);
                 None
             }
         }
@@ -137,7 +140,7 @@ macro_rules! get_instrument {
                 cell
             }))),
             Err(e) => {
-                tracing::error!("Instrument '{}' lock poisoned: {e:?}", $name);
+                tracing::error!(target: LOG_TARGET, "Instrument '{}' lock poisoned: {e:?}", $name);
                 None
             }
         }
@@ -175,7 +178,9 @@ pub fn observable_gauge_u64_set(name: &'static str, value: impl IntoMetricU64) {
     ) {
         match cell.lock() {
             Ok(mut current) => *current = Some(value.into_metric_u64()),
-            Err(e) => tracing::error!("Observable gauge '{name}' value lock poisoned: {e:?}"),
+            Err(e) => {
+                tracing::error!(target: LOG_TARGET, "Observable gauge '{name}' value lock poisoned: {e:?}");
+            }
         }
     }
 }
@@ -199,12 +204,14 @@ pub fn observable_gauge_u64_clear(name: &'static str) {
                 match cell.lock() {
                     Ok(mut current) => *current = None,
                     Err(e) => {
-                        tracing::error!("Observable gauge '{name}' value lock poisoned: {e:?}");
+                        tracing::error!(target: LOG_TARGET, "Observable gauge '{name}' value lock poisoned: {e:?}");
                     }
                 }
             }
         }
-        Err(e) => tracing::error!("Observable gauge '{name}' lock poisoned: {e:?}"),
+        Err(e) => {
+            tracing::error!(target: LOG_TARGET, "Observable gauge '{name}' lock poisoned: {e:?}");
+        }
     }
 }
 

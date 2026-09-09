@@ -82,14 +82,12 @@ impl ServiceState for CryptarchiaConsensusState {
         let (lib_id, genesis_id, lib_ledger_state) = match &settings.starting_state {
             StartingState::Genesis { genesis_block } => {
                 let lib_id = genesis_block.header().id();
-                let genesis_tx = genesis_block
-                    .transactions_iter()
-                    .next()
-                    .expect("Genesis block should be valid");
+                let genesis_tx = genesis_block.genesis_tx();
+                let epoch_nonce = genesis_tx.cryptarchia_parameter().epoch_nonce;
                 let (ledger, _events) = LedgerState::from_genesis_tx(
-                    genesis_tx,
+                    genesis_tx.clone(),
                     &settings.config,
-                    genesis_tx.cryptarchia_parameter().epoch_nonce,
+                    epoch_nonce,
                 )?;
                 (lib_id, lib_id, ledger)
             }
@@ -146,14 +144,13 @@ mod tests {
         RewardPoWConfig {
             reward_pool_genesis: 1_000_000_000,
             epoch_reward_genesis: 1_000_000,
-            initial_difficulty_seed: 1_000,
+            initial_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
             target_claims_per_block: 100,
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
             target_claim_per_block: NonZeroU64::MIN,
-            expected_blocks_per_epoch: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).unwrap(),
         }
     }

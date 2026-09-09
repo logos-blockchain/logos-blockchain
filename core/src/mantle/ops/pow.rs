@@ -15,12 +15,14 @@ use crate::{
     mantle::{
         Note, TxHash, Utxo, Value,
         batch::DeferredZkpVerification,
-        gas::{Gas, MainnetGasProfile, OperationGas},
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
-            VerifiableOperation, verification_mode,
+            VerifiableOperation,
+            verification_mode::{StandardMode, VerificationMode},
         },
-        ops::{NoOpProof, OpId},
+        ops::{NoOpProof, OpId, SignedOperation},
+        transactions::states::{Preverified, Unverified, VerificationState, Verified},
     },
 };
 
@@ -273,45 +275,47 @@ impl ClaimPoWRewardExecutionContext {
 
 impl ProvableOperation for ClaimPowRewardOp {
     type Proof = NoOpProof;
+    const CODE: u8 = 0x40;
 }
 
 impl OperationGas<MainnetGasProfile> for ClaimPowRewardOp {
     const GAS_COST: Gas = Gas::new(1);
 }
 
-impl PreverifiableOperation<verification_mode::StandardMode> for ClaimPowRewardOp {
+impl PreverifiableOperation<StandardMode>
+    for SignedOperation<ClaimPowRewardOp, Unverified, StandardMode>
+{
     type Context<'a> = ();
     type Error = ClaimPowRewardError;
 
-    fn preverify(
-        &self,
-        _proof: &Self::Proof,
-        _context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error> {
+    fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
         Ok(())
     }
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for ClaimPowRewardOp {
+impl VerifiableOperation<StandardMode>
+    for SignedOperation<ClaimPowRewardOp, Preverified, StandardMode>
+{
     type Context<'a> = ClaimPoWRewardVerificationContext<'a>;
     type Error = ClaimPowRewardError;
 
     fn verify(
         &self,
-        _proof: &Self::Proof,
         context: &Self::Context<'_>,
     ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+        let operation = self.operation();
+
         context.are_pow_reward_enabled()?;
-        context.accept_claim(self.block_hash)?;
-        context.validate_current_epoch_nonce(self.epoch_nonce)?;
-        let puzzle_ticket = self.get_puzzle_ticket();
+        context.accept_claim(operation.block_hash)?;
+        context.validate_current_epoch_nonce(operation.epoch_nonce)?;
+        let puzzle_ticket = operation.get_puzzle_ticket();
         context.validate_difficulty_reward(puzzle_ticket)?;
         context.validate_double_claiming(puzzle_ticket)?;
         Ok(None)
     }
 }
 
-impl ExecutableOperation for ClaimPowRewardOp {
+impl ExecutableOperation for SignedOperation<ClaimPowRewardOp, Verified, StandardMode> {
     type Context<'a> = ClaimPoWRewardExecutionContext;
     type Error = ClaimPowRewardError;
 
@@ -319,16 +323,18 @@ impl ExecutableOperation for ClaimPowRewardOp {
         &self,
         mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
+        let operation = self.operation();
+
         let slot = context
             .block_slots
-            .get(&self.block_hash)
+            .get(&operation.block_hash)
             .expect("Existence should be check in verification");
         // add the nullifier to the set
-        let nullifier = self.get_puzzle_ticket();
+        let nullifier = operation.get_puzzle_ticket();
         context.nullifiers.insert_mut(nullifier, *slot);
         // create output note
-        let note = Note::new(context.epoch_reward, self.public_key);
-        let op_id = self.op_id();
+        let note = Note::new(context.epoch_reward, operation.public_key);
+        let op_id = operation.op_id();
         let utxo = Utxo {
             op_id,
             output_index: 0,
@@ -350,6 +356,14 @@ impl ExecutableOperation for ClaimPowRewardOp {
                 },
             )],
         ))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOperation<ClaimPowRewardOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        1
     }
 }
 
@@ -543,9 +557,13 @@ mod tests {
     fn validate_accepts_claim_with_current_epoch_nonce() {
         let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
+        let op = claim_op(CURRENT_EPOCH);
+        let signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap();
         assert!(
-            claim_op(CURRENT_EPOCH)
-                .verify(&NoOpProof, &ctx)
+            signed_operation
+                .verify(&ctx)
                 .expect("stateful verification must succeed")
                 .is_none()
         );
@@ -557,9 +575,14 @@ mod tests {
         // stays claimable, so the previous epoch's nonce is also accepted.
         let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
+        let op = claim_op(PREVIOUS_EPOCH);
+        let signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap();
+
         assert!(
-            claim_op(PREVIOUS_EPOCH)
-                .verify(&NoOpProof, &ctx)
+            signed_operation
+                .verify(&ctx)
                 .expect("stateful verification must succeed")
                 .is_none()
         );
@@ -570,10 +593,13 @@ mod tests {
         let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
         let op = claim_op(PREVIOUS_EPOCH - 1);
+        let signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap();
         assert_eq!(
-            op.verify(&NoOpProof, &ctx).err().unwrap(),
+            signed_operation.verify(&ctx).err().unwrap(),
             ClaimPowRewardError::MismatchEpochNonce {
-                claim: op.epoch_nonce,
+                claim: signed_operation.operation().epoch_nonce,
                 accepted: (
                     nonce_for_epoch(PREVIOUS_EPOCH),
                     nonce_for_epoch(CURRENT_EPOCH)
@@ -589,11 +615,12 @@ mod tests {
         // The hardest possible target: only a ticket of exactly zero would
         // pass, and this op's ticket is not zero.
         ctx.reward_difficulty = Fr::ZERO;
+        let op = claim_op(CURRENT_EPOCH);
+        let signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap();
         assert_eq!(
-            claim_op(CURRENT_EPOCH)
-                .verify(&NoOpProof, &ctx)
-                .err()
-                .unwrap(),
+            signed_operation.verify(&ctx).err().unwrap(),
             ClaimPowRewardError::InvalidPoWRewardTicket
         );
     }
@@ -607,8 +634,11 @@ mod tests {
         let op = claim_op(CURRENT_EPOCH);
         let mut ctx = accepting_context(&nullifiers);
         ctx.reward_difficulty = op.get_puzzle_ticket().into();
+        let signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap();
         assert_eq!(
-            op.verify(&NoOpProof, &ctx).err().unwrap(),
+            signed_operation.verify(&ctx).err().unwrap(),
             ClaimPowRewardError::InvalidPoWRewardTicket
         );
     }
@@ -619,8 +649,11 @@ mod tests {
         let nullifiers =
             HashTrieMapSync::new_sync().insert(op.get_puzzle_ticket(), Slot::from(45u64));
         let ctx = accepting_context(&nullifiers);
+        let signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap();
         assert_eq!(
-            op.verify(&NoOpProof, &ctx).err().unwrap(),
+            signed_operation.verify(&ctx).err().unwrap(),
             ClaimPowRewardError::DoubleClaimed
         );
     }
@@ -628,10 +661,19 @@ mod tests {
     #[test]
     fn execute_issues_reward_utxo_and_registers_nullifier() {
         let op = claim_op(CURRENT_EPOCH);
+        let verified_signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap()
+            .into_verified(&accepting_context(&HashTrieMapSync::new_sync()))
+            .unwrap();
+        let (signed_operation, _) = verified_signed_operation.into_parts();
+        let puzzle_ticket = signed_operation.operation().get_puzzle_ticket();
+        let operation_op_id = signed_operation.operation().op_id();
+        let operation_public_key = signed_operation.operation().public_key;
         let epoch_reward = 10;
         let tx_hash = TxHash::from([11u8; 32]);
 
-        let (ctx, events) = op
+        let (ctx, events) = signed_operation
             .execute(ClaimPoWRewardExecutionContext {
                 reward_pool: 1_000,
                 epoch_reward,
@@ -644,19 +686,16 @@ mod tests {
 
         // The spent solution is recorded against the anchor block's slot,
         // and the pool pays out sigma_e.
-        assert_eq!(
-            ctx.nullifiers.get(&op.get_puzzle_ticket()),
-            Some(&Slot::from(45u64))
-        );
+        assert_eq!(ctx.nullifiers.get(&puzzle_ticket), Some(&Slot::from(45u64)));
         assert_eq!(ctx.reward_pool, 990);
 
         // The reward note lands in the UTXO set, payable to the op's key
         // (§5.3 execution step 3). Regression: the persistent-tree insert
         // result used to be discarded, so the note never reached the set.
         let expected_utxo = Utxo {
-            op_id: op.op_id(),
+            op_id: operation_op_id,
             output_index: 0,
-            note: Note::new(epoch_reward, op.public_key),
+            note: Note::new(epoch_reward, operation_public_key),
         };
         assert_eq!(ctx.utxos.get(&expected_utxo.id()), Some(expected_utxo));
 
@@ -674,8 +713,8 @@ mod tests {
             panic!("expected PoWRewardClaimed tx event");
         };
         assert_eq!(*event_tx_hash, tx_hash);
-        assert_eq!(*op_id, op.op_id());
-        assert_eq!(*pow_nullifier, op.get_puzzle_ticket());
+        assert_eq!(*op_id, operation_op_id);
+        assert_eq!(*pow_nullifier, puzzle_ticket);
         assert_eq!(*utxo, expected_utxo);
         assert!(events.next().is_none());
     }
@@ -689,7 +728,14 @@ mod tests {
         // and aborts loudly rather than minting a reward note the pool
         // cannot back.
         let op = claim_op(CURRENT_EPOCH);
-        drop(op.execute(ClaimPoWRewardExecutionContext {
+        let verified_signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap()
+            .into_verified(&accepting_context(&HashTrieMapSync::new_sync()))
+            .unwrap();
+        let (signed_operation, _) = verified_signed_operation.into_parts();
+
+        drop(signed_operation.execute(ClaimPoWRewardExecutionContext {
             reward_pool: 5,
             epoch_reward: 10,
             nullifiers: HashTrieMapSync::new_sync(),

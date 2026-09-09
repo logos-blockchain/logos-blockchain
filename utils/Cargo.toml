@@ -14,15 +14,12 @@ workspace = true
 
 [dependencies]
 async-trait    = { workspace = true }
-blake2         = { optional = true, workspace = true }
-cipher         = { workspace = true }
 const-hex      = { features = ["alloc"], workspace = true }
 futures        = { optional = true, workspace = true }
 humantime      = { optional = true, workspace = true }
 lb-log-targets = { workspace = true }
 multiaddr      = { workspace = true }
 overwatch      = { workspace = true }
-rand           = { features = ["getrandom"], workspace = true }
 serde          = { features = ["alloc", "derive"], workspace = true }
 serde_ignored  = { workspace = true }
 serde_with     = { optional = true, workspace = true }
@@ -31,18 +28,17 @@ thiserror      = { workspace = true }
 time           = { features = ["serde-human-readable"], optional = true, workspace = true }
 tokio          = { optional = true, workspace = true }
 tracing        = { workspace = true }
+utoipa         = { features = ["macros"], optional = true, workspace = true }
 
 [features]
-rng              = ["dep:blake2"]
+openapi          = ["dep:utoipa"]
 serde            = ["const-hex/alloc", "serde/alloc"]
 time             = ["dep:humantime", "dep:serde_with", "dep:time"]
 tokio            = ["dep:futures", "dep:tokio"]
 tokio-task-names = ["tokio", "tokio/rt", "tokio/tracing"]
 
 [dev-dependencies]
-bincode     = { workspace = true }
-nistrs      = { workspace = true }
-rand_chacha = { workspace = true }
-serde_json  = { features = ["alloc"], workspace = true }
-serde_with  = { features = ["macros"], workspace = true }
-tempfile    = { workspace = true }
+bincode    = { workspace = true }
+serde_json = { features = ["alloc"], workspace = true }
+serde_with = { features = ["macros"], workspace = true }
+tempfile   = { workspace = true }

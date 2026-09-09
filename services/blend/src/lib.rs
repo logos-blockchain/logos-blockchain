@@ -36,8 +36,8 @@ use crate::{
     core::{
         dispatcher::PayloadDispatcher as PayloadDispatcherTrait,
         service_components::{
-            BlendBackendSettingsOfService, MempoolOfService, MessageComponents,
-            NetworkBackendOfService, PayloadDispatcherSettingsOfService,
+            BlendBackendSettingsOfService, ChainNetworkOfService, MempoolOfService,
+            MessageComponents, NetworkBackendOfService, PayloadDispatcherSettingsOfService,
             ServiceComponents as CoreServiceComponents,
         },
     },
@@ -49,12 +49,13 @@ use crate::{
         chain::BlendEpochState,
         node_id::{self, TryFrom as _},
     },
-    message::{BlendPayload, ProxyServiceMessage},
+    message::{DataPayload, ProxyServiceMessage},
     settings::Settings,
 };
 
 pub mod api;
 pub mod core;
+pub mod delivery;
 pub mod edge;
 pub mod epoch;
 pub mod epoch_info;
@@ -66,6 +67,7 @@ pub mod settings;
 mod instance;
 mod kms;
 mod modes;
+mod pending;
 mod service_components;
 pub use self::service_components::ServiceComponents;
 
@@ -105,7 +107,7 @@ impl<CoreService, EdgeService, SdpService, RuntimeServiceId> ServiceCore<Runtime
     for BlendService<CoreService, EdgeService, SdpService, RuntimeServiceId>
 where
     CoreService: ServiceData<
-            Message: MessageComponents<CoreService::NodeId, Payload: Into<BlendPayload>>
+            Message: MessageComponents<CoreService::NodeId, Payload: Into<DataPayload>>
                          + Send
                          + Sync
                          + 'static,
@@ -139,6 +141,7 @@ where
                 RuntimeServiceId,
             >,
         > + AsServiceId<MempoolOfService<CoreService, RuntimeServiceId>>
+        + AsServiceId<ChainNetworkOfService<CoreService, RuntimeServiceId>>
         + AsServiceId<SdpService>
         + Debug
         + Display
@@ -238,6 +241,7 @@ where
             // We don't need to generate secret zk info in the proxy service, so we ignore the
             // secret key at this level.
             None,
+            "blend_proxy_service",
         )
         .await
         // We take only the membership info from the epoch stream since the proxy service does not
@@ -267,7 +271,7 @@ where
             Mode::choose(&membership, minimal_network_size),
             local_node_id.clone(),
             overwatch_handle,
-            settings.core.network.clone(),
+            settings.common.broadcast.clone(),
         )
         .await?;
 
@@ -288,7 +292,7 @@ where
                             overwatch_handle,
                             minimal_network_size,
                             local_node_id.clone(),
-                            settings.core.network.clone(),
+                            settings.common.broadcast.clone(),
                         )
                         .await?;
                 },

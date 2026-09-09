@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     env, fs, io,
     net::{Ipv4Addr, UdpSocket},
+    num::NonZeroU64,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -18,6 +19,7 @@ use lb_node::{
     config::{
         self, RunConfig,
         deployment::DeploymentSettings,
+        sdp::serde::ActiveMessageTrackerConfig,
         tracing::serde::{
             Level,
             logger::{self, AppenderType},
@@ -726,6 +728,9 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
                 max_tx_fee: mantle::Value::MAX.into(),
                 funding_pk: config.consensus_config.funding_sk.as_public_key(),
             },
+            active_message_tracker: ActiveMessageTrackerConfig {
+                status_check_interval_in_tip_changes: NonZeroU64::new(3).unwrap(),
+            },
         },
         wallet: {
             let known_keys: HashMap<_, _> = [
@@ -777,11 +782,9 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
                 keys: config.kms_config.backend.keys,
             },
         },
-        // Pay PoW claim change to the node's own wallet key (node-controlled and
-        // in the KMS/wallet, so spendable), not the SDP funding key.
-        pow: config::pow::serde::Config::with_required_values(config::pow::serde::RequiredValues {
-            claim_address: config.consensus_config.known_key.as_public_key(),
-        }),
+        // Mining defaults, auto-claim off: provisioned nodes claim on demand,
+        // naming the destination key on each claim request.
+        pow: config::pow::serde::Config::default(),
         state: state::Config::default(),
     };
 

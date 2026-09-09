@@ -37,7 +37,7 @@ impl Display for TxId {
 }
 
 impl TxId {
-    fn generate() -> Self {
+    pub(crate) fn generate() -> Self {
         let mut bytes = [0; 32];
         rand::rngs::OsRng.fill_bytes(&mut bytes);
 
@@ -303,11 +303,10 @@ pub struct EncodedWrite {
 
 impl EncodedWrite {
     pub fn new(
+        tx_id: TxId,
         transaction: &Transaction,
         captured_function_calls: CapturedFunctionCalls,
     ) -> Result<Self, Error> {
-        let tx_id = TxId::generate();
-
         let channel_inscription = ChannelInscription {
             tx_id,
             transaction: transaction.clone(),
@@ -370,8 +369,12 @@ mod tests {
         ])
         .expect("transaction should be valid");
 
-        let encoded = EncodedWrite::new(&transaction, CapturedFunctionCalls::empty())
-            .expect("payload should encode");
+        let encoded = EncodedWrite::new(
+            TxId::generate(),
+            &transaction,
+            CapturedFunctionCalls::empty(),
+        )
+        .expect("payload should encode");
         let decoded = ChannelInscription::decode(&encoded.payload)
             .expect("channel inscription should decode");
 
@@ -446,7 +449,11 @@ mod tests {
             .expect("statement should be valid"),
         ])
         .expect("transaction should be valid");
-        let result = EncodedWrite::new(&transaction, CapturedFunctionCalls::empty());
+        let result = EncodedWrite::new(
+            TxId::generate(),
+            &transaction,
+            CapturedFunctionCalls::empty(),
+        );
 
         assert!(matches!(result, Err(crate::Error::InscriptionTooLarge)));
     }

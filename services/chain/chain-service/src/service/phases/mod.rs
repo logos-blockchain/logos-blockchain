@@ -19,6 +19,7 @@ pub trait Phase: Send + Sync + Debug {
 
 /// Phase tags
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum PhaseTag {
     /// The genesis time is in the future. Only read-only queries are served.
     AwaitingGenesisTime,

@@ -14,10 +14,13 @@ use crate::{
         gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
-            verification_mode::{self, VerificationMode},
+            verification_mode::{StandardMode, VerificationMode},
         },
-        ops::SignedOp,
-        transactions::{hash::TxHashView, states::VerificationState},
+        ops::SignedOperation,
+        transactions::{
+            hash::TxHashView,
+            states::{Preverified, Unverified, VerificationState, Verified},
+        },
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -59,23 +62,26 @@ impl ProvableOperation for ChannelConfigOp {
     // `SignedOperationExecutionGas::gas_multiplier` below reads this proof's
     // signature count. If this changes, update that too.
     type Proof = ChannelMultiSigProof;
+    const CODE: u8 = 0x10;
 }
 
 impl OperationGas<MainnetGasProfile> for ChannelConfigOp {
     const GAS_COST: Gas = Gas::new(56);
 }
 
-impl PreverifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
+impl PreverifiableOperation<StandardMode>
+    for SignedOperation<ChannelConfigOp, Unverified, StandardMode>
+{
     type Context<'a> = ();
     type Error = Error;
 
-    fn preverify(
-        &self,
-        _proof: &Self::Proof,
-        _context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error> {
+    fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        let operation = self.operation();
+
         // Check config is well-formed
-        if self.configuration_threshold == 0 || self.transfer_threshold == 0 || self.keys.is_empty()
+        if operation.configuration_threshold == 0
+            || operation.transfer_threshold == 0
+            || operation.keys.is_empty()
         {
             return Err(Error::InvalidChannelConfig);
         }
@@ -84,24 +90,28 @@ impl PreverifiableOperation<verification_mode::StandardMode> for ChannelConfigOp
     }
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
+impl VerifiableOperation<StandardMode>
+    for SignedOperation<ChannelConfigOp, Preverified, StandardMode>
+{
     type Context<'a> = ChannelConfigValidationContext<'a>;
     type Error = Error;
 
     fn verify(
         &self,
-        proof: &Self::Proof,
         context: &Self::Context<'_>,
     ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+        let operation = self.operation();
+        let proof = self.proof();
+
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.
 
-        if let Some(channel) = context.channels.channels.get(&self.channel).cloned() {
+        if let Some(channel) = context.channels.channels.get(&operation.channel).cloned() {
             // Check the configuration extends the last configuration of the channel
-            if self.parent != channel.config_tip_hash {
+            if operation.parent != channel.config_tip_hash {
                 return Err(Error::InvalidParent {
-                    channel_id: self.channel,
-                    parent: self.parent.into(),
+                    channel_id: operation.channel,
+                    parent: operation.parent.into(),
                     actual: channel.config_tip_hash.into(),
                 });
             }
@@ -110,7 +120,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
             let signatures = proof.signatures();
             if signatures.len() != channel.configuration_threshold as usize {
                 return Err(Error::ThresholdUnmet {
-                    channel_id: self.channel,
+                    channel_id: operation.channel,
                     threshold: channel.configuration_threshold,
                     actual: proof.signatures().len(),
                 });
@@ -122,7 +132,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
                     .accredited_keys
                     .get(signature.channel_key_index as usize)
                     .ok_or_else(|| Error::InvalidSignatureIndex {
-                        channel_id: self.channel,
+                        channel_id: operation.channel,
                         sequencers: channel.accredited_keys.len(),
                         index: signature.channel_key_index,
                     })?
@@ -132,11 +142,11 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
                     return Err(Error::InvalidSignature);
                 }
             }
-        } else if self.parent != MsgId::root() {
+        } else if operation.parent != MsgId::root() {
             // Checked that the parent is ZERO because channel doesn't exist
             return Err(Error::InvalidParent {
-                channel_id: self.channel,
-                parent: self.parent.into(),
+                channel_id: operation.channel,
+                parent: operation.parent.into(),
                 actual: MsgId::root().into(),
             });
         }
@@ -145,7 +155,9 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
     }
 }
 
-impl ExecutableOperation for ChannelConfigOp {
+impl<Mode: VerificationMode> ExecutableOperation
+    for SignedOperation<ChannelConfigOp, Verified, Mode>
+{
     type Context<'a> = ChannelConfigExecutionContext;
     type Error = Error;
 
@@ -153,31 +165,33 @@ impl ExecutableOperation for ChannelConfigOp {
         &self,
         mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
+        let operation = self.operation();
+
         // if the channel doesn't exist, create it otherwise just update the config
-        if let Some(channel) = context.channels.channels.get_mut(&self.channel) {
-            channel.accredited_keys = self.keys.clone().into();
-            channel.configuration_threshold = self.configuration_threshold;
+        if let Some(channel) = context.channels.channels.get_mut(&operation.channel) {
+            channel.accredited_keys = operation.keys.clone().into();
+            channel.configuration_threshold = operation.configuration_threshold;
             channel.tip_sequencer = 0;
             channel.tip_sequencer_starting_slot = context.block_slot;
-            channel.posting_timeframe = self.posting_timeframe.clone();
-            channel.posting_timeout = self.posting_timeout.clone();
-            channel.transfer_threshold = self.transfer_threshold;
+            channel.posting_timeframe = operation.posting_timeframe.clone();
+            channel.posting_timeout = operation.posting_timeout.clone();
+            channel.transfer_threshold = operation.transfer_threshold;
             channel.tip_slot = context.block_slot;
-            channel.config_tip_hash = self.id();
+            channel.config_tip_hash = operation.id();
         } else {
             context.channels.channels = context.channels.channels.insert(
-                self.channel,
+                operation.channel,
                 ChannelState {
-                    accredited_keys: self.keys.clone().into(),
-                    configuration_threshold: self.configuration_threshold,
+                    accredited_keys: operation.keys.clone().into(),
+                    configuration_threshold: operation.configuration_threshold,
                     tip_message: MsgId::root(),
-                    config_tip_hash: self.id(),
+                    config_tip_hash: operation.id(),
                     tip_slot: context.block_slot,
                     tip_sequencer: 0,
                     tip_sequencer_starting_slot: context.block_slot,
-                    posting_timeframe: self.posting_timeframe.clone(),
-                    transfer_threshold: self.transfer_threshold,
-                    posting_timeout: self.posting_timeout.clone(),
+                    posting_timeframe: operation.posting_timeframe.clone(),
+                    transfer_threshold: operation.transfer_threshold,
+                    posting_timeout: operation.posting_timeout.clone(),
                 },
             );
         }
@@ -186,7 +200,7 @@ impl ExecutableOperation for ChannelConfigOp {
 }
 
 impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<ChannelConfigOp, State, Mode>
+    for SignedOperation<ChannelConfigOp, State, Mode>
 {
     fn gas_multiplier(&self) -> Value {
         let signature_count = self.proof().signatures().len();

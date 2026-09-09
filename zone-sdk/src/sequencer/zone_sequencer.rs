@@ -11,9 +11,9 @@ use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, Op, SignedMantleTx, Value,
+        Note, Op, OpRef, SignedOps, Value,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
-        ledger::{Inputs, Outputs},
+        ledger::{Inputs, NoteId, Outputs, verification_mode::StandardMode},
         ops::channel::{
             ChannelId, MsgId,
             channel_transfer::ChannelTransferOp,
@@ -22,13 +22,9 @@ use lb_core::{
             withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
-        transactions::{
-            Ops,
-            hash::TxHash,
-            mantle_tx::{MantleTx as _, RawMantleTx},
-            states::Unverified,
-        },
+        transactions::{Ops, hash::TxHash, states::Unverified},
     },
+    proofs::channel_multi_sig_proof::IndexedSignature,
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -43,14 +39,15 @@ use super::{
     slot_clock::SlotClock,
     state::{BlockChannelTx, TxState},
     tx_builder::{
-        build_atomic_withdraw_ops_proofs, create_channel_config_tx, create_inscribe_tx,
-        find_own_key_index, fund_ops, prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
+        assemble_channel_config_tx, build_and_fund_config, build_atomic_bundle_ops_proofs,
+        create_channel_config_tx, create_inscribe_tx, find_own_key_index, fund_ops,
+        prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
     },
     types::{
         AtomicWithdrawInfo, ChannelWalletView, Error, Event, FundingConfig, InscriptionInfo,
-        PendingTx, PublishResult, SequencerChannelView, SequencerCheckpoint, SequencerConfig,
-        TurnNotification, TxSource, TxStatus, TxStatusUpdate, WithdrawArg, WithdrawInfo,
-        WithdrawInputs,
+        PendingTx, PinDepositInfo, PreparedChannelConfig, PublishResult, SequencerChannelView,
+        SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
+        WithdrawArg, WithdrawInfo, WithdrawInputs,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -156,6 +153,7 @@ pub struct ZoneSequencer<Node> {
 }
 
 pub type PublishReceipt = (PublishResult, SequencerCheckpoint);
+pub type PublishResponse = (PublishReceipt, SignedOps<Unverified, StandardMode>);
 
 /// Internal request enum routed through the actor's `request_rx` channel.
 ///
@@ -174,26 +172,46 @@ pub(super) enum ActorRequest {
         inputs: WithdrawInputs,
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
+    PublishPinDeposit {
+        inscribe: Inscription,
+        consumed_notes: Vec<NoteId>,
+        response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
+    },
     ChannelConfig {
         keys: Keys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         transfer_threshold: u16,
-        response_tx: oneshot::Sender<Result<(PublishReceipt, SignedMantleTx<Unverified>), Error>>,
+        response_tx: oneshot::Sender<Result<PublishResponse, Error>>,
+    },
+    PrepareChannelConfig {
+        keys: Keys,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        transfer_threshold: u16,
+        response_tx: oneshot::Sender<Result<PreparedChannelConfig, Error>>,
+    },
+    SubmitChannelConfig {
+        // Boxed: `PreparedChannelConfig` is much larger than the other
+        // variants' payloads, so keep it off the enum's inline footprint.
+        prepared: Box<PreparedChannelConfig>,
+        signatures: Vec<IndexedSignature>,
+        response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
     SubmitSignedTx {
-        tx: SignedMantleTx<Unverified>,
+        tx: SignedOps<Unverified, StandardMode>,
         msg_id: MsgId,
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
     PrepareTx {
         ops: Ops,
         data: Inscription,
-        response_tx: oneshot::Sender<Result<(RawMantleTx, MsgId, Ed25519Signature), Error>>,
+        response_tx: oneshot::Sender<Result<(Ops, MsgId, Ed25519Signature), Error>>,
     },
     SignTx {
-        tx: RawMantleTx,
+        tx: Ops,
         response_tx: oneshot::Sender<Result<Ed25519Signature, Error>>,
     },
     ChannelWallet {
@@ -556,6 +574,13 @@ where
                     ),
                 );
             }
+            ActorRequest::PublishPinDeposit {
+                inscribe,
+                consumed_notes,
+                response_tx,
+            } => {
+                drop(response_tx.send(self.do_publish_pin_deposit(inscribe, consumed_notes).await));
+            }
             ActorRequest::ChannelConfig {
                 keys,
                 posting_timeframe,
@@ -576,6 +601,34 @@ where
                         .await,
                     ),
                 );
+            }
+            ActorRequest::PrepareChannelConfig {
+                keys,
+                posting_timeframe,
+                posting_timeout,
+                configuration_threshold,
+                transfer_threshold,
+                response_tx,
+            } => {
+                drop(
+                    response_tx.send(
+                        self.do_prepare_channel_config(
+                            keys,
+                            posting_timeframe,
+                            posting_timeout,
+                            configuration_threshold,
+                            transfer_threshold,
+                        )
+                        .await,
+                    ),
+                );
+            }
+            ActorRequest::SubmitChannelConfig {
+                prepared,
+                signatures,
+                response_tx,
+            } => {
+                drop(response_tx.send(self.do_submit_channel_config(*prepared, signatures)));
             }
             ActorRequest::SubmitSignedTx {
                 tx,
@@ -672,7 +725,7 @@ where
             parent,
         )
         .await?;
-        let id = signed_tx.mantle_tx().hash();
+        let id = signed_tx.hash();
 
         debug!(target: TARGET,
             "Prepared publish: payload={:?}, parent={}, msg_id={}, tx={}",
@@ -728,6 +781,7 @@ where
     /// computation, status queueing and checkpointing. Scoped to single-signer
     /// (centralized) channels — only the sequencer's own signature proves the
     /// transfer and withdraw ops.
+    #[expect(clippy::too_many_lines, reason = "single bundle assembly pipeline")]
     pub(super) async fn do_publish_atomic_withdraw(
         &mut self,
         inscribe: Inscription,
@@ -791,14 +845,22 @@ where
         let (tx, transfer_proof) = fund_ops(&self.node, &self.config.funding, ops).await?;
         let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
         let ops_proofs =
-            build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
-        let signed_tx = SignedMantleTx::new(tx, ops_proofs);
+            build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
+        let signed_tx = SignedOps::from_parts(tx, ops_proofs).map_err(|error| {
+            Error::Network(format!(
+                "failed to build signed atomic withdraw tx: {error:?}"
+            ))
+        })?;
 
-        let tx_hash = signed_tx.mantle_tx().hash();
+        let tx_hash = signed_tx.hash();
         let withdraw_infos = vec![WithdrawInfo {
             tx_hash,
             op: withdraw_op,
         }];
+        // The recipient notes the bundle releases — carried so an orphaned
+        // bundle can be re-issued from its report.
+        let outputs = Outputs::try_new(recipient_outputs)
+            .map_err(|e| Error::Network(format!("invalid withdraw outputs: {e:?}")))?;
 
         debug!(target: TARGET,
             "Prepared atomic withdraw: payload={:?}, parent={}, msg_id={}, tx={}, amount={}",
@@ -817,6 +879,7 @@ where
             msg_id,
             inscribe.clone(),
             withdraw_infos.clone(),
+            outputs.clone(),
         );
         self.last_msg_id = msg_id;
         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
@@ -843,6 +906,7 @@ where
                         signer: Some(self.signing_key.public_key()),
                     },
                     withdraws: withdraw_infos,
+                    outputs,
                 }),
             },
             checkpoint,
@@ -912,6 +976,150 @@ where
         Ok((transfer_op, withdraw_op))
     }
 
+    /// Builds and publishes `[CHANNEL_INSCRIBE, CHANNEL_TRANSFER]`: the
+    /// transfer consumes the named deposited notes (re-creating each 1:1),
+    /// gating the inscription on the deposit. Mirrors
+    /// [`Self::do_publish_atomic_withdraw`]; single-signer channels.
+    pub(super) async fn do_publish_pin_deposit(
+        &mut self,
+        inscribe: Inscription,
+        consumed_notes: Vec<NoteId>,
+    ) -> Result<PublishReceipt, Error> {
+        self.ensure_ready()?;
+        self.ensure_fundable()?;
+
+        if consumed_notes.is_empty() {
+            return Err(Error::Network(
+                "publish_pin_deposit requires at least one deposited note".into(),
+            ));
+        }
+
+        // Use the cached channel state kept fresh by the drive loop.
+        let channel_state = self.channel_state.as_ref().ok_or_else(|| {
+            Error::Network(format!(
+                "publish_pin_deposit requires channel state for {:?}",
+                self.channel_id
+            ))
+        })?;
+        if channel_state.transfer_threshold > 1 {
+            return Err(Error::Network(format!(
+                "publish_pin_deposit requires transfer_threshold == 1, got {}",
+                channel_state.transfer_threshold
+            )));
+        }
+        let own_key_index = find_own_key_index(channel_state, &self.signing_key)?;
+
+        let transfer_op = self.build_deposit_transfer(&consumed_notes)?;
+        // The bounded input set is exactly what the transfer consumes.
+        let consumed_inputs = transfer_op.inputs.clone();
+
+        let parent = self.compute_publish_parent();
+        let inscription_op = InscriptionOp {
+            channel_id: self.channel_id,
+            inscription: inscribe.clone(),
+            parent,
+            signer: self.signing_key.public_key(),
+        };
+        let msg_id = inscription_op.id();
+
+        let ops = vec![
+            Op::ChannelInscribe(inscription_op),
+            Op::ChannelTransfer(transfer_op),
+        ];
+
+        let (tx, transfer_proof) = fund_ops(&self.node, &self.config.funding, ops).await?;
+        let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
+        let ops_proofs =
+            build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
+        let signed_tx = SignedOps::from_parts(tx, ops_proofs).map_err(|error| {
+            Error::Network(format!("failed to build signed atomic fund tx: {error:?}"))
+        })?;
+
+        let tx_hash = signed_tx.hash();
+
+        debug!(target: TARGET,
+            "Prepared pin-deposit: payload={:?}, parent={}, msg_id={}, tx={}, notes={}",
+            String::from_utf8_lossy(&inscribe),
+            hex::encode(parent.as_ref()),
+            hex::encode(msg_id.as_ref()),
+            hex::encode(tx_hash.0),
+            consumed_notes.len(),
+        );
+
+        // Safe to unwrap — `ensure_ready` checks state.
+        let state = self.state.as_mut().unwrap();
+        state.submit_pin_deposit(
+            signed_tx.clone(),
+            parent,
+            msg_id,
+            inscribe.clone(),
+            consumed_inputs.clone(),
+        );
+        self.last_msg_id = msg_id;
+        self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
+
+        if self.can_publish_inscription_now() {
+            self.queue_publish_post(tx_hash, signed_tx);
+        }
+
+        self.publish_channel_view();
+
+        let checkpoint = self.publish_checkpoint().ok_or(Error::Unavailable {
+            reason: "checkpoint unavailable",
+        })?;
+
+        Ok((
+            PublishResult {
+                tx: PendingTx::PinDeposit(PinDepositInfo {
+                    tx_hash,
+                    inscription: InscriptionInfo {
+                        tx_hash,
+                        parent_msg: parent,
+                        this_msg: msg_id,
+                        payload: inscribe,
+                        signer: Some(self.signing_key.public_key()),
+                    },
+                    consumed_notes: consumed_inputs,
+                }),
+            },
+            checkpoint,
+        ))
+    }
+
+    /// Consume the named deposited notes and re-create each 1:1; errors if a
+    /// note is not in the tracked channel-note set (deposit not on this
+    /// branch).
+    fn build_deposit_transfer(
+        &self,
+        consumed_notes: &[NoteId],
+    ) -> Result<ChannelTransferOp, Error> {
+        let view = self.channel_wallet();
+        let by_id: HashMap<NoteId, (Value, _)> = view
+            .finalized
+            .iter()
+            .chain(view.unfinalized.iter())
+            .map(|n| (n.note_id, (n.value, n.pk)))
+            .collect();
+        let mut outputs = Vec::with_capacity(consumed_notes.len());
+        for id in consumed_notes {
+            let &(value, pk) = by_id.get(id).ok_or_else(|| {
+                Error::Network(
+                    "deposited note not found in the tracked channel set (deposit not on this \
+                     branch, or already consumed)"
+                        .into(),
+                )
+            })?;
+            outputs.push(Note::new(value, pk));
+        }
+        Ok(ChannelTransferOp {
+            channel_id: self.channel_id,
+            inputs: Inputs::try_new(consumed_notes.to_vec())
+                .map_err(|e| Error::Network(format!("invalid transfer inputs: {e:?}")))?,
+            outputs: Outputs::try_new(outputs)
+                .map_err(|e| Error::Network(format!("invalid transfer outputs: {e:?}")))?,
+        })
+    }
+
     pub(super) async fn do_channel_config(
         &mut self,
         keys: Keys,
@@ -919,7 +1127,7 @@ where
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         transfer_threshold: u16,
-    ) -> Result<(PublishReceipt, SignedMantleTx<Unverified>), Error> {
+    ) -> Result<(PublishReceipt, SignedOps<Unverified, StandardMode>), Error> {
         self.ensure_ready()?;
         self.ensure_fundable()?;
 
@@ -983,7 +1191,7 @@ where
             transfer_threshold,
         )
         .await?;
-        let tx_hash = signed_tx.mantle_tx().hash();
+        let tx_hash = signed_tx.hash();
 
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
@@ -1014,16 +1222,120 @@ where
         Ok((publish_receipt, signed_tx))
     }
 
+    /// Build and fund a channel-config tx for external multi-sig signing,
+    /// without mutating state.
+    ///
+    /// The returned [`PreparedChannelConfig`] carries the funded tx (opaque),
+    /// the exact `sign_payload` each accredited key must sign, and the
+    /// channel's current accredited keys / `configuration_threshold` so the
+    /// caller knows whom to collect signatures from. Configuring the tx flows
+    /// through the same config-lineage parent detection
+    /// ([`super::state::TxState::config_tip_at`]) as the single-sig
+    /// [`Self::do_channel_config`]. The caller collects the signatures
+    /// out-of-band and submits via [`Self::do_submit_channel_config`].
+    ///
+    /// For an unclaimed channel the accredited-key list is empty and the
+    /// threshold `0` — the caller submits with no signatures (the empty
+    /// multi-sig proof), which the Mantle spec accepts for a claiming config.
+    ///
+    /// Takes `&mut self` for parity with the other async build/fund methods so
+    /// the resulting future stays `Send` (a `&self` future would instead
+    /// require `ZoneSequencer: Sync`, which the boxed block stream is not),
+    /// even though it does not mutate sequencer state.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "&mut self keeps the async future Send; a &self future would require Sync"
+    )]
+    pub(super) async fn do_prepare_channel_config(
+        &mut self,
+        keys: Keys,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        transfer_threshold: u16,
+    ) -> Result<PreparedChannelConfig, Error> {
+        self.ensure_ready()?;
+        self.ensure_fundable()?;
+
+        // Same config-lineage parent as `do_channel_config`: extend our local
+        // config tip so the config we prepare is never transiently orphaned by
+        // an ahead-of-us node config tip.
+        let parent = match (self.state.as_ref(), self.current_tip) {
+            (Some(state), Some(tip)) => state.config_tip_at(tip),
+            _ => MsgId::root(),
+        };
+
+        let (tx, transfer_proof) = build_and_fund_config(
+            &self.node,
+            &self.config.funding,
+            self.channel_id,
+            parent,
+            keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            transfer_threshold,
+        )
+        .await?;
+
+        // The current (pre-update) accredited list is what the ledger verifies
+        // the collected signatures against — empty/0 for an unclaimed channel.
+        let (accredited_keys, signing_threshold) = self.channel_state.as_ref().map_or_else(
+            || (Vec::new(), 0),
+            |channel| {
+                (
+                    channel.accredited_keys.iter().copied().collect(),
+                    channel.configuration_threshold,
+                )
+            },
+        );
+
+        let sign_payload = tx.hash().as_signing_bytes().as_ref().to_vec();
+
+        Ok(PreparedChannelConfig {
+            tx,
+            transfer_proof,
+            sign_payload,
+            accredited_keys,
+            signing_threshold,
+        })
+    }
+
+    /// Assemble a prepared config tx with its externally-collected signatures
+    /// and submit it.
+    ///
+    /// `signatures` must be indexed against
+    /// [`PreparedChannelConfig::accredited_keys`] and strictly ascending by
+    /// index. Once assembled, the fully-signed config tx is a plain
+    /// `[CHANNEL_CONFIG, TRANSFER(fee)]` — identical in shape to a single-sig
+    /// config — so it flows through the same submit path as
+    /// [`Self::do_submit_signed_tx`] (track → `submit_other`, queue post,
+    /// checkpoint, tx status), keyed on the current message tip.
+    pub(super) fn do_submit_channel_config(
+        &mut self,
+        prepared: PreparedChannelConfig,
+        signatures: Vec<IndexedSignature>,
+    ) -> Result<PublishReceipt, Error> {
+        let signed_tx =
+            assemble_channel_config_tx(prepared.tx, prepared.transfer_proof, signatures)?;
+        // A pure config leaves the message tip unchanged, so the caller's
+        // `msg_id` is our current tip — `do_submit_signed_tx` derives no
+        // inscription tip from it and routes it to `submit_other`, exactly as
+        // `do_channel_config` does.
+        let msg_id = self.last_msg_id;
+        self.do_submit_signed_tx(signed_tx, msg_id)
+    }
+
     pub(super) fn do_submit_signed_tx(
         &mut self,
-        tx: SignedMantleTx<Unverified>,
+        tx: SignedOps<Unverified, StandardMode>,
         msg_id: MsgId,
     ) -> Result<PublishReceipt, Error> {
         self.ensure_ready()?;
 
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
-        let id = tx.mantle_tx().hash();
+        let id = tx.hash();
         let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id);
         let parent_msg = self.last_msg_id;
         // The tip the tx leaves behind is defined by its inscriptions (the
@@ -1044,11 +1356,9 @@ where
         info!(target: TARGET, "Submitted tx including inscription {:?}", id);
 
         let (payload, signer) = tx
-            .mantle_tx()
-            .ops()
-            .iter()
+            .op_refs_iter()
             .find_map(|op| match op {
-                Op::ChannelInscribe(i) if i.channel_id == self.channel_id => {
+                OpRef::ChannelInscribe(i) if i.channel_id == self.channel_id => {
                     Some((i.inscription.clone(), Some(i.signer)))
                 }
                 _ => None,
@@ -1079,7 +1389,7 @@ where
         &self,
         ops: Ops,
         data: Inscription,
-    ) -> Result<(RawMantleTx, MsgId, Ed25519Signature), Error> {
+    ) -> Result<(Ops, MsgId, Ed25519Signature), Error> {
         self.ensure_ready()?;
         let parent = self.compute_publish_parent();
         Ok(build_prepare_tx(
@@ -1091,7 +1401,7 @@ where
         ))
     }
 
-    pub(super) fn do_sign_tx(&self, tx: &RawMantleTx) -> Result<Ed25519Signature, Error> {
+    pub(super) fn do_sign_tx(&self, tx: &Ops) -> Result<Ed25519Signature, Error> {
         self.ensure_ready()?;
         Ok(build_sign_tx(tx.hash(), &self.signing_key))
     }
@@ -1137,7 +1447,7 @@ where
     pub(super) fn queue_publish_post(
         &mut self,
         tx_hash: TxHash,
-        signed_tx: SignedMantleTx<Unverified>,
+        signed_tx: SignedOps<Unverified, StandardMode>,
     ) {
         self.posting.insert(tx_hash);
         self.in_flight.push(Box::pin(post_batch(
@@ -1152,7 +1462,7 @@ where
     /// `resubmit_pending` does this gate.
     pub(super) fn queue_resubmit_batch(
         &mut self,
-        batch: Vec<(TxHash, SignedMantleTx<Unverified>)>,
+        batch: Vec<(TxHash, SignedOps<Unverified, StandardMode>)>,
     ) {
         if batch.is_empty() {
             return;
@@ -1173,7 +1483,7 @@ where
 
 async fn post_batch<Node>(
     node: Node,
-    batch: Vec<(TxHash, SignedMantleTx<Unverified>)>,
+    batch: Vec<(TxHash, SignedOps<Unverified, StandardMode>)>,
 ) -> Vec<(TxHash, bool)>
 where
     Node: adapter::Node + Clone + Send + Sync + 'static,
@@ -1227,15 +1537,15 @@ pub(super) fn build_checkpoint(
 }
 
 fn restored_pending_channel_tip(
-    pending_txs: &[(TxHash, SignedMantleTx<Unverified>)],
+    pending_txs: &[(TxHash, SignedOps<Unverified, StandardMode>)],
     channel_id: ChannelId,
 ) -> Option<MsgId> {
     let mut parents = Vec::new();
     let mut children = HashSet::new();
 
     for (_, tx) in pending_txs {
-        for op in tx.mantle_tx().ops() {
-            if let Op::ChannelInscribe(ins) = op
+        for op in tx.op_refs() {
+            if let OpRef::ChannelInscribe(ins) = op
                 && ins.channel_id == channel_id
             {
                 parents.push(ins.parent);
@@ -1255,7 +1565,7 @@ fn restored_pending_channel_tip(
 /// tip-advancing op), or `None` when the tx carries none for this channel.
 pub(super) fn track_pending_tx(
     state: &mut TxState,
-    tx: SignedMantleTx<Unverified>,
+    tx: SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
 ) -> Option<MsgId> {
     match classify_channel_tx(&tx, channel_id, &mut None) {
@@ -1272,6 +1582,18 @@ pub(super) fn track_pending_tx(
                 this_msg,
                 aw.inscription.payload,
                 aw.withdraws,
+                aw.outputs,
+            );
+            Some(this_msg)
+        }
+        Some(BlockChannelTx::PinDeposit(ad)) => {
+            let this_msg = ad.inscription.this_msg;
+            state.submit_pin_deposit(
+                tx,
+                ad.inscription.parent_msg,
+                this_msg,
+                ad.inscription.payload,
+                ad.consumed_notes,
             );
             Some(this_msg)
         }

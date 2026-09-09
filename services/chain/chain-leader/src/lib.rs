@@ -22,9 +22,10 @@ use lb_core::{
     },
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
+        OpRef, SignedOps,
         gas::MainnetGasProfile,
-        traits::{Hashable, MantleTxWithProofs, StorageSize},
+        ledger::verification_mode::StandardMode,
+        traits::{Hashable, MantleTx, SignedMantleTx, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
@@ -32,6 +33,7 @@ use lb_core::{
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
 use lb_ledger::LedgerState;
+use lb_log_targets::chain;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
@@ -62,6 +64,36 @@ use crate::{
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::CryptarchiaConsensusRelays,
 };
+
+fn log_sdp_activity_selected_for_proposal<Tx>(block: &Block<Tx>, ledger_state: &LedgerState)
+where
+    Tx: MantleTx,
+{
+    for (tx, active) in block.transactions_iter().flat_map(|tx| {
+        tx.op_refs_iter().filter_map(move |op| match op {
+            OpRef::SDPActive(active) => Some((tx, active)),
+            _ => None,
+        })
+    }) {
+        let provider_id = ledger_state
+            .mantle_ledger()
+            .sdp_ledger()
+            .get_declaration(&active.declaration_id)
+            .map(|declaration| declaration.provider_id);
+        tracing::debug!(
+            target: LOG_TARGET,
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_activity_selected_for_proposal",
+            tx_id = ?tx.hash(),
+            provider_id = ?provider_id,
+            declaration_id = ?active.declaration_id,
+            proof_epoch = u32::from(active.metadata.origin_epoch()),
+            proposal_block_id = %block.header().id(),
+            proposal_slot = u64::from(block.header().slot()),
+            "Selected SDP activity transaction for proposal"
+        );
+    }
+}
 
 /// The per-subscriber stream of per-epoch winning slots. Each item
 /// carries a single epoch and that epoch's stream of winning slots.
@@ -95,7 +127,7 @@ pub type WinningPolSlotStream = Pin<Box<dyn Stream<Item = WinningSlotFuture> + S
 const WINNING_POL_EPOCH_HANDOFF_BUFFER_SIZE: usize = 2;
 const SERVICE_ID: &str = "ChainLeader";
 
-pub(crate) const LOG_TARGET: &str = "chain_leader::service";
+pub(crate) const LOG_TARGET: &str = chain::leader::ROOT;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -174,7 +206,7 @@ pub struct CryptarchiaLeader<
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone,
     Mempool::Item: Clone + Eq + Debug + 'static,
-    Mempool::Item: MantleTxWithProofs,
+    Mempool::Item: SignedMantleTx<Preverified, StandardMode>,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
@@ -213,7 +245,7 @@ where
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Settings: Clone,
-    Mempool::Item: MantleTxWithProofs + Clone + Eq + Debug,
+    Mempool::Item: SignedMantleTx<Preverified, StandardMode> + Clone + Eq + Debug,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
@@ -258,7 +290,7 @@ where
         > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + 'static,
-    Mempool: MemPool<Item = SignedMantleTx<Preverified>>
+    Mempool: MemPool<Item = SignedOps<Preverified, StandardMode>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
         + Sync
@@ -276,7 +308,7 @@ where
         + Sync
         + Unpin
         + 'static,
-    Mempool::Item: MantleTxWithProofs,
+    Mempool::Item: SignedMantleTx<Preverified, StandardMode>,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
         + Send
         + Sync
@@ -404,15 +436,16 @@ where
 
         // Wait until the chain becomes Online mode.
         // We should not propose blocks while the chain is in Bootstrapping mode.
-        info!("Waiting for chain to become online");
+        info!(target: LOG_TARGET, "Waiting for chain to become online");
         cryptarchia_api
             .wait_until_chain_becomes_online()
             .await
             .expect("Waiting for chain to be online should succeed");
-        info!("Chain is online. Starting block proposals.");
+        info!(target: LOG_TARGET, "Chain is online. Starting block proposals.");
 
         self.service_resources_handle.status_updater.notify_ready();
         info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
@@ -458,7 +491,12 @@ where
                             Err(e) => {
                                 error!(
                                     target: LOG_TARGET,
-                                    "Failed to build leadership proof for slot {slot:?}: {e}"
+                                    diagnostic = "blend_tsi_outage",
+                                    event = "leadership_proof_failure",
+                                    epoch = u32::from(ledger_config.epoch(slot)),
+                                    slot = u64::from(slot),
+                                    error = %e,
+                                    "Failed to build leadership proof"
                                 );
                                 continue;
                             }
@@ -503,7 +541,9 @@ where
         // Hypothesis:
         // 1. Probably related to too many generics.
         // 2. It seems `span` requires a `const` string literal.
-        async_loop.instrument(span!(Level::TRACE, SERVICE_ID)).await;
+        async_loop
+            .instrument(span!(target: LOG_TARGET, Level::TRACE, SERVICE_ID))
+            .await;
 
         Ok(())
     }
@@ -537,14 +577,14 @@ where
         > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + 'static,
-    Mempool: MemPool<Item = SignedMantleTx<Preverified>>
+    Mempool: MemPool<Item = SignedOps<Preverified, StandardMode>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
         + Sync
         + 'static,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone + Send + Sync + 'static,
-    Mempool::Item: MantleTxWithProofs<Hash = Mempool::Key>
+    Mempool::Item: SignedMantleTx<Preverified, StandardMode, Hash = Mempool::Key>
         + Debug
         + Clone
         + Eq
@@ -575,6 +615,7 @@ where
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>,
 {
     #[instrument(
+        target = LOG_TARGET,
         level = "debug",
         skip(
             relays,
@@ -647,7 +688,10 @@ where
                     .clone()
                     .try_apply_contents::<_, HeaderId, MainnetGasProfile>(
                         ledger_config,
-                        iter::once(&tx),
+                        // Tx is cloned eagerly: `try_apply_contents` consumes the tx, but we need
+                        // it for the block if it is valid.
+                        // Avoidable if we made the ledger hand it back.
+                        iter::once(tx.clone()),
                     ) {
                     Ok((new_state, _events, deferred_zkps)) => match deferred_zkps.verify() {
                         Ok(()) => {
@@ -657,6 +701,7 @@ where
                         }
                         Err(err) => {
                             tracing::trace!(
+                                target: LOG_TARGET,
                                 tx = ?tx.hash(),
                                 %err,
                                 "deferred ZKP verification failed during block assembly",
@@ -666,6 +711,7 @@ where
                     },
                     Err(err) => {
                         tracing::trace!(
+                            target: LOG_TARGET,
                             "tx {:?} not (yet) applicable during block assembly: {:?}",
                             tx.hash(),
                             err
@@ -688,15 +734,19 @@ where
                 .remove_transactions(&invalid_tx_hashes)
                 .await
         {
-            error!("Failed to remove invalid transactions from mempool: {e:?}");
+            error!(target: LOG_TARGET, "Failed to remove invalid transactions from mempool: {e:?}");
         }
 
         let valid_tx_stream = stream::iter(valid_txs);
         let txs = txs_for_block(valid_tx_stream).await;
 
         let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
+        if tracing::enabled!(Level::DEBUG) {
+            log_sdp_activity_selected_for_proposal(&block, &ledger_state);
+        }
 
         info!(
+            target: LOG_TARGET,
             "proposed block {:?} with {} transactions ({} removed)",
             block.header().id(),
             block.transactions_iter().len(),
@@ -785,7 +835,7 @@ where
     ) {
         let result = Self::build_and_submit_claim_tx(cryptarchia, wallet, mempool, config).await;
         if resp_tx.send(result).is_err() {
-            error!("Failed to send claim response");
+            error!(target: LOG_TARGET, "Failed to send claim response");
         }
     }
 

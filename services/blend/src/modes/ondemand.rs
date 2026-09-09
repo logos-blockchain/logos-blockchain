@@ -31,14 +31,14 @@ where
     )]
     pub async fn new(overwatch_handle: OverwatchHandle<RuntimeServiceId>) -> Result<Self, Error> {
         let service_id = <RuntimeServiceId as AsServiceId<Service>>::SERVICE_ID;
-        info!(target = LOG_TARGET, "Starting service {service_id:}");
+        info!(target: LOG_TARGET, "Starting service {service_id:}");
         overwatch_handle
             .start_service::<Service>()
             .await
             .map_err(|e| Error::Overwatch(Box::new(e)))?;
 
         info!(
-            target = LOG_TARGET,
+            target: LOG_TARGET,
             "Waiting until service {service_id:} is ready"
         );
         if let Err(e) =
@@ -95,12 +95,12 @@ async fn kill_service<Service, RuntimeServiceId>(
     RuntimeServiceId: AsServiceId<Service> + Debug + Display + Sync,
 {
     info!(
-        target = LOG_TARGET,
+        target: LOG_TARGET,
         "Killing service {}",
         <RuntimeServiceId as AsServiceId<Service>>::SERVICE_ID
     );
     if let Err(e) = overwatch_handle.stop_service::<Service>().await {
-        error!(target = LOG_TARGET, "Failed to kill service: {e:}");
+        error!(target: LOG_TARGET, "Failed to kill service: {e:}");
     }
 }
 

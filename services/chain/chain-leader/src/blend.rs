@@ -8,13 +8,14 @@
 
 use std::marker::PhantomData;
 
-use lb_blend_service::message::{BlendPayload, ProxyServiceMessage, ServiceMessage};
+use lb_blend_service::message::{DataPayload, ProxyServiceMessage, ServiceMessage};
 use lb_codec::BinaryEncode as _;
 use lb_core::block::Proposal;
+use lb_log_targets::chain;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use tracing::error;
 
-use crate::LOG_TARGET;
+const LOG_TARGET: &str = chain::leader::BLEND;
 
 pub struct BlendAdapter<BlendService>
 where
@@ -50,7 +51,7 @@ where
         if let Err((e, _)) = self
             .relay
             .send(
-                ServiceMessage::Blend(BlendPayload::BlockProposal(proposal.encode_to_vec())).into(),
+                ServiceMessage::Blend(DataPayload::BlockProposal(proposal.encode_to_vec())).into(),
             )
             .await
         {

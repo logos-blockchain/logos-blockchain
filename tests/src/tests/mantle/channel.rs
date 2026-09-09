@@ -10,7 +10,7 @@ use lb_core::{
         gas::GasCost,
         ledger::Inputs,
         ops::channel::{ChannelId, deposit::DepositOp},
-        traits::{GenesisTx as _, Hashable as _},
+        traits::Hashable as _,
         transactions::hash::TxHash,
     },
 };
@@ -97,9 +97,10 @@ async fn channel_deposit() {
         .config
         .genesis_block
         .as_ref()
-        .expect("manual-cluster deployment should include genesis tx")
+        .expect("manual-cluster deployment should include genesis block")
         .genesis_tx()
-        .genesis_inscription()
+        .inscription()
+        .operation()
         .channel_id;
     // TODO: assert the channel balance again once channel notes are tracked. A
     //  channel's balance is now the sum of its channel notes rather than a

@@ -185,7 +185,7 @@ if let Event::BlocksProcessed { finalized, .. } = event {
 
 When `withdraw_threshold > 1`, no single sequencer can authorize a withdraw alone. The Zone SDK exposes the lower-level building blocks for threshold coordination, and the proposing sequencer builds the `ChannelWithdrawOp` itself (instead of `WithdrawArg`) because it needs to commit to a specific `withdraw_nonce` before sharing the unsigned tx with the rest of the committee.
 
-- `handle.prepare_tx(ops, inscription)` — build the unsigned `RawMantleTx` for arbitrary `ops` (including `ChannelWithdraw`) and return it plus this sequencer's own signature.
+- `handle.prepare_tx(ops, inscription)` — build the unsigned `Ops` for arbitrary `ops` (including `ChannelWithdraw`) and return it plus this sequencer's own signature.
 - `handle.sign_tx(&tx)` — sign a transaction prepared elsewhere, e.g. one proposed by another committee member.
 - `handle.submit_signed_tx(signed_tx, msg_id)` — submit once the committee has gathered `ChannelState.withdraw_threshold` signatures.
 
@@ -195,7 +195,7 @@ The proposing sequencer needs the current `withdraw_nonce` and its own accredite
 
 ```rust
 use lb_core::mantle::{
-    Op, SignedMantleTx,
+    Op, SignedOps,
     ops::{OpProof, channel::withdraw::ChannelWithdrawOp},
 };
 use lb_core::proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature};
@@ -230,7 +230,7 @@ let signatures: Vec<IndexedSignature> = collect_signatures_from_committee(
 
 // 4. Assemble the threshold proof and submit.
 let withdraw_proof = ChannelMultiSigProof::new(signatures)?;
-let signed_tx = SignedMantleTx::new(
+let signed_tx = SignedOps::new(
     tx,
     vec![
         OpProof::ChannelMultiSigProof(withdraw_proof),

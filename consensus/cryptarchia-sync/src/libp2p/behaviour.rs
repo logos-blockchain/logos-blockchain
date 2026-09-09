@@ -6,6 +6,7 @@ use std::{
 
 use futures::{AsyncWriteExt as _, FutureExt as _, StreamExt as _, future::BoxFuture};
 use lb_core::header::HeaderId;
+use lb_log_targets::cryptarchia;
 use libp2p::{
     Multiaddr, PeerId, Stream as Libp2pStream, Stream, StreamProtocol,
     core::{Endpoint, transport::PortUse},
@@ -44,6 +45,8 @@ type SendingBlocksResponsesFuture = BoxFuture<'static, Result<(), ChainSyncError
 type SendingTipResponsesFuture = BoxFuture<'static, Result<(), ChainSyncError>>;
 
 type ReceivingRequestsFuture = BoxFuture<'static, Result<ReceivingRequestStream, ChainSyncError>>;
+
+const LOG_TARGET: &str = cryptarchia::sync::libp2p::REQUESTS;
 
 pub type BoxedStream<T> = Box<dyn futures::Stream<Item = T> + Send + Unpin>;
 
@@ -252,7 +255,7 @@ impl Behaviour {
         mut stream: Libp2pStream,
     ) -> Poll<ToSwarmEvent> {
         if request.known_blocks.additional_blocks.len() > MAX_ADDITIONAL_BLOCKS {
-            error!("Received excessive number of additional blocks");
+            error!(target: LOG_TARGET, "Received excessive number of additional blocks");
 
             self.incoming_streams_to_close.push(
                 async move {
@@ -291,7 +294,7 @@ impl Behaviour {
                 }
                 .boxed(),
             );
-            error!("Rejected excess pending incoming request");
+            error!(target: LOG_TARGET, "Rejected excess pending incoming request");
         } else {
             self.receiving_requests
                 .push(Provider::process_request(peer_id, stream).boxed());
@@ -440,7 +443,7 @@ impl NetworkBehaviour for Behaviour {
         self.waker = Some(cx.waker().clone());
 
         if self.incoming_streams_to_close.poll_next_unpin(cx) == Poll::Ready(Some(())) {
-            debug!("Incoming stream closed");
+            debug!(target: LOG_TARGET, "Incoming stream closed");
         }
 
         if let Poll::Ready(Some(result)) = self.sending_block_requests.poll_next_unpin(cx) {
@@ -449,7 +452,7 @@ impl NetworkBehaviour for Behaviour {
                     self.handle_blocks_request_available(request_stream);
                 }
                 Err(err) => {
-                    error!(%err, "failed to send a block download request");
+                    error!(target: LOG_TARGET, %err, "failed to send a block download request");
                 }
             }
 
@@ -462,7 +465,7 @@ impl NetworkBehaviour for Behaviour {
                     self.handle_tip_request_available(request_stream);
                 }
                 Err(err) => {
-                    error!(%err, "failed to send a tip request");
+                    error!(target: LOG_TARGET, %err, "failed to send a tip request");
                 }
             }
 
@@ -479,7 +482,7 @@ impl NetworkBehaviour for Behaviour {
 
         if let Poll::Ready(Some(result)) = self.sending_block_responses.poll_next_unpin(cx) {
             if let Err(e) = result {
-                error!("Sending response failed: {}", e);
+                error!(target: LOG_TARGET, "Sending response failed: {}", e);
             }
 
             self.try_notify_waker();
@@ -489,7 +492,7 @@ impl NetworkBehaviour for Behaviour {
 
         if let Poll::Ready(Some(result)) = self.sending_tip_responses.poll_next_unpin(cx) {
             if let Err(e) = result {
-                error!("Sending response failed: {}", e);
+                error!(target: LOG_TARGET, "Sending response failed: {}", e);
             }
 
             self.try_notify_waker();
@@ -500,7 +503,7 @@ impl NetworkBehaviour for Behaviour {
             match result {
                 Ok(request_stream) => return self.handle_request_ready(request_stream),
                 Err(e) => {
-                    error!("Error while processing incoming request: {}", e);
+                    error!(target: LOG_TARGET, "Error while processing incoming request: {}", e);
                 }
             }
         }

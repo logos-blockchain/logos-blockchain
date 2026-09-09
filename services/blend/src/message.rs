@@ -1,10 +1,10 @@
 use core::fmt::{self, Debug, Formatter};
 
-use lb_blend::message::{
-    MAX_PAYLOAD_BODY_SIZE, PayloadType,
-    encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
-};
+pub use lb_blend::message::MAX_PAYLOAD_BODY_SIZE;
+use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
+use lb_codec::BinaryEncode;
 use lb_core::{
+    codec::SerializeOp,
     mantle::NoteId,
     sdp::{DeclarationId, Locator},
 };
@@ -47,7 +47,7 @@ impl<InnerMessage> From<InnerMessage> for ProxyServiceMessage<InnerMessage> {
 pub enum ServiceMessage<NodeId> {
     /// To send a payload through the blend network, for the exit node to
     /// hand over to whichever local service owns that kind of payload.
-    Blend(BlendPayload),
+    Blend(DataPayload),
     /// Request the current blend network info (connected peers).
     GetNetworkInfo {
         reply: oneshot::Sender<Option<NetworkInfo<NodeId>>>,
@@ -55,7 +55,7 @@ pub enum ServiceMessage<NodeId> {
     /// Request the transactions still waiting for a `PoW` solution to back
     /// their layer proofs, oldest first.
     // TODO: Change this to be tx IDs once we have strong types at the API level and we don't blend
-    // `Vec<u8>`s but actual `SignedMantleTx`s.
+    // `Vec<u8>`s but actual `SignedOps`s.
     GetPendingTransactions {
         reply: oneshot::Sender<Vec<Vec<u8>>>,
     },
@@ -73,8 +73,8 @@ impl<NodeId> Debug for ServiceMessage<NodeId> {
     }
 }
 
-impl<NodeId> From<BlendPayload> for ServiceMessage<NodeId> {
-    fn from(value: BlendPayload) -> Self {
+impl<NodeId> From<DataPayload> for ServiceMessage<NodeId> {
+    fn from(value: DataPayload) -> Self {
         Self::Blend(value)
     }
 }
@@ -82,31 +82,69 @@ impl<NodeId> From<BlendPayload> for ServiceMessage<NodeId> {
 /// The plaintext body of a Blend data message, tagged with what it carries.
 // TODO: Replace with strong types for each message type Blend supports.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum BlendPayload {
+pub enum DataPayload {
     BlockProposal(Vec<u8>),
     Transaction(Vec<u8>),
 }
 
-impl BlendPayload {
-    /// Wraps a transaction for blending, refusing one that could never fit.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum DataPayloadType {
+    BlockProposal,
+    Transaction,
+}
+
+impl AsRef<str> for DataPayloadType {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::BlockProposal => "block_proposal",
+            Self::Transaction => "transaction",
+        }
+    }
+}
+
+impl DataPayload {
+    /// Encodes a transaction for blending, refusing one that could never fit.
     // TODO: This will go once we move away from `Vec<u8>` and into strong types
-    // for each message type Blend supports.
-    pub fn transaction(transaction: Vec<u8>) -> Result<Self, TransactionTooLarge> {
-        if transaction.len() > MAX_PAYLOAD_BODY_SIZE {
-            return Err(TransactionTooLarge {
-                size: transaction.len(),
+    // for each message type Blend supports. Then we can also implement `TryFrom`
+    // directly.
+    pub fn try_from_transaction<Tx>(transaction: &Tx) -> Result<Self, TransactionNotBlendable>
+    where
+        Tx: SerializeOp,
+    {
+        let encoded_tx = transaction.to_bytes()?.to_vec();
+        if encoded_tx.len() > MAX_PAYLOAD_BODY_SIZE {
+            return Err(TransactionNotBlendable::TooLarge {
+                size: encoded_tx.len(),
                 maximum: MAX_PAYLOAD_BODY_SIZE,
             });
         }
-        Ok(Self::Transaction(transaction))
+        Ok(Self::Transaction(encoded_tx))
+    }
+
+    /// Encodes a proposal for blending, refusing one that could never fit.
+    // TODO: This will go once we move away from `Vec<u8>` and into strong types
+    // for each message type Blend supports. Then we can also implement `TryFrom`
+    // directly.
+    pub fn try_from_proposal<Proposal>(proposal: &Proposal) -> Result<Self, ProposalNotBlendable>
+    where
+        Proposal: BinaryEncode,
+    {
+        if proposal.encoded_length() > MAX_PAYLOAD_BODY_SIZE {
+            return Err(ProposalNotBlendable::TooLarge {
+                size: proposal.encoded_length(),
+                maximum: MAX_PAYLOAD_BODY_SIZE,
+            });
+        }
+        let encoded_proposal = proposal.encode_to_vec();
+        Ok(Self::BlockProposal(encoded_proposal))
     }
 
     /// The wire discriminant this payload travels under.
     #[must_use]
-    pub const fn payload_type(&self) -> PayloadType {
+    pub const fn payload_type(&self) -> DataPayloadType {
         match self {
-            Self::BlockProposal(_) => PayloadType::BlockProposal,
-            Self::Transaction(_) => PayloadType::Transaction,
+            Self::BlockProposal(_) => DataPayloadType::BlockProposal,
+            Self::Transaction(_) => DataPayloadType::Transaction,
         }
     }
 
@@ -128,22 +166,30 @@ impl BlendPayload {
     }
 }
 
-/// A transaction too large to fit in a Blend payload.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[error("Transaction of {size} bytes exceeds the {maximum} a Blend payload can carry.")]
-pub struct TransactionTooLarge {
-    pub size: usize,
-    pub maximum: usize,
+/// Why a transaction cannot be carried by the Blend network.
+#[derive(Debug, thiserror::Error)]
+pub enum TransactionNotBlendable {
+    #[error("Transaction of {size} bytes exceeds the {maximum} a Blend payload can carry.")]
+    TooLarge { size: usize, maximum: usize },
+    #[error("Transaction cannot be encoded: {0}")]
+    Encoding(#[from] lb_core::codec::Error),
+}
+
+/// Why a proposal cannot be carried by the Blend network.
+#[derive(Debug, thiserror::Error)]
+pub enum ProposalNotBlendable {
+    #[error("Proposal of {size} bytes exceeds the {maximum} a Blend payload can carry.")]
+    TooLarge { size: usize, maximum: usize },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ProcessedMessage {
-    Decapsulated(BlendPayload),
+    Decapsulated(DataPayload),
     Encapsulated(Box<EncapsulatedMessageWithVerifiedPublicHeader>),
 }
 
-impl From<BlendPayload> for ProcessedMessage {
-    fn from(value: BlendPayload) -> Self {
+impl From<DataPayload> for ProcessedMessage {
+    fn from(value: DataPayload) -> Self {
         Self::Decapsulated(value)
     }
 }

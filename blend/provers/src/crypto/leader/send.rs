@@ -199,6 +199,7 @@ where
             .enumerate()
             .inspect(|(layer, (_, node_index))| {
                 tracing::trace!(
+                    target: LOG_TARGET,
                     "Encapsulating layer {layer:?} of data message type {payload_type:?} for node at index {node_index:?}."
                 );
             })

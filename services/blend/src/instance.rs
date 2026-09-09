@@ -9,17 +9,18 @@ use overwatch::{
     overwatch::OverwatchHandle,
     services::{AsServiceId, ServiceData},
 };
+use tracing::info;
 
 use crate::{
     core::{
         dispatcher::PayloadDispatcher as PayloadDispatcherTrait,
         service_components::{
-            MempoolOfService, MessageComponents, NetworkBackendOfService,
+            ChainNetworkOfService, MempoolOfService, MessageComponents, NetworkBackendOfService,
             PayloadDispatcherSettingsOfService, ServiceComponents as CoreServiceComponents,
         },
     },
     membership::MembershipInfo,
-    message::BlendPayload,
+    message::DataPayload,
     modes::{self, BroadcastMode, CoreMode, EdgeMode},
 };
 
@@ -49,7 +50,7 @@ impl<CoreService, EdgeService, RuntimeServiceId>
     Instance<CoreService, EdgeService, RuntimeServiceId>
 where
     CoreService: ServiceData<
-            Message: MessageComponents<CoreService::NodeId, Payload: Into<BlendPayload>>
+            Message: MessageComponents<CoreService::NodeId, Payload: Into<DataPayload>>
                          + Send
                          + Sync
                          + 'static,
@@ -67,6 +68,7 @@ where
                 RuntimeServiceId,
             >,
         > + AsServiceId<MempoolOfService<CoreService, RuntimeServiceId>>
+        + AsServiceId<ChainNetworkOfService<CoreService, RuntimeServiceId>>
         + Debug
         + Display
         + Clone
@@ -168,13 +170,48 @@ where
         local_node_id: CoreService::NodeId,
         network_settings: PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
     ) -> Result<Self, modes::Error> {
-        match to_mode {
+        let previous_mode = self.mode();
+        let selected_mode = to_mode.as_str();
+        let result = match to_mode {
             Mode::Core => self.transition_to_core(overwatch_handle).await,
             Mode::Edge => self.transition_to_edge(overwatch_handle).await,
             Mode::Broadcast => {
                 self.transition_to_broadcast(overwatch_handle, local_node_id, network_settings)
                     .await
             }
+        };
+        if let Ok(instance) = &result {
+            let resulting_mode = instance.mode();
+            let mode_changed = previous_mode != resulting_mode;
+            info!(
+                target: crate::LOG_TARGET,
+                diagnostic = "blend_tsi_outage",
+                event = "blend_mode_applied",
+                selected_mode,
+                previous_mode = previous_mode.as_str(),
+                resulting_mode = resulting_mode.as_str(),
+                mode_changed,
+                "Applied selected Blend mode"
+            );
+            if mode_changed {
+                info!(
+                    target: crate::LOG_TARGET,
+                    diagnostic = "blend_tsi_outage",
+                    event = "blend_mode_changed",
+                    previous_mode = previous_mode.as_str(),
+                    new_mode = resulting_mode.as_str(),
+                    "Blend mode changed"
+                );
+            }
+        }
+        result
+    }
+
+    const fn mode(&self) -> Mode {
+        match self {
+            Self::Core(_) => Mode::Core,
+            Self::Edge(_) | Self::EdgeAfterCore { .. } => Mode::Edge,
+            Self::Broadcast(_) | Self::BroadcastAfterCore { .. } => Mode::Broadcast,
         }
     }
 
@@ -291,7 +328,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mode {
     Core,
     Edge,
@@ -303,12 +340,30 @@ impl Mode {
     where
         NodeId: Eq + Hash,
     {
-        if membership.size() < minimal_network_size {
+        let mode = if membership.size() < minimal_network_size {
             Self::Broadcast
         } else if membership.contains_local() {
             Self::Core
         } else {
             Self::Edge
+        };
+        info!(
+            target: crate::LOG_TARGET,
+            diagnostic = "blend_tsi_outage",
+            event = "blend_mode_chosen",
+            mode = mode.as_str(),
+            membership_count = membership.size(),
+            local_is_member = membership.contains_local(),
+            "Selected Blend mode from latched membership"
+        );
+        mode
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Edge => "edge",
+            Self::Broadcast => "broadcast",
         }
     }
 }
@@ -334,7 +389,7 @@ mod tests {
     use super::*;
     use crate::{
         modes::broadcast_tests::{TestMessage, TestNetworkBackend, TestPayloadDispatcher},
-        test_utils::mempool::TestMempoolService,
+        test_utils::mocks::{TestChainNetworkService, TestMempoolService},
     };
 
     const LOCAL_NODE_ID: u8 = 99;
@@ -704,6 +759,7 @@ mod tests {
         edge: EdgeService,
         network: NetworkService<TestNetworkBackend, RuntimeServiceId>,
         mempool: TestMempoolService<RuntimeServiceId>,
+        chain_network: TestChainNetworkService<RuntimeServiceId>,
     }
 
     async fn start_network_service(handle: &OverwatchHandle<RuntimeServiceId>) {
@@ -803,6 +859,7 @@ mod tests {
             edge: (),
             network: NetworkConfig { backend: () },
             mempool: (),
+            chain_network: (),
         }
     }
 

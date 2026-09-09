@@ -7,16 +7,19 @@ Feature: PoW mining
   # starts empty, so the increase is exactly the claimed reward.
   #
   # Wallet resources are only needed on the late-joining mining node: it carries
-  # a mining wallet (`is_mining_wallet`), whose public key becomes the node's
-  # `pow.claim_address`, plus an unrelated second wallet to show only one mining
-  # wallet is configured.
+  # a mining wallet (`is_mining_wallet`), whose public key the claim request
+  # names, plus an unrelated second wallet to show only one mining wallet is
+  # configured.
   #
   # Two deployment tweaks make mining observable in a short test:
   #   * `rate_num = 1` enables the reward payout (the shipped configs disable it
   #     with `rate_num = 0`).
-  #   * The reward-difficulty EMA is tuned (factor 1, huge precision and
-  #     target-claims-per-block) so the difficulty target eases to the field
-  #     maximum within a few blocks, making a winning ticket trivial to find.
+  #   * `initial_difficulty = 1` starts `d_reward` at `p / 2`, half the scalar
+  #     field, so a winning ticket is trivial to find from the first block.
+  #     (The exponent inverts: a *larger* n means a *smaller* target, i.e.
+  #     harder.) The EMA is also tuned (factor 1, huge precision and
+  #     target-claims-per-block) so the controller does not tighten the target
+  #     once claims start landing.
 
   @blend_ci
   Scenario: A late-joining node mines PoW rewards while two nodes run consensus
@@ -37,7 +40,7 @@ Feature: PoW mining
     # fast, and the claim is capped to `reward_pool / reward` tickets — so a
     # single-ticket cap keeps the reward-claim transaction small and fast.
     And I have deployment config override "cryptarchia.pow_config.reward.reward_pool_genesis" as "1000000"
-    And I have deployment config override "cryptarchia.pow_config.reward.initial_difficulty_seed" as "0"
+    And I have deployment config override "cryptarchia.pow_config.reward.initial_difficulty" as "1"
     And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
     And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_precision" as "1000000000000000000"
     And I have deployment config override "cryptarchia.pow_config.reward.target_claims_per_block" as "1000000000000000000"
@@ -49,7 +52,7 @@ Feature: PoW mining
     # mineable target before the miner joins.
     When node "NODE_1" is at height 5 in 300 seconds
     # The miner joins the running network with its wallet resources; WALLET_MINER
-    # (account 1) is the mining wallet and becomes the node's pow.claim_address.
+    # (account 1) is the mining wallet the claim request pays.
     And I start mining nodes with wallet resources:
       | node_name | account_index | wallet_name  | is_mining_wallet | connected_to |
       | NODE_3    | 1             | WALLET_MINER | true             | NODE_1       |
@@ -68,4 +71,102 @@ Feature: PoW mining
     # The balance grows by exactly the reward the claim transaction paid to the
     # account and no more, so the increase is strictly the claimed reward.
     And wallet "WALLET_MINER" balance increased by exactly the reward from claim "POW_CLAIM_TX" over "MINER_BASELINE" in 120 seconds
+    Then I stop all nodes
+
+  # The two scenarios above deliberately fund the pool for a single claim
+  # (`reward_pool_genesis == epoch_reward_genesis`), which keeps every claim
+  # transaction to one op and makes them fast — but it also means the batching
+  # caps are never reached. This one funds the pool for many claims and lets a
+  # backlog of tickets build up first, so the batch is capped by the node's own
+  # limits instead. That is the path where a claim can be built larger than the
+  # Blend payload it has to travel in: such a transaction is refused at publish
+  # time and never reaches a block, so the claim step below fails outright.
+  @blend_ci
+  Scenario: A mining node claims a backlog of rewards in one transaction
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 0           | 0            |
+      | 2             | 1           | 1000         |
+    And I have a cluster with capacity of 3 nodes
+    And the first 2 nodes are declared as blend providers
+    And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
+    And I have deployment config override "time.slot_duration" as "seconds(1)"
+    And I have deployment config override "cryptarchia.slot_activation_coeff.numerator" as "1"
+    And I have deployment config override "cryptarchia.slot_activation_coeff.denominator" as "2"
+    And I have deployment config override "cryptarchia.pow_config.reward.rate_num" as "1"
+    And I have deployment config override "cryptarchia.pow_config.reward.epoch_reward_genesis" as "1000000"
+    # Funds 1000 claims, so `reward_pool / reward` no longer caps the batch and
+    # the node's own per-transaction limits decide how many tickets it takes.
+    And I have deployment config override "cryptarchia.pow_config.reward.reward_pool_genesis" as "1000000000"
+    And I have deployment config override "cryptarchia.pow_config.reward.initial_difficulty" as "1"
+    And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
+    And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_precision" as "1000000000000000000"
+    And I have deployment config override "cryptarchia.pow_config.reward.target_claims_per_block" as "1000000000000000000"
+    And I start node "NODE_1"
+    And I start peer node "NODE_2" connected to node "NODE_1"
+    When node "NODE_1" is at height 5 in 300 seconds
+    And I start mining nodes with wallet resources:
+      | node_name | account_index | wallet_name  | is_mining_wallet | connected_to |
+      | NODE_3    | 1             | WALLET_MINER | true             | NODE_1       |
+      | NODE_3    | 2             | OTHER_WALLET | false            | NODE_1       |
+    And node "NODE_3" is at height 6 in 180 seconds
+    And I record the balance of wallet "WALLET_MINER" as "MINER_BASELINE"
+    And I start mining on node "NODE_3"
+    # Mine until the ready set is far past any per-transaction cap, so the
+    # batch the node builds is the largest one it believes it may build.
+    And node "NODE_3" has at least 500 claimable PoW rewards within 120 seconds
+    And I stop mining on node "NODE_3"
+    And I claim PoW rewards on node "NODE_3" as "POW_CLAIM_TX" within 120 seconds
+    Then transaction "POW_CLAIM_TX" is included on node "NODE_1" in 120 seconds
+    # The claim must have batched the backlog rather than quietly falling back
+    # to a single reward, and it must be publishable while doing so.
+    And claim "POW_CLAIM_TX" batched at least 2 PoW rewards on node "NODE_1"
+    And wallet "WALLET_MINER" balance increased by exactly the reward from claim "POW_CLAIM_TX" over "MINER_BASELINE" in 120 seconds
+    Then I stop all nodes
+
+  # Same setup as above, but nothing ever calls the claim endpoint: the node is
+  # configured with a `pow.auto_claim` target and claims on its own. The miner's
+  # account starts empty, so any balance at all proves auto-claim ran.
+  @blend_ci
+  Scenario: A mining node claims its PoW rewards unattended
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 0           | 0            |
+      | 2             | 1           | 1000         |
+    And I have a cluster with capacity of 3 nodes
+    And the first 2 nodes are declared as blend providers
+    And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
+    And I have deployment config override "time.slot_duration" as "seconds(1)"
+    And I have deployment config override "cryptarchia.slot_activation_coeff.numerator" as "1"
+    And I have deployment config override "cryptarchia.slot_activation_coeff.denominator" as "2"
+    And I have deployment config override "cryptarchia.pow_config.reward.rate_num" as "1"
+    And I have deployment config override "cryptarchia.pow_config.reward.epoch_reward_genesis" as "1000000"
+    And I have deployment config override "cryptarchia.pow_config.reward.reward_pool_genesis" as "1000000"
+    And I have deployment config override "cryptarchia.pow_config.reward.initial_difficulty" as "1"
+    And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
+    And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_precision" as "1000000000000000000"
+    And I have deployment config override "cryptarchia.pow_config.reward.target_claims_per_block" as "1000000000000000000"
+    And I start node "NODE_1"
+    And I start peer node "NODE_2" connected to node "NODE_1"
+    When node "NODE_1" is at height 5 in 300 seconds
+    # Staged before the miner boots: auto-claim validates its targets against
+    # the node's wallet keys at startup, so it cannot be turned on later. The
+    # threshold is far above anything the single fundable claim can pay, so the
+    # target never becomes satisfied and auto-claim stays armed. Slot pacing
+    # ties the tick to chain progress rather than wall-clock time.
+    And I configure PoW auto-claim on node "NODE_3" paying wallet account 1 up to 1000000000 LGO every 1 slots
+    And I start mining nodes with wallet resources:
+      | node_name | account_index | wallet_name  | is_mining_wallet | connected_to |
+      | NODE_3    | 1             | WALLET_MINER | true             | NODE_1       |
+      | NODE_3    | 2             | OTHER_WALLET | false            | NODE_1       |
+    And node "NODE_3" is at height 6 in 180 seconds
+    And I start mining on node "NODE_3"
+    # Stop mining once tickets exist, as in the manual scenario: at the eased
+    # difficulty the miner floods the service loop, and the auto-claim tick has
+    # to get a turn on that same loop.
+    And node "NODE_3" has at least 1 claimable PoW rewards within 120 seconds
+    And I stop mining on node "NODE_3"
+    # No claim step anywhere: the wallet started empty, so a non-zero balance
+    # can only have come from a claim the node issued by itself.
+    Then wallet "WALLET_MINER" has 1 or more LGO in 180 seconds
     Then I stop all nodes

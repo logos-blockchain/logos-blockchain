@@ -11,6 +11,7 @@ use futures::{StreamExt as _, TryStreamExt as _, future, stream, stream::BoxStre
 use lb_core::{block::Block, header::HeaderId};
 use lb_cryptarchia_engine::{Branch, Slot};
 use lb_cryptarchia_sync::{BlocksResponse, BlocksUnavailableReason, ProviderResponse};
+use lb_log_targets::chain;
 use lb_storage_service::{StorageMsg, api::chain::StorageChainApi, backends::StorageBackend};
 use overwatch::DynError;
 use serde::Serialize;
@@ -19,6 +20,8 @@ use tokio::sync::{mpsc::Sender, oneshot};
 use tracing::{debug, error};
 
 use crate::{relays::StorageRelay, sync::config::BlockProviderConfig};
+
+const LOG_TARGET: &str = chain::service::sync::BLOCK_PROVIDER;
 
 #[derive(Debug, Error, Clone)]
 pub enum GetBlocksError {
@@ -84,6 +87,7 @@ where
         reply_sender: Sender<BlocksResponse>,
     ) {
         debug!(
+            target: LOG_TARGET,
             "Providing blocks:
             target_block={target_block:?},
             known_blocks={known_blocks:?},"
@@ -96,7 +100,7 @@ where
             Ok(stream) => {
                 let response = ProviderResponse::Available(stream);
                 if let Err(e) = reply_sender.send(response).await {
-                    error!("Failed to send blocks stream: {e}");
+                    error!(target: LOG_TARGET, "Failed to send blocks stream: {e}");
                 }
             }
             Err(e) => {
@@ -144,6 +148,7 @@ where
 
         if let (Some(start_block), Some(end_block)) = (path.first(), path.last()) {
             debug!(
+                target: LOG_TARGET,
                 "Prepared block stream from {:?} to {:?} with {} path entries",
                 start_block,
                 end_block,
@@ -564,11 +569,12 @@ where
     async fn send_error(reason: BlocksUnavailableReason, reply_sender: Sender<BlocksResponse>) {
         if let BlocksUnavailableReason::BlockNotFound(target) = &reason {
             error!(
+                target: LOG_TARGET,
                 ?target,
                 "Failed to create a block stream: requested target block is unavailable"
             );
         } else {
-            error!(reason = %reason, "Failed to create a block stream");
+            error!(target: LOG_TARGET, reason = %reason, "Failed to create a block stream");
         }
 
         if let Err(e) = reply_sender
@@ -576,7 +582,7 @@ where
             .await
             .map_err(|_| GetBlocksError::SendError("Failed to send error response".to_owned()))
         {
-            error!("Failed to send error response: {e}");
+            error!(target: LOG_TARGET, "Failed to send error response: {e}");
         }
     }
 }
@@ -591,8 +597,10 @@ mod tests {
         crypto::ZkHasher,
         events::Events,
         mantle::{
-            Note, RawMantleTx, SignedMantleTx, ledger::Utxo, ops::leader_claim::VoucherCm,
-            transactions::states::Unverified,
+            Note,
+            ledger::{Utxo, verification_mode::StandardMode},
+            ops::leader_claim::VoucherCm,
+            transactions::{Ops, SignedOps, states::Unverified},
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
@@ -758,13 +766,20 @@ mod tests {
         pub storage: StorageService<RocksBackend, RuntimeServiceId>,
     }
 
+    type TestBlock = (
+        Block<SignedOps<Unverified, StandardMode>>,
+        HeaderId,
+        HeaderId,
+        Slot,
+    );
+
     #[expect(dead_code, reason = "Fix in a separate PR")]
     struct TestEnv {
         service: overwatch::overwatch::Overwatch<RuntimeServiceId>,
         storage_relay: StorageRelay<RocksBackend>,
         cryptarchia: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         proof: lb_core::proofs::leader_proof::Groth16LeaderProof,
-        provider: BlockProvider<RocksBackend, SignedMantleTx<Unverified>>,
+        provider: BlockProvider<RocksBackend, SignedOps<Unverified, StandardMode>>,
     }
 
     impl TestEnv {
@@ -824,11 +839,7 @@ mod tests {
             (service, storage_relay)
         }
 
-        fn create_block_sequence(
-            &self,
-            count: usize,
-            slot_offset: u64,
-        ) -> Vec<(Block<SignedMantleTx<Unverified>>, HeaderId, HeaderId, Slot)> {
+        fn create_block_sequence(&self, count: usize, slot_offset: u64) -> Vec<TestBlock> {
             let mut blocks = Vec::new();
             let mut prev_header = HeaderId::from([0u8; 32]);
 
@@ -901,7 +912,7 @@ mod tests {
             &self,
             prev_header: HeaderId,
             slot: Slot,
-        ) -> Option<Block<SignedMantleTx<Unverified>>> {
+        ) -> Option<Block<SignedOps<Unverified, StandardMode>>> {
             let dummy_signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
             Block::create(
                 prev_header,
@@ -916,7 +927,7 @@ mod tests {
 
         async fn add_block(
             &mut self,
-            block: &Block<SignedMantleTx<Unverified>>,
+            block: &Block<SignedOps<Unverified, StandardMode>>,
             header_id: HeaderId,
             prev_header: HeaderId,
             slot: Slot,
@@ -930,7 +941,7 @@ mod tests {
 
         async fn store_block_only(
             &self,
-            block: &Block<SignedMantleTx<Unverified>>,
+            block: &Block<SignedOps<Unverified, StandardMode>>,
             header_id: HeaderId,
         ) {
             let parent_id = block.header().parent();
@@ -957,7 +968,7 @@ mod tests {
 
         async fn store_block_in_storage(
             &self,
-            block: &Block<SignedMantleTx<Unverified>>,
+            block: &Block<SignedOps<Unverified, StandardMode>>,
             header_id: HeaderId,
             slot: Slot,
         ) {
@@ -995,7 +1006,7 @@ mod tests {
             if let Some(ProviderResponse::Available(mut stream)) = rx.recv().await {
                 while let Some(res) = &stream.next().await {
                     if let Ok(bytes) = &res {
-                        let block: Block<SignedMantleTx<Unverified>> =
+                        let block: Block<SignedOps<Unverified, StandardMode>> =
                             Block::from_bytes(bytes).unwrap();
                         blocks.push(block.header().id());
                     } else {
@@ -1040,7 +1051,7 @@ mod tests {
                     }
                     ProviderResponse::Available(mut stream) => match stream.next().await {
                         Some(Ok(bytes)) => {
-                            let block: Block<RawMantleTx> = Block::try_from(bytes).unwrap();
+                            let block: Block<Ops> = Block::try_from(bytes).unwrap();
                             (
                                 false,
                                 format!("Available(first_block={:?})", block.header().id()),

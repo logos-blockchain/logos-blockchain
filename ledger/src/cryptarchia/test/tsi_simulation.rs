@@ -26,8 +26,9 @@ use std::{num::NonZero, sync::Arc};
 use lb_core::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        Note, SignedMantleTx, Utxo, Value,
+        Note, SignedOps, Utxo, Value,
         gas::MainnetGasProfile,
+        ledger::verification_mode::StandardMode,
         transactions::{
             GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Preverified,
         },
@@ -385,7 +386,7 @@ fn apply_block_to_ledger(
             slot,
             &proof,
             uncle_slots,
-            std::iter::empty::<&SignedMantleTx<Preverified>>(),
+            std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
         )
         .expect("ledger update")
         .verify_batch_proofs()

@@ -73,6 +73,42 @@ pub struct ChannelMultiSigProof {
     signatures: IndexedSignatures,
 }
 
+impl ChannelMultiSigProof {
+    #[must_use]
+    pub const fn new_unchecked(signatures: IndexedSignatures) -> Self {
+        Self { signatures }
+    }
+
+    pub fn try_new(signatures: IndexedSignatures) -> Result<Self, Error> {
+        let signatures = Self::validate_well_formedness(signatures)?;
+        Ok(Self { signatures })
+    }
+
+    /// Validates that the proof is structurally well-formed: signature indices
+    /// must be strictly increasing (so they are ordered and unique, per the
+    /// `CHANNEL_CONFIG` / `CHANNEL_WITHDRAW` spec).
+    ///
+    /// This validates structural correctness only. Cryptographic validity
+    /// (signature verification, threshold requirements, index-to-key
+    /// correspondence) must be checked separately.
+    fn validate_well_formedness(signatures: IndexedSignatures) -> Result<IndexedSignatures, Error> {
+        if signatures
+            .windows(2)
+            .any(|w| w[0].channel_key_index >= w[1].channel_key_index)
+        {
+            return Err(Error::IndicesNotStrictlyIncreasing(
+                signatures.iter().map(|s| s.channel_key_index).collect(),
+            ));
+        }
+        Ok(signatures)
+    }
+
+    #[must_use]
+    pub fn signatures(&self) -> &[IndexedSignature] {
+        self.signatures.as_slice()
+    }
+}
+
 impl BinaryEncode for ChannelMultiSigProof {
     fn encoded_length(&self) -> usize {
         self.signatures.encoded_length()
@@ -119,37 +155,6 @@ impl From<ChannelMultiSigProof> for ChannelMultiSigProofRepr {
         Self {
             signatures: proof.signatures,
         }
-    }
-}
-
-impl ChannelMultiSigProof {
-    pub fn try_new(signatures: IndexedSignatures) -> Result<Self, Error> {
-        let signatures = Self::validate_well_formedness(signatures)?;
-        Ok(Self { signatures })
-    }
-
-    /// Validates that the proof is structurally well-formed: signature indices
-    /// must be strictly increasing (so they are ordered and unique, per the
-    /// `CHANNEL_CONFIG` / `CHANNEL_WITHDRAW` spec).
-    ///
-    /// This validates structural correctness only. Cryptographic validity
-    /// (signature verification, threshold requirements, index-to-key
-    /// correspondence) must be checked separately.
-    fn validate_well_formedness(signatures: IndexedSignatures) -> Result<IndexedSignatures, Error> {
-        if signatures
-            .windows(2)
-            .any(|w| w[0].channel_key_index >= w[1].channel_key_index)
-        {
-            return Err(Error::IndicesNotStrictlyIncreasing(
-                signatures.iter().map(|s| s.channel_key_index).collect(),
-            ));
-        }
-        Ok(signatures)
-    }
-
-    #[must_use]
-    pub fn signatures(&self) -> &[IndexedSignature] {
-        self.signatures.as_slice()
     }
 }
 

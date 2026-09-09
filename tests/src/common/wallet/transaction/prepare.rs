@@ -4,8 +4,9 @@ use std::collections::HashMap;
 
 use lb_core::mantle::{
     NoteId, Op, Utxo,
-    traits::Hashable as _,
-    transactions::{MantleTxBuilder, MantleTxContext, hash::TxHash, mantle_tx::MantleTx},
+    ops::OpRef,
+    traits::{Hashable as _, MantleTx},
+    transactions::{MantleTxBuilder, hash::TxHash, tx_list::ops::OpsContext},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 
@@ -25,7 +26,7 @@ use crate::common::wallet::{WalletFundingResources, WalletFundingSource, WalletR
 /// expensive proof/signing work concurrently.
 pub struct PreparedWalletTransactionWorkItem {
     funded_builder: MantleTxBuilder,
-    context: MantleTxContext,
+    context: OpsContext,
     tx_hash: TxHash,
     ops: Vec<Op>,
     transfer_signers: WalletTransferSigners,
@@ -77,11 +78,12 @@ pub fn prepare_wallet_transaction_work_item(
         fee_sponsor_pk.unwrap_or(sender_pk),
     );
 
+    let ops = mantle_tx.into_inner().into();
     Ok(PreparedWalletTransactionWorkItem {
         funded_builder,
         context,
         tx_hash,
-        ops: mantle_tx.ops().to_vec(),
+        ops,
         transfer_signers,
         reserved_inputs,
     })
@@ -166,10 +168,10 @@ fn funding_inputs_from_transfers(
     input_utxos_by_note_id: &HashMap<NoteId, Utxo>,
 ) -> Result<Vec<Utxo>, WalletTransactionError> {
     mantle_tx
-        .ops()
-        .iter()
+        .op_refs()
+        .into_iter()
         .filter_map(|op| match op {
-            Op::Transfer(transfer_op) => Some(transfer_op),
+            OpRef::Transfer(transfer_op) => Some(transfer_op),
             _ => None,
         })
         .flat_map(|transfer_op| transfer_op.inputs.iter())

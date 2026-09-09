@@ -144,6 +144,10 @@ pub trait OperationGas<Profile: GasProfile> {
     const GAS_COST: Gas;
 }
 
+impl<T: OperationGas<Profile>, Profile: GasProfile> OperationGas<Profile> for &T {
+    const GAS_COST: Gas = T::GAS_COST;
+}
+
 pub trait SignedOperationExecutionGas {
     /// The factor `execution_gas` scales the operation's base gas cost by.
     fn gas_multiplier(&self) -> Value;

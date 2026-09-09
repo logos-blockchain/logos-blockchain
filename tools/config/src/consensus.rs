@@ -4,7 +4,7 @@ use lb_codec::BinaryEncode as _;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
-        CryptarchiaParameter, GenesisTime, Note, NoteId, OpProof, RawMantleTx, Utxo,
+        CryptarchiaParameter, GenesisTime, Note, NoteId, OpProof, Utxo,
         ops::{
             Op, OpId as _, ZkAndEd25519Proof,
             channel::{
@@ -13,7 +13,7 @@ use lb_core::{
             },
             transfer::TransferOp,
         },
-        transactions::{GenesisTx, Ops, OpsProofs},
+        transactions::{GenesisTx, OpProofs, Ops},
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
@@ -21,7 +21,7 @@ use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
 use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
-use lb_node::{Hashable as _, SignedMantleTx};
+use lb_node::{Hashable as _, SignedOps};
 use num_bigint::BigUint;
 
 use crate::unique::unique_test_context;
@@ -480,10 +480,9 @@ pub fn create_genesis_block_with_declarations(
         ops.push(Op::SDPDeclare(declaration));
     }
 
-    let mantle_tx = RawMantleTx(Ops::new_unchecked(ops));
-
+    let mantle_tx = Ops::new_unchecked(ops);
     let mantle_tx_hash = mantle_tx.hash();
-    let mut ops_proofs = OpsProofs::from([
+    let mut ops_proofs = OpProofs::from([
         OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
             &EMPTY_GROTH16_PROOF_BYTES,
         ))),
@@ -506,7 +505,7 @@ pub fn create_genesis_block_with_declarations(
             .expect("genesis transaction proofs are bounded");
     }
 
-    let signed_mantle_tx = SignedMantleTx::new_trusted(mantle_tx, ops_proofs);
+    let signed_mantle_tx = SignedOps::from_parts_trusted(mantle_tx, ops_proofs).unwrap();
 
     // TODO: Maybe use the builder instead of trusting the signed mantle tx
     GenesisBlockBuilder::new()

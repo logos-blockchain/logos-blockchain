@@ -17,7 +17,7 @@ use rpds::HashTrieMapSync;
 
 use crate::{
     EpochState,
-    config::RewardPoWConfig,
+    config::{Config, RewardPoWConfig},
     mantle::pow::{
         difficulty::compute_new_reward_difficulty,
         tx_density::{ClosedEpochLoad, TxDensity},
@@ -78,19 +78,15 @@ pub struct BlendPowState {
 
 impl PowState {
     /// Create the genesis `PoW` state from `config`: pool and per-claim reward
-    /// seeded from the genesis endowment, initial difficulty derived from them,
-    /// and no claims or seen blocks yet.
+    /// seeded from the genesis endowment, difficulty taken straight from the
+    /// configured exponent, and no claims or seen blocks yet.
     #[must_use]
     pub fn from_reward_config(config: &RewardPoWConfig) -> Self {
         Self {
             reward: RewardPowState {
                 reward_pool: config.reward_pool_genesis,
                 epoch_reward: config.epoch_reward_genesis,
-                reward_difficulty: compute_new_reward_difficulty(
-                    config.initial_difficulty_seed,
-                    PowTarget::from(config.epoch_reward_genesis),
-                    config,
-                ),
+                reward_difficulty: PowTarget::from(config.initial_difficulty),
                 refill_rewards: 0,
                 nullifiers: HashTrieMapSync::new_sync(),
                 block_slots: HashTrieMapSync::new_sync(),
@@ -134,7 +130,7 @@ impl PowState {
 
     /// Move the epoch's collected `refill_rewards` into the `reward_pool`
     /// and recompute the per-claim `epoch_reward` from it.
-    pub(crate) fn add_rewards_to_pool(&mut self, config: &RewardPoWConfig) {
+    pub(crate) fn add_rewards_to_pool(&mut self, config: &Config) {
         self.reward.reward_pool = self
             .reward
             .reward_pool
@@ -209,7 +205,7 @@ impl PowState {
         &self,
         previous_epoch: &EpochState,
         next_epoch: &EpochState,
-        config: &RewardPoWConfig,
+        config: &Config,
     ) -> Self {
         if previous_epoch.epoch >= next_epoch.epoch {
             return self.clone();
@@ -236,17 +232,16 @@ impl PowState {
 }
 
 /// Compute the per-claim `sigma_e` reward for the epoch from the current
-/// `PoW` reward pool balance, per the deployment's payout rate
-/// (`config.rate_num / config.claim_rate_denominator()`).
+/// `PoW` reward pool balance, per the deployment's payout rate (`rate_num`
+/// over [`Config::claim_rate_denominator`]).
 ///
-/// The intermediate product is widened to `u128` so a full pool
-/// (`u64::MAX`, reachable through saturation) cannot overflow with a
-/// `rate_num` greater than one; a result beyond `u64` saturates.
+/// The whole computation is widened to `u128` so a full pool (`u64::MAX`,
+/// reachable through saturation) cannot overflow with a `rate_num` greater
+/// than one; a result beyond `u64` saturates.
 #[must_use]
-pub fn compute_epoch_pow_reward(pow_reward_pool: PowReward, config: &RewardPoWConfig) -> PowReward {
-    let denominator = u64::from(config.claim_rate_denominator());
-    let reward =
-        u128::from(pow_reward_pool) * u128::from(config.rate_num) / u128::from(denominator);
+pub fn compute_epoch_pow_reward(pow_reward_pool: PowReward, config: &Config) -> PowReward {
+    let reward = u128::from(pow_reward_pool) * u128::from(config.pow_config.reward.rate_num)
+        / config.claim_rate_denominator().get();
     PowReward::try_from(reward).unwrap_or(PowReward::MAX)
 }
 
@@ -258,10 +253,11 @@ mod tests {
         mantle::{ledger::Utxos, transactions::hash::TxHash},
         sdp::Declarations,
     };
-    use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
+    use lb_groth16::{AdditiveGroup as _, Field as _, Fr, fr_to_bytes};
+    use num_bigint::BigUint;
 
     use super::*;
-    use crate::UtxoTree;
+    use crate::{UtxoTree, config::ModulusShift};
 
     const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
 
@@ -289,14 +285,13 @@ mod tests {
         RewardPoWConfig {
             reward_pool_genesis: POW_REWARD_POOL_GENESIS,
             epoch_reward_genesis: POW_EPOCH_REWARD_POOL_GENESIS,
-            initial_difficulty_seed: 1_000,
+            initial_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).expect("10 is non-zero"),
             target_claims_per_block: 100,
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
             target_claim_per_block: NonZeroU64::MIN,
-            expected_blocks_per_epoch: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(SLOT_WINDOW.get()).expect("SLOT_WINDOW is non-zero"),
         }
     }
@@ -306,16 +301,26 @@ mod tests {
         PowState::from_reward_config(&reward_config())
     }
 
+    /// A ledger config carrying [`reward_config`]. Its consensus schedule
+    /// (`k = 1`, `f = 1/10`) works out to ten expected blocks per epoch — the
+    /// derived factor of the payout denominator.
+    fn ledger_config() -> Config {
+        let mut config = crate::cryptarchia::tests::config();
+        config.pow_config.reward = reward_config();
+        config
+    }
+
     /// A payout rate of `1/100`: `sigma_e = pool / 100` (rate `1`, denominator
-    /// `1 * 10 * 10`).
-    fn test_pool_config() -> RewardPoWConfig {
-        RewardPoWConfig {
+    /// `1 * 10 * 10`, the last factor derived from the consensus schedule).
+    fn test_pool_config() -> Config {
+        let mut config = ledger_config();
+        config.pow_config.reward = RewardPoWConfig {
             rate_num: 1,
             rate_den: NonZeroU64::MIN,
             target_claim_per_block: NonZeroU64::new(10).expect("10 is non-zero"),
-            expected_blocks_per_epoch: NonZeroU64::new(10).expect("10 is non-zero"),
             ..reward_config()
-        }
+        };
+        config
     }
 
     const BLOCK_A: Hash = [1u8; 32];
@@ -326,11 +331,33 @@ mod tests {
         let state = pow_state();
         assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS);
         assert_eq!(state.epoch_reward(), POW_EPOCH_REWARD_POOL_GENESIS);
-        // The initial difficulty is seeded too — a zero target would be an
-        // absorbing state no claim could ever satisfy.
-        assert_ne!(state.reward_difficulty(), PowTarget::default());
+        // The genesis difficulty is exactly the configured exponent, not a
+        // value derived from it. Asserting only that it is non-zero would not
+        // notice a target off by orders of magnitude, which is what deriving
+        // it from a token amount used to produce.
+        assert_eq!(
+            state.reward_difficulty(),
+            PowTarget::from(ModulusShift::new::<26>())
+        );
         assert!(state.nullifiers().is_empty());
         assert!(state.block_slots().is_empty());
+    }
+
+    /// The genesis difficulty has to be a sane fraction of the scalar field:
+    /// `p / 2^26`, which is a ~68-digit number. A token-scale value such as
+    /// the per-claim reward is ~7 digits, so a target derived from one is
+    /// unreachable by tens of orders of magnitude and no ticket ever wins.
+    /// This pins the scale rather than the exact constant.
+    #[test]
+    fn genesis_difficulty_is_field_scale_not_token_scale() {
+        let difficulty = BigUint::from_bytes_le(&fr_to_bytes(&pow_state().reward_difficulty()));
+        let field = BigUint::from_bytes_le(&fr_to_bytes(&-PowTarget::ONE));
+
+        // Within a factor of 2^27 of the whole field, and nowhere near the
+        // token amounts in `reward_config`.
+        assert!(difficulty > &field >> 27u32);
+        assert!(difficulty < field);
+        assert!(difficulty > BigUint::from(u64::MAX));
     }
 
     #[test]
@@ -346,24 +373,20 @@ mod tests {
     #[test]
     fn compute_epoch_pow_reward_disabled_is_always_zero() {
         // The default config disables claiming (`rate_num = 0`).
-        assert_eq!(compute_epoch_pow_reward(u64::MAX, &reward_config()), 0);
+        assert_eq!(compute_epoch_pow_reward(u64::MAX, &ledger_config()), 0);
     }
 
     #[test]
     fn compute_epoch_pow_reward_does_not_overflow_on_full_pool() {
-        // A rate with rate_num > 1: `sigma_e = pool * 2 / 4`.
-        let high_rate = RewardPoWConfig {
-            rate_num: 2,
-            rate_den: NonZeroU64::MIN,
-            target_claim_per_block: NonZeroU64::MIN,
-            expected_blocks_per_epoch: NonZeroU64::new(4).expect("4 is non-zero"),
-            ..reward_config()
-        };
+        // A rate with rate_num > 1: `sigma_e = pool * 2 / 10`, the denominator
+        // being the ten expected blocks per epoch.
+        let mut high_rate = ledger_config();
+        high_rate.pow_config.reward.rate_num = 2;
 
         // The pool can legitimately reach u64::MAX (it saturates there), so
         // `pool * rate_num` must be widened past u64 or it overflows for any
         // rate_num > 1.
-        assert_eq!(compute_epoch_pow_reward(u64::MAX, &high_rate), u64::MAX / 2);
+        assert_eq!(compute_epoch_pow_reward(u64::MAX, &high_rate), u64::MAX / 5);
     }
 
     #[test]
@@ -452,7 +475,7 @@ mod tests {
         state.add_reward_refill_rewards(500);
         let same_epoch = epoch_state(3);
 
-        let unchanged = state.try_apply_header(&same_epoch, &same_epoch, &reward_config());
+        let unchanged = state.try_apply_header(&same_epoch, &same_epoch, &ledger_config());
 
         assert_eq!(unchanged, state);
         assert_eq!(unchanged.reward_pool(), POW_REWARD_POOL_GENESIS);
@@ -466,7 +489,7 @@ mod tests {
         let later = epoch_state(5);
 
         // `next_epoch` behind `previous_epoch`, e.g. a stale/reorged branch.
-        let unchanged = state.try_apply_header(&later, &earlier, &reward_config());
+        let unchanged = state.try_apply_header(&later, &earlier, &ledger_config());
 
         assert_eq!(unchanged, state);
     }
@@ -479,7 +502,7 @@ mod tests {
         let previous = epoch_state(0);
         let next = epoch_state(1);
 
-        drop(state.try_apply_header(&previous, &next, &reward_config()));
+        drop(state.try_apply_header(&previous, &next, &ledger_config()));
 
         assert_eq!(state, original);
     }
@@ -491,7 +514,7 @@ mod tests {
         let previous = epoch_state(0);
         let next = epoch_state(1);
 
-        let new_state = state.try_apply_header(&previous, &next, &reward_config());
+        let new_state = state.try_apply_header(&previous, &next, &ledger_config());
 
         assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 500);
     }
@@ -506,7 +529,7 @@ mod tests {
         let previous = epoch_state(0);
         let next = epoch_state(1);
 
-        let new_state = state.try_apply_header(&previous, &next, &reward_config());
+        let new_state = state.try_apply_header(&previous, &next, &ledger_config());
 
         assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 1_000_000);
         assert_eq!(new_state.epoch_reward(), 0);
@@ -519,7 +542,7 @@ mod tests {
         let previous = epoch_state(0);
         let next = epoch_state(5);
 
-        let new_state = state.try_apply_header(&previous, &next, &reward_config());
+        let new_state = state.try_apply_header(&previous, &next, &ledger_config());
 
         assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 500);
     }
@@ -531,12 +554,12 @@ mod tests {
         let mut state = pow_state();
         state.add_reward_refill_rewards(200);
         let same = epoch_state(2);
-        let mut state = state.try_apply_header(&same, &same, &reward_config());
+        let mut state = state.try_apply_header(&same, &same, &ledger_config());
 
         state.add_reward_refill_rewards(300);
         let previous = epoch_state(2);
         let next = epoch_state(3);
-        let new_state = state.try_apply_header(&previous, &next, &reward_config());
+        let new_state = state.try_apply_header(&previous, &next, &ledger_config());
 
         assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 500);
     }
@@ -695,7 +718,7 @@ mod tests {
         let mut state = pow_state();
         state.update_from_claim_execution_result(&claim_result(0, nullifier));
 
-        let new_state = state.try_apply_header(&epoch_state(0), &epoch_state(1), &reward_config());
+        let new_state = state.try_apply_header(&epoch_state(0), &epoch_state(1), &ledger_config());
 
         assert!(new_state.nullifiers().contains_key(&nullifier));
     }

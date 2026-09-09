@@ -1,9 +1,9 @@
-use lb_utils::blake_rng::BlakeRng;
+use rand_chacha::ChaCha20Rng;
 use tokio::sync::oneshot;
 
 use crate::{
     core::{BlendService, backends::BlendBackend, dispatcher::PayloadDispatcher},
-    message::{BlendPayload, NetworkInfo, ServiceMessage},
+    message::{DataPayload, NetworkInfo, ServiceMessage},
 };
 
 /// Helper trait to help the Blend proxy service rely on the concrete types of
@@ -44,7 +44,7 @@ impl<
         RuntimeServiceId,
     >
 where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
     Network: PayloadDispatcher<RuntimeServiceId>,
     StateStorage: lb_services_utils::overwatch::recovery::RecoveryBackend<
             RuntimeServiceId,
@@ -55,7 +55,7 @@ where
     type PayloadDispatcher = Network;
     type BackendSettings = Backend::Settings;
     type NodeId = NodeId;
-    type Rng = BlakeRng;
+    type Rng = ChaCha20Rng;
     type ProofsGenerator = ProofsGenerator;
 }
 
@@ -72,6 +72,10 @@ pub type BlendBackendSettingsOfService<Service, RuntimeServiceId> =
 pub type MempoolOfService<Service, RuntimeServiceId> = <<Service as ServiceComponents<
     RuntimeServiceId,
 >>::PayloadDispatcher as PayloadDispatcher<RuntimeServiceId>>::MempoolService;
+
+pub type ChainNetworkOfService<Service, RuntimeServiceId> = <<Service as ServiceComponents<
+    RuntimeServiceId,
+>>::PayloadDispatcher as PayloadDispatcher<RuntimeServiceId>>::ChainNetworkService;
 
 pub type PayloadDispatcherSettingsOfService<Service, RuntimeServiceId> =
     <<Service as ServiceComponents<RuntimeServiceId>>::PayloadDispatcher as PayloadDispatcher<
@@ -101,7 +105,7 @@ pub trait MessageComponents<NodeId> {
 }
 
 impl<NodeId> MessageComponents<NodeId> for ServiceMessage<NodeId> {
-    type Payload = BlendPayload;
+    type Payload = DataPayload;
 
     fn into_payload(self) -> Self::Payload {
         match self {

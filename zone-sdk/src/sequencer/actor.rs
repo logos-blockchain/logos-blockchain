@@ -500,8 +500,12 @@ where
             None => ChannelUpdate {
                 orphaned: Vec::new(),
                 adopted: Vec::new(),
+                adopted_deposits: Vec::new(),
             },
         };
+        // Observed deposits ride every processed block, independent of whether
+        // the lineage moved.
+        channel_update.adopted_deposits = result.adopted_deposits;
 
         // Shed pending configs superseded on the config lineage on every
         // block: a foreign config landing alone moves no message lineage and
@@ -516,7 +520,7 @@ where
             .map(ChannelUpdateTx::tx_hash)
             .collect();
         for tx in stale_configs {
-            if !seen.contains(&tx.mantle_tx().hash()) {
+            if !seen.contains(&tx.hash()) {
                 channel_update
                     .orphaned
                     .push(classify_shed_other(tx, self.channel_id));
@@ -649,6 +653,8 @@ where
         ChannelUpdate {
             orphaned,
             adopted: u.adopted,
+            // Set by `apply_block_result` from the block's observed deposits.
+            adopted_deposits: Vec::new(),
         }
     }
 }
@@ -670,11 +676,11 @@ mod tests {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            Note, Op, RawMantleTx, SignedMantleTx, Utxo,
+            Note, Op, SignedOps, Utxo,
             channel::{SlotTimeframe, SlotTimeout},
-            ledger::Inputs,
+            ledger::{Inputs, verification_mode::StandardMode},
             ops::{
-                OpProof,
+                OpProof, OpProofRef, OpRef,
                 channel::{
                     MsgId,
                     config::{ChannelConfigOp, Keys},
@@ -683,7 +689,7 @@ mod tests {
                     withdraw::ChannelWithdrawOp,
                 },
             },
-            transactions::{Ops, OpsProofs, mantle_tx::MantleTx as _, states::Unverified},
+            transactions::{OpProofs, Ops, states::Unverified},
         },
     };
     use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
@@ -693,6 +699,7 @@ mod tests {
 
     use super::{
         super::{
+            state::PendingBundle,
             types::{FinalizedOp, SequencerConfig},
             zone_sequencer::track_pending_tx,
         },
@@ -749,29 +756,26 @@ mod tests {
                 b"Mint 10 to Alice".into(),
             )
             .unwrap();
-        assert_eq!(tx.ops().len(), 2);
-        assert_eq!(&tx.ops()[0], &Op::ChannelDeposit(deposit_op));
-        assert!(matches!(&tx.ops()[1], &Op::ChannelInscribe(_)));
+        assert_eq!(tx.inner().len(), 2);
+        assert_eq!(tx.inner()[0], Op::ChannelDeposit(deposit_op));
+        assert!(matches!(tx.inner()[1], Op::ChannelInscribe(_)));
 
         // Sign the `MantleTx`
-        let signed_tx = SignedMantleTx::new(
-            tx.clone(),
-            [
-                OpProof::ZkSig(
-                    ZkKey::multi_sign(std::slice::from_ref(&sk), &tx.clone().hash().to_fr())
-                        .unwrap(),
-                ),
-                OpProof::Ed25519Sig(inscription_sig),
-            ]
-            .into(),
-        );
+        let op_proofs = OpProofs::from([
+            OpProof::ZkSig(
+                ZkKey::multi_sign(std::slice::from_ref(&sk), &tx.clone().hash().to_fr()).unwrap(),
+            ),
+            OpProof::Ed25519Sig(inscription_sig),
+        ]);
+        let signed_tx = SignedOps::from_parts(tx, op_proofs)
+            .expect("Should generate a valid transaction with valid matching proofs.");
 
         // Submit via the handle (mutates state + queues post to in_flight).
         let (result, checkpoint) = sequencer
             .handle()
             .submit_signed_tx(signed_tx.clone(), msg_id)
             .unwrap();
-        assert_eq!(result.inscription_id(), signed_tx.mantle_tx().hash());
+        assert_eq!(result.inscription_id(), signed_tx.hash());
         assert_eq!(checkpoint.last_msg_id, msg_id);
 
         // The post lives in `in_flight` until the drive loop polls it.
@@ -1047,10 +1051,9 @@ mod tests {
 
         assert!(
             posted
-                .mantle_tx()
-                .ops()
-                .iter()
-                .any(|op| matches!(op, Op::ChannelInscribe(_))),
+                .op_refs()
+                .into_iter()
+                .any(|op| matches!(op, OpRef::ChannelInscribe(_))),
             "posted tx should carry the inscription published during reconnect"
         );
     }
@@ -1136,7 +1139,7 @@ mod tests {
             transfer_threshold: 1,
         };
         let config_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(config_op)]);
-        let config_hash = config_tx.mantle_tx().hash();
+        let config_hash = config_tx.hash();
         let config_block = api_block(2, 1, 2, vec![config_tx]);
 
         // Second connection (the config block) is gated behind `up` so it
@@ -1259,15 +1262,12 @@ mod tests {
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = RawMantleTx(
-            Ops::try_from(vec![
-                Op::ChannelWithdraw(withdraw_op.clone()),
-                Op::ChannelInscribe(inscribe_op),
-            ])
-            .unwrap(),
-        );
+        let mantle_tx = Ops::from([
+            Op::ChannelWithdraw(withdraw_op.clone()),
+            Op::ChannelInscribe(inscribe_op),
+        ]);
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
+        let signed_tx = SignedOps::from_ops_with_placeholder_proofs(mantle_tx);
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, channel_id);
@@ -1275,10 +1275,9 @@ mod tests {
         let pending = state
             .pending_inscription(&tx_hash)
             .expect("bundle should be in pending inscriptions");
-        let withdraws = pending
-            .withdraws
-            .as_ref()
-            .expect("bundle should carry Some(withdraws)");
+        let PendingBundle::Withdraw { withdraws, .. } = &pending.bundle else {
+            panic!("bundle should be a withdraw bundle");
+        };
         assert_eq!(withdraws.len(), 1, "bundle should carry one WithdrawInfo");
         assert_eq!(withdraws[0].op, withdraw_op);
         assert!(
@@ -1297,9 +1296,9 @@ mod tests {
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = RawMantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
+        let mantle_tx = Ops::from([Op::ChannelInscribe(inscribe_op)]);
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
+        let signed_tx = SignedOps::from_ops_with_placeholder_proofs(mantle_tx);
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, channel_id);
@@ -1307,7 +1306,7 @@ mod tests {
         let pending = state
             .pending_inscription(&tx_hash)
             .expect("plain inscription should be in pending inscriptions");
-        assert!(pending.withdraws.is_none());
+        assert!(matches!(pending.bundle, PendingBundle::Plain));
     }
 
     #[test]
@@ -1322,9 +1321,9 @@ mod tests {
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = RawMantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
+        let mantle_tx = Ops::from([Op::ChannelInscribe(inscribe_op)]);
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
+        let signed_tx = SignedOps::from_ops_with_placeholder_proofs(mantle_tx);
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, our_channel);
@@ -1358,7 +1357,7 @@ mod tests {
         };
         let expected_msg_id = inscribe.id();
         let genesis_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(inscribe)]);
-        let genesis_tx_hash = genesis_tx.mantle_tx().hash();
+        let genesis_tx_hash = genesis_tx.hash();
 
         let genesis_block = api_block(1, 0, 0, vec![genesis_tx]);
         // Empty block at slot 1 so the block stream advances and the
@@ -1688,7 +1687,7 @@ mod tests {
         };
         let mut sequencer = ready_sequencer_with_channel(Some(channel), own_key.clone()).await;
 
-        let (_receipt, signed_tx) = sequencer
+        let (_receipt, signed_ops) = sequencer
             .handle()
             .channel_config(
                 Keys::new_unchecked(vec![own_key.public_key()]),
@@ -1701,15 +1700,12 @@ mod tests {
             .expect("config update from an accredited non-leading key must build");
 
         assert_eq!(
-            config_op_of(&signed_tx).parent,
+            config_op_of(&signed_ops).parent,
             MsgId::root(),
             "parent must equal the channel's config tip"
         );
-        let OpProof::ChannelMultiSigProof(proof) = signed_tx
-            .ops_proofs()
-            .iter()
-            .next()
-            .expect("config op proof present")
+        let OpProofRef::ChannelMultiSigProof(proof) =
+            signed_ops.first().expect("config op proof present").proof()
         else {
             panic!("config op must carry a multi-sig proof");
         };
@@ -1722,7 +1718,7 @@ mod tests {
         own_key
             .public_key()
             .verify(
-                signed_tx.mantle_tx().hash().as_signing_bytes().as_ref(),
+                signed_ops.hash().as_signing_bytes().as_ref(),
                 &signatures[0].signature,
             )
             .expect("signature must verify against the claimed key over the funded tx hash");
@@ -1736,7 +1732,7 @@ mod tests {
         let own_key = Ed25519Key::from_bytes(&[7; 32]);
         let mut sequencer = ready_sequencer_with_channel(None, own_key.clone()).await;
 
-        let (_receipt, signed_tx) = sequencer
+        let (_receipt, signed_ops) = sequencer
             .handle()
             .channel_config(
                 Keys::new_unchecked(vec![own_key.public_key()]),
@@ -1748,17 +1744,14 @@ mod tests {
             .await
             .expect("claiming an unclaimed channel must build");
 
-        let OpProof::ChannelMultiSigProof(proof) = signed_tx
-            .ops_proofs()
-            .iter()
-            .next()
-            .expect("config op proof present")
+        let OpProofRef::ChannelMultiSigProof(proof) =
+            signed_ops.first().expect("config op proof present").proof()
         else {
             panic!("config op must carry a multi-sig proof");
         };
         assert!(proof.signatures().is_empty());
         assert_eq!(
-            config_op_of(&signed_tx).parent,
+            config_op_of(&signed_ops).parent,
             MsgId::root(),
             "claiming an unclaimed channel must be rooted at ZERO"
         );
@@ -1823,12 +1816,11 @@ mod tests {
         );
     }
 
-    fn config_op_of(tx: &SignedMantleTx<Unverified>) -> ChannelConfigOp {
-        tx.mantle_tx()
-            .ops()
+    fn config_op_of(tx: &SignedOps<Unverified, StandardMode>) -> ChannelConfigOp {
+        tx.op_refs()
             .iter()
-            .find_map(|op| match op {
-                Op::ChannelConfig(config) => Some(config.clone()),
+            .find_map(|op| match *op {
+                OpRef::ChannelConfig(config) => Some(config.clone()),
                 _ => None,
             })
             .expect("tx should carry a config op")
