@@ -277,7 +277,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        message::BlendPayload,
+        message::DataPayload,
         test_utils::{
             membership::membership,
             mocks::{TestChainNetworkService, TestMempoolService},
@@ -297,7 +297,7 @@ mod tests {
     }
 
     /// A broadcast node's only collaborator, recording what it was handed.
-    struct RecordingDispatcher(mpsc::UnboundedSender<BlendPayload>);
+    struct RecordingDispatcher(mpsc::UnboundedSender<DataPayload>);
 
     #[async_trait]
     impl<RuntimeServiceId> PayloadDispatcher<RuntimeServiceId> for RecordingDispatcher
@@ -320,13 +320,13 @@ mod tests {
             unimplemented!("these tests construct the dispatcher directly")
         }
 
-        async fn dispatch(&self, payload: BlendPayload) {
+        async fn dispatch(&self, payload: DataPayload) {
             self.0.send(payload).expect("receiver kept alive");
         }
 
         /// A broadcast node never waits on delivery: it is not blending, so
         /// there is nothing to detect the failure of.
-        async fn observe_broadcasts(&self) -> BoxStream<'static, BlendPayload> {
+        async fn observe_broadcasts(&self) -> BoxStream<'static, DataPayload> {
             stream::empty().boxed()
         }
     }
@@ -361,14 +361,14 @@ mod tests {
         let dispatcher = RecordingDispatcher(dispatched_sender);
 
         handle_inbound_message::<_, _, ()>(
-            ServiceMessage::Blend(BlendPayload::BlockProposal(b"proposal".to_vec())),
+            ServiceMessage::Blend(DataPayload::BlockProposal(b"proposal".to_vec())),
             &dispatcher,
             &LOCAL,
         )
         .await;
         assert_eq!(
             dispatched.recv().await.expect("a payload was dispatched"),
-            BlendPayload::BlockProposal(b"proposal".to_vec()),
+            DataPayload::BlockProposal(b"proposal".to_vec()),
             "a broadcast node puts a payload straight on the wire"
         );
 
