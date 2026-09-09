@@ -97,9 +97,9 @@ impl ClaimPowRewardOp {
     #[must_use]
     pub fn get_puzzle_ticket(&self) -> PuzzleTicket {
         PowNullifier(ZkHasher::digest(&[
-            self.epoch_nonce,
-            fr_from_mod_bytes(&self.block_hash),
             *self.public_key.as_fr(),
+            fr_from_mod_bytes(&self.block_hash),
+            self.epoch_nonce,
         ]))
     }
 }

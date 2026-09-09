@@ -35,12 +35,6 @@ use crate::{ZkHash, ZkHashExt as _, quota::inputs::prove::private::ProofOfWorkQu
 /// value is a *harder* puzzle.
 pub type PowTarget = Fr;
 
-const DOMAIN_SEPARATION_TAG: [u8; 12] = *b"BLEND_POW_V1";
-static DOMAIN_SEPARATION_TAG_FR: LazyLock<ZkHash> = LazyLock::new(|| {
-    fr_from_bytes(&DOMAIN_SEPARATION_TAG[..])
-        .expect("DST for the Blend PoW ticket calculation must be correct.")
-});
-
 /// The value a candidate nonce derives, which a solution must place below the
 /// epoch's [`PowTarget`] to be admitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +43,7 @@ pub struct PowTicket(ZkHash);
 impl PowTicket {
     #[must_use]
     pub fn derive(epoch_nonce: ZkHash, pow_nonce: ZkHash) -> Self {
-        Self([*DOMAIN_SEPARATION_TAG_FR, epoch_nonce, pow_nonce].hash())
+        Self([pow_nonce, epoch_nonce].hash())
     }
 
     #[must_use]
@@ -137,15 +131,6 @@ mod tests {
     /// The largest field element, `p - 1`, as an integer.
     fn largest_target() -> BigUint {
         (-PowTarget::ONE).into()
-    }
-
-    #[test]
-    fn pow_ticket_dst_encoding() {
-        // Blend spec: <https://github.com/logos-co/logos-lips/pull/400>
-        assert_eq!(
-            *DOMAIN_SEPARATION_TAG_FR,
-            fr_from_bytes_unchecked(&<[u8; 12]>::from_hex("0x424c454e445f504f575f5631").unwrap()),
-        );
     }
 
     /// The fixture is a solution the circuit accepts, so the ticket this module
