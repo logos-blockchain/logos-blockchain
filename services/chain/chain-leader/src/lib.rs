@@ -5,6 +5,7 @@ mod leadership;
 mod mempool;
 mod metrics;
 mod relays;
+mod tx_selection;
 mod wallet;
 
 use core::fmt::Debug;
@@ -23,8 +24,6 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         OpRef, SignedOps,
-        batch::DeferredZkpVerifications,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         traits::{Hashable, MantleTx, SignedMantleTx, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
@@ -33,7 +32,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
-use lb_ledger::{GasAndFees, LedgerState};
+use lb_ledger::LedgerState;
 use lb_log_targets::chain;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
@@ -56,6 +55,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
+use tx_selection::{TransactionSelection, select_transactions};
 
 pub use crate::wallet::LeaderWalletConfig;
 use crate::{
@@ -121,156 +121,6 @@ pub type WinningSlotFuture = Pin<Box<dyn Future<Output = Option<LeaderPrivate>> 
 /// [`WinningSlotFuture`] per slot in the epoch's range. The consumer drives the
 /// futures and filters out the non-winning (`None`) slots.
 pub type WinningPolSlotStream = Pin<Box<dyn Stream<Item = WinningSlotFuture> + Send + Unpin>>;
-
-/// Progress made while selecting transactions for a block proposal.
-enum AssemblyState {
-    Progress,
-    NoProgress,
-    GasCapacityReached,
-}
-
-/// Ledger state, gas, and fees for a proposal under construction.
-#[derive(Clone)]
-struct BlockBuilder {
-    ledger_state: LedgerState,
-    gas_and_fees: GasAndFees,
-}
-
-impl BlockBuilder {
-    #[must_use]
-    fn new(ledger_state: LedgerState) -> Self {
-        Self {
-            ledger_state,
-            gas_and_fees: GasAndFees::default(),
-        }
-    }
-
-    fn try_add_transaction(
-        self,
-        tx: &SignedOps<Preverified, StandardMode>,
-        ledger_config: &lb_ledger::Config,
-    ) -> Result<(Self, DeferredZkpVerifications), lb_ledger::LedgerError<HeaderId>> {
-        let Self {
-            ledger_state,
-            gas_and_fees,
-        } = self;
-        let (ledger_state, tx_gas_and_fees, _events, deferred_zkps) =
-            ledger_state
-                .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(ledger_config, tx)?;
-        let gas_and_fees = gas_and_fees.checked_add::<HeaderId>(tx_gas_and_fees)?;
-
-        Ok((
-            Self {
-                ledger_state,
-                gas_and_fees,
-            },
-            deferred_zkps,
-        ))
-    }
-
-    #[must_use]
-    fn into_ledger_state(self) -> LedgerState {
-        self.ledger_state
-    }
-}
-
-/// Result of selecting mempool candidates for a block proposal.
-struct TransactionSelection {
-    ledger_state: LedgerState,
-    selected_txs: Vec<SignedOps<Preverified, StandardMode>>,
-    invalid_tx_hashes: Vec<TxHash>,
-}
-
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "Dependency retries and distinct invalid, proof, and block-capacity outcomes"
-)]
-fn select_transactions(
-    mut block_builder: BlockBuilder,
-    mut pending: Vec<SignedOps<Preverified, StandardMode>>,
-    ledger_config: &lb_ledger::Config,
-) -> TransactionSelection {
-    let mut selected_txs = Vec::new();
-    let mut invalid_tx_hashes = Vec::new();
-
-    // A transaction may only become valid once another transaction it depends
-    // on has already been applied. Repeatedly attempt to apply the pending
-    // transactions, retrying the full set of failures each round, while a
-    // round keeps adding new transactions to the block.
-    let mut assembly_state = AssemblyState::Progress;
-    while matches!(assembly_state, AssemblyState::Progress) {
-        assembly_state = AssemblyState::NoProgress;
-        let mut still_pending = Vec::with_capacity(pending.len());
-
-        for tx in std::mem::take(&mut pending) {
-            match block_builder
-                .clone()
-                .try_add_transaction(&tx, ledger_config)
-            {
-                Ok((next_block_builder, deferred_zkps)) => match deferred_zkps.verify() {
-                    Ok(()) => {
-                        block_builder = next_block_builder;
-                        selected_txs.push(tx);
-                        assembly_state = AssemblyState::Progress;
-                    }
-                    Err(err) => {
-                        tracing::trace!(
-                            target: LOG_TARGET,
-                            tx = ?tx.hash(),
-                            %err,
-                            "deferred ZKP verification failed during block assembly",
-                        );
-                        still_pending.push(tx);
-                    }
-                },
-                Err(err @ lb_ledger::LedgerError::TooMuchExecutionGas { .. }) => {
-                    tracing::trace!(
-                        target: LOG_TARGET,
-                        tx = ?tx.hash(),
-                        %err,
-                        "block execution gas limit reached during block assembly",
-                    );
-                    assembly_state = AssemblyState::GasCapacityReached;
-                    break;
-                }
-                Err(err @ lb_ledger::LedgerError::TooMuchTransactionExecutionGas { .. }) => {
-                    tracing::trace!(
-                        target: LOG_TARGET,
-                        tx = ?tx.hash(),
-                        %err,
-                        "transaction execution gas exceeds the block limit",
-                    );
-                    invalid_tx_hashes.push(tx.hash());
-                }
-                Err(err) => {
-                    tracing::trace!(
-                        target: LOG_TARGET,
-                        "tx {:?} not (yet) applicable during block assembly: {:?}",
-                        tx.hash(),
-                        err
-                    );
-                    still_pending.push(tx);
-                }
-            }
-        }
-
-        pending = still_pending;
-    }
-
-    // Transactions that never became applicable are genuinely invalid against
-    // this block's ledger state and can be evicted from the mempool. If assembly
-    // stopped at the gas limit, unprocessed transactions are not invalid and
-    // must remain in the mempool.
-    if !matches!(assembly_state, AssemblyState::GasCapacityReached) {
-        invalid_tx_hashes.extend(pending.iter().map(Hashable::hash));
-    }
-
-    TransactionSelection {
-        ledger_state: block_builder.into_ledger_state(),
-        selected_txs,
-        invalid_tx_hashes,
-    }
-}
 
 /// Number of epochs to buffer for late subscribers to the winning `PoL` slots
 /// stream. Subscribers will almost certainly consume each epoch at some point,
@@ -818,15 +668,13 @@ where
                 &uncle_headers.slots(),
                 ledger_config,
             )?;
-        let block_builder = BlockBuilder::new(ledger_state);
-
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
         let TransactionSelection {
             ledger_state,
             selected_txs,
             invalid_tx_hashes,
-        } = select_transactions(block_builder, tx_stream.collect().await, ledger_config);
+        } = select_transactions(ledger_state, tx_stream.collect().await, ledger_config);
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays
@@ -1012,24 +860,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use lb_core::{
-        mantle::{
-            Note, Op, OpProof, TxGasCalculator as _, Utxo,
-            channel::{SlotTimeframe, SlotTimeout},
-            ledger::{Inputs, Outputs},
-            ops::{
-                channel::{
-                    ChannelId, MsgId,
-                    config::{ChannelConfigOp, Keys},
-                },
-                transfer::TransferOp,
-            },
-            transactions::{OpProofs, Ops, states::Unverified},
-        },
-        proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
-    };
-    use lb_key_management_system_service::keys::ZkKey;
-
     use super::*;
 
     #[derive(Clone)]
@@ -1041,185 +871,6 @@ mod tests {
         fn storage_size(&self) -> usize {
             self.size
         }
-    }
-
-    // Two transactions at this multiplier exceed the block execution-gas limit,
-    // while each transaction remains below it.
-    const HIGH_GAS_CONFIG_SIGNATURES: usize = 28_514;
-
-    fn build_high_execution_gas_ops(
-        transaction_index: usize,
-        channel_signing_key: &Ed25519Key,
-        funding_key: &ZkKey,
-    ) -> (Utxo, Ops) {
-        let mut channel_id = [0; 32];
-        channel_id[..size_of::<usize>()].copy_from_slice(&transaction_index.to_le_bytes());
-
-        let funding_utxo = Utxo::new(
-            channel_id,
-            0,
-            Note::new(10_000_000, funding_key.to_public_key()),
-        );
-        let transfer = TransferOp::new(
-            Inputs::try_new(vec![funding_utxo.id()]).unwrap(),
-            Outputs::try_new(Vec::new()).unwrap(),
-        );
-
-        let channel_config = ChannelConfigOp {
-            channel: ChannelId::from(channel_id),
-            parent: MsgId::root(),
-            keys: Keys::from(channel_signing_key.public_key()),
-            posting_timeframe: SlotTimeframe::from(0),
-            posting_timeout: SlotTimeout::from(0),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
-        };
-
-        let ops = Ops::from([Op::Transfer(transfer), Op::ChannelConfig(channel_config)]);
-        (funding_utxo, ops)
-    }
-
-    fn sign_high_execution_gas_ops(
-        ops: Ops,
-        channel_signing_key: &Ed25519Key,
-        funding_key: &ZkKey,
-        signature_count: usize,
-    ) -> SignedOps<Preverified, StandardMode> {
-        let tx_hash = ops.hash();
-        let zk_signature =
-            ZkKey::multi_sign(std::slice::from_ref(funding_key), &tx_hash.to_fr()).unwrap();
-        let channel_signature =
-            channel_signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
-        let channel_signatures = (0..signature_count)
-            .map(|index| IndexedSignature::new(index as u16, channel_signature))
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        let channel_proof = ChannelMultiSigProof::try_new(channel_signatures).unwrap();
-        let proofs = OpProofs::from([
-            OpProof::ZkSig(zk_signature),
-            OpProof::ChannelMultiSigProof(channel_proof),
-        ]);
-
-        SignedOps::<Unverified, StandardMode>::from_parts(ops, proofs)
-            .unwrap()
-            .preverify()
-            .unwrap()
-    }
-
-    fn high_execution_gas_transaction(
-        transaction_index: usize,
-        channel_signing_key: &Ed25519Key,
-        funding_key: &ZkKey,
-    ) -> (Utxo, SignedOps<Preverified, StandardMode>) {
-        let (funding_utxo, ops) =
-            build_high_execution_gas_ops(transaction_index, channel_signing_key, funding_key);
-        let transaction = sign_high_execution_gas_ops(
-            ops,
-            channel_signing_key,
-            funding_key,
-            HIGH_GAS_CONFIG_SIGNATURES,
-        );
-
-        (funding_utxo, transaction)
-    }
-
-    #[tokio::test]
-    async fn gas_limited_selection_returns_canonically_applicable_prefix() {
-        const CANDIDATE_COUNT: usize = 2;
-
-        let config = leadership::test_config();
-        let channel_signing_key = Ed25519Key::from_bytes(&[7; 32]);
-        let funding_key = ZkKey::zero();
-        let (funding_utxos, candidates): (Vec<_>, Vec<_>) = (0..CANDIDATE_COUNT)
-            .map(|transaction_index| {
-                high_execution_gas_transaction(
-                    transaction_index,
-                    &channel_signing_key,
-                    &funding_key,
-                )
-            })
-            .unzip();
-
-        let ledger_state = LedgerState::from_utxos(funding_utxos, &config);
-        let gas_prices = ledger_state.get_gas_prices();
-        let individual_gas = candidates[0]
-            .execution_gas_consumption::<MainnetGasProfile>(&gas_prices)
-            .unwrap();
-        assert!(candidates.iter().all(|candidate| {
-            candidate
-                .execution_gas_consumption::<MainnetGasProfile>(&gas_prices)
-                .unwrap()
-                == individual_gas
-        }));
-        assert!(
-            candidates
-                .iter()
-                .all(|candidate| candidate.storage_size() <= MAX_BLOCK_TRANSACTIONS_SIZE)
-        );
-        let all_candidates_result = ledger_state
-            .clone()
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                &config,
-                candidates.iter().cloned(),
-            );
-        let all_candidates_error = all_candidates_result.err();
-        assert!(
-            matches!(
-                &all_candidates_error,
-                Some(lb_ledger::LedgerError::TooMuchExecutionGas { .. })
-            ),
-            "individual gas: {individual_gas:?}, error: {all_candidates_error:?}"
-        );
-
-        let selection =
-            select_transactions(BlockBuilder::new(ledger_state.clone()), candidates, &config);
-        assert_eq!(selection.selected_txs.len(), CANDIDATE_COUNT - 1);
-        assert!(selection.invalid_tx_hashes.is_empty());
-
-        let block_txs = txs_for_block(stream::iter(selection.selected_txs)).await;
-        assert_eq!(block_txs.len(), CANDIDATE_COUNT - 1);
-        ledger_state
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                &config,
-                block_txs.into_iter(),
-            )
-            .expect("the selected prefix must pass canonical application");
-    }
-
-    #[test]
-    fn oversized_transaction_is_evicted_without_stopping_selection() {
-        const OVERSIZED_SIGNATURES: usize = 60_000;
-
-        let config = leadership::test_config();
-        let channel_signing_key = Ed25519Key::from_bytes(&[7; 32]);
-        let funding_key = ZkKey::zero();
-        let (oversized_utxo, oversized_ops) =
-            build_high_execution_gas_ops(0, &channel_signing_key, &funding_key);
-        let oversized_tx = sign_high_execution_gas_ops(
-            oversized_ops,
-            &channel_signing_key,
-            &funding_key,
-            OVERSIZED_SIGNATURES,
-        );
-        let oversized_hash = oversized_tx.hash();
-        let (valid_utxo, valid_tx) =
-            high_execution_gas_transaction(1, &channel_signing_key, &funding_key);
-        let ledger_state = LedgerState::from_utxos([oversized_utxo, valid_utxo], &config);
-
-        assert!(matches!(
-            BlockBuilder::new(ledger_state.clone()).try_add_transaction(&oversized_tx, &config),
-            Err(lb_ledger::LedgerError::TooMuchTransactionExecutionGas { .. })
-        ));
-
-        let selection = select_transactions(
-            BlockBuilder::new(ledger_state),
-            vec![oversized_tx, valid_tx.clone()],
-            &config,
-        );
-
-        assert_eq!(selection.selected_txs, vec![valid_tx]);
-        assert_eq!(selection.invalid_tx_hashes, vec![oversized_hash]);
     }
 
     #[tokio::test]
