@@ -89,9 +89,19 @@ pub type BlendEdgeService<RuntimeServiceId> = lb_blend_service::edge::BlendServi
     PolInfoProvider,
     RuntimeServiceId,
 >;
+
+pub type BlendBroadcastService<RuntimeServiceId> = lb_blend_service::broadcast::BlendService<
+    PeerId,
+    BlendPayloadDispatcher<RuntimeServiceId>,
+    NtpTimeBackend,
+    CryptarchiaService<RuntimeServiceId>,
+    RuntimeServiceId,
+>;
+
 pub type BlendService<RuntimeServiceId> = lb_blend_service::BlendService<
     BlendCoreService<RuntimeServiceId>,
     BlendEdgeService<RuntimeServiceId>,
+    BlendBroadcastService<RuntimeServiceId>,
     SdpService<RuntimeServiceId>,
     RuntimeServiceId,
 >;
