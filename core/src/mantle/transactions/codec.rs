@@ -5,7 +5,11 @@ use lb_key_management_system_keys::keys::ED25519_SIGNATURE_SIZE;
 use crate::{
     mantle::{
         OpRef,
-        transactions::tx_list::{OpRefs, ops::OpsGasContext},
+        gas::ThresholdSource as _,
+        transactions::{
+            thresholds::RunningThresholds,
+            tx_list::{OpRefs, ops::OpsGasContext},
+        },
     },
     proofs::channel_multi_sig_proof::codec::calculate_channel_multi_sig_proof_byte_size,
 };
@@ -13,64 +17,53 @@ use crate::{
 /// Predicts the minimum encoded size of the transaction once signed.
 ///
 /// Proof sizes are fixed per op type or dictated by the channel thresholds
-/// the ledger enforces, so the prediction is exact — except for a
-/// `ChannelConfig` op creating a new channel. In this case, the ledger skips
-/// proof verifications, so this function assumes 0 proofs.
-/// Attaching more proofs than predicted is allowed, but if the tx is funded
-/// based on the predicted size, it may end up paying insufficient fees.
+/// the ledger enforces, a channel-creating `ChannelConfig` being verified
+/// against a threshold of 0.
 #[must_use]
 pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasContext) -> usize {
     let encoded_ops_size = op_refs.encoded_length();
 
-    let ops_proofs_size = op_refs
-        .iter()
-        .map(|op| match op {
-            // Ed25519SigProof = Ed25519Signature
-            OpRef::ChannelInscribe(_) => ED25519_SIGNATURE_SIZE,
+    let (_, ops_proofs_size) = op_refs.iter().fold(
+        (RunningThresholds::new(context), 0),
+        |(mut thresholds, total), op| {
+            let proof_size = match op {
+                // Ed25519SigProof = Ed25519Signature
+                OpRef::ChannelInscribe(_) => ED25519_SIGNATURE_SIZE,
 
-            // ChannelMultiSigProof
-            //
-            // For existing channels, the ledger enforces exactly
-            // `configuration_threshold` proofs.
-            //
-            // On the other hand, for new channels, the ledger skips proof verifications.
-            // So, this function predicts the tx size assuming that 0 proofs will be added for this operation.
-            OpRef::ChannelConfig(operation) => {
-                let threshold = context
-                    .configuration_threshold(&operation.channel)
-                    .unwrap_or(0);
-                calculate_channel_multi_sig_proof_byte_size(threshold)
-            }
+                // ChannelMultiSigProof
+                //
+                // The ledger enforces exactly `configuration_threshold` proofs,
+                // which is 0 for a channel that does not exist yet.
+                OpRef::ChannelConfig(operation) => calculate_channel_multi_sig_proof_byte_size(
+                    thresholds.configuration_threshold(&operation.channel),
+                ),
 
-            // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
-            OpRef::SDPDeclare(_) => COMPRESSED_PROOF_SIZE + ED25519_SIGNATURE_SIZE,
+                // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
+                OpRef::SDPDeclare(_) => COMPRESSED_PROOF_SIZE + ED25519_SIGNATURE_SIZE,
 
-            // ZkSigProof = ZkSignature = ProofOfClaimProof = Groth16
-            OpRef::SDPWithdraw(_) | OpRef::SDPActive(_) | OpRef::LeaderClaim(_) | OpRef::Transfer(_) => {
-                COMPRESSED_PROOF_SIZE
-            }
+                // ZkSigProof = ZkSignature = ProofOfClaimProof = Groth16
+                OpRef::SDPWithdraw(_)
+                | OpRef::SDPActive(_)
+                | OpRef::LeaderClaim(_)
+                | OpRef::Transfer(_)
+                | OpRef::ChannelDeposit(_) => COMPRESSED_PROOF_SIZE,
 
-            // ChannelMultiSigProof
-            OpRef::ChannelWithdraw(operation) => {
-                let channel_transfer_threshold = context.transfer_threshold(&operation.channel_id).expect(
-                    "Operation should have been verified before reaching this point, so the channel must exist in the context."
-                );
-                calculate_channel_multi_sig_proof_byte_size(channel_transfer_threshold)
-            }
+                // ChannelMultiSigProof
+                OpRef::ChannelWithdraw(operation) => calculate_channel_multi_sig_proof_byte_size(
+                    thresholds.transfer_threshold(&operation.channel_id),
+                ),
 
-            // ChannelMultiSigProof
-            OpRef::ChannelTransfer(operation) => {
-                let channel_transfer_threshold = context.transfer_threshold(&operation.channel_id).expect(
-                    "Operation should have been verified before reaching this point, so the channel must exist in the context."
-                );
-                calculate_channel_multi_sig_proof_byte_size(channel_transfer_threshold)
-            }
+                // ChannelMultiSigProof
+                OpRef::ChannelTransfer(operation) => calculate_channel_multi_sig_proof_byte_size(
+                    thresholds.transfer_threshold(&operation.channel_id),
+                ),
 
-            // ZkSigProof = ZkSignature = Groth16
-            OpRef::ChannelDeposit(_) => COMPRESSED_PROOF_SIZE,
-            OpRef::ClaimPowReward(_) => 0, // no proof
-        })
-        .sum::<usize>();
+                OpRef::ClaimPowReward(_) => 0, // no proof
+            };
+            thresholds.apply(*op);
+            (thresholds, total + proof_size)
+        },
+    );
 
     encoded_ops_size + ops_proofs_size
 }

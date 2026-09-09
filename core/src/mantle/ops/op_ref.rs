@@ -3,7 +3,7 @@ use serde::{Serialize, Serializer};
 
 use crate::mantle::{
     GasProfile, Op,
-    gas::{Gas, OperationGas},
+    gas::{Gas, GasOverflow, OpGasCalculator as _, OperationGas, ThresholdSource},
     ledger::ProvableOperation,
     ops::{
         channel::{
@@ -63,6 +63,25 @@ impl OpRef<'_> {
             Self::LeaderClaim(op) => gas_cost_of(op),
             Self::Transfer(op) => gas_cost_of(op),
             Self::ClaimPowReward(op) => gas_cost_of(op),
+        }
+    }
+
+    pub fn execution_gas<Profile: GasProfile>(
+        &self,
+        thresholds: &impl ThresholdSource,
+    ) -> Result<Gas, GasOverflow> {
+        match self {
+            Self::ChannelInscribe(op) => op.execution_gas(thresholds),
+            Self::ChannelConfig(op) => op.execution_gas(thresholds),
+            Self::ChannelDeposit(op) => op.execution_gas(thresholds),
+            Self::ChannelWithdraw(op) => op.execution_gas(thresholds),
+            Self::ChannelTransfer(op) => op.execution_gas(thresholds),
+            Self::SDPDeclare(op) => op.execution_gas(thresholds),
+            Self::SDPWithdraw(op) => op.execution_gas(thresholds),
+            Self::SDPActive(op) => op.execution_gas(thresholds),
+            Self::LeaderClaim(op) => op.execution_gas(thresholds),
+            Self::Transfer(op) => op.execution_gas(thresholds),
+            Self::ClaimPowReward(op) => op.execution_gas(thresholds),
         }
     }
 

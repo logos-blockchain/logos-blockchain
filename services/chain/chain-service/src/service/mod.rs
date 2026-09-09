@@ -17,10 +17,10 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        OpRef, TxGasCalculator,
+        OpRef,
         ledger::verification_mode::StandardMode,
-        traits::{MantleTx, PreverifiedMantleTransaction, SignedMantleTx},
-        transactions::{GasPrices, states::Preverified},
+        traits::{MantleTx, PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
+        transactions::states::Preverified,
     },
     sdp::ServiceType,
 };
@@ -141,7 +141,7 @@ where
     Phase: phases::Phase,
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -780,7 +780,7 @@ pub async fn process_block<Tx, Storage, RuntimeServiceId>(
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -916,7 +916,7 @@ async fn log_newly_canonical_blocks<Tx, Storage, RuntimeServiceId>(
 ) where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -976,7 +976,7 @@ pub fn get_block_ids<Tx, Storage, RuntimeServiceId>(
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -1036,7 +1036,7 @@ pub fn load_block_ids_from_storage<Tx, Storage, RuntimeServiceId>(
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -1098,7 +1098,7 @@ pub async fn delete_stale_blocks_from_storage<Tx, Storage, RuntimeServiceId>(
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -1144,7 +1144,7 @@ where
     Headers: Iterator<Item = HeaderId> + Send,
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq

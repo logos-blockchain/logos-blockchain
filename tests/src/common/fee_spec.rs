@@ -298,8 +298,10 @@ pub fn fee_surplus_at<State: VerificationState, Mode: VerificationMode>(
     prices: &GasPrices,
 ) -> Result<i128, String> {
     let paid = net_balance_against(genesis_utxos, tx)?;
+    let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
     let required = tx
-        .total_gas_cost::<MainnetGasProfile>(prices)
+        .op_refs()
+        .total_gas_cost::<MainnetGasProfile>(&gas_context)
         .map_err(|source| format!("transaction gas cost calculation failed: {source}"))?;
 
     Ok(i128::from(paid) - i128::from(required.into_inner()))

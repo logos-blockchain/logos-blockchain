@@ -9,6 +9,7 @@ use crate::{
     mantle::{
         NoteId,
         channel_notes::{self, ChannelNotes},
+        gas::ThresholdSource,
         ledger,
         ledger::verification_mode::GenesisMode,
         ops::{
@@ -135,6 +136,20 @@ pub(crate) const DEFAULT_TRANSFER_THRESHOLD: ChannelKeyIndex = 1;
 impl Default for Channels {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ThresholdSource for Channels {
+    fn configuration_threshold(&self, channel: &ChannelId) -> ChannelKeyIndex {
+        self.channels
+            .get(channel)
+            .map_or(0, |channel| channel.configuration_threshold)
+    }
+
+    fn transfer_threshold(&self, channel: &ChannelId) -> ChannelKeyIndex {
+        self.channels
+            .get(channel)
+            .map_or(0, |channel| channel.transfer_threshold)
     }
 }
 

@@ -11,7 +11,9 @@ use crate::{
         Value,
         batch::DeferredZkpVerification,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{
+            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
+        },
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
@@ -19,7 +21,7 @@ use crate::{
         ops::SignedOperation,
         transactions::{
             hash::TxHashView,
-            states::{Preverified, Unverified, VerificationState, Verified},
+            states::{Preverified, Unverified, Verified},
         },
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -59,14 +61,20 @@ pub struct ChannelConfigExecutionContext {
 }
 
 impl ProvableOperation for ChannelConfigOp {
-    // `SignedOperationExecutionGas::gas_multiplier` below reads this proof's
-    // signature count. If this changes, update that too.
     type Proof = ChannelMultiSigProof;
     const CODE: u8 = 0x10;
 }
 
 impl OperationGas<MainnetGasProfile> for ChannelConfigOp {
     const GAS_COST: Gas = Gas::new(56);
+}
+
+impl OpGasCalculator<MainnetGasProfile> for ChannelConfigOp {
+    fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
+        Self::GAS_COST.checked_mul(Value::from(
+            thresholds.configuration_threshold(&self.channel),
+        ))
+    }
 }
 
 impl PreverifiableOperation<StandardMode>
@@ -142,13 +150,25 @@ impl VerifiableOperation<StandardMode>
                     return Err(Error::InvalidSignature);
                 }
             }
-        } else if operation.parent != MsgId::root() {
+        } else {
             // Checked that the parent is ZERO because channel doesn't exist
-            return Err(Error::InvalidParent {
-                channel_id: operation.channel,
-                parent: operation.parent.into(),
-                actual: MsgId::root().into(),
-            });
+            if operation.parent != MsgId::root() {
+                return Err(Error::InvalidParent {
+                    channel_id: operation.channel,
+                    parent: operation.parent.into(),
+                    actual: MsgId::root().into(),
+                });
+            }
+
+            // No key is accredited yet, so the threshold to verify against is 0
+            let signatures = proof.signatures();
+            if !signatures.is_empty() {
+                return Err(Error::ThresholdUnmet {
+                    channel_id: operation.channel,
+                    threshold: 0,
+                    actual: signatures.len(),
+                });
+            }
         }
 
         Ok(None)
@@ -199,12 +219,68 @@ impl<Mode: VerificationMode> ExecutableOperation
     }
 }
 
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOperation<ChannelConfigOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        let signature_count = self.proof().signatures().len();
-        Value::try_from(signature_count)
-            .expect("Channel multi-signature proofs are bound to u16::MAX signatures.")
+#[cfg(test)]
+mod tests {
+    use lb_key_management_system_keys::keys::Ed25519Key;
+
+    use super::*;
+    use crate::mantle::{
+        ops::channel::verification::test_utils::create_channel_multi_sig_proof,
+        transactions::hash::TxHash,
+    };
+
+    fn genesis_config_op(channel: ChannelId) -> ChannelConfigOp {
+        ChannelConfigOp {
+            channel,
+            parent: MsgId::root(),
+            keys: Ed25519Key::from_bytes(&[1; 32]).public_key().into(),
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        }
+    }
+
+    // Audit #136: nothing constrained this proof, so the same block id could
+    // carry two bodies priced differently.
+    #[test]
+    fn genesis_config_rejects_a_non_empty_proof() {
+        let op = genesis_config_op(ChannelId::from([0u8; 32]));
+        let tx_hash = TxHash::from([7u8; 32]);
+        let tx_hash_view = TxHashView::new(tx_hash);
+        let context = ChannelConfigValidationContext {
+            channels: &Channels::new(),
+            tx_hash_view: &tx_hash_view,
+        };
+        let signer = Ed25519Key::from_bytes(&[2; 32]);
+        let proof = create_channel_multi_sig_proof(&tx_hash, &[&signer]);
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(op, proof)
+            .into_preverified(&())
+            .unwrap();
+
+        assert!(matches!(
+            signed_operation.verify(&context),
+            Err(Error::ThresholdUnmet {
+                threshold: 0,
+                actual: 1,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn genesis_config_accepts_an_empty_proof() {
+        let op = genesis_config_op(ChannelId::from([0u8; 32]));
+        let tx_hash_view = TxHashView::new(TxHash::from([7u8; 32]));
+        let context = ChannelConfigValidationContext {
+            channels: &Channels::new(),
+            tx_hash_view: &tx_hash_view,
+        };
+        let proof = ChannelMultiSigProof::try_new([].into()).unwrap();
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(op, proof)
+            .into_preverified(&())
+            .unwrap();
+
+        assert!(signed_operation.verify(&context).unwrap().is_none());
     }
 }

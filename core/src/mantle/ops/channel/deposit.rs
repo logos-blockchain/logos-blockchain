@@ -6,10 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::{DepositNote, DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
-        Value,
         batch::DeferredZkpVerification,
         channel::{Channels, Error},
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, Inputs, InputsError, Outputs, PreverifiableOperation,
             ProvableOperation, Utxos, VerifiableOperation,
@@ -18,7 +17,7 @@ use crate::{
         ops::{OpId, SignedOperation, channel::ChannelId},
         transactions::{
             hash::{TxHash, TxHashView},
-            states::{Preverified, Unverified, VerificationState, Verified},
+            states::{Preverified, Unverified, Verified},
         },
     },
     sdp::service_notes::ServiceNotes,
@@ -79,6 +78,8 @@ impl ProvableOperation for DepositOp {
 impl OperationGas<MainnetGasProfile> for DepositOp {
     const GAS_COST: Gas = Gas::new(590);
 }
+
+impl OpGasCalculator<MainnetGasProfile> for DepositOp {}
 
 impl PreverifiableOperation<StandardMode> for SignedOperation<DepositOp, Unverified, StandardMode> {
     type Context<'a> = ();
@@ -178,14 +179,6 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<DepositOp, 
         .collect();
 
         Ok((context, events))
-    }
-}
-
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOperation<DepositOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
     }
 }
 

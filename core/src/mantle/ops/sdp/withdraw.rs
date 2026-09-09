@@ -7,9 +7,8 @@ use super::{SDPWithdrawOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        Value,
         batch::DeferredZkpVerification,
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
             VerifiableOperation,
@@ -18,7 +17,7 @@ use crate::{
         ops::SignedOperation,
         transactions::{
             hash::TxHashView,
-            states::{Preverified, Unverified, VerificationState, Verified},
+            states::{Preverified, Unverified, Verified},
         },
     },
     sdp::{self, service_notes::ServiceNotes},
@@ -47,6 +46,8 @@ impl ProvableOperation for SDPWithdrawOp {
 impl OperationGas<MainnetGasProfile> for SDPWithdrawOp {
     const GAS_COST: Gas = Gas::new(590);
 }
+
+impl OpGasCalculator<MainnetGasProfile> for SDPWithdrawOp {}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<SDPWithdrawOp, Unverified, StandardMode>
@@ -166,13 +167,5 @@ impl<Mode: VerificationMode> ExecutableOperation
         );
 
         Ok((context, Vec::new()))
-    }
-}
-
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOperation<SDPWithdrawOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
     }
 }
