@@ -4,6 +4,7 @@ pub mod config;
 //   algorithm, including a minimal UTxO model.
 // - `mantle_ops`: our extensions in the form of Mantle operations, e.g. SDP.
 pub mod cryptarchia;
+mod gas_and_fees;
 mod intent;
 pub mod mantle;
 mod update;
@@ -13,6 +14,9 @@ use std::hash::Hash;
 pub use config::Config;
 use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
+#[cfg(test)]
+use gas_and_fees::EXECUTION_GAS_LIMIT;
+pub use gas_and_fees::GasAndFees;
 pub use intent::{Intent, IntentStatus};
 use lb_core::{
     block::BlockNumber,
@@ -96,8 +100,6 @@ const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
 // (blend+leadership)
 const POW_REWARD_SHARE_NUMERATOR: u128 = 0;
 const POW_REWARD_SHARE_DENOMINATOR: u128 = 4;
-const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_193_460);
-
 // While individual notes are constrained to be `u64`, intermediate calculations
 // may overflow, so we use `i128` to avoid that and to easily represent negative
 // balances which may arise in special circumstances (e.g. rewards calculation).
@@ -250,54 +252,6 @@ pub struct LedgerState {
     block_number: BlockNumber,
     cryptarchia_ledger: CryptarchiaLedger,
     mantle_ledger: MantleLedger,
-}
-
-/// Gas consumed and fees paid by applied transactions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GasAndFees {
-    execution_gas: Gas,
-    storage_gas: Gas,
-    fee_burned: GasCost,
-    fee_tip: GasCost,
-}
-
-impl Default for GasAndFees {
-    fn default() -> Self {
-        Self {
-            execution_gas: 0.into(),
-            storage_gas: 0.into(),
-            fee_burned: 0.into(),
-            fee_tip: 0.into(),
-        }
-    }
-}
-
-impl GasAndFees {
-    /// Adds one transaction's gas and fees, enforcing the execution gas limit.
-    /// An oversized transaction is distinguished from exhausted capacity.
-    pub fn checked_add<Id>(self, transaction: Self) -> Result<Self, LedgerError<Id>> {
-        if transaction.execution_gas > EXECUTION_GAS_LIMIT {
-            return Err(LedgerError::TooMuchTransactionExecutionGas {
-                gas: transaction.execution_gas,
-                limit: EXECUTION_GAS_LIMIT,
-            });
-        }
-
-        let execution_gas = self.execution_gas.checked_add(transaction.execution_gas)?;
-        if execution_gas > EXECUTION_GAS_LIMIT {
-            return Err(LedgerError::TooMuchExecutionGas {
-                gas: execution_gas,
-                limit: EXECUTION_GAS_LIMIT,
-            });
-        }
-
-        Ok(Self {
-            execution_gas,
-            storage_gas: self.storage_gas.checked_add(transaction.storage_gas)?,
-            fee_burned: self.fee_burned.checked_add(transaction.fee_burned)?,
-            fee_tip: self.fee_tip.checked_add(transaction.fee_tip)?,
-        })
-    }
 }
 
 impl LedgerState {
