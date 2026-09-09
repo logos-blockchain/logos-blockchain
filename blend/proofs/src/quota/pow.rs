@@ -21,7 +21,6 @@
 //! rather than only to prose.
 
 use core::num::NonZeroU64;
-use std::sync::LazyLock;
 
 use lb_groth16::{AdditiveGroup as _, Fr, fr_from_bytes};
 use rand::RngCore;
@@ -116,8 +115,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use const_hex::FromHex as _;
-    use lb_groth16::{Field as _, fr_from_bytes_unchecked};
+    use lb_groth16::Field as _;
     use num_bigint::BigUint;
     use rand::rngs::OsRng;
 
@@ -125,7 +123,7 @@ mod tests {
         ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, Quota,
         fixtures::valid_proof_of_work_quota_inputs,
         inputs::prove::{PublicInputs, private::ProofOfWorkQuotaInputs},
-        pow::{DOMAIN_SEPARATION_TAG_FR, PowTarget, PowTicket, solve_puzzle},
+        pow::{PowTarget, PowTicket, solve_puzzle},
     };
 
     /// The largest field element, `p - 1`, as an integer.
