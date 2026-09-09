@@ -192,6 +192,10 @@ pub enum WalletMsg {
         tip: Option<HeaderId>,
         resp_tx: Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
     },
+    GetLeaderAgedNotesInfo {
+        tip: Option<HeaderId>,
+        resp_tx: Sender<Result<TipResponse<LeaderAgedNotesInfo>, WalletServiceError>>,
+    },
     GenerateNewVoucherSecret {
         resp_tx: Sender<Result<VoucherCm, WalletServiceError>>,
     },
@@ -270,6 +274,65 @@ impl ClaimableVouchersInfo {
     }
 }
 
+/// One wallet-owned UTXO old enough to take part in the leadership lottery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeaderAgedNoteInfo {
+    pub note_id: NoteId,
+    pub value: Value,
+    /// The wallet address holding the note.
+    pub public_key: ZkPublicKey,
+}
+
+/// The wallet's UTXOs that are eligible to lead at a given tip.
+///
+/// A note is eligible when it is present in the epoch's aged UTXO snapshot —
+/// the same stake distribution the leadership proof is built against — and its
+/// public key is one the wallet holds a key for. An empty `notes` means this
+/// node cannot win a slot at that tip: either it owns no notes, or none of
+/// them have aged into the current epoch's snapshot yet.
+///
+/// The set is reported unfiltered. The leader service additionally skips the
+/// faucet UTXO when a `faucet_pk` is configured, which only matters on a
+/// faucet node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaderAgedNotesInfo {
+    pub notes: Vec<LeaderAgedNoteInfo>,
+    /// Total value staked across `notes`, saturating.
+    pub total_value: Value,
+}
+
+impl LeaderAgedNotesInfo {
+    /// Number of eligible notes.
+    #[must_use]
+    pub const fn count(&self) -> usize {
+        self.notes.len()
+    }
+}
+
+impl From<Vec<UtxoWithKeyId>> for LeaderAgedNotesInfo {
+    fn from(utxos: Vec<UtxoWithKeyId>) -> Self {
+        Self::from_iter(utxos.iter().map(|UtxoWithKeyId { utxo, .. }| utxo))
+    }
+}
+
+impl<'a> FromIterator<&'a Utxo> for LeaderAgedNotesInfo {
+    fn from_iter<I: IntoIterator<Item = &'a Utxo>>(utxos: I) -> Self {
+        let mut total_value: Value = 0;
+        let notes = utxos
+            .into_iter()
+            .map(|utxo| {
+                total_value = total_value.saturating_add(utxo.note.value);
+                LeaderAgedNoteInfo {
+                    note_id: utxo.id(),
+                    value: utxo.note.value,
+                    public_key: utxo.note.pk,
+                }
+            })
+            .collect();
+        Self { notes, total_value }
+    }
+}
+
 impl WalletMsg {
     /// Returns [`HeaderId`] of the tip if the message is associated
     /// with a specific tip.
@@ -280,6 +343,7 @@ impl WalletMsg {
             | Self::FundTx { tip, .. }
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
+            | Self::GetLeaderAgedNotesInfo { tip, .. }
             | Self::GetClaimableVouchers { tip, .. }
             | Self::GetTxContext { block_id: tip, .. } => *tip,
             Self::BuildLeaderClaimTx { tip, .. } => Some(*tip),
@@ -751,7 +815,21 @@ where
                 }
             }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
-                Self::get_leader_aged_notes(tip, resp_tx, state.wallet(), cryptarchia).await;
+                let response = Self::leader_aged_notes_at(tip, state.wallet(), cryptarchia).await;
+                if resp_tx.send(response).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to GetLeaderAgedNotes");
+                }
+            }
+            WalletMsg::GetLeaderAgedNotesInfo { tip, resp_tx } => {
+                let response = Self::leader_aged_notes_at(tip, state.wallet(), cryptarchia)
+                    .await
+                    .map(|TipResponse { tip, response }| TipResponse {
+                        tip,
+                        response: LeaderAgedNotesInfo::from(response),
+                    });
+                if resp_tx.send(response).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to GetLeaderAgedNotesInfo");
+                }
             }
             WalletMsg::GenerateNewVoucherSecret { resp_tx } => {
                 Self::generate_new_voucher_secret(
@@ -1111,39 +1189,21 @@ where
         )?)
     }
 
-    async fn get_leader_aged_notes(
+    /// Resolves the wallet-owned UTXOs that are eligible to lead at `tip`
+    /// (or at the current tip when `tip` is `None`), paired with the key ids
+    /// needed to build a leadership proof for them.
+    async fn leader_aged_notes_at(
         tip: Option<HeaderId>,
-        resp_tx: Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
         wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
-    ) {
-        let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
-            Ok(tip) => tip,
-            Err(err) => {
-                Self::send_err(resp_tx, err);
-                return;
-            }
-        };
+    ) -> Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError> {
+        let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
+        let ledger_state = Self::ledger_state_at(tip, cryptarchia).await?;
 
-        let ledger_state = match Self::ledger_state_at(tip, cryptarchia).await {
-            Ok(ledger_state) => ledger_state,
-            Err(err) => {
-                Self::send_err(resp_tx, err);
-                return;
-            }
-        };
-
-        let wallet_state = match wallet.wallet_state_at(tip) {
-            Ok(wallet_state) => wallet_state,
-            Err(err) => {
-                error!(target: LOG_TARGET, err = ?err, "Failed to fetch wallet state");
-                Self::send_err(
-                    resp_tx,
-                    WalletServiceError::FailedToFetchWalletStateForBlock(tip),
-                );
-                return;
-            }
-        };
+        let wallet_state = wallet.wallet_state_at(tip).map_err(|err| {
+            error!(target: LOG_TARGET, err = ?err, "Failed to fetch wallet state");
+            WalletServiceError::FailedToFetchWalletStateForBlock(tip)
+        })?;
 
         let aged_utxos = ledger_state.epoch_state().utxos.utxos();
         let eligible_utxos = wallet_state
@@ -1161,15 +1221,10 @@ where
             })
             .collect();
 
-        if resp_tx
-            .send(Ok(TipResponse {
-                tip,
-                response: eligible_utxos,
-            }))
-            .is_err()
-        {
-            debug!(target: LOG_TARGET, "Failed to respond to GetLeaderAgedNotes");
-        }
+        Ok(TipResponse {
+            tip,
+            response: eligible_utxos,
+        })
     }
 
     /// Derive a new voucher via KMS and store it in [`Wallet`].

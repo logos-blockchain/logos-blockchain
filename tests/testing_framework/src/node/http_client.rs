@@ -21,6 +21,7 @@ use lb_http_api_common::{
         blend::JoinBlendRequestBody,
         mantle::GasPricesResponseBody,
         wallet::{
+            aged_notes::LeaderAgedNotesResponseBody,
             balance::WalletBalanceResponseBody,
             fund::{WalletFundRequestBody, WalletFundResponseBody},
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
@@ -79,6 +80,20 @@ impl NodeHttpClient {
         self.with_timeout(
             "Chain ID request",
             self.http_client.chain_id(self.base_url.clone()),
+        )
+        .await
+    }
+
+    /// The wallet notes aged enough to take part in the leadership lottery.
+    /// Empty when this node cannot currently win a slot.
+    pub async fn leader_aged_notes(
+        &self,
+        tip: Option<HeaderId>,
+    ) -> Result<LeaderAgedNotesResponseBody, Error> {
+        self.with_timeout(
+            "Leader aged notes request",
+            self.http_client
+                .get_leader_aged_notes(self.base_url.clone(), tip),
         )
         .await
     }

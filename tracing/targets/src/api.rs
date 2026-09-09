@@ -7,6 +7,7 @@ log_targets! {
         MANTLE,
         PPROF,
         wallet::{
+            AGED_NOTES,
             BALANCE,
             CLAIMABLE_VOUCHERS,
             TRANSFER_FUNDS,

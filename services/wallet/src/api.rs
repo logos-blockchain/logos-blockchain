@@ -27,8 +27,8 @@ use overwatch::{
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
-    ClaimableVouchersInfo, TipResponse, UtxoWithKeyId, WalletMsg, WalletServiceError,
-    WalletServiceSettings,
+    ClaimableVouchersInfo, LeaderAgedNotesInfo, TipResponse, UtxoWithKeyId, WalletMsg,
+    WalletServiceError, WalletServiceSettings,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -278,6 +278,25 @@ where
 
         self.relay
             .send(WalletMsg::GetLeaderAgedNotes { tip, resp_tx })
+            .await?;
+
+        Ok(rx.await??)
+    }
+
+    /// Reports which of the wallet's notes are old enough to take part in the
+    /// leadership lottery at `tip`, or at the current tip when `tip` is
+    /// `None`, along with the total value they stake.
+    ///
+    /// Unlike [`Self::get_leader_aged_notes`], this does not expose the key
+    /// ids, so it is the variant to use for external reporting (HTTP, FFI).
+    pub async fn get_leader_aged_notes_info(
+        &self,
+        tip: Option<HeaderId>,
+    ) -> Result<TipResponse<LeaderAgedNotesInfo>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(WalletMsg::GetLeaderAgedNotesInfo { tip, resp_tx })
             .await?;
 
         Ok(rx.await??)

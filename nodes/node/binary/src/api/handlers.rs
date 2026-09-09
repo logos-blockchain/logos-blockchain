@@ -1805,6 +1805,7 @@ where
 
 pub mod wallet {
     use lb_http_api_common::bodies::wallet::{
+        aged_notes::{LeaderAgedNoteResponseBody, LeaderAgedNotesResponseBody},
         fund::{WalletFundRequestBody, WalletFundResponseBody},
         sign::{
             WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody,
@@ -1860,6 +1861,53 @@ pub mod wallet {
             Ok(lb_wallet_service::TipResponse { response: None, .. }) => {
                 ApiError::NotFound("The requested address could not be found in the wallet".into())
                     .into_response()
+            }
+            Err(error) => ApiError::internal(error).into_response(),
+        }
+    }
+
+    #[utoipa::path(
+    get,
+    path = paths::LEADER_AGED_NOTES,
+    responses(
+        (status = 200, description = "Get the wallet notes eligible to lead"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+    )]
+    pub async fn get_leader_aged_notes<WalletService, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Query(query): Query<TipQuery>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData + 'static,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+    {
+        let wallet_relay = match get_relay::<WalletService, _>(&handle).await {
+            Ok(relay) => relay,
+            Err(error) => return error.into_response(),
+        };
+        let wallet_api = WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay);
+
+        match wallet_api.get_leader_aged_notes_info(query.tip).await {
+            Ok(lb_wallet_service::TipResponse { tip, response }) => {
+                let count = response.count();
+                let notes = response
+                    .notes
+                    .into_iter()
+                    .map(|note| LeaderAgedNoteResponseBody {
+                        note_id: note.note_id,
+                        value: note.value,
+                        public_key: note.public_key,
+                    })
+                    .collect();
+
+                LeaderAgedNotesResponseBody {
+                    tip,
+                    notes,
+                    count,
+                    total_value: response.total_value,
+                }
+                .into_response()
             }
             Err(error) => ApiError::internal(error).into_response(),
         }
