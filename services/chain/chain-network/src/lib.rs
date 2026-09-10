@@ -587,7 +587,7 @@ where
             return;
         }
 
-        // Verify the block signature.
+        // Verify the header signature.
         // Don't cache the rejected block for orphan downloader because it is easy to
         // tamper a signature, which is not authenticated by the block ID.
         if let Err(e) = verify_signature(proposal.header(), proposal.signature()) {
