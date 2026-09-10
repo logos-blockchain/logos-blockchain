@@ -45,6 +45,7 @@ use super::{
         assemble_atomic_bundle_tx, assemble_channel_config_tx, build_and_fund_config,
         create_channel_config_tx, create_inscribe_tx, find_own_key_index, fund_ops,
         prepare_tx as build_prepare_tx, sign_prepared, sign_tx as build_sign_tx,
+        stale_bundle_reasons, validate_multi_sig,
     },
     types::{
         AtomicWithdrawInfo, ChannelWalletView, Error, Event, FundingConfig, InscriptionInfo,
@@ -1125,8 +1126,40 @@ where
             inscribe,
             signer,
             kind,
-            ..
+            sign_payload,
+            accredited_keys: prepared_keys,
+            signing_threshold: prepared_threshold,
         } = prepared;
+
+        // Fail fast against *live* state rather than the prepared snapshot:
+        // the ledger verifies the proof against the keys/threshold at
+        // inclusion time and the inscription against the channel tip, so a
+        // config or peer inscription that landed during signature collection
+        // surfaces as `ChannelStateChanged` (re-prepare) instead of parking an
+        // unlandable bundle in the pending set (only chain inclusion evicts
+        // it). Only once state is known unchanged are the signatures checked,
+        // so `InvalidMultiSig` always means a construction bug.
+        let channel_state = self.channel_state.as_ref().ok_or(Error::Unavailable {
+            reason: "channel state unavailable",
+        })?;
+        let live_keys: Vec<_> = channel_state.accredited_keys.iter().copied().collect();
+        let stale = stale_bundle_reasons(
+            &prepared_keys,
+            prepared_threshold,
+            &live_keys,
+            channel_state.transfer_threshold,
+            parent,
+            self.compute_publish_parent(),
+        );
+        if !stale.is_empty() {
+            return Err(Error::ChannelStateChanged(stale.join("; ")));
+        }
+        validate_multi_sig(
+            &live_keys,
+            channel_state.transfer_threshold,
+            &sign_payload,
+            &signatures,
+        )?;
 
         let signed_tx =
             assemble_atomic_bundle_tx(tx, inscribe_sig, signatures, transfer_proof.as_ref())?;

@@ -392,6 +392,21 @@ pub enum Error {
     Unavailable { reason: &'static str },
     #[error("network error: {0}")]
     Network(String),
+    /// The channel moved under a prepared bundle since prepare: the config
+    /// changed (keys/threshold the signatures were collected under) and/or
+    /// the message tip advanced (the inscription parent is no longer the tip
+    /// prepare would pick). Recoverable: take the new state, re-prepare, and
+    /// re-collect signatures. The message lists every change found.
+    #[error("channel state changed since prepare: {0}")]
+    ChannelStateChanged(String),
+    /// The channel state is unchanged since prepare, yet the collected
+    /// signature set would never verify on the ledger (wrong count,
+    /// unordered/duplicate indices, index outside the accredited keys, or a
+    /// signature that fails against its key). Not recoverable by retrying:
+    /// the signing/collection code is wrong. The message lists every problem
+    /// found.
+    #[error("multi-sig signatures rejected: {0}")]
+    InvalidMultiSig(String),
 }
 
 /// Events emitted by the sequencer.
