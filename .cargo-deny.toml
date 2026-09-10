@@ -1,9 +1,8 @@
 # Config file reference can be found at https://embarkstudios.github.io/cargo-deny/checks/cfg.html.
 
 [graph]
-all-features        = true
-exclude-dev         = true
-no-default-features = true
+all-features = true
+exclude-dev  = false
 
 [advisories]
 ignore = [
@@ -17,12 +16,23 @@ ignore = [
   { id = "RUSTSEC-2026-0194", reason = "`quick-xml` v0.26 is pulled in by pprof (via inferno) and will not parse untrusted XML." },
   { id = "RUSTSEC-2026-0195", reason = "`quick-xml` v0.26 is pulled in by pprof (via inferno) and will not parse untrusted XML." },
 ]
+unmaintained = "all"
+unsound = "all"
 unused-ignored-advisory = "deny"
 yanked = "deny"
 
 [bans]
 allow-wildcard-paths = false
 multiple-versions    = "allow"
+
+[bans.std-replacements]
+level        = "deny"
+rust-version = "1.0"
+scope        = "workspace"
+
+[bans.workspace-dependencies]
+duplicates = "deny"
+unused     = "deny"
 
 [licenses]
 allow = [
@@ -41,8 +51,10 @@ allow = [
   "Unicode-3.0",
   "Zlib",
 ]
+confidence-threshold = 0.93
 private = { ignore = false }
 unused-allowed-license = "deny"
+unused-license-exception = "deny"
 
 [sources]
 allow-git = [
@@ -52,8 +64,11 @@ allow-git = [
   "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git",
   "https://github.com/logos-blockchain/logos-blockchain-testing.git",
 ]
+required-git-spec = "tag"
 unknown-git = "deny"
 unknown-registry = "deny"
+unused-allowed-org = "deny"
+unused-allowed-source = "deny"
 
 [sources.allow-org]
 github = ["logos-co"]
