@@ -41,9 +41,10 @@ tracing               = { workspace = true }
 tracing-futures       = { workspace = true }
 
 [dev-dependencies]
-lb-core            = { workspace = true }
-lb-network-service = { workspace = true }
-lb-utils           = { workspace = true }
+lb-core                       = { workspace = true }
+lb-key-management-system-keys = { workspace = true }
+lb-network-service            = { workspace = true }
+lb-utils                      = { workspace = true }
 
 [features]
 default          = []

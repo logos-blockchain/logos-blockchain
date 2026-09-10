@@ -543,7 +543,6 @@ where
         );
     }
 
-    #[expect(clippy::cognitive_complexity, reason = "TODO: refactor")]
     async fn handle_incoming_proposal(
         &self,
         proposal: Proposal,
@@ -575,25 +574,10 @@ where
             }
         }
 
-        // The header must stand on its own before any mempool scanning.
-        // `references` and `signature` are unauthenticated, so tampered copies of a
-        // genuine proposal are cheap to mint, and reconstruction walks the
-        // mempool once per reference.
-        if let Err(e) = verify_header_alone(proposal.header()) {
-            let e = Error::InvalidHeader(e);
+        // Check the proposal before any mempool scanning.
+        if let Err(e) = verify_header_and_signature(&proposal, orphan_downloader) {
             metrics::consensus_observe_proposal_reconstruct_err("network", &e);
-            error!(target: LOG_TARGET, %e, ?block_id, "Invalid proposal header");
-            orphan_downloader.insert_rejected_block(block_id);
-            return;
-        }
-
-        // Verify the header signature.
-        // Don't cache the rejected block for orphan downloader because it is easy to
-        // tamper a signature, which is not authenticated by the block ID.
-        if let Err(e) = verify_signature(proposal.header(), proposal.signature()) {
-            let e = Error::InvalidBlock(e.to_string());
-            metrics::consensus_observe_proposal_reconstruct_err("network", &e);
-            error!(target: LOG_TARGET, %e, ?block_id, "Block signature verification failed");
+            error!(target: LOG_TARGET, %e, ?block_id, "Invalid proposal");
             return;
         }
 
@@ -836,6 +820,34 @@ where
 enum DoNotProcessBlock {
     OlderThanLib,
     AlreadyApplied,
+}
+
+/// Verifies the proposal header and signature.
+///
+/// If the proposal header is invalid, cache the block ID as rejected in the
+/// orphan downloader, so that we don't waste time downloading the block later.
+fn verify_header_and_signature<NetAdapter, RuntimeServiceId>(
+    proposal: &Proposal,
+    orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
+) -> Result<(), Error>
+where
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Send + Sync + Clone + 'static,
+    NetAdapter::Block: Clone + Send + Sync + 'static,
+    RuntimeServiceId: Send + Sync + 'static,
+{
+    // If a header is invalid, cache the block ID as rejected in the orphan
+    // downloader, so that we don't waste time downloading the block later.
+    if let Err(e) = verify_header_alone(proposal.header()) {
+        orphan_downloader.insert_rejected_block(proposal.header().id());
+        return Err(Error::InvalidHeader(e));
+    }
+
+    // Verify a signature.
+    // Even if it is invalid, do not cache the block as rejected in the orphan
+    // downloader, because the signature is not committed by the block ID.
+    // A genuine proposal may arrive later, and it shouldn't be rejected.
+    verify_signature(proposal.header(), proposal.signature())
+        .map_err(|e| Error::InvalidBlock(e.to_string()))
 }
 
 async fn is_after_lib<Cryptarchia, RuntimeServiceId>(
@@ -1096,13 +1108,30 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        collections::HashSet,
+        num::NonZeroUsize,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use futures::stream;
-    use lb_core::mantle::{traits::Hasher, transactions::hash::REFERENCE_PREFIX_BYTES};
+    use lb_codec::BinaryDecodeExt as _;
+    use lb_core::{
+        block::UncleHeaders,
+        mantle::{
+            traits::Hasher,
+            transactions::{RawMantleTx, hash::REFERENCE_PREFIX_BYTES},
+        },
+        proofs::leader_proof::Groth16LeaderProof,
+    };
+    use lb_cryptarchia_sync::GetTipResponse;
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
+    use lb_network_service::{backends::mock::Mock, message::ChainSyncEvent};
     use lb_tx_service::TxsWithCommonPrefix;
+    use overwatch::services::relay::OutboundRelay;
 
     use super::*;
+    use crate::network::BoxedStream;
 
     /// A transaction that is nothing but its hash, which is all
     /// [`resolve_reference`] looks at.
@@ -1275,5 +1304,115 @@ mod tests {
 
         assert!(matches!(result, Err(Error::InvalidBlock(_))));
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    /// A block ID rejected due to a tampered signature must not be cached by
+    /// the orphan downloader, because the genuine proposal (with the same ID)
+    /// may arrive later and must be accepted.
+    #[test]
+    fn tampered_signature_block_is_not_cached_by_orphan_downloader() {
+        let leader_key = Ed25519Key::from_bytes(&[1; 32]);
+        let genuine = Block::create(
+            HeaderId::from([0; 32]),
+            Slot::new(1),
+            UncleHeaders::empty(),
+            leader_proof(&leader_key.public_key()),
+            BlockTransactions::<RawMantleTx>::empty(),
+            &leader_key,
+        )
+        .expect("block must be created")
+        .to_proposal();
+
+        let mut signature = genuine.signature().to_bytes();
+        signature[0] ^= 1;
+        let tampered = Proposal {
+            signature: Ed25519Signature::from_bytes(&signature),
+            ..genuine.clone()
+        };
+        let block_id = genuine.header().id();
+        // The tampered proposal has the same block ID as the genuine one,
+        // because the block ID doesn't commit to the signature.
+        assert_eq!(tampered.header().id(), block_id);
+
+        let mut orphan_downloader =
+            OrphanBlocksDownloader::<_, usize>::new(NoopNetworkAdapter, NonZeroUsize::MIN, 1);
+
+        verify_header_and_signature(&genuine, &mut orphan_downloader)
+            .expect("genuine proposal must pass");
+
+        assert!(matches!(
+            verify_header_and_signature(&tampered, &mut orphan_downloader),
+            Err(Error::InvalidBlock(_))
+        ));
+
+        // check that the rejected block was not cached in the orphan downloader.
+        assert!(!orphan_downloader.has_rejected_block(&block_id));
+    }
+
+    /// A network adapter that the orphan downloader holds but never calls here.
+    #[derive(Clone)]
+    struct NoopNetworkAdapter;
+
+    #[async_trait::async_trait]
+    impl<RuntimeServiceId: Send + Sync> NetworkAdapter<RuntimeServiceId> for NoopNetworkAdapter {
+        type Backend = Mock;
+        type Settings = ();
+        type PeerId = ();
+        type Block = ();
+        type Proposal = ();
+
+        async fn new(
+            _settings: Self::Settings,
+            _network_relay: OutboundRelay<
+                <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
+            >,
+        ) -> Self {
+            unimplemented!()
+        }
+
+        async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
+            unimplemented!()
+        }
+
+        async fn chainsync_events_stream(&self) -> Result<BoxedStream<ChainSyncEvent>, DynError> {
+            unimplemented!()
+        }
+
+        async fn request_tip(&self, _peer: Self::PeerId) -> Result<GetTipResponse, DynError> {
+            unimplemented!()
+        }
+
+        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {
+            unimplemented!()
+        }
+
+        async fn request_blocks_from_peer(
+            &self,
+            _peer: Self::PeerId,
+            _target_block: HeaderId,
+            _local_tip: HeaderId,
+            _latest_immutable_block: HeaderId,
+            _additional_blocks: HashSet<HeaderId>,
+        ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
+            unimplemented!()
+        }
+
+        async fn request_blocks_from_peers(
+            &self,
+            _target_block: HeaderId,
+            _local_tip: HeaderId,
+            _latest_immutable_block: HeaderId,
+            _additional_blocks: HashSet<HeaderId>,
+        ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
+            unimplemented!()
+        }
+    }
+
+    /// A dummy leader proof carrying only `leader_key`
+    fn leader_proof(leader_key: &Ed25519PublicKey) -> Groth16LeaderProof {
+        // Layout: `proof (128B) || entropy_contribution (32B) || leader_key (32B) ||
+        // voucher_cm (32B)`
+        let bytes = [&[0u8; 160][..], leader_key.as_bytes(), &[0u8; 32]].concat();
+        Groth16LeaderProof::decode_all(&bytes).expect("leader proof bytes must decode")
     }
 }
