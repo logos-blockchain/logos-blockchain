@@ -4246,6 +4246,7 @@ dependencies = [
  "logos-blockchain-pow-service",
  "logos-blockchain-time-service",
  "logos-blockchain-utils",
+ "logos-blockchain-version",
  "logos-blockchain-wallet-service",
  "multiaddr",
  "overwatch",

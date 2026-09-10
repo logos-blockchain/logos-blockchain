@@ -14,6 +14,7 @@ pub mod storage;
 pub mod subscriptions;
 pub mod time;
 pub(crate) mod types;
+pub mod version;
 pub mod wallet;
 
 pub(crate) use memory::free;
