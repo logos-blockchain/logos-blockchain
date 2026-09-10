@@ -171,98 +171,17 @@ mod tests {
         block::MAX_BLOCK_TRANSACTIONS_SIZE,
         mantle::{
             Note, Op, OpProof, Utxo,
-            channel::{SlotTimeframe, SlotTimeout},
             gas::TxGasCalculator as _,
             ledger::{Inputs, Outputs},
-            ops::{
-                channel::{ChannelId, MsgId, config::ChannelConfigOp},
-                transfer::TransferOp,
-            },
+            ops::transfer::TransferOp,
             traits::StorageSize,
             transactions::{OpProofs, Ops, states::Unverified},
         },
-        proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
     };
-    use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
+    use lb_key_management_system_service::keys::ZkKey;
 
     use super::*;
     use crate::{leadership, txs_for_block};
-
-    fn build_high_execution_gas_ops(
-        transaction_index: usize,
-        channel_signing_key: &Ed25519Key,
-        funding_key: &ZkKey,
-        signature_count: usize,
-    ) -> (Utxo, Ops) {
-        let mut channel_id = [0; 32];
-        channel_id[..size_of::<usize>()].copy_from_slice(&transaction_index.to_le_bytes());
-
-        let funding_utxo = Utxo::new(
-            channel_id,
-            0,
-            Note::new(100_000_000, funding_key.to_public_key()),
-        );
-        let transfer = TransferOp::new(
-            Inputs::try_new(vec![funding_utxo.id()]).unwrap(),
-            Outputs::try_new(Vec::new()).unwrap(),
-        );
-
-        let channel_keys = std::iter::repeat_with(|| channel_signing_key.public_key())
-            .take(signature_count)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        let initial_channel_config = ChannelConfigOp {
-            channel: ChannelId::from(channel_id),
-            parent: MsgId::root(),
-            keys: channel_keys,
-            posting_timeframe: SlotTimeframe::from(0),
-            posting_timeout: SlotTimeout::from(0),
-            configuration_threshold: signature_count as u16,
-            transfer_threshold: 1,
-        };
-        let updated_channel_config = ChannelConfigOp {
-            parent: initial_channel_config.id(),
-            ..initial_channel_config.clone()
-        };
-
-        let ops = Ops::from([
-            Op::Transfer(transfer),
-            Op::ChannelConfig(initial_channel_config),
-            Op::ChannelConfig(updated_channel_config),
-        ]);
-        (funding_utxo, ops)
-    }
-
-    fn sign_high_execution_gas_ops(
-        ops: Ops,
-        channel_signing_key: &Ed25519Key,
-        funding_key: &ZkKey,
-        signature_count: usize,
-    ) -> SignedOps<Preverified, StandardMode> {
-        let tx_hash = ops.hash();
-        let zk_signature =
-            ZkKey::multi_sign(std::slice::from_ref(funding_key), &tx_hash.to_fr()).unwrap();
-        let channel_signature =
-            channel_signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
-        let channel_signatures = (0..signature_count)
-            .map(|index| IndexedSignature::new(index as u16, channel_signature))
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        let initial_channel_proof = ChannelMultiSigProof::try_new([].into()).unwrap();
-        let updated_channel_proof = ChannelMultiSigProof::try_new(channel_signatures).unwrap();
-        let proofs = OpProofs::from([
-            OpProof::ZkSig(zk_signature),
-            OpProof::ChannelMultiSigProof(initial_channel_proof),
-            OpProof::ChannelMultiSigProof(updated_channel_proof),
-        ]);
-
-        SignedOps::<Unverified, StandardMode>::from_parts(ops, proofs)
-            .unwrap()
-            .preverify()
-            .unwrap()
-    }
 
     fn transfer_heavy_transaction(
         transaction_index: usize,
@@ -363,41 +282,5 @@ mod tests {
                 block_txs.into_iter(),
             )
             .expect("the selected prefix must pass canonical application");
-    }
-
-    #[test]
-    fn oversized_transaction_is_evicted_without_stopping_selection() {
-        const OVERSIZED_SIGNATURES: usize = 60_000;
-
-        let config = leadership::test_config();
-        let channel_signing_key = Ed25519Key::from_bytes(&[7; 32]);
-        let funding_key = ZkKey::zero();
-        let (oversized_utxo, oversized_ops) = build_high_execution_gas_ops(
-            0,
-            &channel_signing_key,
-            &funding_key,
-            OVERSIZED_SIGNATURES,
-        );
-        let oversized_tx = sign_high_execution_gas_ops(
-            oversized_ops,
-            &channel_signing_key,
-            &funding_key,
-            OVERSIZED_SIGNATURES,
-        );
-        let oversized_hash = oversized_tx.hash();
-        let (valid_utxos, valid_tx) = transfer_heavy_transaction(1, &funding_key, 1);
-        let ledger_state =
-            LedgerState::from_utxos(std::iter::once(oversized_utxo).chain(valid_utxos), &config);
-
-        assert!(matches!(
-            BlockBuilder::new(ledger_state.clone()).try_add_transaction(&oversized_tx, &config),
-            Err(lb_ledger::LedgerError::TooMuchTransactionExecutionGas { .. })
-        ));
-
-        let selection =
-            select_transactions(ledger_state, vec![oversized_tx, valid_tx.clone()], &config);
-
-        assert_eq!(selection.selected_txs, vec![valid_tx]);
-        assert_eq!(selection.invalid_tx_hashes, vec![oversized_hash]);
     }
 }

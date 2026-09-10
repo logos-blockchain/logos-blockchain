@@ -51,3 +51,49 @@ impl GasAndFees {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_execution_gas(execution_gas: Gas) -> GasAndFees {
+        GasAndFees {
+            execution_gas,
+            ..GasAndFees::default()
+        }
+    }
+
+    #[test]
+    fn rejects_a_transaction_that_exceeds_the_block_limit() {
+        let excessive_gas = EXECUTION_GAS_LIMIT
+            .checked_add(Gas::new(1))
+            .expect("the test gas value should not overflow");
+        let transaction = with_execution_gas(excessive_gas);
+
+        assert_eq!(
+            GasAndFees::default().checked_add::<()>(transaction),
+            Err(LedgerError::TooMuchTransactionExecutionGas {
+                gas: excessive_gas,
+                limit: EXECUTION_GAS_LIMIT,
+            })
+        );
+    }
+
+    #[test]
+    fn distinguishes_exhausted_block_capacity_from_an_oversized_transaction() {
+        let accumulated = with_execution_gas(EXECUTION_GAS_LIMIT);
+        let transaction = with_execution_gas(Gas::new(1));
+
+        let cumulative_gas = EXECUTION_GAS_LIMIT
+            .checked_add(transaction.execution_gas)
+            .expect("the test gas value should not overflow");
+
+        assert_eq!(
+            accumulated.checked_add::<()>(transaction),
+            Err(LedgerError::TooMuchExecutionGas {
+                gas: cumulative_gas,
+                limit: EXECUTION_GAS_LIMIT,
+            })
+        );
+    }
+}
