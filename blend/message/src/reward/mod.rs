@@ -7,7 +7,7 @@ use std::collections::HashSet;
 pub use activity::ActivityProof;
 pub use epoch::EpochInfo;
 use lb_cryptarchia_engine::Epoch;
-use lb_log_targets::blend;
+use lb_log_targets::{blend, diagnostic::BLEND_REACHABILITY};
 use serde::{Deserialize, Serialize};
 pub use token::{BlendingToken, HammingDistance};
 
@@ -45,7 +45,7 @@ impl ActivityTokenEvaluationDiagnostic {
         let candidate_blending_token_count = self.candidate_hamming_distances.len();
         tracing::debug!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "blend_activity_token_evaluation",
             proof_epoch = self.proof_epoch,
             candidate_blending_token_count,

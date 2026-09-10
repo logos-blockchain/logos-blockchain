@@ -6,8 +6,8 @@ use lb_blend::{
     proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
     scheduling::membership::Membership,
 };
-use lb_chain_service::Epoch;
-use lb_core::crypto::ZkHash;
+use lb_chain_service::{Epoch, Slot};
+use lb_core::{crypto::ZkHash, header::HeaderId};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use tokio::{
     sync::{mpsc, oneshot},
@@ -24,7 +24,7 @@ use crate::{
             spawn_run_without_direct_broadcast,
         },
     },
-    epoch_info::PolEpochInfo,
+    epoch_info::{PolEpochInfo, PolEpochState, PolEpochStateSource},
     membership::chain::{BlendEpoch, BlendEpochState},
     message::{DataPayload, ServiceMessage},
     pending::{NextLocalMessage, PendingTransactions, next_local_message},
@@ -330,6 +330,18 @@ async fn run_fails_if_local_is_core_in_new_membership() {
 fn test_pol_epoch_info(epoch: Epoch) -> PolEpochInfo {
     PolEpochInfo {
         epoch,
+        state: PolEpochState {
+            nonce: Fr::ZERO,
+            aged_utxo_root: Fr::ZERO,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ZERO,
+            source: PolEpochStateSource {
+                tip_id: HeaderId::from([0; 32]),
+                tip_slot: Slot::from(0),
+                lib_id: HeaderId::from([0; 32]),
+                lib_slot: Slot::from(0),
+            },
+        },
         winning_pol_info_stream: Box::pin(repeat(ProofOfLeadershipQuotaInputs {
             slot: 1,
             note_value: 1,

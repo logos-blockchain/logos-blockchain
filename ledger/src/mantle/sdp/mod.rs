@@ -29,7 +29,7 @@ use lb_core::{
     },
 };
 use lb_cryptarchia_engine::Epoch;
-use lb_log_targets::ledger;
+use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 use rewards::{Error as RewardsError, Rewards};
 use tracing::debug;
 
@@ -454,11 +454,11 @@ impl SdpLedger {
                 });
             tracing::info!(
                 target: LOG_TARGET,
-                diagnostic = "blend_tsi_outage",
+                diagnostic = BLEND_REACHABILITY,
                 event = "sdp_genesis_declaration_applied",
                 canonical = true,
                 provider_id = ?declaration.provider_id,
-                declaration_id = ?operation_id,
+                declaration_id = %operation_id,
                 ledger_epoch = u32::from(self.epoch),
                 ledger_slot = 0u64,
                 initial_active_epoch = u32::from(declaration.active),

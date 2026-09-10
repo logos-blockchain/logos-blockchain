@@ -1,20 +1,26 @@
 use core::{iter::once, num::NonZeroU64, time::Duration};
 use std::{collections::VecDeque, sync::Arc};
 
-use futures::{StreamExt as _, stream::repeat};
+use futures::{
+    StreamExt as _,
+    stream::{empty, repeat},
+};
 use lb_blend::{
     message::{
         MAX_PAYLOAD_BODY_SIZE,
         reward::{ActivityProof, BlendingToken, EpochBlendingTokenCollector},
     },
-    proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
+    proofs::{
+        quota::{VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
+        selection::VerifiedProofOfSelection,
+    },
     scheduling::{
         EpochMessageScheduler, message_blend::crypto::EpochCryptographicProcessorSettings,
     },
 };
-use lb_chain_service::Epoch;
-use lb_core::{crypto::ZkHash, sdp::ActivityMetadata};
-use lb_groth16::AdditiveGroup as _;
+use lb_chain_service::{Epoch, Slot};
+use lb_core::{crypto::ZkHash, header::HeaderId, sdp::ActivityMetadata};
+use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
 use rand::SeedableRng as _;
@@ -50,7 +56,7 @@ use crate::{
         },
     },
     epoch::{CoreEpochInfo, CoreEpochPublicInfo, CoreEpochStateInfo},
-    epoch_info::PolEpochInfo,
+    epoch_info::{PolEpochInfo, PolEpochState, PolEpochStateSource},
     membership::{
         MembershipInfo, ZkInfo,
         chain::{BlendEpoch, BlendEpochState},
@@ -70,6 +76,46 @@ use crate::{
 mod utils;
 
 type RuntimeServiceId = ();
+
+#[test]
+fn pol_state_match_detects_fingerprint_mismatch() {
+    let public = LeaderInputs {
+        pol_ledger_aged: ZkHash::ZERO,
+        pol_epoch_nonce: ZkHash::ZERO,
+        message_quota: Quota::ZERO,
+        lottery_0: Fr::ZERO,
+        lottery_1: Fr::ZERO,
+    };
+    let mut private = PolEpochInfo {
+        epoch: Epoch::new(7),
+        state: PolEpochState {
+            nonce: public.pol_epoch_nonce,
+            aged_utxo_root: public.pol_ledger_aged,
+            lottery_0: public.lottery_0,
+            lottery_1: public.lottery_1,
+            source: PolEpochStateSource {
+                tip_id: HeaderId::from([0; 32]),
+                tip_slot: Slot::from(0),
+                lib_id: HeaderId::from([0; 32]),
+                lib_slot: Slot::from(0),
+            },
+        },
+        winning_pol_info_stream: Box::pin(empty()),
+    };
+
+    assert!(super::diagnostics::pol_state_matches(
+        &private,
+        Epoch::new(7),
+        &public
+    ));
+
+    private.state.lottery_1 = Fr::from(1u64);
+    assert!(!super::diagnostics::pol_state_matches(
+        &private,
+        Epoch::new(7),
+        &public
+    ));
+}
 
 fn test_blend_epoch_state(
     epoch: u32,
@@ -972,6 +1018,18 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
 
     let secret_info = PolEpochInfo {
         epoch: secret_epoch,
+        state: PolEpochState {
+            nonce: ZkHash::ZERO,
+            aged_utxo_root: ZkHash::ZERO,
+            lottery_0: ZkHash::ZERO,
+            lottery_1: ZkHash::ZERO,
+            source: PolEpochStateSource {
+                tip_id: HeaderId::from([0; 32]),
+                tip_slot: Slot::from(0),
+                lib_id: HeaderId::from([0; 32]),
+                lib_slot: Slot::from(0),
+            },
+        },
         winning_pol_info_stream: Box::pin(repeat(dummy_pol_private_inputs())),
     };
 

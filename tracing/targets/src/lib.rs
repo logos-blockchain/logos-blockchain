@@ -2,6 +2,10 @@ use lb_log_targets_macros::log_target_modules;
 
 pub const ROOT: &str = "logos_blockchain";
 
+pub mod diagnostic {
+    pub const BLEND_REACHABILITY: &str = "blend_reachability";
+}
+
 log_target_modules! {
     api,
     blend,

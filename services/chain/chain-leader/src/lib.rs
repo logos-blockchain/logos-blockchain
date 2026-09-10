@@ -29,11 +29,12 @@ use lb_core::{
         transactions::{hash::TxHash, states::Preverified},
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
+    sdp::blend::PolEpochState,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
 use lb_ledger::LedgerState;
-use lb_log_targets::chain;
+use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
@@ -82,11 +83,11 @@ where
             .map(|declaration| declaration.provider_id);
         tracing::debug!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "sdp_activity_selected_for_proposal",
-            tx_id = ?tx.hash(),
+            tx_id = %tx.hash(),
             provider_id = ?provider_id,
-            declaration_id = ?active.declaration_id,
+            declaration_id = %active.declaration_id,
             proof_epoch = u32::from(active.metadata.origin_epoch()),
             proposal_block_id = %block.header().id(),
             proposal_slot = u64::from(block.header().slot()),
@@ -95,8 +96,8 @@ where
     }
 }
 
-/// The per-subscriber stream of per-epoch winning slots. Each item
-/// carries a single epoch and that epoch's stream of winning slots.
+/// The per-subscriber stream of per-epoch winning slots. Each item carries the
+/// state used to construct its stream and that epoch's stream of winning slots.
 ///
 /// `Send` but not `Sync`: each item carries a [`WinningPolSlotStream`] of
 /// `Send`-only per-slot futures (see [`WinningSlotFuture`]), so the handoff is
@@ -106,6 +107,7 @@ pub type WinningPolEpochSlotsStream =
 
 pub struct WinningPolEpochSlots {
     pub epoch: Epoch,
+    pub state: PolEpochState,
     pub slots: WinningPolSlotStream,
 }
 
@@ -455,7 +457,7 @@ where
                 tokio::select! {
                     Some(SlotTick { slot, epoch }) = slot_timer.next() => {
                         trace!(target: LOG_TARGET, "Received SlotTick for slot {}, ep {}", u64::from(slot), u32::from(epoch));
-                        let Some(SlotContext { tip, epoch_state, eligible_aged }) =
+                        let Some(SlotContext { wallet_tip, epoch_state, eligible_aged, .. }) =
                             fetch_slot_context(&cryptarchia_api, &wallet_api, &ledger_config, slot).await
                         else {
                             error!(target: LOG_TARGET, "Failed to fetch epoch context for slot {slot:?}");
@@ -464,10 +466,10 @@ where
 
                         // The block-proposal proof must prove the winning note is still
                         // unspent, so it needs the latest tip ledger state (fetched per slot).
-                        let tip_state = match cryptarchia_api.get_ledger_state(tip).await {
+                        let tip_state = match cryptarchia_api.get_ledger_state(wallet_tip).await {
                             Ok(Some(state)) => state,
                             Ok(None) => {
-                                error!(target: LOG_TARGET, "Ledger state not found for tip {tip:?}");
+                                error!(target: LOG_TARGET, "Ledger state not found for tip {wallet_tip:?}");
                                 continue;
                             }
                             Err(e) => {
@@ -491,7 +493,7 @@ where
                             Err(e) => {
                                 error!(
                                     target: LOG_TARGET,
-                                    diagnostic = "blend_tsi_outage",
+                                    diagnostic = BLEND_REACHABILITY,
                                     event = "leadership_proof_failure",
                                     epoch = u32::from(ledger_config.epoch(slot)),
                                     slot = u64::from(slot),
@@ -505,7 +507,7 @@ where
                         if let Some((proof, signing_key)) = proof {
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
-                                tip,
+                                wallet_tip,
                                 slot,
                                 proof,
                                 &signing_key,

@@ -47,14 +47,6 @@ mod imp {
         lb_tracing::increase_counter_u64!(blend_messages_sent_total, 1, action = ACTION_FORWARD);
     }
 
-    pub fn outbound_forward_err() {
-        lb_tracing::increase_counter_u64!(
-            blend_outbound_messages_failed_total,
-            1,
-            action = ACTION_FORWARD
-        );
-    }
-
     pub fn inbound_message_ok() {
         lb_tracing::increase_counter_u64!(blend_messages_received_total, 1);
     }

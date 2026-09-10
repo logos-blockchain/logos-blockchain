@@ -45,7 +45,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Slot, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
-use lb_log_targets::ledger;
+use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 use mantle::LedgerState as MantleLedger;
 use rpds::HashTrieMapSync;
 use thiserror::Error;
@@ -680,7 +680,7 @@ impl LedgerState {
             });
         tracing::trace!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "sdp_declaration_applied",
             evaluation_context = "candidate",
             canonical = false,
@@ -719,16 +719,16 @@ impl LedgerState {
             });
         tracing::trace!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "sdp_activity_applied",
             evaluation_context = "candidate",
             canonical = false,
             proof_epoch = u32::from(op.metadata.origin_epoch()),
             ledger_epoch = u32::from(epoch),
             ledger_slot = u64::from(slot),
-            tx_id = ?tx_hash,
+            tx_id = %tx_hash,
             provider_id = ?new_declaration.provider_id,
-            declaration_id = ?op.declaration_id,
+            declaration_id = %op.declaration_id,
             previous_active_epoch = ?previous_active_epoch,
             new_active_epoch = ?new_declaration.active,
             active_until_epoch = u32::from(new_declaration.active).saturating_add(inactivity_period),

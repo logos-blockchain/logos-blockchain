@@ -5,11 +5,12 @@ use std::{
 };
 
 use lb_blend::scheduling::epoch::EpochEvent;
+use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{AsServiceId, ServiceData},
 };
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::{
     membership::MembershipInfo,
@@ -231,9 +232,9 @@ where
 /// operator sees a node's mode decisions in the log.
 fn log_mode_applied(previous_mode: Mode, selected_mode: Mode, resulting_mode: Mode) {
     let mode_changed = previous_mode != resulting_mode;
-    info!(
+    debug!(
         target: crate::LOG_TARGET,
-        diagnostic = "blend_tsi_outage",
+        diagnostic = BLEND_REACHABILITY,
         event = "blend_mode_applied",
         selected_mode = selected_mode.as_ref(),
         previous_mode = previous_mode.as_ref(),
@@ -244,7 +245,7 @@ fn log_mode_applied(previous_mode: Mode, selected_mode: Mode, resulting_mode: Mo
     if mode_changed {
         info!(
             target: crate::LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "blend_mode_changed",
             previous_mode = previous_mode.as_ref(),
             new_mode = resulting_mode.as_ref(),
