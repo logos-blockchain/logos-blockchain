@@ -41,12 +41,17 @@ utoipa             = { features = ["macros"], optional = true, workspace = true 
 
 [dev-dependencies]
 lb-tracing-service = { workspace = true }
-lb-tx-service      = { features = ["rocksdb-backend"], workspace = true }
 overwatch-derive   = { workspace = true }
 tempfile           = { workspace = true }
 
 [features]
-default         = []
+# `rocksdb-backend` is default-on so this crate's own integration tests
+# (`tests/mock.rs`) compile against the RocksDB adapter. This replaces a self
+# dev-dependency, which made `cargo-deny` unable to include dev-dependencies in
+# its graph (`krates` panics on the resulting cycle). Workspace consumers are
+# unaffected: `[workspace.dependencies]` sets `default-features = false` and
+# members may not override it, so each still opts in explicitly.
+default         = ["rocksdb-backend"]
 rocksdb-backend = ["lb-storage-service/rocksdb-backend"]
 
 # enable to help generate OpenAPI

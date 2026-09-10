@@ -54,10 +54,10 @@ jobs:
       # Thus, results may differ from local runs.
       # To avoid this, we install and run `cargo-deny` manually.
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked --version 0.19.0
+        run: cargo install cargo-deny --locked --version 0.20.2
 
       - name: Run cargo-deny
-        run: CARGO_BUILD_WARNINGS=deny cargo-deny --locked --all-features check --hide-inclusion-graph -c .cargo-deny.toml --show-stats
+        run: CARGO_BUILD_WARNINGS=deny cargo-deny --locked --config .cargo-deny.toml check --hide-inclusion-graph --show-stats
 
   workspace-deps:
     name: Check for correctly declared dependencies in the workspace
