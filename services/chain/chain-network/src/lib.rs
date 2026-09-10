@@ -17,7 +17,7 @@ use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::{StreamExt as _, future::join_all};
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
-    block::{Block, BlockTransactions, Proposal, verify_header_alone, verify_signature},
+    block::{Block, BlockTransactions, Proposal, verify_header_alone, verify_header_signature},
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
@@ -889,7 +889,7 @@ where
     // downloader, because the signature is not committed by the block ID.
     // A genuine proposal with the same block ID may arrive later, and it shouldn't
     // be rejected.
-    verify_signature(proposal.header(), proposal.signature())
+    verify_header_signature(proposal.header(), proposal.signature())
         .map_err(|e| Error::InvalidBlock(e.to_string()))
 }
 

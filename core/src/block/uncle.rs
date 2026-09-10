@@ -81,6 +81,6 @@ impl SignedHeader {
 
     pub fn verify(&self) -> Result<(), Error> {
         crate::block::verify_header_alone(&self.header)?;
-        crate::block::verify_signature(&self.header, &self.signature)
+        crate::block::verify_header_signature(&self.header, &self.signature)
     }
 }
