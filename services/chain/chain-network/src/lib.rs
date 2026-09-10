@@ -845,7 +845,8 @@ where
     // Verify a signature.
     // Even if it is invalid, do not cache the block as rejected in the orphan
     // downloader, because the signature is not committed by the block ID.
-    // A genuine proposal may arrive later, and it shouldn't be rejected.
+    // A genuine proposal with the same block ID may arrive later, and it shouldn't
+    // be rejected.
     verify_signature(proposal.header(), proposal.signature())
         .map_err(|e| Error::InvalidBlock(e.to_string()))
 }
