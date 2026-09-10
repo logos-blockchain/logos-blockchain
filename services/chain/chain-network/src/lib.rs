@@ -1385,9 +1385,6 @@ mod tests {
         let mut orphan_downloader =
             OrphanBlocksDownloader::<_, usize>::new(NoopNetworkAdapter, NonZeroUsize::MIN, 1);
 
-        verify_header_and_signature(&genuine, &mut orphan_downloader)
-            .expect("genuine proposal must pass");
-
         assert!(matches!(
             verify_header_and_signature(&tampered, &mut orphan_downloader),
             Err(Error::InvalidBlock(_))
@@ -1395,6 +1392,9 @@ mod tests {
 
         // check that the rejected block was not cached in the orphan downloader.
         assert!(!orphan_downloader.has_rejected_block(&block_id));
+
+        verify_header_and_signature(&genuine, &mut orphan_downloader)
+            .expect("genuine proposal must pass");
     }
 
     /// A network adapter that the orphan downloader holds but never calls here.
