@@ -6,7 +6,7 @@ use std::{
 };
 
 use futures::stream::{self, StreamExt as _};
-use lb_common_http_client::ProcessedBlockEvent;
+use lb_common_http_client::{ApiBlock, CommonHttpClient, ProcessedBlockEvent};
 use lb_core::header::HeaderId;
 use lb_http_api_common::{
     DEFAULT_NUMBER_OF_BLOCKS_TO_STREAM, MAX_BLOCKS_STREAM_BLOCKS, MAX_BLOCKS_STREAM_CHUNK_SIZE,
@@ -277,6 +277,17 @@ async fn request_stream_events(
     events
 }
 
+async fn request_legacy_immutable_blocks(
+    node: &NodeHttpClient,
+    slot_from: u64,
+    slot_to: u64,
+) -> Vec<ApiBlock> {
+    CommonHttpClient::new(None)
+        .get_immutable_blocks(node.base_url().clone(), slot_from, slot_to)
+        .await
+        .expect("legacy immutable blocks request should succeed")
+}
+
 fn assert_stream_integrity(_chain: &CanonicalChain, events: &[ProcessedBlockEvent]) {
     let first = events
         .first()
@@ -361,6 +372,23 @@ fn ids_in_slot_range(
         .collect()
 }
 
+fn canonical_ids_in_slot_range(
+    chain: &CanonicalChain,
+    slot_from: u64,
+    slot_to: u64,
+) -> Vec<HeaderId> {
+    chain
+        .heights_by_slot
+        .range(slot_from..=slot_to)
+        .map(|(_, height)| {
+            *chain
+                .ids_by_height
+                .get(height)
+                .expect("slot-mapped height must exist in canonical chain")
+        })
+        .collect()
+}
+
 fn assert_event_order_matches_expected(events: &[ProcessedBlockEvent], expected_ids: &[HeaderId]) {
     let actual_ids = events
         .iter()
@@ -391,6 +419,72 @@ async fn test_blocks_streaming() {
     assert!(
         chain.tip_height >= chain.lib_height + 2,
         "tip height must allow streaming three blocks starting from LIB"
+    );
+
+    // ============== Legacy immutable block range ==============
+
+    println!("case: legacy immutable block range preserves finite-range semantics");
+    let first_immutable_slot = slot_for_height(&chain, 1);
+    let below_lib_slot = slot_for_height(&chain, chain.lib_height - 1);
+
+    let blocks_below_lib =
+        request_legacy_immutable_blocks(node, first_immutable_slot, below_lib_slot).await;
+    let expected_below_lib =
+        canonical_ids_in_slot_range(&chain, first_immutable_slot, below_lib_slot);
+    assert_eq!(
+        blocks_below_lib
+            .iter()
+            .map(|block| block.header.id)
+            .collect::<Vec<_>>(),
+        expected_below_lib,
+        "legacy immutable blocks should preserve ascending ordering below LIB"
+    );
+
+    let blocks_through_lib =
+        request_legacy_immutable_blocks(node, first_immutable_slot, chain.lib_slot).await;
+    let expected_through_lib =
+        canonical_ids_in_slot_range(&chain, first_immutable_slot, chain.lib_slot);
+    assert!(
+        blocks_through_lib.len() > 1,
+        "legacy immutable range should return multiple blocks"
+    );
+    assert_eq!(
+        blocks_through_lib
+            .iter()
+            .map(|block| block.header.id)
+            .collect::<Vec<_>>(),
+        expected_through_lib,
+        "legacy immutable blocks should include the block at LIB in order"
+    );
+
+    let bounded_events = request_stream_events(
+        node,
+        BlocksStreamQuery {
+            slot_from: Some(first_immutable_slot),
+            slot_to: Some(chain.lib_slot),
+            order: Some(BlockSortOrder::Ascending),
+            blocks_limit: None,
+            server_batch_size: None,
+            block_filter: Some(BlockFilter::ImmutableOnly),
+        },
+    )
+    .await;
+    assert_eq!(
+        bounded_events
+            .iter()
+            .map(|event| event.block.header.id)
+            .collect::<Vec<_>>(),
+        expected_through_lib,
+        "legacy immutable range should match shared bounded retrieval"
+    );
+
+    chain = refresh_chain(node, &chain).await;
+    let above_chain_slot = chain.tip_slot.saturating_add(1_000);
+    let empty_blocks =
+        request_legacy_immutable_blocks(node, above_chain_slot, above_chain_slot).await;
+    assert!(
+        empty_blocks.is_empty(),
+        "an immutable range fully above LIB should be empty"
     );
 
     // ============== Happy path =============

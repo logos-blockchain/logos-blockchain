@@ -2,7 +2,7 @@ use core::fmt::Debug;
 use std::{collections::HashMap, fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt as _, future::join_all};
+use futures::{Stream, StreamExt as _};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::{
     ConsensusMsg, CryptarchiaInfo, ProcessedBlockEvent, Query, Slot,
@@ -42,7 +42,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::warn;
 
 use crate::http::{
-    consensus::{Cryptarchia, cryptarchia_ledger_state},
+    consensus::{Cryptarchia, cryptarchia_info, cryptarchia_ledger_state},
     errors::BlockSlotRangeError,
 };
 
@@ -462,8 +462,7 @@ where
 
             // Retry once from the latest tip if the original tip is not yet available.
             // The original LIB remains the anchor for this request.
-            let refreshed_info =
-                crate::http::consensus::cryptarchia_info::<RuntimeServiceId>(handle).await?;
+            let refreshed_info = cryptarchia_info::<RuntimeServiceId>(handle).await?;
             current_id = refreshed_info.cryptarchia_info.tip;
             retried = true;
             blocks.clear();
@@ -653,62 +652,13 @@ where
     Ok(blocks)
 }
 
-/// Fetch immutable block header ids in range.
-///
-/// # Arguments
-///
-/// - `handle`: A reference to the `OverwatchHandle` to interact with the
-///   runtime and storage service.
-/// - `from_slot`: A non-zero starting slot (inclusive) indicating the starting
-///   point of the desired slot range.
-/// - `to_slot`: A non-zero ending slot (inclusive) indicating the endpoint of
-///   the desired slot range. If the range spans across the LIB block, only
-///   header IDs up to LIB will be returned.
-///
-/// # Returns
-///
-/// If successful, returns a `Vec<HeaderId>` containing the block header IDs for
-/// the specified slot range. If any error occurs during processing, returns a
-/// boxed `DynError`.
-pub async fn get_immutable_blocks_header_ids<Backend, RuntimeServiceId>(
-    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-    from_slot: usize,
-    to_slot: usize,
-) -> Result<Vec<HeaderId>, super::DynError>
-where
-    Backend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<Backend, RuntimeServiceId>>,
-{
-    let relay = handle.relay().await?;
-    let (response_tx, response_rx) = oneshot::channel();
-
-    let limit = {
-        // Since this request requires a limit, let's calculate it based on the slot
-        // range. Add 1 to the difference to ensure that limit makes sense.
-        let diff = to_slot - from_slot + 1;
-        NonZeroUsize::new(diff)
-            .ok_or_else(|| String::from("to_slot must be greater or equal to from_slot"))
-    }?;
-
-    let start = Slot::new(from_slot as u64);
-    let end = Slot::new(to_slot as u64);
-    let slot_range = RangeInclusive::new(start, end);
-
-    relay
-        .send(StorageMsg::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::ScanImmutableBlockIds {
-                slot_range,
-                limit,
-                response_tx,
-            }),
-        })
-        .await
-        .map_err(|(error, _)| error)?;
-
-    response_rx
-        .await
-        .map_err(|error| Box::new(error) as super::DynError)
+fn slot_range_limit(slot_from: Slot, slot_to: Slot) -> Option<NonZeroUsize> {
+    slot_to
+        .into_inner()
+        .checked_sub(slot_from.into_inner())
+        .and_then(|diff| diff.checked_add(1))
+        .and_then(|diff| usize::try_from(diff).ok())
+        .and_then(NonZeroUsize::new)
 }
 
 /// Fetch immutable blocks in range
@@ -742,27 +692,40 @@ where
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
+        + Send
         + Sync
         + Display
         + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + 'static,
 {
-    let header_ids = get_immutable_blocks_header_ids(handle, from_slot, to_slot).await?;
+    if to_slot < from_slot {
+        return Err("to_slot must be greater or equal to from_slot".into());
+    }
 
-    let relay = handle.relay().await?;
-    let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
+    let chain_info = cryptarchia_info::<RuntimeServiceId>(handle)
+        .await?
+        .cryptarchia_info;
+    let slot_from = Slot::new(from_slot as u64);
+    if slot_from > chain_info.lib_slot {
+        return Ok(Vec::new());
+    }
 
-    let blocks_futures = header_ids
-        .iter()
-        .map(|header_id| storage_adapter.get_block(header_id));
+    let slot_to = Slot::new(to_slot as u64).min(chain_info.lib_slot);
+    let blocks_limit = slot_range_limit(slot_from, slot_to)
+        .ok_or_else(|| "legacy immutable block range is too large".to_owned())?;
+    let blocks = get_blocks_in_slot_range_with_snapshot::<_, _, RuntimeServiceId>(
+        handle,
+        slot_from,
+        slot_to,
+        false,
+        blocks_limit,
+        true,
+        &chain_info,
+    )
+    .await?;
 
-    let blocks = join_all(blocks_futures)
-        .await
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-
-    Ok(blocks)
+    Ok(blocks.into_iter().map(|block| block.block).collect())
 }
 
 /// Fetch a single block by its header ID.
