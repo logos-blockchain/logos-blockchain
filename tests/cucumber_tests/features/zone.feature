@@ -279,6 +279,45 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
+  # Distinct participants sign a config prepared by SEQ_A: no step signs on
+  # another sequencer's behalf. Escalates single-signer -> 2-of-2 -> 2-of-3.
+  Scenario: Multi-sig channel config escalates across independent signers
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers          |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B, SEQ_C |
+    When node "NODE_1" is at height 1 in 120 seconds
+    And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And I start zone sequencer "SEQ_B"
+    And sequencer "SEQ_A" prepares zone config transaction "CHANNEL_CONFIG_1" with threshold 1 authorizing:
+      | alias |
+      | SEQ_A |
+    And sequencer "SEQ_A" submits prepared zone config transaction "CHANNEL_CONFIG_1"
+    Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
+    When sequencer "SEQ_A" prepares zone config transaction "CHANNEL_CONFIG_2" with threshold 2 authorizing:
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+    And sequencer "SEQ_A" signs prepared zone config transaction "CHANNEL_CONFIG_2"
+    And sequencer "SEQ_A" submits prepared zone config transaction "CHANNEL_CONFIG_2"
+    Then zone transaction "CHANNEL_CONFIG_2" is finalized in 180 seconds
+    When sequencer "SEQ_A" prepares zone config transaction "CHANNEL_CONFIG_3" with threshold 2 authorizing:
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+      | SEQ_C |
+    And sequencer "SEQ_B" signs prepared zone config transaction "CHANNEL_CONFIG_3"
+    And sequencer "SEQ_A" signs prepared zone config transaction "CHANNEL_CONFIG_3"
+    And sequencer "SEQ_B" submits prepared zone config transaction "CHANNEL_CONFIG_3"
+    Then zone transaction "CHANNEL_CONFIG_3" is finalized in 180 seconds
+    And I stop all nodes
+
+  @zone_ci
   Scenario: Round-robin waits for turn and submits pending messages
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -713,7 +752,10 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
-  Scenario: Atomic withdraw bundle finalizes alongside multi-sequencer publishing
+  # Deposit 5 → withdraw "1,1,2" leaves a value-1 change note that can only exist
+  # if both the integration inscription and the withdraw landed, so its
+  # finalization proves the whole reactive chain.
+  Scenario: Observed deposit is integrated then withdrawn without waiting for finalization
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 3           | 100000       |
@@ -733,26 +775,19 @@ Feature: Zone SDK
       | alias    | data                |
       | MSG_INIT | initial inscription |
     Then all zone messages are finalized in 120 seconds
-    When I submit zone deposit transaction "DEPOSIT_1" into channel of "SEQ_A" of 5 with metadata "Mint 5 for atomic withdraw"
-    Then zone transaction "DEPOSIT_1" is finalized in 120 seconds
-    And the zone indexer returns finalized deposit "DEPOSIT_1" in 120 seconds
-    When I start zone sequencer "SEQ_B"
+    When I start zone sequencer "SEQ_B" pinning then withdrawing observed deposits with outputs "1,1,2"
     And sequencer "SEQ_A" publishes the following zone messages:
       | alias  | data |
       | MSG_A1 | a1   |
       | MSG_A2 | a2   |
-    And sequencer "SEQ_B" publishes atomic withdraw "BUNDLE_1" with inscription "MSG_BURN":
-      | withdraw     | outputs |
-      | WITHDRAW_ALL | 1,1,2   |
-    Then zone transaction "BUNDLE_1" is included in 240 seconds
-    And zone transaction "BUNDLE_1" is finalized in 240 seconds
-    And the zone indexer returns finalized withdraw "WITHDRAW_ALL" in 120 seconds
-    And the zone indexer returns messages in any order in 240 seconds:
+    When I submit zone deposit transaction "DEPOSIT_1" into channel of "SEQ_A" of 5 with metadata "Mint 5 for atomic integration"
+    Then the channel wallet of "SEQ_B" contains a finalized note of value 1 in 300 seconds
+    And the zone indexer returns a finalized channel transfer consuming 1 inputs in 300 seconds
+    And the zone indexer returns messages in this order:
       | alias    |
       | MSG_INIT |
       | MSG_A1   |
       | MSG_A2   |
-      | MSG_BURN |
     And I stop all nodes
 
   @zone_ci
@@ -766,7 +801,9 @@ Feature: Zone SDK
   # value-1 notes in a single channel transfer (bounded by the 255-output
   # limit), rather than one ZK-signed deposit per 32 notes (a deposit is capped
   # at 32 inputs by the ZK signing-key limit).
-  Scenario: Withdrawal stays valid under a dust flood
+  # The withdraw is reactive: SEQ_A reacts to the big deposit and publishes the
+  # sweeping withdraw. Dust exists before the big deposit, so it is swept.
+  Scenario: Reactive withdrawal stays valid under a dust flood
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 3           | 1000000      |
@@ -779,24 +816,17 @@ Feature: Zone SDK
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
     And I do a coin split for "WALLET_1A" of 1 UTXOs valued at 255 LGO tokens each
     And I do a coin split for "WALLET_1A" of 1 UTXOs valued at 10000 LGO tokens each
-    And I start zone sequencer "SEQ_A" with indexer
+    And I start zone sequencer "SEQ_A" withdrawing observed deposit of 10000 with outputs "10000"
     And sequencer "SEQ_A" publishes the following zone messages:
       | alias    | data                |
       | MSG_INIT | initial inscription |
     Then all zone messages are finalized in 120 seconds
     When I submit zone deposit transaction "DEPOSIT_DUST_SEED" into channel of "SEQ_A" of 255 with metadata "Dust seed"
-    Then zone transaction "DEPOSIT_DUST_SEED" is included in 180 seconds
-    When I submit zone deposit transaction "DEPOSIT_BIG" into channel of "SEQ_A" of 10000 with metadata "Big note"
-    Then zone transaction "DEPOSIT_BIG" is finalized in 240 seconds
-    And the zone indexer returns finalized deposit "DEPOSIT_BIG" in 120 seconds
+    And the channel wallet of "SEQ_A" contains a note of value 255 in 240 seconds
     When sequencer "SEQ_A" splits deposit "DEPOSIT_DUST_SEED" into 255 dust notes as "SPLIT_DUST"
     Then zone transaction "SPLIT_DUST" is finalized in 240 seconds
-    When sequencer "SEQ_A" submits zone withdraw transaction "WITHDRAW_DUST" with inscription "MSG_DUST" of 10000
-    Then zone transaction "WITHDRAW_DUST" is included in 240 seconds
-    And zone transaction "WITHDRAW_DUST" is finalized in 240 seconds
-    And the zone indexer returns finalized withdraw "WITHDRAW_DUST" in 240 seconds
-    And the zone indexer returns a finalized channel transfer consuming 255 inputs in 240 seconds
-    And sequencer "SEQ_A" finalizes withdraw "WITHDRAW_DUST" in 240 seconds
+    When I submit zone deposit transaction "DEPOSIT_BIG" into channel of "SEQ_A" of 10000 with metadata "Big note"
+    Then the zone indexer returns a finalized channel transfer consuming 255 inputs in 300 seconds
     And I stop all nodes
 
   @zone_ci

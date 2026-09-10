@@ -5,11 +5,11 @@ pub mod noop_service;
 pub mod types;
 pub mod yaml;
 
-#[cfg(feature = "rng")]
-pub mod blake_rng;
-
 #[cfg(feature = "time")]
 pub mod bounded_duration;
+
+#[cfg(feature = "openapi")]
+pub mod openapi;
 
 #[cfg(feature = "tokio")]
 pub mod tokio;

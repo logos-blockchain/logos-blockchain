@@ -1,16 +1,20 @@
-use lb_core::mantle::{
-    SignedMantleTx,
-    channel::{SlotTimeframe, SlotTimeout},
-    ops::channel::{MsgId, config::Keys, inscribe::Inscription},
-    transactions::{Ops, mantle_tx::RawMantleTx, states::Unverified},
+use lb_core::{
+    mantle::{
+        SignedOps,
+        channel::{SlotTimeframe, SlotTimeout},
+        ledger::{NoteId, verification_mode::StandardMode},
+        ops::channel::{MsgId, config::Keys, inscribe::Inscription},
+        transactions::{Ops, states::Unverified},
+    },
+    proofs::channel_multi_sig_proof::IndexedSignature,
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use super::{
     types::{
-        ChannelWalletView, Error, Event, SequencerChannelView, SequencerCheckpoint,
-        TurnNotification, TxStatusUpdate, WithdrawArg, WithdrawInputs,
+        ChannelWalletView, Error, Event, PreparedChannelConfig, SequencerChannelView,
+        SequencerCheckpoint, TurnNotification, TxStatusUpdate, WithdrawArg, WithdrawInputs,
     },
     zone_sequencer::ActorRequest,
 };
@@ -91,6 +95,25 @@ impl SequencerClient {
         Self::recv(response_rx).await?
     }
 
+    /// Publish an atomic inscription+transfer bundle pinning an observed
+    /// deposit.
+    ///
+    /// Async counterpart of
+    /// [`super::SequencerHandle::publish_pin_deposit`].
+    pub async fn publish_pin_deposit(
+        &self,
+        inscribe: Inscription,
+        consumed_notes: Vec<NoteId>,
+    ) -> Result<PublishReceipt, Error> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(ActorRequest::PublishPinDeposit {
+            inscribe,
+            consumed_notes,
+            response_tx,
+        })?;
+        Self::recv(response_rx).await?
+    }
+
     /// Update the channel's config.
     ///
     /// Async counterpart of [`super::SequencerHandle::channel_config`].
@@ -101,7 +124,7 @@ impl SequencerClient {
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         transfer_threshold: u16,
-    ) -> Result<(PublishReceipt, SignedMantleTx<Unverified>), Error> {
+    ) -> Result<(PublishReceipt, SignedOps<Unverified, StandardMode>), Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(ActorRequest::ChannelConfig {
             keys,
@@ -114,12 +137,55 @@ impl SequencerClient {
         Self::recv(response_rx).await?
     }
 
-    /// Enqueue a pre-signed [`SignedMantleTx`] for posting.
+    /// Build and fund a channel-config tx for external multi-sig signing.
+    ///
+    /// Async counterpart of
+    /// [`super::SequencerHandle::prepare_channel_config`].
+    pub async fn prepare_channel_config(
+        &self,
+        keys: Keys,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        transfer_threshold: u16,
+    ) -> Result<PreparedChannelConfig, Error> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(ActorRequest::PrepareChannelConfig {
+            keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            transfer_threshold,
+            response_tx,
+        })?;
+        Self::recv(response_rx).await?
+    }
+
+    /// Submit a [`PreparedChannelConfig`] with its externally-collected
+    /// signatures.
+    ///
+    /// Async counterpart of
+    /// [`super::SequencerHandle::submit_channel_config`].
+    pub async fn submit_channel_config(
+        &self,
+        prepared: PreparedChannelConfig,
+        signatures: Vec<IndexedSignature>,
+    ) -> Result<PublishReceipt, Error> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(ActorRequest::SubmitChannelConfig {
+            prepared: Box::new(prepared),
+            signatures,
+            response_tx,
+        })?;
+        Self::recv(response_rx).await?
+    }
+
+    /// Enqueue a pre-signed [`SignedOps`] for posting.
     ///
     /// Async counterpart of [`super::SequencerHandle::submit_signed_tx`].
     pub async fn submit_signed_tx(
         &self,
-        tx: SignedMantleTx<Unverified>,
+        tx: SignedOps<Unverified, StandardMode>,
         msg_id: MsgId,
     ) -> Result<PublishReceipt, Error> {
         let (response_tx, response_rx) = oneshot::channel();
@@ -131,14 +197,14 @@ impl SequencerClient {
         Self::recv(response_rx).await?
     }
 
-    /// Build a [`RawMantleTx`] for the given ops and an inscription message.
+    /// Build an [`Ops`] for the given ops and an inscription message.
     ///
     /// Async counterpart of [`super::SequencerHandle::prepare_tx`].
     pub async fn prepare_tx(
         &self,
         ops: Ops,
         data: Inscription,
-    ) -> Result<(RawMantleTx, MsgId, Ed25519Signature), Error> {
+    ) -> Result<(Ops, MsgId, Ed25519Signature), Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(ActorRequest::PrepareTx {
             ops,
@@ -148,11 +214,11 @@ impl SequencerClient {
         Self::recv(response_rx).await?
     }
 
-    /// Sign a [`RawMantleTx`] using the sequencer's key.
+    /// Sign an [`Ops`] using the sequencer's key.
     ///
     /// Async counterpart of [`super::SequencerHandle::sign_tx`]. Clones `tx`
     /// internally so the call site can keep its borrow.
-    pub async fn sign_tx(&self, tx: &RawMantleTx) -> Result<Ed25519Signature, Error> {
+    pub async fn sign_tx(&self, tx: &Ops) -> Result<Ed25519Signature, Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(ActorRequest::SignTx {
             tx: tx.clone(),

@@ -14,6 +14,7 @@ use lb_core::{
     mantle::{traits::Hashable, transactions::hash::TxHash},
 };
 use lb_cryptarchia_engine::Slot;
+use lb_log_targets::chain;
 use lb_storage_service::{
     StorageMsg, StorageService, api::chain::StorageChainApi, backends::StorageBackend,
 };
@@ -22,6 +23,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 
 use crate::storage::StorageAdapter as StorageAdapterTrait;
+
+const LOG_TARGET: &str = chain::service::STORAGE;
 
 pub struct StorageAdapter<Storage, Tx, RuntimeServiceId>
 where
@@ -82,7 +85,7 @@ where
             let block = maybe_block?;
             block.try_into().ok()
         } else {
-            tracing::error!("Failed to receive block from storage relay");
+            tracing::error!(target: LOG_TARGET, "Failed to receive block from storage relay");
             None
         }
     }
@@ -132,7 +135,7 @@ where
             .unwrap();
 
         receiver.await.unwrap_or_else(|e| {
-            tracing::error!("Failed to receive block parent from storage relay: {e}");
+            tracing::error!(target: LOG_TARGET, "Failed to receive block parent from storage relay: {e}");
             None
         })
     }
@@ -146,13 +149,13 @@ where
             .unwrap();
 
         let Ok(maybe_events) = receiver.await else {
-            tracing::error!("Failed to receive block events from storage relay");
+            tracing::error!(target: LOG_TARGET, "Failed to receive block events from storage relay");
             return None;
         };
 
         let events = maybe_events?;
         let Ok(events) = events.try_into() else {
-            tracing::error!("Failed to convert block events loaded from storage");
+            tracing::error!(target: LOG_TARGET, "Failed to convert block events loaded from storage");
             return None;
         };
         Some(events)

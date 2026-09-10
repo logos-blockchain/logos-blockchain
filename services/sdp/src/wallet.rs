@@ -1,7 +1,8 @@
 use lb_core::{
     mantle::{
-        SignedMantleTx,
+        SignedOps,
         gas::{GasCost, GasOverflow},
+        ledger::verification_mode::StandardMode,
         transactions::{MantleTxBuilder, TxBuilderError, states::Preverified},
     },
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
@@ -45,19 +46,19 @@ pub trait SdpWalletAdapter {
         tx_builder: MantleTxBuilder,
         declaration: DeclarationMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedMantleTx<Preverified>, SdpWalletError>;
+    ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError>;
 
     async fn active_tx(
         &self,
         tx_builder: MantleTxBuilder,
         active_message: ActiveMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedMantleTx<Preverified>, SdpWalletError>;
+    ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError>;
 
     async fn withdraw_tx(
         &self,
         tx_builder: MantleTxBuilder,
         withdraw: WithdrawMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedMantleTx<Preverified>, SdpWalletError>;
+    ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError>;
 }

@@ -6,19 +6,25 @@ use lb_core::{
     events::DepositRecreatedNotes,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Value,
+        SignedOps, Value,
         channel::ChannelState,
         gas::GasCost,
-        ledger::{Inputs, NoteId, Outputs},
-        ops::channel::{
-            ChannelId, MsgId, channel_transfer::ChannelTransferOp, deposit::Metadata,
-            inscribe::Inscription, withdraw::ChannelWithdrawOp,
+        ledger::{Inputs, NoteId, Outputs, verification_mode::StandardMode},
+        ops::{
+            Op, OpProof,
+            channel::{
+                ChannelId, MsgId, channel_transfer::ChannelTransferOp, config::ChannelConfigOp,
+                deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
+            },
         },
         traits::Hashable as _,
-        transactions::{TxHash, states::Unverified},
+        transactions::{Ops, TxHash, states::Unverified},
     },
+    proofs::channel_multi_sig_proof::IndexedSignature,
 };
-use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
+use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, ZkPublicKey};
+
+use super::tx_builder::sign_prepared;
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -34,7 +40,7 @@ pub struct SequencerCheckpoint {
     /// Last message ID for chain continuity.
     pub last_msg_id: MsgId,
     /// Pending transactions to restore.
-    pub pending_txs: Vec<(TxHash, SignedMantleTx<Unverified>)>,
+    pub pending_txs: Vec<(TxHash, SignedOps<Unverified, StandardMode>)>,
     /// Last known LIB.
     pub lib: HeaderId,
     /// Last known LIB slot (for backfill range queries).
@@ -77,6 +83,67 @@ impl PublishResult {
     }
 }
 
+/// A channel-config transaction built and funded by the SDK, handed back for
+/// external multi-sig signing before submission.
+///
+/// Produced by
+/// [`prepare_channel_config`](super::SequencerClient::prepare_channel_config)
+/// and consumed by
+/// [`submit_channel_config`](super::SequencerClient::submit_channel_config).
+/// The caller collects a signature from each key holder over
+/// [`Self::sign_payload`], assembles an ascending-by-index
+/// `Vec<IndexedSignature>`, and submits it alongside the (unchanged) prepared
+/// value. `tx` and `transfer_proof` are opaque to the caller — they carry the
+/// funded transaction and its fee-transfer proof straight back into
+/// submission.
+#[derive(Debug, Clone)]
+pub struct PreparedChannelConfig {
+    pub(crate) tx: Ops,
+    pub(crate) transfer_proof: Option<OpProof>,
+    /// The exact bytes each accredited key must sign (the funded tx hash's
+    /// signing bytes).
+    pub sign_payload: Vec<u8>,
+    /// The channel's current accredited keys, in index order. Each collected
+    /// signature must be indexed by this key's position here. Empty for an
+    /// unclaimed channel, which needs no signatures.
+    pub accredited_keys: Vec<Ed25519PublicKey>,
+    /// The channel's current `configuration_threshold` — how many of the
+    /// `accredited_keys` must sign for the config to be valid. `0` for an
+    /// unclaimed channel.
+    pub signing_threshold: u16,
+}
+
+impl PreparedChannelConfig {
+    /// The channel config this prepared tx will enact.
+    ///
+    /// Exposed so an accredited signer can inspect what it is authorizing — the
+    /// new key set and thresholds — before signing [`Self::sign_payload`],
+    /// rather than signing the opaque payload blind.
+    #[must_use]
+    pub fn proposed_config(&self) -> &ChannelConfigOp {
+        self.tx
+            .iter()
+            .find_map(|op| match op {
+                Op::ChannelConfig(config) => Some(config),
+                _ => None,
+            })
+            // Invariant: the SDK builds every prepared config as a
+            // `[CHANNEL_CONFIG, TRANSFER(fee)]` tx and the struct's `tx` is not
+            // publicly constructible, so the config op is always present.
+            .expect("a prepared channel config always carries a ChannelConfig op")
+    }
+
+    /// Sign this prepared config with `signing_key`.
+    ///
+    /// Convenience wrapper over [`sign_prepared`](super::sign_prepared) for the
+    /// common case where the signer holds the prepared value: signs
+    /// [`Self::sign_payload`] and indexes it against [`Self::accredited_keys`].
+    /// Returns [`Error`] if `signing_key` is not among the accredited keys.
+    pub fn sign_with(&self, signing_key: &Ed25519Key) -> Result<IndexedSignature, Error> {
+        sign_prepared(signing_key, &self.accredited_keys, &self.sign_payload)
+    }
+}
+
 /// One withdraw to bundle atomically with an inscription.
 ///
 /// The SDK fills `channel_id` from internal state.
@@ -113,44 +180,36 @@ pub enum WithdrawInputs {
     Explicit(Vec<NoteId>),
 }
 
-/// A tx reported in a [`ChannelUpdate`], in both `adopted` and `orphaned`.
+/// A tx reported in a [`ChannelUpdate`]'s `adopted`/`orphaned`.
 ///
-/// The variants mirror the submission flows, so an orphaned entry is
-/// recovered with the same method that produced it:
+/// Variants mirror the submission flows, so an orphaned entry is recovered with
+/// the method that produced it (the SDK fills a fresh `parent_msg` each time):
 /// - [`ChannelUpdateTx::Inscription`] →
-///   [`SequencerHandle::publish`](super::SequencerHandle::publish) with
-///   `info.payload`
+///   [`publish`](super::SequencerHandle::publish) with `info.payload`.
 /// - [`ChannelUpdateTx::AtomicWithdraw`] →
-///   [`SequencerHandle::publish_atomic_withdraw`](super::SequencerHandle::publish_atomic_withdraw)
-///   with `info.inscription.payload` and `WithdrawArg`s reconstructed from
-///   `info.withdraws[i].op.inputs`. The SDK fills a fresh `parent_msg` and
-///   reselects the transfer inputs per [`WithdrawInputs`] on each publish — the
-///   original input selection need not be reproduced.
-/// - [`ChannelUpdateTx::Config`] → a config-only tx on the config lineage. Like
-///   [`ChannelUpdateTx::Custom`], recovery is the caller's: the SDK does not
-///   auto-resubmit a config (it cannot re-sign a multi-sig one). The caller
-///   routes it — a single-sig config back through `do_channel_config`, a
-///   multi-sig one through its own signing flow. The variant is a typed marker
-///   ("this orphan is a config"), not a re-publish trigger.
-/// - [`ChannelUpdateTx::Custom`] → the `prepare_tx` + `submit_signed_tx` flow:
-///   the SDK cannot demystify the tx, so it hands back the whole
-///   [`SignedMantleTx`] and the caller's own logic decides how to parse and
-///   whether/how to rebuild it (an orphaned tx cannot be re-posted as-is — its
-///   parent slot is consumed).
-///   [`channel_inscriptions`](super::channel_inscriptions) extracts the tx's
-///   channel inscriptions the way the SDK sees them.
+///   [`publish_atomic_withdraw`](super::SequencerHandle::publish_atomic_withdraw)
+///   with `info.inscription.payload` and `WithdrawArg { outputs: info.outputs
+///   }`.
+/// - [`ChannelUpdateTx::PinDeposit`] →
+///   [`publish_pin_deposit`](super::SequencerHandle::publish_pin_deposit) with
+///   `info.inscription.payload` and `info.consumed_notes`.
+/// - [`ChannelUpdateTx::Config`] / [`ChannelUpdateTx::Custom`] →
+///   caller-recovered; the SDK cannot re-sign a multi-sig config or rebuild a
+///   custom tx, so it never auto-resubmits them.
 #[derive(Debug, Clone)]
 pub enum ChannelUpdateTx {
     /// A published message.
     Inscription(InscriptionInfo),
     /// An atomic inscription+withdraw bundle.
     AtomicWithdraw(AtomicWithdrawInfo),
+    /// An atomic inscription+transfer bundle pinning an observed deposit.
+    PinDeposit(PinDepositInfo),
     /// A config-only tx (a single `ChannelConfig` op) on the config lineage.
     /// Caller-recovered, like [`Self::Custom`] — never auto-resubmitted.
-    Config(SignedMantleTx<Unverified>),
+    Config(SignedOps<Unverified, StandardMode>),
     /// A tx shape the SDK cannot produce (bundled deposits, multi-inscribe,
     /// other custom-built txs), reported whole as a unit.
-    Custom(SignedMantleTx<Unverified>),
+    Custom(SignedOps<Unverified, StandardMode>),
 }
 
 impl ChannelUpdateTx {
@@ -159,7 +218,8 @@ impl ChannelUpdateTx {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
-            Self::Config(tx) | Self::Custom(tx) => tx.mantle_tx().hash(),
+            Self::PinDeposit(a) => a.tx_hash,
+            Self::Config(tx) | Self::Custom(tx) => tx.hash(),
         }
     }
 
@@ -171,6 +231,7 @@ impl ChannelUpdateTx {
         match self {
             Self::Inscription(i) => Some(i),
             Self::AtomicWithdraw(a) => Some(&a.inscription),
+            Self::PinDeposit(a) => Some(&a.inscription),
             Self::Config(_) | Self::Custom(_) => None,
         }
     }
@@ -425,6 +486,17 @@ pub struct ChannelUpdate {
     /// branches), so consumers dedup by `this_msg` against their own state
     /// there.
     pub adopted: Vec<ChannelUpdateTx>,
+    /// Channel deposits observed in this block. Surfaced non-finalized so a
+    /// consumer can pin a deposit without waiting for finalization, via
+    /// [`publish_pin_deposit`](super::SequencerHandle::publish_pin_deposit).
+    ///
+    /// Reconcile against branch state, don't fire once: a branch change can
+    /// re-surface the same deposit or reorg it out. Publish an inscription for
+    /// a deposit only while it is on the current branch and none consuming
+    /// it is already in flight, and republish if yours is reported in
+    /// `orphaned`. The bundle's transfer consumes the deposited note, so it
+    /// can only land where the deposit is.
+    pub adopted_deposits: Vec<DepositInfo>,
 }
 
 /// Information about whose turn it is to post and the current posting
@@ -491,6 +563,27 @@ pub struct AtomicWithdrawInfo {
     pub inscription: InscriptionInfo,
     /// The withdraw ops carried by the bundle, in tx order.
     pub withdraws: Vec<WithdrawInfo>,
+    /// The recipient notes the bundle releases (the transfer outputs the
+    /// withdraw consumes, change excluded). Enough to re-issue the bundle from
+    /// its orphan report as a single [`WithdrawArg`] — the note IDs in
+    /// `withdraws[i].op.inputs` alone can't recover the recipient value + key.
+    pub outputs: Outputs,
+}
+
+/// An inscription bundled atomically with a channel transfer that consumes an
+/// observed deposited note, in a single `MantleTx`. The transfer makes the
+/// inscription conditional on the deposit being on chain: if the deposit is not
+/// present the consumed note does not exist, the transfer fails, and the whole
+/// tx (inscription included) fails. All ops adopt/orphan/finalize as a unit.
+#[derive(Debug, Clone)]
+pub struct PinDepositInfo {
+    /// Transaction hash of the bundled `MantleTx`.
+    pub tx_hash: TxHash,
+    /// The inscription op carried by the bundle.
+    pub inscription: InscriptionInfo,
+    /// The channel notes the bundled transfer consumes (the deposit being
+    /// pinned). Recovering an orphaned bundle re-supplies these.
+    pub consumed_notes: Inputs,
 }
 
 /// A channel deposit observed in a finalized L1 block. Sequencers do not
@@ -576,6 +669,9 @@ pub enum PendingTx {
     /// A bundled inscription+withdraw(s) published via
     /// `publish_atomic_withdraw`.
     AtomicWithdraw(AtomicWithdrawInfo),
+    /// A bundled inscription+transfer pinning an observed deposit,
+    /// published via `publish_pin_deposit`.
+    PinDeposit(PinDepositInfo),
 }
 
 impl PendingTx {
@@ -585,6 +681,7 @@ impl PendingTx {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
+            Self::PinDeposit(a) => a.tx_hash,
         }
     }
 
@@ -594,6 +691,7 @@ impl PendingTx {
         match self {
             Self::Inscription(i) => i,
             Self::AtomicWithdraw(a) => &a.inscription,
+            Self::PinDeposit(a) => &a.inscription,
         }
     }
 }
@@ -634,4 +732,73 @@ pub enum FinalizedOp {
     /// A channel transfer op on the channel: notes re-keyed/re-denominated
     /// under channel authority.
     ChannelTransfer(ChannelTransferInfo),
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_core::mantle::{
+        Op,
+        channel::{SlotTimeframe, SlotTimeout},
+        ops::channel::{
+            ChannelId, MsgId,
+            config::{ChannelConfigOp, Keys},
+        },
+        transactions::Ops,
+    };
+    use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
+
+    use super::{PreparedChannelConfig, sign_prepared};
+
+    fn config_op(keys: Vec<Ed25519PublicKey>) -> ChannelConfigOp {
+        ChannelConfigOp {
+            channel: ChannelId::from([7; 32]),
+            parent: MsgId::root(),
+            keys: Keys::new_unchecked(keys),
+            posting_timeframe: SlotTimeframe::from(15),
+            posting_timeout: SlotTimeout::from(3),
+            configuration_threshold: 2,
+            transfer_threshold: 2,
+        }
+    }
+
+    #[test]
+    fn proposed_config_exposes_the_built_config() {
+        let new_keys: Vec<Ed25519PublicKey> = [1u8, 2, 3]
+            .into_iter()
+            .map(|b| Ed25519Key::from_bytes(&[b; 32]).public_key())
+            .collect();
+        let op = config_op(new_keys);
+        let prepared = PreparedChannelConfig {
+            tx: Ops::new_unchecked(vec![Op::ChannelConfig(op.clone())]),
+            transfer_proof: None,
+            sign_payload: vec![0xab; 32],
+            accredited_keys: Vec::new(),
+            signing_threshold: 0,
+        };
+
+        // Decodes the enacted config straight back out of the opaque `tx`.
+        assert_eq!(prepared.proposed_config(), &op);
+    }
+
+    #[test]
+    fn sign_with_delegates_to_sign_prepared() {
+        let signer = Ed25519Key::from_bytes(&[5; 32]);
+        let accredited = vec![
+            Ed25519Key::from_bytes(&[4; 32]).public_key(),
+            signer.public_key(),
+        ];
+        let prepared = PreparedChannelConfig {
+            tx: Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited.clone()))]),
+            transfer_proof: None,
+            sign_payload: vec![0x11; 32],
+            accredited_keys: accredited.clone(),
+            signing_threshold: 2,
+        };
+
+        assert_eq!(
+            prepared.sign_with(&signer).expect("signer is accredited"),
+            sign_prepared(&signer, &accredited, &prepared.sign_payload)
+                .expect("signer is accredited"),
+        );
+    }
 }

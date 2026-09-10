@@ -4,7 +4,7 @@ use rusqlite::types::{ToSql, ToSqlOutput, Value, ValueRef};
 
 use crate::{
     error::Error,
-    protocol::{Statement, Transaction},
+    protocol::{Statement, Transaction, TxId},
 };
 
 /// A replicated SQL transaction with a current query.
@@ -14,6 +14,7 @@ use crate::{
 /// [`Self::bind`].
 #[must_use = "the transaction must be passed to LogosSql::execute"]
 pub struct TransactionBuilder {
+    tx_id: TxId,
     transaction: TransactionDraft,
 }
 
@@ -27,8 +28,19 @@ impl TransactionBuilder {
     /// Starts a transaction with its first SQL query.
     pub fn new(sql: impl Into<String>) -> Self {
         Self {
+            tx_id: TxId::generate(),
             transaction: TransactionDraft::new(sql),
         }
+    }
+
+    /// Returns the identity that will follow this write through publication
+    /// and any later displacement.
+    ///
+    /// Applications can persist this value with their own operation before
+    /// awaiting [`crate::LogosSql::execute`].
+    #[must_use]
+    pub const fn tx_id(&self) -> TxId {
+        self.tx_id
     }
 
     /// Adds the next SQL query to this transaction.
@@ -52,8 +64,8 @@ impl TransactionBuilder {
         self
     }
 
-    pub(crate) fn finish(self) -> Result<Transaction, Error> {
-        self.transaction.finish()
+    pub(crate) fn finish(self) -> Result<(TxId, Transaction), Error> {
+        Ok((self.tx_id, self.transaction.finish()?))
     }
 }
 
@@ -156,7 +168,8 @@ mod tests {
                 .bind("email")
                 .bind(42i64)
                 .finish()
-                .unwrap();
+                .unwrap()
+                .1;
         let expected = Transaction::new(vec![
             Statement::new(
                 "INSERT INTO credentials (label, account) VALUES (?1, ?2)".to_owned(),
@@ -188,5 +201,15 @@ mod tests {
     #[test]
     fn converts_none_to_sql_null() {
         assert_eq!(to_owned_value(&Option::<i64>::None).unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn transaction_identity_is_available_before_execution() {
+        let transaction = TransactionBuilder::new("INSERT INTO items VALUES (?1)").bind(1i64);
+        let tx_id = transaction.tx_id();
+
+        let (finished_tx_id, _) = transaction.finish().expect("transaction should finish");
+
+        assert_eq!(finished_tx_id, tx_id);
     }
 }

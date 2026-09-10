@@ -5,10 +5,13 @@ use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredE
 use lb_poq::Quota;
 use rayon::ThreadPool;
 
-use crate::{core::settings::CoverTrafficSettings, settings::TimingSettings};
+use crate::{
+    core::settings::CoverTrafficSettings,
+    settings::{TimingSettings, max_data_message_delay_in_rounds},
+};
 
 #[derive(Clone, Debug)]
-pub struct StartingBlendConfig<BackendSettings> {
+pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
     pub backend: BackendSettings,
     pub time: TimingSettings,
     pub non_ephemeral_signing_key_id: KeyId,
@@ -17,6 +20,9 @@ pub struct StartingBlendConfig<BackendSettings> {
     pub cover: CoverTrafficSettings,
     /// `R_c`: replication factor for data messages.
     pub data_replication_factor: u64,
+    pub max_blend_delay_in_rounds: NonZeroU64,
+    pub network: NetworkSettings,
+    pub abstain_on_failure: bool,
 }
 
 /// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
@@ -31,6 +37,8 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub cover: CoverTrafficSettings,
     pub data_replication_factor: u64,
     pub pow_mining_pool: Arc<ThreadPool>,
+    pub max_blend_delay_in_rounds: NonZeroU64,
+    pub abstain_on_failure: bool,
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {
@@ -55,5 +63,10 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
                 panic!("Leadership Quota must fit within the width the `PoQ` circuit allows.")
             }
         }
+    }
+
+    #[must_use]
+    pub const fn max_data_message_delay_in_rounds(&self) -> NonZeroU64 {
+        max_data_message_delay_in_rounds(self.num_blend_layers, self.max_blend_delay_in_rounds)
     }
 }

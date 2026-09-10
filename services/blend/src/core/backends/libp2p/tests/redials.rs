@@ -594,3 +594,62 @@ async fn core_retry_skipped_when_peering_degree_satisfied() {
             >= 1
     );
 }
+
+#[test(tokio::test)]
+async fn core_does_not_retry_unrecoverable_dial_failure() {
+    let (mut identities, peer_ids) = new_nodes_with_empty_address(2);
+
+    // A real listening swarm whose address we pair with the wrong identity.
+    let TestSwarm {
+        swarm: mut listening_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &peer_ids)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+    let (listening_node, _) = listening_swarm
+        .listen_and_return_membership_entry(None)
+        .await;
+    tokio::spawn(async move { listening_swarm.run().await });
+
+    let TestSwarm {
+        swarm: mut dialing_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &peer_ids)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+
+    let wrong_peer_id = PeerId::random();
+    dialing_swarm.dial_peer_at_addr(wrong_peer_id, listening_node.address.clone());
+
+    dialing_swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(wrong_peer_id)
+        })
+        .await;
+
+    assert!(
+        dialing_swarm.unrecoverable_peers().contains(&wrong_peer_id),
+        "a wrong-peer-id failure must mark the peer unusable for this epoch"
+    );
+    assert!(
+        !dialing_swarm.ongoing_dials().contains_key(&wrong_peer_id),
+        "the abandoned peer must not be left in ongoing dials"
+    );
+
+    // The first backoff would be 2^1 = 2s; no further attempt may occur.
+    let no_second_attempt = time::timeout(
+        Duration::from_secs(4),
+        dialing_swarm.poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(wrong_peer_id)
+        }),
+    )
+    .await;
+    assert!(
+        no_second_attempt.is_err(),
+        "an unrecoverable dial failure must not be retried"
+    );
+}

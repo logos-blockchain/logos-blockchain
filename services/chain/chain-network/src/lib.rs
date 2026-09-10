@@ -20,12 +20,17 @@ use lb_core::{
     block::{Block, BlockTransactions, Proposal, verify_header_alone, verify_signature},
     header::HeaderId,
     mantle::{
-        traits::{Hashable, MantleTxWithProofs},
-        transactions::hash::{TxHash, TxHashPrefix},
+        ledger::verification_mode::StandardMode,
+        traits::{Hashable, SignedMantleTx, StorageSize},
+        transactions::{
+            hash::{TxHash, TxHashPrefix},
+            states::Preverified,
+        },
     },
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
+use lb_log_targets::chain;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
@@ -46,7 +51,7 @@ use overwatch::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
     time::sleep,
 };
@@ -69,9 +74,10 @@ use crate::{
 
 const SERVICE_ID: &str = "ChainNetwork";
 
-pub(crate) const LOG_TARGET: &str = "chain_network::service";
+pub(crate) const LOG_TARGET: &str = chain::network::ROOT;
 const FUTURE_BLOCK_MAX_RETRIES: usize = 3;
 const FUTURE_BLOCK_RETRY_DELAY: Duration = Duration::from_millis(500);
+const RECEIVED_PROPOSALS_BUFFER: usize = 64;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -98,10 +104,17 @@ pub enum Error {
 }
 
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Boxing a block in `ApplyBlockAndReconcileMempool` would cost in every apply an allocation to spare the rare subscription eight bytes."
+)]
 pub enum Message<Tx> {
     ApplyBlockAndReconcileMempool {
         block: Block<Tx>,
         resp: oneshot::Sender<Result<(), Error>>,
+    },
+    SubscribeToProposals {
+        result_sender: oneshot::Sender<broadcast::Receiver<Proposal>>,
     },
 }
 
@@ -134,7 +147,7 @@ pub struct ChainNetwork<
     Mempool::Settings: Clone,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Item: Clone + Eq + Debug + 'static,
-    Mempool::Item: MantleTxWithProofs,
+    Mempool::Item: SignedMantleTx<Preverified, StandardMode>,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     MempoolNetAdapter::Settings: Send + Sync,
@@ -142,6 +155,7 @@ pub struct ChainNetwork<
     TimeBackend::Settings: Clone + Send + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
+    received_proposals_sender: broadcast::Sender<Proposal>,
 }
 
 impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId> ServiceData
@@ -162,7 +176,7 @@ where
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Mempool::Item: MantleTxWithProofs + Clone + Eq + Debug,
+    Mempool::Item: SignedMantleTx<Preverified, StandardMode> + Clone + Eq + Debug,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     MempoolNetAdapter::Settings: Send + Sync,
@@ -200,7 +214,8 @@ where
     Mempool::Settings: Clone + Send + Sync + 'static,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Item: Hashable<Hash = Mempool::Key>
-        + MantleTxWithProofs
+        + SignedMantleTx<Preverified, StandardMode>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -241,8 +256,10 @@ where
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         _initial_state: Self::State,
     ) -> Result<Self, DynError> {
+        let (received_proposals_sender, _) = broadcast::channel(RECEIVED_PROPOSALS_BUFFER);
         Ok(Self {
             service_resources_handle,
+            received_proposals_sender,
         })
     }
 
@@ -301,15 +318,16 @@ where
             .await
         {
             Ok(_) => {
-                info!("Initial Block Download completed successfully");
+                info!(target: LOG_TARGET, "Initial Block Download completed successfully");
                 // Notify chain-service that IBD is complete so it can start the prolonged
                 // bootstrap timer
                 if let Err(e) = relays.cryptarchia().notify_ibd_completed().await {
-                    error!("Failed to notify chain-service of IBD completion: {e:?}");
+                    error!(target: LOG_TARGET, "Failed to notify chain-service of IBD completion: {e:?}");
                 }
             }
             Err(e) => {
                 error!(
+                    target: LOG_TARGET,
                     "Initial Block Download failed: {e:?}. Initiating graceful shutdown. Retry with different bootstrap peers"
                 );
                 if let Err(shutdown_err) = self
@@ -318,7 +336,7 @@ where
                     .shutdown()
                     .await
                 {
-                    error!("Failed to shutdown overwatch: {shutdown_err:?}");
+                    error!(target: LOG_TARGET, "Failed to shutdown overwatch: {shutdown_err:?}");
                 }
 
                 return Err(DynError::from(format!(
@@ -387,6 +405,7 @@ where
             loop {
                 tokio::select! {
                     Some(proposal) = incoming_proposals.next() => {
+                        self.note_received_proposal(&proposal);
                         self.handle_incoming_proposal(
                             proposal,
                             orphan_downloader.as_mut().get_mut(),
@@ -439,7 +458,9 @@ where
                             .await
                         {
                             Ok(()) => {
-                                trace!(counter.consensus_processed_blocks = 1);
+                                trace!(target: LOG_TARGET, {
+                                    counter.consensus_processed_blocks = 1
+                                }, "Processed consensus block");
                             }
                             Err(e) => {
                                 error!(target: LOG_TARGET, "Error processing orphan downloader block: {e:?}");
@@ -482,7 +503,7 @@ where
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
-                        Self::handle_message(msg, &relays).await;
+                        Self::handle_message(msg, &self.received_proposals_sender, &relays).await;
                     }
                 }
             }
@@ -495,7 +516,9 @@ where
         // Hypothesis:
         // 1. Probably related to too many generics.
         // 2. It seems `span` requires a `const` string literal.
-        async_loop.instrument(span!(Level::TRACE, SERVICE_ID)).await;
+        async_loop
+            .instrument(span!(target: LOG_TARGET, Level::TRACE, SERVICE_ID))
+            .await;
 
         Ok(())
     }
@@ -517,7 +540,8 @@ where
     Mempool::Settings: Clone + Send + Sync + 'static,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Item: Hashable<Hash = Mempool::Key>
-        + MantleTxWithProofs
+        + SignedMantleTx<Preverified, StandardMode>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -538,6 +562,7 @@ where
     fn notify_service_ready(&self) {
         self.service_resources_handle.status_updater.notify_ready();
         info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
@@ -680,7 +705,9 @@ where
             Ok(()) => {
                 metrics::consensus_observe_apply_block_ok(started_at.elapsed());
                 orphan_downloader.remove_orphan(&block_id);
-                trace!(counter.consensus_processed_blocks = 1);
+                trace!(target: LOG_TARGET, {
+                    counter.consensus_processed_blocks = 1
+                }, "Processed consensus block");
             }
             Err(err) => {
                 metrics::consensus_observe_apply_block_err(&err);
@@ -721,15 +748,15 @@ where
         let content_size = 0; // TODO: calculate the actual content size
         let transactions = block.transactions_iter().len();
 
-        trace!(
+        trace!(target: LOG_TARGET, {
             counter.received_blocks = 1,
             transactions = transactions,
             bytes = content_size
-        );
-        trace!(
+        }, "Received block");
+        trace!(target: LOG_TARGET, {
             histogram.received_blocks_data = content_size,
             transactions = transactions,
-        );
+        }, "Recorded received block size");
     }
 
     /// Hand a tip discovered by the watchdog to the orphan downloader and
@@ -758,8 +785,15 @@ where
         }
     }
 
+    fn note_received_proposal(&self, proposal: &Proposal) {
+        if self.received_proposals_sender.receiver_count() > 0 {
+            drop(self.received_proposals_sender.send(proposal.clone()));
+        }
+    }
+
     async fn handle_message(
         msg: Message<Mempool::Item>,
+        received_proposals: &broadcast::Sender<Proposal>,
         relays: &ChainNetworkRelays<
             Cryptarchia,
             Mempool,
@@ -771,6 +805,14 @@ where
         RuntimeServiceId: Send,
     {
         match msg {
+            Message::SubscribeToProposals { result_sender } => {
+                if result_sender.send(received_proposals.subscribe()).is_err() {
+                    error!(
+                        target: LOG_TARGET,
+                        "Subscriber hung up before it could be given the received-proposal stream."
+                    );
+                }
+            }
             Message::ApplyBlockAndReconcileMempool { block, resp } => {
                 let result = apply_block_and_reconcile_mempool::<_, Mempool, _>(
                     block,
@@ -797,7 +839,7 @@ async fn should_process_block<Cryptarchia, RuntimeServiceId>(
 ) -> Result<(), DoNotProcessBlock>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
     if !is_after_lib(cryptarchia, block_id, block_slot).await {
@@ -858,7 +900,7 @@ async fn is_after_lib<Cryptarchia, RuntimeServiceId>(
 ) -> bool
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
     match cryptarchia.info().await {
@@ -970,6 +1012,7 @@ where
 /// A [`Block`] is only added if it's valid
 #[expect(clippy::allow_attributes_without_reason)]
 #[instrument(
+    target = LOG_TARGET,
     level = "debug",
     skip(block, cryptarchia, mempool_adapter),
     fields(block_id = %block.header().id(), tx_count = block.transactions().len())
@@ -981,12 +1024,12 @@ async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool, RuntimeServiceI
 ) -> Result<(), Error>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
-    trace!("Received proposal with ID: {:?}", block.header().id());
+    trace!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
 
     let (tip, reorged_txs) = cryptarchia.apply_block(block.clone()).await?;
     let reorged_tx_count = reorged_txs.len();
@@ -997,6 +1040,7 @@ where
     // honest chain later when this node proposes blocks.
     if tip == block.header().id() {
         debug!(
+            target: LOG_TARGET,
             "Applied block {:?} to the canonical chain; included {} transactions and will reinsert {} reorged transactions",
             block.header().id(),
             included_tx_count,
@@ -1010,9 +1054,12 @@ where
                     .collect::<Vec<_>>(),
             )
             .await
-            .unwrap_or_else(|e| error!("Could not mark transactions in block: {e}"));
+            .unwrap_or_else(
+                |e| error!(target: LOG_TARGET, "Could not mark transactions in block: {e}"),
+            );
     } else {
         debug!(
+            target: LOG_TARGET,
             "Applied block {:?} off the canonical chain; keeping {} included transactions in mempool because the current tip is {:?}",
             block.header().id(),
             included_tx_count,
@@ -1025,7 +1072,7 @@ where
         let mempool_adapter = mempool_adapter.clone();
         async move {
             if let Err(e) = mempool_adapter.add_transaction(tx).await {
-                error!("Could not reinsert a reorged tx into mempool: {e:?}");
+                error!(target: LOG_TARGET, "Could not reinsert a reorged tx into mempool: {e:?}");
             }
         }
     }))
@@ -1053,7 +1100,7 @@ async fn reconstruct_block_from_proposal<Item>(
     mempool: &impl MempoolAdapterTrait<Item>,
 ) -> Result<Block<Item>, Error>
 where
-    Item: MantleTxWithProofs<Hash = TxHash> + Clone + Send + Sync + 'static,
+    Item: SignedMantleTx<Preverified, StandardMode> + StorageSize + Clone + Send + Sync + 'static,
 {
     let mut transactions = Vec::with_capacity(proposal.mempool_transactions().len());
     for (index, prefix) in proposal.mempool_transactions().iter().copied().enumerate() {

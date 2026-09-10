@@ -130,6 +130,39 @@ pub const fn average_slots_for_blocks(
         .expect("base_period_length with proper configuration should never be zero")
 }
 
+/// `N_b`: the number of blocks an epoch of `epoch_length` slots is expected to
+/// produce, `epoch_length * f`.
+///
+/// For the standard 3/3/4 phase split this works out to `10k`: the epoch spans
+/// ten base periods and a base period is `k / f` slots. It is therefore never a
+/// free parameter — anything that needs a per-epoch block count derives it from
+/// the schedule rather than carrying its own copy.
+#[must_use]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "The u128 product is explicitly clamped to u64 before the cast."
+)]
+pub const fn expected_blocks_per_epoch(
+    epoch_length: u64,
+    slot_activation_coeff: NonNegativeRatio,
+) -> NonZero<u64> {
+    // Widened so the multiplication cannot wrap: `epoch_length` spans the whole
+    // of `u64` and the numerator the whole of `u32`.
+    let blocks = (epoch_length as u128 * slot_activation_coeff.numerator as u128)
+        / slot_activation_coeff.denominator.get() as u128;
+    let blocks = if blocks > u64::MAX as u128 {
+        u64::MAX
+    } else {
+        blocks as u64
+    };
+    match NonZero::new(blocks) {
+        Some(blocks) => blocks,
+        // Only an `f` of zero gets here, a chain that produces no blocks at
+        // all. One keeps arithmetic that divides by this value well-defined.
+        None => NonZero::<u64>::MIN,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ops::Mul as _;
@@ -154,6 +187,19 @@ mod tests {
         assert_eq!(
             config.stake_inference_learning_rate().mul(10.0).floor() as u64,
             1,
+        );
+    }
+
+    #[test]
+    fn test_expected_blocks_per_epoch_is_ten_k() {
+        // k = 10, f = 1/5: a base period is 50 slots and the standard 3/3/4
+        // split makes the epoch ten of them.
+        let slot_activation_coeff = NonNegativeRatio::new(1, 5.try_into().unwrap());
+        let epoch_length =
+            10 * base_period_length(NonZero::new(10).unwrap(), slot_activation_coeff).get();
+        assert_eq!(
+            expected_blocks_per_epoch(epoch_length, slot_activation_coeff),
+            NonZero::new(100).unwrap(),
         );
     }
 }

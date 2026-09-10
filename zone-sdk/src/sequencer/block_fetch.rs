@@ -4,15 +4,18 @@ use lb_common_http_client::{ApiBlock, ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
+        SignedOps,
+        ledger::{
+            Inputs, Outputs,
+            verification_mode::{StandardMode, VerificationMode},
+        },
         ops::{
-            Op, OpId as _,
+            OpId as _, OpRef,
             channel::{ChannelId, MsgId, inscribe::Inscription},
         },
         traits::Hashable as _,
         transactions::{
             hash::TxHash,
-            mantle_tx::MantleTx as _,
             states::{Unverified, VerificationState},
         },
     },
@@ -22,10 +25,10 @@ use tracing::{debug, error, warn};
 use super::{
     TARGET,
     channel_wallet::{NoteOp, note_ops_from_txs},
-    state::{BlockChannelTx, ChannelUpdateInfo, TxState},
+    state::{BlockChannelTx, ChannelUpdateInfo, PendingBundle, TxState},
     types::{
         AtomicWithdrawInfo, ChannelTransferInfo, ChannelUpdateTx, DepositInfo, Error, FinalizedOp,
-        FinalizedTx, InscriptionInfo, PendingTx, WithdrawInfo,
+        FinalizedTx, InscriptionInfo, PendingTx, PinDepositInfo, WithdrawInfo,
     },
 };
 use crate::{
@@ -46,6 +49,10 @@ pub(super) struct BlockEventResult {
     /// its tx reached the chain (`OnChain` status) even when the tx didn't move
     /// the canonical channel chain.
     pub(super) mined_inscriptions: Vec<InscriptionInfo>,
+    /// Channel deposits observed in this block, in op order. Surfaced
+    /// non-finalized as `ChannelUpdate::adopted_deposits` so a consumer can
+    /// pin a deposit without waiting for finalization.
+    pub(super) adopted_deposits: Vec<DepositInfo>,
 }
 
 struct PreparedBlockEvent<'a> {
@@ -63,6 +70,7 @@ struct PreparedBlockEvent<'a> {
     /// Channel-note ops of the live block, computed in the prepare phase.
     note_ops: Vec<NoteOp>,
     mined_inscriptions: Vec<InscriptionInfo>,
+    adopted_deposits: Vec<DepositInfo>,
 }
 
 /// Process a block event. Returns finalized tx hashes and optional channel
@@ -110,7 +118,7 @@ where
         let from: u64 = lib_slot.into();
         let to: u64 = event.lib_slot.into();
         if from < to {
-            prepare_finalized_blocks(from + 1, to, channel_id, node).await?
+            prepare_finalized_blocks(from + 1, to, channel_id, node, state).await?
         } else {
             Vec::new()
         }
@@ -135,7 +143,7 @@ where
         .transactions
         .iter()
         .filter(|tx| touches_channel_tip(tx, channel_id))
-        .map(|tx| tx.mantle_tx().hash())
+        .map(|tx| tx.op_refs().hash())
         .collect();
     let channel_txs = classify_channel_txs(&event.block.transactions, channel_id);
     let mut mined_inscriptions: Vec<InscriptionInfo> = channel_txs
@@ -162,6 +170,12 @@ where
         &deposit_events,
         event.block.header.slot,
     );
+    let adopted_deposits = block_channel_deposits(
+        &event.block.transactions,
+        channel_id,
+        event.block.header.slot,
+        &deposit_events,
+    );
 
     Ok(PreparedBlockEvent {
         block: &event.block,
@@ -175,7 +189,27 @@ where
         channel_txs,
         note_ops,
         mined_inscriptions,
+        adopted_deposits,
     })
+}
+
+/// The channel deposits in a single block, in on-chain op order — the
+/// non-finalized counterpart of the finalized deposit stream, surfaced so a
+/// consumer can pin a deposit before it finalizes.
+fn block_channel_deposits(
+    transactions: &[SignedOps<Unverified, StandardMode>],
+    channel_id: ChannelId,
+    l1_slot: Slot,
+    deposit_events: &DepositEvents,
+) -> Vec<DepositInfo> {
+    extract_finalized_items(transactions, channel_id, l1_slot, deposit_events)
+        .into_iter()
+        .flat_map(|item| item.ops)
+        .filter_map(|op| match op {
+            FinalizedOp::Deposit(d) => Some(d),
+            _ => None,
+        })
+        .collect()
 }
 
 fn apply_prepared_block_event(
@@ -194,9 +228,10 @@ fn apply_prepared_block_event(
         finalized,
         canonical_backfill,
         our_txs,
-        channel_txs,
+        mut channel_txs,
         note_ops,
         mined_inscriptions,
+        adopted_deposits,
     } = prepared;
 
     if state.is_none() {
@@ -228,6 +263,10 @@ fn apply_prepared_block_event(
     for (block, note_ops) in canonical_backfill {
         apply_backfilled_block(s, &block, channel_id, current_lib, note_ops);
     }
+
+    // Re-type unsound pin-deposits to `Custom` before they are stored
+    // or mirrored, so both the `adopted` surface and the pending set agree.
+    demote_non_identity_pin_deposits(&mut channel_txs, &block.transactions, channel_id, s);
 
     // Mirror this block's inscriptions into the pending set BEFORE
     // `process_block`, so on-branch entries land in the block's safe set and
@@ -295,6 +334,7 @@ fn apply_prepared_block_event(
         finalized_items: finalized_batch.items,
         channel_update,
         mined_inscriptions,
+        adopted_deposits,
     }
 }
 
@@ -304,16 +344,24 @@ fn apply_prepared_block_event(
 fn observe_channel_inscriptions(
     state: &mut TxState,
     classified: &[BlockChannelTx],
-    transactions: &[SignedMantleTx<Unverified>],
+    transactions: &[SignedOps<Unverified, StandardMode>],
 ) {
-    let by_hash: HashMap<TxHash, &SignedMantleTx<Unverified>> = transactions
-        .iter()
-        .map(|tx| (tx.mantle_tx().hash(), tx))
-        .collect();
+    let by_hash: HashMap<TxHash, &SignedOps<Unverified, StandardMode>> =
+        transactions.iter().map(|tx| (tx.hash(), tx)).collect();
     for block_tx in classified {
-        let (info, withdraws) = match block_tx {
-            BlockChannelTx::Inscription(i) => (i, None),
-            BlockChannelTx::AtomicWithdraw(a) => (&a.inscription, Some(a.withdraws.clone())),
+        let (info, bundle) = match block_tx {
+            BlockChannelTx::Inscription(i) => (i, PendingBundle::Plain),
+            BlockChannelTx::AtomicWithdraw(a) => (
+                &a.inscription,
+                PendingBundle::Withdraw {
+                    withdraws: a.withdraws.clone(),
+                    outputs: a.outputs.clone(),
+                },
+            ),
+            BlockChannelTx::PinDeposit(a) => (
+                &a.inscription,
+                PendingBundle::PinDeposit(a.consumed_notes.clone()),
+            ),
             BlockChannelTx::Config(_) | BlockChannelTx::Custom { .. } => continue,
         };
         let tx = by_hash
@@ -324,22 +372,86 @@ fn observe_channel_inscriptions(
             info.parent_msg,
             info.this_msg,
             info.payload.clone(),
-            withdraws,
+            bundle,
         );
     }
+}
+
+/// Re-type any [`BlockChannelTx::PinDeposit`] whose transfer is
+/// not a 1:1 identity re-creation of its consumed notes as `Custom` — a split,
+/// merge, re-value or re-key would make `consumed_notes` misdescribe the
+/// deposit. Runs before the classification is stored or mirrored.
+fn demote_non_identity_pin_deposits(
+    channel_txs: &mut [BlockChannelTx],
+    transactions: &[SignedOps<Unverified, StandardMode>],
+    channel_id: ChannelId,
+    state: &TxState,
+) {
+    let by_hash: HashMap<TxHash, &SignedOps<Unverified, StandardMode>> =
+        transactions.iter().map(|tx| (tx.hash(), tx)).collect();
+    for block_tx in channel_txs.iter_mut() {
+        let BlockChannelTx::PinDeposit(a) = block_tx else {
+            continue;
+        };
+        let tx = by_hash
+            .get(&a.tx_hash)
+            .expect("classified entries come from these transactions");
+        if !is_identity_deposit_transfer(state, tx, channel_id) {
+            *block_tx = BlockChannelTx::Custom {
+                tx: (*tx).clone(),
+                entries: vec![a.inscription.clone()],
+                config_entries: Vec::new(),
+            };
+        }
+    }
+}
+
+/// Whether the bundle's `ChannelTransfer` re-creates its inputs unchanged —
+/// same count and `(value, key)` multiset. An input note we do not track (so
+/// cannot compare) is treated as non-identity.
+fn is_identity_deposit_transfer(
+    state: &TxState,
+    tx: &SignedOps<Unverified, StandardMode>,
+    channel_id: ChannelId,
+) -> bool {
+    let Some(transfer) = tx.op_refs_iter().find_map(|op| match op {
+        OpRef::ChannelTransfer(t) if t.channel_id == channel_id => Some(t),
+        _ => None,
+    }) else {
+        return false;
+    };
+    let mut outputs: Vec<_> = transfer
+        .utxos()
+        .map(|u| (u.note.value, u.note.pk))
+        .collect();
+    if transfer.inputs.len() != outputs.len() {
+        return false;
+    }
+    for id in transfer.inputs.iter() {
+        let Some(note) = state.find_channel_note(id) else {
+            return false;
+        };
+        match outputs.iter().position(|out| *out == (note.value, note.pk)) {
+            Some(pos) => {
+                outputs.swap_remove(pos);
+            }
+            None => return false,
+        }
+    }
+    outputs.is_empty()
 }
 
 /// Extract a tx's channel inscriptions, in op order. `ChannelConfig` ops are
 /// not part of the message lineage and yield no entries.
 #[must_use]
 pub fn channel_inscriptions(
-    tx: &SignedMantleTx<Unverified>,
+    tx: &SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
 ) -> Vec<InscriptionInfo> {
-    let tx_hash = tx.mantle_tx().hash();
+    let tx_hash = tx.op_refs().hash();
     let mut entries: Vec<InscriptionInfo> = Vec::new();
-    for op in tx.mantle_tx().ops() {
-        if let Op::ChannelInscribe(inscribe) = op
+    for op in tx.op_refs() {
+        if let OpRef::ChannelInscribe(inscribe) = op
             && inscribe.channel_id == channel_id
         {
             entries.push(InscriptionInfo {
@@ -359,19 +471,19 @@ pub fn channel_inscriptions(
 /// ids. Status is keyed on the tx, so a tx already covered by an inscription
 /// entry in `mined` needs nothing more.
 fn mined_config_entries(
-    transactions: &[SignedMantleTx<Unverified>],
+    transactions: &[SignedOps<Unverified, StandardMode>],
     channel_id: ChannelId,
     mined: &[InscriptionInfo],
 ) -> Vec<InscriptionInfo> {
     transactions
         .iter()
         .filter_map(|tx| {
-            let tx_hash = tx.mantle_tx().hash();
+            let tx_hash = tx.hash();
             if mined.iter().any(|info| info.tx_hash == tx_hash) {
                 return None;
             }
-            let config = tx.mantle_tx().ops().iter().find_map(|op| match op {
-                Op::ChannelConfig(config) if config.channel == channel_id => Some(config),
+            let config = tx.op_refs_iter().find_map(|op| match op {
+                OpRef::ChannelConfig(config) if config.channel == channel_id => Some(config),
                 _ => None,
             })?;
             Some(InscriptionInfo {
@@ -399,6 +511,7 @@ pub(super) fn orphan_from_shed(entry: PendingTx) -> ChannelUpdateTx {
     match entry {
         PendingTx::Inscription(i) => ChannelUpdateTx::Inscription(i),
         PendingTx::AtomicWithdraw(a) => ChannelUpdateTx::AtomicWithdraw(a),
+        PendingTx::PinDeposit(a) => ChannelUpdateTx::PinDeposit(a),
     }
 }
 
@@ -429,6 +542,7 @@ async fn prepare_finalized_blocks<Node>(
     to_slot: u64,
     channel_id: ChannelId,
     node: &Node,
+    state: Option<&TxState>,
 ) -> Result<Vec<PreparedFinalizedBlock>, Error>
 where
     Node: adapter::Node + Sync,
@@ -449,10 +563,22 @@ where
             .transactions
             .iter()
             .filter(|tx| touches_channel_tip(tx, channel_id))
-            .map(|tx| tx.mantle_tx().hash())
+            .map(|tx| tx.op_refs().hash())
             .collect();
 
-        let channel_txs = classify_channel_txs(&block.transactions, channel_id);
+        let mut channel_txs = classify_channel_txs(&block.transactions, channel_id);
+        // Below-LIB blocks feed the lineage walk too, so on first sync (empty
+        // old lineage) they surface as `adopted` — demote here as well. A
+        // same-batch deposit isn't applied yet, so its inscription can only
+        // under-label to `Custom`, which is safe.
+        if let Some(state) = state {
+            demote_non_identity_pin_deposits(
+                &mut channel_txs,
+                &block.transactions,
+                channel_id,
+                state,
+            );
+        }
 
         // Fetch + validate deposit events for this block BEFORE mutating
         // state — on error we leave state untouched so the caller can retry.
@@ -528,7 +654,8 @@ pub(super) async fn fetch_and_process_blocks<Node>(
 where
     Node: adapter::Node + Sync,
 {
-    let prepared = prepare_finalized_blocks(from_slot, to_slot, channel_id, node).await?;
+    let prepared =
+        prepare_finalized_blocks(from_slot, to_slot, channel_id, node, Some(state)).await?;
 
     Ok(apply_finalized_blocks(state, prepared))
 }
@@ -548,7 +675,7 @@ where
 async fn fetch_block_deposit_events<Node>(
     node: &Node,
     block_id: HeaderId,
-    transactions: &[SignedMantleTx<Unverified>],
+    transactions: &[SignedOps<Unverified, StandardMode>],
     channel_id: ChannelId,
 ) -> Result<DepositEvents, Error>
 where
@@ -557,9 +684,9 @@ where
     let expected: Vec<DepositOpKey> = transactions
         .iter()
         .flat_map(|tx| {
-            let tx_hash = tx.mantle_tx().hash();
-            tx.mantle_tx().ops().iter().filter_map(move |op| match op {
-                Op::ChannelDeposit(d) if d.channel_id == channel_id => Some(DepositOpKey {
+            let tx_hash = tx.op_refs().hash();
+            tx.op_refs().into_iter().filter_map(move |op| match op {
+                OpRef::ChannelDeposit(d) if d.channel_id == channel_id => Some(DepositOpKey {
                     tx_hash,
                     op_id: d.op_id(),
                 }),
@@ -629,7 +756,7 @@ where
 ///
 /// Deposits without a matching event entry are skipped with a warning.
 fn extract_finalized_items(
-    transactions: &[SignedMantleTx<Unverified>],
+    transactions: &[SignedOps<Unverified, StandardMode>],
     channel_id: ChannelId,
     l1_slot: Slot,
     deposit_events: &DepositEvents,
@@ -637,11 +764,11 @@ fn extract_finalized_items(
     let mut items: Vec<FinalizedTx> = Vec::new();
 
     for tx in transactions {
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.op_refs().hash();
         let mut ops: Vec<FinalizedOp> = Vec::new();
-        for op in tx.mantle_tx().ops() {
+        for op in tx.op_refs() {
             match op {
-                Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                OpRef::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
                     // Chain order is asserted by `classify_channel_txs`,
                     // which runs on the same `transactions` before this
                     // walker on every call site (live + backfill).
@@ -654,7 +781,7 @@ fn extract_finalized_items(
                     };
                     ops.push(FinalizedOp::Inscription(info));
                 }
-                Op::ChannelConfig(config) if config.channel == channel_id => {
+                OpRef::ChannelConfig(config) if config.channel == channel_id => {
                     ops.push(FinalizedOp::Config(InscriptionInfo {
                         tx_hash,
                         parent_msg: config.parent,
@@ -663,7 +790,7 @@ fn extract_finalized_items(
                         signer: None,
                     }));
                 }
-                Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
+                OpRef::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
                     let op_id = deposit.op_id();
                     // `fetch_block_deposit_events` validates that every
                     // channel-deposit op in the block has a matching event
@@ -683,16 +810,16 @@ fn extract_finalized_items(
                         metadata: deposit.metadata.clone(),
                     }));
                 }
-                Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
+                OpRef::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
                     ops.push(FinalizedOp::Withdraw(WithdrawInfo {
                         tx_hash,
-                        op: withdraw.clone(),
+                        op: (*withdraw).clone(),
                     }));
                 }
-                Op::ChannelTransfer(transfer) if transfer.channel_id == channel_id => {
+                OpRef::ChannelTransfer(transfer) if transfer.channel_id == channel_id => {
                     ops.push(FinalizedOp::ChannelTransfer(ChannelTransferInfo {
                         tx_hash,
-                        op: transfer.clone(),
+                        op: (*transfer).clone(),
                     }));
                 }
                 _ => {}
@@ -834,10 +961,11 @@ fn apply_backfilled_block(
         .transactions
         .iter()
         .filter(|tx| touches_channel_tip(tx, channel_id))
-        .map(|tx| tx.mantle_tx().hash())
+        .map(|tx| tx.op_refs().hash())
         .collect();
 
-    let channel_txs = classify_channel_txs(&block.transactions, channel_id);
+    let mut channel_txs = classify_channel_txs(&block.transactions, channel_id);
+    demote_non_identity_pin_deposits(&mut channel_txs, &block.transactions, channel_id, state);
 
     // Mirror inscriptions into pending before the safe-set build, matching
     // the live-block path in `handle_block_event`.
@@ -862,7 +990,7 @@ fn apply_backfilled_block(
 /// silently re-deriving order, because the same node bug could produce an
 /// undetectable mis-ordering elsewhere.
 fn classify_channel_txs(
-    txs: &[SignedMantleTx<Unverified>],
+    txs: &[SignedOps<Unverified, StandardMode>],
     channel_id: ChannelId,
 ) -> Vec<BlockChannelTx> {
     // Running in-block channel tip, for the chain-order assertion.
@@ -874,22 +1002,24 @@ fn classify_channel_txs(
 
 /// Classify one tx's channel ops; `None` when the tx has no tip-advancing op.
 pub(super) fn classify_channel_tx(
-    tx: &SignedMantleTx<Unverified>,
+    tx: &SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
     block_tip: &mut Option<MsgId>,
 ) -> Option<BlockChannelTx> {
-    let tx_hash = tx.mantle_tx().hash();
+    let tx_hash = tx.op_refs().hash();
     let mut entries: Vec<InscriptionInfo> = Vec::new();
     let mut config_entries: Vec<InscriptionInfo> = Vec::new();
     let mut inscribes = 0usize;
     let mut configs = 0usize;
     let mut withdraws: Vec<WithdrawInfo> = Vec::new();
     let mut transfers = 0usize;
+    let mut channel_transfers = 0usize;
+    let mut channel_transfer_inputs: Option<Inputs> = None;
     let mut foreign_ops = false;
 
-    for op in tx.mantle_tx().ops() {
+    for op in tx.op_refs() {
         match op {
-            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+            OpRef::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
                 if let Some(prev) = *block_tip {
                     assert_eq!(
                         inscribe.parent, prev,
@@ -909,7 +1039,7 @@ pub(super) fn classify_channel_tx(
                 });
                 *block_tip = Some(this_msg);
             }
-            Op::ChannelConfig(config) if config.channel == channel_id => {
+            OpRef::ChannelConfig(config) if config.channel == channel_id => {
                 configs += 1;
                 // Configs sit on the separate config lineage — `this_msg` is a
                 // config id, `parent_msg` its config parent, payload empty.
@@ -924,13 +1054,17 @@ pub(super) fn classify_channel_tx(
                     signer: None,
                 });
             }
-            Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
+            OpRef::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
                 withdraws.push(WithdrawInfo {
                     tx_hash,
-                    op: withdraw.clone(),
+                    op: (*withdraw).clone(),
                 });
             }
-            Op::Transfer(_) => transfers += 1,
+            OpRef::ChannelTransfer(transfer) if transfer.channel_id == channel_id => {
+                channel_transfers += 1;
+                channel_transfer_inputs = Some(transfer.inputs.clone());
+            }
+            OpRef::Transfer(_) => transfers += 1,
             _ => foreign_ops = true,
         }
     }
@@ -941,43 +1075,62 @@ pub(super) fn classify_channel_tx(
     }
 
     let clean = !foreign_ops && transfers <= 1;
-    Some(if clean && inscribes == 1 && configs == 0 {
-        let inscription = entries.pop().expect("exactly one inscribe entry");
-        if withdraws.is_empty() {
-            BlockChannelTx::Inscription(inscription)
+    Some(
+        if clean && inscribes == 1 && configs == 0 && channel_transfers <= 1 {
+            let inscription = entries.pop().expect("exactly one inscribe entry");
+            match (withdraws.is_empty(), channel_transfers) {
+                // `[inscribe, channel_transfer, withdraw…]`. Only re-issue of our
+                // own orphaned bundle needs the outputs; an observed one has none.
+                (false, _) => BlockChannelTx::AtomicWithdraw(AtomicWithdrawInfo {
+                    tx_hash,
+                    inscription,
+                    withdraws,
+                    outputs: Outputs::empty(),
+                }),
+                // `[inscribe, channel_transfer]` — transfer consumes the deposited note.
+                (true, 1) => BlockChannelTx::PinDeposit(PinDepositInfo {
+                    tx_hash,
+                    inscription,
+                    consumed_notes: channel_transfer_inputs
+                        .expect("channel_transfers == 1 implies a captured transfer"),
+                }),
+                (true, _) => BlockChannelTx::Inscription(inscription),
+            }
+        } else if clean
+            && configs == 1
+            && inscribes == 0
+            && withdraws.is_empty()
+            && channel_transfers == 0
+        {
+            // A pure single-config tx — the config-lineage analogue of a clean
+            // single inscription.
+            BlockChannelTx::Config(config_entries.pop().expect("exactly one config entry"))
         } else {
-            BlockChannelTx::AtomicWithdraw(AtomicWithdrawInfo {
-                tx_hash,
-                inscription,
-                withdraws,
-            })
-        }
-    } else if clean && inscribes == 0 && configs == 1 && withdraws.is_empty() {
-        // A pure single-config tx — the config-lineage analogue of a clean
-        // single inscription.
-        BlockChannelTx::Config(config_entries.pop().expect("exactly one config entry"))
-    } else {
-        BlockChannelTx::Custom {
-            tx: tx.clone(),
-            entries,
-            config_entries,
-        }
-    })
+            BlockChannelTx::Custom {
+                tx: tx.clone(),
+                entries,
+                config_entries,
+            }
+        },
+    )
 }
 
 /// Whether `tx` is a clean single-config tx for `channel_id` — the same
 /// config-only shape [`classify_channel_tx`] reports as
 /// [`BlockChannelTx::Config`]. Mirrors that rule so a shed config is typed the
 /// same way it was classified on chain.
-fn is_pure_config(tx: &SignedMantleTx<Unverified>, channel_id: ChannelId) -> bool {
+fn is_pure_config<Mode: VerificationMode>(
+    tx: &SignedOps<Unverified, Mode>,
+    channel_id: ChannelId,
+) -> bool {
     let mut configs = 0usize;
     let mut transfers = 0usize;
-    for op in tx.mantle_tx().ops() {
+    for op in tx.op_refs_iter() {
         match op {
-            Op::ChannelConfig(config) if config.channel == channel_id => configs += 1,
-            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => return false,
-            Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => return false,
-            Op::Transfer(_) => transfers += 1,
+            OpRef::ChannelConfig(config) if config.channel == channel_id => configs += 1,
+            OpRef::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => return false,
+            OpRef::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => return false,
+            OpRef::Transfer(_) => transfers += 1,
             _ => return false,
         }
     }
@@ -987,7 +1140,7 @@ fn is_pure_config(tx: &SignedMantleTx<Unverified>, channel_id: ChannelId) -> boo
 /// Type a shed pending tx for orphan reporting: a config-only tx as
 /// [`ChannelUpdateTx::Config`], anything else as [`ChannelUpdateTx::Custom`].
 pub(super) fn classify_shed_other(
-    tx: SignedMantleTx<Unverified>,
+    tx: SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
 ) -> ChannelUpdateTx {
     if is_pure_config(&tx, channel_id) {
@@ -1000,13 +1153,13 @@ pub(super) fn classify_shed_other(
 /// True iff this tx contains any op that advances our channel's tip pointer
 /// (`ChannelInscribe` or `ChannelConfig`). Deposits and withdraws don't move
 /// the tip and so don't make a tx "ours" for tip-tracking purposes.
-fn touches_channel_tip<State: VerificationState>(
-    tx: &SignedMantleTx<State>,
+fn touches_channel_tip<State: VerificationState, Mode: VerificationMode>(
+    tx: &SignedOps<State, Mode>,
     channel_id: ChannelId,
 ) -> bool {
-    tx.mantle_tx().ops().iter().any(|op| match op {
-        Op::ChannelInscribe(inscribe) => inscribe.channel_id == channel_id,
-        Op::ChannelConfig(set_keys) => set_keys.channel == channel_id,
+    tx.op_refs().iter().any(|op| match op {
+        OpRef::ChannelInscribe(inscribe) => inscribe.channel_id == channel_id,
+        OpRef::ChannelConfig(set_keys) => set_keys.channel == channel_id,
         _ => false,
     })
 }
@@ -1017,9 +1170,8 @@ mod tests {
         crypto::Hash,
         events::{DepositNote, DepositRecreatedNotes},
         mantle::{
-            Note, NoteId, RawMantleTx, Value,
+            Note, NoteId, Op, Value,
             channel::{SlotTimeframe, SlotTimeout},
-            ledger::{Inputs, Outputs},
             ops::{
                 OpProof,
                 channel::{
@@ -1030,6 +1182,7 @@ mod tests {
                     withdraw::ChannelWithdrawOp,
                 },
             },
+            transactions::{OpProofs, Ops},
         },
     };
     use lb_groth16::Fr;
@@ -1069,7 +1222,7 @@ mod tests {
     /// Extract deposits via the unified walker and filter to deposit entries
     /// for assertion clarity.
     fn extract_deposits_for_test(
-        transactions: &[SignedMantleTx<Unverified>],
+        transactions: &[SignedOps<Unverified, StandardMode>],
         channel_id: ChannelId,
         deposit_events: &DepositEvents,
     ) -> Vec<DepositInfo> {
@@ -1096,7 +1249,7 @@ mod tests {
             Op::ChannelDeposit(deposit_for_us.clone()),
             Op::ChannelDeposit(deposit_other_channel),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let amounts = DepositEvents::from([deposit_event_entry(tx_hash, our_op_id, 1234)]);
 
@@ -1148,8 +1301,8 @@ mod tests {
         // tx_a carries d1 then d2 (in op order); tx_b carries d3.
         let tx_a = unverified_tx_with_ops(vec![Op::ChannelDeposit(d1), Op::ChannelDeposit(d2)]);
         let tx_b = unverified_tx_with_ops(vec![Op::ChannelDeposit(d3)]);
-        let hash_a = tx_a.mantle_tx().hash();
-        let hash_b = tx_b.mantle_tx().hash();
+        let hash_a = tx_a.hash();
+        let hash_b = tx_b.hash();
 
         let amounts = DepositEvents::from([
             deposit_event_entry(hash_a, id1, 10),
@@ -1186,7 +1339,7 @@ mod tests {
 
         let tx =
             unverified_tx_with_ops(vec![Op::ChannelDeposit(dep), Op::ChannelInscribe(inscribe)]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let mut amounts = DepositEvents::new();
         amounts.insert(
@@ -1229,7 +1382,7 @@ mod tests {
         let msg_id = inscribe.id();
         let tx =
             unverified_tx_with_ops(vec![Op::ChannelDeposit(dep), Op::ChannelInscribe(inscribe)]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
         assert_eq!(classified.len(), 1);
@@ -1263,13 +1416,153 @@ mod tests {
         match &update.adopted[0] {
             ChannelUpdateTx::Custom(adopted_tx) => {
                 assert_eq!(
-                    adopted_tx.mantle_tx().hash(),
+                    adopted_tx.op_refs().hash(),
                     tx_hash,
                     "the whole tx is handed over"
                 );
                 let inscriptions = channel_inscriptions(adopted_tx, channel_id);
                 assert_eq!(inscriptions.len(), 1);
                 assert_eq!(inscriptions[0].this_msg, msg_id);
+            }
+            other => panic!("expected Custom, got {other:?}"),
+        }
+    }
+
+    /// An `[inscribe, channel_transfer]` whose transfer re-creates its inputs
+    /// unchanged is a sound `PinDeposit`.
+    #[test]
+    fn inscribe_plus_identity_transfer_is_pin_deposit() {
+        use super::super::types::ChannelNote;
+
+        let channel_id = ChannelId::from([0; 32]);
+        let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
+        let input_id = NoteId::from(Fr::from(42u64));
+
+        let inscribe = inscribe_op(channel_id, MsgId::root(), b"pin");
+        let msg_id = inscribe.id();
+        let transfer = ChannelTransferOp {
+            channel_id,
+            inputs: Inputs::new([input_id]),
+            outputs: Outputs::new([Note::new(50, pk)]),
+        };
+        let tx = unverified_tx_with_ops(vec![
+            Op::ChannelInscribe(inscribe),
+            Op::ChannelTransfer(transfer),
+        ]);
+        let tx_hash = tx.hash();
+
+        let genesis = header_id(0);
+        let block = header_id(1);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.apply_finalized_note_ops(vec![NoteOp::Add(ChannelNote {
+            note_id: input_id,
+            value: 50,
+            pk,
+            slot: Slot::from(0),
+        })]);
+        let old_lineage = state.channel_lineage(genesis);
+
+        let mut classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
+        demote_non_identity_pin_deposits(
+            &mut classified,
+            std::slice::from_ref(&tx),
+            channel_id,
+            &state,
+        );
+        assert!(matches!(&classified[0], BlockChannelTx::PinDeposit(_)));
+
+        observe_channel_inscriptions(&mut state, &classified, std::slice::from_ref(&tx));
+        state.process_block(
+            block,
+            genesis,
+            genesis,
+            vec![tx_hash],
+            classified,
+            Vec::new(),
+        );
+
+        let update = state
+            .detect_channel_update(&old_lineage, block)
+            .expect("update");
+        assert_eq!(update.new_channel_tip, msg_id);
+        assert_eq!(update.adopted.len(), 1);
+        match &update.adopted[0] {
+            ChannelUpdateTx::PinDeposit(a) => {
+                assert_eq!(a.consumed_notes, Inputs::new([input_id]));
+            }
+            other => panic!("expected PinDeposit, got {other:?}"),
+        }
+    }
+
+    /// A re-keying transfer (balance-preserving, but not an identity
+    /// re-creation) falls to `Custom` — its payload still reaches the consumer
+    /// via `adopted`, and it is not mirrored for retry.
+    #[test]
+    fn inscribe_plus_non_identity_transfer_is_custom() {
+        use super::super::types::ChannelNote;
+
+        let channel_id = ChannelId::from([0; 32]);
+        let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
+        let rekeyed = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(8u64));
+        let input_id = NoteId::from(Fr::from(42u64));
+
+        let inscribe = inscribe_op(channel_id, MsgId::root(), b"pin");
+        let msg_id = inscribe.id();
+        let transfer = ChannelTransferOp {
+            channel_id,
+            inputs: Inputs::new([input_id]),
+            outputs: Outputs::new([Note::new(50, rekeyed)]),
+        };
+        let tx = unverified_tx_with_ops(vec![
+            Op::ChannelInscribe(inscribe),
+            Op::ChannelTransfer(transfer),
+        ]);
+        let tx_hash = tx.hash();
+
+        let genesis = header_id(0);
+        let block = header_id(1);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.apply_finalized_note_ops(vec![NoteOp::Add(ChannelNote {
+            note_id: input_id,
+            value: 50,
+            pk,
+            slot: Slot::from(0),
+        })]);
+        let old_lineage = state.channel_lineage(genesis);
+
+        let mut classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
+        demote_non_identity_pin_deposits(
+            &mut classified,
+            std::slice::from_ref(&tx),
+            channel_id,
+            &state,
+        );
+        assert!(
+            matches!(&classified[0], BlockChannelTx::Custom { entries, .. } if entries.len() == 1)
+        );
+
+        observe_channel_inscriptions(&mut state, &classified, std::slice::from_ref(&tx));
+        state.process_block(
+            block,
+            genesis,
+            genesis,
+            vec![tx_hash],
+            classified,
+            Vec::new(),
+        );
+
+        assert!(
+            !state.is_tracked(&tx_hash),
+            "non-identity bundle is not mirrored for retry"
+        );
+        let update = state
+            .detect_channel_update(&old_lineage, block)
+            .expect("update");
+        assert_eq!(update.new_channel_tip, msg_id);
+        assert_eq!(update.adopted.len(), 1);
+        match &update.adopted[0] {
+            ChannelUpdateTx::Custom(adopted_tx) => {
+                assert_eq!(adopted_tx.hash(), tx_hash);
             }
             other => panic!("expected Custom, got {other:?}"),
         }
@@ -1284,9 +1577,9 @@ mod tests {
             channel_id,
             MsgId::root(),
         ))]);
-        let config_hash = config_tx.mantle_tx().hash();
+        let config_hash = config_tx.hash();
         match classify_shed_other(config_tx, channel_id) {
-            ChannelUpdateTx::Config(tx) => assert_eq!(tx.mantle_tx().hash(), config_hash),
+            ChannelUpdateTx::Config(tx) => assert_eq!(tx.hash(), config_hash),
             other => panic!("expected Config, got {other:?}"),
         }
 
@@ -1326,7 +1619,7 @@ mod tests {
             Op::ChannelConfig(config),
             Op::ChannelInscribe(inscribe_op(channel_id, MsgId::root(), b"m")),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         // Classification keeps the config in `config_entries`.
         let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
@@ -1370,7 +1663,7 @@ mod tests {
             Op::ChannelInscribe(first),
             Op::ChannelInscribe(second),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
         assert_eq!(classified.len(), 1);
@@ -1435,7 +1728,7 @@ mod tests {
             Op::ChannelInscribe(inscribe),
             Op::ChannelWithdraw(withdraw),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
         assert!(matches!(classified[0], BlockChannelTx::AtomicWithdraw(_)));
@@ -1489,7 +1782,7 @@ mod tests {
             Op::ChannelWithdraw(withdraw_for_us),
             Op::ChannelWithdraw(withdraw_other),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let items = extract_finalized_items(
             std::slice::from_ref(&tx),
@@ -1525,20 +1818,16 @@ mod tests {
         }
     }
 
-    fn dummy_pending_tx(seed: u8) -> SignedMantleTx<Unverified> {
-        let mantle_tx = RawMantleTx(
-            [Op::ChannelInscribe(InscriptionOp {
-                channel_id: [0u8; 32].into(),
-                inscription: Inscription::new_unchecked(vec![seed]),
-                parent: MsgId::root(),
-                signer: Ed25519Key::from_bytes(&[seed; 32]).public_key(),
-            })]
-            .into(),
-        );
-        SignedMantleTx::new(
-            mantle_tx,
-            [OpProof::Ed25519Sig(Ed25519Signature::zero())].into(),
-        )
+    fn dummy_pending_tx(seed: u8) -> SignedOps<Unverified, StandardMode> {
+        let mantle_tx = Ops::from([Op::ChannelInscribe(InscriptionOp {
+            channel_id: [0u8; 32].into(),
+            inscription: Inscription::new_unchecked(vec![seed]),
+            parent: MsgId::root(),
+            signer: Ed25519Key::from_bytes(&[seed; 32]).public_key(),
+        })]);
+        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(Ed25519Signature::zero())]);
+        SignedOps::from_parts(mantle_tx, op_proofs)
+            .expect("Should generate a valid transaction with valid matching proofs.")
     }
 
     /// Run a synchronous callable on a background thread and bail out if it
@@ -1574,7 +1863,7 @@ mod tests {
             Op::ChannelConfig(config),
             Op::ChannelInscribe(i2),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         // Stage pending inscriptions BEFORE driving the block through.
         let genesis = header_id(0);
@@ -1583,7 +1872,7 @@ mod tests {
 
         // Pending chained from I1 — its position is taken by the mined I2.
         let pending_stale = dummy_pending_tx(1);
-        let pending_stale_hash = pending_stale.mantle_tx().hash();
+        let pending_stale_hash = pending_stale.hash();
         state.submit_inscription(
             pending_stale,
             i1_id,
@@ -1593,7 +1882,7 @@ mod tests {
 
         // Pending chained from the block tip — should remain on-branch.
         let pending_live = dummy_pending_tx(2);
-        let pending_live_hash = pending_live.mantle_tx().hash();
+        let pending_live_hash = pending_live.hash();
         state.submit_inscription(
             pending_live,
             i2_id,
@@ -1639,7 +1928,7 @@ mod tests {
         let config = channel_config(channel_id, parent);
         let config_id = config.id();
         let tx = unverified_tx_with_ops(vec![Op::ChannelConfig(config)]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let items = extract_finalized_items(
             std::slice::from_ref(&tx),

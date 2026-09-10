@@ -14,7 +14,7 @@ log_targets! {
         handler::CORE_EDGE,
     },
     processor::{
-        core_and_leader::SEND,
+        core_and_leader::{RECEIVE, SEND},
         leader::SEND,
     },
     prover::{
@@ -30,10 +30,12 @@ log_targets! {
         DELAY,
     },
     service::{
+        BROADCAST,
         CORE,
         EDGE,
         EPOCH,
-        MODES,
+        MEMBERSHIP,
+        ORCHESTRATOR,
         core::KMS_POQ_GENERATOR,
         edge::backend::LIBP2P,
     }

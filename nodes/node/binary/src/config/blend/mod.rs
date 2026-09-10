@@ -26,6 +26,18 @@ use crate::config::{
 pub mod deployment;
 pub mod serde;
 
+/// The three settings a Blend deployment produces: the proxy's, which picks
+/// between the two, and one for each of the services it can start.
+type BlendServicesSettings = (
+    BlendSettings<
+        Libp2pCoreBlendBackendSettings,
+        Libp2pEdgeBlendBackendSettings,
+        Libp2pBroadcastSettings,
+    >,
+    BlendCoreSettings<Libp2pCoreBlendBackendSettings, Libp2pBroadcastSettings>,
+    BlendEdgeSettings<Libp2pEdgeBlendBackendSettings, Libp2pBroadcastSettings>,
+);
+
 /// Blend service config which combines user-provided configuration with
 /// deployment-specific settings.
 ///
@@ -43,15 +55,7 @@ impl ServiceConfig {
         recovery_data: RecoveryData,
         time_deployment: &TimeDeploymentSettings,
         cryptarchia_deployment: &CryptarchiaDeploymentSettings,
-    ) -> (
-        BlendSettings<
-            Libp2pCoreBlendBackendSettings,
-            Libp2pEdgeBlendBackendSettings,
-            Libp2pBroadcastSettings,
-        >,
-        BlendCoreSettings<Libp2pCoreBlendBackendSettings, Libp2pBroadcastSettings>,
-        BlendEdgeSettings<Libp2pEdgeBlendBackendSettings>,
-    ) {
+    ) -> BlendServicesSettings {
         let slots_per_epoch = cryptarchia_deployment.slots_per_epoch();
         let slots_per_block = cryptarchia_deployment.average_slots_per_block();
         let slot_duration = time_deployment.slot_duration;
@@ -65,6 +69,10 @@ impl ServiceConfig {
                 non_ephemeral_signing_key_id: self.user.non_ephemeral_signing_key_id,
                 num_blend_layers: self.deployment.common.num_blend_layers,
                 minimum_network_size: self.deployment.common.minimum_network_size.into(),
+                broadcast: Libp2pBroadcastSettings {
+                    topic: cryptarchia_deployment.gossipsub_protocol.clone(),
+                },
+                abstain_on_failure: self.user.abstain_on_failure,
                 recovery_data,
                 time: TimingSettings {
                     epoch_transition_period: self
@@ -79,9 +87,6 @@ impl ServiceConfig {
                 data_replication_factor: self.deployment.common.data_replication_factor,
             },
             core: CoreSettings {
-                network: Libp2pBroadcastSettings {
-                    topic: cryptarchia_deployment.gossipsub_protocol.clone(),
-                },
                 backend: Libp2pCoreBlendBackendSettings {
                     core_peering_degree: self.user.core.backend.core_peering_degree,
                     listening_address: self.user.core.backend.listening_address,
@@ -141,7 +146,7 @@ impl ServiceConfig {
             },
         };
         let blend_core_settings: BlendCoreSettings<_, _> = blend_service_settings.clone().into();
-        let blend_edge_settings: BlendEdgeSettings<_> = blend_service_settings.clone().into();
+        let blend_edge_settings: BlendEdgeSettings<_, _> = blend_service_settings.clone().into();
         (
             blend_service_settings,
             blend_core_settings,

@@ -199,7 +199,7 @@ The flow mirrors the multi-sig withdraw flow described in [`BRIDGING.md`](BRIDGI
 
 ```rust
 use lb_core::mantle::{
-    Op, SignedMantleTx,
+    Op, SignedOps,
     ops::{OpProof, channel::config::ChannelConfigOp},
 };
 use lb_core::proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature};
@@ -231,7 +231,7 @@ let signatures: Vec<IndexedSignature> = collect_signatures_from_committee(
 
 // 4. Assemble the threshold proof and submit.
 let config_proof = ChannelMultiSigProof::new(signatures)?;
-let signed_tx = SignedMantleTx::new(
+let signed_tx = SignedOps::new(
     tx,
     vec![
         OpProof::ChannelMultiSigProof(config_proof),
@@ -269,7 +269,7 @@ The integration tests provide reference policies that run this re-publish loop a
 
 If the orphan policy is too aggressive — e.g., the orphan was caused by genuine application-level conflict, not a race — the consumer can choose to drop the payload, deduplicate against a higher-level transaction stream, or apply any other custom rule. The SDK only surfaces the event; the resolution policy is yours.
 
-Channel txs built outside the publish API are classified by shape, not by how they were submitted: a tx that looks like publish output (a single inscription, optionally with withdraws and one funding transfer) surfaces as `ChannelUpdateTx::Inscription` / `ChannelUpdateTx::AtomicWithdraw`; anything else surfaces as `ChannelUpdateTx::Custom(SignedMantleTx)` — the SDK hands back the whole transaction and it is up to the consumer to parse it (the `channel_inscriptions` helper extracts its inscriptions) and decide how to recover it. The main API is `publish` and `publish_atomic_withdraw`.
+Channel txs built outside the publish API are classified by shape, not by how they were submitted: a tx that looks like publish output (a single inscription, optionally with withdraws and one funding transfer) surfaces as `ChannelUpdateTx::Inscription` / `ChannelUpdateTx::AtomicWithdraw`; anything else surfaces as `ChannelUpdateTx::Custom(SignedOps)` — the SDK hands back the whole transaction and it is up to the consumer to parse it (the `channel_inscriptions` helper extracts its inscriptions) and decide how to recover it. The main API is `publish` and `publish_atomic_withdraw`.
 
 
 ## Current limitations

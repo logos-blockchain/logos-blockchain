@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use lb_core::mantle::{Utxo, traits::GenesisTx as _};
+use lb_core::mantle::Utxo;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
@@ -354,9 +354,8 @@ pub fn genesis_wallet_utxos(config: &TopologyConfig) -> Vec<Utxo> {
         .as_ref()
         .expect("manual-cluster deployment should include genesis tx")
         .genesis_tx();
-    let genesis_transfer = genesis_tx.genesis_transfer();
 
-    genesis_transfer.utxos().collect()
+    genesis_tx.transfer().operation().utxos().collect()
 }
 
 #[must_use]

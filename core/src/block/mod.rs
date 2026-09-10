@@ -410,7 +410,7 @@ mod tests {
             ledger::{Note, Utxo},
             ops::leader_claim::VoucherCm,
             traits::hashable,
-            transactions::{Ops, mantle_tx::RawMantleTx},
+            transactions::Ops,
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
@@ -474,8 +474,8 @@ mod tests {
             .expect("Proof generation should succeed")
     }
 
-    fn create_tx(count: usize) -> Vec<RawMantleTx> {
-        iter::repeat_with(|| RawMantleTx(Ops::new_unchecked(vec![])))
+    fn create_tx(count: usize) -> Vec<Ops> {
+        iter::repeat_with(|| Ops::new_unchecked(vec![]))
             .take(count)
             .collect()
     }
@@ -505,7 +505,7 @@ mod tests {
         let parent_block = [0u8; 32].into();
         let slot = Slot::from(42u64);
         let proof_of_leadership = create_proof();
-        let transactions = BlockTransactions::<RawMantleTx>::empty();
+        let transactions = BlockTransactions::<Ops>::empty();
 
         let valid_signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let valid_block = Block::create(
@@ -555,7 +555,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
 
         let transactions = BlockTransactions::empty();
-        let _valid_block: Block<RawMantleTx> = Block::create(
+        let _valid_block: Block<Ops> = Block::create(
             parent_block,
             slot,
             UncleHeaders::empty(),
@@ -566,7 +566,7 @@ mod tests {
         .expect("Valid block should be created");
 
         let transactions = BlockTransactions::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap();
-        let _valid_block: Block<RawMantleTx> = Block::create(
+        let _valid_block: Block<Ops> = Block::create(
             parent_block,
             slot,
             UncleHeaders::empty(),
@@ -577,7 +577,7 @@ mod tests {
         .expect("Valid block should be created");
 
         let invalid_transaction_inputs_result =
-            BlockTransactions::<RawMantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS + 1));
+            BlockTransactions::<Ops>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS + 1));
 
         assert!(invalid_transaction_inputs_result.is_err());
         let error = invalid_transaction_inputs_result.unwrap_err();
@@ -632,7 +632,7 @@ mod tests {
             Slot::from(42u64),
             UncleHeaders::empty(),
             create_proof(),
-            BlockTransactions::<RawMantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
+            BlockTransactions::<Ops>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
             &signing_key,
         )
         .unwrap();
@@ -666,7 +666,7 @@ mod tests {
             Slot::from(42u64),
             UncleHeaders::empty(),
             create_proof(),
-            BlockTransactions::<RawMantleTx>::empty(),
+            BlockTransactions::<Ops>::empty(),
             &signing_key,
         )
         .unwrap()
@@ -718,7 +718,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
 
         let transactions = BlockTransactions::empty();
-        let _valid_block: Block<RawMantleTx> = Block::create(
+        let _valid_block: Block<Ops> = Block::create(
             parent_block,
             slot,
             UncleHeaders::empty(),
@@ -766,11 +766,8 @@ mod tests {
 
     #[test]
     fn global_block_limits_are_reflective_in_block_transaction_bounds() {
-        assert_eq!(BlockTransactions::<RawMantleTx>::MIN, 0);
-        assert_eq!(
-            BlockTransactions::<RawMantleTx>::MAX,
-            MAX_BLOCK_TRANSACTIONS
-        );
+        assert_eq!(BlockTransactions::<Ops>::MIN, 0);
+        assert_eq!(BlockTransactions::<Ops>::MAX, MAX_BLOCK_TRANSACTIONS);
     }
 
     #[test]
@@ -779,7 +776,7 @@ mod tests {
         let proof = create_proof();
 
         // Build a syntactically valid non-genesis block first.
-        let txs = BlockTransactions::<RawMantleTx>::empty();
+        let txs = BlockTransactions::<Ops>::empty();
         let key = Ed25519Key::from_bytes(&[0; 32]);
         let block_result = Block::create(
             parent_block,
@@ -810,7 +807,7 @@ mod tests {
             Slot::from(1u64),
             UncleHeaders::empty(),
             proof.clone(),
-            BlockTransactions::<RawMantleTx>::empty(),
+            BlockTransactions::<Ops>::empty(),
             &key,
         )
         .expect("valid non-genesis block");
@@ -830,7 +827,7 @@ mod tests {
         let err = Block::reconstruct(
             genesis_header,
             UncleHeaders::empty(),
-            BlockTransactions::<RawMantleTx>::empty(),
+            BlockTransactions::<Ops>::empty(),
             genesis_signature,
         )
         .expect_err("genesis slot must be rejected by reconstruct path");
@@ -855,7 +852,7 @@ mod tests {
             Slot::from(42u64),
             UncleHeaders::new(std::array::from_fn::<_, MAX_UNCLES, _>(|_| uncle.clone())),
             proof,
-            BlockTransactions::<RawMantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
+            BlockTransactions::<Ops>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
             &Ed25519Key::from_bytes(&[0; 32]),
         )
         .expect("valid block")
@@ -952,10 +949,7 @@ mod tests {
         SignedHeader::new(header, signature)
     }
 
-    fn block_with_uncles(
-        uncle_headers: UncleHeaders,
-        proof: Groth16LeaderProof,
-    ) -> Block<RawMantleTx> {
+    fn block_with_uncles(uncle_headers: UncleHeaders, proof: Groth16LeaderProof) -> Block<Ops> {
         Block::create(
             [0u8; 32].into(),
             Slot::from(42u64),

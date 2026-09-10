@@ -3,7 +3,10 @@ use lb_chain_service::Slot;
 use lb_core::{
     block::{Block, SignedHeader},
     header::{ContentId, Header, HeaderId},
-    mantle::{SignedMantleTx, transactions::states::VerificationState},
+    mantle::{
+        SignedOps, ledger::verification_mode::VerificationMode,
+        transactions::states::VerificationState,
+    },
     proofs::leader_proof::Groth16LeaderProof,
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
@@ -20,8 +23,8 @@ pub struct ApiBlock<'block> {
 }
 
 impl<'block> ApiBlock<'block> {
-    pub fn serialize<State: VerificationState, Serializer>(
-        block: &'block Block<SignedMantleTx<State>>,
+    pub fn serialize<State: VerificationState, Mode: VerificationMode, Serializer>(
+        block: &'block Block<SignedOps<State, Mode>>,
         serializer: Serializer,
     ) -> Result<Serializer::Ok, Serializer::Error>
     where
@@ -31,10 +34,10 @@ impl<'block> ApiBlock<'block> {
     }
 }
 
-impl<'block, State: VerificationState> From<&'block Block<SignedMantleTx<State>>>
-    for ApiBlock<'block>
+impl<'block, State: VerificationState, Mode: VerificationMode>
+    From<&'block Block<SignedOps<State, Mode>>> for ApiBlock<'block>
 {
-    fn from(value: &'block Block<SignedMantleTx<State>>) -> Self {
+    fn from(value: &'block Block<SignedOps<State, Mode>>) -> Self {
         let transactions = value
             .transactions()
             .iter()
@@ -67,13 +70,15 @@ impl<'block> From<&'block SignedHeader> for ApiSignedHeader<'block> {
 
 #[derive(Serialize)]
 #[serde(transparent)]
-pub struct ApiBlockOwned<State: VerificationState> {
+pub struct ApiBlockOwned<State: VerificationState, Mode: VerificationMode> {
     #[serde(with = "ApiBlock")]
-    block: Block<SignedMantleTx<State>>,
+    block: Block<SignedOps<State, Mode>>,
 }
 
-impl<State: VerificationState> From<Block<SignedMantleTx<State>>> for ApiBlockOwned<State> {
-    fn from(value: Block<SignedMantleTx<State>>) -> Self {
+impl<State: VerificationState, Mode: VerificationMode> From<Block<SignedOps<State, Mode>>>
+    for ApiBlockOwned<State, Mode>
+{
+    fn from(value: Block<SignedOps<State, Mode>>) -> Self {
         Self { block: value }
     }
 }
@@ -101,10 +106,10 @@ pub struct ApiHeaderSerializer {
 /// represent a newly processed block. Clients should handle events
 /// idempotently.
 #[derive(Serialize)]
-pub struct ApiProcessedBlockEvent<'block, State: VerificationState> {
+pub struct ApiProcessedBlockEvent<'block, State: VerificationState, Mode: VerificationMode> {
     /// The processed block.
     #[serde(with = "ApiBlock")]
-    pub block: &'block Block<SignedMantleTx<State>>,
+    pub block: &'block Block<SignedOps<State, Mode>>,
     /// The current canonical tip after processing this block.
     pub tip: &'block HeaderId,
     pub tip_slot: &'block Slot,
@@ -113,9 +118,11 @@ pub struct ApiProcessedBlockEvent<'block, State: VerificationState> {
     pub lib_slot: &'block Slot,
 }
 
-impl<'block, State: VerificationState> ApiProcessedBlockEvent<'block, State> {
+impl<'block, State: VerificationState, Mode: VerificationMode>
+    ApiProcessedBlockEvent<'block, State, Mode>
+{
     pub fn serialize<Serializer>(
-        value: &'block BlockWithChainState<SignedMantleTx<State>>,
+        value: &'block BlockWithChainState<SignedOps<State, Mode>>,
         serializer: Serializer,
     ) -> Result<Serializer::Ok, Serializer::Error>
     where
@@ -125,10 +132,11 @@ impl<'block, State: VerificationState> ApiProcessedBlockEvent<'block, State> {
     }
 }
 
-impl<'block, State: VerificationState> From<&'block BlockWithChainState<SignedMantleTx<State>>>
-    for ApiProcessedBlockEvent<'block, State>
+impl<'block, State: VerificationState, Mode: VerificationMode>
+    From<&'block BlockWithChainState<SignedOps<State, Mode>>>
+    for ApiProcessedBlockEvent<'block, State, Mode>
 {
-    fn from(value: &'block BlockWithChainState<SignedMantleTx<State>>) -> Self {
+    fn from(value: &'block BlockWithChainState<SignedOps<State, Mode>>) -> Self {
         Self {
             block: &value.block,
             tip: &value.tip,
@@ -141,22 +149,22 @@ impl<'block, State: VerificationState> From<&'block BlockWithChainState<SignedMa
 
 #[derive(Serialize)]
 #[serde(transparent)]
-pub struct ApiProcessedBlockEventOwned<State: VerificationState> {
+pub struct ApiProcessedBlockEventOwned<State: VerificationState, Mode: VerificationMode> {
     #[serde(with = "ApiProcessedBlockEvent")]
-    block_with_chain_state: BlockWithChainState<SignedMantleTx<State>>,
+    block_with_chain_state: BlockWithChainState<SignedOps<State, Mode>>,
 }
 
-impl<State: VerificationState> ApiProcessedBlockEventOwned<State> {
+impl<State: VerificationState, Mode: VerificationMode> ApiProcessedBlockEventOwned<State, Mode> {
     #[must_use]
-    pub const fn block(&self) -> &Block<SignedMantleTx<State>> {
+    pub const fn block(&self) -> &Block<SignedOps<State, Mode>> {
         &self.block_with_chain_state.block
     }
 }
 
-impl<State: VerificationState> From<BlockWithChainState<SignedMantleTx<State>>>
-    for ApiProcessedBlockEventOwned<State>
+impl<State: VerificationState, Mode: VerificationMode>
+    From<BlockWithChainState<SignedOps<State, Mode>>> for ApiProcessedBlockEventOwned<State, Mode>
 {
-    fn from(value: BlockWithChainState<SignedMantleTx<State>>) -> Self {
+    fn from(value: BlockWithChainState<SignedOps<State, Mode>>) -> Self {
         Self {
             block_with_chain_state: value,
         }

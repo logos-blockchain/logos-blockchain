@@ -17,6 +17,7 @@ use crate::{
     mantle::{
         batch::DeferredZkpVerification,
         channel::Channels,
+        ledger::verification_mode::VerificationMode,
         ops::{OpId, channel::ChannelId},
     },
     sdp::{Declaration, DeclarationId, service_notes::ServiceNotes},
@@ -41,41 +42,33 @@ pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
 pub mod verification_mode {
     pub trait VerificationMode {}
 
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct GenesisMode;
     impl VerificationMode for GenesisMode {}
 
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct StandardMode;
     impl VerificationMode for StandardMode {}
 }
 
 pub trait ProvableOperation {
     type Proof;
+    const CODE: u8;
 }
 
-pub trait PreverifiableOperation<Mode: verification_mode::VerificationMode>:
-    ProvableOperation
-{
+pub trait PreverifiableOperation<Mode: VerificationMode> {
     type Context<'a>;
     type Error;
 
-    fn preverify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error>;
+    fn preverify(&self, context: &Self::Context<'_>) -> Result<(), Self::Error>;
 }
 
-pub trait VerifiableOperation<Mode: verification_mode::VerificationMode>:
-    ProvableOperation
-{
+pub trait VerifiableOperation<Mode: VerificationMode> {
     type Context<'a>;
     type Error;
 
-    /// Performs stateful verifications, and returns a deferred ZKP verification
-    /// so that the caller can batch it.
     fn verify(
         &self,
-        proof: &Self::Proof,
         context: &Self::Context<'_>,
     ) -> Result<Option<DeferredZkpVerification>, Self::Error>;
 }
@@ -88,21 +81,6 @@ pub trait ExecutableOperation {
         &self,
         context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error>;
-}
-
-pub trait Operation<Mode: verification_mode::VerificationMode>:
-    ProvableOperation + PreverifiableOperation<Mode> + VerifiableOperation<Mode> + ExecutableOperation
-{
-}
-
-impl<
-    T: ProvableOperation
-        + PreverifiableOperation<Mode>
-        + VerifiableOperation<Mode>
-        + ExecutableOperation,
-    Mode: verification_mode::VerificationMode,
-> Operation<Mode> for T
-{
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
@@ -461,6 +439,16 @@ impl<'input> IntoIterator for &'input Inputs {
 )]
 #[serde(transparent)]
 pub struct NoteId(#[serde(with = "serde_fr")] pub Fr);
+
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for NoteId {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        lb_utils::openapi::hex_bytes_schema(size_of::<lb_groth16::FrBytes>())
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for NoteId {}
 
 impl NoteId {
     #[must_use]

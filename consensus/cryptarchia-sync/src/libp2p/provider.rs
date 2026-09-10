@@ -1,4 +1,5 @@
 use futures::{TryStreamExt as _, stream::BoxStream};
+use lb_log_targets::cryptarchia;
 use libp2p::{PeerId, Stream as Libp2pStream};
 use tokio::sync::mpsc;
 use tracing::error;
@@ -13,6 +14,8 @@ use crate::{
     },
     messages::{GetTipResponse, SerialisedBlock},
 };
+
+const LOG_TARGET: &str = cryptarchia::sync::libp2p::PROVIDER;
 
 pub const MAX_ADDITIONAL_BLOCKS: usize = 5;
 
@@ -109,7 +112,7 @@ impl Provider {
                 send_message(peer_id, &mut libp2p_stream, &message).await
             }
             Err(e) => {
-                error!("Failed to send blocks to peer {}: {}", peer_id, e);
+                error!(target: LOG_TARGET, "Failed to send blocks to peer {}: {}", peer_id, e);
                 let message = DownloadBlocksResponse::Failure(BlocksUnavailableReason::Unknown(
                     e.to_string(),
                 ));

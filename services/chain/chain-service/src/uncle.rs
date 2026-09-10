@@ -177,7 +177,10 @@ mod tests {
     use lb_core::{
         block::BlockTransactions,
         header::{ContentId, Header},
-        mantle::{SignedMantleTx, Utxo, transactions::states::Preverified},
+        mantle::{
+            SignedOps, Utxo, ledger::verification_mode::StandardMode,
+            transactions::states::Preverified,
+        },
         proofs::leader_proof::Groth16LeaderProof,
     };
     use lb_cryptarchia_engine::{Slot, UncleSlots};
@@ -202,14 +205,16 @@ mod tests {
         )
         .unwrap();
 
+        let b2_header_slot = b2.header().slot();
+        let b2_header_id = b2.header().id();
         cryptarchia
-            .try_apply_block(&b2, b2.header().slot())
+            .try_apply_block(b2, b2_header_slot)
             .expect("a block referencing a valid uncle should be applied");
         assert_eq!(
             cryptarchia
                 .consensus
                 .branches()
-                .get(&b2.header().id())
+                .get(&b2_header_id)
                 .unwrap()
                 .uncle_slots(),
             &[u1.header().slot()].into()
@@ -229,7 +234,8 @@ mod tests {
             &u1_key,
         );
 
-        let Err(err) = cryptarchia.try_apply_block(&block, block.header().slot()) else {
+        let block_header_slot = block.header().slot();
+        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
             panic!("expected the block to be rejected");
         };
         assert!(matches!(
@@ -263,7 +269,8 @@ mod tests {
             &u1_key,
         );
 
-        let Err(err) = cryptarchia.try_apply_block(&block, block.header().slot()) else {
+        let block_header_slot = block.header().slot();
+        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
             panic!("expected the block to be rejected");
         };
         assert!(matches!(
@@ -288,7 +295,8 @@ mod tests {
             &u1_key,
         );
 
-        let Err(err) = cryptarchia.try_apply_block(&block, block.header().slot()) else {
+        let block_header_slot = block.header().slot();
+        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
             panic!("expected the block to be rejected");
         };
         assert!(matches!(
@@ -320,7 +328,8 @@ mod tests {
             &u1_key,
         );
 
-        let Err(err) = cryptarchia.try_apply_block(&block, block.header().slot()) else {
+        let block_header_slot = block.header().slot();
+        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
             panic!("expected the block to be rejected");
         };
         assert!(matches!(
@@ -350,7 +359,8 @@ mod tests {
             &u1_key,
         );
 
-        let Err(err) = cryptarchia.try_apply_block(&block, block.header().slot()) else {
+        let block_header_slot = block.header().slot();
+        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
             panic!("expected the block to be rejected");
         };
         assert!(matches!(
@@ -384,7 +394,8 @@ mod tests {
             &u1_key,
         );
 
-        let Err(err) = cryptarchia.try_apply_block(&block, block.header().slot()) else {
+        let block_header_slot = block.header().slot();
+        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
             panic!("expected the block to be rejected");
         };
         assert!(matches!(
@@ -401,8 +412,8 @@ mod tests {
     #[expect(clippy::type_complexity, reason = "a test helper")]
     fn chain_with_fork() -> (
         Cryptarchia,
-        Block<SignedMantleTx<Preverified>>,
-        Block<SignedMantleTx<Preverified>>,
+        Block<SignedOps<Preverified, StandardMode>>,
+        Block<SignedOps<Preverified, StandardMode>>,
         Ed25519Key,
         ZkKey,
         Utxo,
@@ -441,14 +452,15 @@ mod tests {
             UncleHeaders::empty(),
         )
         .unwrap();
+        let b1_header_slot = b1.header().slot();
         cryptarchia
-            .try_apply_block(&b1, b1.header().slot())
+            .try_apply_block(b1.clone(), b1_header_slot)
             .unwrap();
 
         (cryptarchia, b1, u1, u1_key, zk_key, utxo)
     }
 
-    fn signed_header(block: &Block<SignedMantleTx<Preverified>>) -> SignedHeader {
+    fn signed_header(block: &Block<SignedOps<Preverified, StandardMode>>) -> SignedHeader {
         SignedHeader::new(block.header().clone(), *block.signature())
     }
 
@@ -460,7 +472,7 @@ mod tests {
         uncle_headers: UncleHeaders,
         proof: &Groth16LeaderProof,
         key: &Ed25519Key,
-    ) -> Block<SignedMantleTx<Preverified>> {
+    ) -> Block<SignedOps<Preverified, StandardMode>> {
         Block::create(
             parent,
             slot,

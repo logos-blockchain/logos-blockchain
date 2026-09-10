@@ -1,8 +1,9 @@
 use futures::stream;
+use lb_log_targets::cryptarchia;
 use libp2p::{PeerId, StreamProtocol};
 use libp2p_stream::Control;
 use tokio::{sync::oneshot, time, time::Duration};
-use tracing::{error, warn};
+use tracing::{debug, warn};
 
 use crate::{
     DownloadBlocksRequest, GetTipResponse,
@@ -15,6 +16,8 @@ use crate::{
     },
     messages::SerialisedBlock,
 };
+
+const LOG_TARGET: &str = cryptarchia::sync::libp2p::DOWNLOADER;
 
 pub struct Downloader;
 
@@ -67,7 +70,7 @@ impl Downloader {
         )
         .await
         .map_err(|e| {
-            warn!("Timeout while receiving tip from peer {}", peer_id);
+            warn!(target: LOG_TARGET, "Timeout while receiving tip from peer {}", peer_id);
             ChainSyncError::from((peer_id, e))
         })?
         .map_err(|e| ChainSyncError::from((peer_id, e)))
@@ -80,7 +83,10 @@ impl Downloader {
         });
 
         if let Err(e) = reply_channel.send(response) {
-            error!("Failed to send tip response to peer {peer_id}: {e:?}");
+            debug!(
+                target: LOG_TARGET,
+                "Tip requester dropped before receiving response from peer {peer_id}: {e:?}"
+            );
         }
 
         utils::close_stream(peer_id, stream).await

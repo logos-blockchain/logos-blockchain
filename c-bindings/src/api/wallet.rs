@@ -8,9 +8,9 @@ use lb_api_service::http::mempool;
 use lb_core::{
     header::HeaderId as CoreHeaderId,
     mantle::{
-        Note, NoteId as CoreNoteId, Op, OpProof, RawMantleTx, SignedMantleTx,
+        Note, NoteId as CoreNoteId, Op, OpProof, SignedOps,
         gas::GasCost,
-        ledger::{Inputs, Outputs},
+        ledger::{Inputs, Outputs, verification_mode::StandardMode},
         ops::{
             channel::{
                 ChannelId,
@@ -20,7 +20,7 @@ use lb_core::{
         },
         traits::Hashable,
         transactions::{
-            MantleTxBuilder,
+            MantleTxBuilder, OpProofs, Ops,
             states::{Preverified, Unverified},
         },
     },
@@ -32,7 +32,7 @@ use lb_node::{
     RuntimeServiceId,
     generic_services::{CryptarchiaService, WalletService as NodeWalletService},
 };
-use lb_wallet_service::{ClaimableVoucherInfo, TipResponse, api::WalletApi};
+use lb_wallet_service::{ClaimableVouchersInfo, LeaderAgedNotesInfo, TipResponse, api::WalletApi};
 use overwatch::services::status::ServiceStatus;
 
 use crate::{
@@ -42,6 +42,7 @@ use crate::{
         types::{
             claimable_vouchers::{ClaimableVoucher, ClaimableVouchers},
             known_addresses::KnownAddresses,
+            leader_aged_notes::{LeaderAgedNote, LeaderAgedNotes},
             value::Value,
             wallet_notes::{WalletNote, WalletNotes},
         },
@@ -264,7 +265,7 @@ pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) -> Oper
 pub(crate) fn get_claimable_vouchers_sync(
     node: &LogosBlockchainNode,
     tip: Option<CoreHeaderId>,
-) -> StatusResult<TipResponse<Vec<ClaimableVoucherInfo>>> {
+) -> StatusResult<TipResponse<ClaimableVouchersInfo>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         if let Err(status) = node
@@ -321,8 +322,12 @@ pub unsafe extern "C" fn get_claimable_vouchers(
     };
 
     let response = unwrap_or_return_error!(get_claimable_vouchers_sync(node, tip));
-    let vouchers: Vec<ClaimableVoucher> = response
-        .response
+    let TipResponse {
+        tip,
+        response: info,
+    } = response;
+    let vouchers: Vec<ClaimableVoucher> = info
+        .vouchers
         .into_iter()
         .map(|voucher| {
             let nullifier = voucher.nullifier.into();
@@ -337,9 +342,11 @@ pub unsafe extern "C" fn get_claimable_vouchers(
     let vouchers_ptr = Box::leak(vouchers.into_boxed_slice()).as_mut_ptr();
 
     FfiClaimableVouchersResult::ok(ClaimableVouchers {
-        tip: response.tip.into(),
+        tip: tip.into(),
         vouchers: vouchers_ptr,
         len,
+        reward_amount: info.reward_amount,
+        total_claimable: info.total_claimable,
     })
 }
 
@@ -589,6 +596,116 @@ pub unsafe extern "C" fn get_wallet_notes(
     }
 }
 
+/// Gets the wallet notes that are aged enough to take part in the leadership
+/// lottery.
+///
+/// This is a synchronous wrapper around
+/// [`WalletApi::get_leader_aged_notes_info`].
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+/// - `tip`: The header ID to query at, or `None` for the current tip.
+///
+/// # Returns
+///
+/// A [`Result`] containing the resolved tip and the eligible UTXOs on success,
+/// or an [`OperationStatus`] error on failure.
+pub(crate) fn get_leader_aged_notes_sync(
+    node: &LogosBlockchainNode,
+    tip: Option<CoreHeaderId>,
+) -> StatusResult<TipResponse<LeaderAgedNotesInfo>> {
+    node.get_runtime_handle().block_on(async {
+        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
+            node.get_overwatch_handle(),
+        )
+        .await;
+        api.get_leader_aged_notes_info(tip).await.map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Failed to get leader aged notes: {error:?}"),
+            )
+        })
+    })
+}
+
+pub type FfiLeaderAgedNotesResult = FfiStatusResult<LeaderAgedNotes>;
+
+/// Reports which of the wallet's notes are old enough to take part in the
+/// leadership lottery, i.e. whether this node can currently win a slot.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance.
+/// - `optional_tip`: An optional pointer to the header ID to query at. If null,
+///   the current tip is used.
+///
+/// # Returns
+///
+/// A [`FfiLeaderAgedNotesResult`] containing the tip and the eligible notes on
+/// success, or an [`OperationStatus`] error on failure. A successful result
+/// with `len == 0` means the node has no eligible notes at that tip. Note IDs
+/// and public keys are in little-endian format.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. The caller
+/// must ensure that all pointers are valid, and must free the returned
+/// [`LeaderAgedNotes`] with [`free_leader_aged_notes`] exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn get_leader_aged_notes(
+    node: *const LogosBlockchainNode,
+    optional_tip: *const HeaderId,
+) -> FfiLeaderAgedNotesResult {
+    return_error_if_null_pointer!(node);
+    let node = unsafe { &*node };
+    let tip = if optional_tip.is_null() {
+        None
+    } else {
+        Some(CoreHeaderId::from(unsafe { *optional_tip }))
+    };
+
+    let TipResponse { tip, response } =
+        unwrap_or_return_error!(get_leader_aged_notes_sync(node, tip));
+
+    let notes: Vec<LeaderAgedNote> = response
+        .notes
+        .into_iter()
+        .map(|note| LeaderAgedNote {
+            id: fr_to_bytes(note.note_id.as_fr()),
+            value: note.value,
+            public_key: fr_to_bytes(&note.public_key.into()),
+        })
+        .collect();
+
+    let len = notes.len();
+    let notes_ptr = Box::leak(notes.into_boxed_slice()).as_mut_ptr();
+
+    FfiLeaderAgedNotesResult::ok(LeaderAgedNotes {
+        tip: tip.into(),
+        notes: notes_ptr,
+        len,
+        total_value: response.total_value,
+    })
+}
+
+/// Frees the memory allocated for a [`LeaderAgedNotes`] structure.
+///
+/// # Safety
+///
+/// This function is unsafe because it reconstructs a boxed slice from a raw
+/// pointer. The caller must only pass values returned by
+/// [`get_leader_aged_notes`] and must call this exactly once per result.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_leader_aged_notes(notes: LeaderAgedNotes) -> OperationStatus {
+    if notes.notes.is_null() {
+        return OperationStatus::OK;
+    }
+    let notes = unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(notes.notes, notes.len)) };
+    drop(notes);
+    OperationStatus::OK
+}
+
 /// Frees the memory allocated for a [`WalletNotes`] structure.
 ///
 /// # Safety
@@ -682,7 +799,7 @@ impl TransferFundsArguments {
 ///
 /// # Returns
 ///
-/// A `Result` containing a [`SignedMantleTx`] on success, or an
+/// A `Result` containing a [`SignedOps`] on success, or an
 /// [`OperationStatus`] error on failure.
 pub(crate) fn transfer_funds_sync(
     node: &LogosBlockchainNode,
@@ -691,7 +808,7 @@ pub(crate) fn transfer_funds_sync(
     funding_public_keys: Vec<ZkPublicKey>,
     recipient_public_key: ZkPublicKey,
     amount: u64,
-) -> StatusResult<SignedMantleTx<Preverified>> {
+) -> StatusResult<SignedOps<Preverified, StandardMode>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -813,7 +930,7 @@ pub unsafe extern "C" fn transfer_funds(
 /// # Safety
 ///
 /// `pointer` must be non-null and point to at least 32 readable bytes.
-unsafe fn parse_public_key(pointer: *const u8) -> StatusResult<ZkPublicKey> {
+pub(crate) unsafe fn parse_public_key(pointer: *const u8) -> StatusResult<ZkPublicKey> {
     let bytes = unsafe { std::slice::from_raw_parts(pointer, 32) };
     fr_from_bytes(bytes).map(ZkPublicKey::new).map_err(|error| {
         OperationStatus::error(
@@ -935,8 +1052,8 @@ impl ChannelDepositWithNotesArguments {
 ///
 /// # Returns
 ///
-/// A [`Result`] containing the submitted [`SignedMantleTx`] on success, or an
-/// [`OperationStatus`] error on failure.
+/// A [`Result`] containing the submitted [`SignedOps`] on success, or
+/// an [`OperationStatus`] error on failure.
 pub(crate) fn channel_deposit_with_notes_sync(
     node: &LogosBlockchainNode,
     tip: lb_core::header::HeaderId,
@@ -944,7 +1061,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
     change_public_key: ZkPublicKey,
     funding_public_keys: Vec<ZkPublicKey>,
     max_tx_fee: GasCost,
-) -> StatusResult<SignedMantleTx<Preverified>> {
+) -> StatusResult<SignedOps<Preverified, StandardMode>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -1239,8 +1356,8 @@ impl ChannelDepositArguments {
 ///
 /// # Returns
 ///
-/// A [`Result`] containing the submitted [`SignedMantleTx`] on success, or an
-/// [`OperationStatus`] error on failure.
+/// A [`Result`] containing the submitted [`SignedOps`] on success, or
+/// an [`OperationStatus`] error on failure.
 pub(crate) fn channel_deposit_sync(
     node: &LogosBlockchainNode,
     tip: lb_core::header::HeaderId,
@@ -1248,7 +1365,7 @@ pub(crate) fn channel_deposit_sync(
     funding_public_key: ZkPublicKey,
     amount: Value,
     metadata: Metadata,
-) -> StatusResult<SignedMantleTx<Preverified>> {
+) -> StatusResult<SignedOps<Preverified, StandardMode>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -1322,15 +1439,17 @@ pub(crate) fn channel_deposit_sync(
         // 5. Assemble [transfer, deposit] in order and sign both ops with a single ZK
         //    signature by the funding key (which owns every input).
         //
-        //    NOTE: we deliberately sign with `sign_tx_with_zk` (explicit keys) rather
-        //    than the usual `WalletApi::sign_tx`. `sign_tx` resolves each op's input
-        //    public keys from the *committed* ledger state, but the deposit consumes
-        //    the note this same transaction's transfer creates (it is not on-chain
-        //    yet), so `sign_tx` would fail with `MissingInputNote`. Both the transfer
-        //    inputs and the deposit's input note are owned by `funding_public_key`, so
-        //    one signature over the tx hash satisfies both op proofs. Do not "simplify"
-        //    this to `sign_tx`.
-        let tx = RawMantleTx([Op::Transfer(transfer), Op::ChannelDeposit(deposit)].into());
+        //    NOTE: we deliberately sign with `sign_tx_with_zk` (explicit keys)
+        // rather    than the usual `WalletApi::sign_tx`. `sign_tx`
+        // resolves each op's input    public keys from the *committed*
+        // ledger state, but the deposit consumes    the note this same
+        // transaction's transfer creates (it is not on-chain
+        //    yet), so `sign_tx` would fail with `MissingInputNote`. Both the
+        // transfer    inputs and the deposit's input note are owned by
+        // `funding_public_key`, so    one signature over the tx hash
+        // satisfies both op proofs. Do not "simplify"    this to
+        // `sign_tx`.
+        let tx = Ops::from([Op::Transfer(transfer), Op::ChannelDeposit(deposit)]);
         let tx_hash = tx.hash();
         let user_sig = api
             .sign_tx_with_zk(tx_hash, vec![funding_public_key])
@@ -1341,17 +1460,22 @@ pub(crate) fn channel_deposit_sync(
                     format!("Failed to sign deposit tx: {error}"),
                 )
             })?;
-        let signed_tx = SignedMantleTx::new(
-            tx,
-            [OpProof::ZkSig(user_sig.clone()), OpProof::ZkSig(user_sig)].into(),
-        )
-        .preverify()
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to assemble signed tx: {error:?}"),
-            )
-        })?;
+        let op_proofs =
+            OpProofs::from([OpProof::ZkSig(user_sig.clone()), OpProof::ZkSig(user_sig)]);
+        let signed_tx = SignedOps::from_parts(tx, op_proofs)
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to assemble signed tx: {error:?}"),
+                )
+            })?
+            .preverify()
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to assemble signed tx: {error:?}"),
+                )
+            })?;
 
         // 6. Submit to the mempool.
         if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Hashable::hash).await {
@@ -1668,15 +1792,16 @@ pub unsafe extern "C" fn submit_signed_transaction(
                 ));
             }
         };
-        let signed_tx: SignedMantleTx<Unverified> = match serde_json::from_str(signed_tx_json) {
-            Ok(signed_tx) => signed_tx,
-            Err(error) => {
-                return FfiSubmitTransactionResult::err(OperationStatus::error(
-                    OperationStatusCode::ValidationError,
-                    format!("Failed to parse signed transaction: {error}"),
-                ));
-            }
-        };
+        let signed_tx: SignedOps<Unverified, StandardMode> =
+            match serde_json::from_str(signed_tx_json) {
+                Ok(signed_tx) => signed_tx,
+                Err(error) => {
+                    return FfiSubmitTransactionResult::err(OperationStatus::error(
+                        OperationStatusCode::ValidationError,
+                        format!("Failed to parse signed transaction: {error}"),
+                    ));
+                }
+            };
         match signed_tx.preverify() {
             Ok(preverified_tx) => preverified_tx,
             Err(error) => {

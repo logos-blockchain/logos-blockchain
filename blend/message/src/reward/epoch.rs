@@ -5,10 +5,13 @@ use lb_blend_proofs::quota::Quota;
 use lb_core::crypto::ZkHash;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{Fr, FrBytes, fr_to_bytes};
+use lb_log_targets::blend;
 use lb_utils::math::{F64Ge1, NonNegativeF64};
 use serde::{Deserialize, Serialize};
 
 use crate::reward::{BlendingToken, activity, token::HammingDistance};
+
+const LOG_TARGET: &str = blend::message::REWARD;
 
 /// Epoch-specific information to compute an activity proof.
 pub struct EpochInfo {
@@ -80,18 +83,59 @@ impl BlendingTokenEvaluation {
         token: &BlendingToken,
         next_epoch_randomness: EpochRandomness,
     ) -> Option<HammingDistance> {
-        let distance = token.hamming_distance(self.token_count_byte_len, next_epoch_randomness);
+        let evaluation = self.evaluate_token(token, next_epoch_randomness);
+        evaluation
+            .satisfies_activity_threshold
+            .then_some(evaluation.distance)
+    }
+
+    /// Evaluates a token once and retains both the distance and the threshold
+    /// decision for callers that need to select a proof and report that same
+    /// decision.
+    #[must_use]
+    pub(super) fn evaluate_token(
+        &self,
+        token: &BlendingToken,
+        next_epoch_randomness: EpochRandomness,
+    ) -> TokenEvaluation {
+        let distance = self.distance(token, next_epoch_randomness);
+        let satisfies_activity_threshold = distance <= self.activity_threshold;
         tracing::trace!(
-            "Evaluated blending token {:?} for activity proof. Calculated Hamming distance = {distance:?}",
-            token.signing_key()
+            target: LOG_TARGET,
+            diagnostic = "blend_tsi_outage",
+            event = "blend_activity_token_distance",
+            signing_key = ?token.signing_key(),
+            hamming_distance = distance.value(),
+            activity_threshold = self.activity_threshold.value(),
+            satisfies_activity_threshold,
+            "Evaluated blending token for activity proof"
         );
-        (distance <= self.activity_threshold).then_some(distance)
+
+        TokenEvaluation {
+            distance,
+            satisfies_activity_threshold,
+        }
+    }
+
+    #[must_use]
+    pub fn distance(
+        &self,
+        token: &BlendingToken,
+        next_epoch_randomness: EpochRandomness,
+    ) -> HammingDistance {
+        token.hamming_distance(self.token_count_byte_len, next_epoch_randomness)
     }
 
     #[must_use]
     pub const fn activity_threshold(&self) -> HammingDistance {
         self.activity_threshold
     }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub(super) struct TokenEvaluation {
+    pub(super) distance: HammingDistance,
+    pub(super) satisfies_activity_threshold: bool,
 }
 
 /// Deterministic unbiased randomness for an epoch.

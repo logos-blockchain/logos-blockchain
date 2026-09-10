@@ -23,6 +23,7 @@ lb-cryptarchia-engine      = { workspace = true }
 lb-cryptarchia-sync        = { workspace = true }
 lb-groth16                 = { workspace = true }
 lb-ledger                  = { workspace = true }
+lb-log-targets             = { workspace = true }
 lb-network-service         = { workspace = true }
 lb-services-utils          = { workspace = true }
 lb-storage-service         = { workspace = true }
@@ -37,7 +38,7 @@ time                       = { workspace = true }
 tokio                      = { workspace = true }
 tracing                    = { workspace = true }
 tracing-futures            = { features = ["std-future"], workspace = true }
-utoipa                     = { optional = true, workspace = true }
+utoipa                     = { features = ["macros"], optional = true, workspace = true }
 
 [dev-dependencies]
 lb-core                       = { workspace = true }
@@ -50,4 +51,4 @@ tempfile                      = { workspace = true }
 
 [features]
 default = []
-openapi = ["dep:utoipa"]
+openapi = ["dep:utoipa", "lb-core/openapi", "lb-cryptarchia-engine/openapi"]

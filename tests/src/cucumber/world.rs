@@ -15,7 +15,8 @@ use lb_core::{
     codec::DeserializeOp as _,
     header::HeaderId,
     mantle::{
-        GenesisTime, SignedMantleTx, Utxo, Value,
+        GenesisTime, SignedOps, Utxo, Value,
+        ledger::verification_mode::StandardMode,
         ops::channel::{
             ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
@@ -26,7 +27,7 @@ use lb_core::{
     },
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
-use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
+use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, ZkPublicKey};
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
@@ -60,11 +61,14 @@ use crate::{
         },
         error::{StepError, StepResult},
         fee_reserve::{SCENARIO_FEE_ACCOUNT_NAME, ScenarioFeeState},
+        logos_sql::LogosSqlState,
         steps::{
-            manual_zone::runner::{
-                Event, InscriptionId, SequencerCheckpoint, SequencerClient, TxStatusUpdate,
-            },
+            nodes::BlendRelayRegistry,
             tokio_console::profile::TokioConsoleProfile,
+            zone::runner::{
+                Event, IndexedSignature, InscriptionId, PreparedChannelConfig, SequencerCheckpoint,
+                SequencerClient, TxStatusUpdate,
+            },
         },
         utils::{make_builder, shared_host_bin_path},
         wallet::snapshot::WalletSnapshot,
@@ -236,6 +240,8 @@ pub struct ZoneState {
     published_order: Vec<String>,
     saved_checkpoints: HashMap<String, SequencerCheckpoint>,
     latest_checkpoints: HashMap<String, SequencerCheckpoint>,
+    prepared_configs: HashMap<String, PreparedChannelConfig>,
+    prepared_config_signatures: HashMap<String, Vec<IndexedSignature>>,
     sequencer_startups: HashMap<String, ZoneSequencerStartup>,
     observed_mempool_pending: HashMap<String, HashSet<InscriptionId>>,
     sorted_total_payloads: Option<usize>,
@@ -309,6 +315,12 @@ impl ZoneState {
             .ok_or(StepError::LogicalError {
                 message: format!("Zone sequencer '{alias}' is not registered"),
             })
+    }
+
+    /// A registered sequencer's public key, without touching its private key.
+    pub fn sequencer_public_key(&self, alias: &str) -> Result<Ed25519PublicKey, StepError> {
+        self.sequencer_signing_key(alias)
+            .map(Ed25519Key::public_key)
     }
 
     pub fn sequencer_channel_id(&self, alias: &str) -> Result<ChannelId, StepError> {
@@ -547,6 +559,33 @@ impl ZoneState {
 
     pub fn remember_checkpoint(&mut self, alias: String, checkpoint: SequencerCheckpoint) {
         self.saved_checkpoints.insert(alias, checkpoint);
+    }
+
+    pub fn remember_prepared_config(&mut self, alias: String, prepared: PreparedChannelConfig) {
+        self.prepared_configs.insert(alias, prepared);
+    }
+
+    pub fn prepared_config(&self, alias: &str) -> Result<&PreparedChannelConfig, StepError> {
+        self.prepared_configs
+            .get(alias)
+            .ok_or(StepError::LogicalError {
+                message: format!("No prepared zone config transaction '{alias}'"),
+            })
+    }
+
+    pub fn add_prepared_config_signature(&mut self, alias: String, signature: IndexedSignature) {
+        self.prepared_config_signatures
+            .entry(alias)
+            .or_default()
+            .push(signature);
+    }
+
+    #[must_use]
+    pub fn prepared_config_signatures(&self, alias: &str) -> Vec<IndexedSignature> {
+        self.prepared_config_signatures
+            .get(alias)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn set_latest_checkpoint_for(
@@ -816,6 +855,8 @@ impl ZoneState {
         self.published_order.clear();
         self.saved_checkpoints.clear();
         self.latest_checkpoints.clear();
+        self.prepared_configs.clear();
+        self.prepared_config_signatures.clear();
         self.expected_custom_payloads.clear();
     }
 
@@ -895,6 +936,8 @@ pub struct ScenarioLifecycle {
     pub genesis_time: Option<GenesisTime>,
     /// Base directory for scenario artifacts like logs and generated configs.
     pub scenario_base_dir: PathBuf,
+    /// Cucumber scenario name used in scenario-local diagnostic artifacts.
+    pub scenario_name: Option<String>,
     /// Automated: Scenario specification
     pub spec: ScenarioSpec,
     /// Automated: Runtime state for the scenario.
@@ -951,16 +994,59 @@ pub struct ClusterState {
     pub sdp_funding_config: SdpFundingConfig,
 }
 
+/// Named node heights captured for comparisons in later scenario steps.
+#[derive(Default)]
+pub struct NodeHeightSnapshots {
+    recorded_heights: HashMap<String, u64>,
+}
+
+impl NodeHeightSnapshots {
+    /// Records a node height under a scenario-defined name.
+    pub fn record_height(&mut self, alias: String, height: u64) -> StepResult {
+        if self.recorded_heights.contains_key(&alias) {
+            return Err(StepError::LogicalError {
+                message: format!("node height alias '{alias}' is already recorded"),
+            });
+        }
+
+        self.recorded_heights.insert(alias, height);
+
+        Ok(())
+    }
+
+    /// Resolves a previously recorded node height.
+    pub fn height(&self, alias: &str) -> Result<u64, StepError> {
+        self.recorded_heights
+            .get(alias)
+            .copied()
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("node height alias '{alias}' is not recorded"),
+            })
+    }
+
+    #[must_use]
+    fn len(&self) -> usize {
+        self.recorded_heights.len()
+    }
+}
+
 /// Runtime observations collected by the tagged Blend/TSI diagnostic
 /// scenarios.
 #[derive(Default)]
 pub struct BlendDiagnosticState {
     /// Current phase of the diagnostic scenario.
     pub phase: Option<BlendDiagnosticPhase>,
+    /// Node whose Time-service clock drives the diagnostic observation.
+    pub reference_node: Option<String>,
     /// Number of epoch-observation steps completed by the scenario.
     pub observation_count: u32,
     /// Nodes successfully stopped during the diagnostic outage phase.
     pub stopped_nodes: HashSet<String>,
+    /// Nodes whose Blend endpoint is intentionally unreachable during the
+    /// diagnostic outage phase while their processes remain running.
+    pub blend_unreachable_nodes: HashSet<String>,
+    /// Whether this scenario has written its diagnostic timeline header.
+    pub timeline_header_written: Mutex<bool>,
 }
 
 /// Node-startup configuration written by steps before nodes start and consumed
@@ -1022,7 +1108,7 @@ pub struct TransactionState {
     /// than on later inclusion.
     submission_outcomes: HashMap<String, Result<(), String>>,
     /// Manual: Exact signed transactions prepared for later submission.
-    prepared_transactions: HashMap<String, SignedMantleTx<Preverified>>,
+    prepared_transactions: HashMap<String, SignedOps<Preverified, StandardMode>>,
     /// Manual: Initial fee arithmetic for percentage-funded transactions
     /// prepared by the fee-market steps.
     prepared_priority_fees: HashMap<String, PreparedPriorityFee>,
@@ -1163,6 +1249,8 @@ pub struct CucumberWorld {
     pub cluster: ClusterState,
     /// Manual: List of nodes with their info.
     pub nodes_info: HashMap<String, NodeInfo>,
+    /// Node heights captured for comparisons in later scenario steps.
+    pub node_height_snapshots: NodeHeightSnapshots,
     /// Node-startup configuration overrides.
     pub startup: NodeStartupConfig,
     /// Snapshot save/restore configuration.
@@ -1177,8 +1265,12 @@ pub struct CucumberWorld {
     pub fork_groups: ForkGroups,
     /// Runtime observations for the tagged Blend/TSI diagnostics.
     pub blend_diagnostics: BlendDiagnosticState,
+    /// Opt-in test-owned UDP relays for controllable Blend reachability tests.
+    pub(crate) blend_relays: BlendRelayRegistry,
     /// Manual: Zone-specific state for SDK/sequencer scenarios.
     pub zone: ZoneState,
+    /// Logos SQL runtimes and writes owned by this scenario.
+    pub logos_sql: LogosSqlState,
     /// Manual: Per-node Tokio console profiling requested by Cucumber steps.
     pub tokio_console_profile: TokioConsoleProfile,
     /// Manual: Per-block gas prices recorded by the fee-market steps,
@@ -1188,11 +1280,24 @@ pub struct CucumberWorld {
     /// assert a wallet's balance strictly increased relative to the recorded
     /// baseline (used by the `PoW` mining test to prove the reward landed).
     pub recorded_wallet_balances: HashMap<String, u64>,
+    /// Manual: Per-node key that mined `PoW` rewards are claimed to, recorded
+    /// when the node's mining wallet is declared. The claim step names it on
+    /// each request, since the node no longer carries a claim address in its
+    /// configuration.
+    pub mining_claim_addresses: HashMap<String, ZkPublicKey>,
+    /// Manual: Per-node `pow.auto_claim` overrides, staged by the auto-claim
+    /// configuration step and applied when that node starts. Auto-claim must be
+    /// configured before the node boots, since it validates its targets against
+    /// the wallet's known keys at startup; the override is per-node because a
+    /// target key a node's wallet does not track aborts that node's startup.
+    pub auto_claim_overrides: HashMap<String, Vec<ConfigOverride>>,
 }
 
 impl Drop for CucumberWorld {
     fn drop(&mut self) {
+        self.logos_sql.clear();
         self.zone.clear();
+        self.blend_relays.shutdown();
         self.scanner.shutdown();
         self.wallet_registry.shutdown();
     }
@@ -1330,6 +1435,8 @@ impl Debug for CucumberWorld {
                 "recorded_wallet_balances",
                 &self.recorded_wallet_balances.len(),
             )
+            .field("mining_claim_addresses", &self.mining_claim_addresses.len())
+            .field("auto_claim_overrides", &self.auto_claim_overrides.len())
             .field("submission_outcomes", &self.txs.submission_outcomes.len())
             .field(
                 "prepared_transactions",
@@ -1376,6 +1483,8 @@ impl Debug for CucumberWorld {
                 &self.startup.manual_node_config_overrides,
             )
             .field("zone", &self.zone.debug_summary())
+            .field("logos_sql", &self.logos_sql)
+            .field("recorded_node_heights", &self.node_height_snapshots.len())
             .field(
                 "initial_override_peers_display",
                 &initial_peers_override_display(self.startup.initial_peers_override.as_ref()),
@@ -1400,6 +1509,10 @@ impl Debug for CucumberWorld {
             )
             .field("blend_diagnostic_phase", &self.blend_diagnostics.phase)
             .field(
+                "blend_diagnostic_reference_node",
+                &self.blend_diagnostics.reference_node,
+            )
+            .field(
                 "blend_diagnostic_observation_count",
                 &self.blend_diagnostics.observation_count,
             )
@@ -1407,6 +1520,11 @@ impl Debug for CucumberWorld {
                 "blend_diagnostic_stopped_nodes",
                 &self.blend_diagnostics.stopped_nodes,
             )
+            .field(
+                "blend_diagnostic_unreachable_nodes",
+                &self.blend_diagnostics.blend_unreachable_nodes,
+            )
+            .field("blend_relays", &self.blend_relays.is_enabled().ok())
             .field("sdp_funding_config", &self.cluster.sdp_funding_config)
             .field(
                 "deployment_config_override_path",
@@ -1660,6 +1778,11 @@ impl CucumberWorld {
         if let Some(topology) = self.lifecycle.spec.topology.as_mut() {
             topology.scenario_base_dir = log_dir;
         }
+    }
+
+    /// Set the name of the current Cucumber scenario.
+    pub fn set_scenario_name(&mut self, scenario_name: &str) {
+        self.lifecycle.scenario_name = Some(scenario_name.to_owned());
     }
 
     pub fn set_test_context(&mut self, test_context: String) {
@@ -2290,7 +2413,7 @@ impl CucumberWorld {
     pub fn remember_prepared_transaction(
         &mut self,
         alias: String,
-        signed_tx: SignedMantleTx<Preverified>,
+        signed_tx: SignedOps<Preverified, StandardMode>,
     ) {
         self.txs.prepared_transactions.insert(alias, signed_tx);
     }
@@ -2314,7 +2437,7 @@ impl CucumberWorld {
     pub fn resolve_prepared_transaction(
         &self,
         alias: &str,
-    ) -> Result<SignedMantleTx<Preverified>, StepError> {
+    ) -> Result<SignedOps<Preverified, StandardMode>, StepError> {
         self.txs
             .prepared_transactions
             .get(alias)
@@ -2346,7 +2469,7 @@ impl CucumberWorld {
     pub async fn submit_transaction<State>(
         &self,
         wallet: &WalletInfo,
-        signed_tx: &SignedMantleTx<State>,
+        signed_tx: &SignedOps<State, StandardMode>,
         node_client: &NodeHttpClient,
     ) -> Result<(), StepError>
     where

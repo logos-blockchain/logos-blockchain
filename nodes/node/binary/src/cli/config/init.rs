@@ -16,7 +16,6 @@ use crate::{
         blend::serde::{Config as BlendConfig, RequiredValues as BlendConfigRequiredValues},
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
         network::serde::Config as NetworkConfig,
-        pow::serde::RequiredValues as PoWConfigRequiredValues,
         sdp::serde::RequiredValues as SdpConfigRequiredValues,
         update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
         update_tracing,
@@ -115,7 +114,9 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> UserConfig {
         storage: storage_config,
         kms: kms_config,
         wallet: wallet_config,
-        pow: build_pow_config(keystore),
+        // Mining defaults, auto-claim off: a generated node mines and claims on
+        // demand, naming the destination key on each claim request.
+        pow: PoWConfig::default(),
         tracing: tracing_config,
         state: state_config,
     }
@@ -192,15 +193,6 @@ fn build_sdp_config(keystore: &Keystore, sdp_args: SdpArgs) -> SdpConfig {
     update_sdp(&mut sdp_config, sdp_args);
 
     sdp_config
-}
-
-fn build_pow_config(keystore: &Keystore) -> PoWConfig {
-    let (_, pow_claim_key) = keystore
-        .get_zk(KeyTitle::POW_CLAIM)
-        .expect("PoW claim key set by default");
-    PoWConfig::with_required_values(PoWConfigRequiredValues {
-        claim_address: pow_claim_key.to_public_key(),
-    })
 }
 
 fn build_kms_config(keystore: &Keystore) -> KmsConfig {

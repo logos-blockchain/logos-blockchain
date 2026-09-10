@@ -4,14 +4,7 @@ use serde::{Deserialize, Serialize};
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_LOG_TARGETS: &[&str] = &[
-    "logos_blockchain",
-    "chain",
-    "chain_network",
-    "chain_leader",
-    "cryptarchia",
-    "ledger",
-];
+const DEFAULT_LOG_TARGETS: &[&str] = &[lb_log_targets::ROOT];
 const DEFAULT_QUIET_TARGETS: &[(&str, Level)] = &[
     ("libp2p_gossipsub", Level::ERROR),
     ("h2", Level::WARN),

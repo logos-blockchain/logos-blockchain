@@ -11,7 +11,8 @@ use lb_core::mantle::{
     },
     transactions::{
         GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GasPrices, MantleTxBuilder,
-        MantleTxContext, MantleTxGasContext, hash::TxHash,
+        hash::TxHash,
+        tx_list::ops::{OpsContext, OpsGasContext},
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
@@ -21,9 +22,9 @@ pub fn build_inscription_tx_builder(
     signing_key: &Ed25519Key,
     channel_id: ChannelId,
     parent: Option<MsgId>,
-) -> (MantleTxBuilder, MantleTxContext) {
-    let tx_context = MantleTxContext {
-        gas_context: MantleTxGasContext::new(
+) -> (MantleTxBuilder, OpsContext) {
+    let tx_context = OpsContext {
+        gas_context: OpsGasContext::new(
             HashMap::new(),
             HashMap::new(),
             GasPrices {

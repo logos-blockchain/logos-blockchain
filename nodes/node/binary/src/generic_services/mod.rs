@@ -4,7 +4,8 @@ use lb_chain_service::CryptarchiaConsensus;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
+        SignedOps,
+        ledger::verification_mode::StandardMode,
         traits::Hashable,
         transactions::{hash::TxHash, states::Preverified},
     },
@@ -22,19 +23,19 @@ pub mod sdp;
 
 pub type MempoolNetworkAdapter<RuntimeServiceId> =
     lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
-        SignedMantleTx<Preverified>,
-        <SignedMantleTx<Preverified> as Hashable>::Hash,
+        SignedOps<Preverified, StandardMode>,
+        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
         RuntimeServiceId,
     >;
 
 pub type MempoolRocksStorageAdapter = RocksStorageAdapter<
-    SignedMantleTx<Preverified>,
-    <SignedMantleTx<Preverified> as Hashable>::Hash,
+    SignedOps<Preverified, StandardMode>,
+    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
 >;
 
 pub type MempoolPool<RuntimeServiceId> = Mempool<
     HeaderId,
-    SignedMantleTx<Preverified>,
+    SignedOps<Preverified, StandardMode>,
     TxHash,
     MempoolRocksStorageAdapter,
     RuntimeServiceId,
@@ -51,24 +52,24 @@ pub type TimeService<RuntimeServiceId> =
     lb_time_service::TimeService<NtpTimeBackend, RuntimeServiceId>;
 
 pub type MempoolAdapter<RuntimeServiceId> = lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
-    SignedMantleTx<Preverified>,
-    <SignedMantleTx<Preverified> as Hashable>::Hash,
+    SignedOps<Preverified, StandardMode>,
+    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
     RuntimeServiceId,
 >;
 
 pub type MempoolBackend<RuntimeServiceId> = Mempool<
     HeaderId,
-    SignedMantleTx<Preverified>,
-    <SignedMantleTx<Preverified> as Hashable>::Hash,
+    SignedOps<Preverified, StandardMode>,
+    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
     RocksStorageAdapter<
-        SignedMantleTx<Preverified>,
-        <SignedMantleTx<Preverified> as Hashable>::Hash,
+        SignedOps<Preverified, StandardMode>,
+        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
     >,
     RuntimeServiceId,
 >;
 
 pub type CryptarchiaService<RuntimeServiceId> = CryptarchiaConsensus<
-    SignedMantleTx<Preverified>,
+    SignedOps<Preverified, StandardMode>,
     RocksBackend,
     NtpTimeBackend,
     RuntimeServiceId,
@@ -76,7 +77,7 @@ pub type CryptarchiaService<RuntimeServiceId> = CryptarchiaConsensus<
 
 pub type ChainNetworkService<RuntimeServiceId> = lb_chain_network_service::ChainNetwork<
     CryptarchiaService<RuntimeServiceId>,
-    LibP2pAdapter<SignedMantleTx<Preverified>, RuntimeServiceId>,
+    LibP2pAdapter<SignedOps<Preverified, StandardMode>, RuntimeServiceId>,
     MempoolBackend<RuntimeServiceId>,
     MempoolAdapter<RuntimeServiceId>,
     NtpTimeBackend,
@@ -89,7 +90,7 @@ pub type KeyManagementService<RuntimeServiceId> =
 pub type WalletService<Cryptarchia, RuntimeServiceId> = lb_wallet_service::WalletService<
     KeyManagementService<RuntimeServiceId>,
     Cryptarchia,
-    SignedMantleTx<Preverified>,
+    SignedOps<Preverified, StandardMode>,
     RocksBackend,
     RuntimeServiceId,
 >;
@@ -108,17 +109,17 @@ pub type CryptarchiaLeaderService<Cryptarchia, ChainNetwork, Wallet, RuntimeServ
 
 pub type SdpMempoolAdapter<RuntimeServiceId> = sdp::mempool::SdpMempoolAdapter<
     lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
-        SignedMantleTx<Preverified>,
+        SignedOps<Preverified, StandardMode>,
         TxHash,
         RuntimeServiceId,
     >,
     Mempool<
         HeaderId,
-        SignedMantleTx<Preverified>,
+        SignedOps<Preverified, StandardMode>,
         TxHash,
         RocksStorageAdapter<
-            SignedMantleTx<Preverified>,
-            <SignedMantleTx<Preverified> as Hashable>::Hash,
+            SignedOps<Preverified, StandardMode>,
+            <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
         >,
         RuntimeServiceId,
     >,
@@ -144,6 +145,8 @@ pub type SdpService<RuntimeServiceId> = lb_sdp_service::SdpService<
 pub type PoWService<RuntimeServiceId> = lb_pow_service::PoWService<
     CryptarchiaService<RuntimeServiceId>,
     BlendService<RuntimeServiceId>,
+    WalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>,
+    NtpTimeBackend,
     RocksBackend,
     RuntimeServiceId,
 >;

@@ -13,8 +13,9 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
+        SignedOps,
         channel::ChannelState,
+        ledger::verification_mode::StandardMode,
         ops::channel::ChannelId,
         traits::Hashable,
         transactions::{hash::TxHash, states::Preverified},
@@ -63,14 +64,14 @@ pub struct BlockWithChainState<Tx> {
 
 pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
     MempoolNetworkAdapter<
-        SignedMantleTx<Preverified>,
-        <SignedMantleTx<Preverified> as Hashable>::Hash,
+        SignedOps<Preverified, StandardMode>,
+        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
         RuntimeServiceId,
     >,
     Mempool<
         HeaderId,
-        SignedMantleTx<Preverified>,
-        <SignedMantleTx<Preverified> as Hashable>::Hash,
+        SignedOps<Preverified, StandardMode>,
+        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
         StorageAdapter,
         RuntimeServiceId,
     >,
@@ -113,8 +114,8 @@ pub async fn mantle_mempool_metrics<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Key = <SignedMantleTx<Preverified> as Hashable>::Hash,
-            Item = SignedMantleTx<Preverified>,
+            Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            Item = SignedOps<Preverified, StandardMode>,
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,
@@ -143,13 +144,13 @@ where
 
 pub async fn mantle_mempool_status<StorageAdapter, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-    items: Vec<<SignedMantleTx<Preverified> as Hashable>::Hash>,
+    items: Vec<<SignedOps<Preverified, StandardMode> as Hashable>::Hash>,
 ) -> Result<Vec<Status>, super::DynError>
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Key = <SignedMantleTx<Preverified> as Hashable>::Hash,
-            Item = SignedMantleTx<Preverified>,
+            Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            Item = SignedOps<Preverified, StandardMode>,
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,

@@ -16,21 +16,21 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        NoteId, Op, OpProof, SignedMantleTx, TxHash, Utxo, Value, VerificationError,
+        NoteId, Op, OpProof, SignedOps, TxHash, Utxo, Value, VerificationError,
         gas::{GasCost, GasOverflow, MainnetGasProfile},
-        ledger::Inputs,
+        ledger::{Inputs, verification_mode::StandardMode},
         ops::{
-            NoOpProof, ZkAndEd25519Proof,
+            NoOpProof, OpRef, ZkAndEd25519Proof,
             channel::{ChannelId, config::ChannelConfigOp, inscribe::InscriptionOp},
             leader_claim::{
                 LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier, VoucherSecret,
             },
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
-        traits::{Hashable as _, MantleTxWithProofs},
+        traits::{Hashable as _, MantleTx, SignedMantleTx},
         transactions::{
-            MantleTxBuilder, MantleTxContext, OpsProofs, TxBuilderError, mantle_tx::MantleTx as _,
-            states::Preverified,
+            MantleTxBuilder, OpProofs, TxBuilderError, states::Preverified,
+            tx_list::ops::OpsContext,
         },
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
@@ -169,12 +169,14 @@ pub enum WalletMsg {
         reward_amount: Value,
         funding_pk: ZkPublicKey,
         max_tx_fee: GasCost,
-        resp_tx: Sender<Result<TipResponse<SignedMantleTx<Preverified>>, WalletServiceError>>,
+        resp_tx:
+            Sender<Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletServiceError>>,
     },
     SignTx {
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-        resp_tx: Sender<Result<TipResponse<SignedMantleTx<Preverified>>, WalletServiceError>>,
+        resp_tx:
+            Sender<Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletServiceError>>,
     },
     SignTxWithEd25519 {
         tx_hash: TxHash,
@@ -190,19 +192,23 @@ pub enum WalletMsg {
         tip: Option<HeaderId>,
         resp_tx: Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
     },
+    GetLeaderAgedNotesInfo {
+        tip: Option<HeaderId>,
+        resp_tx: Sender<Result<TipResponse<LeaderAgedNotesInfo>, WalletServiceError>>,
+    },
     GenerateNewVoucherSecret {
         resp_tx: Sender<Result<VoucherCm, WalletServiceError>>,
     },
     GetClaimableVouchers {
         tip: Option<HeaderId>,
-        resp_tx: Sender<Result<TipResponse<Vec<ClaimableVoucherInfo>>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<ClaimableVouchersInfo>, WalletServiceError>>,
     },
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
     },
     GetTxContext {
         block_id: Option<HeaderId>,
-        resp_tx: Sender<Result<MantleTxContext, WalletServiceError>>,
+        resp_tx: Sender<Result<OpsContext, WalletServiceError>>,
     },
 }
 
@@ -219,7 +225,7 @@ pub struct UtxoWithKeyId {
 }
 
 struct LeaderClaimTx {
-    signed_tx: SignedMantleTx<Preverified>,
+    signed_tx: SignedOps<Preverified, StandardMode>,
     voucher_nullifier: VoucherNullifier,
     funded_notes: Vec<NoteId>,
 }
@@ -238,6 +244,95 @@ pub struct ClaimableVoucherInfo {
     pub nullifier: VoucherNullifier,
 }
 
+/// The vouchers a wallet can claim right now, and what they are worth.
+#[derive(Debug)]
+pub struct ClaimableVouchersInfo {
+    /// Vouchers with a proven path at the queried tip and no claim already in
+    /// flight. Vouchers reserved by a pending claim are excluded.
+    pub vouchers: Vec<ClaimableVoucherInfo>,
+    /// What a single voucher pays out at the queried tip.
+    ///
+    /// The ledger splits the claimable reward pool evenly across every
+    /// unclaimed voucher on the chain, so this is the same for each of
+    /// `vouchers` and it moves as other leaders claim or as a new epoch adds
+    /// to the pool. It is a snapshot, not a guarantee of what a claim
+    /// submitted now will settle for.
+    pub reward_amount: Value,
+    /// `reward_amount` times the number of claimable `vouchers`: what this
+    /// wallet could claim in total at the queried tip.
+    pub total_claimable: Value,
+}
+
+impl ClaimableVouchersInfo {
+    const fn new(vouchers: Vec<ClaimableVoucherInfo>, reward_amount: Value) -> Self {
+        let total_claimable = reward_amount.saturating_mul(vouchers.len() as Value);
+        Self {
+            vouchers,
+            reward_amount,
+            total_claimable,
+        }
+    }
+}
+
+/// One wallet-owned UTXO old enough to take part in the leadership lottery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeaderAgedNoteInfo {
+    pub note_id: NoteId,
+    pub value: Value,
+    /// The wallet address holding the note.
+    pub public_key: ZkPublicKey,
+}
+
+/// The wallet's UTXOs that are eligible to lead at a given tip.
+///
+/// A note is eligible when it is present in the epoch's aged UTXO snapshot —
+/// the same stake distribution the leadership proof is built against — and its
+/// public key is one the wallet holds a key for. An empty `notes` means this
+/// node cannot win a slot at that tip: either it owns no notes, or none of
+/// them have aged into the current epoch's snapshot yet.
+///
+/// The set is reported unfiltered. The leader service additionally skips the
+/// faucet UTXO when a `faucet_pk` is configured, which only matters on a
+/// faucet node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaderAgedNotesInfo {
+    pub notes: Vec<LeaderAgedNoteInfo>,
+    /// Total value staked across `notes`, saturating.
+    pub total_value: Value,
+}
+
+impl LeaderAgedNotesInfo {
+    /// Number of eligible notes.
+    #[must_use]
+    pub const fn count(&self) -> usize {
+        self.notes.len()
+    }
+}
+
+impl From<Vec<UtxoWithKeyId>> for LeaderAgedNotesInfo {
+    fn from(utxos: Vec<UtxoWithKeyId>) -> Self {
+        Self::from_iter(utxos.iter().map(|UtxoWithKeyId { utxo, .. }| utxo))
+    }
+}
+
+impl<'a> FromIterator<&'a Utxo> for LeaderAgedNotesInfo {
+    fn from_iter<I: IntoIterator<Item = &'a Utxo>>(utxos: I) -> Self {
+        let mut total_value: Value = 0;
+        let notes = utxos
+            .into_iter()
+            .map(|utxo| {
+                total_value = total_value.saturating_add(utxo.note.value);
+                LeaderAgedNoteInfo {
+                    note_id: utxo.id(),
+                    value: utxo.note.value,
+                    public_key: utxo.note.pk,
+                }
+            })
+            .collect();
+        Self { notes, total_value }
+    }
+}
+
 impl WalletMsg {
     /// Returns [`HeaderId`] of the tip if the message is associated
     /// with a specific tip.
@@ -248,6 +343,7 @@ impl WalletMsg {
             | Self::FundTx { tip, .. }
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
+            | Self::GetLeaderAgedNotesInfo { tip, .. }
             | Self::GetClaimableVouchers { tip, .. }
             | Self::GetTxContext { block_id: tip, .. } => *tip,
             Self::BuildLeaderClaimTx { tip, .. } => Some(*tip),
@@ -313,7 +409,14 @@ impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceCore<RuntimeService
     for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 where
     Kms: KmsServiceData<Backend = KmsBackend> + Send + Sync,
-    Tx: MantleTxWithProofs + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static,
+    Tx: SignedMantleTx<Preverified, StandardMode>
+        + Send
+        + Sync
+        + Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
@@ -470,7 +573,14 @@ impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
     WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 where
     Kms: KmsServiceData<Backend = KmsBackend>,
-    Tx: MantleTxWithProofs + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static,
+    Tx: SignedMantleTx<Preverified, StandardMode>
+        + Send
+        + Sync
+        + Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
@@ -705,7 +815,21 @@ where
                 }
             }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
-                Self::get_leader_aged_notes(tip, resp_tx, state.wallet(), cryptarchia).await;
+                let response = Self::leader_aged_notes_at(tip, state.wallet(), cryptarchia).await;
+                if resp_tx.send(response).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to GetLeaderAgedNotes");
+                }
+            }
+            WalletMsg::GetLeaderAgedNotesInfo { tip, resp_tx } => {
+                let response = Self::leader_aged_notes_at(tip, state.wallet(), cryptarchia)
+                    .await
+                    .map(|TipResponse { tip, response }| TipResponse {
+                        tip,
+                        response: LeaderAgedNotesInfo::from(response),
+                    });
+                if resp_tx.send(response).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to GetLeaderAgedNotesInfo");
+                }
             }
             WalletMsg::GenerateNewVoucherSecret { resp_tx } => {
                 Self::generate_new_voucher_secret(
@@ -924,54 +1048,55 @@ where
         tip_leader: LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         wallet: &Wallet,
-    ) -> Result<SignedMantleTx<Preverified>, WalletServiceError> {
+    ) -> Result<SignedOps<Preverified, StandardMode>, WalletServiceError> {
         // TODO: Maybe Unverified?
         // Extract input public keys before building the transaction
         let mut channel_multi_sig_proofs = tx_builder.channel_multi_sig_proofs().clone();
         let mantle_tx = tx_builder.clone().build()?;
         let tx_hash = mantle_tx.hash();
 
-        let mut ops_proofs = OpsProofs::empty();
-        for (i, op) in mantle_tx.ops().iter().enumerate() {
-            let proof = match op {
-                Op::ChannelInscribe(inscribe_op) => {
+        let mut op_proofs = OpProofs::empty();
+        for (i, op) in mantle_tx.op_refs().into_iter().enumerate() {
+            let op_proof = match op {
+                OpRef::ChannelInscribe(inscribe_op) => {
                     Self::sign_inscription(tx_hash, inscribe_op, kms).await?
                 }
-                Op::ChannelConfig(set_keys_op) => {
+                OpRef::ChannelConfig(set_keys_op) => {
                     Self::sign_channel_set_key(tx_hash, set_keys_op, &tip_leader, kms).await?
                 }
-                Op::ChannelDeposit(deposit_op) => {
+                OpRef::ChannelDeposit(deposit_op) => {
                     Self::sign_channel_deposit(tx_hash, deposit_op.inputs.clone(), kms, &tip_leader)
                         .await?
                 }
-                Op::ChannelWithdraw(_) | Op::ChannelTransfer(_) => {
+                OpRef::ChannelWithdraw(_) | OpRef::ChannelTransfer(_) => {
                     let proof = channel_multi_sig_proofs
                         .remove(&i)
                         .ok_or(WalletServiceError::ChannelMultiSigProofNotFound(i))?;
                     OpProof::ChannelMultiSigProof(proof)
                 }
-                Op::SDPDeclare(declare_op) => {
+                OpRef::SDPDeclare(declare_op) => {
                     Self::sign_sdp_declare(tx_hash, declare_op, &tip_leader, kms).await?
                 }
-                Op::SDPWithdraw(withdraw_op) => {
+                OpRef::SDPWithdraw(withdraw_op) => {
                     Self::sign_sdp_withdraw(tx_hash, withdraw_op, &tip_leader, kms).await?
                 }
-                Op::SDPActive(active_op) => {
+                OpRef::SDPActive(active_op) => {
                     Self::sign_sdp_active(tx_hash, active_op, &tip_leader, kms).await?
                 }
-                Op::LeaderClaim(claim_op) => {
+                OpRef::LeaderClaim(claim_op) => {
                     Self::sign_leader_claim(tx_hash, claim_op, tip, wallet, kms).await?
                 }
-                Op::Transfer(transfer_op) => {
+                OpRef::Transfer(transfer_op) => {
                     Self::sign_transfer(tx_hash, transfer_op.inputs.clone(), kms, &tip_leader)
                         .await?
                 }
-                Op::ClaimPowReward(_) => OpProof::None(NoOpProof),
+                OpRef::ClaimPowReward(_) => OpProof::None(NoOpProof),
             };
-            ops_proofs.try_push(proof)?;
+            op_proofs.try_push(op_proof)?;
         }
 
-        let signed_mantle_tx = SignedMantleTx::new(mantle_tx, ops_proofs)
+        let signed_mantle_tx = SignedOps::from_parts(mantle_tx, op_proofs)
+            .expect("SignedOps should be valid with the provided proofs.")
             .preverify()
             .expect("Preverification should not fail.");
 
@@ -1064,39 +1189,21 @@ where
         )?)
     }
 
-    async fn get_leader_aged_notes(
+    /// Resolves the wallet-owned UTXOs that are eligible to lead at `tip`
+    /// (or at the current tip when `tip` is `None`), paired with the key ids
+    /// needed to build a leadership proof for them.
+    async fn leader_aged_notes_at(
         tip: Option<HeaderId>,
-        resp_tx: Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
         wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
-    ) {
-        let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
-            Ok(tip) => tip,
-            Err(err) => {
-                Self::send_err(resp_tx, err);
-                return;
-            }
-        };
+    ) -> Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError> {
+        let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
+        let ledger_state = Self::ledger_state_at(tip, cryptarchia).await?;
 
-        let ledger_state = match Self::ledger_state_at(tip, cryptarchia).await {
-            Ok(ledger_state) => ledger_state,
-            Err(err) => {
-                Self::send_err(resp_tx, err);
-                return;
-            }
-        };
-
-        let wallet_state = match wallet.wallet_state_at(tip) {
-            Ok(wallet_state) => wallet_state,
-            Err(err) => {
-                error!(target: LOG_TARGET, err = ?err, "Failed to fetch wallet state");
-                Self::send_err(
-                    resp_tx,
-                    WalletServiceError::FailedToFetchWalletStateForBlock(tip),
-                );
-                return;
-            }
-        };
+        let wallet_state = wallet.wallet_state_at(tip).map_err(|err| {
+            error!(target: LOG_TARGET, err = ?err, "Failed to fetch wallet state");
+            WalletServiceError::FailedToFetchWalletStateForBlock(tip)
+        })?;
 
         let aged_utxos = ledger_state.epoch_state().utxos.utxos();
         let eligible_utxos = wallet_state
@@ -1114,15 +1221,10 @@ where
             })
             .collect();
 
-        if resp_tx
-            .send(Ok(TipResponse {
-                tip,
-                response: eligible_utxos,
-            }))
-            .is_err()
-        {
-            debug!(target: LOG_TARGET, "Failed to respond to GetLeaderAgedNotes");
-        }
+        Ok(TipResponse {
+            tip,
+            response: eligible_utxos,
+        })
     }
 
     /// Derive a new voucher via KMS and store it in [`Wallet`].
@@ -1235,7 +1337,7 @@ where
 
     async fn get_claimable_vouchers(
         tip: Option<HeaderId>,
-        resp_tx: Sender<Result<TipResponse<Vec<ClaimableVoucherInfo>>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<ClaimableVouchersInfo>, WalletServiceError>>,
         state: &ServiceState<'_>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
@@ -1246,16 +1348,31 @@ where
                 return;
             }
         };
+
+        // The per-voucher payout is a property of the ledger at `tip`, not of
+        // the wallet, and it is the same figure the leader claim transaction
+        // is built with.
+        let reward_amount = match Self::ledger_state_at(tip, cryptarchia).await {
+            Ok(ledger_state) => ledger_state.mantle_ledger().leader_reward_amount(),
+            Err(err) => {
+                Self::send_err(resp_tx, err);
+                return;
+            }
+        };
+
         let response = state.claimable_vouchers(tip).map(|vouchers| TipResponse {
             tip,
-            response: vouchers
-                .available
-                .into_iter()
-                .map(|voucher| ClaimableVoucherInfo {
-                    commitment: voucher.commitment,
-                    nullifier: voucher.nullifier,
-                })
-                .collect(),
+            response: ClaimableVouchersInfo::new(
+                vouchers
+                    .available
+                    .into_iter()
+                    .map(|voucher| ClaimableVoucherInfo {
+                        commitment: voucher.commitment,
+                        nullifier: voucher.nullifier,
+                    })
+                    .collect(),
+                reward_amount,
+            ),
         });
 
         if resp_tx.send(response).is_err() {
@@ -1269,7 +1386,7 @@ where
         ledger: LedgerState,
         state: &mut ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<(SignedMantleTx<Preverified>, Vec<NoteId>), WalletServiceError> {
+    ) -> Result<(SignedOps<Preverified, StandardMode>, Vec<NoteId>), WalletServiceError> {
         let context = ledger.tx_context();
         let tx_builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(LeaderClaimOp {
             rewards_root: request.rewards_root,
@@ -1308,7 +1425,7 @@ where
         ledger: LedgerState,
         state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<SignedMantleTx<Preverified>, WalletServiceError> {
+    ) -> Result<SignedOps<Preverified, StandardMode>, WalletServiceError> {
         let context = ledger.tx_context();
         let net_balance = funded_tx_builder.net_balance();
         let gas_cost = funded_tx_builder.minimum_gas_cost::<MainnetGasProfile>(&context)?;
@@ -1518,23 +1635,21 @@ where
             .filter_map(async |header_id| storage_adapter.get_block(header_id).await)
             .collect::<Vec<_>>()
             .await;
-        let claimed_nullifiers: Vec<VoucherNullifier> = immutable_blocks
+
+        immutable_blocks
             .into_iter()
             .flat_map(|block: Block<Tx>| block.into_transactions().into_iter())
-            .flat_map(|tx: Tx| {
-                tx.ops_with_proof()
-                    .map(|(op, _)| op.clone())
-                    .collect::<Vec<_>>()
-            })
+            .collect::<Vec<_>>() // Need to collect to avoid lifetime issues
+            .iter()
+            .flat_map(MantleTx::op_refs)
             .filter_map(|op| {
-                if let Op::LeaderClaim(claim_op) = op {
+                if let OpRef::LeaderClaim(claim_op) = op {
                     Some(claim_op.voucher_nullifier)
                 } else {
                     None
                 }
             })
-            .collect();
-        claimed_nullifiers
+            .collect::<Vec<_>>()
     }
 
     #[expect(
@@ -1629,7 +1744,7 @@ where
 
     async fn get_tx_context(
         block_id: Option<HeaderId>,
-        resp_tx: Sender<Result<MantleTxContext, WalletServiceError>>,
+        resp_tx: Sender<Result<OpsContext, WalletServiceError>>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
         let block_id = match Self::msg_tip_or_latest(block_id, cryptarchia).await {

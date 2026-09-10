@@ -70,6 +70,9 @@ pub struct UserConfig {
     #[serde(default)]
     pub kms: KmsConfig,
     pub wallet: WalletConfig,
+    /// Optional: an omitted section leaves mining on its defaults and
+    /// auto-claim off.
+    #[serde(default)]
     pub pow: PoWConfig,
     #[serde(default)]
     pub tracing: TracingConfig,
@@ -82,7 +85,6 @@ pub struct RequiredValues {
     pub cryptarchia: CryptarchiaConfig,
     pub sdp: SdpConfig,
     pub wallet: WalletConfig,
-    pub pow: PoWConfig,
 }
 
 impl UserConfig {
@@ -93,9 +95,11 @@ impl UserConfig {
             cryptarchia: required_values.cryptarchia,
             sdp: required_values.sdp,
             wallet: required_values.wallet,
-            pow: required_values.pow,
 
             api: ApiConfig::default(),
+            // Mining defaults, auto-claim off: unattended claiming is opt-in
+            // through `pow.auto_claim.targets`.
+            pow: PoWConfig::default(),
             kms: KmsConfig::default(),
             network: NetworkConfig::default(),
             state: StateConfig::default(),
@@ -256,6 +260,13 @@ pub struct BlendArgs {
 
     #[clap(long = "blend-secret-key-id", env = "BLEND_SECRET_KEY_ID")]
     pub blend_secret_key_id: Option<KeyId>,
+
+    #[clap(
+        long = "blend-abstain-on-failure",
+        env = "BLEND_ABSTAIN_ON_FAILURE",
+        default_value_t = false
+    )]
+    pub abstain_on_failure: bool,
 }
 
 #[derive(Parser, Debug, Default, Clone, Copy)]
@@ -461,7 +472,12 @@ pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
         blend_addr,
         blend_signing_key_id,
         blend_secret_key_id,
+        abstain_on_failure,
     } = blend_args;
+
+    if abstain_on_failure {
+        blend.abstain_on_failure();
+    }
 
     if let Some(addr) = blend_addr {
         blend.set_listening_address(addr);

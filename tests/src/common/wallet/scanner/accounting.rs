@@ -2,10 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    NoteId, SignedMantleTx, TxHash, Utxo,
-    ops::Op,
-    traits::Hashable as _,
-    transactions::{mantle_tx::MantleTx as _, states::Unverified},
+    NoteId, SignedOps, TxHash, Utxo, ledger::verification_mode::StandardMode, ops::OpRef,
+    traits::Hashable as _, transactions::states::Unverified,
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 
@@ -106,7 +104,7 @@ impl ScannerAccounting {
     /// Record transaction hashes from a block without changing wallet UTXOs.
     pub fn observe_block_transactions(&mut self, block: &ApiBlock) {
         self.observed_transaction_hashes
-            .extend(block.transactions.iter().map(SignedMantleTx::hash));
+            .extend(block.transactions.iter().map(SignedOps::hash));
     }
 
     #[must_use]
@@ -146,10 +144,10 @@ impl ScannerAccounting {
         self.tracked_wallets.len()
     }
 
-    fn apply_transaction(&mut self, tx: &SignedMantleTx<Unverified>) {
-        for op in tx.mantle_tx().ops() {
+    fn apply_transaction(&mut self, tx: &SignedOps<Unverified, StandardMode>) {
+        for op in tx.op_refs() {
             match op {
-                Op::Transfer(transfer) => {
+                OpRef::Transfer(transfer) => {
                     for note_id in transfer.inputs.iter().copied() {
                         self.remove_spent_note(note_id);
                     }
@@ -157,7 +155,7 @@ impl ScannerAccounting {
                         self.add_owned_output(utxo);
                     }
                 }
-                Op::ChannelDeposit(deposit) => {
+                OpRef::ChannelDeposit(deposit) => {
                     // The deposit consumes its inputs and re-creates them as
                     // channel notes under a new NoteId. The re-created notes
                     // are channel-owned, which the wallet doesn't track, so
@@ -166,22 +164,22 @@ impl ScannerAccounting {
                         self.remove_spent_note(note_id);
                     }
                 }
-                Op::SDPDeclare(declaration) => {
+                OpRef::SDPDeclare(declaration) => {
                     self.lock_note(declaration.service_note_id);
                 }
-                Op::SDPWithdraw(withdrawal) => {
+                OpRef::SDPWithdraw(withdrawal) => {
                     self.unlock_note(withdrawal.service_note_id);
                 }
                 // `ChannelWithdraw` and `ChannelTransfer` only move notes in and
                 // out of a channel's ownership, which the wallet doesn't track.
                 // TODO: observe released notes once channel notes are tracked.
-                Op::ChannelWithdraw(_)
-                | Op::ChannelTransfer(_)
-                | Op::ChannelConfig(_)
-                | Op::ChannelInscribe(_)
-                | Op::SDPActive(_)
-                | Op::LeaderClaim(_)
-                | Op::ClaimPowReward(_) => {}
+                OpRef::ChannelWithdraw(_)
+                | OpRef::ChannelTransfer(_)
+                | OpRef::ChannelConfig(_)
+                | OpRef::ChannelInscribe(_)
+                | OpRef::SDPActive(_)
+                | OpRef::LeaderClaim(_)
+                | OpRef::ClaimPowReward(_) => {}
             }
         }
     }
@@ -224,15 +222,15 @@ mod tests {
     use lb_core::{
         header::{ContentId, HeaderId},
         mantle::{
-            Note, RawMantleTx, SignedMantleTx, Utxo,
-            ledger::{Inputs, Outputs},
+            Note, SignedOps, Utxo,
+            ledger::{Inputs, Outputs, verification_mode::StandardMode},
             ops::{
                 Op,
                 channel::{ChannelId, deposit::DepositOp},
                 transfer::TransferOp,
             },
             traits::Hashable as _,
-            transactions::{OpsProofs, states::Unverified},
+            transactions::{Ops, states::Unverified},
         },
         proofs::leader_proof::Groth16LeaderProof,
         sdp::{DeclarationMessage, Locator, ProviderId, ServiceType, WithdrawMessage},
@@ -256,7 +254,7 @@ mod tests {
         Utxo::new([output_index as u8; 32], output_index, Note::new(value, pk))
     }
 
-    fn block(seed: u8, txs: Vec<SignedMantleTx<Unverified>>) -> ApiBlock {
+    fn block(seed: u8, txs: Vec<SignedOps<Unverified, StandardMode>>) -> ApiBlock {
         ApiBlock {
             header: ApiHeader {
                 id: HeaderId::from([seed; 32]),
@@ -272,17 +270,12 @@ mod tests {
 
     /// A transaction creating `outputs`. A channel withdraw no longer creates
     /// notes, so a transfer is what the accounting observes owned outputs from.
-    fn transfer_tx(outputs: [Note; 2]) -> SignedMantleTx<Unverified> {
-        SignedMantleTx::new(
-            RawMantleTx(
-                [Op::Transfer(TransferOp::new(
-                    Inputs::empty(),
-                    Outputs::new(outputs),
-                ))]
-                .into(),
-            ),
-            OpsProofs::empty(),
-        )
+    fn transfer_tx(outputs: [Note; 2]) -> SignedOps<Unverified, StandardMode> {
+        let ops = Ops::from([Op::Transfer(TransferOp::new(
+            Inputs::empty(),
+            Outputs::new(outputs),
+        ))]);
+        SignedOps::from_ops_with_placeholder_proofs(ops)
     }
 
     fn sdp_declaration(service_note_id: lb_core::mantle::NoteId) -> DeclarationMessage {
@@ -350,17 +343,12 @@ mod tests {
     #[test]
     fn accounting_removes_spent_utxos() {
         let owned = utxo(10, 0, pk(1));
-        let spend = SignedMantleTx::new(
-            RawMantleTx(
-                [Op::ChannelDeposit(DepositOp {
-                    channel_id: ChannelId::from([0; 32]),
-                    inputs: Inputs::from([owned.id()]),
-                    metadata: b"deposit".into(),
-                })]
-                .into(),
-            ),
-            OpsProofs::empty(),
-        );
+        let ops = Ops::from([Op::ChannelDeposit(DepositOp {
+            channel_id: ChannelId::from([0; 32]),
+            inputs: Inputs::from([owned.id()]),
+            metadata: b"deposit".into(),
+        })]);
+        let spend = SignedOps::from_ops_with_placeholder_proofs(ops);
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[owned])
                 .expect("accounting should build");
@@ -384,21 +372,14 @@ mod tests {
     fn sdp_declare_hides_and_withdraw_restores_locked_utxo() {
         let locked = utxo(10, 0, pk(1));
         let declaration = sdp_declaration(locked.id());
-        let declare_tx = SignedMantleTx::new(
-            RawMantleTx([Op::SDPDeclare(declaration.clone())].into()),
-            OpsProofs::empty(),
-        );
-        let withdraw_tx = SignedMantleTx::new(
-            RawMantleTx(
-                [Op::SDPWithdraw(WithdrawMessage {
-                    declaration_id: declaration.id(),
-                    service_note_id: locked.id(),
-                    nonce: 0,
-                })]
-                .into(),
-            ),
-            OpsProofs::empty(),
-        );
+        let declare_ops = Ops::from([Op::SDPDeclare(declaration.clone())]);
+        let declare_tx = SignedOps::from_ops_with_placeholder_proofs(declare_ops);
+        let withdraw_ops = Ops::from([Op::SDPWithdraw(WithdrawMessage {
+            declaration_id: declaration.id(),
+            service_note_id: locked.id(),
+            nonce: 0,
+        })]);
+        let withdraw_tx = SignedOps::from_ops_with_placeholder_proofs(withdraw_ops);
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[locked])
                 .expect("accounting should build");

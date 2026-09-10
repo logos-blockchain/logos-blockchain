@@ -112,16 +112,6 @@ Approximately 3.5h (two epochs) after you receive funds from the faucet, your no
 
 ---
 
-## 📝 Inscribing
-
-Start publishing messages to the blockchain using the built in text sequencer:
-
-```bash
-./logos-blockchain-node inscribe
-```
-
----
-
 ## 🛟 Troubleshooting
 
 Having issues? Reach out to the Logos Blockchain team on [Discord][testnet-discord-public] or check the [testnet Notion page][release-notion] for FAQs and up-to-date instructions.

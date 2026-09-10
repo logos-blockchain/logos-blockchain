@@ -9,16 +9,19 @@ use lb_chain_service::ChainServiceInfo;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        NoteId, SignedMantleTx,
-        transactions::{hash::TxHash, states::VerificationState},
+        NoteId, SignedOps,
+        ledger::verification_mode::StandardMode,
+        transactions::{genesis_tx::ChainId, hash::TxHash, states::VerificationState},
     },
     sdp::{Declaration, DeclarationId, Locator},
 };
 use lb_http_api_common::{
+    TimeInfo,
     bodies::{
         blend::JoinBlendRequestBody,
         mantle::GasPricesResponseBody,
         wallet::{
+            aged_notes::LeaderAgedNotesResponseBody,
             balance::WalletBalanceResponseBody,
             fund::{WalletFundRequestBody, WalletFundResponseBody},
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
@@ -72,10 +75,41 @@ impl NodeHttpClient {
         }
     }
 
+    /// The chain ID the node was deployed on.
+    pub async fn chain_id(&self) -> Result<ChainId, Error> {
+        self.with_timeout(
+            "Chain ID request",
+            self.http_client.chain_id(self.base_url.clone()),
+        )
+        .await
+    }
+
+    /// The wallet notes aged enough to take part in the leadership lottery.
+    /// Empty when this node cannot currently win a slot.
+    pub async fn leader_aged_notes(
+        &self,
+        tip: Option<HeaderId>,
+    ) -> Result<LeaderAgedNotesResponseBody, Error> {
+        self.with_timeout(
+            "Leader aged notes request",
+            self.http_client
+                .get_leader_aged_notes(self.base_url.clone(), tip),
+        )
+        .await
+    }
+
     pub async fn consensus_info(&self) -> Result<ChainServiceInfo, Error> {
         self.with_timeout(
             "Consensus info request",
             self.http_client.consensus_info(self.base_url.clone()),
+        )
+        .await
+    }
+
+    pub async fn time_info(&self) -> Result<TimeInfo, Error> {
+        self.with_timeout(
+            "Time info request",
+            self.http_client.time_info(self.base_url.clone()),
         )
         .await
     }
@@ -166,7 +200,10 @@ impl NodeHttpClient {
         Ok(Box::pin(stream))
     }
 
-    pub async fn submit_transaction<State>(&self, tx: &SignedMantleTx<State>) -> Result<(), Error>
+    pub async fn submit_transaction<State>(
+        &self,
+        tx: &SignedOps<State, StandardMode>,
+    ) -> Result<(), Error>
     where
         State: VerificationState + Send + Sync + Clone + 'static,
     {
@@ -180,7 +217,7 @@ impl NodeHttpClient {
 
     pub async fn blend_transaction<State>(
         &self,
-        tx: &SignedMantleTx<State>,
+        tx: SignedOps<State, StandardMode>,
     ) -> Result<TxHash, Error>
     where
         State: VerificationState + Send + Sync + Clone + 'static,
@@ -188,7 +225,7 @@ impl NodeHttpClient {
         self.with_timeout(
             "Blend transaction request",
             self.http_client
-                .blend_transaction(self.base_url.clone(), tx.clone()),
+                .blend_transaction(self.base_url.clone(), tx),
         )
         .await
     }
@@ -271,16 +308,23 @@ impl NodeHttpClient {
     }
 
     /// Submits the mined-but-unclaimed `PoW` rewards as a single reward-claim
-    /// transaction, returning its hash. Returns `None` when there is nothing
-    /// to claim yet.
-    pub async fn claim_pow_rewards(&self) -> Result<Option<TxHash>, Error> {
+    /// transaction paid to `claim_address`, returning its hash. Returns `None`
+    /// when there is nothing to claim yet.
+    ///
+    /// A `None` address defers to the node's auto-claim configuration, which
+    /// fails when the node has no target below its threshold.
+    pub async fn claim_pow_rewards(
+        &self,
+        claim_address: Option<ZkPublicKey>,
+    ) -> Result<Option<TxHash>, Error> {
         let request_url = Self::join_path(&self.base_url, POW_CLAIM)?;
+        let body = PowClaimRequestBody { claim_address };
 
         let response: PowClaimResponseBody = self
             .with_timeout(
                 "PoW claim request",
                 self.http_client
-                    .post::<(), PowClaimResponseBody>(request_url, &()),
+                    .post::<PowClaimRequestBody, PowClaimResponseBody>(request_url, &body),
             )
             .await?;
 
@@ -376,6 +420,13 @@ impl NodeHttpClient {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct DialPeerRequestBody {
     addr: Multiaddr,
+}
+
+/// Mirrors the node's `PoWClaimRequestBody`: the key the claimed rewards are
+/// paid to, or `null` to defer to the node's auto-claim configuration.
+#[derive(Clone, Debug, Serialize)]
+struct PowClaimRequestBody {
+    claim_address: Option<ZkPublicKey>,
 }
 
 /// Mirrors the node's `PoWClaimResponseBody`: the hash of the submitted

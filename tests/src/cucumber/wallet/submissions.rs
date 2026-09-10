@@ -3,12 +3,16 @@
 //! This adapter resolves scenario wallets, reads spendable state, applies
 //! fee reserves, submits signed transactions, and records reservations.
 
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use lb_core::mantle::{
-    SignedMantleTx, TxGasCalculator as _, TxHash, Utxo,
-    gas::MainnetGasProfile,
-    transactions::{GasPrices, OpsProofs, states::Preverified},
+    SignedOps, TxHash, Utxo,
+    gas::{MainnetGasProfile, TxGasCalculator as _},
+    ledger::verification_mode::StandardMode,
+    transactions::{GasPrices, OpProofs, states::Preverified, tx_list::ops::OpsGasContext},
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -77,7 +81,7 @@ impl SignedUserWalletSubmission {
         self.submission.tx_hash()
     }
 
-    pub(crate) const fn signed_tx(&self) -> &SignedMantleTx<Preverified> {
+    pub(crate) const fn signed_tx(&self) -> &SignedOps<Preverified, StandardMode> {
         self.submission.signed_tx()
     }
 
@@ -359,12 +363,18 @@ async fn validate_signed_submissions_against_live_prices(
             message: format!("live fee validation gas price query failed: {source}"),
         })?;
     for submission in signed_submissions {
-        let required_fee = submission
-            .signed_tx()
-            .total_gas_cost::<MainnetGasProfile>(&GasPrices {
+        let gas_context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices {
                 execution_base_gas_price: prices.execution_base_gas_price,
                 storage_gas_price: prices.storage_gas_price,
-            })
+            },
+        );
+        let required_fee = submission
+            .signed_tx()
+            .op_refs()
+            .total_gas_cost::<MainnetGasProfile>(&gas_context)
             .map_err(|source| StepError::LogicalError {
                 message: format!("live fee validation failed: {source}"),
             })?
@@ -591,7 +601,7 @@ pub async fn submit_prepared_user_wallet_transaction(
     world: &mut CucumberWorld,
     step: &str,
     prepared: PreparedUserWalletSubmission,
-    extra_op_proofs: OpsProofs,
+    extra_op_proofs: OpProofs,
     best_node_info: Option<&BestNodeInfo>,
     in_memory_available_utxos: Option<&mut WalletUtxos>,
 ) -> Result<TxHash, StepError> {
@@ -626,7 +636,7 @@ pub async fn submit_prepared_user_wallet_transaction(
 pub(crate) fn sign_prepared_user_wallet_transaction(
     step: &str,
     prepared: PreparedUserWalletSubmission,
-    extra_op_proofs: OpsProofs,
+    extra_op_proofs: OpProofs,
 ) -> Result<SignedUserWalletSubmission, StepError> {
     let PreparedUserWalletSubmission { wallet, submission } = prepared;
     let signed_submission = submission
@@ -656,7 +666,7 @@ fn finalize_reserved_user_wallet_submission(
     sign_prepared_user_wallet_transaction(
         step,
         PreparedUserWalletSubmission { wallet, submission },
-        OpsProofs::empty(),
+        OpProofs::empty(),
     )
 }
 
@@ -844,7 +854,7 @@ async fn submit_user_wallet_transaction(
         world,
         step,
         prepared,
-        OpsProofs::empty(),
+        OpProofs::empty(),
         best_node_info,
         in_memory_available_utxos,
     )
@@ -904,6 +914,9 @@ fn wallet_transaction_error(error: WalletTransactionError) -> StepError {
             message: error.to_string(),
         },
         WalletTransactionError::BoundedError(error) => StepError::BoundedError(error),
+        WalletTransactionError::SignedOpsError(error) => StepError::LogicalError {
+            message: error.to_string(),
+        },
     }
 }
 

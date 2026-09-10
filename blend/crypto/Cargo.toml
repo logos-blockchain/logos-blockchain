@@ -17,7 +17,8 @@ blake2         = { workspace = true }
 lb-groth16     = { workspace = true }
 lb-poq         = { workspace = true }
 lb-poseidon2   = { workspace = true }
-lb-utils       = { features = ["rng"], workspace = true }
+rand           = { features = ["getrandom"], workspace = true }
+rand_chacha    = { workspace = true }
 rs-merkle-tree = { features = ["memory_store"], workspace = true }
 thiserror      = { workspace = true }
 

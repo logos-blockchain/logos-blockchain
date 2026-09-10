@@ -1,11 +1,12 @@
 use std::time::SystemTime;
 
 use lb_core::header::HeaderId;
+use lb_log_targets::chain;
 use tracing::warn;
 
-use crate::{
-    BootstrapConfig, OfflineGracePeriodConfig, bootstrap::LOG_TARGET, states::LastEngineState,
-};
+use crate::{BootstrapConfig, OfflineGracePeriodConfig, states::LastEngineState};
+
+const LOG_TARGET: &str = chain::service::bootstrap::OFFLINE_GRACE_PERIOD;
 
 pub fn choose_engine_state(
     lib_id: HeaderId,

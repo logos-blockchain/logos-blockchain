@@ -25,7 +25,7 @@ lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-log-targets                = { workspace = true }
-lb-utils                      = { features = ["rng", "tokio"], workspace = true }
+lb-utils                      = { features = ["tokio"], workspace = true }
 rand                          = { features = ["alloc"], workspace = true }
 rayon                         = { workspace = true }
 tokio                         = { workspace = true }

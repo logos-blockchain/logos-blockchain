@@ -11,11 +11,11 @@ use std::panic::set_hook;
 
 use color_eyre::eyre::{Result, eyre};
 pub use lb_blend_service::core::backends::libp2p::Libp2pBlendBackend as BlendBackend;
-use lb_core::mantle::transactions::states::Preverified;
+use lb_core::mantle::{ledger::verification_mode::StandardMode, transactions::states::Preverified};
 pub use lb_core::{
     codec,
     header::HeaderId,
-    mantle::{SignedMantleTx, traits::Hashable, transactions::hash::TxHash},
+    mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 pub use lb_storage_service::backends::{
@@ -65,6 +65,8 @@ pub(crate) type NetworkService =
 
 pub(crate) type BlendCoreService = generic_services::blend::BlendCoreService<RuntimeServiceId>;
 pub(crate) type BlendEdgeService = generic_services::blend::BlendEdgeService<RuntimeServiceId>;
+pub(crate) type BlendBroadcastService =
+    generic_services::blend::BlendBroadcastService<RuntimeServiceId>;
 pub(crate) type BlendService = generic_services::blend::BlendService<RuntimeServiceId>;
 
 pub(crate) type BlockBroadcastService =
@@ -99,7 +101,7 @@ pub type ApiService = lb_api_service::ApiService<
     AxumBackend<
         NtpTimeBackend,
         ApiStorageAdapter<RuntimeServiceId>,
-        RocksStorageAdapter<SignedMantleTx<Preverified>, TxHash>,
+        RocksStorageAdapter<SignedOps<Preverified, StandardMode>, TxHash>,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
         SdpRecoveryBackend<RuntimeServiceId>,
@@ -118,6 +120,7 @@ pub struct LogosBlockchain {
     blend: BlendService,
     blend_core: BlendCoreService,
     blend_edge: BlendEdgeService,
+    blend_broadcast: BlendBroadcastService,
     mempool: MempoolService,
     cryptarchia: CryptarchiaService,
     chain_network: ChainNetworkService,
@@ -139,6 +142,11 @@ pub fn run_node_from_config(
     config: RunConfig,
     handle: Option<runtime::Handle>,
 ) -> Result<Overwatch<RuntimeServiceId>, DynError> {
+    // Read before the deployment settings are consumed piecewise below. The
+    // chain ID is fixed by the deployment, so the API backend is handed it up
+    // front rather than querying a service for a value that cannot change.
+    let chain_id = config.deployment.chain_id();
+
     let blend_rewards_params = config.deployment.blend_reward_params();
 
     // The PoW mining service must use the same acceptance window as consensus;
@@ -213,6 +221,7 @@ pub fn run_node_from_config(
 
     let api_config = ApiConfig {
         user: config.user.api,
+        chain_id,
     };
 
     let http_config = api_config.backend_settings();
@@ -222,9 +231,10 @@ pub fn run_node_from_config(
     let app = OverwatchRunner::<LogosBlockchain>::run(
         LogosBlockchainServiceSettings {
             network: network_service_config,
-            blend: blend_config,
+            blend: blend_config.clone(),
             blend_core: blend_core_config,
             blend_edge: blend_edge_config,
+            blend_broadcast: blend_config.into(),
             block_broadcast: (),
             mempool: mempool_service_config,
             cryptarchia: chain_service_config,
@@ -252,9 +262,13 @@ pub async fn get_services_to_start(
 ) -> Result<Vec<RuntimeServiceId>, OverwatchError> {
     let mut service_ids = app.handle().retrieve_service_ids().await?;
 
-    // Exclude core and edge blend services, which will be started
-    // on demand by the blend service.
-    let blend_inner_service_ids = [RuntimeServiceId::BlendCore, RuntimeServiceId::BlendEdge];
+    // Exclude core, edge and broadcast blend services, which will be started
+    // on demand by the blend orchestrator service.
+    let blend_inner_service_ids = [
+        RuntimeServiceId::BlendCore,
+        RuntimeServiceId::BlendEdge,
+        RuntimeServiceId::BlendBroadcast,
+    ];
     service_ids.retain(|value| !blend_inner_service_ids.contains(value));
 
     // Start tracing first so the global subscriber is installed before the

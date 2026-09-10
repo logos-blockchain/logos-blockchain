@@ -1,5 +1,6 @@
 use core::time::Duration;
 
+use lb_core::mantle::transactions::genesis_tx::ChainId;
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,12 @@ pub struct DeploymentSettings {
 }
 
 impl DeploymentSettings {
+    /// The chain this deployment targets, read off the genesis inscription.
+    #[must_use]
+    pub fn chain_id(&self) -> ChainId {
+        self.cryptarchia.chain_id()
+    }
+
     #[must_use]
     pub const fn blend_round_duration(&self) -> Duration {
         self.blend.round_duration(&self.time.slot_duration)
@@ -56,5 +63,24 @@ mod tests {
         let settings = DeploymentSettings::default();
         let as_str = serde_yaml::to_string(&settings).unwrap();
         let _recovered: DeploymentSettings = serde_yaml::from_str(&as_str).unwrap();
+    }
+
+    #[test]
+    fn genesis_epoch_reward_matches_the_payout_rate() {
+        // `epoch_reward_genesis` is not free: it must be the `sigma_e` the
+        // first epoch boundary would compute for the genesis pool, or genesis
+        // and steady state disagree. That is
+        // `W0 * rate_num / (rate_den * target_claim_per_block * N_b)`, and
+        // `N_b` follows from the consensus schedule — so changing
+        // `security_param` or `slot_activation_coeff` moves this value too.
+        let settings = DeploymentSettings::default();
+        let reward = &settings.cryptarchia.pow_config.reward;
+        let denominator = u128::from(reward.rate_den.get())
+            * u128::from(reward.target_claim_per_block.get())
+            * u128::from(settings.cryptarchia.expected_blocks_per_epoch().get());
+        assert_eq!(
+            u128::from(reward.epoch_reward_genesis),
+            u128::from(reward.reward_pool_genesis) * u128::from(reward.rate_num) / denominator,
+        );
     }
 }

@@ -1,3 +1,7 @@
+use lb_log_targets::ledger;
+
+const LOG_TARGET: &str = ledger::cryptarchia::STAKE;
+
 pub const PRECISION: u64 = 1000;
 
 #[derive(Copy, Clone, serde::Serialize, serde::Deserialize)]
@@ -47,6 +51,9 @@ impl StakeInference {
             (total_stake_estimate_with_precision - correction) / i128::from(PRECISION);
 
         tracing::debug!(
+            target: LOG_TARGET,
+            diagnostic = "blend_tsi_outage",
+            event = "tsi_calculated",
             old_total_stake = total_stake_estimate,
             new_total_stake = new_total_stake_estimate,
             measured_density = measured_block_density,

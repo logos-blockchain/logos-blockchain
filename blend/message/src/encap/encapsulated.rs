@@ -11,6 +11,7 @@ use lb_codec::{BinaryDecode, BinaryEncode, DecodeError, take};
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, SharedKey, UnsecuredEd25519Key,
 };
+use lb_log_targets::blend;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
@@ -32,6 +33,8 @@ use crate::{
         public_header::VerifiedPublicHeader,
     },
 };
+
+const LOG_TARGET: &str = blend::message::ROOT;
 
 pub type MessageIdentifier = ZkHash;
 
@@ -344,7 +347,7 @@ where
 {
     verify_last_reconstructed_public_header(public_header, private_header, payload)?;
     // Verify the proof of quota in the reconstructed public header
-    tracing::trace!("Verifying proof of quota of intermediate reconstructed public header.");
+    tracing::trace!(target: LOG_TARGET, "Verifying proof of quota of intermediate reconstructed public header.");
     public_header.verify_proof_of_quota(verifier)?;
     Ok(())
 }

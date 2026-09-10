@@ -19,6 +19,7 @@ use lb_key_management_system_service::{
     operators::zk::leader::BuildPrivateInputsWithLeaderKey,
 };
 use lb_ledger::{EpochState, UtxoTree};
+use lb_log_targets::chain;
 use lb_time_service::{EpochSlotTickStream, SlotTick, TimeServiceMessage};
 use lb_utils::tokio::task::spawn_blocking;
 use lb_wallet_service::{
@@ -33,10 +34,12 @@ use tokio::{
 };
 
 use crate::{
-    LOG_TARGET, WinningPolEpochSlots, WinningPolSlotStream, WinningSlotFuture,
+    WinningPolEpochSlots, WinningPolSlotStream, WinningSlotFuture,
     kms::{KmsAdapter, PreloadKmsService},
     metrics,
 };
+
+const LOG_TARGET: &str = chain::leader::LEADERSHIP;
 
 /// Return a leadership proof and signing key if the current slot is a winning
 /// one for any of the eligible UTXOs, for use in a block proposal.
@@ -728,14 +731,13 @@ mod pol_tests {
         RewardPoWConfig {
             reward_pool_genesis: 1_000_000_000,
             epoch_reward_genesis: 1_000_000,
-            initial_difficulty_seed: 1_000,
+            initial_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: core::num::NonZeroU64::new(10).unwrap(),
             target_claims_per_block: 100,
             rate_num: 0,
             rate_den: core::num::NonZeroU64::MIN,
             target_claim_per_block: core::num::NonZeroU64::MIN,
-            expected_blocks_per_epoch: core::num::NonZeroU64::MIN,
             slot_window: core::num::NonZeroU64::new(100).unwrap(),
         }
     }
