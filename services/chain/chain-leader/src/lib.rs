@@ -5,10 +5,11 @@ mod leadership;
 mod mempool;
 mod metrics;
 mod relays;
+mod tx_selection;
 mod wallet;
 
 use core::fmt::Debug;
-use std::{fmt::Display, iter, pin::Pin, time::Duration};
+use std::{fmt::Display, pin::Pin, time::Duration};
 
 use futures::{Stream, StreamExt as _, stream};
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
@@ -23,7 +24,6 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         OpRef, SignedOps,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         traits::{Hashable, MantleTx, SignedMantleTx, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
@@ -56,6 +56,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
+use tx_selection::{TransactionSelection, select_transactions};
 
 pub use crate::wallet::LeaderWalletConfig;
 use crate::{
@@ -669,66 +670,13 @@ where
                 &uncle_headers.slots(),
                 ledger_config,
             )?;
-
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
-        let mut pending: Vec<_> = tx_stream.collect().await;
-
-        let mut valid_txs = Vec::new();
-
-        // A transaction may only become valid once another transaction it depends
-        // on has already been applied. Repeatedly attempt to apply the pending
-        // transactions, retrying the full set of failures each round, while a
-        // round keeps adding new transactions to the block.
-        let mut applied_any = true;
-        while applied_any {
-            applied_any = false;
-            let mut still_pending = Vec::with_capacity(pending.len());
-
-            for tx in pending {
-                match ledger_state
-                    .clone()
-                    .try_apply_contents::<_, HeaderId, MainnetGasProfile>(
-                        ledger_config,
-                        // Tx is cloned eagerly: `try_apply_contents` consumes the tx, but we need
-                        // it for the block if it is valid.
-                        // Avoidable if we made the ledger hand it back.
-                        iter::once(tx.clone()),
-                    ) {
-                    Ok((new_state, _events, deferred_zkps)) => match deferred_zkps.verify() {
-                        Ok(()) => {
-                            ledger_state = new_state;
-                            valid_txs.push(tx);
-                            applied_any = true;
-                        }
-                        Err(err) => {
-                            tracing::trace!(
-                                target: LOG_TARGET,
-                                tx = ?tx.hash(),
-                                %err,
-                                "deferred ZKP verification failed during block assembly",
-                            );
-                            still_pending.push(tx);
-                        }
-                    },
-                    Err(err) => {
-                        tracing::trace!(
-                            target: LOG_TARGET,
-                            "tx {:?} not (yet) applicable during block assembly: {:?}",
-                            tx.hash(),
-                            err
-                        );
-                        still_pending.push(tx);
-                    }
-                }
-            }
-
-            pending = still_pending;
-        }
-
-        // Transactions that never became applicable are genuinely invalid against
-        // this block's ledger state and can be evicted from the mempool.
-        let invalid_tx_hashes: Vec<_> = pending.iter().map(Hashable::hash).collect();
+        let TransactionSelection {
+            ledger_state,
+            selected_txs,
+            invalid_tx_hashes,
+        } = select_transactions(ledger_state, tx_stream.collect().await, ledger_config);
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays
@@ -739,7 +687,7 @@ where
             error!(target: LOG_TARGET, "Failed to remove invalid transactions from mempool: {e:?}");
         }
 
-        let valid_tx_stream = stream::iter(valid_txs);
+        let valid_tx_stream = stream::iter(selected_txs);
         let txs = txs_for_block(valid_tx_stream).await;
 
         let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
