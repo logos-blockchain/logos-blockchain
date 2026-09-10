@@ -231,6 +231,22 @@ mod schema_conformance_tests {
         );
     }
 
+    /// Covers the optional `commit` and `tag`, absent on non-checkout builds.
+    #[test]
+    fn build_version_info_matches_its_schema() {
+        assert_round_trip_matches_component::<lb_version::BuildVersionInfo>(
+            "BuildVersionInfo",
+            serde_json::json!({
+                "version": "0.3.0-rc.2",
+                "commit": "ff337d8",
+                "tag": "0.3.0-rc.2",
+                "target": "aarch64-apple-darwin",
+                "profile": "release",
+                "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+            }),
+        );
+    }
+
     /// Covers `PeerId` and `Multiaddr`, both documented as `String`.
     #[test]
     fn libp2p_info_matches_its_schema() {

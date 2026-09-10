@@ -4221,6 +4221,7 @@ dependencies = [
  "logos-blockchain-pow-service",
  "logos-blockchain-time-service",
  "logos-blockchain-utils",
+ "logos-blockchain-version",
  "logos-blockchain-wallet-service",
  "multiaddr",
  "overwatch",
@@ -4466,6 +4467,7 @@ dependencies = [
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
+ "logos-blockchain-version",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -4889,6 +4891,7 @@ dependencies = [
  "logos-blockchain-tracing-service",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
+ "logos-blockchain-version",
  "logos-blockchain-wallet-service",
  "num-bigint",
  "nutype",
@@ -5308,6 +5311,14 @@ dependencies = [
  "rand 0.8.6",
  "rpds",
  "serde",
+]
+
+[[package]]
+name = "logos-blockchain-version"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "utoipa",
 ]
 
 [[package]]
