@@ -4,6 +4,12 @@
 # Tests are marked SLOW after `period`.
 # They are killed after `period * terminate-after`.
 
+# This end-to-end block-selection regression is expected to exceed the default
+# unit-test timeout.
+[[profile.default.overrides]]
+filter       = "package(logos-blockchain-chain-leader-service) and test(gas_limited_selection_returns_canonically_applicable_prefix)"
+slow-timeout = { period = "1m", terminate-after = 4 }
+
 # For unit tests, kill after 30s * 4 = 2m
 [[profile.default.overrides]]
 filter       = "not package(logos-blockchain-tests)"
