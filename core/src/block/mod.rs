@@ -246,7 +246,7 @@ impl<Tx> Block<Tx> {
         self.validate_body_root()?;
 
         // 4. Signature is valid over the header bytes
-        verify_signature(&self.header, &self.signature)?;
+        verify_header_signature(&self.header, &self.signature)?;
 
         Ok(self)
     }
@@ -346,7 +346,7 @@ pub fn verify_header_alone(header: &Header) -> Result<(), HeaderError> {
 }
 
 /// Verifies the signature of block header.
-pub fn verify_signature(header: &Header, signature: &Ed25519Signature) -> Result<(), Error> {
+pub fn verify_header_signature(header: &Header, signature: &Ed25519Signature) -> Result<(), Error> {
     let header_bytes = header.to_bytes()?;
     header
         .leader_proof()
