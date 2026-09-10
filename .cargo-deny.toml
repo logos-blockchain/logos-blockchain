@@ -5,15 +5,16 @@ all-features = true
 exclude-dev  = false
 
 [advisories]
+# When adding a new line, please consider to which group the advisory belongs, and whether the issue can be fixed by upgrading some dependencies.
 ignore = [
   # Unmaintained deps. To review periodically to check if they can be removed with an upgrade.
   { id = "RUSTSEC-2024-0388", reason = "`derivative` is unmaintained. No workspace crate depends on it directly. Pulled in via `ark-groth16` -> `ark-crypto-primitives`, which requires it non-optionally in both 0.5 and 0.6, so no arkworks upgrade can drop it. Re-evaluate this entry on future arkworks releases." },
   { id = "RUSTSEC-2024-0436", reason = "`paste` is unmaintained. No workspace crate depends on it directly. Pulled in via `ark-ff` 0.5 (removed in 0.6, which needs jellyfish/`jf-poseidon2` on arkworks 0.6 first) and via `netlink-packet-core` 0.8 behind libp2p's `if-watch` (removed in 0.9, but `if-watch` 3.2.2 still requires ^0.8.1). Re-evaluate this entry in the future and drop it once/if both are gone." },
-  # Vulnerable deps, affecting out production code. To review periodically to check if they can be removed with an upgrade.
+  # Vulnerable deps, affecting our production code. To review periodically to check if they can be removed with an upgrade.
   { id = "RUSTSEC-2026-0119", reason = "`hickory-proto` O(n^2) name compression during DNS message *encoding* (no feature gate, so the code is present). We use it only as a stub resolver behind `libp2p` `.with_dns()`, encoding small outbound queries rather than many-record responses, so exposure is low. Fixed in `hickory-proto` 0.26.1+, but `libp2p-dns` 0.44.0 (latest) still requires `hickory-resolver` ^0.25.2, so the upgrade is blocked upstream." },
-
   # Unmaintained deps. Acknowledged but a replacement has not been decided yet.
   { id = "RUSTSEC-2025-0141", reason = "`bincode` is unmaintained but continuing to use it." },
+
   # Vulnerable deps, not affecting our production code.
   { id = "RUSTSEC-2026-0118", reason = "`hickory-proto` unbounded NSEC3 closest-encloser loop. NOT APPLICABLE to our build: the advisory requires the `dnssec-ring` or `dnssec-aws-lc-rs` feature, and the only features we enable on `hickory-proto` 0.25.2 are `std`, `tokio` and `futures-io`, so the vulnerable validator is not compiled in. Kept only because cargo-deny matches on crate version, not enabled features. Reached solely via `libp2p` -> `libp2p-dns` -> `hickory-resolver`." },
   { id = "RUSTSEC-2026-0194", reason = "`quick-xml` < 0.41 quadratic duplicate-attribute scan when parsing untrusted XML. Reached only through the optional `profiling` feature (`lb-http-api-common` -> `pprof` 0.15 -> `inferno` 0.11 -> `quick-xml` 0.26); `pprof` is absent from default node builds and no CI or release build enables it. `inferno` uses `quick-xml` to WRITE flamegraph SVG from our own profiler output - we never feed it untrusted XML, and the affected APIs are parser-side. `inferno` 0.12.8 already uses the patched `quick-xml` ^0.41, but `pprof` 0.15.0 (latest) pins `inferno` ^0.11, so this is blocked upstream. The patched `quick-xml` 0.41.0 is already in the graph via `junit-report`; only the 0.26 copy is affected." },
@@ -29,9 +30,8 @@ allow-wildcard-paths = false
 multiple-versions    = "allow"
 
 [bans.std-replacements]
-level        = "deny"
-rust-version = "1.0"
-scope        = "workspace"
+level = "deny"
+scope = "workspace"
 
 [bans.workspace-dependencies]
 duplicates = "deny"
@@ -54,7 +54,6 @@ allow = [
   "Unicode-3.0",
   "Zlib",
 ]
-confidence-threshold = 0.93
 private = { ignore = false }
 unused-allowed-license = "deny"
 unused-license-exception = "deny"
