@@ -204,7 +204,7 @@ dependencies = [
  "ark-poly",
  "ark-serialize",
  "ark-std",
- "educe",
+ "educe 0.6.0",
  "fnv",
  "hashbrown 0.15.5",
  "itertools 0.13.0",
@@ -226,7 +226,7 @@ dependencies = [
  "ark-std",
  "arrayvec",
  "digest",
- "educe",
+ "educe 0.6.0",
  "itertools 0.13.0",
  "num-bigint",
  "num-traits",
@@ -282,7 +282,7 @@ dependencies = [
  "ark-ff",
  "ark-serialize",
  "ark-std",
- "educe",
+ "educe 0.6.0",
  "fnv",
  "hashbrown 0.15.5",
 ]
@@ -1886,6 +1886,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "educe"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e451fac8dd8dece16234604bf1efce6e90fddd8ab6ad4d66eec0eca5160959dd"
+dependencies = [
+ "enum-ordinalize",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.5",
+]
+
+[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1930,22 +1942,22 @@ dependencies = [
 
 [[package]]
 name = "enum-ordinalize"
-version = "4.3.2"
+version = "4.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a1091a7bb1f8f2c4b28f1fe2cef4980ca2d410a3d727d67ecc3178c9b0800f0"
+checksum = "89dd01549b09589510cf0647475075d12071456586d70f5c75c98ae2a5537677"
 dependencies = [
  "enum-ordinalize-derive",
 ]
 
 [[package]]
 name = "enum-ordinalize-derive"
-version = "4.3.2"
+version = "4.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ca9601fb2d62598ee17836250842873a413586e5d7ed88b356e38ddbb0ec631"
+checksum = "a65863d15a4ce2888bd2f0f543cc963d3879c3a022c8ee43f6141d479a3ac815"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.118",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -3385,7 +3397,7 @@ dependencies = [
  "async-broadcast",
  "async-stream",
  "backon",
- "educe",
+ "educe 0.6.0",
  "futures",
  "hashbrown 0.16.1",
  "hostname 0.4.2",
@@ -4061,8 +4073,8 @@ version = "0.0.0"
 dependencies = [
  "bincode",
  "blake2",
- "derivative",
  "divan",
+ "educe 0.7.6",
  "hex",
  "itertools 0.14.0",
  "logos-blockchain-blend-crypto",
@@ -4141,7 +4153,7 @@ name = "logos-blockchain-blend-provers"
 version = "0.0.0"
 dependencies = [
  "async-trait",
- "derivative",
+ "educe 0.7.6",
  "futures",
  "hex",
  "libp2p",
@@ -4261,7 +4273,7 @@ name = "logos-blockchain-chain-broadcast-service"
 version = "0.0.0"
 dependencies = [
  "async-trait",
- "derivative",
+ "educe 0.7.6",
  "logos-blockchain-core",
  "logos-blockchain-log-targets",
  "overwatch",
@@ -4342,7 +4354,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "bytes",
- "derivative",
+ "educe 0.7.6",
  "futures",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-core",
@@ -4747,8 +4759,8 @@ dependencies = [
 name = "logos-blockchain-ledger"
 version = "0.0.0"
 dependencies = [
- "derivative",
  "divan",
+ "educe 0.7.6",
  "logos-blockchain-blend-crypto",
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
@@ -5123,9 +5135,9 @@ dependencies = [
  "axum 0.7.9",
  "bincode",
  "cucumber",
- "derivative",
  "divan",
  "ed25519",
+ "educe 0.7.6",
  "futures",
  "futures-util",
  "hex",
@@ -8038,6 +8050,17 @@ name = "syn"
 version = "2.0.118"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn"
+version = "3.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12df2e0110f65b775f769bb17ef989067a1d931b2eb822bd4346631eeada89f9"
 dependencies = [
  "proc-macro2",
  "quote",

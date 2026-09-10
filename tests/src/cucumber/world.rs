@@ -10,7 +10,7 @@ use std::{
 };
 
 use cucumber::World;
-use derivative::Derivative;
+use educe::Educe;
 use lb_core::{
     codec::DeserializeOp as _,
     header::HeaderId,
@@ -951,8 +951,8 @@ pub struct ScenarioLifecycle {
 }
 
 /// Chain and genesis parameters captured at cluster build time.
-#[derive(Derivative)]
-#[derivative(Default)]
+#[derive(Educe)]
+#[educe(Default)]
 pub struct ChainParameters {
     /// Manual: List of genesis block UTXOs allocated in the genesis
     /// configuration.
@@ -964,7 +964,7 @@ pub struct ChainParameters {
     pub genesis_tokens: Vec<GenesisTokens>,
     /// Effective epoch length, populated from the first launched node's
     /// deployment config.
-    #[derivative(Default(value = "DEFAULT_SLOTS_PER_EPOCH"))]
+    #[educe(Default(expression = DEFAULT_SLOTS_PER_EPOCH))]
     pub slots_per_epoch: NonZero<u64>,
 }
 

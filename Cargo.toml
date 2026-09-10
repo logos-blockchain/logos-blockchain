@@ -202,11 +202,11 @@ color-eyre                         = { default-features = false, version = "0.6.
 console-subscriber                 = { default-features = false, version = "0.5" }
 const-hex                          = { default-features = false, version = "1" }
 cucumber                           = { default-features = false, version = "=0.23.0" }
-derivative                         = { default-features = false, version = "2" }
 dhat                               = { default-features = false, version = "0.3.3" }
 divan                              = { default-features = false, version = "0.1" }
 ed25519                            = { default-features = false, version = "2.2.3" }
 ed25519-dalek                      = { default-features = false, version = "2" }
+educe                              = { default-features = false, version = "0.7.6" }
 either                             = { default-features = false, version = "1.15.0" }
 flate2                             = { default-features = false, version = "1.1.9" }
 fork_stream                        = { default-features = false, version = "0.1.0" }
