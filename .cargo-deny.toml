@@ -8,7 +8,6 @@ exclude-dev  = false
 ignore = [
   { id = "RUSTSEC-2024-0388", reason = "`derivative` is unmaintained. No workspace crate depends on it directly. Pulled in via `ark-groth16` -> `ark-crypto-primitives`, which requires it non-optionally in both 0.5 and 0.6, so no arkworks upgrade can drop it. Re-evaluate this entry on future arkworks releases." },
   { id = "RUSTSEC-2024-0436", reason = "`paste` is unmaintained. No workspace crate depends on it directly. Pulled in via `ark-ff` 0.5 (removed in 0.6, which needs jellyfish/`jf-poseidon2` on arkworks 0.6 first) and via `netlink-packet-core` 0.8 behind libp2p's `if-watch` (removed in 0.9, but `if-watch` 3.2.2 still requires ^0.8.1). Re-evaluate this entry in the future and drop it once/if both are gone." },
-  { id = "RUSTSEC-2025-0055", reason = "`tracing-subscriber` v0.2.25 pulled in by ark-relations v0.4.0 - will be addressed before mainnet" },
   { id = "RUSTSEC-2025-0141", reason = "`bincode` is unmaintained but continuing to use it." },
   { id = "RUSTSEC-2026-0118", reason = "`hickory-proto` can enter an unbounded DNSSEC NSEC3 validation loop and exhaust memory; pulled in through libp2p." },
   { id = "RUSTSEC-2026-0119", reason = "`hickory-proto` DNS message compression can cause CPU exhaustion during encoding; pulled in through libp2p." },

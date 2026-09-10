@@ -184,6 +184,7 @@ ark-bn254                          = { default-features = false, version = "0.5"
 ark-ec                             = { default-features = false, version = "0.5" }
 ark-ff                             = { default-features = false, version = "0.5" }
 ark-groth16                        = { default-features = false, version = "0.5" }
+ark-relations                      = { default-features = false, version = "0.5" }
 ark-serialize                      = { default-features = false, version = "0.5" }
 astro-float                        = { default-features = false, version = "0.9" }
 async-ctrlc                        = { default-features = false, version = "1.2" }
