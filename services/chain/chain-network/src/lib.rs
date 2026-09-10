@@ -1168,7 +1168,7 @@ mod tests {
         block::UncleHeaders,
         mantle::{
             traits::Hasher,
-            transactions::{RawMantleTx, hash::REFERENCE_PREFIX_BYTES},
+            transactions::{Ops, hash::REFERENCE_PREFIX_BYTES},
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
@@ -1365,7 +1365,7 @@ mod tests {
             Slot::new(1),
             UncleHeaders::empty(),
             leader_proof(&leader_key.public_key()),
-            BlockTransactions::<RawMantleTx>::empty(),
+            BlockTransactions::<Ops>::empty(),
             &leader_key,
         )
         .expect("block must be created")
