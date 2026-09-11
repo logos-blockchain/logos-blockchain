@@ -16,6 +16,7 @@ workspace = true
 [dependencies]
 bincode                          = { workspace = true }
 blake2                           = { workspace = true }
+futures-util                     = { workspace = true }
 lb-codec                         = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-log-targets                   = { workspace = true }
@@ -26,6 +27,7 @@ reqwest                          = { workspace = true }
 rusqlite                         = { features = ["backup", "bundled", "functions", "hooks"], workspace = true }
 thiserror                        = { workspace = true }
 tokio                            = { features = ["macros", "rt", "sync", "time"], workspace = true }
+tokio-stream                     = { features = ["sync"], workspace = true }
 tracing                          = { workspace = true }
 
 [dev-dependencies]
