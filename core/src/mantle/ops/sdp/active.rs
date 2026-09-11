@@ -150,10 +150,14 @@ mod tests {
                 Declarations, PreverifiableOperation as _, ProvableOperation,
                 VerifiableOperation as _, verification_mode::StandardMode,
             },
-            ops::{SignedOperation, op_proof::samples::SampleProof as _, sdp::SDPDeclareOp},
+            ops::{
+                SignedOperation,
+                op_proof::samples::SampleProof as _,
+                sdp::{SDPActiveExecutionContext, SDPDeclareOp},
+            },
             transactions::{
                 hash::TxHashView,
-                states::{Preverified, Unverified},
+                states::{Preverified, Unverified, Verified},
             },
         },
         sdp::{
@@ -331,6 +335,54 @@ mod tests {
             verify_active_at(WITHDRAW_AT.strict_add(Epoch::new(1))),
             Err(SdpError::DeclarationWithdrawn { .. })
         ));
+    }
+
+    fn verified(operation: SDPActiveOp) -> SignedOperation<SDPActiveOp, Verified, StandardMode> {
+        SignedOperation::<_, Unverified, StandardMode>::new(
+            operation,
+            <SDPActiveOp as ProvableOperation>::Proof::sample(),
+        )
+        .into_state_trusted()
+    }
+
+    #[test]
+    #[should_panic(expected = "The operation should have been validated")]
+    fn execute_panics_on_a_declaration_the_ledger_does_not_hold() {
+        drop(
+            verified(SDPActiveOp::sample()).execute(SDPActiveExecutionContext {
+                epoch: Epoch::from(4),
+                declarations: Declarations::new_sync(),
+            }),
+        );
+    }
+
+    #[test]
+    fn execute_marks_the_declaration_active_for_the_current_epoch() {
+        let (message, declaration) = declaration();
+        let declaration_id = message.id();
+        let declarations = Declarations::new_sync().insert(declaration_id, declaration);
+
+        let operation = SDPActiveOp {
+            declaration_id,
+            ..SDPActiveOp::sample()
+        };
+        let nonce = operation.nonce;
+        let epoch = Epoch::from(4);
+
+        let (context, events) = verified(operation)
+            .execute(SDPActiveExecutionContext {
+                epoch,
+                declarations,
+            })
+            .expect("the declaration is registered");
+
+        let updated = context
+            .declarations
+            .get(&declaration_id)
+            .expect("the declaration stays registered");
+        assert_eq!(updated.active, epoch);
+        assert_eq!(updated.nonce, nonce);
+        assert!(events.is_empty());
     }
 
     /// Verifies an active message at `epoch` against a declaration whose
