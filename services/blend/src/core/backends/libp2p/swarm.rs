@@ -1,6 +1,6 @@
 use core::{
     num::{NonZeroU64, NonZeroUsize},
-    ops::{Deref, RangeInclusive},
+    ops::Deref,
     pin::Pin,
 };
 use std::{
@@ -18,14 +18,12 @@ use lb_blend::{
         NetworkBehaviourEvent,
         with_core::{
             behaviour::{
-                ConnectionUpgradeFailureReason, Event as CoreToCoreEvent, IntervalStreamProvider,
-                NegotiatedPeerState,
+                ConnectionUpgradeFailureReason, Event as CoreToCoreEvent, NegotiatedPeerState,
             },
             error::SendError,
         },
         with_edge::behaviour::Event as CoreToEdgeEvent,
     },
-    scheduling::membership::Membership,
 };
 use lb_chain_service::Epoch;
 use lb_libp2p::{DialError, DialErrorExt as _, DialOpts, SwarmEvent};
@@ -104,13 +102,11 @@ impl DialAttempt {
 type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, DialAttempt)> + Send>>>;
 type FullMembershipRetry = Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
 
-pub struct BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
+pub struct BlendSwarm<Rng, ProofsVerifier>
 where
-    ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
-        + 'static,
     ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
-    swarm: Swarm<BlendBehaviour<ObservationWindowProvider, ProofsVerifier>>,
+    swarm: Swarm<BlendBehaviour<ProofsVerifier>>,
     swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage<ProofsVerifier>>,
     incoming_message_sender:
         broadcast::Sender<(EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>,
@@ -145,15 +141,9 @@ enum LogLevel {
     Trace,
 }
 
-impl<Rng, ObservationWindowProvider, ProofsVerifier>
-    BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
+impl<Rng, ProofsVerifier> BlendSwarm<Rng, ProofsVerifier>
 where
     Rng: RngCore,
-    ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
-        + for<'c> From<(
-            &'c BlendConfig<Libp2pBlendBackendSettings>,
-            &'c Membership<PeerId>,
-        )> + 'static,
     ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
     pub(super) fn new(
@@ -218,16 +208,7 @@ where
 
         self_instance
     }
-}
 
-impl<Rng, ObservationWindowProvider, ProofsVerifier>
-    BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
-where
-    Rng: RngCore,
-    ObservationWindowProvider:
-        IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
-    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
-{
     /// Dial random peers from the membership list,
     /// excluding the peers with a negotiated connection in the ongoing epoch,
     /// the peers that we are already trying to dial, the blocked peers, and
@@ -454,11 +435,6 @@ where
         }
     }
 
-    fn handle_unhealthy_peer(&mut self, peer_id: PeerId) {
-        tracing::trace!(target: LOG_TARGET, "Peer {peer_id} is unhealthy");
-        self.check_and_dial_new_peers_except(&HashSet::from([peer_id]));
-    }
-
     fn handle_blend_core_behaviour_event(&mut self, blend_event: CoreToCoreEvent) {
         match blend_event {
             lb_blend::network::core::with_core::behaviour::Event::Message { message, sender, epoch } => {
@@ -466,12 +442,6 @@ where
                 self.forward_received_core_message(&message, sender, epoch);
                 // Bubble up to service for decapsulation and delaying.
                 self.report_message_to_service(*message, epoch, metrics::InboundMessageType::Core);
-            }
-            lb_blend::network::core::with_core::behaviour::Event::UnhealthyPeer(peer_id) => {
-                self.handle_unhealthy_peer(peer_id);
-            }
-            lb_blend::network::core::with_core::behaviour::Event::HealthyPeer(peer_id) => {
-                Self::handle_healthy_peer(peer_id);
             }
             lb_blend::network::core::with_core::behaviour::Event::PeerDisconnected(
                 peer_id,
@@ -542,10 +512,7 @@ where
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
     )]
-    fn handle_event(
-        &mut self,
-        event: SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider, ProofsVerifier>>,
-    ) {
+    fn handle_event(&mut self, event: SwarmEvent<BlendBehaviourEvent<ProofsVerifier>>) {
         match event {
             SwarmEvent::ConnectionEstablished { peer_id, .. }
             | SwarmEvent::ConnectionClosed { peer_id, .. } => {
@@ -662,8 +629,7 @@ where
         swarm_event_match_predicate: Predicate,
     ) -> bool
     where
-        Predicate:
-            Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider, ProofsVerifier>>) -> bool,
+        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ProofsVerifier>>) -> bool,
     {
         tokio::select! {
             Some(msg) = self.swarm_messages_receiver.recv() => {
@@ -701,8 +667,7 @@ where
     #[cfg(test)]
     pub async fn poll_next_until<Predicate>(&mut self, swarm_event_match_predicate: Predicate)
     where
-        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider, ProofsVerifier>>) -> bool
-            + Copy,
+        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ProofsVerifier>>) -> bool + Copy,
     {
         loop {
             if self.poll_next_and_match(swarm_event_match_predicate).await {
@@ -710,13 +675,57 @@ where
             }
         }
     }
+
+    #[cfg(test)]
+    #[expect(clippy::too_many_arguments, reason = "necessary for testing")]
+    pub fn new_test<BehaviourConstructor, PeeringDegreeCheckClock>(
+        identity: &libp2p::identity::Keypair,
+        behaviour_constructor: BehaviourConstructor,
+        swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage<ProofsVerifier>>,
+        incoming_message_sender: broadcast::Sender<(
+            EncapsulatedMessageWithVerifiedPublicHeader,
+            Epoch,
+        )>,
+        current_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
+        rng: Rng,
+        max_dial_attempts_per_connection: NonZeroU64,
+        minimum_network_size: NonZeroUsize,
+        peering_degree_check_clock: PeeringDegreeCheckClock,
+    ) -> Self
+    where
+        BehaviourConstructor: FnOnce(
+            PeerId,
+            lb_blend::scheduling::membership::Membership<PeerId>,
+        ) -> BlendBehaviour<ProofsVerifier>,
+        PeeringDegreeCheckClock: Stream<Item = ()> + Send + 'static,
+    {
+        use crate::test_utils::memory_test_swarm;
+
+        let membership = current_epoch_info.membership.clone();
+        Self {
+            incoming_message_sender,
+            current_epoch_info,
+            max_dial_attempts_per_connection,
+            ongoing_dials: HashMap::new(),
+            unrecoverable_peers: HashSet::new(),
+            pending_retries: FuturesUnordered::new(),
+            pending_full_membership_retry: None,
+            rng,
+            swarm: memory_test_swarm(
+                identity,
+                membership,
+                Duration::from_secs(1),
+                behaviour_constructor,
+            ),
+            swarm_messages_receiver,
+            minimum_network_size,
+            peering_degree_check_clock: Box::pin(peering_degree_check_clock),
+        }
+    }
 }
 
-impl<Rng, ObservationWindowProvider, ProofsVerifier>
-    BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
+impl<Rng, ProofsVerifier> BlendSwarm<Rng, ProofsVerifier>
 where
-    ObservationWindowProvider:
-        IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
     ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
     fn log_blend_peer_negotiation_failure(
@@ -952,10 +961,6 @@ where
             .available_connection_slots()
     }
 
-    fn handle_healthy_peer(peer_id: PeerId) {
-        tracing::trace!(target: LOG_TARGET, "Peer {peer_id} is healthy again");
-    }
-
     fn handle_blend_edge_behaviour_event(&mut self, blend_event: CoreToEdgeEvent) {
         match blend_event {
             lb_blend::network::core::with_edge::behaviour::Event::Message { message, epoch } => {
@@ -996,72 +1001,12 @@ where
     }
 }
 
-impl<Rng, ObservationWindowProvider, ProofsVerifier>
-    BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
-where
-    Rng: RngCore,
-    ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
-        + 'static,
-    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
-{
-    #[cfg(test)]
-    #[expect(clippy::too_many_arguments, reason = "necessary for testing")]
-    pub fn new_test<BehaviourConstructor, PeeringDegreeCheckClock>(
-        identity: &libp2p::identity::Keypair,
-        behaviour_constructor: BehaviourConstructor,
-        swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage<ProofsVerifier>>,
-        incoming_message_sender: broadcast::Sender<(
-            EncapsulatedMessageWithVerifiedPublicHeader,
-            Epoch,
-        )>,
-        current_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
-        rng: Rng,
-        max_dial_attempts_per_connection: NonZeroU64,
-        minimum_network_size: NonZeroUsize,
-        peering_degree_check_clock: PeeringDegreeCheckClock,
-    ) -> Self
-    where
-        BehaviourConstructor: FnOnce(
-            PeerId,
-            Membership<PeerId>,
-        )
-            -> BlendBehaviour<ObservationWindowProvider, ProofsVerifier>,
-        PeeringDegreeCheckClock: Stream<Item = ()> + Send + 'static,
-    {
-        use crate::test_utils::memory_test_swarm;
-
-        let membership = current_epoch_info.membership.clone();
-        Self {
-            incoming_message_sender,
-            current_epoch_info,
-            max_dial_attempts_per_connection,
-            ongoing_dials: HashMap::new(),
-            unrecoverable_peers: HashSet::new(),
-            pending_retries: FuturesUnordered::new(),
-            pending_full_membership_retry: None,
-            rng,
-            swarm: memory_test_swarm(
-                identity,
-                membership,
-                Duration::from_secs(1),
-                behaviour_constructor,
-            ),
-            swarm_messages_receiver,
-            minimum_network_size,
-            peering_degree_check_clock: Box::pin(peering_degree_check_clock),
-        }
-    }
-}
-
 // We implement `Deref` so we are able to call swarm methods on our own swarm.
-impl<Rng, ObservationWindowProvider, ProofsVerifier> Deref
-    for BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
+impl<Rng, ProofsVerifier> Deref for BlendSwarm<Rng, ProofsVerifier>
 where
-    ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
-        + 'static,
     ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
-    type Target = Swarm<BlendBehaviour<ObservationWindowProvider, ProofsVerifier>>;
+    type Target = Swarm<BlendBehaviour<ProofsVerifier>>;
 
     fn deref(&self) -> &Self::Target {
         &self.swarm
@@ -1071,11 +1016,8 @@ where
 #[cfg(test)]
 // We implement `DerefMut` only for tests, since we do not want to give people a
 // chance to bypass our API.
-impl<Rng, ObservationWindowProvider, ProofsVerifier> core::ops::DerefMut
-    for BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
+impl<Rng, ProofsVerifier> core::ops::DerefMut for BlendSwarm<Rng, ProofsVerifier>
 where
-    ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
-        + 'static,
     ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
