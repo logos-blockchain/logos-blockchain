@@ -719,8 +719,8 @@ where
 
         info_with_id!(
             block.header().id().as_ref(),
-            "proposed block {header_id:?} with {tx_count} transactions ({removed_count} removed)",
-            header_id = block.header().id(),
+            "proposed block",
+            header_id = ?block.header().id(),
             tx_count = block.transactions_iter().len(),
             removed_count = invalid_tx_hashes.len()
         );
