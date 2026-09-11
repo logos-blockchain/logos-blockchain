@@ -87,14 +87,15 @@ pub use lb_core::{
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
 pub use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
-// Pure key-only signing primitive for prepared multi-sig artifacts — usable by
-// an offline key holder with no sequencer or chain state.
+// Pure key-only signing primitive for prepared multi-sig artifacts — sign a
+// prepared bundle/config received out of band (e.g. over gossip) with just this
+// participant's key, no sequencer or chain state needed.
 pub use tx_builder::sign_prepared;
 pub use types::{
     AtomicWithdrawInfo, ChannelNote, ChannelTransferInfo, ChannelUpdate, ChannelUpdateTx,
     ChannelWalletView, DepositInfo, Error, Event, FinalizedOp, FinalizedTx, FundingConfig,
-    InscriptionId, InscriptionInfo, PendingTx, PreparedChannelConfig, PublishResult,
-    SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource,
-    TxStatus, TxStatusUpdate, WithdrawArg, WithdrawInfo, WithdrawInputs,
+    InscriptionId, InscriptionInfo, PendingTx, PreparedAtomicBundle, PreparedChannelConfig,
+    PublishResult, SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification,
+    TxSource, TxStatus, TxStatusUpdate, WithdrawArg, WithdrawInfo, WithdrawInputs,
 };
 pub use zone_sequencer::ZoneSequencer;

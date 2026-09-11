@@ -22,15 +22,16 @@ use tokio::{
 use tracing::warn;
 
 use super::{
-    AtomicZoneDepositRequest, CustomRepublishDeps, DiscardedPayloads, PolicyRuntime,
-    PublishDeadline, ZoneAccountBalances, ZoneDeposit, ZoneTestError, build_zone_deposit,
-    build_zone_deposit_from_values, ensure_zone_transactions_included,
+    AtomicZoneDepositRequest, BundleAnnounce, CustomRepublishDeps, DiscardedPayloads, MultiSigBus,
+    PolicyRuntime, PublishDeadline, ZoneAccountBalances, ZoneDeposit, ZoneTestError,
+    build_zone_deposit, build_zone_deposit_from_values, ensure_zone_transactions_included,
     errors::{log_step_error, zone_step_error},
     keygen, publish_atomic_zone_withdraw, publish_message_with_retry,
     runner::{Event, PublishResult, SequencerCheckpoint, SequencerClient},
     sequencer_config, sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
     start_custom_republish_policy, start_deposit_lifecycle_policy, start_deposit_withdraw_policy,
-    start_republish_lineage_policy, start_sequencer_event_loop, start_sorted_conflict_policy,
+    start_multisig_lifecycle_policy, start_republish_lineage_policy, start_sequencer_event_loop,
+    start_sorted_conflict_policy,
     steps::DEFAULT_ZONE_SEQUENCER,
     submit_atomic_zone_deposit, submit_zone_channel_split, submit_zone_deposit,
     submit_zone_withdraw,
@@ -95,6 +96,16 @@ pub(super) enum DriveMode {
         withdraw_outputs: Vec<u64>,
         recipient: ZkPublicKey,
     },
+    /// Reactively pin then withdraw each observed deposit under multi-sig,
+    /// gathering signatures on the shared `bus` via the `announce` channel.
+    MultiSigLifecycle {
+        withdraw_outputs: Vec<u64>,
+        recipient: ZkPublicKey,
+        bus: MultiSigBus,
+        announce: BundleAnnounce,
+        // Boxed: `Ed25519Key` is large and would bloat every `DriveMode` value.
+        signing_key: Box<Ed25519Key>,
+    },
 }
 
 impl DriveMode {
@@ -149,6 +160,7 @@ pub(super) use publishing::{
     initialize_zone_indexer, publish_zone_messages, publish_zone_messages_concurrently,
 };
 pub(super) use sequencer::{
-    start_deposit_reaction_sequencer, start_deposit_withdraw_sequencer, start_named_sequencer,
+    start_deposit_reaction_sequencer, start_deposit_withdraw_sequencer,
+    start_multisig_lifecycle_sequencer, start_named_sequencer,
     start_named_sequencer_with_pending_submit_depth,
 };

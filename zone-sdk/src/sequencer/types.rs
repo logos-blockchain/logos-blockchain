@@ -22,7 +22,9 @@ use lb_core::{
     },
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
-use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, ZkPublicKey};
+use lb_key_management_system_service::keys::{
+    Ed25519Key, Ed25519PublicKey, Ed25519Signature, ZkPublicKey,
+};
 
 use super::tx_builder::sign_prepared;
 
@@ -142,6 +144,55 @@ impl PreparedChannelConfig {
     pub fn sign_with(&self, signing_key: &Ed25519Key) -> Result<IndexedSignature, Error> {
         sign_prepared(signing_key, &self.accredited_keys, &self.sign_payload)
     }
+}
+
+/// A funded atomic channel bundle awaiting external multi-sig signatures.
+///
+/// The multi-sig counterpart of [`publish_atomic_withdraw`] /
+/// [`publish_pin_deposit`]. The caller collects a signature from each required
+/// key holder over `sign_payload`, assembles a strictly-ascending-by-index
+/// `Vec<IndexedSignature>`, and submits via [`submit_atomic_bundle`]. The
+/// bundled inscription is turn-gated, so prepare and submit from the
+/// current-turn sequencer. `tx`, `transfer_proof`, `inscribe_sig`, and the
+/// bundle metadata are opaque — they carry straight back into submission.
+///
+/// [`publish_atomic_withdraw`]: super::SequencerHandle::publish_atomic_withdraw
+/// [`publish_pin_deposit`]: super::SequencerHandle::publish_pin_deposit
+/// [`submit_atomic_bundle`]: super::SequencerHandle::submit_atomic_bundle
+#[derive(Debug, Clone)]
+pub struct PreparedAtomicBundle {
+    pub(crate) tx: Ops,
+    pub(crate) transfer_proof: Option<OpProof>,
+    /// The preparing sequencer's inscription signature — authorized by the
+    /// single round-robin sequencer, not the threshold.
+    pub(crate) inscribe_sig: Ed25519Signature,
+    pub(crate) parent: MsgId,
+    pub(crate) msg_id: MsgId,
+    pub(crate) inscribe: Inscription,
+    pub(crate) signer: Ed25519PublicKey,
+    pub(crate) kind: PreparedBundleKind,
+    /// The exact bytes each accredited key must sign (the funded tx hash's
+    /// signing bytes).
+    pub sign_payload: Vec<u8>,
+    /// The channel's current accredited keys, in index order. Each collected
+    /// signature must be indexed by this key's position here.
+    pub accredited_keys: Vec<Ed25519PublicKey>,
+    /// The channel's current `transfer_threshold` — how many of the
+    /// `accredited_keys` must sign to authorize the transfer/withdraw ops.
+    pub signing_threshold: u16,
+}
+
+/// The op-specific tail of a [`PreparedAtomicBundle`], carried back into
+/// submission.
+#[derive(Debug, Clone)]
+pub enum PreparedBundleKind {
+    AtomicWithdraw {
+        withdraws: Vec<WithdrawInfo>,
+        outputs: Outputs,
+    },
+    PinDeposit {
+        consumed_notes: Inputs,
+    },
 }
 
 /// One withdraw to bundle atomically with an inscription.
@@ -341,6 +392,21 @@ pub enum Error {
     Unavailable { reason: &'static str },
     #[error("network error: {0}")]
     Network(String),
+    /// The channel moved under a prepared bundle since prepare: the config
+    /// changed (keys/threshold the signatures were collected under) and/or
+    /// the message tip advanced (the inscription parent is no longer the tip
+    /// prepare would pick). Recoverable: take the new state, re-prepare, and
+    /// re-collect signatures. The message lists every change found.
+    #[error("channel state changed since prepare: {0}")]
+    ChannelStateChanged(String),
+    /// The channel state is unchanged since prepare, yet the collected
+    /// signature set would never verify on the ledger (wrong count,
+    /// unordered/duplicate indices, index outside the accredited keys, or a
+    /// signature that fails against its key). Not recoverable by retrying:
+    /// the signing/collection code is wrong. The message lists every problem
+    /// found.
+    #[error("multi-sig signatures rejected: {0}")]
+    InvalidMultiSig(String),
 }
 
 /// Events emitted by the sequencer.

@@ -14,19 +14,22 @@ use lb_core::{
         Note, Op, OpRef, SignedOps, Value,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ledger::{Inputs, NoteId, Outputs, verification_mode::StandardMode},
-        ops::channel::{
-            ChannelId, MsgId,
-            channel_transfer::ChannelTransferOp,
-            config::Keys,
-            inscribe::{Inscription, InscriptionOp},
-            withdraw::ChannelWithdrawOp,
+        ops::{
+            OpProof,
+            channel::{
+                ChannelId, ChannelKeyIndex, MsgId,
+                channel_transfer::ChannelTransferOp,
+                config::Keys,
+                inscribe::{Inscription, InscriptionOp},
+                withdraw::ChannelWithdrawOp,
+            },
         },
         traits::Hashable as _,
         transactions::{Ops, hash::TxHash, states::Unverified},
     },
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
-use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
+use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{debug, info, warn};
 
@@ -39,15 +42,17 @@ use super::{
     slot_clock::SlotClock,
     state::{BlockChannelTx, TxState},
     tx_builder::{
-        assemble_channel_config_tx, build_and_fund_config, build_atomic_bundle_ops_proofs,
+        assemble_atomic_bundle_tx, assemble_channel_config_tx, build_and_fund_config,
         create_channel_config_tx, create_inscribe_tx, find_own_key_index, fund_ops,
-        prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
+        prepare_tx as build_prepare_tx, sign_prepared, sign_tx as build_sign_tx,
+        stale_bundle_reasons, validate_multi_sig,
     },
     types::{
         AtomicWithdrawInfo, ChannelWalletView, Error, Event, FundingConfig, InscriptionInfo,
-        PendingTx, PinDepositInfo, PreparedChannelConfig, PublishResult, SequencerChannelView,
-        SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
-        WithdrawArg, WithdrawInfo, WithdrawInputs,
+        PendingTx, PinDepositInfo, PreparedAtomicBundle, PreparedBundleKind, PreparedChannelConfig,
+        PublishResult, SequencerChannelView, SequencerCheckpoint, SequencerConfig,
+        TurnNotification, TxSource, TxStatus, TxStatusUpdate, WithdrawArg, WithdrawInfo,
+        WithdrawInputs,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -194,9 +199,25 @@ pub(super) enum ActorRequest {
         response_tx: oneshot::Sender<Result<PreparedChannelConfig, Error>>,
     },
     SubmitChannelConfig {
-        // Boxed: `PreparedChannelConfig` is much larger than the other
-        // variants' payloads, so keep it off the enum's inline footprint.
+        // Boxed: much larger than the other variants' payloads.
         prepared: Box<PreparedChannelConfig>,
+        signatures: Vec<IndexedSignature>,
+        response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
+    },
+    PrepareAtomicWithdraw {
+        inscribe: Inscription,
+        withdraws: Vec<WithdrawArg>,
+        inputs: WithdrawInputs,
+        response_tx: oneshot::Sender<Result<PreparedAtomicBundle, Error>>,
+    },
+    PreparePinDeposit {
+        inscribe: Inscription,
+        consumed_notes: Vec<NoteId>,
+        response_tx: oneshot::Sender<Result<PreparedAtomicBundle, Error>>,
+    },
+    SubmitAtomicBundle {
+        // Boxed: `PreparedAtomicBundle` is much larger than the other variants.
+        prepared: Box<PreparedAtomicBundle>,
         signatures: Vec<IndexedSignature>,
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
@@ -556,6 +577,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one match arm per actor request; splitting would just scatter the dispatch"
+    )]
     async fn handle_request(&mut self, request: ActorRequest) {
         match request {
             ActorRequest::Publish { data, response_tx } => {
@@ -629,6 +654,33 @@ where
                 response_tx,
             } => {
                 drop(response_tx.send(self.do_submit_channel_config(*prepared, signatures)));
+            }
+            ActorRequest::PrepareAtomicWithdraw {
+                inscribe,
+                withdraws,
+                inputs,
+                response_tx,
+            } => {
+                drop(
+                    response_tx.send(
+                        self.do_prepare_atomic_withdraw(inscribe, withdraws, inputs)
+                            .await,
+                    ),
+                );
+            }
+            ActorRequest::PreparePinDeposit {
+                inscribe,
+                consumed_notes,
+                response_tx,
+            } => {
+                drop(response_tx.send(self.do_prepare_pin_deposit(inscribe, consumed_notes).await));
+            }
+            ActorRequest::SubmitAtomicBundle {
+                prepared,
+                signatures,
+                response_tx,
+            } => {
+                drop(response_tx.send(self.do_submit_atomic_bundle(*prepared, signatures)));
             }
             ActorRequest::SubmitSignedTx {
                 tx,
@@ -767,54 +819,45 @@ where
         ))
     }
 
-    /// Core atomic-withdraw logic. Builds the client-side bundle
-    /// `[CHANNEL_INSCRIBE, CHANNEL_TRANSFER, CHANNEL_WITHDRAW]`: the transfer
-    /// moves channel notes to the recipient keys (plus a change note back to
-    /// the sequencer's own key when the selected inputs overpay), and the
-    /// withdraw releases exactly the freshly-created recipient notes. A channel
-    /// withdraw only releases an existing channel note to the key it already
-    /// carries, so paying a fresh recipient requires transferring a note to
-    /// that key first — which is why this depends on the sequencer tracking the
-    /// channel's notes.
-    ///
-    /// Mirrors [`Self::do_publish`] for the readiness/funding checks, parent
-    /// computation, status queueing and checkpointing. Scoped to single-signer
-    /// (centralized) channels — only the sequencer's own signature proves the
-    /// transfer and withdraw ops.
-    #[expect(clippy::too_many_lines, reason = "single bundle assembly pipeline")]
+    /// Single-signer atomic withdraw: prepare, self-sign, and submit.
     pub(super) async fn do_publish_atomic_withdraw(
         &mut self,
         inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
         inputs: WithdrawInputs,
     ) -> Result<PublishReceipt, Error> {
+        let own_key_index = self.own_key_index_for_single_sig("publish_atomic_withdraw")?;
+        let prepared = self
+            .do_prepare_atomic_withdraw(inscribe, withdraws, inputs)
+            .await?;
+        let signature = IndexedSignature::new(own_key_index, prepared.inscribe_sig);
+        self.do_submit_atomic_bundle(prepared, vec![signature])
+    }
+
+    /// Build and fund an atomic `[inscribe, transfer, withdraw]` bundle for
+    /// external multi-sig signing, without mutating state. The
+    /// transfer/withdraw ops are signed out-of-band (`transfer_threshold`
+    /// accredited keys over [`PreparedAtomicBundle::sign_payload`]); the
+    /// inscription is signed here.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "&mut self keeps the async future Send; a &self future would require Sync"
+    )]
+    pub(super) async fn do_prepare_atomic_withdraw(
+        &mut self,
+        inscribe: Inscription,
+        withdraws: Vec<WithdrawArg>,
+        inputs: WithdrawInputs,
+    ) -> Result<PreparedAtomicBundle, Error> {
         self.ensure_ready()?;
         self.ensure_fundable()?;
 
         if withdraws.is_empty() {
             return Err(Error::Network(
-                "publish_atomic_withdraw requires at least one withdraw".into(),
+                "atomic withdraw requires at least one withdraw".into(),
             ));
         }
 
-        // Use the cached channel state kept fresh by the drive loop — see
-        // `ensure_connected` for the staleness gate.
-        let channel_state = self.channel_state.as_ref().ok_or_else(|| {
-            Error::Network(format!(
-                "publish_atomic_withdraw requires channel state for {:?}",
-                self.channel_id
-            ))
-        })?;
-        if channel_state.transfer_threshold > 1 {
-            return Err(Error::Network(format!(
-                "publish_atomic_withdraw requires transfer_threshold == 1, got {}",
-                channel_state.transfer_threshold
-            )));
-        }
-        let own_key_index = find_own_key_index(channel_state, &self.signing_key)?;
-
-        // Recipient notes, concatenated across the withdraw args in order, plus
-        // the total value they release.
         let recipient_outputs: Vec<Note> = withdraws
             .iter()
             .flat_map(|w| w.outputs.iter().copied())
@@ -827,38 +870,23 @@ where
         let (transfer_op, withdraw_op) =
             self.build_transfer_and_withdraw(&recipient_outputs, amount, &inputs)?;
 
-        let parent = self.compute_publish_parent();
-        let inscription_op = InscriptionOp {
-            channel_id: self.channel_id,
-            inscription: inscribe.clone(),
-            parent,
-            signer: self.signing_key.public_key(),
-        };
-        let msg_id = inscription_op.id();
-
-        let ops = vec![
-            Op::ChannelInscribe(inscription_op),
-            Op::ChannelTransfer(transfer_op),
-            Op::ChannelWithdraw(withdraw_op.clone()),
-        ];
+        let (ops, parent, msg_id) = self.wrap_bundle_ops(
+            &inscribe,
+            vec![
+                Op::ChannelTransfer(transfer_op),
+                Op::ChannelWithdraw(withdraw_op.clone()),
+            ],
+        );
 
         let (tx, transfer_proof) = fund_ops(&self.node, &self.config.funding, ops).await?;
-        let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
-        let ops_proofs =
-            build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
-        let signed_tx = SignedOps::from_parts(tx, ops_proofs).map_err(|error| {
-            Error::Network(format!(
-                "failed to build signed atomic withdraw tx: {error:?}"
-            ))
-        })?;
+        let tx_hash = tx.hash();
+        let inscribe_sig = build_sign_tx(tx_hash, &self.signing_key);
 
-        let tx_hash = signed_tx.hash();
         let withdraw_infos = vec![WithdrawInfo {
             tx_hash,
             op: withdraw_op,
         }];
-        // The recipient notes the bundle releases — carried so an orphaned
-        // bundle can be re-issued from its report.
+        // Carried so an orphaned bundle can be re-issued from its report.
         let outputs = Outputs::try_new(recipient_outputs)
             .map_err(|e| Error::Network(format!("invalid withdraw outputs: {e:?}")))?;
 
@@ -871,52 +899,20 @@ where
             amount,
         );
 
-        // Safe to unwrap — `ensure_ready` checks state.
-        let state = self.state.as_mut().unwrap();
-        state.submit_atomic_withdraw(
-            signed_tx.clone(),
+        Ok(self.build_prepared_bundle(
+            (tx, transfer_proof),
+            inscribe_sig,
             parent,
             msg_id,
-            inscribe.clone(),
-            withdraw_infos.clone(),
-            outputs.clone(),
-        );
-        self.last_msg_id = msg_id;
-        self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
-
-        if self.can_publish_inscription_now() {
-            self.queue_publish_post(tx_hash, signed_tx);
-        }
-
-        self.publish_channel_view();
-
-        let checkpoint = self.publish_checkpoint().ok_or(Error::Unavailable {
-            reason: "checkpoint unavailable",
-        })?;
-
-        Ok((
-            PublishResult {
-                tx: PendingTx::AtomicWithdraw(AtomicWithdrawInfo {
-                    tx_hash,
-                    inscription: InscriptionInfo {
-                        tx_hash,
-                        parent_msg: parent,
-                        this_msg: msg_id,
-                        payload: inscribe,
-                        signer: Some(self.signing_key.public_key()),
-                    },
-                    withdraws: withdraw_infos,
-                    outputs,
-                }),
+            inscribe,
+            PreparedBundleKind::AtomicWithdraw {
+                withdraws: withdraw_infos,
+                outputs,
             },
-            checkpoint,
         ))
     }
 
-    /// Build the transfer + withdraw ops for an atomic withdraw: select the
-    /// channel notes that cover `amount`, transfer them to the recipient keys
-    /// (with change back to the funding key when they overpay), and release the
-    /// freshly-created recipient notes.
+    /// Build the transfer + withdraw ops for an atomic withdraw.
     fn build_transfer_and_withdraw(
         &self,
         recipient_outputs: &[Note],
@@ -943,9 +939,8 @@ where
             Error::Network("selected channel notes underfund the withdrawal".into())
         })?;
 
-        // Transfer outputs: the recipient notes, then a change note when the
-        // inputs overpay. Change routes to `change_pk` if configured, else back
-        // to the funding key.
+        // Recipient notes, plus a change note (to `change_pk`, else the funding
+        // key) when the inputs overpay.
         let change_pk = self.config.funding.change_pk.unwrap_or(funding_pk);
         let mut transfer_outputs = recipient_outputs.to_vec();
         if change > 0 {
@@ -959,9 +954,8 @@ where
                 .map_err(|e| Error::Network(format!("invalid transfer outputs: {e:?}")))?,
         };
 
-        // The withdraw releases exactly the recipient notes the transfer
-        // created: the first `recipient_outputs.len()` utxos in output order. A
-        // trailing change note, if any, stays in the channel.
+        // Release exactly the transfer's recipient notes: the first
+        // `recipient_outputs.len()` utxos in output order; change stays in-channel.
         let recipient_note_ids: Vec<_> = transfer_op
             .utxos()
             .take(recipient_outputs.len())
@@ -976,43 +970,94 @@ where
         Ok((transfer_op, withdraw_op))
     }
 
-    /// Builds and publishes `[CHANNEL_INSCRIBE, CHANNEL_TRANSFER]`: the
-    /// transfer consumes the named deposited notes (re-creating each 1:1),
-    /// gating the inscription on the deposit. Mirrors
-    /// [`Self::do_publish_atomic_withdraw`]; single-signer channels.
+    /// Single-signer pin deposit: prepare, self-sign, and submit.
     pub(super) async fn do_publish_pin_deposit(
         &mut self,
         inscribe: Inscription,
         consumed_notes: Vec<NoteId>,
     ) -> Result<PublishReceipt, Error> {
+        let own_key_index = self.own_key_index_for_single_sig("publish_pin_deposit")?;
+        let prepared = self
+            .do_prepare_pin_deposit(inscribe, consumed_notes)
+            .await?;
+        let signature = IndexedSignature::new(own_key_index, prepared.inscribe_sig);
+        self.do_submit_atomic_bundle(prepared, vec![signature])
+    }
+
+    /// Build and fund an atomic `[inscribe, transfer]` pin-deposit bundle for
+    /// external multi-sig signing: the transfer consumes the named deposited
+    /// notes (re-creating each 1:1), gating the inscription on the deposit.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "&mut self keeps the async future Send; a &self future would require Sync"
+    )]
+    pub(super) async fn do_prepare_pin_deposit(
+        &mut self,
+        inscribe: Inscription,
+        consumed_notes: Vec<NoteId>,
+    ) -> Result<PreparedAtomicBundle, Error> {
         self.ensure_ready()?;
         self.ensure_fundable()?;
 
         if consumed_notes.is_empty() {
             return Err(Error::Network(
-                "publish_pin_deposit requires at least one deposited note".into(),
+                "pin deposit requires at least one deposited note".into(),
             ));
         }
 
-        // Use the cached channel state kept fresh by the drive loop.
+        let transfer_op = self.build_deposit_transfer(&consumed_notes)?;
+        let consumed_inputs = transfer_op.inputs.clone();
+
+        let (ops, parent, msg_id) =
+            self.wrap_bundle_ops(&inscribe, vec![Op::ChannelTransfer(transfer_op)]);
+
+        let (tx, transfer_proof) = fund_ops(&self.node, &self.config.funding, ops).await?;
+        let tx_hash = tx.hash();
+        let inscribe_sig = build_sign_tx(tx_hash, &self.signing_key);
+
+        debug!(target: TARGET,
+            "Prepared pin-deposit: payload={:?}, parent={}, msg_id={}, tx={}, notes={}",
+            String::from_utf8_lossy(&inscribe),
+            hex::encode(parent.as_ref()),
+            hex::encode(msg_id.as_ref()),
+            hex::encode(tx_hash.0),
+            consumed_inputs.len(),
+        );
+
+        Ok(self.build_prepared_bundle(
+            (tx, transfer_proof),
+            inscribe_sig,
+            parent,
+            msg_id,
+            inscribe,
+            PreparedBundleKind::PinDeposit {
+                consumed_notes: consumed_inputs,
+            },
+        ))
+    }
+
+    /// Resolve this sequencer's accredited-key index, rejecting channels that
+    /// require multi-sig (`transfer_threshold > 1`).
+    fn own_key_index_for_single_sig(&self, op: &str) -> Result<ChannelKeyIndex, Error> {
         let channel_state = self.channel_state.as_ref().ok_or_else(|| {
             Error::Network(format!(
-                "publish_pin_deposit requires channel state for {:?}",
+                "{op} requires channel state for {:?}",
                 self.channel_id
             ))
         })?;
         if channel_state.transfer_threshold > 1 {
             return Err(Error::Network(format!(
-                "publish_pin_deposit requires transfer_threshold == 1, got {}",
+                "{op} requires transfer_threshold == 1, got {}; use the prepare/submit \
+                 multi-sig path instead",
                 channel_state.transfer_threshold
             )));
         }
-        let own_key_index = find_own_key_index(channel_state, &self.signing_key)?;
+        find_own_key_index(channel_state, &self.signing_key)
+    }
 
-        let transfer_op = self.build_deposit_transfer(&consumed_notes)?;
-        // The bounded input set is exactly what the transfer consumes.
-        let consumed_inputs = transfer_op.inputs.clone();
-
+    /// Prefix an inscription op onto the bundle's fund-moving ops, returning
+    /// them in execution order plus the inscription's parent and message id.
+    fn wrap_bundle_ops(&self, inscribe: &Inscription, mut ops: Vec<Op>) -> (Vec<Op>, MsgId, MsgId) {
         let parent = self.compute_publish_parent();
         let inscription_op = InscriptionOp {
             channel_id: self.channel_id,
@@ -1021,40 +1066,128 @@ where
             signer: self.signing_key.public_key(),
         };
         let msg_id = inscription_op.id();
+        ops.insert(0, Op::ChannelInscribe(inscription_op));
+        (ops, parent, msg_id)
+    }
 
-        let ops = vec![
-            Op::ChannelInscribe(inscription_op),
-            Op::ChannelTransfer(transfer_op),
-        ];
-
-        let (tx, transfer_proof) = fund_ops(&self.node, &self.config.funding, ops).await?;
-        let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
-        let ops_proofs =
-            build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
-        let signed_tx = SignedOps::from_parts(tx, ops_proofs).map_err(|error| {
-            Error::Network(format!("failed to build signed atomic fund tx: {error:?}"))
-        })?;
-
-        let tx_hash = signed_tx.hash();
-
-        debug!(target: TARGET,
-            "Prepared pin-deposit: payload={:?}, parent={}, msg_id={}, tx={}, notes={}",
-            String::from_utf8_lossy(&inscribe),
-            hex::encode(parent.as_ref()),
-            hex::encode(msg_id.as_ref()),
-            hex::encode(tx_hash.0),
-            consumed_notes.len(),
+    /// Assemble a [`PreparedAtomicBundle`], capturing the channel's current
+    /// accredited keys / `transfer_threshold` and the `sign_payload` to sign.
+    fn build_prepared_bundle(
+        &self,
+        funded: (Ops, Option<OpProof>),
+        inscribe_sig: Ed25519Signature,
+        parent: MsgId,
+        msg_id: MsgId,
+        inscribe: Inscription,
+        kind: PreparedBundleKind,
+    ) -> PreparedAtomicBundle {
+        let (tx, transfer_proof) = funded;
+        let (accredited_keys, signing_threshold) = self.channel_state.as_ref().map_or_else(
+            || (Vec::new(), 0),
+            |channel| {
+                (
+                    channel.accredited_keys.iter().copied().collect(),
+                    channel.transfer_threshold,
+                )
+            },
         );
-
-        // Safe to unwrap — `ensure_ready` checks state.
-        let state = self.state.as_mut().unwrap();
-        state.submit_pin_deposit(
-            signed_tx.clone(),
+        let sign_payload = tx.hash().as_signing_bytes().as_ref().to_vec();
+        PreparedAtomicBundle {
+            tx,
+            transfer_proof,
+            inscribe_sig,
             parent,
             msg_id,
-            inscribe.clone(),
-            consumed_inputs.clone(),
+            inscribe,
+            signer: self.signing_key.public_key(),
+            kind,
+            sign_payload,
+            accredited_keys,
+            signing_threshold,
+        }
+    }
+
+    /// Assemble a [`PreparedAtomicBundle`] with its externally-collected
+    /// signatures and submit it — the shared tail of the single-sig and
+    /// multi-sig paths (tracking, queueing, checkpoint, tx status).
+    pub(super) fn do_submit_atomic_bundle(
+        &mut self,
+        prepared: PreparedAtomicBundle,
+        signatures: Vec<IndexedSignature>,
+    ) -> Result<PublishReceipt, Error> {
+        self.ensure_ready()?;
+
+        let PreparedAtomicBundle {
+            tx,
+            transfer_proof,
+            inscribe_sig,
+            parent,
+            msg_id,
+            inscribe,
+            signer,
+            kind,
+            sign_payload,
+            accredited_keys: prepared_keys,
+            signing_threshold: prepared_threshold,
+        } = prepared;
+
+        // Fail fast against *live* state rather than the prepared snapshot:
+        // the ledger verifies the proof against the keys/threshold at
+        // inclusion time and the inscription against the channel tip, so a
+        // config or peer inscription that landed during signature collection
+        // surfaces as `ChannelStateChanged` (re-prepare) instead of parking an
+        // unlandable bundle in the pending set (only chain inclusion evicts
+        // it). Only once state is known unchanged are the signatures checked,
+        // so `InvalidMultiSig` always means a construction bug.
+        let channel_state = self.channel_state.as_ref().ok_or(Error::Unavailable {
+            reason: "channel state unavailable",
+        })?;
+        let live_keys: Vec<_> = channel_state.accredited_keys.iter().copied().collect();
+        let stale = stale_bundle_reasons(
+            &prepared_keys,
+            prepared_threshold,
+            &live_keys,
+            channel_state.transfer_threshold,
+            parent,
+            self.compute_publish_parent(),
         );
+        if !stale.is_empty() {
+            return Err(Error::ChannelStateChanged(stale.join("; ")));
+        }
+        validate_multi_sig(
+            &live_keys,
+            channel_state.transfer_threshold,
+            &sign_payload,
+            &signatures,
+        )?;
+
+        let signed_tx =
+            assemble_atomic_bundle_tx(tx, inscribe_sig, signatures, transfer_proof.as_ref())?;
+        let tx_hash = signed_tx.hash();
+
+        // Track the pending bundle exactly as its single-sig equivalent would.
+        {
+            // Safe to unwrap — `ensure_ready` checks state.
+            let state = self.state.as_mut().unwrap();
+            match &kind {
+                PreparedBundleKind::AtomicWithdraw { withdraws, outputs } => state
+                    .submit_atomic_withdraw(
+                        signed_tx.clone(),
+                        parent,
+                        msg_id,
+                        inscribe.clone(),
+                        withdraws.clone(),
+                        outputs.clone(),
+                    ),
+                PreparedBundleKind::PinDeposit { consumed_notes } => state.submit_pin_deposit(
+                    signed_tx.clone(),
+                    parent,
+                    msg_id,
+                    inscribe.clone(),
+                    consumed_notes.clone(),
+                ),
+            }
+        }
         self.last_msg_id = msg_id;
         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
@@ -1068,27 +1201,47 @@ where
             reason: "checkpoint unavailable",
         })?;
 
-        Ok((
-            PublishResult {
-                tx: PendingTx::PinDeposit(PinDepositInfo {
+        let inscription = InscriptionInfo {
+            tx_hash,
+            parent_msg: parent,
+            this_msg: msg_id,
+            payload: inscribe,
+            signer: Some(signer),
+        };
+        let tx = match kind {
+            PreparedBundleKind::AtomicWithdraw { withdraws, outputs } => {
+                PendingTx::AtomicWithdraw(AtomicWithdrawInfo {
                     tx_hash,
-                    inscription: InscriptionInfo {
-                        tx_hash,
-                        parent_msg: parent,
-                        this_msg: msg_id,
-                        payload: inscribe,
-                        signer: Some(self.signing_key.public_key()),
-                    },
-                    consumed_notes: consumed_inputs,
-                }),
-            },
-            checkpoint,
-        ))
+                    inscription,
+                    withdraws,
+                    outputs,
+                })
+            }
+            PreparedBundleKind::PinDeposit { consumed_notes } => {
+                PendingTx::PinDeposit(PinDepositInfo {
+                    tx_hash,
+                    inscription,
+                    consumed_notes,
+                })
+            }
+        };
+
+        Ok((PublishResult { tx }, checkpoint))
+    }
+
+    /// Sign a prepared multi-sig payload with this sequencer's own key,
+    /// returning its `IndexedSignature`. The index is this sequencer's position
+    /// in the prepared `accredited_keys`; errors if its key is not accredited.
+    pub(super) fn do_sign_prepared(
+        &self,
+        accredited_keys: &[Ed25519PublicKey],
+        sign_payload: &[u8],
+    ) -> Result<IndexedSignature, Error> {
+        sign_prepared(&self.signing_key, accredited_keys, sign_payload)
     }
 
     /// Consume the named deposited notes and re-create each 1:1; errors if a
-    /// note is not in the tracked channel-note set (deposit not on this
-    /// branch).
+    /// note is not in the tracked channel-note set.
     fn build_deposit_transfer(
         &self,
         consumed_notes: &[NoteId],

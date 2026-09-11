@@ -110,6 +110,33 @@ async fn step_prepare_zone_channel_config(
         transaction_alias,
         authorized_aliases,
         threshold,
+        0,
+    )
+    .await
+}
+
+#[when(
+    expr = "sequencer {string} prepares zone config transaction {string} with threshold {int} and posting timeframe {int} authorizing:"
+)]
+async fn step_prepare_zone_channel_config_with_timeframe(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    transaction_alias: String,
+    threshold: u16,
+    posting_timeframe: u32,
+) -> StepResult {
+    let authorized_aliases =
+        single_column_table(step, "alias", "authorized zone sequencer aliases")?;
+
+    prepare_zone_channel_config(
+        world,
+        step,
+        &sequencer_alias,
+        transaction_alias,
+        authorized_aliases,
+        threshold,
+        posting_timeframe,
     )
     .await
 }
