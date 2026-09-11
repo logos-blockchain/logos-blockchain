@@ -1,7 +1,6 @@
 use core::{
     num::{NonZeroU64, NonZeroUsize},
     ops::RangeInclusive,
-    time::Duration,
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -10,7 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt as _, select};
+use futures::{StreamExt as _, select};
 use lb_blend_membership::{Membership, Node};
 use lb_blend_message::crypto::key_ext::Ed25519SecretKeyExt as _;
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
@@ -20,52 +19,15 @@ use libp2p::{
     identity::{PublicKey, ed25519},
 };
 use libp2p_swarm_test::SwarmExt as _;
-use tokio::time::{MissedTickBehavior, interval};
-use tokio_stream::wrappers::IntervalStream;
 
 use crate::core::{
     poq_verification::PendingPoQVerifications,
     tests::utils::{PROTOCOL_NAME, TestProofsVerifier, TestSwarm},
-    with_core::behaviour::{Behaviour, Event, IntervalStreamProvider, message_cache::MessageCache},
+    with_core::behaviour::{Behaviour, Event, message_cache::MessageCache},
 };
 
 /// The behaviour under test, with the `PoQ` verifier the tests use.
-pub type TestBehaviour = Behaviour<IntervalProvider, TestProofsVerifier>;
-
-#[derive(Clone)]
-pub struct IntervalProvider(Duration, RangeInclusive<u64>);
-
-impl IntervalStreamProvider for IntervalProvider {
-    type IntervalStream = Box<dyn Stream<Item = RangeInclusive<u64>> + Send + Unpin + 'static>;
-    type IntervalItem = RangeInclusive<u64>;
-
-    fn interval_stream(&self) -> Self::IntervalStream {
-        let range = self.1.clone();
-        let interval = {
-            let mut interval = interval(self.0);
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-            interval
-        };
-        Box::new(IntervalStream::new(interval).map(move |_| range.clone()))
-    }
-}
-
-#[derive(Default)]
-pub struct IntervalProviderBuilder {
-    range: Option<RangeInclusive<u64>>,
-}
-
-impl IntervalProviderBuilder {
-    pub fn with_range(mut self, range: RangeInclusive<u64>) -> Self {
-        self.range = Some(range);
-        self
-    }
-
-    pub fn build(self) -> IntervalProvider {
-        IntervalProvider(Duration::from_secs(1), self.range.unwrap_or(0..=1))
-    }
-}
+pub type TestBehaviour = Behaviour<TestProofsVerifier>;
 
 /// Generates `count` nodes with randomly generated identities and empty
 /// addresses.
@@ -93,7 +55,6 @@ pub fn new_nodes_with_empty_address(
 pub struct BehaviourBuilder {
     local_public_key: ed25519::PublicKey,
     membership: Option<Membership<PeerId>>,
-    provider: Option<IntervalProvider>,
     peering_degree: Option<RangeInclusive<usize>>,
     minimum_network_size: Option<NonZeroUsize>,
     num_blend_layers: Option<NonZeroU64>,
@@ -105,7 +66,6 @@ impl BehaviourBuilder {
         Self {
             local_public_key: identity.public(),
             membership: None,
-            provider: None,
             peering_degree: None,
             minimum_network_size: None,
             num_blend_layers: None,
@@ -125,11 +85,6 @@ impl BehaviourBuilder {
             &Ed25519PublicKey::from_bytes(&self.local_public_key.to_bytes())
                 .expect("must be a valid ed25519 public key"),
         ));
-        self
-    }
-
-    pub fn with_provider(mut self, provider: IntervalProvider) -> Self {
-        self.provider = Some(provider);
         self
     }
 
@@ -154,9 +109,6 @@ impl BehaviourBuilder {
             connections_waiting_upgrade: HashMap::new(),
             events: VecDeque::new(),
             waker: None,
-            observation_window_clock_provider: self
-                .provider
-                .unwrap_or_else(|| IntervalProviderBuilder::default().build()),
             current_epoch_info: (
                 self.membership
                     .unwrap_or_else(|| Membership::new_without_local(&[])),
