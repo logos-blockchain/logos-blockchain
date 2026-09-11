@@ -12,7 +12,14 @@ use lb_zone_sdk::{
 use reqwest::Url;
 use rusqlite::Connection;
 
-use crate::{db::Databases, error::Error, protocol::TxId, runtime, sql::TransactionBuilder};
+use crate::{
+    db::Databases,
+    error::Error,
+    protocol::TxId,
+    runtime,
+    sql::TransactionBuilder,
+    status::{WriteStatus, WriteStatusChanges},
+};
 
 /// Configuration for one `λSQL` database.
 pub struct LogosSqlConfig {
@@ -123,28 +130,47 @@ impl LogosSql {
             .await
     }
 
-    /// Returns local writes whose channel position was removed by a conflict
-    /// or reorganization.
+    /// Returns the current status of a local write.
     ///
-    /// Logos SQL does not execute these writes again. The returned set is
-    /// durable across restarts but provisional: a later reorganization that
-    /// restores the original channel position removes its `TxId` from the
-    /// set. This API does not yet report when a displacement becomes final.
-    /// Repeated calls return the same IDs until such a restoration because
-    /// the current API has no application acknowledgement operation.
-    /// An application that retries before finality must therefore make the
-    /// replacement safe if the original write returns.
+    /// `None` means this participant has no record of `tx_id`. A displaced
+    /// write can become live again if a channel reorganization restores it.
+    /// Once a write is [`WriteStatus::Finalized`], its status cannot change.
     ///
     /// # Errors
     ///
-    /// Returns an error when the runtime is no longer available or its local
-    /// outcome state cannot be read.
-    pub async fn displaced_writes(&self) -> Result<Vec<TxId>, Error> {
+    /// Returns an error if the runtime has stopped or local status cannot be
+    /// read.
+    pub async fn write_status(&self, tx_id: TxId) -> Result<Option<WriteStatus>, Error> {
         self.runtime
             .as_ref()
             .ok_or(Error::RuntimeStopped)?
-            .displaced_writes()
+            .write_status(tx_id)
             .await
+    }
+
+    /// Subscribes to future status changes for local writes.
+    ///
+    /// Notifications are kept in memory and are lost on restart. If the
+    /// application reads too slowly, older notifications are dropped and the
+    /// stream reports `Lagged`. Call [`Self::write_status`] for each write you
+    /// are tracking to get its latest saved status.
+    ///
+    /// Subscribe before querying current statuses so changes that happen
+    /// during those queries are included in the stream.
+    ///
+    /// Logos SQL does not retry or republish displaced writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime is no longer available.
+    pub fn write_status_changes(&self) -> Result<WriteStatusChanges, Error> {
+        let receiver = self
+            .runtime
+            .as_ref()
+            .ok_or(Error::RuntimeStopped)?
+            .subscribe_write_status_changes();
+
+        Ok(WriteStatusChanges::new(receiver))
     }
 
     /// Opens a read-only connection to the replicated database.
