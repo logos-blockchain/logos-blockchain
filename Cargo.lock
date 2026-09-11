@@ -4650,6 +4650,7 @@ name = "logos-blockchain-key-management-system-keys"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "blake2",
  "bytes",
  "ed25519-dalek",
  "generic-array 1.4.3",
