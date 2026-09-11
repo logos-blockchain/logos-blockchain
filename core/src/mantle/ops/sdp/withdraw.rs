@@ -248,7 +248,7 @@ mod tests {
     fn verify_rejects_an_unknown_declaration() {
         let operation = SDPWithdrawOp::sample();
         let declaration_id = operation.declaration_id;
-        let locked_notes = locked_notes(&operation.service_note_id);
+        let service_notes = locked_notes(&operation.service_note_id);
         let declarations = Declarations::new_sync();
 
         let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
@@ -259,7 +259,7 @@ mod tests {
                 .verify(&SDPWithdrawValidationContext {
                     declarations: &declarations,
                     epoch: Epoch::from(0),
-                    service_notes: &locked_notes,
+                    service_notes: &service_notes,
                     tx_hash_view: &signed_view,
                 })
                 .unwrap_err(),
@@ -271,7 +271,7 @@ mod tests {
     fn verify_rejects_a_declaration_already_scheduled_for_withdrawal() {
         let operation = SDPWithdrawOp::sample();
         let declaration_id = operation.declaration_id;
-        let locked_notes = locked_notes(&operation.service_note_id);
+        let service_notes = locked_notes(&operation.service_note_id);
 
         let withdraw_at = Epoch::from(7);
         let declaration = Declaration {
@@ -288,7 +288,7 @@ mod tests {
                 .verify(&SDPWithdrawValidationContext {
                     declarations: &declarations,
                     epoch: Epoch::from(0),
-                    service_notes: &locked_notes,
+                    service_notes: &service_notes,
                     tx_hash_view: &signed_view,
                 })
                 .unwrap_err(),
@@ -303,7 +303,7 @@ mod tests {
     fn verify_rejects_a_note_not_locked_for_the_service() {
         let operation = SDPWithdrawOp::sample();
         let note_id = operation.service_note_id;
-        let locked_notes = ServiceNotes::new();
+        let service_notes = ServiceNotes::new();
         let declarations = declarations(&operation, declaration(operation.service_note_id));
 
         let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
@@ -314,7 +314,7 @@ mod tests {
                 .verify(&SDPWithdrawValidationContext {
                     declarations: &declarations,
                     epoch: Epoch::from(0),
-                    service_notes: &locked_notes,
+                    service_notes: &service_notes,
                     tx_hash_view: &signed_view,
                 })
                 .unwrap_err(),
@@ -330,7 +330,7 @@ mod tests {
         let operation = SDPWithdrawOp::sample();
         let note_id = operation.service_note_id;
         let expected = NoteId(Fr::from(99u64));
-        let locked_notes = locked_notes(&note_id);
+        let service_notes = locked_notes(&note_id);
         let declarations = declarations(&operation, declaration(expected));
 
         let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
@@ -341,7 +341,7 @@ mod tests {
                 .verify(&SDPWithdrawValidationContext {
                     declarations: &declarations,
                     epoch: Epoch::from(0),
-                    service_notes: &locked_notes,
+                    service_notes: &service_notes,
                     tx_hash_view: &signed_view,
                 })
                 .unwrap_err(),
@@ -355,7 +355,7 @@ mod tests {
             nonce: 0,
             ..SDPWithdrawOp::sample()
         };
-        let locked_notes = locked_notes(&operation.service_note_id);
+        let service_notes = locked_notes(&operation.service_note_id);
         let declarations = declarations(&operation, declaration(operation.service_note_id));
 
         let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
@@ -366,7 +366,7 @@ mod tests {
                 .verify(&SDPWithdrawValidationContext {
                     declarations: &declarations,
                     epoch: Epoch::from(0),
-                    service_notes: &locked_notes,
+                    service_notes: &service_notes,
                     tx_hash_view: &signed_view,
                 })
                 .unwrap_err(),
@@ -375,6 +375,64 @@ mod tests {
                 declaration_nonce: 0,
             }
         );
+    }
+
+    fn verified(
+        operation: SDPWithdrawOp,
+    ) -> SignedOperation<SDPWithdrawOp, Verified, StandardMode> {
+        SignedOperation::<_, Unverified, StandardMode>::new(
+            operation,
+            <SDPWithdrawOp as ProvableOperation>::Proof::sample(),
+        )
+        .into_state_trusted()
+    }
+
+    #[test]
+    fn execute_schedules_the_withdrawal_after_the_snapshot_delay() {
+        let operation = SDPWithdrawOp::sample();
+        let declaration_id = operation.declaration_id;
+        let locked_note_id = operation.service_note_id;
+        let nonce = operation.nonce;
+        let service_notes = locked_notes(&locked_note_id);
+        let declarations = declarations(&operation, declaration(locked_note_id));
+        let epoch = Epoch::from(4);
+
+        let (context, events) = verified(operation)
+            .execute(SDPWithdrawExecutionContext {
+                declarations,
+                service_notes,
+                epoch,
+            })
+            .expect("the declaration is registered");
+
+        let updated = context
+            .declarations
+            .get(&declaration_id)
+            .expect("the declaration stays registered");
+        assert_eq!(
+            updated.withdraw_at,
+            Some(epoch.strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY))
+        );
+        assert_eq!(updated.nonce, nonce);
+        assert!(
+            context
+                .service_notes
+                .is_used_for_service(&locked_note_id, &ServiceType::BlendNetwork)
+        );
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "The operation should have been validated")]
+    fn execute_panics_on_a_declaration_the_ledger_does_not_hold() {
+        let operation = SDPWithdrawOp::sample();
+        let service_notes = locked_notes(&operation.service_note_id);
+
+        drop(verified(operation).execute(SDPWithdrawExecutionContext {
+            declarations: Declarations::new_sync(),
+            service_notes,
+            epoch: Epoch::from(4),
+        }));
     }
 
     #[test]
