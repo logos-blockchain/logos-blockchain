@@ -22,8 +22,8 @@ use crate::core::{
 /// A composed behaviour that wraps the two sub-behaviours for dealing with core
 /// and edge nodes.
 #[derive(lb_libp2p::NetworkBehaviour)]
-pub struct NetworkBehaviour<ObservationWindowClockProvider, ProofsVerifier> {
-    with_core: CoreToCoreBehaviour<ObservationWindowClockProvider, ProofsVerifier>,
+pub struct NetworkBehaviour<ProofsVerifier> {
+    with_core: CoreToCoreBehaviour<ProofsVerifier>,
     with_edge: CoreToEdgeBehaviour<ProofsVerifier>,
 }
 
@@ -32,14 +32,12 @@ pub struct Config {
     pub with_edge: CoreToEdgeConfig,
 }
 
-impl<ObservationWindowClockProvider, ProofsVerifier>
-    NetworkBehaviour<ObservationWindowClockProvider, ProofsVerifier>
+impl<ProofsVerifier> NetworkBehaviour<ProofsVerifier>
 where
     ProofsVerifier: Clone,
 {
     pub fn new(
         config: &Config,
-        observation_window_clock_provider: ObservationWindowClockProvider,
         current_epoch_info: (Membership<PeerId>, Epoch),
         proofs_verifier: ProofsVerifier,
         local_peer_id: PeerId,
@@ -48,7 +46,6 @@ where
         Self {
             with_core: CoreToCoreBehaviour::new(
                 &config.with_core,
-                observation_window_clock_provider,
                 current_epoch_info.clone(),
                 proofs_verifier.clone(),
                 local_peer_id,
@@ -74,15 +71,11 @@ where
             .start_new_epoch(new_epoch_info, new_proofs_verifier);
     }
 
-    pub const fn with_core(
-        &self,
-    ) -> &CoreToCoreBehaviour<ObservationWindowClockProvider, ProofsVerifier> {
+    pub const fn with_core(&self) -> &CoreToCoreBehaviour<ProofsVerifier> {
         &self.with_core
     }
 
-    pub const fn with_core_mut(
-        &mut self,
-    ) -> &mut CoreToCoreBehaviour<ObservationWindowClockProvider, ProofsVerifier> {
+    pub const fn with_core_mut(&mut self) -> &mut CoreToCoreBehaviour<ProofsVerifier> {
         &mut self.with_core
     }
 

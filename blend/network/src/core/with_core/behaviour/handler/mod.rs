@@ -1,7 +1,4 @@
-use core::{
-    ops::RangeInclusive,
-    task::{Context, Poll, Waker},
-};
+use core::task::{Context, Poll, Waker};
 use std::{collections::VecDeque, io};
 
 use futures::{FutureExt as _, future::BoxFuture};
@@ -15,23 +12,15 @@ use libp2p::{
     },
 };
 
-use crate::{
-    core::with_core::behaviour::handler::conn_maintenance::{
-        ConnectionMonitor, ConnectionMonitorOutput,
-    },
-    recv_msg, send_msg,
-};
-
-pub(super) mod conn_maintenance;
+use crate::{recv_msg, send_msg};
 
 const LOG_TARGET: &str = blend::network::core::core::conn::HANDLER;
 
-pub struct ConnectionHandler<ConnectionWindowClock> {
+pub struct ConnectionHandler {
     inbound_substream: Option<InboundSubstreamState>,
     outbound_substream: Option<OutboundSubstreamState>,
     outbound_msgs: VecDeque<Vec<u8>>,
     pending_events_to_behaviour: VecDeque<ToBehaviour>,
-    monitor: ConnectionMonitor<ConnectionWindowClock>,
     protocol_name: StreamProtocol,
     waker: Option<Waker>,
     connection_details: (PeerId, ConnectionId),
@@ -65,19 +54,14 @@ enum OutboundSubstreamState {
     Dropped,
 }
 
-impl<ConnectionWindowClock> ConnectionHandler<ConnectionWindowClock> {
-    pub fn new(
-        monitor: ConnectionMonitor<ConnectionWindowClock>,
-        protocol_name: StreamProtocol,
-        connection_details: (PeerId, ConnectionId),
-    ) -> Self {
+impl ConnectionHandler {
+    pub fn new(protocol_name: StreamProtocol, connection_details: (PeerId, ConnectionId)) -> Self {
         tracing::trace!(target: LOG_TARGET, "Initializing core->core connection handler for connection {connection_details:?}.");
         Self {
             inbound_substream: None,
             outbound_substream: None,
             outbound_msgs: VecDeque::new(),
             pending_events_to_behaviour: VecDeque::new(),
-            monitor,
             protocol_name,
             waker: None,
             connection_details,
@@ -138,23 +122,12 @@ pub enum ToBehaviour {
     FullyNegotiated,
     /// A message has been received from the connection.
     Message(Vec<u8>),
-    /// Notifying that the peer is detected as spammy.
-    /// The inbound/outbound streams to the peer are closed proactively.
-    SpammyPeer,
-    /// Notifying that the peer is detected as unhealthy.
-    UnhealthyPeer,
-    /// Notifying that the peer is detected as healthy.
-    HealthyPeer,
     /// An IO error from the connection.
     /// The inbound/outbound streams to the peer are closed proactively.
     IOError(io::Error),
 }
 
-impl<ConnectionWindowClock> libp2p::swarm::ConnectionHandler
-    for ConnectionHandler<ConnectionWindowClock>
-where
-    ConnectionWindowClock: futures::Stream<Item = RangeInclusive<u64>> + Unpin + Send + 'static,
-{
+impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
     type FromBehaviour = FromBehaviour;
     type ToBehaviour = ToBehaviour;
     type InboundProtocol = ReadyUpgrade<StreamProtocol>;
@@ -177,8 +150,8 @@ where
     ) -> Poll<
         ConnectionHandlerEvent<Self::OutboundProtocol, Self::OutboundOpenInfo, Self::ToBehaviour>,
     > {
-        // Short-circuit so that we do not poll the connection monitor anymore in case
-        // either of the two substreams has been dropped.
+        // Short-circuit so that we do no further work once either of the two
+        // substreams has been dropped.
         if matches!(self.inbound_substream, Some(InboundSubstreamState::Dropped))
             || matches!(
                 self.outbound_substream,
@@ -186,36 +159,6 @@ where
             )
         {
             return Poll::Pending;
-        }
-
-        // Check if the monitor interval has elapsed, if exists.
-        // TODO: Refactor this to a separate function.
-        if let Poll::Ready(output) = self.monitor.poll(cx) {
-            match output {
-                Some(ConnectionMonitorOutput::Spammy) => {
-                    // TODO: Re-enable this once we have fixed Blend observation
-                    // window range values.
-                    // self.close_substreams();
-                    self.pending_events_to_behaviour
-                        .push_back(ToBehaviour::SpammyPeer);
-                }
-                Some(ConnectionMonitorOutput::Unhealthy) => {
-                    self.pending_events_to_behaviour
-                        .push_back(ToBehaviour::UnhealthyPeer);
-                }
-                Some(ConnectionMonitorOutput::Healthy) => {
-                    self.pending_events_to_behaviour
-                        .push_back(ToBehaviour::HealthyPeer);
-                }
-                None => {
-                    tracing::debug!(
-                        target: LOG_TARGET,
-                        "Connection monitor for connection {:?} closed unexpectedly. Closing substreams proactively.",
-                        self.connection_details
-                    );
-                    self.close_substreams();
-                }
-            }
         }
 
         // Process pending events to be sent to the behaviour
@@ -236,9 +179,6 @@ where
                         "Received message from inbound stream {:?}; notifying behaviour",
                         self.connection_details
                     );
-
-                    // Record the message to the monitor.
-                    self.monitor.record_message();
 
                     self.inbound_substream =
                         Some(InboundSubstreamState::PendingRecv(recv_msg(stream).boxed()));

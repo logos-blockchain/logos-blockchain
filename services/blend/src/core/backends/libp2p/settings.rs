@@ -3,7 +3,6 @@ use std::{num::NonZeroU64, ops::RangeInclusive};
 
 use futures::{Stream, StreamExt as _, stream::pending};
 use lb_libp2p::protocol_name::StreamProtocol;
-use lb_utils::math::NonNegativeF64;
 use libp2p::{Multiaddr, PeerId, identity::Keypair};
 use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
@@ -16,8 +15,6 @@ use crate::core::settings::RunningBlendConfig as BlendConfig;
 pub struct Libp2pBlendBackendSettings {
     pub listening_address: Multiaddr,
     pub core_peering_degree: RangeInclusive<u64>,
-    pub minimum_messages_coefficient: NonZeroU64,
-    pub normalization_constant: NonNegativeF64,
     #[serde_as(
         as = "lb_utils::bounded_duration::MinimalBoundedDuration<1, lb_utils::bounded_duration::SECOND>"
     )]

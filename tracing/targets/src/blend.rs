@@ -9,7 +9,6 @@ log_targets! {
         core::BEHAVIOUR,
         core::behaviour::OLD,
         core::conn::HANDLER,
-        core::conn::MAINTENANCE,
         edge::BEHAVIOUR,
         handler::CORE_EDGE,
     },

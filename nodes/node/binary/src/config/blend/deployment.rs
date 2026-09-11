@@ -2,7 +2,7 @@ use core::{num::NonZeroU64, time::Duration};
 
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_libp2p::protocol_name::StreamProtocol;
-use lb_utils::math::{NonNegativeF64, PositiveF64};
+use lb_utils::math::PositiveF64;
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
 
@@ -112,9 +112,6 @@ impl From<MinimumNetworkSize> for NonZeroU64 {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CoreSettings {
     pub scheduler: SchedulerSettings,
-    // TODO: Can we derive this?
-    pub minimum_messages_coefficient: NonZeroU64,
-    pub normalization_constant: NonNegativeF64,
     pub activity_threshold_sensitivity: u64,
 }
 
