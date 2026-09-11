@@ -1,5 +1,5 @@
 use core::{
-    num::{NonZeroU64, NonZeroU128},
+    num::{NonZeroU32, NonZeroU64, NonZeroU128},
     time::Duration,
 };
 
@@ -115,6 +115,8 @@ impl From<MinimumNetworkSize> for NonZeroU64 {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CoreSettings {
     pub scheduler: SchedulerSettings,
+    /// `Φ_CC`: the peering degree a core node maintains with other core nodes.
+    pub target_peering_degree: NonZeroU32,
     pub activity_threshold_sensitivity: u64,
 }
 
