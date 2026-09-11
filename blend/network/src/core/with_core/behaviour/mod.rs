@@ -5,7 +5,6 @@ use core::{
 use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
     convert::Infallible,
-    ops::RangeInclusive,
     sync::Arc,
     task::{Context, Poll, Waker},
 };
@@ -61,8 +60,8 @@ const LOG_TARGET: &str = blend::network::core::core::BEHAVIOUR;
 
 #[derive(Debug)]
 pub struct Config {
-    /// The [minimum, maximum] peering degree of this node.
-    pub peering_degree: RangeInclusive<usize>,
+    /// `Φ_CC`: the peering degree of this node.
+    pub target_peering_degree: NonZeroUsize,
     /// The minimum Blend network size for messages to be relayed between peers.
     pub minimum_network_size: NonZeroUsize,
     /// `ß_c`: the fixed number of encapsulation layers every well-formed Blend
@@ -77,10 +76,41 @@ pub struct Config {
     pub liveness_window_in_rounds: NonZeroU128,
 }
 
+/// Who opened a connection, from this node's point of view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionDirection {
+    /// This node dialed the peer.
+    Outgoing,
+    /// The peer dialed this node.
+    Incoming,
+}
+
+impl ConnectionDirection {
+    /// The one place libp2p's convention is decoded: the swarm reports the
+    /// endpoint of an established connection from the *local* side.
+    #[must_use]
+    const fn from_local_endpoint(local: Endpoint) -> Self {
+        match local {
+            Endpoint::Dialer => Self::Outgoing,
+            Endpoint::Listener => Self::Incoming,
+        }
+    }
+
+    #[must_use]
+    const fn is_outgoing(self) -> bool {
+        matches!(self, Self::Outgoing)
+    }
+
+    #[must_use]
+    const fn is_incoming(self) -> bool {
+        matches!(self, Self::Incoming)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct RemotePeerConnectionDetails {
-    /// Role of the remote peer in this connection.
-    role: Endpoint,
+    /// Which side opened this connection.
+    direction: ConnectionDirection,
     /// Latest negotiated state of the peer.
     negotiated_state: NegotiatedPeerState,
     /// The ID of the connection with the peer.
@@ -89,8 +119,8 @@ pub struct RemotePeerConnectionDetails {
 
 impl RemotePeerConnectionDetails {
     #[must_use]
-    pub const fn role(&self) -> Endpoint {
-        self.role
+    pub const fn direction(&self) -> ConnectionDirection {
+        self.direction
     }
 
     #[must_use]
@@ -117,10 +147,10 @@ pub struct Behaviour<ProofsVerifier> {
     negotiated_peers: HashMap<PeerId, RemotePeerConnectionDetails>,
     /// The set of connections established but not yet upgraded.
     ///
-    /// We use this to keep track of the role of the remote peer, to be used
-    /// when deciding which connection to close when a duplicate connection to
-    /// the same peer is detected.
-    connections_waiting_upgrade: HashMap<(PeerId, ConnectionId), Endpoint>,
+    /// We use this to keep track of the connection direction (outgoing or
+    /// incoming), to be used when deciding which connection to close when a
+    /// duplicate connection to the same peer is detected.
+    connections_waiting_upgrade: HashMap<(PeerId, ConnectionId), ConnectionDirection>,
     /// Queue of events to yield to the swarm.
     events: VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     /// Waker that handles polling
@@ -138,8 +168,8 @@ pub struct Behaviour<ProofsVerifier> {
     /// `PoQ` verifications currently running on the blocking pool, for messages
     /// of either the current or the outgoing epoch.
     pending_poq_verifications: PendingPoQVerifications,
-    /// The [minimum, maximum] peering degree of this node.
-    peering_degree: RangeInclusive<usize>,
+    /// `Φ_CC`: the peering degree this node maintains with other core nodes.
+    target_peering_degree: NonZeroUsize,
     local_peer_id: PeerId,
     protocol_name: StreamProtocol,
     /// The minimum Blend network size for messages to be relayed between peers.
@@ -216,7 +246,7 @@ pub enum ConnectionUpgradeFailureReason {
 
 #[derive(Debug)]
 struct ConnectionUpgradeFailure {
-    remote_peer_role: Endpoint,
+    direction: ConnectionDirection,
     reason: ConnectionUpgradeFailureReason,
 }
 
@@ -265,14 +295,14 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         let round_clock = RoundClock::new(config.round_duration_in_seconds);
         let current_round = round_clock.current_round();
         Self {
-            negotiated_peers: HashMap::with_capacity(*config.peering_degree.end()),
+            negotiated_peers: HashMap::with_capacity(config.target_peering_degree.get() + 1),
             events: VecDeque::new(),
             waker: None,
             message_cache: MessageCache::new_with_peer_capacity(epoch_info.0.size()),
             current_epoch_info: epoch_info,
             proofs_verifier: Arc::new(proofs_verifier),
             pending_poq_verifications: PendingPoQVerifications::new(),
-            peering_degree: config.peering_degree.clone(),
+            target_peering_degree: config.target_peering_degree,
             connections_waiting_upgrade: HashMap::new(),
             local_peer_id,
             protocol_name,
@@ -340,27 +370,97 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         }
     }
 
+    /// `Φ_CC - 1`: the fewest live connections the node settles for.
     #[must_use]
-    pub fn num_healthy_peers(&self) -> usize {
+    const fn minimum_live_peers(&self) -> usize {
+        self.target_peering_degree
+            .get()
+            .checked_sub(1)
+            .expect("Target peering degree is greater than 0.")
+    }
+
+    /// `Φ_CC - 2`: the fewest live connections the node must have opened
+    /// itself.
+    #[must_use]
+    const fn minimum_live_dialed_peers(&self) -> usize {
+        self.target_peering_degree.get().saturating_sub(2)
+    }
+
+    /// `Φ_CC + 1`: the most connections with core nodes the node holds at once.
+    #[must_use]
+    pub const fn maximum_peers(&self) -> usize {
+        self.target_peering_degree.get().saturating_add(1)
+    }
+
+    /// `(Φ_CC + 1) - (Φ_CC - 2)`: the most connections the node accepts.
+    #[must_use]
+    pub const fn maximum_accepted_peers(&self) -> usize {
+        self.maximum_peers() - self.minimum_live_dialed_peers()
+    }
+
+    pub fn live_peers(&self) -> impl Iterator<Item = (&PeerId, &RemotePeerConnectionDetails)> {
+        let now = self.round_clock.current_round();
         self.negotiated_peers
-            .values()
-            .filter(|state| state.negotiated_state.is_healthy())
+            .iter()
+            .filter(move |(peer_id, _)| !self.liveness.is_connection_unhealthy(peer_id, now))
+    }
+
+    pub fn num_live_peers(&self) -> usize {
+        self.live_peers().count()
+    }
+
+    /// Of the live connections, the ones this node opened itself.
+    #[must_use]
+    fn num_live_dialed_peers(&self) -> usize {
+        self.live_peers()
+            .filter(|(_, details)| details.direction.is_outgoing())
             .count()
     }
 
+    /// The connections other nodes opened to this one, live or not.
+    #[must_use]
+    fn num_total_accepted_peers(&self) -> usize {
+        self.negotiated_peers
+            .values()
+            .filter(|details| details.direction.is_incoming())
+            .count()
+    }
+
+    #[must_use]
     pub fn num_negotiated_peers(&self) -> usize {
         self.negotiated_peers.len()
     }
 
-    pub const fn minimum_healthy_peering_degree(&self) -> usize {
-        *self.peering_degree.start()
+    /// How many connections the node should open right now.
+    ///
+    /// The node opens while it holds fewer than `Φ_CC - 1` live connections,
+    /// **or** fewer than `Φ_CC - 2` live ones that it opened itself, as per the
+    /// spec.
+    #[must_use]
+    pub fn connections_to_open(&self) -> usize {
+        let live_shortfall = self
+            .minimum_live_peers()
+            .saturating_sub(self.num_live_peers());
+        let dialed_shortfall = self
+            .minimum_live_dialed_peers()
+            .saturating_sub(self.num_live_dialed_peers());
+
+        live_shortfall
+            .max(dialed_shortfall)
+            .min(self.available_connection_slots())
+    }
+
+    /// The connections the node could still hold before reaching `Φ_CC + 1`.
+    #[must_use]
+    pub fn available_connection_slots(&self) -> usize {
+        self.maximum_peers()
+            .saturating_sub(self.negotiated_peers.len())
     }
 
     #[must_use]
-    pub fn available_connection_slots(&self) -> usize {
-        self.peering_degree
-            .end()
-            .saturating_sub(self.negotiated_peers.len())
+    fn can_accept_connection(&self) -> bool {
+        self.available_connection_slots() > 0
+            && self.num_total_accepted_peers() < self.maximum_accepted_peers()
     }
 
     /// Force send a message to a peer, as long as the peer is connected, no
@@ -475,12 +575,9 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     fn notify_about_connection_upgrade_failure(
         &mut self,
         peer_id: PeerId,
-        ConnectionUpgradeFailure {
-            reason,
-            remote_peer_role,
-        }: ConnectionUpgradeFailure,
+        ConnectionUpgradeFailure { reason, direction }: ConnectionUpgradeFailure,
     ) {
-        let event = if remote_peer_role == Endpoint::Dialer {
+        let event = if direction.is_incoming() {
             Event::InboundConnectionUpgradeFailed {
                 peer: peer_id,
                 reason,
@@ -498,15 +595,14 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     fn notify_about_connection_upgrade_success(
         &mut self,
         peer_id: PeerId,
-        remote_peer_role: Endpoint,
+        direction: ConnectionDirection,
     ) {
-        self.events.push_back(ToSwarm::GenerateEvent(
-            if remote_peer_role == Endpoint::Listener {
+        self.events
+            .push_back(ToSwarm::GenerateEvent(if direction.is_outgoing() {
                 Event::OutboundConnectionUpgradeSucceeded(peer_id)
             } else {
                 Event::InboundConnectionUpgradeSucceeded(peer_id)
-            },
-        ));
+            }));
         self.try_wake();
     }
 
@@ -538,7 +634,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     /// ignore the stale event rather than acting on a connection that no longer
     /// belongs to the current epoch.
     fn handle_negotiated_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
-        let Some(new_connection_peer_role) = self
+        let Some(new_connection_direction) = self
             .connections_waiting_upgrade
             .remove(&(peer_id, connection_id))
         else {
@@ -552,12 +648,12 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         if self.negotiated_peers.contains_key(&peer_id) {
             self.handle_negotiated_connection_for_existing_peer(
                 (peer_id, connection_id),
-                new_connection_peer_role,
+                new_connection_direction,
             );
         } else {
             self.handle_negotiated_connection_for_new_peer(
                 (peer_id, connection_id),
-                new_connection_peer_role,
+                new_connection_direction,
             );
         }
     }
@@ -573,7 +669,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     fn handle_negotiated_connection_for_new_peer(
         &mut self,
         (peer_id, connection_id): (PeerId, ConnectionId),
-        remote_peer_role: Endpoint,
+        direction: ConnectionDirection,
     ) {
         // We need to check if we still have available connection slots, as it is
         // possible, especially upon epoch transition, that more than the maximum
@@ -581,14 +677,18 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         // actually upgraded, we downgrade it again if we do not have space left for it.
         // By not adding the new connection to the map of negotiated peers, the swarm
         // will not be notified about this dropped connection, which is what we want.
-        if self.available_connection_slots() == 0 {
+        let has_room = match direction {
+            ConnectionDirection::Incoming => self.can_accept_connection(),
+            ConnectionDirection::Outgoing => self.available_connection_slots() > 0,
+        };
+        if !has_room {
             tracing::debug!(target: LOG_TARGET, "Connection {connection_id:?} with peer {peer_id:?} must be closed because peering degree limit has already been reached.");
             self.close_connection((peer_id, connection_id));
             self.notify_about_connection_upgrade_failure(
                 peer_id,
                 ConnectionUpgradeFailure {
                     reason: ConnectionUpgradeFailureReason::MaximumPeeringDegreeReached,
-                    remote_peer_role,
+                    direction,
                 },
             );
             return;
@@ -604,7 +704,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         self.negotiated_peers.insert(
             peer_id,
             RemotePeerConnectionDetails {
-                role: remote_peer_role,
+                direction,
                 negotiated_state: NegotiatedPeerState::Healthy,
                 connection_id,
             },
@@ -612,7 +712,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         self.liveness
             .start_or_resume_observing(peer_id, self.round_clock.current_round());
         // Notify the Swarm about the successful negotiation.
-        self.notify_about_connection_upgrade_success(peer_id, remote_peer_role);
+        self.notify_about_connection_upgrade_success(peer_id, direction);
     }
 
     /// Handle a newly upgraded connection for a peer that this peer is already
@@ -629,7 +729,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     fn handle_negotiated_connection_for_existing_peer(
         &mut self,
         (peer_id, new_connection_id): (PeerId, ConnectionId),
-        new_remote_peer_role: Endpoint,
+        new_direction: ConnectionDirection,
     ) {
         tracing::trace!(target: LOG_TARGET, "Handling connection ({peer_id:?}, {new_connection_id:?}) where the peer is already negotiated.");
         let existing_connection = self
@@ -640,21 +740,18 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                     "Currently established connection with peer {peer_id:?} not found in storage of established connections.",
                 )
             });
-        match (existing_connection.role, new_remote_peer_role) {
-            // Same connection direction (in case it was not caught at connection establishment
-            // time), we ignore the new connection.
-            (Endpoint::Dialer, Endpoint::Dialer) | (Endpoint::Listener, Endpoint::Listener) => {
-                self.handle_connected_peer_duplicate_connection(
-                    (peer_id, new_connection_id),
-                    new_remote_peer_role,
-                );
-            }
-            (Endpoint::Listener, Endpoint::Dialer) | (Endpoint::Dialer, Endpoint::Listener) => {
-                self.handle_connected_peer_reverse_connection(
-                    (peer_id, new_connection_id),
-                    new_remote_peer_role,
-                );
-            }
+        if existing_connection.direction == new_direction {
+            // Same connection direction (in case it was not caught at connection
+            // establishment time), we ignore the new connection.
+            self.handle_connected_peer_duplicate_connection(
+                (peer_id, new_connection_id),
+                new_direction,
+            );
+        } else {
+            self.handle_connected_peer_reverse_connection(
+                (peer_id, new_connection_id),
+                new_direction,
+            );
         }
     }
 
@@ -663,7 +760,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     fn handle_connected_peer_duplicate_connection(
         &mut self,
         (peer_id, new_connection_id): (PeerId, ConnectionId),
-        new_remote_peer_role: Endpoint,
+        new_direction: ConnectionDirection,
     ) {
         tracing::trace!(target: LOG_TARGET, "Connection {new_connection_id:?} with peer {peer_id:?} will be closed since there is already a connection established in the same direction.");
         self.close_connection((peer_id, new_connection_id));
@@ -671,7 +768,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             peer_id,
             ConnectionUpgradeFailure {
                 reason: ConnectionUpgradeFailureReason::DuplicateConnection,
-                remote_peer_role: new_remote_peer_role,
+                direction: new_direction,
             },
         );
     }
@@ -685,7 +782,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     fn handle_connected_peer_reverse_connection(
         &mut self,
         (peer_id, new_connection_id): (PeerId, ConnectionId),
-        new_remote_peer_role: Endpoint,
+        new_direction: ConnectionDirection,
     ) {
         let existing_connection_details = self
             .negotiated_peers
@@ -698,7 +795,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         // If the current connection is incoming, we close it if our peer ID is higher
         // than theirs.
         tracing::trace!(target: LOG_TARGET, "Connection with already connected peer {peer_id:?} found with the following details: {existing_connection_details:?}.");
-        let should_close_established = if existing_connection_details.role == Endpoint::Dialer {
+        let should_close_established = if existing_connection_details.direction.is_incoming() {
             self.local_peer_id.to_base58() > peer_id.to_base58()
         } else {
             // If the current connection is outgoing, we close it if our peer ID is lower
@@ -712,12 +809,16 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             // Modify the `negotiated_peers` storage directly so
             // that when the old connection is dropped, the swarm is
             // not notified.
-            update_connection_id_and_direction(existing_connection_details, new_connection_id);
+            replace_connection(
+                existing_connection_details,
+                new_connection_id,
+                new_direction,
+            );
             // After the old connection details have been updated with the new
             // ones, notify the Swarm that the new connection has been upgraded.
-            let existing_role = existing_connection_details.role;
+            let existing_connection_direction = existing_connection_details.direction;
             self.close_connection(existing_connection);
-            self.notify_about_connection_upgrade_success(peer_id, existing_role);
+            self.notify_about_connection_upgrade_success(peer_id, existing_connection_direction);
         } else {
             tracing::trace!(target: LOG_TARGET, "Dropping upgraded connection {new_connection_id:?} with peer {peer_id:?} in favor of currently established connection {:?}", existing_connection_details.connection_id);
             // Notify the new connection handler to drop the substreams, and we do not
@@ -727,7 +828,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                 peer_id,
                 ConnectionUpgradeFailure {
                     reason: ConnectionUpgradeFailureReason::ReverseDirectionPreferred,
-                    remote_peer_role: new_remote_peer_role,
+                    direction: new_direction,
                 },
             );
         }
@@ -802,58 +903,22 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         Some(mem::replace(&mut peer_details.negotiated_state, state))
     }
 
-    /// Return `True` if this peer has an established (negotiated or not)
-    /// incoming connection with the specified peer, `False` otherwise.
-    fn has_incoming_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
-        self.has_negotiated_incoming_connection_with_peer(remote_peer)
-            || self.has_pending_incoming_connection_with_peer(remote_peer)
-    }
-
-    /// Return `True` if this peer has an established (negotiated or not)
-    /// outgoing connection with the specified peer, `False` otherwise.
-    fn has_outgoing_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
-        self.has_negotiated_outgoing_connection_with_peer(remote_peer)
-            || self.has_pending_outgoing_connection_with_peer(remote_peer)
-    }
-
-    /// Return `True` if there is a negotiated inbound connection with the
-    /// provided peer.
-    fn has_negotiated_incoming_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
+    /// Return `True` if this node has an established (negotiated or not)
+    /// connection with the specified peer in the given direction.
+    fn has_connection_with_peer(
+        &self,
+        remote_peer: &PeerId,
+        direction: ConnectionDirection,
+    ) -> bool {
         self.negotiated_peers
             .get(remote_peer)
-            .is_some_and(|remote| remote.role.is_dialer())
-    }
-
-    /// Return `true` if there is a negotiated outbound connection with the
-    /// provided peer.
-    fn has_negotiated_outgoing_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
-        self.negotiated_peers
-            .get(remote_peer)
-            .is_some_and(|remote| remote.role.is_listener())
-    }
-
-    /// Return `True` if there is at least one inbound connection pending
-    /// upgrade with the provided peer.
-    // TODO: Find a different data structure to be able to perform this check in
-    // O(1).
-    fn has_pending_incoming_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
-        self.connections_waiting_upgrade
-            .iter()
-            .any(|((peer_id, _), remote_endpoint)| {
-                peer_id == remote_peer && remote_endpoint.is_dialer()
-            })
-    }
-
-    /// Return `True` if there is at least one outbound connection pending
-    /// upgrade with the provided peer.
-    // TODO: Find a different data structure to be able to perform this check in
-    // O(1).
-    fn has_pending_outgoing_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
-        self.connections_waiting_upgrade
-            .iter()
-            .any(|((peer_id, _), remote_endpoint)| {
-                peer_id == remote_peer && remote_endpoint.is_listener()
-            })
+            .is_some_and(|remote| remote.direction == direction)
+            || self
+                .connections_waiting_upgrade
+                .iter()
+                .any(|((peer_id, _), pending_direction)| {
+                    peer_id == remote_peer && *pending_direction == direction
+                })
     }
 
     /// Publish an already-encapsulated and validated message to all connected
@@ -1040,13 +1105,14 @@ where
     }
 }
 
-/// Revert the direction of a connection and updates its ID with the provided
-/// one.
-fn update_connection_id_and_direction(
+/// Point a peer's record at the connection that replaced the one it held,
+/// which is the one in the other direction.
+const fn replace_connection(
     existing_connection: &mut RemotePeerConnectionDetails,
     new_connection_id: ConnectionId,
+    new_direction: ConnectionDirection,
 ) {
-    existing_connection.role = existing_connection.role.reverse();
+    existing_connection.direction = new_direction;
     existing_connection.connection_id = new_connection_id;
 }
 
@@ -1068,10 +1134,10 @@ where
         _: &Multiaddr,
         remote_addr: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        // If the new peer makes the set of established connections too large, do not
-        // try to upgrade the connection.
-        if self.negotiated_peers.len() >= *self.peering_degree.end() {
-            tracing::trace!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since we are already at maximum peering capacity.");
+        // A connection offered above either bound is refused: the maximum the node
+        // holds at all, and the share of that maximum it lets other nodes fill.
+        if !self.can_accept_connection() {
+            tracing::trace!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since we are already holding as many connections as we accept.");
             return Ok(Either::Right(DummyConnectionHandler));
         }
 
@@ -1080,7 +1146,7 @@ where
         // inbound connection. Otherwise, we let the connection upgrade, and we will
         // close one of the two connections depending on the comparison result of
         // local and remote peer IDs.
-        if self.has_incoming_connection_with_peer(&peer_id) {
+        if self.has_connection_with_peer(&peer_id, ConnectionDirection::Incoming) {
             tracing::trace!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since there is already an inbound connection established or pending.");
             return Ok(Either::Right(DummyConnectionHandler));
         }
@@ -1094,7 +1160,7 @@ where
                 "Upgrading inbound connection {connection_id:?} with core peer {peer_id:?} with addr {remote_addr:?}."
             );
             self.connections_waiting_upgrade
-                .insert((peer_id, connection_id), Endpoint::Dialer);
+                .insert((peer_id, connection_id), ConnectionDirection::Incoming);
             Either::Left(ConnectionHandler::new(
                 self.protocol_name.clone(),
                 (peer_id, connection_id),
@@ -1117,9 +1183,10 @@ where
         _: Endpoint,
         _: PortUse,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        // If the new peer makes the set of established connections too large, do not
-        // try to upgrade the connection.
-        if self.negotiated_peers.len() >= *self.peering_degree.end() {
+        // Only the overall maximum applies to a connection the node opened itself:
+        // the share reserved for accepted connections exists to protect this
+        // direction, not to limit it.
+        if self.available_connection_slots() == 0 {
             tracing::trace!(target: LOG_TARGET, "Outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since we are already at maximum peering capacity.");
             return Ok(Either::Right(DummyConnectionHandler));
         }
@@ -1128,7 +1195,7 @@ where
         // do not try to upgrade the new one as we already have an outbound connection.
         // Otherwise, we let the connection upgrade, and we will close one of the two
         // connections depending on the comparison result of local and remote peer IDs.
-        if self.has_outgoing_connection_with_peer(&peer_id) {
+        if self.has_connection_with_peer(&peer_id, ConnectionDirection::Outgoing) {
             tracing::trace!(target: LOG_TARGET, "Outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since there is already an outbound connection established.");
             return Ok(Either::Right(DummyConnectionHandler));
         }
@@ -1142,7 +1209,7 @@ where
                 "Upgrading outbound connection {connection_id:?} with core peer {peer_id:?} with addr {remote_addr:?}."
             );
             self.connections_waiting_upgrade
-                .insert((peer_id, connection_id), Endpoint::Listener);
+                .insert((peer_id, connection_id), ConnectionDirection::Outgoing);
             Either::Left(ConnectionHandler::new(
                 self.protocol_name.clone(),
                 (peer_id, connection_id),
@@ -1170,20 +1237,21 @@ where
             }
 
             // We notify the swarm of any connection that failed to be upgraded.
-            if let Some(remote_peer_role) = self
+            if let Some(connection_direction) = self
                 .connections_waiting_upgrade
                 .remove(&(peer_id, connection_id))
             {
                 debug_assert!(
-                    local_endpoint.to_endpoint().reverse() == remote_peer_role,
-                    "Remote peer endpoint provided by event and the one stored do not match."
+                    ConnectionDirection::from_local_endpoint(local_endpoint.to_endpoint())
+                        == connection_direction,
+                    "Connection direction provided by the event and the one stored do not match."
                 );
                 // Notify the swarm about the negotiation failure.
                 self.notify_about_connection_upgrade_failure(
                     peer_id,
                     ConnectionUpgradeFailure {
                         reason: ConnectionUpgradeFailureReason::ConnectionFailure,
-                        remote_peer_role,
+                        direction: connection_direction,
                     },
                 );
                 return;
@@ -1290,20 +1358,5 @@ where
 
         self.waker = Some(cx.waker().clone());
         Poll::Pending
-    }
-}
-
-/// A trait for reversable types.
-trait Reverse: Sized {
-    /// Consumes `self` and returns its reverse.
-    fn reverse(self) -> Self;
-}
-
-impl Reverse for Endpoint {
-    fn reverse(self) -> Self {
-        match self {
-            Self::Dialer => Self::Listener,
-            Self::Listener => Self::Dialer,
-        }
     }
 }

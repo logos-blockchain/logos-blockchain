@@ -18,7 +18,8 @@ use crate::core::{
             Event,
             handler::ToBehaviour,
             tests::utils::{
-                BehaviourBuilder, SwarmExt as _, build_memberships, new_nodes_with_empty_address,
+                BehaviourBuilder, PEERING_DEGREE, SwarmExt as _, build_memberships,
+                new_nodes_with_empty_address,
             },
         },
         error::SendError,
@@ -176,7 +177,7 @@ async fn forward_message() {
     let mut forwarder = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
-            .with_peering_degree(2..=2)
+            .with_peering_degree(PEERING_DEGREE)
             .build()
     });
     let mut receiver1 = TestSwarm::new(&identities.next().unwrap(), |id| {
@@ -338,7 +339,7 @@ async fn old_epoch_message_not_forwarded_back_to_sender() {
     let mut forwarder = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
-            .with_peering_degree(2..=2)
+            .with_peering_degree(PEERING_DEGREE)
             .build()
     });
     let mut receiver = TestSwarm::new(&identities.next().unwrap(), |id| {
@@ -535,7 +536,7 @@ async fn start_new_epoch_moves_peers_to_old_epoch() {
     let mut node_a = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
-            .with_peering_degree(2..=2)
+            .with_peering_degree(PEERING_DEGREE)
             .build()
     });
     let mut node_b = TestSwarm::new(&identities.next().unwrap(), |id| {
@@ -582,7 +583,7 @@ async fn finish_epoch_transition_emits_peer_disconnected_for_old_epoch_peers() {
     let mut node_a = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
-            .with_peering_degree(2..=2)
+            .with_peering_degree(PEERING_DEGREE)
             .build()
     });
     let mut node_b = TestSwarm::new(&identities.next().unwrap(), |id| {
@@ -710,8 +711,7 @@ async fn epoch_transition_reboots_peering_degree() {
     let mut node_a = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
-            // Peering degree: exactly 2 peers.
-            .with_peering_degree(2..=2)
+            .with_peering_degree(PEERING_DEGREE)
             .build()
     });
     let mut node_b = TestSwarm::new(&identities.next().unwrap(), |id| {
@@ -728,11 +728,15 @@ async fn epoch_transition_reboots_peering_degree() {
     node_c.listen().with_memory_addr_external().await;
     node_d.listen().with_memory_addr_external().await;
 
-    // Connect node_a to b and c (filling peering degree of 2).
+    // Connect node_a to b and c, taking two of its slots.
+    let maximum_connections = node_a.behaviour().maximum_peers();
     node_a.connect_and_wait_for_upgrade(&mut node_b).await;
     node_a.connect_and_wait_for_upgrade(&mut node_c).await;
     assert_eq!(node_a.behaviour().negotiated_peers.len(), 2);
-    assert_eq!(node_a.behaviour().available_connection_slots(), 0);
+    assert_eq!(
+        node_a.behaviour().available_connection_slots(),
+        maximum_connections - 2
+    );
 
     // Start epoch transition - all current peers move to old epoch.
     let memberships = build_memberships(&[&node_a, &node_b, &node_c, &node_d]);
@@ -753,10 +757,12 @@ async fn epoch_transition_reboots_peering_degree() {
         TestProofsVerifier::accepting(),
     );
 
-    // After transition, new epoch has no peers, so all slots are available.
+    // After transition, the new epoch has no peers, so every slot is free
+    // again: the connections that were taking them belong to the epoch that
+    // ended.
     assert_eq!(
         node_a.behaviour().available_connection_slots(),
-        2,
+        maximum_connections,
         "All peering degree slots must be available after epoch transition"
     );
 
@@ -764,5 +770,8 @@ async fn epoch_transition_reboots_peering_degree() {
     node_a.connect_and_wait_for_upgrade(&mut node_b).await;
     node_a.connect_and_wait_for_upgrade(&mut node_d).await;
     assert_eq!(node_a.behaviour().negotiated_peers.len(), 2);
-    assert_eq!(node_a.behaviour().available_connection_slots(), 0);
+    assert_eq!(
+        node_a.behaviour().available_connection_slots(),
+        maximum_connections - 2
+    );
 }
