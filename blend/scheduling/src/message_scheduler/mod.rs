@@ -19,7 +19,7 @@ use crate::{
     cover_traffic::EpochCoverTraffic,
     message_scheduler::{
         epoch_info::EpochInfo,
-        round_info::{RoundClock, RoundInfo, RoundReleaseType},
+        round_info::{RoundInfo, RoundReleaseType, RoundStream},
     },
     release_delayer::EpochProcessedMessageDelayer,
 };
@@ -46,7 +46,7 @@ const OLD_EPOCH: &str = "old epoch";
 /// the only thing pending is a queued data message.
 fn poll_round_info<ProcessedMessage, DataMessage>(
     epoch: &str,
-    round_clock: &mut RoundClock,
+    round_clock: &mut RoundStream,
     data_messages: &mut Vec<DataMessage>,
     cx: &mut Context<'_>,
     poll_release_type: impl FnOnce(&mut Context<'_>) -> Poll<Option<RoundReleaseType<ProcessedMessage>>>,
@@ -106,14 +106,14 @@ pub struct EpochMessageScheduler<Rng, ProcessedMessage, DataMessage> {
     /// The module responsible for randomly generated cover messages, given the
     /// allowed epoch quota and accounting for data messages generated within
     /// the epoch.
-    cover_traffic: EpochCoverTraffic<Rng, RoundClock>,
+    cover_traffic: EpochCoverTraffic<Rng, RoundStream>,
     /// The module responsible for delaying the release of processed messages
     /// that have not been fully decapsulated.
-    release_delayer: EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
+    release_delayer: EpochProcessedMessageDelayer<RoundStream, Rng, ProcessedMessage>,
     /// The queue of data messages that are stored in between rounds.
     data_messages: Vec<DataMessage>,
     /// The multi-consumer stream forked on each sub-stream.
-    round_clock: RoundClock,
+    round_clock: RoundStream,
 }
 
 impl<Rng, ProcessedMessage, DataMessage> EpochMessageScheduler<Rng, ProcessedMessage, DataMessage>
@@ -148,21 +148,21 @@ where
                 message_count: epoch_info.core_quota.get() / u64::from(settings.num_blend_layers),
             },
             rng.clone(),
-            Box::new(round_clock.clone()) as RoundClock,
+            Box::new(round_clock.clone()) as RoundStream,
         );
         let release_delayer = EpochProcessedMessageDelayer::new(
             crate::release_delayer::Settings {
                 maximum_release_delay_in_rounds: settings.maximum_release_delay_in_rounds,
             },
             rng,
-            Box::new(round_clock.clone()) as RoundClock,
+            Box::new(round_clock.clone()) as RoundStream,
         );
 
         Self {
             cover_traffic,
             release_delayer,
             data_messages: Vec::new(),
-            round_clock: Box::new(round_clock) as RoundClock,
+            round_clock: Box::new(round_clock) as RoundStream,
         }
     }
 
@@ -219,9 +219,9 @@ where
 impl<Rng, ProcessedMessage, DataMessage> EpochMessageScheduler<Rng, ProcessedMessage, DataMessage> {
     #[cfg(test)]
     pub fn with_test_values(
-        cover_traffic: EpochCoverTraffic<Rng, RoundClock>,
-        release_delayer: EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
-        round_clock: RoundClock,
+        cover_traffic: EpochCoverTraffic<Rng, RoundStream>,
+        release_delayer: EpochProcessedMessageDelayer<RoundStream, Rng, ProcessedMessage>,
+        round_clock: RoundStream,
         data_messages: Vec<DataMessage>,
     ) -> Self {
         Self {
@@ -235,7 +235,7 @@ impl<Rng, ProcessedMessage, DataMessage> EpochMessageScheduler<Rng, ProcessedMes
     #[cfg(any(test, feature = "unsafe-test-functions"))]
     pub fn release_delayer(
         &self,
-    ) -> &EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage> {
+    ) -> &EpochProcessedMessageDelayer<RoundStream, Rng, ProcessedMessage> {
         &self.release_delayer
     }
 }
@@ -326,11 +326,11 @@ impl Default for Settings {
 pub struct OldEpochMessageScheduler<Rng, ProcessedMessage, DataMessage> {
     /// The module responsible for delaying the release of processed messages
     /// that have not been fully decapsulated.
-    release_delayer: EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
+    release_delayer: EpochProcessedMessageDelayer<RoundStream, Rng, ProcessedMessage>,
     /// The data messages the old epoch had queued but not yet released.
     data_messages: Vec<DataMessage>,
     /// The multi-consumer stream forked on each sub-stream.
-    round_clock: RoundClock,
+    round_clock: RoundStream,
 }
 
 impl<Rng, ProcessedMessage, DataMessage> ProcessedMessageScheduler<ProcessedMessage>
@@ -373,7 +373,7 @@ impl<Rng, ProcessedMessage, DataMessage>
     #[cfg(any(test, feature = "unsafe-test-functions"))]
     pub fn release_delayer(
         &self,
-    ) -> &EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage> {
+    ) -> &EpochProcessedMessageDelayer<RoundStream, Rng, ProcessedMessage> {
         &self.release_delayer
     }
 }

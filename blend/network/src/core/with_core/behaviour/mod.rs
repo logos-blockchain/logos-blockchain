@@ -1,6 +1,6 @@
 use core::{
     mem::{self},
-    num::{NonZeroU64, NonZeroUsize},
+    num::{NonZeroU64, NonZeroU128, NonZeroUsize},
 };
 use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
@@ -16,6 +16,7 @@ use lb_blend_membership::Membership;
 use lb_blend_message::encap::{
     ProofsVerifier as ProofsVerifierTrait, validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
+use lb_blend_primitives::time::{Round, RoundClock, RoundCount};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_log_targets::blend;
@@ -34,6 +35,7 @@ use crate::core::{
     with_core::{
         behaviour::{
             handler::{ConnectionHandler, FromBehaviour, ToBehaviour},
+            liveness::PeerLivenessMap,
             message_cache::MessageCache,
             old_epoch::OldEpoch,
             utils::{
@@ -44,6 +46,8 @@ use crate::core::{
         error::{ReceiveError, SendError},
     },
 };
+
+pub(crate) mod liveness;
 
 mod handler;
 mod message_cache;
@@ -65,6 +69,12 @@ pub struct Config {
     /// message carries. Used to validate the layout of messages received from
     /// remote peers before processing them.
     pub num_blend_layers: NonZeroU64,
+    /// The duration of a Blend round, the unit every rate and window of
+    /// connectivity maintenance is expressed in.
+    pub round_duration_in_seconds: NonZeroU64,
+    /// `W`: the observation window, in rounds. A connection whose neighbour has
+    /// delivered nothing within the trailing window is closed.
+    pub liveness_window_in_rounds: NonZeroU128,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -140,6 +150,14 @@ pub struct Behaviour<ProofsVerifier> {
     /// States for processing messages from the old epoch
     /// before the transition period has passed.
     old_epoch: Option<OldEpoch<ProofsVerifier>>,
+    /// The clock every window and deadline of connectivity maintenance is
+    /// measured against.
+    round_clock: RoundClock,
+    /// Which neighbours are still delivering messages.
+    liveness: PeerLivenessMap,
+    /// The last round in which liveness was evaluated, so that the check runs
+    /// once a round rather than on every poll.
+    last_liveness_check: Round,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -244,6 +262,8 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         local_peer_id: PeerId,
         protocol_name: StreamProtocol,
     ) -> Self {
+        let round_clock = RoundClock::new(config.round_duration_in_seconds);
+        let current_round = round_clock.current_round();
         Self {
             negotiated_peers: HashMap::with_capacity(*config.peering_degree.end()),
             events: VecDeque::new(),
@@ -259,6 +279,9 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             minimum_network_size: config.minimum_network_size,
             num_blend_layers: config.num_blend_layers,
             old_epoch: None,
+            round_clock,
+            liveness: PeerLivenessMap::new(RoundCount::new(config.liveness_window_in_rounds)),
+            last_liveness_check: current_round,
         }
     }
 
@@ -294,6 +317,10 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             self.num_blend_layers,
             current_epoch_proofs_verifier,
         ));
+
+        // The observations were collected against the membership of the epoch
+        // that just ended, so they do not carry over.
+        self.liveness.clear();
 
         tracing::debug!(target: LOG_TARGET, "Started a new epoch by passing negotiated peers and exchanged message IDs to the old epoch. Now, no negotiated peers in the current epoch.");
     }
@@ -582,6 +609,8 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                 connection_id,
             },
         );
+        self.liveness
+            .start_or_resume_observing(peer_id, self.round_clock.current_round());
         // Notify the Swarm about the successful negotiation.
         self.notify_about_connection_upgrade_success(peer_id, remote_peer_role);
     }
@@ -701,6 +730,28 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                     remote_peer_role: new_remote_peer_role,
                 },
             );
+        }
+    }
+
+    /// Close the connection with every neighbour that has stopped delivering
+    /// messages.
+    fn close_unhealthy_connections(&mut self, current_round: Round) {
+        let unhealthy_connections = self
+            .negotiated_peers
+            .iter()
+            .filter(|(peer_id, _)| {
+                self.liveness
+                    .is_connection_unhealthy(peer_id, current_round)
+            })
+            .map(|(peer_id, details)| (*peer_id, details.connection_id))
+            .collect::<Vec<_>>();
+
+        for (peer_id, connection_id) in unhealthy_connections {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "Closing connection {connection_id:?} with peer {peer_id:?}: it has delivered no message within the observation window."
+            );
+            self.close_connection((peer_id, connection_id));
         }
     }
 
@@ -1175,6 +1226,16 @@ where
             Either::Left(event) => match event {
                 // A message was forwarded from the peer.
                 ToBehaviour::Message(message) => {
+                    if self
+                        .negotiated_peers
+                        .get(&peer_id)
+                        .is_some_and(|details| details.connection_id == connection_id)
+                    {
+                        self.liveness.record_message_from_neighbour(
+                            peer_id,
+                            self.round_clock.current_round(),
+                        );
+                    }
                     self.handle_received_serialized_encapsulated_message(
                         &message,
                         (peer_id, connection_id),
@@ -1198,6 +1259,15 @@ where
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
+        // Polled first and unconditionally: this is the only thing that keeps
+        // the task scheduled when nothing else is happening, and the liveness
+        // window it drives is what closes connections that have gone silent.
+        let current_round = self.round_clock.poll_current(cx);
+        if current_round > self.last_liveness_check {
+            self.last_liveness_check = current_round;
+            self.close_unhealthy_connections(current_round);
+        }
+
         if let Some(old_epoch) = &mut self.old_epoch
             && let Poll::Ready(event) = old_epoch.poll(cx)
         {

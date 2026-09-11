@@ -222,6 +222,10 @@ impl BlendBehaviourBuilder {
                         peering_degree,
                         minimum_network_size: 1.try_into().unwrap(),
                         num_blend_layers: 3.try_into().unwrap(),
+                        round_duration_in_seconds: 1.try_into().unwrap(),
+                        // Long enough that no connection in a test goes stale
+                        // by accident.
+                        liveness_window_in_rounds: u128::from(u32::MAX).try_into().unwrap(),
                     },
                     with_edge: CoreToEdgeConfig {
                         connection_timeout: Duration::from_secs(1),

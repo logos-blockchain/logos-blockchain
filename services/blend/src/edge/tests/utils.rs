@@ -1,4 +1,7 @@
-use core::{num::NonZeroU64, time::Duration};
+use core::{
+    num::{NonZeroU64, NonZeroU128},
+    time::Duration,
+};
 use std::{
     fmt::{Debug, Display},
     sync::Arc,
@@ -46,7 +49,7 @@ use crate::{
 /// The tests that sit through a whole delivery deadline are not slow for it:
 /// they run on a paused clock, which jumps to the next timer the moment every
 /// task is idle.
-pub const TEST_ROUND: Duration = Duration::from_secs(1);
+pub const TEST_ROUND: NonZeroU64 = NonZeroU64::new(1).unwrap();
 
 /// `ß_c` for the tests.
 const TEST_BLEND_LAYERS: NonZeroU64 = NonZeroU64::new(1).unwrap();
@@ -186,8 +189,8 @@ pub fn settings(
         abstain_on_failure: false,
         time: TimingSettings {
             rounds_per_epoch: NonZeroU64::new(1).unwrap(),
-            round_duration: TEST_ROUND,
-            rounds_per_observation_window: NonZeroU64::new(1).unwrap(),
+            round_duration_in_seconds: TEST_ROUND,
+            rounds_per_observation_window: NonZeroU128::new(1).unwrap(),
             epoch_transition_period: Duration::from_secs(1),
         },
         non_ephemeral_signing_key: key(local_id).0,

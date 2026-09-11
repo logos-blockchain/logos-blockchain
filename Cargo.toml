@@ -34,6 +34,7 @@ members = [
   "blend/membership",
   "blend/message",
   "blend/network",
+  "blend/primitives",
   "blend/proofs",
   "blend/provers",
   "blend/scheduling",
@@ -113,6 +114,7 @@ lb-blend-crypto                    = { default-features = false, package = "logo
 lb-blend-membership                = { default-features = false, package = "logos-blockchain-blend-membership", path = "./blend/membership" }
 lb-blend-message                   = { default-features = false, package = "logos-blockchain-blend-message", path = "./blend/message" }
 lb-blend-network                   = { default-features = false, package = "logos-blockchain-blend-network", path = "./blend/network" }
+lb-blend-primitives                = { default-features = false, package = "logos-blockchain-blend-primitives", path = "./blend/primitives" }
 lb-blend-proofs                    = { default-features = false, package = "logos-blockchain-blend-proofs", path = "./blend/proofs" }
 lb-blend-provers                   = { default-features = false, package = "logos-blockchain-blend-provers", path = "./blend/provers" }
 lb-blend-scheduling                = { default-features = false, package = "logos-blockchain-blend-scheduling", path = "./blend/scheduling" }

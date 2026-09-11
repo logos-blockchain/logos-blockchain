@@ -1,4 +1,7 @@
-use core::{num::NonZeroU64, time::Duration};
+use core::{
+    num::{NonZeroU64, NonZeroU128},
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -7,11 +10,7 @@ use serde::{Deserialize, Serialize};
 pub struct TimingSettings {
     /// `S`: length of an epoch in terms of rounds.
     pub rounds_per_epoch: NonZeroU64,
-    #[serde_as(
-        as = "lb_utils::bounded_duration::MinimalBoundedDuration<1, lb_utils::bounded_duration::SECOND>"
-    )]
-    /// Duration of a round.
-    pub round_duration: Duration,
-    pub rounds_per_observation_window: NonZeroU64,
+    pub round_duration_in_seconds: NonZeroU64,
+    pub rounds_per_observation_window: NonZeroU128,
     pub epoch_transition_period: Duration,
 }

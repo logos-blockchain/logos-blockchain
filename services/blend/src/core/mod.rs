@@ -467,7 +467,7 @@ where
         } else {
             Some(FailureDetector::new(
                 running_blend_config.max_data_message_delay_in_rounds(),
-                running_blend_config.time.round_duration,
+                Duration::from_secs(running_blend_config.time.round_duration_in_seconds.get()),
                 payload_dispatcher.observe_broadcasts().await,
             ))
         };
