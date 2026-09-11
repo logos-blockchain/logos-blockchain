@@ -83,7 +83,7 @@ impl ServiceConfig {
                         .round_duration(&slot_duration)
                         .as_secs()
                         .try_into()
-                        .expect("Round duration must be grater than `0`."),
+                        .expect("Round duration must be greater than `0` seconds."),
                     rounds_per_observation_window: self.deployment.rounds_per_observation_window(),
                     rounds_per_epoch: self
                         .deployment
