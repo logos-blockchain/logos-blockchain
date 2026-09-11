@@ -93,7 +93,7 @@ impl ServiceConfig {
             },
             core: CoreSettings {
                 backend: Libp2pCoreBlendBackendSettings {
-                    core_peering_degree: self.user.core.backend.core_peering_degree,
+                    target_peering_degree: self.deployment.core.target_peering_degree,
                     listening_address: self.user.core.backend.listening_address,
                     edge_node_connection_timeout: self
                         .user

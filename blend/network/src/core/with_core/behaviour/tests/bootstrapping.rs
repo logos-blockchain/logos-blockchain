@@ -2,10 +2,7 @@ use core::time::Duration;
 
 use futures::StreamExt as _;
 use lb_libp2p::SwarmEvent;
-use libp2p::{
-    core::Endpoint,
-    swarm::{ConnectionId, dummy},
-};
+use libp2p::swarm::{ConnectionId, dummy};
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
 use tokio::{select, time::sleep};
@@ -13,8 +10,11 @@ use tokio::{select, time::sleep};
 use crate::core::{
     tests::utils::TestSwarm,
     with_core::behaviour::{
-        Event,
-        tests::utils::{BehaviourBuilder, SwarmExt as _, new_nodes_with_empty_address},
+        ConnectionDirection, Event,
+        tests::utils::{
+            BehaviourBuilder, PEERING_DEGREE, SwarmExt as _, maximum_accepted_peers, maximum_peers,
+            new_nodes_with_empty_address,
+        },
     },
 };
 
@@ -139,8 +139,14 @@ async fn outgoing_connection_network_too_small() {
 #[test(tokio::test)]
 async fn incoming_attempt_with_max_negotiated_peering_degree() {
     let (mut identities, nodes) = new_nodes_with_empty_address(3);
+    // One slot short of the number of connections the node accepts, so the
+    // first dialer fills it and the second is the one over the limit.
+    let listener_neighbours = maximum_accepted_peers() - 1;
     let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id).with_membership(&nodes).build()
+        BehaviourBuilder::new(id)
+            .with_membership(&nodes)
+            .with_existing_connections(listener_neighbours, 0)
+            .build()
     });
     let mut dialer_swarm_1 = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id).with_membership(&nodes).build()
@@ -177,8 +183,13 @@ async fn incoming_attempt_with_max_negotiated_peering_degree() {
 #[test(tokio::test)]
 async fn concurrent_incoming_connections() {
     let (mut identities, nodes) = new_nodes_with_empty_address(3);
+    // One slot left, which the two concurrent dialers race for.
+    let listener_neighbours = maximum_accepted_peers() - 1;
     let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id).with_membership(&nodes).build()
+        BehaviourBuilder::new(id)
+            .with_membership(&nodes)
+            .with_existing_connections(listener_neighbours, 0)
+            .build()
     });
     let mut dialer_swarm_1 = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id).with_membership(&nodes).build()
@@ -296,8 +307,14 @@ async fn incoming_attempt_with_duplicate_connection() {
 #[test(tokio::test)]
 async fn outgoing_attempt_with_max_negotiated_peering_degree() {
     let (mut identities, nodes) = new_nodes_with_empty_address(3);
+    // One slot short of the most connections the node holds at all, which is
+    // what bounds the ones it opens itself.
+    let dialer_neighbours = maximum_peers() - 1;
     let mut dialing_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id).with_membership(&nodes).build()
+        BehaviourBuilder::new(id)
+            .with_membership(&nodes)
+            .with_existing_connections(0, dialer_neighbours)
+            .build()
     });
     let mut listening_swarm_1 = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id).with_membership(&nodes).build()
@@ -335,8 +352,13 @@ async fn outgoing_attempt_with_max_negotiated_peering_degree() {
 #[test(tokio::test)]
 async fn concurrent_outgoing_connections() {
     let (mut identities, nodes) = new_nodes_with_empty_address(3);
+    // One slot left, which the two concurrent dials race for.
+    let dialer_neighbours = maximum_peers() - 1;
     let mut dialing_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id).with_membership(&nodes).build()
+        BehaviourBuilder::new(id)
+            .with_membership(&nodes)
+            .with_existing_connections(0, dialer_neighbours)
+            .build()
     });
     let mut listening_swarm_1 = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id).with_membership(&nodes).build()
@@ -620,14 +642,14 @@ async fn concurrent_reverse_connections_between_peers() {
         .negotiated_peers
         .get(swarm_2.local_peer_id())
         .unwrap();
-    // If swarm 1 ID is lower, it must have closed its outgoing connection, so swarm
-    // 2 will be the dialer, or viceversa.
+    // If swarm 1 ID is lower, it must have closed the connection it opened, so the
+    // one it keeps is the one it accepted from swarm 2, or vice versa.
     assert_eq!(
-        swarm_2_details_for_swarm_1.role,
+        swarm_2_details_for_swarm_1.direction,
         if is_swarm_1_id_smaller {
-            Endpoint::Dialer
+            ConnectionDirection::Incoming
         } else {
-            Endpoint::Listener
+            ConnectionDirection::Outgoing
         }
     );
     let swarm_1_details_for_swarm_2 = swarm_2
@@ -636,11 +658,11 @@ async fn concurrent_reverse_connections_between_peers() {
         .get(swarm_1.local_peer_id())
         .unwrap();
     assert_eq!(
-        swarm_1_details_for_swarm_2.role,
+        swarm_1_details_for_swarm_2.direction,
         if is_swarm_1_id_smaller {
-            Endpoint::Listener
+            ConnectionDirection::Outgoing
         } else {
-            Endpoint::Dialer
+            ConnectionDirection::Incoming
         }
     );
 }
@@ -651,13 +673,13 @@ async fn replace_existing_with_new_connection() {
     let mut smaller_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
-            .with_peering_degree(1..=2)
+            .with_peering_degree(PEERING_DEGREE)
             .build()
     });
     let mut larger_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
-            .with_peering_degree(1..=2)
+            .with_peering_degree(PEERING_DEGREE)
             .build()
     });
 
@@ -744,12 +766,12 @@ async fn replace_existing_with_new_connection() {
         .unwrap();
 
     assert_eq!(
-        larger_swarm_details_for_smaller_swarm.role,
-        Endpoint::Dialer
+        larger_swarm_details_for_smaller_swarm.direction,
+        ConnectionDirection::Incoming
     );
     assert_eq!(
-        smaller_swarm_details_for_larger_swarm.role,
-        Endpoint::Listener
+        smaller_swarm_details_for_larger_swarm.direction,
+        ConnectionDirection::Outgoing
     );
 }
 
@@ -759,13 +781,13 @@ async fn discard_new_for_existing_connection() {
     let mut smaller_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
-            .with_peering_degree(1..=2)
+            .with_peering_degree(PEERING_DEGREE)
             .build()
     });
     let mut larger_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
-            .with_peering_degree(1..=2)
+            .with_peering_degree(PEERING_DEGREE)
             .build()
     });
 
@@ -841,14 +863,15 @@ async fn discard_new_for_existing_connection() {
         .get(smaller_swarm.local_peer_id())
         .unwrap();
 
-    // Larger swarm maintains its outgoing connection.
+    // The larger swarm keeps the connection it opened, so the smaller one holds
+    // that same connection as accepted.
     assert_eq!(
-        larger_swarm_details_for_smaller_swarm.role,
-        Endpoint::Dialer
+        larger_swarm_details_for_smaller_swarm.direction,
+        ConnectionDirection::Incoming
     );
-    // Smaller swarm maintains its incoming connection.
+    // And the larger swarm holds it as the one it dialed.
     assert_eq!(
-        smaller_swarm_details_for_larger_swarm.role,
-        Endpoint::Listener
+        smaller_swarm_details_for_larger_swarm.direction,
+        ConnectionDirection::Outgoing
     );
 }

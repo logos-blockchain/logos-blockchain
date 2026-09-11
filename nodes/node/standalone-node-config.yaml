@@ -100,9 +100,6 @@ blend:
   core:
     backend:
       listening_address: /ip4/0.0.0.0/udp/3400/quic-v1
-      core_peering_degree:
-        start: 2
-        end: 3
       edge_node_connection_timeout: '1.000000000'
       max_edge_node_incoming_connections: 300
       max_dial_attempts_per_peer: 3

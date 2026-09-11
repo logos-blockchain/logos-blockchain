@@ -1,5 +1,5 @@
 use core::{
-    num::{NonZero, NonZeroU64},
+    num::{NonZero, NonZeroU32, NonZeroU64},
     time::Duration,
 };
 
@@ -31,6 +31,7 @@ use crate::{
     time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS},
 };
 
+const BLEND_PEERING_DEGREE: NonZeroU32 = NonZeroU32::new(4).unwrap();
 const MINIMUM_BLEND_NETWORK_SIZE: u64 = 2;
 const NUM_BLEND_LAYERS: u64 = 3;
 const BLEND_PROTOCOL_NAME: &str = "/blend/integration-tests";
@@ -104,6 +105,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 data_replication_factor: DATA_REPLICATION_FACTOR,
             },
             core: BlendCoreSettings {
+                target_peering_degree: BLEND_PEERING_DEGREE,
                 scheduler: SchedulerSettings {
                     cover: CoverTrafficSettings {
                         message_frequency_per_round: PositiveF64::try_from(

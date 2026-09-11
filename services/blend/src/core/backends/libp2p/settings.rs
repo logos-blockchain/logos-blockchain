@@ -1,5 +1,5 @@
-use core::{pin::Pin, time::Duration};
-use std::{num::NonZeroU64, ops::RangeInclusive};
+use core::{num::NonZeroU32, pin::Pin, time::Duration};
+use std::num::NonZeroU64;
 
 use futures::{Stream, StreamExt as _, stream::pending};
 use lb_libp2p::protocol_name::StreamProtocol;
@@ -14,7 +14,8 @@ use crate::core::settings::RunningBlendConfig as BlendConfig;
 #[serde_with::serde_as]
 pub struct Libp2pBlendBackendSettings {
     pub listening_address: Multiaddr,
-    pub core_peering_degree: RangeInclusive<u64>,
+    /// `Φ_CC`: the peering degree this node maintains with other core nodes.
+    pub target_peering_degree: NonZeroU32,
     #[serde_as(
         as = "lb_utils::bounded_duration::MinimalBoundedDuration<1, lb_utils::bounded_duration::SECOND>"
     )]

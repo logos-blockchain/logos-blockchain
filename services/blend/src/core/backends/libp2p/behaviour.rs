@@ -22,9 +22,6 @@ where
         current_membership_info: (Membership<PeerId>, Epoch),
         proofs_verifier: ProofsVerifier,
     ) -> Self {
-        let minimum_core_healthy_peering_degree =
-            *config.backend.core_peering_degree.start() as usize;
-        let maximum_core_peering_degree = *config.backend.core_peering_degree.end() as usize;
         let maximum_edge_incoming_connections =
             config.backend.max_edge_node_incoming_connections as usize;
 
@@ -32,8 +29,10 @@ where
             blend: lb_blend::network::core::NetworkBehaviour::new(
                 &lb_blend::network::core::Config {
                     with_core: lb_blend::network::core::with_core::behaviour::Config {
-                        peering_degree: minimum_core_healthy_peering_degree
-                            ..=maximum_core_peering_degree,
+                        target_peering_degree: (config.backend.target_peering_degree.get()
+                            as usize)
+                            .try_into()
+                            .unwrap(),
                         minimum_network_size: config.minimum_network_size.try_into().unwrap(),
                         num_blend_layers: config.num_blend_layers,
                         round_duration_in_seconds: config.time.round_duration_in_seconds,
