@@ -1,16 +1,20 @@
 use lb_blend::scheduling::membership::Membership;
 use lb_chain_service::Epoch;
 use lb_libp2p::NetworkBehaviour;
-use libp2p::{PeerId, allow_block_list::BlockedPeers};
+use libp2p::PeerId;
 
 use crate::core::{
     backends::libp2p::Libp2pBlendBackendSettings, settings::RunningBlendConfig as BlendConfig,
 };
 
+/// The blend behaviour owns the list of peers blocked for spamming (see
+/// `lb_blend::network::core::with_core::behaviour::Behaviour::is_blocked`), so
+/// no `allow_block_list` behaviour is composed here: a verdict closes only the
+/// offending connection, and the block's lifetime is bound to epochs by the
+/// component that issues the verdicts.
 #[derive(NetworkBehaviour)]
 pub struct BlendBehaviour<ObservationWindowProvider, ProofsVerifier> {
     pub blend: lb_blend::network::core::NetworkBehaviour<ObservationWindowProvider, ProofsVerifier>,
-    pub blocked_peers: libp2p::allow_block_list::Behaviour<BlockedPeers>,
 }
 
 impl<ObservationWindowProvider, ProofsVerifier>
@@ -57,7 +61,6 @@ where
                 config.peer_id(),
                 config.backend.protocol_name.clone().into_inner(),
             ),
-            blocked_peers: libp2p::allow_block_list::Behaviour::default(),
         }
     }
 }

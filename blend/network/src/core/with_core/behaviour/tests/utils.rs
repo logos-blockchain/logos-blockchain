@@ -175,6 +175,8 @@ impl BehaviourBuilder {
             message_cache: MessageCache::new(),
             proofs_verifier: Arc::new(self.proofs_verifier),
             pending_poq_verifications: PendingPoQVerifications::new(),
+            blocked_peers: HashMap::new(),
+            spam_strikes: HashMap::new(),
         }
     }
 }

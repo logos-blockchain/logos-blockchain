@@ -22,9 +22,7 @@ use lb_blend::{
 use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_libp2p::{Protocol, SwarmEvent};
-use libp2p::{
-    Multiaddr, PeerId, Swarm, allow_block_list, core::transport::ListenerId, identity::Keypair,
-};
+use libp2p::{Multiaddr, PeerId, Swarm, core::transport::ListenerId, identity::Keypair};
 use libp2p_swarm_test::SwarmExt as _;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
@@ -46,18 +44,21 @@ use crate::{
 };
 
 /// A `PoQ` verifier for the swarm tests, which accepts every proof it is
-/// handed.
+/// handed unless `reject_all` is set.
 ///
-/// What a node does with a *failed* verification is decided by the behaviour,
-/// so it is tested there rather than here.
-#[derive(Debug, Clone, Copy)]
-pub struct TestProofsVerifier;
+/// Rejecting every proof is what a verifier does to messages whose proofs
+/// were generated against another epoch's public inputs, which is how the
+/// swarm's reaction to a failed verification (blocking the sender) is tested.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TestProofsVerifier {
+    pub reject_all: bool,
+}
 
 impl ProofsVerifier for TestProofsVerifier {
     type Error = ();
 
     fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-        Self
+        Self::default()
     }
 
     fn verify_proof_of_quota(
@@ -65,6 +66,9 @@ impl ProofsVerifier for TestProofsVerifier {
         proof: ProofOfQuota,
         _signing_key: &lb_key_management_system_service::keys::Ed25519PublicKey,
     ) -> Result<VerifiedProofOfQuota, Self::Error> {
+        if self.reject_all {
+            return Err(());
+        }
         Ok(VerifiedProofOfQuota::from_proof_of_quota_unchecked(proof))
     }
 
@@ -141,7 +145,7 @@ impl SwarmBuilder {
         let public_info = BackendEpochInfo {
             membership: build_membership(membership, Some(identity.public().into())),
             epoch: 1.into(),
-            proofs_verifier: TestProofsVerifier,
+            proofs_verifier: TestProofsVerifier::default(),
         };
         Self {
             identity,
@@ -213,7 +217,7 @@ impl BlendBehaviourBuilder {
             membership,
             observation_window: None,
             peering_degree: None,
-            proofs_verifier: TestProofsVerifier,
+            proofs_verifier: TestProofsVerifier::default(),
         }
     }
 
@@ -228,6 +232,13 @@ impl BlendBehaviourBuilder {
 
     pub fn with_peering_degree(mut self, peering_degree: RangeInclusive<usize>) -> Self {
         self.peering_degree = Some(peering_degree);
+        self
+    }
+
+    /// Every `PoQ` this behaviour verifies fails, as if the sender's proofs
+    /// were generated for a different epoch.
+    pub fn with_rejecting_proofs_verifier(mut self) -> Self {
+        self.proofs_verifier = TestProofsVerifier { reject_all: true };
         self
     }
 
@@ -261,7 +272,6 @@ impl BlendBehaviourBuilder {
                 self.peer_id,
                 PROTOCOL_NAME,
             ),
-            blocked_peers: allow_block_list::Behaviour::default(),
         }
     }
 }

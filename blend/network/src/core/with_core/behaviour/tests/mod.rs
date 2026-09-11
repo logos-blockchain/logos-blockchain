@@ -1,3 +1,4 @@
+mod blocklist;
 mod bootstrapping;
 mod connection_maintenance;
 mod epoch;

@@ -19,7 +19,7 @@ use lb_blend::{
         with_core::{
             behaviour::{
                 ConnectionUpgradeFailureReason, Event as CoreToCoreEvent, IntervalStreamProvider,
-                NegotiatedPeerState,
+                NegotiatedPeerState, SpamReason,
             },
             error::SendError,
         },
@@ -238,14 +238,16 @@ where
             return;
         }
 
-        let negotiated_peers = self.behaviour().blend.with_core().negotiated_peers().keys();
+        let core_behaviour = self.behaviour().blend.with_core();
+        let negotiated_peers = core_behaviour.negotiated_peers().keys();
+        let num_blocked_peers = core_behaviour.num_blocked_peers();
 
         // We need to clone else we would not be able to call `self.dial` below, which
         // requires access to `&mut self`.
         let current_membership = self.current_epoch_info.membership.clone();
 
         let exclude_peers: HashSet<PeerId> = negotiated_peers
-            .chain(self.swarm.behaviour().blocked_peers.blocked_peers())
+            .chain(core_behaviour.blocked_peers())
             .chain(self.ongoing_dials.keys())
             .chain(self.unrecoverable_peers.iter())
             .chain(except.iter())
@@ -260,6 +262,21 @@ where
             .peekable();
 
         let no_more_peers_to_dial = peers_to_dial.peek().is_none();
+
+        // A node whose blocklist has swallowed its membership would otherwise
+        // look idle: it needs connections, and finds nobody to dial.
+        if no_more_peers_to_dial && num_blocked_peers > 0 {
+            tracing::warn!(
+                target: LOG_TARGET,
+                diagnostic = BLEND_REACHABILITY,
+                event = "blend_no_dialable_peers",
+                epoch = u32::from(self.current_epoch_info.epoch),
+                membership_size = current_membership.size(),
+                blocked_peers = num_blocked_peers,
+                needed_connections = amount,
+                "No member is dialable: every member is negotiated, being dialed, unreachable, or blocked for spamming."
+            );
+        }
 
         // When no membership peer is eligible to be dialed but we still have peers
         // we gave up on earlier in this dial cycle (`except`), we want to clear
@@ -424,14 +441,24 @@ where
         self.dial_random_peers_except(connections_to_establish, except);
     }
 
+    /// A spammy peer was already blocked by the behaviour when the verdict was
+    /// issued (`Event::PeerBlocked`); here only its connection slot is
+    /// refilled.
     fn handle_disconnected_peer(&mut self, peer_id: PeerId, peer_state: NegotiatedPeerState) {
         tracing::trace!(target: LOG_TARGET, "Peer {peer_id} disconnected with state {peer_state:?}.");
-        if let NegotiatedPeerState::Spammy(reason) = peer_state {
-            tracing::debug!(target: LOG_TARGET, "Blocking spammy peer {peer_id} for reason {reason:?}.");
-            self.swarm.behaviour_mut().blocked_peers.block_peer(peer_id);
-            metrics::core_peer_blocked(reason.as_str());
-        }
         self.check_and_dial_new_peers_except(&HashSet::from([peer_id]));
+    }
+
+    fn handle_blocked_peer(&self, peer_id: PeerId, reason: SpamReason, until_epoch: Epoch) {
+        tracing::debug!(target: LOG_TARGET, "Peer {peer_id} blocked for reason {reason:?} until epoch {until_epoch:?}.");
+        metrics::core_peer_blocked(reason.as_str());
+        metrics::core_peers_blocked(self.num_blocked_peers());
+    }
+
+    fn handle_unblocked_peer(&self, peer_id: PeerId) {
+        tracing::debug!(target: LOG_TARGET, "Peer {peer_id} unblocked: its block expired.");
+        metrics::core_peer_unblocked();
+        metrics::core_peers_blocked(self.num_blocked_peers());
     }
 
     fn collect_network_info(&self) -> NetworkInfo<PeerId> {
@@ -478,6 +505,16 @@ where
                 peer_state,
             ) => {
                 self.handle_disconnected_peer(peer_id, peer_state);
+            }
+            lb_blend::network::core::with_core::behaviour::Event::PeerBlocked {
+                peer_id,
+                reason,
+                until_epoch,
+            } => {
+                self.handle_blocked_peer(peer_id, reason, until_epoch);
+            }
+            lb_blend::network::core::with_core::behaviour::Event::PeerUnblocked(peer_id) => {
+                self.handle_unblocked_peer(peer_id);
             }
             lb_blend::network::core::with_core::behaviour::Event::OutboundConnectionUpgradeFailed { peer, reason } => {
                 match reason {
@@ -635,6 +672,8 @@ where
                 self.pending_retries.clear();
                 self.unrecoverable_peers.clear();
                 self.pending_full_membership_retry = None;
+                // Expired blocks are lifted by the behaviour in `start_new_epoch`,
+                // so the peers concerned are dialable again right here.
                 self.check_and_dial_new_peers();
             }
             BlendSwarmMessage::CompleteEpochTransition => {
@@ -942,6 +981,10 @@ where
 
     fn num_healthy_peers(&self) -> usize {
         self.swarm.behaviour().blend.with_core().num_healthy_peers()
+    }
+
+    fn num_blocked_peers(&self) -> usize {
+        self.swarm.behaviour().blend.with_core().num_blocked_peers()
     }
 
     fn available_connection_slots(&self) -> usize {
