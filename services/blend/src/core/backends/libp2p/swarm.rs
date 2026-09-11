@@ -196,7 +196,7 @@ where
             max_dial_attempts_per_connection: config.backend.max_dial_attempts_per_peer,
             unrecoverable_peers: HashSet::new(),
             ongoing_dials: HashMap::with_capacity(
-                *config.backend.core_peering_degree.start() as usize
+                config.backend.target_peering_degree.get() as usize
             ),
             pending_retries: FuturesUnordered::new(),
             pending_full_membership_retry: None,
@@ -352,10 +352,7 @@ where
     /// Called when a pending retry fires. Re-checks peering degree before
     /// actually dialing, so we don't waste a slot on a peer we no longer need.
     fn execute_retry(&mut self, peer_id: PeerId, dial_attempt: DialAttempt) {
-        let num_new_conns_needed = self
-            .minimum_healthy_peering_degree()
-            .saturating_sub(self.num_healthy_peers());
-        if num_new_conns_needed == 0 {
+        if self.connections_to_open() == 0 {
             tracing::debug!(
                 target: LOG_TARGET,
                 "Skipping retry for peer {peer_id:?}: peering degree already satisfied."
@@ -394,14 +391,7 @@ where
             tracing::warn!(target: LOG_TARGET, "Not dialing any peers because set of core nodes is smaller than the minimum network size. {membership_size} < {}", self.minimum_network_size.get());
             return;
         }
-        let num_new_conns_needed = self
-            .minimum_healthy_peering_degree()
-            .saturating_sub(self.num_healthy_peers());
-        let available_connection_slots = self.available_connection_slots();
-        if num_new_conns_needed > available_connection_slots {
-            tracing::trace!(target: LOG_TARGET, "To maintain the minimum healthy peering degree the node would need to create {num_new_conns_needed} new connections, but only {available_connection_slots} slots are available.");
-        }
-        let connections_to_establish = num_new_conns_needed.min(available_connection_slots);
+        let connections_to_establish = self.connections_to_open();
         self.dial_random_peers_except(connections_to_establish, except);
     }
 
@@ -941,24 +931,12 @@ where
         }
     }
 
-    fn minimum_healthy_peering_degree(&self) -> usize {
+    fn connections_to_open(&self) -> usize {
         self.swarm
             .behaviour()
             .blend
             .with_core()
-            .minimum_healthy_peering_degree()
-    }
-
-    fn num_healthy_peers(&self) -> usize {
-        self.swarm.behaviour().blend.with_core().num_healthy_peers()
-    }
-
-    fn available_connection_slots(&self) -> usize {
-        self.swarm
-            .behaviour()
-            .blend
-            .with_core()
-            .available_connection_slots()
+            .connections_to_open()
     }
 
     fn handle_blend_edge_behaviour_event(&mut self, blend_event: CoreToEdgeEvent) {
