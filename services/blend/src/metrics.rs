@@ -71,6 +71,17 @@ mod imp {
         lb_tracing::increase_counter_u64!(blend_core_peers_blocked_total, 1, reason = reason);
     }
 
+    /// Reports a core peer whose block expired at an epoch transition.
+    pub fn core_peer_unblocked() {
+        lb_tracing::increase_counter_u64!(blend_core_peers_unblocked_total, 1);
+    }
+
+    /// Number of core peers currently blocked for spamming. A value close to
+    /// the membership size means the node has nobody left to dial.
+    pub fn core_peers_blocked(count: usize) {
+        lb_tracing::metric_observable_gauge_u64_set!(blend_core_peers_blocked, count as u64);
+    }
+
     /// Reports a data payload the Blend network failed to deliver within the
     /// delivery deadline, and that this node therefore broadcast in the clear.
     pub fn data_payload_bypassed_blend(payload_type: DataPayloadType) {

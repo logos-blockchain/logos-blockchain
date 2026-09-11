@@ -57,6 +57,32 @@ mod tests;
 
 const LOG_TARGET: &str = blend::network::core::core::BEHAVIOUR;
 
+/// Longest a spammy peer stays blocked, in epochs. A peer's first spammy
+/// verdict blocks it until the next epoch; every further verdict adds an
+/// epoch, up to this cap. The membership, and the `PoQ` public inputs the
+/// verdict may have been based on, are rebuilt every epoch, so a block that
+/// outlives the epoch it was issued in outlives its evidence.
+const MAX_BLOCK_DURATION_IN_EPOCHS: u32 = 4;
+
+/// The reason a connection with a blocked peer is denied.
+#[derive(Debug)]
+pub struct BlockedPeer {
+    peer_id: PeerId,
+    until_epoch: Epoch,
+}
+
+impl core::fmt::Display for BlockedPeer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "peer {:?} is blocked for spamming until epoch {:?}",
+            self.peer_id, self.until_epoch
+        )
+    }
+}
+
+impl core::error::Error for BlockedPeer {}
+
 #[derive(Debug)]
 pub struct Config {
     /// The [minimum, maximum] peering degree of this node.
@@ -143,6 +169,15 @@ pub struct Behaviour<ObservationWindowClockProvider, ProofsVerifier> {
     /// States for processing messages from the old epoch
     /// before the transition period has passed.
     old_epoch: Option<OldEpoch<ProofsVerifier>>,
+    /// Peers caught spamming on a current-epoch connection, with the epoch at
+    /// which they may connect again. No new connection is upgraded with a
+    /// blocked peer in either direction; connections it already holds (an
+    /// old-epoch one draining during the transition period) are unaffected.
+    blocked_peers: HashMap<PeerId, Epoch>,
+    /// Number of spammy verdicts issued against each peer, which sets how many
+    /// epochs its next block lasts. Entries are dropped at the epoch
+    /// transition for peers that are neither blocked nor members any more.
+    spam_strikes: HashMap<PeerId, u32>,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -230,6 +265,16 @@ pub enum Event {
     /// A connection with a peer has dropped. The last state that was negotiated
     /// with the peer is also returned.
     PeerDisconnected(PeerId, NegotiatedPeerState),
+    /// A peer was caught spamming on its current-epoch connection and no new
+    /// connection will be upgraded with it before `until_epoch`.
+    PeerBlocked {
+        peer_id: PeerId,
+        reason: SpamReason,
+        until_epoch: Epoch,
+    },
+    /// A peer's block has expired at an epoch transition and it may connect
+    /// again.
+    PeerUnblocked(PeerId),
     /// An outbound connection request was successfully negotiated with the
     /// remote peer.
     OutboundConnectionUpgradeSucceeded(PeerId),
@@ -279,6 +324,8 @@ impl<ObservationWindowClockProvider, ProofsVerifier>
             minimum_network_size: config.minimum_network_size,
             num_blend_layers: config.num_blend_layers,
             old_epoch: None,
+            blocked_peers: HashMap::new(),
+            spam_strikes: HashMap::new(),
         }
     }
 
@@ -302,6 +349,7 @@ impl<ObservationWindowClockProvider, ProofsVerifier>
         let current_epoch_proofs_verifier =
             mem::replace(&mut self.proofs_verifier, Arc::new(new_proofs_verifier));
 
+        self.lift_expired_blocks();
         self.stop_old_epoch();
 
         self.old_epoch = Some(OldEpoch::new(
@@ -331,6 +379,67 @@ impl<ObservationWindowClockProvider, ProofsVerifier>
                 self.try_wake();
             }
         }
+    }
+
+    /// Unblocks the peers whose block has run its course at the current epoch,
+    /// and forgets the strikes of peers that are neither blocked nor members.
+    fn lift_expired_blocks(&mut self) {
+        let current_epoch = self.current_epoch_info.1;
+        let expired_blocks: Vec<PeerId> = self
+            .blocked_peers
+            .iter()
+            .filter(|(_, until_epoch)| **until_epoch <= current_epoch)
+            .map(|(peer_id, _)| *peer_id)
+            .collect();
+        for peer_id in expired_blocks {
+            self.blocked_peers.remove(&peer_id);
+            tracing::debug!(target: LOG_TARGET, "Unblocking peer {peer_id:?}: its block expired at epoch {current_epoch:?}.");
+            self.events
+                .push_back(ToSwarm::GenerateEvent(Event::PeerUnblocked(peer_id)));
+        }
+        let blocked_peers = &self.blocked_peers;
+        let membership = &self.current_epoch_info.0;
+        self.spam_strikes.retain(|peer_id, _| {
+            blocked_peers.contains_key(peer_id) || membership.contains(peer_id)
+        });
+        self.try_wake();
+    }
+
+    /// Blocks a peer caught spamming on its current-epoch connection: its
+    /// first strike blocks it until the next epoch, every further strike adds
+    /// an epoch, up to [`MAX_BLOCK_DURATION_IN_EPOCHS`].
+    fn block_peer(&mut self, peer_id: PeerId, reason: SpamReason) {
+        let strikes = self.spam_strikes.entry(peer_id).or_insert(0);
+        *strikes = strikes.saturating_add(1);
+        let until_epoch: Epoch = u32::from(self.current_epoch_info.1)
+            .saturating_add((*strikes).min(MAX_BLOCK_DURATION_IN_EPOCHS))
+            .into();
+        tracing::debug!(target: LOG_TARGET, "Blocking spammy peer {peer_id:?} for reason {reason:?} until epoch {until_epoch:?} (strike {strikes}).");
+        self.blocked_peers.insert(peer_id, until_epoch);
+        self.events
+            .push_back(ToSwarm::GenerateEvent(Event::PeerBlocked {
+                peer_id,
+                reason,
+                until_epoch,
+            }));
+        self.try_wake();
+    }
+
+    /// Whether no new connection may be upgraded with the peer because it was
+    /// caught spamming.
+    #[must_use]
+    pub fn is_blocked(&self, peer_id: &PeerId) -> bool {
+        self.blocked_peers.contains_key(peer_id)
+    }
+
+    /// The peers currently blocked for spamming.
+    pub fn blocked_peers(&self) -> impl Iterator<Item = &PeerId> {
+        self.blocked_peers.keys()
+    }
+
+    #[must_use]
+    pub fn num_blocked_peers(&self) -> usize {
+        self.blocked_peers.len()
     }
 
     #[must_use]
@@ -726,6 +835,12 @@ impl<ObservationWindowClockProvider, ProofsVerifier>
 
     /// Mark the connection with the sender of a malformed message as malicious
     /// and instruct its connection handler to drop the substream.
+    ///
+    /// Only the offending connection is closed. If it is the peer's
+    /// current-epoch connection, the peer is also blocked from opening or
+    /// receiving new connections until its block expires; an old-epoch
+    /// connection with the same peer keeps draining during the transition
+    /// period.
     fn close_spammy_connection(
         &mut self,
         (peer_id, connection_id): (PeerId, ConnectionId),
@@ -744,10 +859,15 @@ impl<ObservationWindowClockProvider, ProofsVerifier>
         (peer_id, connection_id): (PeerId, ConnectionId),
         reason: SpamReason,
     ) {
-        self.update_state_for_negotiated_peer(
+        // A verdict counts once per connection: a second failure on the same
+        // connection before it is torn down must not add a strike.
+        if let Some(previous_state) = self.update_state_for_negotiated_peer(
             (peer_id, connection_id),
             NegotiatedPeerState::Spammy(reason),
-        );
+        ) && !previous_state.is_spammy()
+        {
+            self.block_peer(peer_id, reason);
+        }
     }
 
     /// Update the state of an already negotiated peer if exists,
@@ -1080,6 +1200,18 @@ where
         _: &Multiaddr,
         remote_addr: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
+        // A peer caught spamming in this or a recent epoch gets no new
+        // connection. Denying (rather than a dummy handler) closes this
+        // connection only: the peer's old-epoch connection, if any, is not
+        // touched.
+        if let Some(until_epoch) = self.blocked_peers.get(&peer_id) {
+            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} blocked until epoch {until_epoch:?}.");
+            return Err(ConnectionDenied::new(BlockedPeer {
+                peer_id,
+                until_epoch: *until_epoch,
+            }));
+        }
+
         // If the new peer makes the set of established connections too large, do not
         // try to upgrade the connection.
         if self.negotiated_peers.len() >= *self.peering_degree.end() {
@@ -1130,6 +1262,19 @@ where
         _: Endpoint,
         _: PortUse,
     ) -> Result<THandler<Self>, ConnectionDenied> {
+        // Reached only by a dial that was in flight when the verdict landed:
+        // `handle_pending_outbound_connection` refuses later dials before the
+        // transport handshake. The denial surfaces as `DialError::Denied`, an
+        // unrecoverable error, so the swarm picks another peer instead of
+        // retrying this one.
+        if let Some(until_epoch) = self.blocked_peers.get(&peer_id) {
+            tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} blocked until epoch {until_epoch:?}.");
+            return Err(ConnectionDenied::new(BlockedPeer {
+                peer_id,
+                until_epoch: *until_epoch,
+            }));
+        }
+
         // If the new peer makes the set of established connections too large, do not
         // try to upgrade the connection.
         if self.negotiated_peers.len() >= *self.peering_degree.end() {
@@ -1165,6 +1310,27 @@ where
             tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with edge peer {peer_id:?} with addr {remote_addr:?}.");
             Either::Right(DummyConnectionHandler)
         })
+    }
+
+    /// Refuses to dial a blocked peer at all, so the node does not pay a
+    /// transport handshake for a connection it would deny once established.
+    fn handle_pending_outbound_connection(
+        &mut self,
+        connection_id: ConnectionId,
+        maybe_peer: Option<PeerId>,
+        _: &[Multiaddr],
+        _: Endpoint,
+    ) -> Result<Vec<Multiaddr>, ConnectionDenied> {
+        if let Some(peer_id) = maybe_peer
+            && let Some(until_epoch) = self.blocked_peers.get(&peer_id)
+        {
+            tracing::debug!(target: LOG_TARGET, "Refusing to dial peer {peer_id:?} on connection {connection_id:?}: blocked until epoch {until_epoch:?}.");
+            return Err(ConnectionDenied::new(BlockedPeer {
+                peer_id,
+                until_epoch: *until_epoch,
+            }));
+        }
+        Ok(vec![])
     }
 
     /// Informs the behaviour about an event from the [`Swarm`].

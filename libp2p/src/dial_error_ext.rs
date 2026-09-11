@@ -14,7 +14,10 @@ impl DialErrorExt for DialError {
             // The address handed resolves back to this node.
             | Self::LocalPeerId { .. }
             // There is no address to dial for this peer.
-            | Self::NoAddresses => false,
+            | Self::NoAddresses
+            // A behaviour refused the connection (the peer is blocked). Nothing
+            // we retry changes that verdict; a new epoch may.
+            | Self::Denied { .. } => false,
 
             // Per-address transport failures. Permanent only when every address
             // failed because we cannot speak its protocol at all; a timeout,
@@ -27,9 +30,7 @@ impl DialErrorExt for DialError {
             }
 
             // Local, transient conditions.
-            Self::Denied { .. }
-            | Self::Aborted
-            | Self::DialPeerConditionFalse(_) => true,
+            Self::Aborted | Self::DialPeerConditionFalse(_) => true,
         }
     }
 }
