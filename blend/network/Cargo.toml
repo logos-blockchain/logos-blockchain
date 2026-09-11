@@ -40,7 +40,6 @@ libp2p-stream       = { workspace = true }
 libp2p-swarm-test   = { features = ["tokio"], workspace = true }
 test-log            = { features = ["trace"], workspace = true }
 tokio               = { workspace = true }
-tokio-stream        = { workspace = true }
 
 [features]
 unsafe-test-functions = []
