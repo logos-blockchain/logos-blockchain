@@ -82,8 +82,14 @@ pub use handle::SequencerHandle;
 // Re-exported so consumers can inspect and assemble the signature set for
 // `prepare_channel_config` / `submit_channel_config` without depending on
 // `lb-core` / the key-management crate directly.
+// Re-exported so a signer can inspect the whole prepared tx
+// (`PreparedChannelConfig::tx`) and match on every op it would authorize.
 pub use lb_core::{
-    mantle::ops::channel::config::ChannelConfigOp,
+    mantle::{
+        Op,
+        ops::{OpProof, channel::config::ChannelConfigOp},
+        transactions::Ops,
+    },
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
 pub use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
