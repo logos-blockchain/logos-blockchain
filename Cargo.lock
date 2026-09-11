@@ -4084,7 +4084,6 @@ dependencies = [
  "logos-blockchain-utils",
  "test-log",
  "tokio",
- "tokio-stream",
  "tracing",
 ]
 

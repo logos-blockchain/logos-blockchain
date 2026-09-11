@@ -36,8 +36,6 @@ const NUM_BLEND_LAYERS: u64 = 3;
 const BLEND_PROTOCOL_NAME: &str = "/blend/integration-tests";
 const DATA_REPLICATION_FACTOR: u64 = 0;
 
-const MINIMUM_MESSAGES_COEFFICIENT: u64 = 1;
-const BLEND_NORMALIZATION_CONSTANT: f64 = 1.03;
 const COVER_MESSAGE_FREQUENCY_PER_ROUND: f64 = 1.0;
 const MAXIMUM_RELEASE_DELAY_IN_ROUNDS: u64 = 3;
 const ACTIVITY_THRESHOLD_SENSITIVITY: u64 = 1;
@@ -106,11 +104,6 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 data_replication_factor: DATA_REPLICATION_FACTOR,
             },
             core: BlendCoreSettings {
-                minimum_messages_coefficient: NonZeroU64::try_from(MINIMUM_MESSAGES_COEFFICIENT)
-                    .expect("Minimum messages coefficient cannot be zero."),
-                normalization_constant: BLEND_NORMALIZATION_CONSTANT
-                    .try_into()
-                    .expect("Normalization constant cannot be negative."),
                 scheduler: SchedulerSettings {
                     cover: CoverTrafficSettings {
                         message_frequency_per_round: PositiveF64::try_from(

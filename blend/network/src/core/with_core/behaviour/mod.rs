@@ -11,7 +11,7 @@ use std::{
 };
 
 use either::Either;
-use futures::{Stream, StreamExt as _};
+use futures::StreamExt as _;
 use lb_blend_membership::Membership;
 use lb_blend_message::encap::{
     ProofsVerifier as ProofsVerifierTrait, validated::EncapsulatedMessageWithVerifiedPublicHeader,
@@ -33,9 +33,7 @@ use crate::core::{
     poq_verification::{PendingPoQVerifications, PoQVerificationOutcome},
     with_core::{
         behaviour::{
-            handler::{
-                ConnectionHandler, FromBehaviour, ToBehaviour, conn_maintenance::ConnectionMonitor,
-            },
+            handler::{ConnectionHandler, FromBehaviour, ToBehaviour},
             message_cache::MessageCache,
             old_epoch::OldEpoch,
             utils::{
@@ -100,7 +98,7 @@ impl RemotePeerConnectionDetails {
 /// propagates messages from the Blend service to the rest of the Blend network.
 ///
 /// The public header signature and uniqueness of incoming messages is validated according to the [Blend specification](https://lip.logos.co/blockchain/raw/blend-protocol.html) before the message is propagated to the swarm and to the Blend service.
-pub struct Behaviour<ObservationWindowClockProvider, ProofsVerifier> {
+pub struct Behaviour<ProofsVerifier> {
     /// Tracks connections between this node and other core nodes.
     ///
     /// Only connections with other core nodes that are established before the
@@ -121,7 +119,6 @@ pub struct Behaviour<ObservationWindowClockProvider, ProofsVerifier> {
     /// to avoid processing the same message multiple times and being marked
     /// as malicious by our peers.
     message_cache: MessageCache,
-    observation_window_clock_provider: ObservationWindowClockProvider,
     current_epoch_info: (Membership<PeerId>, Epoch),
     /// Verifier for the `PoQ`s of the messages received in the current epoch.
     ///
@@ -148,7 +145,6 @@ pub struct Behaviour<ObservationWindowClockProvider, ProofsVerifier> {
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum NegotiatedPeerState {
     Healthy,
-    Unhealthy,
     Spammy(SpamReason),
 }
 
@@ -158,7 +154,6 @@ pub enum SpamReason {
     DuplicateMessage,
     InvalidHeaderSignature,
     InvalidProofOfQuota,
-    TooManyMessages,
 }
 
 impl SpamReason {
@@ -169,7 +164,6 @@ impl SpamReason {
             Self::DuplicateMessage => "duplicate_message",
             Self::InvalidHeaderSignature => "invalid_header_signature",
             Self::InvalidProofOfQuota => "invalid_proof_of_quota",
-            Self::TooManyMessages => "too_many_messages",
         }
     }
 }
@@ -178,11 +172,6 @@ impl NegotiatedPeerState {
     #[must_use]
     pub const fn is_healthy(&self) -> bool {
         matches!(*self, Self::Healthy)
-    }
-
-    #[must_use]
-    pub const fn is_unhealthy(&self) -> bool {
-        matches!(*self, Self::Unhealthy)
     }
 
     #[must_use]
@@ -222,11 +211,6 @@ pub enum Event {
         sender: PeerId,
         epoch: Epoch,
     },
-    /// A peer on a given connection has been detected as unhealthy.
-    UnhealthyPeer(PeerId),
-    /// A peer on a given connection that was previously unhealthy has returned
-    /// to a healthy state.
-    HealthyPeer(PeerId),
     /// A connection with a peer has dropped. The last state that was negotiated
     /// with the peer is also returned.
     PeerDisconnected(PeerId, NegotiatedPeerState),
@@ -251,13 +235,10 @@ pub enum Event {
     },
 }
 
-impl<ObservationWindowClockProvider, ProofsVerifier>
-    Behaviour<ObservationWindowClockProvider, ProofsVerifier>
-{
+impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     #[must_use]
     pub fn new(
         config: &Config,
-        observation_window_clock_provider: ObservationWindowClockProvider,
         epoch_info: (Membership<PeerId>, Epoch),
         proofs_verifier: ProofsVerifier,
         local_peer_id: PeerId,
@@ -267,7 +248,6 @@ impl<ObservationWindowClockProvider, ProofsVerifier>
             negotiated_peers: HashMap::with_capacity(*config.peering_degree.end()),
             events: VecDeque::new(),
             waker: None,
-            observation_window_clock_provider,
             message_cache: MessageCache::new_with_peer_capacity(epoch_info.0.size()),
             current_epoch_info: epoch_info,
             proofs_verifier: Arc::new(proofs_verifier),
@@ -771,42 +751,6 @@ impl<ObservationWindowClockProvider, ProofsVerifier>
         Some(mem::replace(&mut peer_details.negotiated_state, state))
     }
 
-    /// Handle an unhealthy connection if it exists in the current epoch.
-    /// If not, it is ignored.
-    #[expect(
-        dead_code,
-        reason = "TODO: We currently do not handle unhealthy cases."
-    )]
-    fn handle_unhealthy_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
-        // Notify swarm only on first transition into unhealthy state.
-        if let Some(prev_state) = self.update_state_for_negotiated_peer(
-            (peer_id, connection_id),
-            NegotiatedPeerState::Unhealthy,
-        ) && prev_state != NegotiatedPeerState::Unhealthy
-        {
-            tracing::debug!(target: LOG_TARGET, "Peer {peer_id:?} has been marked as unhealthy.");
-            self.events
-                .push_back(ToSwarm::GenerateEvent(Event::UnhealthyPeer(peer_id)));
-            self.try_wake();
-        }
-    }
-
-    /// Handle a unhealthy connection if it exists in the current epoch.
-    /// If not, it is ignored.
-    fn handle_healthy_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
-        // Notify swarm only on first transition into healthy state.
-        if let Some(prev_state) = self.update_state_for_negotiated_peer(
-            (peer_id, connection_id),
-            NegotiatedPeerState::Healthy,
-        ) && prev_state != NegotiatedPeerState::Healthy
-        {
-            tracing::debug!(target: LOG_TARGET, "Peer {peer_id:?} has been marked as healthy.");
-            self.events
-                .push_back(ToSwarm::GenerateEvent(Event::HealthyPeer(peer_id)));
-            self.try_wake();
-        }
-    }
-
     /// Return `True` if this peer has an established (negotiated or not)
     /// incoming connection with the specified peer, `False` otherwise.
     fn has_incoming_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
@@ -996,8 +940,7 @@ impl<ObservationWindowClockProvider, ProofsVerifier>
 
 /// The part of the behaviour that needs to verify the `PoQ` of the messages it
 /// receives, and so requires a usable verifier.
-impl<ObservationWindowClockProvider, ProofsVerifier>
-    Behaviour<ObservationWindowClockProvider, ProofsVerifier>
+impl<ProofsVerifier> Behaviour<ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
 {
@@ -1056,17 +999,11 @@ fn update_connection_id_and_direction(
     existing_connection.connection_id = new_connection_id;
 }
 
-impl<ObservationWindowClockProvider, ProofsVerifier> NetworkBehaviour
-    for Behaviour<ObservationWindowClockProvider, ProofsVerifier>
+impl<ProofsVerifier> NetworkBehaviour for Behaviour<ProofsVerifier>
 where
-    ObservationWindowClockProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
-        + 'static,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
 {
-    type ConnectionHandler = Either<
-        ConnectionHandler<ObservationWindowClockProvider::IntervalStream>,
-        DummyConnectionHandler,
-    >;
+    type ConnectionHandler = Either<ConnectionHandler, DummyConnectionHandler>;
     type ToSwarm = Event;
 
     #[expect(
@@ -1108,7 +1045,6 @@ where
             self.connections_waiting_upgrade
                 .insert((peer_id, connection_id), Endpoint::Dialer);
             Either::Left(ConnectionHandler::new(
-                ConnectionMonitor::new(self.observation_window_clock_provider.interval_stream()),
                 self.protocol_name.clone(),
                 (peer_id, connection_id),
             ))
@@ -1157,7 +1093,6 @@ where
             self.connections_waiting_upgrade
                 .insert((peer_id, connection_id), Endpoint::Listener);
             Either::Left(ConnectionHandler::new(
-                ConnectionMonitor::new(self.observation_window_clock_provider.interval_stream()),
                 self.protocol_name.clone(),
                 (peer_id, connection_id),
             ))
@@ -1251,32 +1186,6 @@ where
                 ToBehaviour::FullyNegotiated => {
                     self.handle_negotiated_connection((peer_id, connection_id));
                 }
-                // TODO: Re-add logic once Blend observation window values calculation is fixed.
-                ToBehaviour::SpammyPeer => {
-                    // We do not explicitly close the connection here since the
-                    // connection handler will already do
-                    // that for us.
-                    // self.set_connection_to_spammy(
-                    //     (peer_id, connection_id),
-                    //     SpamReason::TooManyMessages,
-                    // );
-                    tracing::debug!(
-                        target: LOG_TARGET,
-                        "Peer {peer_id:?} has been marked as spammy by its connection handler. NOT TAKING ANY ACTIONS ON THIS."
-                    );
-                }
-                // TODO: Re-add logic once Blend observation window values calculation is fixed.
-                ToBehaviour::UnhealthyPeer => {
-                    // self.handle_unhealthy_connection((peer_id,
-                    // connection_id));
-                    tracing::trace!(
-                        target: LOG_TARGET,
-                        "Peer {peer_id:?} has been marked as unhealthy by its connection handler. NOT TAKING ANY ACTIONS ON THIS."
-                    );
-                }
-                ToBehaviour::HealthyPeer => {
-                    self.handle_healthy_connection((peer_id, connection_id));
-                }
                 ToBehaviour::IOError(e) => {
                     tracing::trace!(target: LOG_TARGET, "IO error {e:?} with peer {peer_id:?} on connection {connection_id:?}");
                 }
@@ -1312,13 +1221,6 @@ where
         self.waker = Some(cx.waker().clone());
         Poll::Pending
     }
-}
-
-pub trait IntervalStreamProvider {
-    type IntervalStream: Stream<Item = Self::IntervalItem>;
-    type IntervalItem;
-
-    fn interval_stream(&self) -> Self::IntervalStream;
 }
 
 /// A trait for reversable types.

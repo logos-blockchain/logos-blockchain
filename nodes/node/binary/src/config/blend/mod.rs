@@ -101,8 +101,6 @@ impl ServiceConfig {
                         .core
                         .backend
                         .max_edge_node_incoming_connections,
-                    minimum_messages_coefficient: self.deployment.core.minimum_messages_coefficient,
-                    normalization_constant: self.deployment.core.normalization_constant,
                     protocol_name: self.deployment.common.protocol_name.clone(),
                     peering_degree_check_interval: self
                         .user
