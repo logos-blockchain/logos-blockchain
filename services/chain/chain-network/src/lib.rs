@@ -88,7 +88,9 @@ pub enum Error {
     #[error("Invalid block: {0}")]
     InvalidBlock(String),
     #[error("Header is not valid on its own: {0}")]
-    InvalidHeader(lb_core::block::HeaderError),
+    InvalidHeader(#[from] lb_core::block::HeaderError),
+    #[error("Invalid block header signature")]
+    InvalidSignature,
     #[error("No combination of candidate transactions reproduces the block root")]
     NoMatchingReconstruction,
     #[error("Reference {index} ({prefix}) matches no local transaction")]
@@ -101,6 +103,20 @@ pub enum Error {
     HeaderIdNotFound(HeaderId),
     #[error(transparent)]
     BoundedError(#[from] BoundedError),
+}
+
+impl From<lb_core::block::Error> for Error {
+    fn from(e: lb_core::block::Error) -> Self {
+        match e {
+            lb_core::block::Error::Signature => Self::InvalidSignature,
+            lb_core::block::Error::Serialisation(_)
+            | lb_core::block::Error::Header(_)
+            | lb_core::block::Error::BodyRootMismatch
+            | lb_core::block::Error::KeyMismatch
+            | lb_core::block::Error::BoundedError(_)
+            | lb_core::block::Error::ContentTooBig { .. } => Self::InvalidBlock(e.to_string()),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -600,10 +616,8 @@ where
         }
 
         // Check the proposal before any mempool scanning.
-        if let Err(e) = verify_header_and_signature(&proposal, orphan_downloader) {
+        if let Err(e) = verify_proposal_and_cache_rejected(&proposal, orphan_downloader) {
             metrics::consensus_observe_proposal_reconstruct_err("network", &e);
-            error!(target: LOG_TARGET, %e, ?block_id, "Invalid proposal");
-            return;
         }
 
         let reconstruct_started_at = Instant::now();
@@ -864,11 +878,14 @@ enum DoNotProcessBlock {
     AlreadyApplied,
 }
 
-/// Verifies the proposal header and signature.
+/// Verifies the proposal header and signature without mempool scanning.
 ///
 /// If the proposal header is invalid, cache the block ID as rejected in the
 /// orphan downloader, so that we don't waste time downloading the block later.
-fn verify_header_and_signature<NetAdapter, RuntimeServiceId>(
+/// If the signature is invalid, do not cache the block ID as rejected, because
+/// a genuine proposal with the same block ID may arrive later, and it should be
+/// accepted.
+fn verify_proposal_and_cache_rejected<NetAdapter, RuntimeServiceId>(
     proposal: &Proposal,
     orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
 ) -> Result<(), Error>
@@ -877,20 +894,29 @@ where
     NetAdapter::Block: Clone + Send + Sync + 'static,
     RuntimeServiceId: Send + Sync + 'static,
 {
-    // If a header is invalid, cache the block ID as rejected in the orphan
-    // downloader, so that we don't waste time downloading the block later.
-    if let Err(e) = verify_header_alone(proposal.header()) {
-        orphan_downloader.insert_rejected_block(proposal.header().id());
-        return Err(Error::InvalidHeader(e));
+    match verify_proposal(proposal) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let block_id = proposal.header().id();
+            if matches!(e, Error::InvalidSignature) {
+                error!(target: LOG_TARGET, %e, ?block_id, "invalid proposal signature: not caching block ID as rejected in orphan downloader");
+            } else {
+                error!(target: LOG_TARGET, %e, ?block_id, "invalid proposal header: caching block ID as rejected in orphan downloader");
+                orphan_downloader.insert_rejected_block(proposal.header().id());
+            }
+            Err(e)
+        }
     }
+}
 
-    // Verify a signature.
-    // Even if it is invalid, do not cache the block as rejected in the orphan
-    // downloader, because the signature is not committed by the block ID.
-    // A genuine proposal with the same block ID may arrive later, and it shouldn't
-    // be rejected.
-    verify_header_signature(proposal.header(), proposal.signature())
-        .map_err(|e| Error::InvalidBlock(e.to_string()))
+/// Verifies the proposal header and signature without mempool scanning.
+fn verify_proposal(proposal: &Proposal) -> Result<(), Error> {
+    verify_header_alone(proposal.header())?;
+
+    Ok(verify_header_signature(
+        proposal.header(),
+        proposal.signature(),
+    )?)
 }
 
 async fn is_after_lib<Cryptarchia, RuntimeServiceId>(
@@ -1386,14 +1412,13 @@ mod tests {
             OrphanBlocksDownloader::<_, usize>::new(NoopNetworkAdapter, NonZeroUsize::MIN, 1);
 
         assert!(matches!(
-            verify_header_and_signature(&tampered, &mut orphan_downloader),
+            verify_proposal_and_cache_rejected(&tampered, &mut orphan_downloader),
             Err(Error::InvalidBlock(_))
         ));
-
         // check that the rejected block was not cached in the orphan downloader.
         assert!(!orphan_downloader.has_rejected_block(&block_id));
 
-        verify_header_and_signature(&genuine, &mut orphan_downloader)
+        verify_proposal_and_cache_rejected(&genuine, &mut orphan_downloader)
             .expect("genuine proposal must pass");
     }
 
