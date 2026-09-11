@@ -882,9 +882,10 @@ enum DoNotProcessBlock {
 ///
 /// If the proposal header is invalid, cache the block ID as rejected in the
 /// orphan downloader, so that we don't waste time downloading the block later.
+///
 /// If the signature is invalid, do not cache the block ID as rejected, because
 /// a genuine proposal with the same block ID may arrive later, and it should be
-/// accepted.
+/// accepted. The block ID does not commit to the signature.
 fn verify_proposal_and_cache_rejected<NetAdapter, RuntimeServiceId>(
     proposal: &Proposal,
     orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
