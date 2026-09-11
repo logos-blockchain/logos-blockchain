@@ -1,5 +1,5 @@
 use core::{
-    num::{NonZeroU64, NonZeroUsize},
+    num::{NonZeroU64, NonZeroU128, NonZeroUsize},
     ops::RangeInclusive,
 };
 use std::{
@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use futures::{StreamExt as _, select};
 use lb_blend_membership::{Membership, Node};
 use lb_blend_message::crypto::key_ext::Ed25519SecretKeyExt as _;
+use lb_blend_primitives::time::{Round, RoundClock, RoundCount};
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_libp2p::{NetworkBehaviour, SwarmEvent};
 use libp2p::{
@@ -23,7 +24,9 @@ use libp2p_swarm_test::SwarmExt as _;
 use crate::core::{
     poq_verification::PendingPoQVerifications,
     tests::utils::{PROTOCOL_NAME, TestProofsVerifier, TestSwarm},
-    with_core::behaviour::{Behaviour, Event, message_cache::MessageCache},
+    with_core::behaviour::{
+        Behaviour, Event, liveness::PeerLivenessMap, message_cache::MessageCache,
+    },
 };
 
 /// The behaviour under test, with the `PoQ` verifier the tests use.
@@ -55,6 +58,8 @@ pub fn new_nodes_with_empty_address(
 pub struct BehaviourBuilder {
     local_public_key: ed25519::PublicKey,
     membership: Option<Membership<PeerId>>,
+    round_duration_in_seconds: Option<NonZeroU64>,
+    liveness_window_in_rounds: Option<NonZeroU128>,
     peering_degree: Option<RangeInclusive<usize>>,
     minimum_network_size: Option<NonZeroUsize>,
     num_blend_layers: Option<NonZeroU64>,
@@ -66,6 +71,8 @@ impl BehaviourBuilder {
         Self {
             local_public_key: identity.public(),
             membership: None,
+            round_duration_in_seconds: None,
+            liveness_window_in_rounds: None,
             peering_degree: None,
             minimum_network_size: None,
             num_blend_layers: None,
@@ -88,6 +95,16 @@ impl BehaviourBuilder {
         self
     }
 
+    pub fn with_liveness(
+        mut self,
+        round_duration_in_seconds: NonZeroU64,
+        window_in_rounds: NonZeroU128,
+    ) -> Self {
+        self.round_duration_in_seconds = Some(round_duration_in_seconds);
+        self.liveness_window_in_rounds = Some(window_in_rounds);
+        self
+    }
+
     pub fn with_peering_degree(mut self, peering_degree: RangeInclusive<usize>) -> Self {
         self.peering_degree = Some(peering_degree);
         self
@@ -104,6 +121,14 @@ impl BehaviourBuilder {
     }
 
     pub fn build(self) -> TestBehaviour {
+        let round_duration = self
+            .round_duration_in_seconds
+            .unwrap_or_else(|| 1.try_into().unwrap());
+        // A window long enough that no connection in a test goes stale by accident.
+        // Tests that exercise liveness set their own.
+        let liveness_window = self
+            .liveness_window_in_rounds
+            .unwrap_or_else(|| 1_000_000.try_into().unwrap());
         Behaviour {
             negotiated_peers: HashMap::new(),
             connections_waiting_upgrade: HashMap::new(),
@@ -124,6 +149,9 @@ impl BehaviourBuilder {
                 .num_blend_layers
                 .unwrap_or_else(|| 3.try_into().unwrap()),
             old_epoch: None,
+            round_clock: RoundClock::new(round_duration),
+            liveness: PeerLivenessMap::new(RoundCount::new(liveness_window)),
+            last_liveness_check: Round::from(0),
             message_cache: MessageCache::new(),
             proofs_verifier: Arc::new(self.proofs_verifier),
             pending_poq_verifications: PendingPoQVerifications::new(),

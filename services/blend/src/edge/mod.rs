@@ -366,7 +366,7 @@ where
     } else {
         Some(FailureDetector::new(
             settings.max_data_message_delay_in_rounds(),
-            settings.time.round_duration,
+            Duration::from_secs(settings.time.round_duration_in_seconds.get()),
             payload_dispatcher.observe_broadcasts().await,
         ))
     };

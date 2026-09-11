@@ -123,7 +123,11 @@ where
             transport,
             behaviour_fn(identity),
             peer_id,
-            swarm::Config::with_tokio_executor(),
+            // As in production: the connection is meant to go away as soon as
+            // the behaviour lets go of its substreams, so that a test observes
+            // a close the behaviour asked for without waiting out an idle
+            // timeout.
+            swarm::Config::with_tokio_executor().with_idle_connection_timeout(Duration::ZERO),
         ))
     }
 }

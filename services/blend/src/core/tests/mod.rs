@@ -2193,7 +2193,7 @@ async fn test_initialize_drops_activity_proof_older_than_one_epoch() {
 ///
 /// Sitting through a whole delivery deadline costs them nothing: they run on a
 /// paused clock, which jumps to the next timer the moment every task is idle.
-const FALLBACK_TEST_ROUND: Duration = Duration::from_secs(1);
+const FALLBACK_TEST_ROUND_IN_SECONDS: NonZeroU64 = NonZeroU64::new(1).unwrap();
 
 /// Runs the core event loop over a two-node membership, with both sides of
 /// Blend's exit door in the test's hands.
@@ -2218,10 +2218,10 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
     // See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
     settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
-    settings.time.round_duration = FALLBACK_TEST_ROUND;
-    let deadline = FALLBACK_TEST_ROUND
-        * u32::try_from(settings.max_data_message_delay_in_rounds().get())
-            .expect("The test deadline is a handful of rounds.");
+    settings.time.round_duration_in_seconds = FALLBACK_TEST_ROUND_IN_SECONDS;
+    let deadline = Duration::from_secs(
+        FALLBACK_TEST_ROUND_IN_SECONDS.get() * settings.max_data_message_delay_in_rounds().get(),
+    );
 
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
@@ -2280,7 +2280,7 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
         let mut deliveries = FailureDetector::new(
             settings.max_data_message_delay_in_rounds(),
-            settings.time.round_duration,
+            Duration::from_secs(settings.time.round_duration_in_seconds.get()),
             PayloadDispatcher::<RuntimeServiceId>::observe_broadcasts(&payload_dispatcher).await,
         );
         run_event_loop(
@@ -2310,7 +2310,7 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
 
 /// Long enough that reaching it means the assertion has already failed.
 fn past(deadline: Duration) -> Duration {
-    deadline + FALLBACK_TEST_ROUND * 4
+    deadline + Duration::from_secs(FALLBACK_TEST_ROUND_IN_SECONDS.get()) * 4
 }
 
 /// A core node reacts to a delivery failure exactly as an edge node does: at

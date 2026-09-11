@@ -119,7 +119,8 @@ async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
     );
 
     let broadcast = timeout(
-        TEST_ROUND * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
+        Duration::from_secs(TEST_ROUND.get())
+            * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
         broadcasting_channel.dispatched.recv(),
     )
     .await
@@ -159,7 +160,8 @@ async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
 
     assert!(
         timeout(
-            TEST_ROUND * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
+            Duration::from_secs(TEST_ROUND.get())
+                * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
             broadcasting_channel.dispatched.recv(),
         )
         .await
@@ -197,7 +199,8 @@ async fn a_node_that_does_not_bypass_never_broadcasts_in_the_clear() {
 
     assert!(
         timeout(
-            TEST_ROUND * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
+            Duration::from_secs(TEST_ROUND.get())
+                * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
             broadcasting_channel.dispatched.recv(),
         )
         .await
@@ -230,7 +233,8 @@ async fn a_transaction_the_network_never_delivers_is_broadcast_in_the_clear() {
     );
 
     let broadcast = timeout(
-        TEST_ROUND * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
+        Duration::from_secs(TEST_ROUND.get())
+            * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
         broadcasting_channel.dispatched.recv(),
     )
     .await

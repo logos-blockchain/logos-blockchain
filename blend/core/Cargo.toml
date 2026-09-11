@@ -17,6 +17,7 @@ lb-blend-crypto     = { workspace = true }
 lb-blend-membership = { workspace = true }
 lb-blend-message    = { workspace = true }
 lb-blend-network    = { workspace = true }
+lb-blend-primitives = { workspace = true }
 lb-blend-proofs     = { workspace = true }
 lb-blend-provers    = { workspace = true }
 lb-blend-scheduling = { workspace = true }

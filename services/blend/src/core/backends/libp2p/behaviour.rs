@@ -36,6 +36,8 @@ where
                             ..=maximum_core_peering_degree,
                         minimum_network_size: config.minimum_network_size.try_into().unwrap(),
                         num_blend_layers: config.num_blend_layers,
+                        round_duration_in_seconds: config.time.round_duration_in_seconds,
+                        liveness_window_in_rounds: config.time.rounds_per_observation_window,
                     },
                     with_edge: lb_blend::network::core::with_edge::behaviour::Config {
                         connection_timeout: config.backend.edge_node_connection_timeout,
