@@ -152,19 +152,22 @@ pub enum UncleError {
     ParentNotOnChain,
     #[error("on the chain that the block is extending")]
     OnChain,
-    #[error("at a slot no uncle can be proposed for")]
-    InvalidSlot,
+    #[error("invalid uncle header")]
+    InvalidHeader(#[from] HeaderError),
     #[error("invalid header signature")]
     InvalidSignature,
     #[error("invalid proof of leadership")]
     InvalidProof,
+    #[error(transparent)]
+    Other(lb_core::block::Error),
 }
 
-impl From<HeaderError> for UncleError {
-    fn from(error: HeaderError) -> Self {
+impl From<lb_core::block::Error> for UncleError {
+    fn from(error: lb_core::block::Error) -> Self {
         match error {
-            HeaderError::GenesisSlot => Self::InvalidSlot,
-            HeaderError::Signature => Self::InvalidSignature,
+            lb_core::block::Error::Header(e) => Self::InvalidHeader(e),
+            lb_core::block::Error::Signature => Self::InvalidSignature,
+            _ => Self::Other(error),
         }
     }
 }
