@@ -118,16 +118,34 @@ async fn step_start_multisig_lifecycle_sequencers(
     // Shared gossip stand-in: `bus` holds signatures, `announce` fans out bundles.
     let bus = MultiSigBus::default();
     let (announce, _): (BundleAnnounce, _) = tokio::sync::broadcast::channel(256);
-    for alias in aliases {
+    // Readiness barrier: each start awaits the SDK's ready signal before the
+    // next alias begins, and the policy takes its `announce` subscription
+    // synchronously before its task is spawned. So when the loop exits, every
+    // peer is ready and subscribed — no announcement can be broadcast into an
+    // empty channel.
+    for alias in &aliases {
         start_multisig_lifecycle_sequencer(
             world,
             step,
-            &alias,
+            alias,
             withdraw_outputs.clone(),
             std::sync::Arc::clone(&bus),
             announce.clone(),
         )
         .await?;
+    }
+    // Make the barrier checkable: one live subscriber per spawned policy.
+    // (The channel's initial receiver was dropped above, so the count is
+    // exactly the policies'.)
+    let subscribed = announce.receiver_count();
+    if subscribed != aliases.len() {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "expected {} multi-sig policies subscribed to the announce channel, found \
+                 {subscribed}",
+                aliases.len()
+            ),
+        });
     }
     Ok(())
 }

@@ -131,6 +131,12 @@ pub(super) fn assemble_atomic_bundle_ops_proofs(
 /// Assemble a fully-signed atomic bundle. `signatures` must be indexed against
 /// the channel's `accredited_keys`, strictly ascending, exactly
 /// `transfer_threshold` of them.
+///
+/// Only the structural well-formedness of the proof (strictly ascending, hence
+/// unique, indices) is enforced here, via [`ChannelMultiSigProof::try_new`].
+/// Count against the threshold, index range, and signature validity need the
+/// live channel state and are checked upstream by [`validate_multi_sig`]
+/// before this is called.
 pub(super) fn assemble_atomic_bundle_tx(
     tx: Ops,
     inscribe_sig: Ed25519Signature,
@@ -453,10 +459,15 @@ pub(super) fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signa
 
 #[cfg(test)]
 mod tests {
+    use lb_core::mantle::{
+        ledger::{Inputs, NoteId},
+        ops::{OpProofRef, channel::withdraw::ChannelWithdrawOp},
+    };
+    use lb_groth16::Fr;
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::test_support::{MockNode, funding_config};
+    use crate::test_support::{MockNode, funding_config, inscribe_op};
 
     #[tokio::test]
     async fn funding_path_passes_priority_fee_as_a_percentage() {
@@ -639,5 +650,84 @@ mod tests {
         // Everything at once is reported together.
         let reasons = stale_bundle_reasons(&prepared, 2, &rotated, 3, parent, moved);
         assert_eq!(reasons.len(), 3);
+    }
+
+    /// An unfunded `[inscribe, withdraw]` bundle — the minimal op layout
+    /// `assemble_atomic_bundle_tx` has to prove.
+    fn bundle_ops() -> Ops {
+        let channel_id = ChannelId::from([0; 32]);
+        let ops = vec![
+            Op::ChannelInscribe(inscribe_op(channel_id, MsgId::root(), b"pin")),
+            Op::ChannelWithdraw(ChannelWithdrawOp {
+                channel_id,
+                inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
+            }),
+        ];
+        Ops::try_from(ops).expect("ops fit")
+    }
+
+    #[test]
+    fn assemble_atomic_bundle_tx_places_a_valid_2_of_3_proof() {
+        let (keys, accredited, _) = multi_sig_fixture();
+        let ops = bundle_ops();
+        let payload = ops_signing_bytes(&ops);
+        // Signers 0 and 2 of 3 sign the bundle's own hash, ascending.
+        let sigs = vec![
+            sign_prepared(&keys[0], &accredited, &payload).unwrap(),
+            sign_prepared(&keys[2], &accredited, &payload).unwrap(),
+        ];
+        let inscribe_sig = sign_tx(ops.hash(), &keys[0]);
+
+        let signed = assemble_atomic_bundle_tx(ops, inscribe_sig, sigs.clone(), None)
+            .expect("2-of-3 assembles");
+
+        // Hash is over the ops only, so proof attachment leaves it intact.
+        assert_eq!(signed.hash(), bundle_ops().hash());
+        let proofs: Vec<_> = signed.op_proof_refs_iter().collect();
+        assert_eq!(proofs.len(), 2, "one proof per op");
+        assert!(
+            matches!(proofs[0], OpProofRef::Ed25519Sig(sig) if *sig == inscribe_sig),
+            "inscription carries the preparer's signature"
+        );
+        let OpProofRef::ChannelMultiSigProof(proof) = proofs[1] else {
+            panic!("withdraw carries the multi-sig proof, got {:?}", proofs[1]);
+        };
+        assert_eq!(proof.signatures(), sigs.as_slice());
+        for sig in proof.signatures() {
+            accredited[usize::from(sig.channel_key_index)]
+                .verify(&payload, &sig.signature)
+                .expect("each indexed signature verifies against its key");
+        }
+    }
+
+    #[test]
+    fn assemble_atomic_bundle_tx_rejects_duplicate_indices() {
+        let (keys, accredited, _) = multi_sig_fixture();
+        let ops = bundle_ops();
+        let payload = ops_signing_bytes(&ops);
+        let dup = sign_prepared(&keys[1], &accredited, &payload).unwrap();
+        let inscribe_sig = sign_tx(ops.hash(), &keys[0]);
+
+        assert!(
+            assemble_atomic_bundle_tx(ops, inscribe_sig, vec![dup.clone(), dup], None).is_err()
+        );
+    }
+
+    #[test]
+    fn assemble_atomic_bundle_tx_rejects_unordered_indices() {
+        let (keys, accredited, _) = multi_sig_fixture();
+        let ops = bundle_ops();
+        let payload = ops_signing_bytes(&ops);
+        let unordered = vec![
+            sign_prepared(&keys[2], &accredited, &payload).unwrap(),
+            sign_prepared(&keys[0], &accredited, &payload).unwrap(),
+        ];
+        let inscribe_sig = sign_tx(ops.hash(), &keys[0]);
+
+        assert!(assemble_atomic_bundle_tx(ops, inscribe_sig, unordered, None).is_err());
+    }
+
+    fn ops_signing_bytes(ops: &Ops) -> Vec<u8> {
+        ops.hash().as_signing_bytes().as_ref().to_vec()
     }
 }
