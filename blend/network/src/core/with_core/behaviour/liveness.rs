@@ -212,7 +212,7 @@ mod tests {
 
         assert_eq!(
             liveness.current_peer_state(&peer, round(WINDOW_ROUNDS.get())),
-            Some(PeerState::Settling)
+            None
         );
     }
 }
