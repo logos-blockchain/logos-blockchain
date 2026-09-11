@@ -735,15 +735,18 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
 
     /// Close the connection with every neighbour that has stopped delivering
     /// messages.
-    fn close_not_live_connections(&mut self, current_round: Round) {
-        let not_live_connections = self
+    fn close_unhealthy_connections(&mut self, current_round: Round) {
+        let unhealthy_connections = self
             .negotiated_peers
             .iter()
-            .filter(|(peer_id, _)| !self.liveness.is_neighbour_live(peer_id, current_round))
+            .filter(|(peer_id, _)| {
+                self.liveness
+                    .is_connection_unhealthy(peer_id, current_round)
+            })
             .map(|(peer_id, details)| (*peer_id, details.connection_id))
             .collect::<Vec<_>>();
 
-        for (peer_id, connection_id) in not_live_connections {
+        for (peer_id, connection_id) in unhealthy_connections {
             tracing::debug!(
                 target: LOG_TARGET,
                 "Closing connection {connection_id:?} with peer {peer_id:?}: it has delivered no message within the observation window."
@@ -1262,7 +1265,7 @@ where
         let current_round = self.round_clock.poll_current(cx);
         if current_round > self.last_liveness_check {
             self.last_liveness_check = current_round;
-            self.close_not_live_connections(current_round);
+            self.close_unhealthy_connections(current_round);
         }
 
         if let Some(old_epoch) = &mut self.old_epoch

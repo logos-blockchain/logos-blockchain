@@ -1,5 +1,4 @@
 use core::{
-    cmp::Ordering,
     fmt::{self, Display, Formatter},
     num::{NonZeroU64, NonZeroU128},
     task::Context,
@@ -63,18 +62,6 @@ impl RoundCount {
 impl From<NonZeroU128> for RoundCount {
     fn from(rounds: NonZeroU128) -> Self {
         Self::new(rounds)
-    }
-}
-
-impl PartialEq<u128> for RoundCount {
-    fn eq(&self, other: &u128) -> bool {
-        self.0.get() == *other
-    }
-}
-
-impl PartialOrd<u128> for RoundCount {
-    fn partial_cmp(&self, other: &u128) -> Option<Ordering> {
-        Some(self.0.get().cmp(other))
     }
 }
 
