@@ -57,7 +57,6 @@ impl ServiceConfig {
         cryptarchia_deployment: &CryptarchiaDeploymentSettings,
     ) -> BlendServicesSettings {
         let slots_per_epoch = cryptarchia_deployment.slots_per_epoch();
-        let slots_per_block = cryptarchia_deployment.average_slots_per_block();
         let slot_duration = time_deployment.slot_duration;
 
         let blend_service_settings = BlendSettings::<
@@ -68,16 +67,14 @@ impl ServiceConfig {
             common: CommonSettings {
                 non_ephemeral_signing_key_id: self.user.non_ephemeral_signing_key_id,
                 num_blend_layers: self.deployment.common.num_blend_layers,
-                minimum_network_size: self.deployment.common.minimum_network_size.into(),
+                minimum_network_size: self.deployment.common.minimum_network_size,
                 broadcast: Libp2pBroadcastSettings {
                     topic: cryptarchia_deployment.gossipsub_protocol.clone(),
                 },
                 abstain_on_failure: self.user.abstain_on_failure,
                 recovery_data,
                 time: TimingSettings {
-                    epoch_transition_period: self
-                        .deployment
-                        .epoch_transition(slots_per_block, &slot_duration),
+                    epoch_transition_period: self.deployment.epoch_transition(&slot_duration),
                     round_duration: self.deployment.round_duration(&slot_duration),
                     rounds_per_observation_window: self.deployment.rounds_per_observation_window(),
                     rounds_per_epoch: self

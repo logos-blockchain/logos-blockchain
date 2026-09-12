@@ -2,6 +2,9 @@ blend:
   common:
     num_blend_layers: 1
     minimum_network_size: 2
+    # Deviates from blend-protocol.md (∆max = 3, ß_max = 3, minimal network size 32,
+    # minimum messages coefficient 3): this network runs without the spec's anonymity guarantee.
+    acknowledged_spec_deviations: true
     protocol_name: /logos-blockchain/blend/X.Y.Z
     data_replication_factor: 0
   core:
@@ -9,7 +12,7 @@ blend:
       cover:
         message_frequency_per_round: 1.0
       delayer:
-        maximum_release_delay_in_rounds: 1
+        maximum_release_delay_in_rounds: 2
     minimum_messages_coefficient: 1
     normalization_constant: 1.03
     activity_threshold_sensitivity: 1

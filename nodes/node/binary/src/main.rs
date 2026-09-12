@@ -57,13 +57,16 @@ async fn main() -> Result<()> {
             cli_args.user_config_path(),
             OnUnknownKeys::Fail,
         )?);
-        // If custom, check deployment config.
-        if let Some(custom_deployment_path) = cli_args.deployment_config_path() {
-            drop(deserialize_value_at_path::<DeploymentSettings>(
+        // Check the deployment config: the custom one if given, else the
+        // embedded one.
+        let deployment_settings = match cli_args.deployment_config_path() {
+            Some(custom_deployment_path) => deserialize_value_at_path::<DeploymentSettings>(
                 custom_deployment_path,
                 OnUnknownKeys::Fail,
-            )?);
-        }
+            )?,
+            None => DeploymentSettings::default(),
+        };
+        deployment_settings.validate()?;
         #[expect(
             clippy::non_ascii_literal,
             reason = "Use of green checkmark for better UX."

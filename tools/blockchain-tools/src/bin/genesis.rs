@@ -471,13 +471,14 @@ fn struct_to_yaml_value<T: serde::Serialize>(value: &T) -> Result<Value> {
 
 fn ensure_valid_deployment_settings(value: &Value) -> Result<()> {
     let yaml = serde_yaml::to_string(value)?;
-    drop(
-        deserialize_value_from_reader::<DeploymentSettings, _>(
-            yaml.as_bytes(),
-            OnUnknownKeys::Fail,
-        )
-        .context("generated config is not a valid DeploymentSettings value")?,
-    );
+    let settings = deserialize_value_from_reader::<DeploymentSettings, _>(
+        yaml.as_bytes(),
+        OnUnknownKeys::Fail,
+    )
+    .context("generated config is not a valid DeploymentSettings value")?;
+    settings
+        .validate()
+        .context("generated config does not pass the deployment validation")?;
     Ok(())
 }
 

@@ -40,6 +40,17 @@ impl DeploymentSettings {
     pub fn blend_reward_params(&self) -> RewardsParameters {
         self.blend.rewards_params(&self.cryptarchia, &self.time)
     }
+
+    /// Cross-check the deployment against the protocol specifications.
+    ///
+    /// # Errors
+    ///
+    /// The Blend settings are inconsistent, or deviate from `blend-protocol.md`
+    /// without acknowledging it (see
+    /// [`crate::config::blend::deployment::Violation`]).
+    pub fn validate(&self) -> Result<(), crate::config::blend::deployment::Error> {
+        self.blend.validate()
+    }
 }
 
 impl Default for DeploymentSettings {
@@ -56,6 +67,13 @@ mod tests {
     #[test]
     fn default_initialization() {
         drop(DeploymentSettings::default());
+    }
+
+    /// The embedded deployment is what `--check-config` and a node without a
+    /// custom deployment validate, so it must pass its own validation.
+    #[test]
+    fn default_deployment_passes_validation() {
+        DeploymentSettings::default().validate().unwrap();
     }
 
     #[test]

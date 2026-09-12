@@ -8,7 +8,7 @@ use crate::{
 };
 
 mod common;
-pub use self::common::CommonSettings;
+pub use self::common::{CommonSettings, MinimumNetworkSize};
 mod core;
 pub use self::core::CoreSettings;
 mod edge;
@@ -57,7 +57,7 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
             zk,
             non_ephemeral_signing_key_id,
             num_blend_layers,
-            minimum_network_size,
+            minimum_network_size: minimum_network_size.into(),
             recovery_data,
             data_replication_factor,
             activity_threshold_sensitivity,
@@ -97,7 +97,7 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
             time,
             non_ephemeral_signing_key_id,
             num_blend_layers,
-            minimum_network_size,
+            minimum_network_size: minimum_network_size.into(),
             cover,
             data_replication_factor,
             network: broadcast,
@@ -131,7 +131,7 @@ impl<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>
             network: broadcast,
             time,
             non_ephemeral_signing_key_id,
-            minimum_network_size,
+            minimum_network_size: minimum_network_size.into(),
         }
     }
 }
