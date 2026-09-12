@@ -39,6 +39,7 @@ lb-tx-service                    = { workspace = true }
 lb-utils                         = { workspace = true }
 libp2p                           = { features = ["dns"], workspace = true }
 libp2p-stream                    = { workspace = true }
+nutype                           = { features = ["serde"], workspace = true }
 overwatch                        = { workspace = true }
 rand                             = { features = ["getrandom"], workspace = true }
 rand_chacha                      = { workspace = true }

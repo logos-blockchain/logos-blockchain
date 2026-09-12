@@ -150,8 +150,8 @@ fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
 fn get_deployment_config(
     custom_deployment_path: *const c_char,
 ) -> StatusResult<DeploymentSettings> {
-    if custom_deployment_path.is_null() {
-        Ok(DeploymentSettings::default())
+    let deployment_settings = if custom_deployment_path.is_null() {
+        DeploymentSettings::default()
     } else {
         let custom_deployment_path = unsafe { std::ffi::CStr::from_ptr(custom_deployment_path) }
             .to_str()
@@ -171,8 +171,15 @@ fn get_deployment_config(
                 OperationStatusCode::InitializationError,
                 format!("Could not parse deployment file: {error}"),
             )
-        })
-    }
+        })?
+    };
+    deployment_settings.validate().map_err(|error| {
+        OperationStatus::error(
+            OperationStatusCode::InitializationError,
+            format!("Invalid deployment settings: {error}"),
+        )
+    })?;
+    Ok(deployment_settings)
 }
 
 /// Shuts down and frees the resources associated with the given Logos

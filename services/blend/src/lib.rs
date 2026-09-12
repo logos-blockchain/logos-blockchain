@@ -181,7 +181,8 @@ where
         } = self;
 
         let settings = settings_handle.notifier().get_updated_settings();
-        let minimal_network_size = settings.common.minimum_network_size;
+        let minimal_network_size =
+            ::core::num::NonZeroU64::from(settings.common.minimum_network_size);
 
         wait_until_services_are_ready!(
             &overwatch_handle,

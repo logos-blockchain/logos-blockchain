@@ -444,6 +444,7 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
         None => DeploymentSettings::default(),
         Some(path) => deserialize_value_at_path::<DeploymentSettings>(&path, OnUnknownKeys::Fail)?,
     };
+    deployment_settings.validate()?;
 
     Ok(RunConfig {
         deployment: deployment_settings,

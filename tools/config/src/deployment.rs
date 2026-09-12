@@ -32,6 +32,10 @@ use crate::{
 };
 
 const MINIMUM_BLEND_NETWORK_SIZE: u64 = 2;
+/// The e2e network is far smaller than the spec's minimal network size and
+/// runs with a minimum messages coefficient of 1, so the deployment has to
+/// acknowledge that it departs from `blend-protocol.md`.
+const ACKNOWLEDGED_SPEC_DEVIATIONS: bool = true;
 const NUM_BLEND_LAYERS: u64 = 3;
 const BLEND_PROTOCOL_NAME: &str = "/blend/integration-tests";
 const DATA_REPLICATION_FACTOR: u64 = 0;
@@ -104,6 +108,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     .expect("Number of blend layers cannot be zero."),
                 protocol_name: StreamProtocol::new(BLEND_PROTOCOL_NAME),
                 data_replication_factor: DATA_REPLICATION_FACTOR,
+                acknowledged_spec_deviations: ACKNOWLEDGED_SPEC_DEVIATIONS,
             },
             core: BlendCoreSettings {
                 minimum_messages_coefficient: NonZeroU64::try_from(MINIMUM_MESSAGES_COEFFICIENT)
