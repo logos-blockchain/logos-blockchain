@@ -1,15 +1,22 @@
 use core::fmt::{self, Debug, Formatter};
 use std::ops::Add as _;
 
-use lb_blend_proofs::quota::Quota;
+use lb_blend_proofs::{
+    quota::{ProofOfQuota, Quota},
+    selection::ProofOfSelection,
+};
 use lb_core::crypto::ZkHash;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{Fr, FrBytes, fr_to_bytes};
+use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use lb_log_targets::{blend, diagnostic::BLEND_REACHABILITY};
 use lb_utils::math::{F64Ge1, NonNegativeF64};
 use serde::{Deserialize, Serialize};
 
-use crate::reward::{BlendingToken, activity, token::HammingDistance};
+use crate::reward::{
+    BlendingToken, activity,
+    token::{self, HammingDistance},
+};
 
 const LOG_TARGET: &str = blend::message::REWARD;
 
@@ -87,6 +94,30 @@ impl BlendingTokenEvaluation {
         evaluation
             .satisfies_activity_threshold
             .then_some(evaluation.distance)
+    }
+
+    /// Like [`Self::evaluate`], but for a token whose proofs have not been
+    /// verified yet.
+    ///
+    /// The Hamming distance depends only on the token bytes, so a verifier can
+    /// reject an over-threshold token before running the proof-of-quota
+    /// pairing check.
+    #[must_use]
+    pub fn evaluate_unverified(
+        &self,
+        signing_key: &Ed25519PublicKey,
+        proof_of_quota: &ProofOfQuota,
+        proof_of_selection: &ProofOfSelection,
+        next_epoch_randomness: EpochRandomness,
+    ) -> Option<HammingDistance> {
+        let distance = token::unverified_hamming_distance(
+            signing_key,
+            proof_of_quota,
+            proof_of_selection,
+            self.token_count_byte_len,
+            next_epoch_randomness,
+        );
+        (distance <= self.activity_threshold).then_some(distance)
     }
 
     /// Evaluates a token once and retains both the distance and the threshold

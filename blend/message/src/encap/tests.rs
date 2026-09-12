@@ -1,20 +1,15 @@
-use core::convert::Infallible;
-
-use lb_blend_proofs::{
-    quota::{ProofOfQuota, VerifiedProofOfQuota},
-    selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
-};
+use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 use lb_codec::{BinaryDecode as _, BinaryEncode as _};
 use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 use lb_key_management_system_keys::keys::{
-    Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key, X25519PrivateKey,
+    Ed25519Signature, UnsecuredEd25519Key, X25519PrivateKey,
 };
 
 use crate::{
     Error, PaddedPayloadBody, PayloadType,
-    crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
+    crypto::key_ext::Ed25519SecretKeyExt as _,
     encap::{
-        ProofsVerifier,
+        ScriptedProofsVerifier,
         decapsulated::DecapsulationOutput,
         encapsulated::{EncapsulatedMessage, EncapsulatedPart},
         validated::{
@@ -26,92 +21,11 @@ use crate::{
     message::{payload::MAX_PAYLOAD_BODY_SIZE, public_header::VerifiedPublicHeader},
 };
 
-struct NeverFailingProofsVerifier;
-
-impl ProofsVerifier for NeverFailingProofsVerifier {
-    type Error = Infallible;
-
-    fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-        Self
-    }
-
-    fn verify_proof_of_quota(
-        &self,
-        proof: ProofOfQuota,
-        _signing_key: &Ed25519PublicKey,
-    ) -> Result<VerifiedProofOfQuota, Self::Error> {
-        Ok(VerifiedProofOfQuota::from_proof_of_quota_unchecked(proof))
-    }
-
-    fn verify_proof_of_selection(
-        &self,
-        proof: ProofOfSelection,
-        _inputs: &VerifyInputs,
-    ) -> Result<VerifiedProofOfSelection, Self::Error> {
-        Ok(VerifiedProofOfSelection::from_proof_of_selection_unchecked(
-            proof,
-        ))
-    }
-}
-
-struct AlwaysFailingProofOfQuotaVerifier;
-
-impl ProofsVerifier for AlwaysFailingProofOfQuotaVerifier {
-    type Error = ();
-
-    fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-        Self
-    }
-
-    fn verify_proof_of_quota(
-        &self,
-        _proof: ProofOfQuota,
-        _signing_key: &Ed25519PublicKey,
-    ) -> Result<VerifiedProofOfQuota, Self::Error> {
-        Err(())
-    }
-
-    fn verify_proof_of_selection(
-        &self,
-        proof: ProofOfSelection,
-        _inputs: &VerifyInputs,
-    ) -> Result<VerifiedProofOfSelection, Self::Error> {
-        Ok(VerifiedProofOfSelection::from_proof_of_selection_unchecked(
-            proof,
-        ))
-    }
-}
-
-struct AlwaysFailingProofOfSelectionVerifier;
-
-impl ProofsVerifier for AlwaysFailingProofOfSelectionVerifier {
-    type Error = ();
-
-    fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-        Self
-    }
-
-    fn verify_proof_of_quota(
-        &self,
-        proof: ProofOfQuota,
-        _signing_key: &Ed25519PublicKey,
-    ) -> Result<VerifiedProofOfQuota, Self::Error> {
-        Ok(VerifiedProofOfQuota::from_proof_of_quota_unchecked(proof))
-    }
-
-    fn verify_proof_of_selection(
-        &self,
-        _proof: ProofOfSelection,
-        _inputs: &VerifyInputs,
-    ) -> Result<VerifiedProofOfSelection, Self::Error> {
-        Err(())
-    }
-}
-
 #[test]
 fn encapsulate_and_decapsulate() {
     const PAYLOAD_BODY: &[u8] = b"hello";
-    let verifier = NeverFailingProofsVerifier;
+    ScriptedProofsVerifier::accept_all();
+    let verifier = ScriptedProofsVerifier::default();
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
@@ -199,7 +113,8 @@ fn payload_too_long() {
 #[test]
 fn invalid_public_header_signature() {
     const PAYLOAD_BODY: &[u8] = b"hello";
-    let verifier = NeverFailingProofsVerifier;
+    ScriptedProofsVerifier::accept_all();
+    let verifier = ScriptedProofsVerifier::default();
 
     let msg_with_invalid_signature = {
         let (inputs, _) = generate_inputs(2);
@@ -228,7 +143,8 @@ fn invalid_public_header_proof_of_quota() {
     use lb_blend_proofs::quota::Error as PoQError;
 
     const PAYLOAD_BODY: &[u8] = b"hello";
-    let verifier = AlwaysFailingProofOfQuotaVerifier;
+    ScriptedProofsVerifier::reject_proofs_of_quota();
+    let verifier = ScriptedProofsVerifier::default();
 
     let (inputs, _) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
@@ -254,7 +170,8 @@ fn invalid_blend_header_proof_of_selection() {
     use lb_blend_proofs::selection::Error as PoSelError;
 
     const PAYLOAD_BODY: &[u8] = b"hello";
-    let verifier = AlwaysFailingProofOfSelectionVerifier;
+    ScriptedProofsVerifier::reject_proofs_of_selection();
+    let verifier = ScriptedProofsVerifier::default();
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
@@ -295,14 +212,15 @@ fn serde_encapsulated_and_verified() {
         EncapsulatedMessage::from_bytes(&serialized_encapsulated_message).unwrap();
     assert_eq!(deserialized_as_unverified, msg.into());
     deserialized_as_unverified
-        .verify_public_header(&NeverFailingProofsVerifier)
+        .verify_public_header(&ScriptedProofsVerifier::default())
         .unwrap();
 }
 
 #[test]
 fn encapsulate_and_decapsulate_via_two_step_verification() {
     const PAYLOAD_BODY: &[u8] = b"hello";
-    let verifier = NeverFailingProofsVerifier;
+    ScriptedProofsVerifier::accept_all();
+    let verifier = ScriptedProofsVerifier::default();
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
@@ -392,7 +310,8 @@ fn encapsulate_and_decapsulate_fewer_layers_than_maximum() {
     // reconstruct invariant that the per-layer signatures depend on.
     const PAYLOAD_BODY: &[u8] = b"hello";
     const MAX_LAYERS: usize = 4;
-    let verifier = NeverFailingProofsVerifier;
+    ScriptedProofsVerifier::accept_all();
+    let verifier = ScriptedProofsVerifier::default();
 
     for used_layers in 1..=MAX_LAYERS {
         let (inputs, blend_node_enc_keys) = generate_inputs(used_layers);
@@ -478,7 +397,8 @@ fn payload_body_round_trips_through_encapsulation() {
     // Random padding must not disturb the body itself: what comes out of a full
     // decapsulation is exactly what went in, with no padding bleeding into it.
     const BODY: &[u8] = b"hello";
-    let verifier = NeverFailingProofsVerifier;
+    ScriptedProofsVerifier::accept_all();
+    let verifier = ScriptedProofsVerifier::default();
 
     let (inputs, blend_node_enc_keys) = generate_inputs(1);
     let DecapsulationOutput::Completed {
@@ -545,7 +465,7 @@ fn decapsulate_empty_private_headers_returns_error() {
         // Dummy private key
         &[0; _].into(),
         &RequiredProofOfSelectionVerificationInputs::default(),
-        &NeverFailingProofsVerifier,
+        &ScriptedProofsVerifier::default(),
     );
     assert!(matches!(result, Err(Error::EmptyEncapsulationInputs)));
 }

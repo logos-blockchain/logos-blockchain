@@ -2,7 +2,7 @@ use std::{cmp::Ordering, collections::HashMap, iter::once};
 
 use lb_blend_message::{
     encap::ProofsVerifier as ProofsVerifierTrait,
-    reward::{BlendingTokenEvaluation, HammingDistance},
+    reward::{BlendingTokenEvaluation, HammingDistance, VerifyError},
 };
 use lb_core::{
     mantle::{Utxo, Value},
@@ -100,26 +100,29 @@ where
             .get(provider_id)
             .ok_or_else(|| Error::UnknownProvider(Box::new(*provider_id)))?;
 
-        let verified_proof = lb_blend_message::reward::ActivityProof::verify_and_build(
-            proof,
-            &self.proof_verifier,
-            index,
-            num_providers,
-        )
-        .map_err(|_| Error::InvalidProof)?;
+        // Proof of selection, then activity threshold, then the proof-of-quota
+        // pairing check, so that a message a genuine provider can fail on is
+        // rejected before the expensive step.
+        let (verified_proof, hamming_distance) =
+            lb_blend_message::reward::ActivityProof::verify_and_build(
+                proof,
+                &self.proof_verifier,
+                index,
+                num_providers,
+                &self.token_evaluation,
+                current_epoch_state.epoch_randomness(),
+            )
+            .map_err(|error| match error {
+                VerifyError::Proof(_) => Error::InvalidProof,
+                VerifyError::HammingDistanceTooLarge => Error::HammingDistanceTooLarge,
+            })?;
 
         tracing::trace!(
             target: LOG_TARGET,
-            "Verifying activity proof {:?} with epoch randomness: {:?}",
+            "Verified activity proof {:?} with epoch randomness: {:?}",
             verified_proof.token().signing_key(),
             current_epoch_state.epoch_randomness()
         );
-        let Some(hamming_distance) = self.token_evaluation.evaluate(
-            verified_proof.token(),
-            current_epoch_state.epoch_randomness(),
-        ) else {
-            return Err(Error::HammingDistanceTooLarge);
-        };
 
         Ok((zk_id, hamming_distance))
     }
@@ -149,6 +152,27 @@ impl TargetEpochTracker {
         }
     }
 
+    /// Rejects a second activity message from `provider_id` for the target
+    /// epoch.
+    ///
+    /// This is the cheapest check on the activity path (one map lookup) and
+    /// the one a genuine provider is most likely to fail, so callers run it
+    /// before any proof verification. [`Self::insert`] runs it again, so the
+    /// invariant does not depend on the caller.
+    pub fn ensure_not_submitted(
+        &self,
+        provider_id: &ProviderId,
+        epoch: Epoch,
+    ) -> Result<(), Error> {
+        if self.submitted_proofs.contains_key(provider_id) {
+            return Err(Error::DuplicateActiveMessage {
+                epoch,
+                provider_id: Box::new(*provider_id),
+            });
+        }
+        Ok(())
+    }
+
     pub fn insert(
         &self,
         provider_id: ProviderId,
@@ -156,12 +180,7 @@ impl TargetEpochTracker {
         zk_id: ZkPublicKey,
         hamming_distance: HammingDistance,
     ) -> Result<Self, Error> {
-        if self.submitted_proofs.contains_key(&provider_id) {
-            return Err(Error::DuplicateActiveMessage {
-                epoch,
-                provider_id: Box::new(provider_id),
-            });
-        }
+        self.ensure_not_submitted(&provider_id, epoch)?;
 
         debug!(
             target: LOG_TARGET,

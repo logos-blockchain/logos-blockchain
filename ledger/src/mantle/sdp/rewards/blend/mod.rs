@@ -92,6 +92,12 @@ where
 
                 let ActivityMetadata::Blend(proof) = metadata;
 
+                // Cheapest check first: a provider that already has an accepted
+                // message for the target epoch is rejected before any proof is
+                // verified.
+                target_epoch_tracker
+                    .ensure_not_submitted(&provider_id, target_epoch_state.epoch())?;
+
                 let (zk_id, hamming_distance) = target_epoch_state.verify_proof(
                     &provider_id,
                     proof,
@@ -299,12 +305,12 @@ impl RewardsParameters {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, convert::Infallible};
+    use std::collections::HashMap;
 
-    use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
+    use lb_blend_message::encap::{ScriptedProofsVerifier, VerificationCounts};
     use lb_blend_proofs::{
         quota::{ProofOfQuota, VerifiedProofOfQuota},
-        selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
+        selection::{ProofOfSelection, VerifiedProofOfSelection},
     };
     use lb_core::{
         crypto::ZkHash,
@@ -362,7 +368,7 @@ mod tests {
         );
 
         // Create a reward tracker based on epoch0
-        let rewards_tracker = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0);
+        let rewards_tracker = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0);
         assert!(matches!(
             rewards_tracker,
             Rewards::WithoutTargetEpoch { .. } // No target epoch yet since epoch 0 is the 1st
@@ -393,7 +399,7 @@ mod tests {
             Fr::ZERO,
         );
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
         // Update epoch from 1 to 2 without any activity proofs submitted.
@@ -424,7 +430,7 @@ mod tests {
             Fr::ZERO,
         );
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
             .add_income(1000)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
@@ -524,7 +530,7 @@ mod tests {
         let epoch0 =
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
         // provider1 submits an activity proof.
@@ -576,7 +582,7 @@ mod tests {
         let epoch0 =
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
         // provider1 submits an activity proof with invalid epoch.
@@ -619,7 +625,7 @@ mod tests {
         let epoch0 =
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
         // `unknown` was never declared, so target_epoch_state.providers
@@ -653,7 +659,7 @@ mod tests {
         let epoch0 =
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
         assert!(matches!(
             rewards_tracker,
@@ -708,7 +714,7 @@ mod tests {
         // Accumulate income during epoch 0 (funds future target epoch 0).
         let epoch0_income: Value = 1000;
         let rewards_tracker =
-            Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0).add_income(epoch0_income);
+            Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0).add_income(epoch0_income);
 
         // Transition 0 → 1 with shrunk snapshot:
         // - WithoutTargetEpoch → WithTargetEpoch (for epoch 0)
@@ -778,7 +784,7 @@ mod tests {
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
 
         // Create rewards tracker
-        let rewards_tracker = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0);
+        let rewards_tracker = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0);
 
         // Transition 0 → 1 with grown snapshot:
         // - WithoutTargetEpoch → WithoutTargetEpoch (for epoch 0)
@@ -851,7 +857,7 @@ mod tests {
             Fr::ZERO,
         );
         drop(
-            Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
+            Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
                 .update_epoch(&epoch0, &epoch0, &config, &params),
         );
     }
@@ -871,7 +877,7 @@ mod tests {
             Fr::ZERO,
         );
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
         // Now try to "go back" from epoch 1 to epoch 0.
         drop(rewards_tracker.update_epoch(&epoch1, &epoch0, &config, &params));
@@ -893,7 +899,7 @@ mod tests {
         let epoch0 =
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
             .add_income(epoch0_income)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
@@ -955,7 +961,7 @@ mod tests {
             ZkHash::from(9999),
         );
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
         // provider1 submits an activity proof that is larger than activity threshold.
@@ -990,7 +996,8 @@ mod tests {
         let epoch0 =
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
-        let (rewards_tracker, _) = Rewards::<AlwaysFailureProofsVerifier>::new(&params, &epoch0)
+        ScriptedProofsVerifier::reject_all();
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
         // provider1 submits an activity proof, but PoQ/PoSel verification fails.
@@ -1030,11 +1037,19 @@ mod tests {
             Fr::ZERO,
         );
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
-        let (rewards_tracker, _) = Rewards::<ZeroNonceFailureProofsVerifier>::new(&params, &epoch0)
+        // The verifier rejects every proof while the epoch nonce it was created
+        // with is zero.
+        ScriptedProofsVerifier::script_proof_of_quota(|inputs, _, _| {
+            inputs.leader.pol_epoch_nonce != Fr::ZERO
+        });
+        ScriptedProofsVerifier::script_proof_of_selection(|inputs, _, _| {
+            inputs.leader.pol_epoch_nonce != Fr::ZERO
+        });
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
-        // provider submits an activity proof, but rejected due to
-        // ZeroNonceFailureProofsVerifier
+        // provider submits an activity proof, but it is rejected because the
+        // verifier was created with a zero epoch nonce.
         let err = rewards_tracker
             .update_active(
                 provider,
@@ -1069,97 +1084,157 @@ mod tests {
             .unwrap();
     }
 
-    #[derive(Debug, Clone, PartialEq)]
-    struct AlwaysSuccessProofsVerifier;
-
-    impl ProofsVerifierTrait for AlwaysSuccessProofsVerifier {
-        type Error = Infallible;
-
-        fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-            Self
-        }
-
-        fn verify_proof_of_quota(
-            &self,
-            proof: ProofOfQuota,
-            _signing_key: &Ed25519PublicKey,
-        ) -> Result<VerifiedProofOfQuota, Self::Error> {
-            Ok(VerifiedProofOfQuota::from_bytes_unchecked((&proof).into()))
-        }
-
-        fn verify_proof_of_selection(
-            &self,
-            proof: ProofOfSelection,
-            _inputs: &VerifyInputs,
-        ) -> Result<VerifiedProofOfSelection, Self::Error> {
-            Ok(VerifiedProofOfSelection::from_bytes_unchecked(
-                (&proof).into(),
-            ))
-        }
+    fn activity_proof(epoch: u32, byte: u8) -> ActivityMetadata {
+        ActivityMetadata::Blend(Box::new(blend::ActivityProof {
+            epoch: epoch.into(),
+            proof_of_quota: new_proof_of_quota_unchecked(byte),
+            signing_key: new_signing_key(1),
+            proof_of_selection: new_proof_of_selection_unchecked(byte),
+        }))
     }
 
-    #[derive(Debug, Clone, PartialEq)]
-    struct AlwaysFailureProofsVerifier;
+    /// A duplicate message is rejected on the map lookup alone: neither the
+    /// proof of selection nor the proof of quota is verified for it.
+    #[test]
+    fn test_duplicate_active_message_rejected_before_any_verification() {
+        ScriptedProofsVerifier::accept_all();
+        let provider1 = create_provider_id(1);
+        let config = create_service_parameters();
+        let params = create_blend_rewards_params(86_400, 1);
+        let epoch0 =
+            create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
+            .update_epoch(&epoch0, &epoch1, &config, &params);
 
-    impl ProofsVerifierTrait for AlwaysFailureProofsVerifier {
-        type Error = ();
+        let rewards_tracker = rewards_tracker
+            .update_active(provider1, &activity_proof(0, 1), &params)
+            .unwrap();
+        let counts_after_first_message = VerificationCounts {
+            proof_of_quota: 1,
+            proof_of_selection: 1,
+        };
+        assert_eq!(
+            ScriptedProofsVerifier::verification_counts(),
+            counts_after_first_message
+        );
 
-        fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-            Self
-        }
-
-        fn verify_proof_of_quota(
-            &self,
-            _proof: ProofOfQuota,
-            _signing_key: &Ed25519PublicKey,
-        ) -> Result<VerifiedProofOfQuota, Self::Error> {
-            Err(())
-        }
-
-        fn verify_proof_of_selection(
-            &self,
-            _proof: ProofOfSelection,
-            _inputs: &VerifyInputs,
-        ) -> Result<VerifiedProofOfSelection, Self::Error> {
-            Err(())
-        }
+        let err = rewards_tracker
+            .update_active(provider1, &activity_proof(0, 2), &params)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            Error::DuplicateActiveMessage {
+                epoch: 0.into(),
+                provider_id: Box::new(provider1)
+            }
+        );
+        assert_eq!(
+            ScriptedProofsVerifier::verification_counts(),
+            counts_after_first_message
+        );
     }
 
-    #[derive(Debug, Clone, PartialEq)]
-    struct ZeroNonceFailureProofsVerifier(bool);
+    /// Every duplicate after the first accepted message costs one map lookup
+    /// and no proof verification, however many there are. This is the cost a
+    /// block builder pays per proposal when the pool holds `n` re-sent or
+    /// replayed messages from the same provider.
+    #[test]
+    fn test_many_duplicate_active_messages_cost_no_verification() {
+        const DUPLICATES: usize = 10_000;
 
-    impl ProofsVerifierTrait for ZeroNonceFailureProofsVerifier {
-        type Error = ();
+        ScriptedProofsVerifier::accept_all();
+        let provider1 = create_provider_id(1);
+        let config = create_service_parameters();
+        let params = create_blend_rewards_params(86_400, 1);
+        let epoch0 =
+            create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
+            .update_epoch(&epoch0, &epoch1, &config, &params);
 
-        fn new(public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-            // Fail only if pol_epoch_nonce is ZERO
-            Self(public_inputs.leader.pol_epoch_nonce != Fr::ZERO)
+        let rewards_tracker = rewards_tracker
+            .update_active(provider1, &activity_proof(0, 1), &params)
+            .unwrap();
+        ScriptedProofsVerifier::reset_verification_counts();
+
+        for byte in (0..DUPLICATES).map(|i| (i % usize::from(u8::MAX)) as u8) {
+            let err = rewards_tracker
+                .update_active(provider1, &activity_proof(0, byte), &params)
+                .unwrap_err();
+            assert!(matches!(err, Error::DuplicateActiveMessage { .. }));
         }
+        assert_eq!(
+            ScriptedProofsVerifier::verification_counts(),
+            VerificationCounts::default()
+        );
+    }
 
-        fn verify_proof_of_quota(
-            &self,
-            proof: ProofOfQuota,
-            _signing_key: &Ed25519PublicKey,
-        ) -> Result<VerifiedProofOfQuota, Self::Error> {
-            if self.0 {
-                Ok(VerifiedProofOfQuota::from_bytes_unchecked((&proof).into()))
-            } else {
-                Err(())
+    /// A mis-selected message fails the proof of selection and never reaches
+    /// the proof-of-quota pairing check.
+    #[test]
+    fn test_mis_selected_active_message_rejected_before_proof_of_quota() {
+        ScriptedProofsVerifier::reject_proofs_of_selection();
+        let provider1 = create_provider_id(1);
+        let config = create_service_parameters();
+        let params = create_blend_rewards_params(86_400, 1);
+        let epoch0 =
+            create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
+            .update_epoch(&epoch0, &epoch1, &config, &params);
+
+        let err = rewards_tracker
+            .update_active(provider1, &activity_proof(0, 1), &params)
+            .unwrap_err();
+        assert_eq!(err, Error::InvalidProof);
+        assert_eq!(
+            ScriptedProofsVerifier::verification_counts(),
+            VerificationCounts {
+                proof_of_quota: 0,
+                proof_of_selection: 1,
             }
-        }
+        );
+    }
 
-        fn verify_proof_of_selection(
-            &self,
-            proof: ProofOfSelection,
-            _inputs: &VerifyInputs,
-        ) -> Result<VerifiedProofOfSelection, Self::Error> {
-            if self.0 {
-                Ok(VerifiedProofOfSelection::from_bytes_unchecked(
-                    (&proof).into(),
-                ))
-            } else {
-                Err(())
+    /// A token above the activity threshold is rejected before the
+    /// proof-of-quota pairing check. Same fixture as
+    /// `test_blend_proof_distance_larger_than_activity_threshold`.
+    #[test]
+    fn test_over_threshold_active_message_rejected_before_proof_of_quota() {
+        ScriptedProofsVerifier::accept_all();
+        let provider1 = create_provider_id(1);
+        let config = create_service_parameters();
+        let params = create_blend_rewards_params(10, 1);
+        let epoch0 = create_epoch_state(
+            &[provider1],
+            ServiceType::BlendNetwork,
+            0.into(),
+            ZkHash::from(9999),
+        );
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
+        let (rewards_tracker, _) = Rewards::<ScriptedProofsVerifier>::new(&params, &epoch0)
+            .update_epoch(&epoch0, &epoch1, &config, &params);
+
+        let err = rewards_tracker
+            .update_active(
+                provider1,
+                &ActivityMetadata::Blend(Box::new(blend::ActivityProof {
+                    epoch: 0.into(),
+                    proof_of_quota: new_proof_of_quota_unchecked(4),
+                    signing_key: new_signing_key(4),
+                    proof_of_selection: new_proof_of_selection_unchecked(4),
+                })),
+                &params,
+            )
+            .unwrap_err();
+        assert_eq!(err, Error::HammingDistanceTooLarge);
+        assert_eq!(
+            ScriptedProofsVerifier::verification_counts(),
+            VerificationCounts {
+                proof_of_quota: 0,
+                proof_of_selection: 1,
             }
-        }
+        );
     }
 }

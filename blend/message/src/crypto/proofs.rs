@@ -30,7 +30,7 @@ pub struct PoQVerificationInputsMinusSigningKey {
     pub pow: PowInputs,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "unsafe-test-functions"))]
 impl Default for PoQVerificationInputsMinusSigningKey {
     fn default() -> Self {
         use lb_blend_proofs::quota::Quota;

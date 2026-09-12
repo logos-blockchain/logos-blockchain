@@ -10,8 +10,16 @@ pub mod decapsulated;
 pub mod encapsulated;
 pub mod validated;
 
+#[cfg(any(test, feature = "unsafe-test-functions"))]
+mod scripted_verifier;
 #[cfg(test)]
 mod tests;
+
+#[cfg(any(test, feature = "unsafe-test-functions"))]
+pub use scripted_verifier::{
+    ProofOfQuotaScript, ProofOfSelectionScript, Rejected, ScriptedProofsVerifier,
+    VerificationCounts,
+};
 
 /// An epoch-bound `PoQ` verifier.
 pub trait ProofsVerifier {

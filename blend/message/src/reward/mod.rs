@@ -4,7 +4,7 @@ mod token;
 
 use std::collections::HashSet;
 
-pub use activity::ActivityProof;
+pub use activity::{ActivityProof, VerifyError};
 pub use epoch::EpochInfo;
 use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::{blend, diagnostic::BLEND_REACHABILITY};
