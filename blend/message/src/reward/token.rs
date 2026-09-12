@@ -2,7 +2,10 @@ use blake2::{
     Blake2bVar,
     digest::{Update as _, VariableOutput as _},
 };
-use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+use lb_blend_proofs::{
+    quota::{ProofOfQuota, VerifiedProofOfQuota},
+    selection::{ProofOfSelection, VerifiedProofOfSelection},
+};
 use lb_core::codec::SerializeOp as _;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use serde::{Deserialize, Serialize};
@@ -39,16 +42,13 @@ impl BlendingToken {
         token_count_byte_len: u64,
         next_epoch_randomness: EpochRandomness,
     ) -> HammingDistance {
-        let token = self
-            .to_bytes()
-            .expect("BlendingToken should be serializable");
-        let token_hash = hash(&token, token_count_byte_len as usize);
-        let epoch_randomness_hash = hash(
-            &next_epoch_randomness.as_bytes(),
-            token_count_byte_len as usize,
-        );
-
-        HammingDistance::new(&token_hash, &epoch_randomness_hash)
+        unverified_hamming_distance(
+            &self.signing_key,
+            self.proof_of_quota.as_ref(),
+            self.proof_of_selection.as_ref(),
+            token_count_byte_len,
+            next_epoch_randomness,
+        )
     }
 
     #[must_use]
@@ -63,6 +63,50 @@ impl BlendingToken {
     pub(crate) const fn proof_of_selection(&self) -> &VerifiedProofOfSelection {
         &self.proof_of_selection
     }
+}
+
+/// The serialised form of a blending token, borrowed from its parts.
+///
+/// [`VerifiedProofOfQuota`] and [`VerifiedProofOfSelection`] are newtypes over
+/// their unverified counterparts, so this serialises to exactly the bytes a
+/// [`BlendingToken`] serialises to (pinned by
+/// `test_unverified_token_bytes_match_blending_token`) without requiring the
+/// proofs to have been verified. The ledger uses it to evaluate the activity
+/// threshold before paying for the proof-of-quota pairing check.
+#[derive(Serialize)]
+struct UnverifiedTokenRef<'a> {
+    signing_key: &'a Ed25519PublicKey,
+    proof_of_quota: &'a ProofOfQuota,
+    proof_of_selection: &'a ProofOfSelection,
+}
+
+/// Computes the Hamming distance between the blending token made of the given
+/// (not yet verified) parts and the next epoch randomness.
+///
+/// The distance is a function of the token bytes only, so it is the same
+/// whether or not the proofs have been verified.
+#[must_use]
+pub fn unverified_hamming_distance(
+    signing_key: &Ed25519PublicKey,
+    proof_of_quota: &ProofOfQuota,
+    proof_of_selection: &ProofOfSelection,
+    token_count_byte_len: u64,
+    next_epoch_randomness: EpochRandomness,
+) -> HammingDistance {
+    let token = UnverifiedTokenRef {
+        signing_key,
+        proof_of_quota,
+        proof_of_selection,
+    }
+    .to_bytes()
+    .expect("BlendingToken should be serializable");
+    let token_hash = hash(&token, token_count_byte_len as usize);
+    let epoch_randomness_hash = hash(
+        &next_epoch_randomness.as_bytes(),
+        token_count_byte_len as usize,
+    );
+
+    HammingDistance::new(&token_hash, &epoch_randomness_hash)
 }
 
 /// Compute blake-2b hash of `input`, producing `output_size` bytes.
@@ -160,6 +204,30 @@ mod tests {
     fn test_blending_token_hamming_distance() {
         let token = blending_token(1, 1, 2);
         assert_eq!(token.hamming_distance(1, Fr::ONE.into()), 5.into());
+    }
+
+    /// The unverified view must serialise to the same bytes as the token,
+    /// otherwise the ledger's pre-pairing threshold check would evaluate a
+    /// different token than the prover selected.
+    #[test]
+    fn test_unverified_token_bytes_match_blending_token() {
+        let token = blending_token(1, 2, 3);
+        let unverified = UnverifiedTokenRef {
+            signing_key: &token.signing_key,
+            proof_of_quota: token.proof_of_quota.as_ref(),
+            proof_of_selection: token.proof_of_selection.as_ref(),
+        };
+        assert_eq!(token.to_bytes().unwrap(), unverified.to_bytes().unwrap());
+        assert_eq!(
+            token.hamming_distance(1, Fr::ONE.into()),
+            unverified_hamming_distance(
+                &token.signing_key,
+                token.proof_of_quota.as_ref(),
+                token.proof_of_selection.as_ref(),
+                1,
+                Fr::ONE.into(),
+            )
+        );
     }
 
     fn blending_token(
