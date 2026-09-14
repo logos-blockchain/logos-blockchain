@@ -182,6 +182,7 @@ testing-framework-runner-local   = { default-features = false, git = "https://gi
 
 # External
 anyhow                             = { default-features = false, version = "1" }
+arbitrary-int                      = { default-features = false, version = "2.2" }
 ark-bn254                          = { default-features = false, version = "0.5" }
 ark-ec                             = { default-features = false, version = "0.5" }
 ark-ff                             = { default-features = false, version = "0.5" }

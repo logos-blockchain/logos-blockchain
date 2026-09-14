@@ -4,6 +4,7 @@
 
 use std::sync::LazyLock;
 
+pub use arbitrary_int::u31;
 use blake2::{
     Blake2bVarCore,
     digest::{
@@ -94,22 +95,14 @@ impl HardenedIndex {
     ///
     /// Thanks to this conversion, callers can write HD paths with the small
     /// `child_number` instead of the large index.
-    pub const fn new(child_number: u32) -> Result<Self, HardenedIndexError> {
-        if child_number >= Self::OFFSET {
-            return Err(HardenedIndexError::ChildNumberTooLarge(child_number));
-        }
-        Ok(Self(child_number + Self::OFFSET))
+    #[must_use]
+    pub const fn new(child_number: u31) -> Self {
+        Self(child_number.value() + Self::OFFSET)
     }
 
     const fn to_be_bytes(self) -> [u8; 4] {
         self.0.to_be_bytes()
     }
-}
-
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum HardenedIndexError {
-    #[error("child number {0} must be smaller than 2^31")]
-    ChildNumberTooLarge(u32),
 }
 
 /// Unkeyed BLAKE2b-512 with a 16-byte personalization string.

@@ -141,6 +141,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arbitrary-int"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ab387a0c4143b4fd3804e193946e78c8ab16cf26c5fde2048e4ac3d618c3b64"
+
+[[package]]
 name = "archery"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4649,6 +4655,7 @@ dependencies = [
 name = "logos-blockchain-key-management-system-keys"
 version = "0.0.0"
 dependencies = [
+ "arbitrary-int",
  "async-trait",
  "blake2",
  "bytes",

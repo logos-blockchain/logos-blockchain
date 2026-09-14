@@ -1,7 +1,7 @@
 use lb_groth16::{Fr, fr_to_bytes};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 
-use crate::hd::{ExtendedSecretKey, HardenedIndex, HardenedIndexError, ZK_KEY_DST};
+use crate::hd::{ExtendedSecretKey, HardenedIndex, ZK_KEY_DST, u31};
 
 const SEED: &str = "000102030405060708090a0b0c0d0e0f";
 
@@ -106,20 +106,10 @@ fn hardened_index_serializes_big_endian() {
     assert_eq!(index(0).to_be_bytes(), [0x80, 0x00, 0x00, 0x00]);
 }
 
-#[test]
-fn hardened_index_rejects_large_child_number() {
-    assert_eq!(
-        HardenedIndex::new(HardenedIndex::OFFSET),
-        Err(HardenedIndexError::ChildNumberTooLarge(
-            HardenedIndex::OFFSET
-        ))
-    );
-}
-
 fn master() -> ExtendedSecretKey {
     ExtendedSecretKey::from_seed(&hex::decode(SEED).unwrap())
 }
 
 fn index(number: u32) -> HardenedIndex {
-    HardenedIndex::new(number).unwrap()
+    HardenedIndex::new(u31::new(number))
 }
