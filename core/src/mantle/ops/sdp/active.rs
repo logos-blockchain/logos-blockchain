@@ -145,7 +145,7 @@ mod tests {
     use crate::{
         mantle::{
             TxHash,
-            batch::{DeferredZkpVerification, DeferredZkpVerifications, Error as BatchError},
+            batch::{DeferredZkpVerification, Error as BatchError, test_utils::batch_verify},
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger::{
                 Declarations, PreverifiableOperation as _, ProvableOperation,
@@ -289,11 +289,8 @@ mod tests {
         );
     }
 
-    fn batch_verify(deferred_zkp: Option<DeferredZkpVerification>) -> Result<(), BatchError> {
-        deferred_zkp
-            .into_iter()
-            .collect::<DeferredZkpVerifications>()
-            .verify()
+    fn unrelated_key() -> ZkKey {
+        ZkKey::from(BigUint::from(7u8))
     }
 
     fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
@@ -327,7 +324,7 @@ mod tests {
     #[test]
     fn wrong_deferred_zkp_is_rejected() {
         assert!(matches!(
-            batch_verify(deferred_zkp_signed_by(&[ZkKey::from(BigUint::from(7u8))])),
+            batch_verify(deferred_zkp_signed_by(&[unrelated_key()])),
             Err(BatchError::InvalidZkSignatures)
         ));
     }
