@@ -1374,10 +1374,7 @@ where
     path = paths::CRYPTARCHIA_EPOCH_STATE,
     params(EpochQuery),
     responses(
-        (status = 200, description = "Get the epoch state frozen for the requested epoch (default: the tip's epoch), \
-            with the stake-distribution UTXO tree reduced to its root and size. \
-            Recent epochs are served from memory; finalized epochs from the epoch states persisted when their blocks were finalized. \
-            The next epoch is served once its state has been frozen.", body = Object),
+        (status = 200, description = "Get the epoch state for the requested epoch (default: the tip's epoch), with the UTXO tree reduced to its root", body = Object),
         (status = 404, description = "No epoch state is available for the requested epoch", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
