@@ -1,7 +1,7 @@
 use core::time::Duration;
 
 use futures::{FutureExt as _, StreamExt as _, select};
-use futures_timer::Delay; 
+use futures_timer::Delay;
 use lb_libp2p::SwarmEvent;
 use libp2p::PeerId;
 use libp2p_stream::Behaviour as StreamBehaviour;
