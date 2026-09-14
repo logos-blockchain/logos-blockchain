@@ -205,7 +205,10 @@ mod test {
 
     use super::*;
     use crate::mantle::{
-        Note, Utxo, channel_notes, gas::test_utils::FixedThresholds,
+        Note, Utxo,
+        batch::{DeferredZkpVerifications, Error as BatchError},
+        channel_notes,
+        gas::test_utils::FixedThresholds,
         ops::op_proof::samples::SampleProof as _,
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
     };
@@ -484,6 +487,57 @@ mod test {
                 }
             ))
         );
+    }
+
+    fn batch_verify(deferred_zkp: Option<DeferredZkpVerification>) -> Result<(), BatchError> {
+        deferred_zkp
+            .into_iter()
+            .collect::<DeferredZkpVerifications>()
+            .verify()
+    }
+
+    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
+        let input_utxo = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: Note::new(10_000, ZkKey::from(BigUint::from(1u8)).to_public_key()),
+        };
+        let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
+        let operation = DepositOp {
+            inputs: Inputs::new([input_utxo.id()]),
+            ..DepositOp::sample()
+        };
+        let mut channels = Channels::new();
+        channels
+            .channels
+            .insert_mut(operation.channel_id, make_channel_state(1, None));
+        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let proof =
+            ZkKey::multi_sign(signers, tx_hash_view.as_fr()).expect("signing should succeed");
+
+        SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+            .into_preverified(&())
+            .expect("preverify should accept a non-empty deposit")
+            .verify(&DepositValidationContext {
+                channels: &channels,
+                service_notes: &ServiceNotes::new(),
+                utxos: &utxos,
+                tx_hash_view: &tx_hash_view,
+            })
+            .expect("verify leaves the proof to the batch")
+    }
+
+    #[test]
+    fn deferred_zkp_is_accepted() {
+        assert!(batch_verify(deferred_zkp_signed_by(&[ZkKey::from(BigUint::from(1u8))])).is_ok());
+    }
+
+    #[test]
+    fn wrong_deferred_zkp_is_rejected() {
+        assert!(matches!(
+            batch_verify(deferred_zkp_signed_by(&[ZkKey::from(BigUint::from(7u8))])),
+            Err(BatchError::InvalidZkSignatures)
+        ));
     }
 
     #[test]

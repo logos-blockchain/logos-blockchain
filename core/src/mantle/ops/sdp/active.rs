@@ -145,6 +145,7 @@ mod tests {
     use crate::{
         mantle::{
             TxHash,
+            batch::{DeferredZkpVerification, DeferredZkpVerifications, Error as BatchError},
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger::{
                 Declarations, PreverifiableOperation as _, ProvableOperation,
@@ -286,6 +287,49 @@ mod tests {
                 declaration_nonce,
             }
         );
+    }
+
+    fn batch_verify(deferred_zkp: Option<DeferredZkpVerification>) -> Result<(), BatchError> {
+        deferred_zkp
+            .into_iter()
+            .collect::<DeferredZkpVerifications>()
+            .verify()
+    }
+
+    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
+        let (message, declaration) = declaration();
+        let declaration_id = message.id();
+        let declarations = Declarations::new_sync().insert(declaration_id, declaration);
+        let operation = SDPActiveOp {
+            declaration_id,
+            ..SDPActiveOp::sample()
+        };
+        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let proof =
+            ZkKey::multi_sign(signers, tx_hash_view.as_fr()).expect("signing should succeed");
+
+        SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+            .into_preverified(&())
+            .expect("preverify accepts every active message")
+            .verify(&SDPActiveValidationContext {
+                declarations: &declarations,
+                tx_hash_view: &tx_hash_view,
+                epoch: Epoch::from(0),
+            })
+            .expect("verify leaves the proof to the batch")
+    }
+
+    #[test]
+    fn deferred_zkp_is_accepted() {
+        assert!(batch_verify(deferred_zkp_signed_by(&[declaration_key()])).is_ok());
+    }
+
+    #[test]
+    fn wrong_deferred_zkp_is_rejected() {
+        assert!(matches!(
+            batch_verify(deferred_zkp_signed_by(&[ZkKey::from(BigUint::from(7u8))])),
+            Err(BatchError::InvalidZkSignatures)
+        ));
     }
 
     #[test]
