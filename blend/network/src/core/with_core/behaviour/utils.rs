@@ -5,7 +5,6 @@ use either::Either;
 use lb_blend_message::{
     deserialize_encapsulated_message,
     encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
-    serialize_encapsulated_message_with_verified_public_header,
 };
 use lb_cryptarchia_engine::Epoch;
 use libp2p::{
@@ -14,11 +13,14 @@ use libp2p::{
 };
 
 use super::LOG_TARGET;
-use crate::core::{
-    poq_verification::{PendingPoQVerifications, spawn_poq_verification},
-    with_core::{
-        behaviour::{Event, handler::FromBehaviour, message_cache::MessageCache},
-        error::{ReceiveError, SendError},
+use crate::{
+    OutgoingMessage,
+    core::{
+        poq_verification::{PendingPoQVerifications, spawn_poq_verification},
+        with_core::{
+            behaviour::{Event, handler::FromBehaviour, message_cache::MessageCache},
+            error::{ReceiveError, SendError},
+        },
     },
 };
 
@@ -51,7 +53,10 @@ where
         return Err(SendError::NoPeers);
     }
 
-    let serialized_message = serialize_encapsulated_message_with_verified_public_header(message);
+    // Serialized once and then put inside an `Arc` to avoid serializing each copy
+    // or cloning the serialized bytes multiple times.
+    let serialized_message =
+        OutgoingMessage::try_from(message).map_err(|_| SendError::MessageTooLarge)?;
 
     peer_connections.for_each(|(peer_id, connection_id)| {
         tracing::trace!(target: LOG_TARGET, "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message.");

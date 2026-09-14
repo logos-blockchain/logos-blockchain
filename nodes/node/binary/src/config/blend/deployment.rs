@@ -3,6 +3,7 @@ use core::{
     time::Duration,
 };
 
+use lb_blend_service::settings::TimingSettings;
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_utils::math::PositiveF64;
@@ -54,6 +55,41 @@ impl Settings {
         .unwrap()
     }
 
+    /// `r₁ = ⌊(2V/3) / (Φ_CC + 1)⌋`: the messages a core connection may carry
+    /// in one round, in each direction.
+    ///
+    /// Two thirds of the verification rate is what a node at its peering degree
+    /// reads, divided evenly between the connections it may hold and the edge
+    /// nodes it serves.
+    #[must_use]
+    pub fn connection_share_per_round(&self) -> NonZeroU64 {
+        let readable_per_round = 2 * u64::from(self.core.verification_rate_per_second.get()) / 3;
+        let shares = u64::from(self.core.target_peering_degree.get()) + 1;
+        NonZeroU64::new(readable_per_round / shares).expect(
+            "The verification rate must allow at least one message per connection per round.",
+        )
+    }
+
+    #[must_use]
+    pub fn timing_settings(
+        &self,
+        slots_per_epoch: u64,
+        slots_per_block: u64,
+        slot_duration: &Duration,
+    ) -> TimingSettings {
+        TimingSettings {
+            epoch_transition_period: self.epoch_transition(slots_per_block, slot_duration),
+            round_duration_in_seconds: self
+                .round_duration(slot_duration)
+                .as_secs()
+                .try_into()
+                .expect("Round duration must be greater than `0` seconds."),
+            rounds_per_observation_window: self.rounds_per_observation_window(),
+            network_absorption_in_rounds: self.common.network_absorption_in_rounds,
+            rounds_per_epoch: self.rounds_per_epoch(slots_per_epoch, slot_duration),
+        }
+    }
+
     /// Duration of the epoch transition period.
     ///
     /// The Blend spec defines this as roughly the same time it takes to propose
@@ -94,6 +130,9 @@ pub struct CommonSettings {
     pub num_blend_layers: NonZeroU64,
     pub minimum_network_size: MinimumNetworkSize,
     pub protocol_name: StreamProtocol,
+    /// `η`: the network absorption of one hop, the rounds a message spends
+    /// crossing the network between two blend nodes.
+    pub network_absorption_in_rounds: NonZeroU64,
     pub data_replication_factor: u64,
 }
 
@@ -117,6 +156,10 @@ pub struct CoreSettings {
     pub scheduler: SchedulerSettings,
     /// `Φ_CC`: the peering degree a core node maintains with other core nodes.
     pub target_peering_degree: NonZeroU32,
+    /// `V`: the messages per second the slowest node the protocol targets can
+    /// verify the public header of. Every admission share is sized so that what
+    /// a node reads in a round stays within it.
+    pub verification_rate_per_second: NonZeroU32,
     pub activity_threshold_sensitivity: u64,
 }
 

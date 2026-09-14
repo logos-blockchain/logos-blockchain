@@ -16,6 +16,9 @@ pub struct Libp2pBlendBackendSettings {
     pub listening_address: Multiaddr,
     /// `Φ_CC`: the peering degree this node maintains with other core nodes.
     pub target_peering_degree: NonZeroU32,
+    /// `r₁`: the messages a core connection may carry in one round, in each
+    /// direction.
+    pub connection_share_per_round: NonZeroU64,
     #[serde_as(
         as = "lb_utils::bounded_duration::MinimalBoundedDuration<1, lb_utils::bounded_duration::SECOND>"
     )]

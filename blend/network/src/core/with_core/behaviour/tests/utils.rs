@@ -77,6 +77,7 @@ pub struct BehaviourBuilder {
     round_duration_in_seconds: Option<NonZeroU64>,
     liveness_window_in_rounds: Option<NonZeroU128>,
     peering_degree: Option<NonZeroUsize>,
+    connection_share_per_round: Option<NonZeroU64>,
     existing_connections: Option<(usize, usize)>,
     minimum_network_size: Option<NonZeroUsize>,
     num_blend_layers: Option<NonZeroU64>,
@@ -91,6 +92,7 @@ impl BehaviourBuilder {
             round_duration_in_seconds: None,
             liveness_window_in_rounds: None,
             peering_degree: None,
+            connection_share_per_round: None,
             existing_connections: None,
             minimum_network_size: None,
             num_blend_layers: None,
@@ -125,6 +127,13 @@ impl BehaviourBuilder {
 
     pub fn with_existing_connections(mut self, accepted: usize, dialed: usize) -> Self {
         self.existing_connections = Some((accepted, dialed));
+        self
+    }
+
+    /// Sets `r₁`: the messages a connection may carry in a round, in each
+    /// direction.
+    pub fn with_connection_share_per_round(mut self, share: NonZeroU64) -> Self {
+        self.connection_share_per_round = Some(share);
         self
     }
 
@@ -173,6 +182,10 @@ impl BehaviourBuilder {
                 .num_blend_layers
                 .unwrap_or_else(|| 3.try_into().unwrap()),
             old_epoch: None,
+            connection_share_per_round: self
+                .connection_share_per_round
+                .unwrap_or(NonZeroU64::new(1_000).unwrap()),
+            send_deadline: RoundCount::new(NonZeroU128::new(2).unwrap()),
             round_clock: RoundClock::new(round_duration),
             liveness: PeerLivenessMap::new(RoundCount::new(liveness_window)),
             last_liveness_check: Round::from(0),
