@@ -21,15 +21,18 @@ use crate::keys::ZkKey;
 #[cfg(test)]
 mod tests;
 
-const MASTER_KEY_PERSONALIZATION: &[u8; 16] = b"Logos_MasterKGen";
-const CHILD_KEY_PERSONALIZATION: &[u8; 16] = b"Logos_ExpandSeed";
+const BLAKE2B_PERSONA_SIZE: usize = 16;
+const MASTER_KEY_PERSONALIZATION: &[u8; BLAKE2B_PERSONA_SIZE] = b"Logos_MasterKGen";
+const CHILD_KEY_PERSONALIZATION: &[u8; BLAKE2B_PERSONA_SIZE] = b"Logos_ExpandSeed";
 static ZK_KEY_DST: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"WALLET_ZK_SK_V1"));
+const HASH_SIZE: usize = 64;
+const HALF_HASH_SIZE: usize = div_exact(HASH_SIZE, 2);
 
 /// A secret key with a chain code, from which hardened child keys are derived.
 #[derive(Clone, ZeroizeOnDrop)]
 pub struct ExtendedSecretKey {
-    key: [u8; 32],
-    chain_code: [u8; 32],
+    key: [u8; HALF_HASH_SIZE],
+    chain_code: [u8; HALF_HASH_SIZE],
 }
 
 impl ExtendedSecretKey {
@@ -48,11 +51,13 @@ impl ExtendedSecretKey {
         ))
     }
 
-    fn from_hash(hash: &[u8; 64]) -> Self {
-        let (key, chain_code) = hash.split_at(32);
+    fn from_hash(hash: &[u8; HASH_SIZE]) -> Self {
+        let (key, chain_code) = hash.split_at(HALF_HASH_SIZE);
         Self {
-            key: key.try_into().expect("Hash half is 32 bytes"),
-            chain_code: chain_code.try_into().expect("Hash half is 32 bytes"),
+            key: key.try_into().expect("Hash half is HALF_HASH_SIZE bytes"),
+            chain_code: chain_code
+                .try_into()
+                .expect("Hash half is HALF_HASH_SIZE bytes"),
         }
     }
 
@@ -66,7 +71,7 @@ impl ExtendedSecretKey {
     /// Converts this key into the [`ZkKey`] used in logos-blockchain.
     #[must_use]
     pub fn to_zk_key(&self) -> ZkKey {
-        let (left, right) = self.key.split_at(16);
+        let (left, right) = self.key.split_at(div_exact(self.key.len(), 2));
         ZkKey::new(Poseidon2Bn254Hasher::digest(&[
             *ZK_KEY_DST,
             fr_from_bytes_unchecked(left),
@@ -106,8 +111,11 @@ impl HardenedIndex {
 }
 
 /// Unkeyed BLAKE2b-512 with a 16-byte personalization string.
-fn blake2b512(personalization: &[u8; 16], inputs: &[&[u8]]) -> Zeroizing<[u8; 64]> {
-    let mut core = Blake2bVarCore::new_with_params(&[], personalization, 0, 64);
+fn blake2b512(
+    personalization: &[u8; BLAKE2B_PERSONA_SIZE],
+    inputs: &[&[u8]],
+) -> Zeroizing<[u8; HASH_SIZE]> {
+    let mut core = Blake2bVarCore::new_with_params(&[], personalization, 0, HASH_SIZE);
     let mut buffer = Buffer::<Blake2bVarCore>::default();
     for input in inputs {
         buffer.digest_blocks(input, |blocks| core.update_blocks(blocks));
@@ -115,4 +123,12 @@ fn blake2b512(personalization: &[u8; 16], inputs: &[&[u8]]) -> Zeroizing<[u8; 64
     let mut output = Output::<Blake2bVarCore>::default();
     core.finalize_variable_core(&mut buffer, &mut output);
     Zeroizing::new(output.into())
+}
+
+/// Divides `a` by `b`, asserting that the division is exact.
+///
+/// Replace with `a.div_exact(b)` once `usize::div_exact` is stabilized.
+const fn div_exact(a: usize, b: usize) -> usize {
+    assert!(a.is_multiple_of(b));
+    a / b
 }
