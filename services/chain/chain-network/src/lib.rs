@@ -1415,7 +1415,7 @@ mod tests {
 
         assert!(matches!(
             verify_proposal_and_cache_rejected(&tampered, &mut orphan_downloader),
-            Err(Error::InvalidBlock(_))
+            Err(Error::InvalidSignature)
         ));
         // check that the rejected block was not cached in the orphan downloader.
         assert!(!orphan_downloader.has_rejected_block(&block_id));
