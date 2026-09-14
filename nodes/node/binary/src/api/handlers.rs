@@ -19,7 +19,7 @@ use lb_api_service::http::{
 use lb_blend_service::message::ProxyServiceMessage;
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
-use lb_chain_service::{ChainServiceInfo, ConsensusMsg, Slot, api::CryptarchiaServiceApi};
+use lb_chain_service::{ChainServiceInfo, ConsensusMsg, Epoch, Slot, api::CryptarchiaServiceApi};
 use lb_core::{
     block::Block,
     events::Events,
@@ -87,7 +87,7 @@ use crate::{
     api::{
         errors::{ApiError, BlocksStreamHandlerError, BlocksStreamWindowError, ErrorBody},
         openapi::schema,
-        queries::{BlockRangeQuery, BlocksStreamRequest},
+        queries::{BlockRangeQuery, BlocksStreamRequest, SdpSnapshotQuery},
         responses::{self, overwatch::get_relay},
         serializers::{
             blocks::{ApiBlock, ApiBlockOwned, ApiProcessedBlockEventOwned},
@@ -1334,19 +1334,35 @@ where
 #[utoipa::path(
     get,
     path = paths::MANTLE_SDP_SNAPSHOT,
+    params(SdpSnapshotQuery),
     responses(
-        (status = 200, description = "Get the SDP snapshot for the current epoch keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
+        (status = 200, description = "Get the frozen SDP snapshot for the requested epoch (default: the tip's epoch) keyed by declaration id. \
+            Past epochs are served while a block of that epoch is still retained in memory (at or above LIB); \
+            the next epoch is served once its snapshot has been frozen.", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
+        (status = 404, description = "No snapshot is available for the requested epoch", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn get_sdp_snapshot<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Query(query): Query<SdpSnapshotQuery>,
 ) -> Response
 where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
-    make_request_and_return_response!(mantle::get_sdp_snapshot::<RuntimeServiceId>(&handle))
+    let epoch = query.epoch.map(Epoch::new);
+    let result = mantle::get_sdp_snapshot::<RuntimeServiceId>(&handle, epoch)
+        .await
+        .map_err(
+            |error| match error.downcast_ref::<lb_chain_service::Error>() {
+                Some(lb_chain_service::Error::SdpSnapshotUnavailable { .. }) => {
+                    ApiError::NotFound(error.to_string())
+                }
+                _ => ApiError::Internal(error),
+            },
+        );
+    crate::api::errors::json_response(result)
 }
 
 #[utoipa::path(

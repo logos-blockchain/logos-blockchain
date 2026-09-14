@@ -27,7 +27,7 @@ use lb_core::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
     sdp::ServiceParameters,
 };
-use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
+use lb_cryptarchia_engine::{Epoch, EpochConfig, Slot, UncleSlots};
 use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
@@ -122,6 +122,60 @@ fn cryptarchia_switch_to_online() {
     // Check the ledger states of immutable blocks have been pruned
     assert!(cryptarchia.ledger.state(&block_ids[0]).is_none());
     assert!(cryptarchia.ledger.state(&block_ids[1]).is_none());
+}
+
+fn count_declarations(declarations: &lb_core::sdp::Declarations) -> usize {
+    declarations
+        .iter()
+        .map(|(_, declarations)| declarations.len())
+        .sum()
+}
+
+#[test]
+fn sdp_snapshot_by_epoch() {
+    let k = NonZero::<u32>::new(1).unwrap();
+    let config = ledger_config(k);
+    let (_, utxo) = utxo();
+    let genesis_id: HeaderId = [0; 32].into();
+    let cryptarchia = Cryptarchia::from_lib(
+        genesis_id,
+        LedgerState::from_utxos([utxo], &config),
+        genesis_id,
+        config,
+        lb_cryptarchia_engine::State::Bootstrapping,
+        Slot::new(0),
+        0,
+        UncleSlots::default(),
+    );
+    let genesis_state = cryptarchia.ledger.state(&genesis_id).unwrap();
+    let current_epoch = genesis_state.epoch_state().epoch();
+    let next_epoch = genesis_state.next_epoch_state().epoch();
+    assert_eq!(current_epoch, Epoch::new(0));
+    assert_eq!(next_epoch, Epoch::new(1));
+
+    // `None` and the tip's epoch both serve the tip's snapshot.
+    let by_default = cryptarchia.sdp_snapshot(None).unwrap();
+    let by_epoch = cryptarchia.sdp_snapshot(Some(current_epoch)).unwrap();
+    assert_eq!(by_default, by_epoch);
+    assert_eq!(
+        by_default.len(),
+        count_declarations(&genesis_state.epoch_state().active_declarations)
+    );
+
+    // The next epoch's snapshot is frozen at its stake-distribution snapshot
+    // slot, which for epoch 1 is the genesis slot, so it is already served.
+    let next = cryptarchia.sdp_snapshot(Some(next_epoch)).unwrap();
+    assert_eq!(
+        next.len(),
+        count_declarations(&genesis_state.next_epoch_state().active_declarations)
+    );
+
+    // Anything further ahead has no frozen snapshot yet.
+    let too_far = next_epoch.strict_add(Epoch::new(1));
+    assert!(matches!(
+        cryptarchia.sdp_snapshot(Some(too_far)),
+        Err(Error::SdpSnapshotUnavailable { epoch, .. }) if epoch == too_far
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]

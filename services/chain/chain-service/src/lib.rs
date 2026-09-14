@@ -13,6 +13,7 @@ mod uncle;
 
 use core::fmt::Debug;
 use std::{
+    cmp::Ordering,
     collections::{BTreeMap, HashMap},
     fmt::Display,
     pin::Pin,
@@ -123,6 +124,8 @@ pub enum Error {
     InvalidUncle { uncle: HeaderId, reason: UncleError },
     #[error("Batch ZKP verification error: {0}")]
     BatchZkpVerification(#[from] lb_core::mantle::batch::Error),
+    #[error("SDP snapshot for {epoch} is not available: {reason}")]
+    SdpSnapshotUnavailable { epoch: Epoch, reason: String },
 }
 
 struct InitializedCryptarchia {
@@ -190,9 +193,12 @@ pub enum Query {
     GetSdpDeclarations {
         reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
     },
-    /// Returns the frozen SDP snapshot for the current epoch
+    /// Returns the frozen SDP snapshot for `epoch`, or for the epoch the tip
+    /// is in when `None`. See [`Cryptarchia::sdp_snapshot`] for which epochs
+    /// can be served.
     GetSdpSnapshot {
-        reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
+        epoch: Option<Epoch>,
+        reply_channel: oneshot::Sender<Result<HashMap<DeclarationId, Declaration>, Error>>,
     },
     GetEpochState {
         slot: Slot,
@@ -502,6 +508,88 @@ impl Cryptarchia {
 
     fn epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, Error> {
         Ok(self.epoch_state_for_slot_with_source(slot)?.epoch_state)
+    }
+
+    /// The SDP active-declarations snapshot frozen for `epoch`, keyed by
+    /// declaration id. `None` selects the epoch the tip is in.
+    ///
+    /// Which epochs can be served:
+    /// - the tip's epoch, from the tip's ledger state;
+    /// - the next epoch, once its snapshot has been frozen at the
+    ///   stake-distribution snapshot slot;
+    /// - past epochs, from the ledger state of the newest retained block in
+    ///   that epoch. Ledger states are pruned below LIB, so only epochs that
+    ///   still have a block at or above LIB are available, and an epoch in
+    ///   which no block was produced has no snapshot to serve.
+    pub fn sdp_snapshot(
+        &self,
+        epoch: Option<Epoch>,
+    ) -> Result<HashMap<DeclarationId, Declaration>, Error> {
+        let tip_state = self.ledger.state(&self.tip()).expect("no state for tip");
+        let current_epoch = tip_state.epoch_state().epoch();
+        let epoch = epoch.unwrap_or(current_epoch);
+
+        let epoch_state = match epoch.cmp(&current_epoch) {
+            Ordering::Equal => tip_state.epoch_state(),
+            Ordering::Greater => {
+                let next_epoch_state = tip_state.next_epoch_state();
+                let snapshot_slot = self.ledger.config().stake_distribution_snapshot(epoch);
+                if epoch != next_epoch_state.epoch() || tip_state.slot() < snapshot_slot {
+                    return Err(Error::SdpSnapshotUnavailable {
+                        epoch,
+                        reason: format!(
+                            "it has not been frozen yet (tip is at {:?} in {current_epoch})",
+                            tip_state.slot()
+                        ),
+                    });
+                }
+                next_epoch_state
+            }
+            Ordering::Less => self.retained_epoch_state(epoch)?,
+        };
+
+        Ok(epoch_state
+            .active_declarations
+            .iter()
+            .flat_map(|(_, declarations)| {
+                declarations
+                    .iter()
+                    .map(|(id, declaration)| (*id, declaration.clone()))
+            })
+            .collect())
+    }
+
+    /// Walk the canonical chain back from the tip to the newest retained
+    /// block whose ledger state belongs to `epoch`.
+    fn retained_epoch_state(&self, epoch: Epoch) -> Result<&EpochState, Error> {
+        let unavailable = |reason: &str| Error::SdpSnapshotUnavailable {
+            epoch,
+            reason: reason.to_owned(),
+        };
+        let mut block_id = self.tip();
+        loop {
+            let Some(state) = self.ledger.state(&block_id) else {
+                return Err(unavailable(
+                    "its blocks have been pruned from the in-memory ledger",
+                ));
+            };
+            let state_epoch = state.epoch_state().epoch();
+            if state_epoch == epoch {
+                return Ok(state.epoch_state());
+            }
+            if state_epoch < epoch {
+                return Err(unavailable("no block was produced in that epoch"));
+            }
+            let Some(branch) = self.consensus.branches().get(&block_id) else {
+                return Err(unavailable(
+                    "its blocks have been pruned from the in-memory ledger",
+                ));
+            };
+            if branch.parent() == block_id {
+                return Err(unavailable("it predates the oldest retained block"));
+            }
+            block_id = branch.parent();
+        }
     }
 
     fn epoch_state_for_slot_with_source(&self, slot: Slot) -> Result<EpochStateQueryResult, Error> {

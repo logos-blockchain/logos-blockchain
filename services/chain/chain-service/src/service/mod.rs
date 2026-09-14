@@ -361,26 +361,12 @@ where
                     error!(target: LOG_TARGET, "Could not send SDP declarations through channel");
                 });
             }
-            Query::GetSdpSnapshot { reply_channel } => {
-                let tip = self.cryptarchia.tip();
-                let declarations = self
-                    .cryptarchia
-                    .ledger
-                    .state(&tip)
-                    .map(|ledger_state| {
-                        ledger_state
-                            .epoch_state()
-                            .active_declarations
-                            .iter()
-                            .flat_map(|(_, declarations)| {
-                                declarations
-                                    .iter()
-                                    .map(|(id, declaration)| (*id, declaration.clone()))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                reply_channel.send(declarations).unwrap_or_else(|_| {
+            Query::GetSdpSnapshot {
+                epoch,
+                reply_channel,
+            } => {
+                let snapshot = self.cryptarchia.sdp_snapshot(epoch);
+                reply_channel.send(snapshot).unwrap_or_else(|_| {
                     error!(target: LOG_TARGET, "Could not send SDP snapshot through channel");
                 });
             }
