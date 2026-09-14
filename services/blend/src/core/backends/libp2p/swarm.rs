@@ -117,18 +117,16 @@ fn connection_receive_window(
     // Every part of a Blend message is fixed-size, so the frame it occupies is
     // known exactly. Asking the message crate for it keeps this window and the
     // wire format from drifting apart.
-    let frame_size = u64::try_from(
-        encapsulated_message_encoded_size(num_blend_layers.get() as usize)
-            .saturating_add(FRAME_LENGTH_WIRE_SIZE),
-    )
-    .unwrap_or(u64::MAX);
+    let frame_size = encapsulated_message_encoded_size(num_blend_layers)
+        .saturating_add(FRAME_LENGTH_WIRE_SIZE)
+        .get();
 
     let rounds_of_slack = network_absorption_in_rounds.get().saturating_mul(2);
     u32::try_from(
         connection_share_per_round
             .get()
             .saturating_mul(rounds_of_slack)
-            .saturating_mul(frame_size),
+            .saturating_mul(u64::try_from(frame_size).unwrap()),
     )
     .unwrap_or(u32::MAX)
 }
