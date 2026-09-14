@@ -13,9 +13,9 @@ use crate::api::errors::BlocksStreamRequestError;
 #[derive(IntoParams)]
 #[into_params(parameter_in = Query)]
 #[derive(Deserialize)]
-pub struct SdpSnapshotQuery {
-    /// Epoch whose frozen SDP snapshot to return. Defaults to the epoch the
-    /// tip is in.
+pub struct EpochQuery {
+    /// Epoch whose frozen state to return. Defaults to the epoch the tip is
+    /// in.
     #[param(minimum = 0)]
     pub epoch: Option<u32>,
 }

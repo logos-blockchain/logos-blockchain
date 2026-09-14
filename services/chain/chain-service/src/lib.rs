@@ -39,7 +39,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 pub use lb_ledger::EpochState;
-use lb_ledger::LedgerState;
+use lb_ledger::{EpochStateSummary, LedgerState};
 use lb_log_targets::chain;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
@@ -124,8 +124,8 @@ pub enum Error {
     InvalidUncle { uncle: HeaderId, reason: UncleError },
     #[error("Batch ZKP verification error: {0}")]
     BatchZkpVerification(#[from] lb_core::mantle::batch::Error),
-    #[error("SDP snapshot for {epoch} is not available: {reason}")]
-    SdpSnapshotUnavailable { epoch: Epoch, reason: String },
+    #[error("Epoch state for {epoch} is not available: {reason}")]
+    EpochStateUnavailable { epoch: Epoch, reason: String },
 }
 
 struct InitializedCryptarchia {
@@ -194,11 +194,21 @@ pub enum Query {
         reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
     },
     /// Returns the frozen SDP snapshot for `epoch`, or for the epoch the tip
-    /// is in when `None`. See [`Cryptarchia::sdp_snapshot`] for which epochs
-    /// can be served.
+    /// is in when `None`. Served from the same sources as
+    /// [`Query::GetEpochStateSummary`].
     GetSdpSnapshot {
         epoch: Option<Epoch>,
         reply_channel: oneshot::Sender<Result<HashMap<DeclarationId, Declaration>, Error>>,
+    },
+    /// Returns the epoch state frozen for `epoch`, or for the epoch the tip
+    /// is in when `None`, with the UTXO tree reduced to its root.
+    ///
+    /// Recent epochs are served from the in-memory ledger (see
+    /// [`Cryptarchia::epoch_state_summary`]); older ones from the epoch
+    /// states persisted when their blocks were finalized.
+    GetEpochStateSummary {
+        epoch: Option<Epoch>,
+        reply_channel: oneshot::Sender<Result<EpochStateSummary, Error>>,
     },
     GetEpochState {
         slot: Slot,
@@ -332,6 +342,13 @@ pub struct Cryptarchia {
     pub ledger: lb_ledger::Ledger<HeaderId>,
     pub consensus: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
     pub genesis_id: HeaderId,
+    /// Highest epoch whose state has been persisted to storage in this run.
+    ///
+    /// Finalized blocks are pruned in slot order, so every epoch at or below
+    /// this one is already stored and need not be written again. It is not
+    /// recovered across restarts: the first pruning after a restart rewrites
+    /// one epoch, which is harmless.
+    persisted_epochs_watermark: Option<Epoch>,
 }
 
 pub(crate) struct TryApplyBlockOutcome {
@@ -369,6 +386,7 @@ impl Cryptarchia {
             ),
             ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, ledger_config),
             genesis_id,
+            persisted_epochs_watermark: None,
         }
     }
 
@@ -510,21 +528,21 @@ impl Cryptarchia {
         Ok(self.epoch_state_for_slot_with_source(slot)?.epoch_state)
     }
 
-    /// The SDP active-declarations snapshot frozen for `epoch`, keyed by
-    /// declaration id. `None` selects the epoch the tip is in.
+    /// The epoch state frozen for `epoch` from the in-memory ledger, with the
+    /// UTXO tree reduced to its root. `None` selects the epoch the tip is in.
     ///
-    /// Which epochs can be served:
+    /// Which epochs are held in memory:
     /// - the tip's epoch, from the tip's ledger state;
     /// - the next epoch, once its snapshot has been frozen at the
     ///   stake-distribution snapshot slot;
-    /// - past epochs, from the ledger state of the newest retained block in
-    ///   that epoch. Ledger states are pruned below LIB, so only epochs that
-    ///   still have a block at or above LIB are available, and an epoch in
-    ///   which no block was produced has no snapshot to serve.
-    pub fn sdp_snapshot(
-        &self,
-        epoch: Option<Epoch>,
-    ) -> Result<HashMap<DeclarationId, Declaration>, Error> {
+    /// - past epochs that still have a block at or above LIB, from the ledger
+    ///   state of the newest such block.
+    ///
+    /// Anything older has been pruned from memory and is only available from
+    /// the epoch states persisted at pruning time (see
+    /// [`Self::unpersisted_epoch_states`]). An epoch in which no block was
+    /// produced has no state to serve at all.
+    pub fn epoch_state_summary(&self, epoch: Option<Epoch>) -> Result<EpochStateSummary, Error> {
         let tip_state = self.ledger.state(&self.tip()).expect("no state for tip");
         let current_epoch = tip_state.epoch_state().epoch();
         let epoch = epoch.unwrap_or(current_epoch);
@@ -535,7 +553,7 @@ impl Cryptarchia {
                 let next_epoch_state = tip_state.next_epoch_state();
                 let snapshot_slot = self.ledger.config().stake_distribution_snapshot(epoch);
                 if epoch != next_epoch_state.epoch() || tip_state.slot() < snapshot_slot {
-                    return Err(Error::SdpSnapshotUnavailable {
+                    return Err(Error::EpochStateUnavailable {
                         epoch,
                         reason: format!(
                             "it has not been frozen yet (tip is at {:?} in {current_epoch})",
@@ -548,21 +566,13 @@ impl Cryptarchia {
             Ordering::Less => self.retained_epoch_state(epoch)?,
         };
 
-        Ok(epoch_state
-            .active_declarations
-            .iter()
-            .flat_map(|(_, declarations)| {
-                declarations
-                    .iter()
-                    .map(|(id, declaration)| (*id, declaration.clone()))
-            })
-            .collect())
+        Ok(EpochStateSummary::from(epoch_state))
     }
 
     /// Walk the canonical chain back from the tip to the newest retained
     /// block whose ledger state belongs to `epoch`.
     fn retained_epoch_state(&self, epoch: Epoch) -> Result<&EpochState, Error> {
-        let unavailable = |reason: &str| Error::SdpSnapshotUnavailable {
+        let unavailable = |reason: &str| Error::EpochStateUnavailable {
             epoch,
             reason: reason.to_owned(),
         };
@@ -590,6 +600,44 @@ impl Cryptarchia {
             }
             block_id = branch.parent();
         }
+    }
+
+    /// Epoch states of the finalized blocks in `immutable_blocks` that have
+    /// not been persisted yet, one per epoch in ascending order.
+    ///
+    /// Call this before the blocks' ledger states are pruned. The blocks must
+    /// be canonical and finalized: a finalized block's epoch state is final
+    /// for its epoch, so one record per epoch is enough, and a stale fork's
+    /// epoch state may differ from the canonical one.
+    pub(crate) fn unpersisted_epoch_states<'a>(
+        &self,
+        immutable_blocks: impl IntoIterator<Item = &'a HeaderId>,
+    ) -> Vec<EpochStateSummary> {
+        let mut summaries = BTreeMap::new();
+        for block_id in immutable_blocks {
+            let Some(state) = self.ledger.state(block_id) else {
+                continue;
+            };
+            let epoch_state = state.epoch_state();
+            let epoch = epoch_state.epoch();
+            if self
+                .persisted_epochs_watermark
+                .is_some_and(|watermark| epoch <= watermark)
+            {
+                continue;
+            }
+            summaries
+                .entry(epoch)
+                .or_insert_with(|| EpochStateSummary::from(epoch_state));
+        }
+        summaries.into_values().collect()
+    }
+
+    /// Record that the epoch state for `epoch` has been persisted.
+    pub(crate) fn mark_epoch_state_persisted(&mut self, epoch: Epoch) {
+        self.persisted_epochs_watermark = self
+            .persisted_epochs_watermark
+            .map_or(Some(epoch), |watermark| Some(watermark.max(epoch)));
     }
 
     fn epoch_state_for_slot_with_source(&self, slot: Slot) -> Result<EpochStateQueryResult, Error> {
@@ -638,18 +686,27 @@ impl Cryptarchia {
         log_pruned_ledger_states(pruned_states_count);
     }
 
-    fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
+    /// Switch the engine to online, pruning the ledger states of the blocks
+    /// that become stale or immutable.
+    ///
+    /// Also returns the epoch states of the pruned finalized blocks that still
+    /// need persisting, captured before their ledger states were dropped.
+    fn online(self) -> (Self, PrunedBlocks<HeaderId>, Vec<EpochStateSummary>) {
         let (consensus, pruned_blocks) = self.consensus.online();
         let mut cryptarchia = Self {
             ledger: self.ledger,
             consensus,
             genesis_id: self.genesis_id,
+            persisted_epochs_watermark: self.persisted_epochs_watermark,
         };
+
+        let epoch_states =
+            cryptarchia.unpersisted_epoch_states(pruned_blocks.immutable_blocks().values());
 
         // Prune the ledger states of all the pruned blocks.
         cryptarchia.prune_ledger_states(pruned_blocks.all());
 
-        (cryptarchia, pruned_blocks)
+        (cryptarchia, pruned_blocks, epoch_states)
     }
 
     const fn is_bootstrapping(&self) -> bool {

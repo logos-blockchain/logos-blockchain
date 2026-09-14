@@ -87,7 +87,7 @@ use crate::{
     api::{
         errors::{ApiError, BlocksStreamHandlerError, BlocksStreamWindowError, ErrorBody},
         openapi::schema,
-        queries::{BlockRangeQuery, BlocksStreamRequest, SdpSnapshotQuery},
+        queries::{BlockRangeQuery, BlocksStreamRequest, EpochQuery},
         responses::{self, overwatch::get_relay},
         serializers::{
             blocks::{ApiBlock, ApiBlockOwned, ApiProcessedBlockEventOwned},
@@ -1331,21 +1331,32 @@ where
     make_request_and_return_response!(mantle::get_sdp_declarations::<RuntimeServiceId>(&handle))
 }
 
+/// Map a chain-service "epoch state unavailable" error to a 404; anything
+/// else is an internal error.
+fn epoch_state_api_error(error: DynError) -> ApiError {
+    match error.downcast_ref::<lb_chain_service::Error>() {
+        Some(lb_chain_service::Error::EpochStateUnavailable { .. }) => {
+            ApiError::NotFound(error.to_string())
+        }
+        _ => ApiError::Internal(error),
+    }
+}
+
 #[utoipa::path(
     get,
     path = paths::MANTLE_SDP_SNAPSHOT,
-    params(SdpSnapshotQuery),
+    params(EpochQuery),
     responses(
         (status = 200, description = "Get the frozen SDP snapshot for the requested epoch (default: the tip's epoch) keyed by declaration id. \
-            Past epochs are served while a block of that epoch is still retained in memory (at or above LIB); \
-            the next epoch is served once its snapshot has been frozen.", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
+            Recent epochs are served from memory; finalized epochs from the epoch states persisted when their blocks were finalized. \
+            The next epoch is served once its snapshot has been frozen.", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
         (status = 404, description = "No snapshot is available for the requested epoch", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn get_sdp_snapshot<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Query(query): Query<SdpSnapshotQuery>,
+    Query(query): Query<EpochQuery>,
 ) -> Response
 where
     RuntimeServiceId:
@@ -1354,14 +1365,35 @@ where
     let epoch = query.epoch.map(Epoch::new);
     let result = mantle::get_sdp_snapshot::<RuntimeServiceId>(&handle, epoch)
         .await
-        .map_err(
-            |error| match error.downcast_ref::<lb_chain_service::Error>() {
-                Some(lb_chain_service::Error::SdpSnapshotUnavailable { .. }) => {
-                    ApiError::NotFound(error.to_string())
-                }
-                _ => ApiError::Internal(error),
-            },
-        );
+        .map_err(epoch_state_api_error);
+    crate::api::errors::json_response(result)
+}
+
+#[utoipa::path(
+    get,
+    path = paths::CRYPTARCHIA_EPOCH_STATE,
+    params(EpochQuery),
+    responses(
+        (status = 200, description = "Get the epoch state frozen for the requested epoch (default: the tip's epoch), \
+            with the stake-distribution UTXO tree reduced to its root and size. \
+            Recent epochs are served from memory; finalized epochs from the epoch states persisted when their blocks were finalized. \
+            The next epoch is served once its state has been frozen.", body = Object),
+        (status = 404, description = "No epoch state is available for the requested epoch", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn cryptarchia_epoch_state<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Query(query): Query<EpochQuery>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let epoch = query.epoch.map(Epoch::new);
+    let result = consensus::cryptarchia_epoch_state::<RuntimeServiceId>(&handle, epoch)
+        .await
+        .map_err(epoch_state_api_error);
     crate::api::errors::json_response(result)
 }
 

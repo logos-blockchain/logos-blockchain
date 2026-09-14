@@ -13,7 +13,7 @@ use std::hash::Hash;
 
 pub use config::Config;
 use cryptarchia::LedgerState as CryptarchiaLedger;
-pub use cryptarchia::{EpochState, UtxoTree};
+pub use cryptarchia::{EpochState, EpochStateSummary, UtxoTree};
 #[cfg(test)]
 use gas_and_fees::EXECUTION_GAS_LIMIT;
 pub use gas_and_fees::GasAndFees;

@@ -10,9 +10,10 @@ use std::{
 };
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::Stream;
 use lb_core::{header::HeaderId, mantle::TxHash};
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Epoch, Slot};
 
 use crate::api::backend::HeaderIdStream;
 
@@ -80,4 +81,11 @@ pub trait StorageChainApi {
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, Self::Error>;
 
     async fn remove_transactions(&mut self, tx_hashes: &[TxHash]) -> Result<(), Self::Error>;
+
+    /// Persist the serialized epoch state frozen for `epoch`, replacing any
+    /// previous record for that epoch.
+    async fn store_epoch_state(&mut self, epoch: Epoch, state: Bytes) -> Result<(), Self::Error>;
+
+    /// The serialized epoch state stored for `epoch`, if any.
+    async fn get_epoch_state(&mut self, epoch: Epoch) -> Result<Option<Bytes>, Self::Error>;
 }

@@ -7,6 +7,7 @@ pub const CHAIN_ID: &str = "/chain/id";
 pub const CRYPTARCHIA_INFO: &str = "/cryptarchia/info";
 pub const CRYPTARCHIA_HEADERS: &str = "/cryptarchia/headers";
 pub const CRYPTARCHIA_LIB_STREAM: &str = "/cryptarchia/lib-stream";
+pub const CRYPTARCHIA_EPOCH_STATE: &str = "/cryptarchia/epoch_state";
 pub const TIME_INFO: &str = "/time/info";
 pub const NETWORK_INFO: &str = "/network/info";
 pub const BLEND_NETWORK_INFO: &str = "/blend/info";

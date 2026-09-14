@@ -871,8 +871,8 @@ where
 
 /// The frozen SDP snapshot for `epoch`, or for the tip's epoch when `None`.
 ///
-/// Fails with [`lb_chain_service::Error::SdpSnapshotUnavailable`] when the
-/// node does not hold a snapshot for that epoch.
+/// Fails with [`lb_chain_service::Error::EpochStateUnavailable`] when the
+/// node holds no epoch state for that epoch, in memory or in storage.
 pub async fn get_sdp_snapshot<RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     epoch: Option<Epoch>,

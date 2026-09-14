@@ -106,6 +106,49 @@ pub struct EpochState {
     pub active_declarations: Arc<Declarations>,
 }
 
+/// [`EpochState`] with the stake-distribution snapshot reduced to its Merkle
+/// root and size.
+///
+/// This is the form epoch states are persisted in and served over the API.
+/// Every other field is copied verbatim; the full UTXO tree is left out
+/// because it scales with the chain's whole UTXO set.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct EpochStateSummary {
+    pub epoch: Epoch,
+    #[serde(with = "lb_groth16::serde::serde_fr")]
+    pub nonce: Fr,
+    #[serde(with = "lb_groth16::serde::serde_fr")]
+    pub blend_pow_difficulty: PowTarget,
+    /// Merkle root of the stake distribution snapshot
+    /// ([`EpochState::utxos`]).
+    #[serde(with = "lb_groth16::serde::serde_fr")]
+    pub utxos_root: Fr,
+    /// Number of UTXOs in the stake distribution snapshot.
+    pub utxos_count: usize,
+    pub total_stake: Value,
+    #[serde(with = "lb_groth16::serde::serde_fr")]
+    pub lottery_0: Fr,
+    #[serde(with = "lb_groth16::serde::serde_fr")]
+    pub lottery_1: Fr,
+    pub active_declarations: Declarations,
+}
+
+impl From<&EpochState> for EpochStateSummary {
+    fn from(state: &EpochState) -> Self {
+        Self {
+            epoch: state.epoch,
+            nonce: state.nonce,
+            blend_pow_difficulty: state.blend_pow_difficulty,
+            utxos_root: state.utxos.root(),
+            utxos_count: state.utxos.size(),
+            total_stake: state.total_stake,
+            lottery_0: state.lottery_0,
+            lottery_1: state.lottery_1,
+            active_declarations: (*state.active_declarations).clone(),
+        }
+    }
+}
+
 impl EpochState {
     fn update_from_ledger(
         self,
