@@ -323,7 +323,7 @@ mod tests {
             .into_preverified(&())
             .unwrap();
 
-        assert!(signed_operation.verify(&context).unwrap().is_none());
+        assert!(signed_operation.verify(&context).is_ok());
     }
 
     #[test]
@@ -375,6 +375,24 @@ mod tests {
     }
 
     #[test]
+    fn has_no_deferred_zkp() {
+        let signed_operation = preverified(
+            ChannelConfigOp::sample(),
+            ChannelMultiSigProof::sample_with_signatures(0),
+        );
+
+        assert!(
+            signed_operation
+                .verify(&ChannelConfigValidationContext {
+                    channels: &Channels::new(),
+                    tx_hash_view: &TxHashView::from(TxHash::from([9u8; 32])),
+                })
+                .expect("an unregistered channel is configured without signatures")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn verify_accepts_an_unregistered_channel_without_checking_signatures() {
         let signed_operation = preverified(
             ChannelConfigOp::sample(),
@@ -387,8 +405,7 @@ mod tests {
                     channels: &Channels::new(),
                     tx_hash_view: &TxHashView::from(TxHash::from([9u8; 32])),
                 })
-                .unwrap()
-                .is_none()
+                .is_ok()
         );
     }
 
@@ -498,8 +515,7 @@ mod tests {
                     channels: &channels,
                     tx_hash_view: &TxHashView::from(signed_hash),
                 })
-                .unwrap()
-                .is_none()
+                .is_ok()
         );
         assert_eq!(
             signed_operation

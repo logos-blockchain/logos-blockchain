@@ -608,6 +608,37 @@ mod test {
     }
 
     #[test]
+    fn has_no_deferred_zkp() {
+        let signed_hash = TxHash::from([9u8; 32]);
+        let signed_operation = preverified(
+            Outputs::new([Note::new(10_000, ZkPublicKey::from(Fr::from(2u64)))]),
+            create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
+        );
+
+        let channels = ledger_view(1, Keys::new_unchecked(vec![signing_key().public_key()]));
+        let helper = TestOperationVerificationHelper::new(
+            channel_view(),
+            [((CHANNEL_ID, 0), signing_key().public_key())],
+        );
+        let service_notes = ServiceNotes::new();
+        let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
+
+        assert!(
+            signed_operation
+                .verify(&ChannelTransferValidationContext {
+                    channels: &channels,
+                    service_notes: &service_notes,
+                    utxos: &utxos,
+                    tx_hash_view: &TxHashView::from(signed_hash),
+                    op_index: 0,
+                    helper: &helper,
+                })
+                .expect("one accredited signature meets a threshold of one")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn verify_rejects_a_signature_count_below_the_ledger_view_threshold() {
         let signed_hash = TxHash::from([9u8; 32]);
         let signed_operation = preverified(

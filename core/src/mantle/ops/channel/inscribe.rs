@@ -365,6 +365,21 @@ mod tests {
     }
 
     #[test]
+    fn has_no_deferred_zkp() {
+        let signed_operation = preverified(InscriptionOp::sample());
+
+        assert!(
+            signed_operation
+                .verify(&InscriptionValidationContext {
+                    channels: &Channels::new(),
+                    block_slot: Slot::from(0),
+                })
+                .expect("an inscription rooted at the genesis message opens a new channel")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn verify_accepts_an_unregistered_channel_rooted_inscription() {
         let signed_operation = preverified(InscriptionOp::sample());
 
@@ -374,8 +389,7 @@ mod tests {
                     channels: &Channels::new(),
                     block_slot: Slot::from(0),
                 })
-                .unwrap()
-                .is_none()
+                .is_ok()
         );
     }
 
@@ -503,8 +517,7 @@ mod tests {
                     channels: &channels,
                     block_slot: Slot::from(0),
                 })
-                .unwrap()
-                .is_none()
+                .is_ok()
         );
     }
 
