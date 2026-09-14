@@ -618,6 +618,7 @@ where
         // Check the proposal before any mempool scanning.
         if let Err(e) = verify_proposal_and_cache_rejected(&proposal, orphan_downloader) {
             metrics::consensus_observe_proposal_reconstruct_err("network", &e);
+            return;
         }
 
         let reconstruct_started_at = Instant::now();
