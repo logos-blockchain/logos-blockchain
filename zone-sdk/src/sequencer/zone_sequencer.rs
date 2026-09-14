@@ -1107,6 +1107,72 @@ where
         }
     }
 
+    /// Everything that must hold before a prepared bundle is tracked, in
+    /// order of cheapness and severity. Nothing here mutates state.
+    ///
+    /// 1. **Ownership.** The bundled inscription must be ours: the ledger
+    ///    requires the inscription signer to be the turn holder at the block
+    ///    slot, and this runtime only posts during *its own* turn. Another
+    ///    sequencer's bundle would post in our turn under their signature, fail
+    ///    `UnauthorizedSigner` at block assembly, and sit pending here
+    ///    unlandable. Reported as [`Error::InvalidMultiSig`] (construction
+    ///    bug).
+    /// 2. **Live state.** The ledger verifies the proof against the
+    ///    keys/threshold at inclusion time and the inscription against the
+    ///    channel tip, so a config or peer inscription that landed during
+    ///    signature collection surfaces as [`Error::ChannelStateChanged`]
+    ///    (re-prepare) instead of parking an unlandable bundle in the pending
+    ///    set (only chain inclusion evicts it).
+    /// 3. **Signature set.** Only once state is known unchanged are the
+    ///    collected signatures checked, so [`Error::InvalidMultiSig`] always
+    ///    means a construction bug, never a race.
+    fn validate_bundle_submission(
+        &self,
+        prepared: &PreparedAtomicBundle,
+        signatures: &[IndexedSignature],
+    ) -> Result<(), Error> {
+        let own_key = self.signing_key.public_key();
+        if prepared.signer != own_key {
+            return Err(Error::InvalidMultiSig(format!(
+                "bundle was prepared by another sequencer (inscription signer {:?}, this \
+                 sequencer {own_key:?}); prepare and submit must run on the same sequencer",
+                prepared.signer
+            )));
+        }
+        if own_key
+            .verify(&prepared.sign_payload, &prepared.inscribe_sig)
+            .is_err()
+        {
+            return Err(Error::InvalidMultiSig(
+                "bundled inscription signature does not verify against this sequencer's key \
+                 over the sign payload"
+                    .into(),
+            ));
+        }
+
+        let channel_state = self.channel_state.as_ref().ok_or(Error::Unavailable {
+            reason: "channel state unavailable",
+        })?;
+        let live_keys: Vec<_> = channel_state.accredited_keys.iter().copied().collect();
+        let stale = stale_bundle_reasons(
+            &prepared.accredited_keys,
+            prepared.signing_threshold,
+            &live_keys,
+            channel_state.transfer_threshold,
+            prepared.parent,
+            self.compute_publish_parent(),
+        );
+        if !stale.is_empty() {
+            return Err(Error::ChannelStateChanged(stale.join("; ")));
+        }
+        validate_multi_sig(
+            &live_keys,
+            channel_state.transfer_threshold,
+            &prepared.sign_payload,
+            signatures,
+        )
+    }
+
     /// Assemble a [`PreparedAtomicBundle`] with its externally-collected
     /// signatures and submit it — the shared tail of the single-sig and
     /// multi-sig paths (tracking, queueing, checkpoint, tx status).
@@ -1117,6 +1183,8 @@ where
     ) -> Result<PublishReceipt, Error> {
         self.ensure_ready()?;
 
+        self.validate_bundle_submission(&prepared, &signatures)?;
+
         let PreparedAtomicBundle {
             tx,
             transfer_proof,
@@ -1126,40 +1194,8 @@ where
             inscribe,
             signer,
             kind,
-            sign_payload,
-            accredited_keys: prepared_keys,
-            signing_threshold: prepared_threshold,
+            ..
         } = prepared;
-
-        // Fail fast against *live* state rather than the prepared snapshot:
-        // the ledger verifies the proof against the keys/threshold at
-        // inclusion time and the inscription against the channel tip, so a
-        // config or peer inscription that landed during signature collection
-        // surfaces as `ChannelStateChanged` (re-prepare) instead of parking an
-        // unlandable bundle in the pending set (only chain inclusion evicts
-        // it). Only once state is known unchanged are the signatures checked,
-        // so `InvalidMultiSig` always means a construction bug.
-        let channel_state = self.channel_state.as_ref().ok_or(Error::Unavailable {
-            reason: "channel state unavailable",
-        })?;
-        let live_keys: Vec<_> = channel_state.accredited_keys.iter().copied().collect();
-        let stale = stale_bundle_reasons(
-            &prepared_keys,
-            prepared_threshold,
-            &live_keys,
-            channel_state.transfer_threshold,
-            parent,
-            self.compute_publish_parent(),
-        );
-        if !stale.is_empty() {
-            return Err(Error::ChannelStateChanged(stale.join("; ")));
-        }
-        validate_multi_sig(
-            &live_keys,
-            channel_state.transfer_threshold,
-            &sign_payload,
-            &signatures,
-        )?;
 
         let signed_tx =
             assemble_atomic_bundle_tx(tx, inscribe_sig, signatures, transfer_proof.as_ref())?;

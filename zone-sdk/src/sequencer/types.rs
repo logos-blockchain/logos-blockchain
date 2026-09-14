@@ -399,13 +399,15 @@ pub enum Error {
     /// re-collect signatures. The message lists every change found.
     #[error("channel state changed since prepare: {0}")]
     ChannelStateChanged(String),
-    /// The channel state is unchanged since prepare, yet the collected
-    /// signature set would never verify on the ledger (wrong count,
+    /// The channel state is unchanged since prepare, yet the bundle's
+    /// signatures would never verify on the ledger: the bundled inscription
+    /// was signed by a different sequencer than the one submitting (its turn,
+    /// not ours), or the collected multi-sig set is malformed (wrong count,
     /// unordered/duplicate indices, index outside the accredited keys, or a
     /// signature that fails against its key). Not recoverable by retrying:
-    /// the signing/collection code is wrong. The message lists every problem
-    /// found.
-    #[error("multi-sig signatures rejected: {0}")]
+    /// the preparing/signing/collection code is wrong. The message lists
+    /// every problem found.
+    #[error("bundle signatures rejected: {0}")]
     InvalidMultiSig(String),
 }
 
