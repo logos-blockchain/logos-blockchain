@@ -1,5 +1,5 @@
 use core::{
-    num::{NonZeroU64, NonZeroUsize},
+    num::{NonZeroU64, NonZeroU128, NonZeroUsize},
     pin::Pin,
     time::Duration,
 };
@@ -16,6 +16,7 @@ use lb_blend::{
         Config, NetworkBehaviour, with_core::behaviour::Config as CoreToCoreConfig,
         with_edge::behaviour::Config as CoreToEdgeConfig,
     },
+    primitives::time::RoundCount,
     proofs::{
         quota::{ProofOfQuota, VerifiedProofOfQuota},
         selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
@@ -228,6 +229,8 @@ impl BlendBehaviourBuilder {
             blend: NetworkBehaviour::new(
                 &Config {
                     with_core: CoreToCoreConfig {
+                        connection_share_per_round: NonZeroU64::new(1_000).unwrap(),
+                        send_deadline_in_rounds: RoundCount::new(NonZeroU128::new(2).unwrap()),
                         target_peering_degree: peering_degree,
                         minimum_network_size: 1.try_into().unwrap(),
                         num_blend_layers: 3.try_into().unwrap(),

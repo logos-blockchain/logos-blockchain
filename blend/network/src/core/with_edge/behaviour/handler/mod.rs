@@ -12,9 +12,12 @@ use libp2p::{
     swarm::{ConnectionHandlerEvent, SubstreamProtocol},
 };
 
-use crate::core::with_edge::behaviour::handler::{
-    dropped::DroppedState, ready_to_receive::ReadyToReceiveState, receiving::ReceivingState,
-    starting::StartingState,
+use crate::{
+    core::with_edge::behaviour::handler::{
+        dropped::DroppedState, ready_to_receive::ReadyToReceiveState, receiving::ReceivingState,
+        starting::StartingState,
+    },
+    message::IncomingMessage,
 };
 
 mod dropped;
@@ -28,7 +31,8 @@ mod tests;
 const LOG_TARGET: &str = blend::network::core::handler::CORE_EDGE;
 
 type TimerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
-type MessageReceiveFuture = Pin<Box<dyn Future<Output = Result<Vec<u8>, io::Error>> + Send>>;
+type MessageReceiveFuture =
+    Pin<Box<dyn Future<Output = Result<IncomingMessage, io::Error>> + Send>>;
 type PollResult<T> = (
     Poll<
         ConnectionHandlerEvent<
@@ -132,7 +136,7 @@ pub enum FromBehaviour {
 #[derive(Debug)]
 pub enum ToBehaviour {
     /// A message has been received from the connection.
-    Message(Vec<u8>),
+    Message(IncomingMessage),
     SubstreamOpened,
     SubstreamClosed(Option<FailureReason>),
 }

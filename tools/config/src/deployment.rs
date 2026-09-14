@@ -31,6 +31,10 @@ use crate::{
     time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS},
 };
 
+/// `V`: the messages per second the slowest targeted node can verify.
+const BLEND_VERIFICATION_RATE_PER_SECOND: u32 = 156;
+/// `η`: the rounds a message spends crossing the network at one hop.
+const BLEND_NETWORK_ABSORPTION_IN_ROUNDS: u64 = 2;
 const BLEND_PEERING_DEGREE: NonZeroU32 = NonZeroU32::new(4).unwrap();
 const MINIMUM_BLEND_NETWORK_SIZE: u64 = 2;
 const NUM_BLEND_LAYERS: u64 = 3;
@@ -101,11 +105,19 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     .expect("Minimum network size cannot be less than 2."),
                 num_blend_layers: NonZeroU64::try_from(NUM_BLEND_LAYERS)
                     .expect("Number of blend layers cannot be zero."),
+                network_absorption_in_rounds: NonZeroU64::try_from(
+                    BLEND_NETWORK_ABSORPTION_IN_ROUNDS,
+                )
+                .expect("Network absorption cannot be zero."),
                 protocol_name: StreamProtocol::new(BLEND_PROTOCOL_NAME),
                 data_replication_factor: DATA_REPLICATION_FACTOR,
             },
             core: BlendCoreSettings {
                 target_peering_degree: BLEND_PEERING_DEGREE,
+                verification_rate_per_second: NonZeroU32::try_from(
+                    BLEND_VERIFICATION_RATE_PER_SECOND,
+                )
+                .expect("Verification rate cannot be zero."),
                 scheduler: SchedulerSettings {
                     cover: CoverTrafficSettings {
                         message_frequency_per_round: PositiveF64::try_from(
