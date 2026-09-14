@@ -21,7 +21,8 @@ use super::{Following, Phase, PhaseTag};
 use crate::{
     ConsensusMsg, Error, LOG_TARGET,
     service::{
-        Service, delete_stale_blocks_from_storage, immutable_blocks_index, reject_chain_sync_event,
+        Service, delete_stale_blocks_from_storage, immutable_blocks_index, persist_epoch_states,
+        reject_chain_sync_event,
     },
     storage::{StorageAdapter as _, adapters::StorageAdapter},
 };
@@ -110,9 +111,16 @@ where
     /// Switch `Cryptarchia` to online, notify subscribers,
     /// and prune the stale part of the chain from memory and storage.
     async fn switch_to_online(mut self) -> Self {
-        let (cryptarchia, pruned_blocks) = self.cryptarchia.online();
+        let (cryptarchia, pruned_blocks, epoch_states) = self.cryptarchia.online();
         self.cryptarchia = cryptarchia;
         info!(target: LOG_TARGET, "chain switched to online");
+
+        persist_epoch_states(
+            &mut self.cryptarchia,
+            epoch_states,
+            self.relays.storage_adapter(),
+        )
+        .await;
 
         self.chain_online_notifier.notify();
 

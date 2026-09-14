@@ -17,15 +17,16 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        OpRef,
+        OpRef, TxHash,
         ledger::verification_mode::StandardMode,
-        traits::{MantleTx, PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
+        traits::{Hashable, MantleTx, PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
         transactions::states::Preverified,
     },
     sdp::ServiceType,
 };
 use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse};
+use lb_ledger::EpochStateSummary;
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
@@ -246,6 +247,25 @@ where
         Ok(outcome)
     }
 
+    /// The epoch state frozen for `epoch` (`None`: the tip's epoch), from the
+    /// in-memory ledger when it is still retained there and otherwise from
+    /// the epoch states persisted when the epoch's blocks were finalized.
+    async fn epoch_state_summary(&self, epoch: Option<Epoch>) -> Result<EpochStateSummary, Error> {
+        match self.cryptarchia.epoch_state_summary(epoch) {
+            Err(error @ Error::EpochStateUnavailable { .. }) => {
+                let Some(epoch) = epoch else {
+                    return Err(error);
+                };
+                self.relays
+                    .storage_adapter()
+                    .get_epoch_state(epoch)
+                    .await
+                    .ok_or(error)
+            }
+            result => result,
+        }
+    }
+
     fn log_epoch_state_query_sources_became_stale(
         &mut self,
         stale_block_ids: impl IntoIterator<Item = HeaderId>,
@@ -361,27 +381,13 @@ where
                     error!(target: LOG_TARGET, "Could not send SDP declarations through channel");
                 });
             }
-            Query::GetSdpSnapshot { reply_channel } => {
-                let tip = self.cryptarchia.tip();
-                let declarations = self
-                    .cryptarchia
-                    .ledger
-                    .state(&tip)
-                    .map(|ledger_state| {
-                        ledger_state
-                            .epoch_state()
-                            .active_declarations
-                            .iter()
-                            .flat_map(|(_, declarations)| {
-                                declarations
-                                    .iter()
-                                    .map(|(id, declaration)| (*id, declaration.clone()))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                reply_channel.send(declarations).unwrap_or_else(|_| {
-                    error!(target: LOG_TARGET, "Could not send SDP snapshot through channel");
+            Query::GetEpochStateSummary {
+                epoch,
+                reply_channel,
+            } => {
+                let summary = self.epoch_state_summary(epoch).await;
+                reply_channel.send(summary).unwrap_or_else(|_| {
+                    error!(target: LOG_TARGET, "Could not send epoch state summary through channel");
                 });
             }
             Query::GetEpochState {
@@ -833,23 +839,18 @@ where
         relays.storage_adapter(),
     )
     .await;
+    let epoch_states =
+        candidate.unpersisted_epoch_states(applied.pruned_blocks.immutable_blocks().values());
+    persist_epoch_states(&mut candidate, epoch_states, relays.storage_adapter()).await;
     candidate.prune_ledger_states(applied.pruned_blocks.all());
     *cryptarchia = candidate;
     metrics::emit_block_transactions_metric(tx_count);
 
-    let processed_block_event = {
-        let tip = cryptarchia.tip_branch();
-        let lib = cryptarchia.lib_branch();
-        ProcessedBlockEvent {
-            block_id: header.id(),
-            block_slot: header.slot(),
-            tip: tip.id(),
-            tip_slot: tip.slot(),
-            lib: lib.id(),
-            lib_slot: lib.slot(),
-        }
-    };
-    if let Err(e) = new_block_subscription_sender.send(processed_block_event) {
+    if let Err(e) = new_block_subscription_sender.send(processed_block_event(
+        cryptarchia,
+        header.id(),
+        header.slot(),
+    )) {
         debug!(target: LOG_TARGET, "No new-block subscribers to notify: {e}");
     }
 
@@ -1204,6 +1205,55 @@ where
 /// Builds the index of immutable block IDs, including the new LIB if needed.
 /// If `prev_lib` is None, always includes the new LIB.
 /// If `prev_lib` is Some, only includes new LIB if it changed.
+/// The event announcing `header` was applied, with the chain's tip and LIB
+/// after applying it.
+fn processed_block_event(
+    cryptarchia: &Cryptarchia,
+    block_id: HeaderId,
+    block_slot: Slot,
+) -> ProcessedBlockEvent {
+    let tip = cryptarchia.tip_branch();
+    let lib = cryptarchia.lib_branch();
+    ProcessedBlockEvent {
+        block_id,
+        block_slot,
+        tip: tip.id(),
+        tip_slot: tip.slot(),
+        lib: lib.id(),
+        lib_slot: lib.slot(),
+    }
+}
+
+/// Persist the epoch states of finalized blocks whose ledger states are about
+/// to be pruned, so they stay queryable afterwards.
+///
+/// A failed write is logged and the epoch is left unmarked, so it is retried
+/// when a later block of the same epoch is finalized.
+pub async fn persist_epoch_states<Tx, Storage, RuntimeServiceId>(
+    cryptarchia: &mut Cryptarchia,
+    epoch_states: Vec<EpochStateSummary>,
+    storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+) where
+    Tx: Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
+    Storage: StorageBackend + Send + Sync + 'static,
+    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
+    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
+{
+    for epoch_state in epoch_states {
+        let epoch = epoch_state.epoch;
+        match storage_adapter.store_epoch_state(&epoch_state).await {
+            Ok(()) => {
+                debug!(target: LOG_TARGET, %epoch, "Persisted finalized epoch state");
+                cryptarchia.mark_epoch_state_persisted(epoch);
+            }
+            Err(e) => {
+                error!(target: LOG_TARGET, %epoch, "Failed to persist finalized epoch state: {e}");
+            }
+        }
+    }
+}
+
 fn immutable_blocks_index(
     pruned_blocks: &PrunedBlocks<HeaderId>,
     prev_lib: Option<HeaderId>,

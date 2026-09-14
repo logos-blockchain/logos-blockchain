@@ -326,6 +326,7 @@ mod tests {
                 ledger: ledger_state,
                 consensus: cryptarchia_engine.clone(),
                 genesis_id: genesis_header_id,
+                persisted_epochs_watermark: None,
             },
             pruned_stale_blocks.clone(),
         )
@@ -440,6 +441,7 @@ mod tests {
                 ledger_config.clone(),
             ),
             genesis_id: genesis_header_id,
+            persisted_epochs_watermark: None,
         };
         let info_before = original.info();
 

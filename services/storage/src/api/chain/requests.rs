@@ -6,9 +6,10 @@ use std::{
     pin::Pin,
 };
 
+use bytes::Bytes;
 use futures::Stream;
 use lb_core::{header::HeaderId, mantle::TxHash};
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Epoch, Slot};
 use tokio::sync::oneshot::Sender;
 
 use crate::{
@@ -73,6 +74,15 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
     },
     RemoveTransactions {
         tx_hashes: Vec<TxHash>,
+    },
+    StoreEpochState {
+        epoch: Epoch,
+        state: Bytes,
+        response_tx: Sender<Result<(), String>>,
+    },
+    GetEpochState {
+        epoch: Epoch,
+        response_tx: Sender<Option<Bytes>>,
     },
 }
 
@@ -146,6 +156,14 @@ where
             } => handle_get_transactions(backend, tx_hashes, response_tx).await,
             Self::RemoveTransactions { tx_hashes } => {
                 handle_remove_transactions(backend, tx_hashes).await
+            }
+            Self::StoreEpochState {
+                epoch,
+                state,
+                response_tx,
+            } => handle_store_epoch_state(backend, epoch, state, response_tx).await,
+            Self::GetEpochState { epoch, response_tx } => {
+                handle_get_epoch_state(backend, epoch, response_tx).await
             }
         }
     }
@@ -283,6 +301,45 @@ async fn handle_store_immutable_block_ids<Backend: StorageBackend>(
     result
 }
 
+async fn handle_store_epoch_state<Backend: StorageBackend>(
+    backend: &mut Backend,
+    epoch: Epoch,
+    state: Bytes,
+    response_tx: Sender<Result<(), String>>,
+) -> Result<(), StorageServiceError> {
+    let result = backend
+        .store_epoch_state(epoch, state)
+        .await
+        .map_err(|e| StorageServiceError::BackendError(e.into()));
+
+    let response = result.as_ref().map_err(ToString::to_string).copied();
+
+    response_tx
+        .send(response)
+        .map_err(|_| StorageServiceError::ReplyError {
+            message: format!("Failed to send reply for store epoch state request for {epoch}"),
+        })?;
+
+    result
+}
+
+async fn handle_get_epoch_state<Backend: StorageBackend>(
+    backend: &mut Backend,
+    epoch: Epoch,
+    response_tx: Sender<Option<Bytes>>,
+) -> Result<(), StorageServiceError> {
+    let result = backend
+        .get_epoch_state(epoch)
+        .await
+        .map_err(|e| StorageServiceError::BackendError(e.into()))?;
+
+    response_tx
+        .send(result)
+        .map_err(|_| StorageServiceError::ReplyError {
+            message: format!("Failed to send reply for get epoch state request for {epoch}"),
+        })
+}
+
 async fn handle_get_immutable_block_id<Backend: StorageBackend>(
     backend: &mut Backend,
     slot: Slot,
@@ -418,6 +475,31 @@ impl<Api: StorageBackend> StorageMsg<Api> {
         Self::Api {
             request: StorageApiRequest::Chain(ChainApiRequest::StoreImmutableBlockIds {
                 ids,
+                response_tx,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub const fn store_epoch_state_request(
+        epoch: Epoch,
+        state: Bytes,
+        response_tx: Sender<Result<(), String>>,
+    ) -> Self {
+        Self::Api {
+            request: StorageApiRequest::Chain(ChainApiRequest::StoreEpochState {
+                epoch,
+                state,
+                response_tx,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub const fn get_epoch_state_request(epoch: Epoch, response_tx: Sender<Option<Bytes>>) -> Self {
+        Self::Api {
+            request: StorageApiRequest::Chain(ChainApiRequest::GetEpochState {
+                epoch,
                 response_tx,
             }),
         }
