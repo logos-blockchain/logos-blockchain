@@ -308,7 +308,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            batch::{DeferredZkpVerifications, Error as BatchError},
+            batch::{Error as BatchError, test_utils::batch_verify},
             gas::test_utils::FixedThresholds,
         },
         proofs::leader_claim_proof::LeaderClaimPrivate,
@@ -529,13 +529,6 @@ mod tests {
                 .unwrap_err(),
             LeaderClaimError::VouchersRootMismatch
         );
-    }
-
-    fn batch_verify(deferred_zkp: Option<DeferredZkpVerification>) -> Result<(), BatchError> {
-        deferred_zkp
-            .into_iter()
-            .collect::<DeferredZkpVerifications>()
-            .verify()
     }
 
     fn deferred_zkp_verified_over(tx_hash: TxHash) -> Option<DeferredZkpVerification> {

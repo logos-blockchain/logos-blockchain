@@ -180,7 +180,7 @@ mod tests {
     use crate::{
         mantle::{
             Note, NoteId, TxHash,
-            batch::{DeferredZkpVerifications, Error as BatchError},
+            batch::{Error as BatchError, test_utils::batch_verify},
             gas::test_utils::FixedThresholds,
             ops::op_proof::samples::SampleProof as _,
         },
@@ -349,13 +349,6 @@ mod tests {
                 .unwrap_err(),
             SdpError::InvalidServiceNote { note_id, expected }
         );
-    }
-
-    fn batch_verify(deferred_zkp: Option<DeferredZkpVerification>) -> Result<(), BatchError> {
-        deferred_zkp
-            .into_iter()
-            .collect::<DeferredZkpVerifications>()
-            .verify()
     }
 
     fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {

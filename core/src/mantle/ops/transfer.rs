@@ -192,7 +192,7 @@ mod test {
     use super::*;
     use crate::mantle::{
         TxHash,
-        batch::{DeferredZkpVerifications, Error as BatchError},
+        batch::{Error as BatchError, test_utils::batch_verify},
         gas::test_utils::FixedThresholds,
         ops::{channel::ChannelId, op_proof::samples::SampleProof as _},
     };
@@ -270,18 +270,19 @@ mod test {
         assert!(transfer.utxo_by_index(3).is_none());
     }
 
-    fn batch_verify(deferred_zkp: Option<DeferredZkpVerification>) -> Result<(), BatchError> {
-        deferred_zkp
-            .into_iter()
-            .collect::<DeferredZkpVerifications>()
-            .verify()
+    fn input_key() -> ZkKey {
+        ZkKey::from(BigUint::from(1u8))
+    }
+
+    fn unrelated_key() -> ZkKey {
+        ZkKey::from(BigUint::from(7u8))
     }
 
     fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
         let input_utxo = Utxo {
             op_id: [1u8; 32],
             output_index: 0,
-            note: Note::new(10_000, ZkKey::from(BigUint::from(1u8)).to_public_key()),
+            note: Note::new(10_000, input_key().to_public_key()),
         };
         let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
         let operation = TransferOp::new(
@@ -309,13 +310,13 @@ mod test {
 
     #[test]
     fn deferred_zkp_is_accepted() {
-        assert!(batch_verify(deferred_zkp_signed_by(&[ZkKey::from(BigUint::from(1u8))])).is_ok());
+        assert!(batch_verify(deferred_zkp_signed_by(&[input_key()])).is_ok());
     }
 
     #[test]
     fn wrong_deferred_zkp_is_rejected() {
         assert!(matches!(
-            batch_verify(deferred_zkp_signed_by(&[ZkKey::from(BigUint::from(7u8))])),
+            batch_verify(deferred_zkp_signed_by(&[unrelated_key()])),
             Err(BatchError::InvalidZkSignatures)
         ));
     }

@@ -362,7 +362,7 @@ mod tests {
         use super::*;
         use crate::{
             mantle::batch::{
-                DeferredZkpVerification, DeferredZkpVerifications, Error as BatchError,
+                DeferredZkpVerification, Error as BatchError, test_utils::batch_verify,
             },
             sdp::service_notes::ServiceNotes,
         };
@@ -635,15 +635,16 @@ mod tests {
             );
         }
 
-        fn batch_verify(deferred_zkp: Option<DeferredZkpVerification>) -> Result<(), BatchError> {
-            deferred_zkp
-                .into_iter()
-                .collect::<DeferredZkpVerifications>()
-                .verify()
+        fn note_key() -> ZkKey {
+            ZkKey::from(BigUint::from(3u64))
+        }
+
+        fn declaration_key() -> ZkKey {
+            ZkKey::from(BigUint::from(1u64))
         }
 
         fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
-            let utxo = locked_utxo(&ZkKey::from(BigUint::from(3u64)));
+            let utxo = locked_utxo(&note_key());
             let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
             let operation = SDPDeclareOp {
                 service_note_id: utxo.id(),
@@ -671,18 +672,14 @@ mod tests {
         #[test]
         fn deferred_zkp_is_accepted() {
             assert!(
-                batch_verify(deferred_zkp_signed_by(&[
-                    ZkKey::from(BigUint::from(3u64)),
-                    ZkKey::from(BigUint::from(1u64)),
-                ]))
-                .is_ok()
+                batch_verify(deferred_zkp_signed_by(&[note_key(), declaration_key(),])).is_ok()
             );
         }
 
         #[test]
         fn wrong_deferred_zkp_is_rejected() {
             assert!(matches!(
-                batch_verify(deferred_zkp_signed_by(&[ZkKey::from(BigUint::from(1u64))])),
+                batch_verify(deferred_zkp_signed_by(&[declaration_key()])),
                 Err(BatchError::InvalidZkSignatures)
             ));
         }
