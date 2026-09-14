@@ -157,9 +157,16 @@ pub struct TestEncapsulatedMessage(EncapsulatedMessageWithVerifiedPublicHeader);
 
 impl TestEncapsulatedMessage {
     pub fn new(payload: &[u8]) -> Self {
+        Self::new_distinct(0, payload)
+    }
+
+    /// A message whose nullifier is distinct per `nonce`, so that several can
+    /// be sent to the same neighbour without the later ones arriving as
+    /// duplicates of the first.
+    pub fn new_distinct(nonce: u64, payload: &[u8]) -> Self {
         Self(
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
-                &generate_valid_inputs(0.into()),
+                &generate_distinct_inputs(0.into(), nonce),
                 PayloadType::BlockProposal,
                 payload.try_into().unwrap(),
                 NUM_BLEND_LAYERS.try_into().unwrap(),
@@ -214,10 +221,14 @@ impl Deref for TestEncapsulatedMessageWithEpoch {
 }
 
 fn generate_valid_inputs(epoch: Epoch) -> Vec<EncapsulationInput> {
+    generate_distinct_inputs(epoch, 0)
+}
+
+fn generate_distinct_inputs(epoch: Epoch, nonce: u64) -> Vec<EncapsulationInput> {
     repeat_with(UnsecuredEd25519Key::generate_with_chacha_rng)
         .take(NUM_BLEND_LAYERS as usize)
         .map(|recipient_signing_key| {
-            let proofs = epoch_based_mock_blend_proof(epoch);
+            let proofs = mock_blend_proof(epoch, nonce);
             EncapsulationInput::try_new(
                 UnsecuredEd25519Key::generate_with_chacha_rng(),
                 &recipient_signing_key.public_key(),
@@ -229,17 +240,30 @@ fn generate_valid_inputs(epoch: Epoch) -> Vec<EncapsulationInput> {
         .collect::<Vec<_>>()
 }
 
-fn epoch_based_mock_blend_proof(epoch: Epoch) -> BlendLayerProof {
+/// A mock proof whose nullifier is distinct per `nonce`.
+///
+/// The nullifier is the leading bytes of the encoded proof of quota, of which
+/// the fixture only uses the first eight for the epoch. The nonce goes in the
+/// bytes after it, so messages of the same epoch can be told apart — which is
+/// what lets a test send a neighbour more than one message without the second
+/// arriving as a duplicate of the first.
+fn mock_blend_proof(epoch: Epoch, nonce: u64) -> BlendLayerProof {
     let epoch_bytes = epoch.into_inner().to_le_bytes();
+    let nonce_bytes = nonce.to_le_bytes();
+    let fill = |bytes: &mut [u8]| {
+        bytes[..epoch_bytes.len()].copy_from_slice(&epoch_bytes);
+        bytes[epoch_bytes.len()..epoch_bytes.len() + nonce_bytes.len()]
+            .copy_from_slice(&nonce_bytes);
+    };
     BlendLayerProof {
         proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked({
             let mut bytes = [0u8; _];
-            bytes[..epoch_bytes.len()].copy_from_slice(&epoch_bytes);
+            fill(&mut bytes);
             bytes
         }),
         proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked({
             let mut bytes = [0u8; _];
-            bytes[..epoch_bytes.len()].copy_from_slice(&epoch_bytes);
+            fill(&mut bytes);
             bytes
         }),
         ephemeral_signing_key: UnsecuredEd25519Key::generate_with_chacha_rng(),

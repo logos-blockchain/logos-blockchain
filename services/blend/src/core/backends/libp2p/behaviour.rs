@@ -1,4 +1,6 @@
-use lb_blend::scheduling::membership::Membership;
+use core::num::NonZeroU128;
+
+use lb_blend::{primitives::time::RoundCount, scheduling::membership::Membership};
 use lb_chain_service::Epoch;
 use lb_libp2p::NetworkBehaviour;
 use libp2p::{PeerId, allow_block_list::BlockedPeers};
@@ -37,6 +39,10 @@ where
                         num_blend_layers: config.num_blend_layers,
                         round_duration_in_seconds: config.time.round_duration_in_seconds,
                         liveness_window_in_rounds: config.time.rounds_per_observation_window,
+                        connection_share_per_round: config.backend.connection_share_per_round,
+                        send_deadline_in_rounds: RoundCount::new(NonZeroU128::from(
+                            config.time.network_absorption_in_rounds,
+                        )),
                     },
                     with_edge: lb_blend::network::core::with_edge::behaviour::Config {
                         connection_timeout: config.backend.edge_node_connection_timeout,

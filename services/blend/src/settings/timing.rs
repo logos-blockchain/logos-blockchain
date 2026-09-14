@@ -12,5 +12,8 @@ pub struct TimingSettings {
     pub rounds_per_epoch: NonZeroU64,
     pub round_duration_in_seconds: NonZeroU64,
     pub rounds_per_observation_window: NonZeroU128,
+    /// `η`: the network absorption of one hop, the rounds a message spends
+    /// crossing the network between two blend nodes.
+    pub network_absorption_in_rounds: NonZeroU64,
     pub epoch_transition_period: Duration,
 }

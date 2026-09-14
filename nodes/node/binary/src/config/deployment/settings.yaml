@@ -2,6 +2,7 @@ blend:
   common:
     num_blend_layers: 1
     minimum_network_size: 2
+    network_absorption_in_rounds: 2
     protocol_name: /logos-blockchain/blend/X.Y.Z
     data_replication_factor: 0
   core:
@@ -11,6 +12,7 @@ blend:
       delayer:
         maximum_release_delay_in_rounds: 1
     target_peering_degree: 4
+    verification_rate_per_second: 156
     activity_threshold_sensitivity: 1
 network:
   kademlia_protocol_name: /logos-blockchain/kad/X.Y.Z

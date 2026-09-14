@@ -114,7 +114,7 @@ async fn undeserializable_message_received() {
     dialing_swarm
         .behaviour_mut()
         .force_send_serialized_message_to_current_epoch_peer(
-            b"msg".to_vec(),
+            b"msg",
             *listening_swarm.local_peer_id(),
         )
         .unwrap();
@@ -171,7 +171,7 @@ async fn message_with_unexpected_layer_count_disconnects_peer() {
     dialing_swarm
         .behaviour_mut()
         .force_send_serialized_message_to_current_epoch_peer(
-            serialize_encapsulated_message_with_verified_public_header(message.as_ref()),
+            &serialize_encapsulated_message_with_verified_public_header(message.as_ref()),
             *listening_swarm.local_peer_id(),
         )
         .unwrap();
@@ -642,10 +642,7 @@ async fn undeserializable_message_in_old_epoch_closes_connection_without_swarm_n
     // Sender sends garbage data over the old-epoch connection.
     sender
         .behaviour_mut()
-        .force_send_serialized_message_to_current_epoch_peer(
-            b"garbage".to_vec(),
-            *receiver.local_peer_id(),
-        )
+        .force_send_serialized_message_to_current_epoch_peer(b"garbage", *receiver.local_peer_id())
         .unwrap();
 
     let mut peer_disconnected_event = false;
@@ -712,7 +709,7 @@ async fn spammy_old_epoch_peer_does_not_affect_current_epoch() {
     sender
         .behaviour_mut()
         .force_send_serialized_message_to_peer_at_epoch(
-            b"garbage".to_vec(),
+            b"garbage",
             *receiver.local_peer_id(),
             0.into(),
         )
