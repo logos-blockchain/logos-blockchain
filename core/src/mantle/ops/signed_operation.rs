@@ -182,26 +182,34 @@ impl<T: ProvableOperation, Mode: VerificationMode> VerifiedSignedOperation<T, Mo
 mod tests {
     use lb_cryptarchia_engine::Slot;
     use lb_groth16::Fr;
-    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
+    use lb_key_management_system_keys::keys::{
+        Ed25519Key, Ed25519Signature, ZkPublicKey, ZkSignature,
+    };
 
     use super::*;
     use crate::{
         mantle::{
-            NoteId, TxHash,
+            Note, NoteId, TxHash, Utxo,
             channel::{Channels, Error},
             channel_notes,
             gas::MainnetGasProfile,
-            ledger::{Inputs, verification_mode::StandardMode},
-            ops::channel::{
-                ChannelId, MsgId,
-                inscribe::{
-                    InscriptionOp, InscriptionPreverificationContext, InscriptionValidationContext,
+            ledger::{Inputs, Outputs, Utxos, verification_mode::StandardMode},
+            ops::{
+                channel::{
+                    ChannelId, MsgId,
+                    inscribe::{
+                        InscriptionOp, InscriptionPreverificationContext,
+                        InscriptionValidationContext,
+                    },
+                    withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
                 },
-                withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
+                op_proof::samples::SampleProof as _,
+                transfer::{TransferOp, TransferValidationContext},
             },
             transactions::hash::TxHashView,
         },
         proofs::channel_multi_sig_proof::ChannelMultiSigProof,
+        sdp::service_notes::ServiceNotes,
     };
 
     fn tx_hash_view() -> TxHashView {
@@ -318,6 +326,56 @@ mod tests {
                 actual: MsgId::root().into(),
             }
         );
+    }
+
+    #[test]
+    fn into_verified_defers_nothing_for_a_proof_it_checks_itself() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            inscription(MsgId::root()),
+            inscription_signature(),
+        )
+        .into_state_trusted::<Preverified>();
+        let channels = Channels::new();
+
+        let context = InscriptionValidationContext {
+            channels: &channels,
+            block_slot: Slot::default(),
+        };
+        let verified = signed_operation
+            .into_verified(&context)
+            .expect("an inscription rooted at the genesis message opens a new channel");
+
+        assert!(verified.deferred_zkp().is_none());
+    }
+
+    #[test]
+    fn into_verified_defers_a_zk_proof_to_the_batch() {
+        let input_utxo = Utxo {
+            op_id: [32u8; 32],
+            output_index: 0,
+            note: Note::new(10, ZkPublicKey::from(Fr::from(33u64))),
+        };
+        let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            TransferOp::new(Inputs::new([input_utxo.id()]), Outputs::empty()),
+            ZkSignature::sample(),
+        )
+        .into_state_trusted::<Preverified>();
+
+        let context = TransferValidationContext {
+            service_notes: &ServiceNotes::new(),
+            channels: &Channels::new(),
+            utxos: &utxos,
+            tx_hash_view: &tx_hash_view(),
+        };
+        let verified = signed_operation
+            .into_verified(&context)
+            .expect("the input is a ledger note no channel owns");
+
+        assert!(matches!(
+            verified.deferred_zkp(),
+            Some(DeferredZkpVerification::ZkSig(..))
+        ));
     }
 
     #[test]
