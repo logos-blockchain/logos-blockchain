@@ -1347,9 +1347,7 @@ fn epoch_state_api_error(error: DynError) -> ApiError {
     path = paths::MANTLE_SDP_SNAPSHOT,
     params(EpochQuery),
     responses(
-        (status = 200, description = "Get the frozen SDP snapshot for the requested epoch (default: the tip's epoch) keyed by declaration id. \
-            Recent epochs are served from memory; finalized epochs from the epoch states persisted when their blocks were finalized. \
-            The next epoch is served once its snapshot has been frozen.", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
+        (status = 200, description = "Get the SDP snapshot for the requested epoch (default: the tip's epoch) keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
         (status = 404, description = "No snapshot is available for the requested epoch", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
