@@ -1344,31 +1344,6 @@ fn epoch_state_api_error(error: DynError) -> ApiError {
 
 #[utoipa::path(
     get,
-    path = paths::MANTLE_SDP_SNAPSHOT,
-    params(EpochQuery),
-    responses(
-        (status = 200, description = "Get the SDP snapshot for the requested epoch (default: the tip's epoch) keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
-        (status = 404, description = "No snapshot is available for the requested epoch", body = ErrorBody),
-        (status = 500, description = "Internal server error", body = ErrorBody),
-    )
-)]
-pub async fn get_sdp_snapshot<RuntimeServiceId>(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Query(query): Query<EpochQuery>,
-) -> Response
-where
-    RuntimeServiceId:
-        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
-{
-    let epoch = query.epoch.map(Epoch::new);
-    let result = mantle::get_sdp_snapshot::<RuntimeServiceId>(&handle, epoch)
-        .await
-        .map_err(epoch_state_api_error);
-    crate::api::errors::json_response(result)
-}
-
-#[utoipa::path(
-    get,
     path = paths::CRYPTARCHIA_EPOCH_STATE,
     params(EpochQuery),
     responses(

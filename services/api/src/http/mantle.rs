@@ -5,7 +5,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt as _};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::{
-    ConsensusMsg, CryptarchiaInfo, Epoch, ProcessedBlockEvent, Query, Slot,
+    ConsensusMsg, CryptarchiaInfo, ProcessedBlockEvent, Query, Slot,
     storage::{StorageAdapter as _, adapters::StorageAdapter},
 };
 use lb_core::{
@@ -867,40 +867,4 @@ where
         .map_err(|(e, _)| e)?;
 
     Ok(receiver.await?)
-}
-
-/// The frozen SDP snapshot for `epoch`, or for the tip's epoch when `None`.
-///
-/// Fails with [`lb_chain_service::Error::EpochStateUnavailable`] when the
-/// node holds no epoch state for that epoch, in memory or in storage.
-pub async fn get_sdp_snapshot<RuntimeServiceId>(
-    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-    epoch: Option<Epoch>,
-) -> Result<HashMap<DeclarationId, Declaration>, super::DynError>
-where
-    RuntimeServiceId: Debug
-        + Send
-        + Sync
-        + Display
-        + 'static
-        + AsServiceId<Cryptarchia<RuntimeServiceId>>
-        + 'static,
-{
-    let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(
-            Query::GetSdpSnapshot {
-                epoch,
-                reply_channel: sender,
-            }
-            .into(),
-        )
-        .await
-        .map_err(|(e, _)| e)?;
-
-    receiver
-        .await?
-        .map_err(|error| Box::new(error) as super::DynError)
 }

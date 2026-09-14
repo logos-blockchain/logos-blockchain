@@ -193,13 +193,6 @@ pub enum Query {
     GetSdpDeclarations {
         reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
     },
-    /// Returns the frozen SDP snapshot for `epoch`, or for the epoch the tip
-    /// is in when `None`. Served from the same sources as
-    /// [`Query::GetEpochStateSummary`].
-    GetSdpSnapshot {
-        epoch: Option<Epoch>,
-        reply_channel: oneshot::Sender<Result<HashMap<DeclarationId, Declaration>, Error>>,
-    },
     /// Returns the epoch state frozen for `epoch`, or for the epoch the tip
     /// is in when `None`, with the UTXO tree reduced to its root.
     ///

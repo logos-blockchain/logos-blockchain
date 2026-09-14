@@ -22,7 +22,7 @@ use lb_core::{
         traits::{Hashable, MantleTx, PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
         transactions::states::Preverified,
     },
-    sdp::{Declaration, DeclarationId, ServiceType},
+    sdp::ServiceType,
 };
 use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse};
@@ -379,18 +379,6 @@ where
                     .collect();
                 reply_channel.send(declarations).unwrap_or_else(|_| {
                     error!(target: LOG_TARGET, "Could not send SDP declarations through channel");
-                });
-            }
-            Query::GetSdpSnapshot {
-                epoch,
-                reply_channel,
-            } => {
-                let snapshot = self
-                    .epoch_state_summary(epoch)
-                    .await
-                    .map(|summary| declarations_by_id(&summary.active_declarations));
-                reply_channel.send(snapshot).unwrap_or_else(|_| {
-                    error!(target: LOG_TARGET, "Could not send SDP snapshot through channel");
                 });
             }
             Query::GetEpochStateSummary {
@@ -1234,21 +1222,6 @@ fn processed_block_event(
         lib: lib.id(),
         lib_slot: lib.slot(),
     }
-}
-
-/// Flatten a per-service declarations map into one map keyed by declaration
-/// id.
-fn declarations_by_id(
-    declarations: &lb_core::sdp::Declarations,
-) -> HashMap<DeclarationId, Declaration> {
-    declarations
-        .iter()
-        .flat_map(|(_, declarations)| {
-            declarations
-                .iter()
-                .map(|(id, declaration)| (*id, declaration.clone()))
-        })
-        .collect()
 }
 
 /// Persist the epoch states of finalized blocks whose ledger states are about
