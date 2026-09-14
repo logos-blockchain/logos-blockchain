@@ -63,7 +63,7 @@ impl ExtendedSecretKey {
 
     /// Derives the key at `path`, one hardened child per level.
     #[must_use]
-    pub fn derive_path(&self, path: &[HardenedIndex]) -> Self {
+    pub fn derive_path(&self, path: &Path) -> Self {
         path.iter()
             .fold(self.clone(), |key, index| key.derive_child(*index))
     }
@@ -84,6 +84,9 @@ impl ExtendedSecretKey {
         todo!("derive/return a STARK key");
     }
 }
+
+/// HD path, a sequence of hardened child indices.
+pub type Path = [HardenedIndex];
 
 /// The index of a hardened child key, in the range `[2^31, 2^32)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
