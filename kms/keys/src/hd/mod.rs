@@ -28,6 +28,10 @@ static ZK_KEY_DST: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"WAL
 const HASH_SIZE: usize = 64;
 const HALF_HASH_SIZE: usize = div_exact(HASH_SIZE, 2);
 
+/// A 64-byte master seed from which the master key is derived.
+#[derive(ZeroizeOnDrop)]
+pub struct MasterSeed([u8; 64]);
+
 /// A secret key with a chain code, from which hardened child keys are derived.
 #[derive(Clone, ZeroizeOnDrop)]
 pub struct ExtendedSecretKey {
@@ -38,8 +42,8 @@ pub struct ExtendedSecretKey {
 impl ExtendedSecretKey {
     /// Derives the master key from a seed.
     #[must_use]
-    pub fn from_seed(seed: &[u8]) -> Self {
-        Self::from_hash(&blake2b512(MASTER_KEY_PERSONALIZATION, &[seed]))
+    pub fn from_seed(seed: &MasterSeed) -> Self {
+        Self::from_hash(&blake2b512(MASTER_KEY_PERSONALIZATION, &[&seed.0]))
     }
 
     /// Derives the hardened child key at `index`.
