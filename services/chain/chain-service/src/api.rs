@@ -1,4 +1,8 @@
-use std::{collections::HashMap, pin::Pin};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    pin::Pin,
+};
 
 use futures::{Stream, TryStreamExt as _};
 use lb_core::{
@@ -9,7 +13,10 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Slot;
 use lb_network_service::message::ChainSyncEvent;
-use overwatch::services::{ServiceData, relay::OutboundRelay};
+use overwatch::{
+    overwatch::OverwatchHandle,
+    services::{AsServiceId, ServiceData, relay::OutboundRelay},
+};
 use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
@@ -75,6 +82,22 @@ where
     #[must_use]
     pub const fn new(relay: OutboundRelay<Cryptarchia::Message>) -> Self {
         Self { relay }
+    }
+
+    /// Connect to the chain service through the overwatch `handle`.
+    ///
+    /// Fetches the relay for `Cryptarchia` itself, so the service type is
+    /// named once, on this wrapper.
+    pub async fn from_overwatch_handle<RuntimeServiceId>(
+        handle: &OverwatchHandle<RuntimeServiceId>,
+    ) -> Result<Self, ApiError>
+    where
+        RuntimeServiceId: AsServiceId<Cryptarchia> + Debug + Display + Sync,
+    {
+        let relay = handle.relay::<Cryptarchia>().await.map_err(|error| {
+            ApiError::CommsFailure(format!("{error} while connecting to chain-service"))
+        })?;
+        Ok(Self::new(relay))
     }
 
     /// Get the current consensus info including LIB, tip, slot, height, and

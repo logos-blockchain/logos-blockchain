@@ -111,12 +111,10 @@ where
         + Unpin
         + 'static,
 {
-    let chain_service = CryptarchiaServiceApi::<ChainService>::new(
-        overwatch_handle
-            .relay::<ChainService>()
+    let chain_service =
+        CryptarchiaServiceApi::<ChainService>::from_overwatch_handle(overwatch_handle)
             .await
-            .expect("Relay with chain service should be available."),
-    );
+            .expect("Relay with chain service should be available.");
 
     let slot_ticks = {
         let time_relay = overwatch_handle
