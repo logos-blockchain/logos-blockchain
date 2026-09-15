@@ -26,8 +26,8 @@ use crate::core::{
     poq_verification::PendingPoQVerifications,
     tests::utils::{PROTOCOL_NAME, TestProofsVerifier, TestSwarm},
     with_core::behaviour::{
-        Behaviour, ConnectionDirection, Event, NegotiatedPeerState, RemotePeerConnectionDetails,
-        liveness::PeerLivenessMap, message_cache::MessageCache,
+        Behaviour, ConnectionDirection, Event, RemotePeerConnectionDetails,
+        blacklist::PeerBlacklist, liveness::PeerLivenessMap, message_cache::MessageCache,
     },
 };
 
@@ -188,14 +188,22 @@ impl BehaviourBuilder {
             send_deadline: RoundCount::new(NonZeroU128::new(2).unwrap()),
             round_clock: RoundClock::new(round_duration),
             liveness: PeerLivenessMap::new(RoundCount::new(liveness_window)),
-            last_liveness_check: Round::from(0),
+            current_round: Round::from(0),
             message_cache: MessageCache::new(),
             proofs_verifier: Arc::new(self.proofs_verifier),
             pending_poq_verifications: PendingPoQVerifications::new(),
+            blacklist: PeerBlacklist::new(
+                self.peering_degree
+                    .unwrap_or(PEERING_DEGREE)
+                    .checked_mul(NonZeroUsize::new(2).unwrap())
+                    .unwrap(),
+                RoundCount::new(liveness_window),
+            ),
         };
 
         if let Some((accepted, dialed)) = existing_connections {
             let now = behaviour.round_clock.current_round();
+            behaviour.current_round = now;
             let roles = repeat_n(ConnectionDirection::Incoming, accepted)
                 .chain(repeat_n(ConnectionDirection::Outgoing, dialed));
             for (index, role) in roles.enumerate() {
@@ -204,7 +212,6 @@ impl BehaviourBuilder {
                     peer_id,
                     RemotePeerConnectionDetails {
                         direction: role,
-                        negotiated_state: NegotiatedPeerState::Healthy,
                         connection_id: ConnectionId::new_unchecked(1_000 + index),
                     },
                 );

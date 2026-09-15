@@ -3,7 +3,7 @@ use core::num::NonZeroU128;
 use lb_blend::{primitives::time::RoundCount, scheduling::membership::Membership};
 use lb_chain_service::Epoch;
 use lb_libp2p::NetworkBehaviour;
-use libp2p::{PeerId, allow_block_list::BlockedPeers};
+use libp2p::PeerId;
 
 use crate::core::{
     backends::libp2p::Libp2pBlendBackendSettings, settings::RunningBlendConfig as BlendConfig,
@@ -12,7 +12,6 @@ use crate::core::{
 #[derive(NetworkBehaviour)]
 pub struct BlendBehaviour<ProofsVerifier> {
     pub blend: lb_blend::network::core::NetworkBehaviour<ProofsVerifier>,
-    pub blocked_peers: libp2p::allow_block_list::Behaviour<BlockedPeers>,
 }
 
 impl<ProofsVerifier> BlendBehaviour<ProofsVerifier>
@@ -56,7 +55,6 @@ where
                 config.peer_id(),
                 config.backend.protocol_name.clone().into_inner(),
             ),
-            blocked_peers: libp2p::allow_block_list::Behaviour::default(),
         }
     }
 }

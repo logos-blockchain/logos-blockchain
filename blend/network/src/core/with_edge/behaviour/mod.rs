@@ -14,7 +14,7 @@ use lb_blend_membership::Membership;
 use lb_blend_message::{
     deserialize_encapsulated_message,
     encap::{
-        ProofsVerifier as ProofsVerifierTrait,
+        ProofsVerifier as ProofsVerifierTrait, encapsulated_message_encoded_size,
         validated::EncapsulatedMessageWithVerifiedPublicHeader,
     },
 };
@@ -288,6 +288,7 @@ where
             Either::Left(ConnectionHandler::new(
                 self.connection_timeout,
                 self.protocol_name.clone(),
+                encapsulated_message_encoded_size(self.num_blend_layers),
             ))
         })
     }

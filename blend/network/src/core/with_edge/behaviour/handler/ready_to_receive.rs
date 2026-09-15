@@ -1,4 +1,7 @@
-use core::task::{Context, Poll, Waker};
+use core::{
+    num::NonZeroUsize,
+    task::{Context, Poll, Waker},
+};
 
 use futures::{FutureExt as _, TryFutureExt as _};
 use libp2p::{
@@ -22,6 +25,8 @@ pub struct ReadyToReceiveState {
     /// The timer future that will be polled regularly to close the connection
     /// when idling for too long.
     timeout_timer: TimerFuture,
+    /// How many bytes the message this connection is waiting for occupies.
+    message_size: NonZeroUsize,
     behaviour_notified: bool,
     waker: Option<Waker>,
 }
@@ -30,6 +35,7 @@ impl ReadyToReceiveState {
     pub fn new(
         timeout_timer: TimerFuture,
         inbound_stream: <ReadyUpgrade<StreamProtocol> as InboundUpgradeSend>::Output,
+        message_size: NonZeroUsize,
         waker: Option<Waker>,
     ) -> Self {
         // We wake here because we want the timeout to be polled in order to be
@@ -40,6 +46,7 @@ impl ReadyToReceiveState {
         Self {
             inbound_stream,
             timeout_timer,
+            message_size,
             behaviour_notified: false,
             waker: None,
         }
@@ -61,7 +68,10 @@ impl StateTrait for ReadyToReceiveState {
                 let waker = self.take_waker();
                 ReceivingState::new(
                     self.timeout_timer,
-                    Box::pin(recv_msg(self.inbound_stream).map_ok(|(_, message)| message)),
+                    Box::pin(
+                        recv_msg(self.inbound_stream, self.message_size)
+                            .map_ok(|(_, message)| message),
+                    ),
                     waker,
                 )
                 .into()

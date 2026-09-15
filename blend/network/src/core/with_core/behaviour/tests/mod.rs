@@ -1,4 +1,5 @@
 mod admission;
+mod blacklist;
 mod bootstrapping;
 mod epoch;
 mod liveness;

@@ -13,7 +13,8 @@ use either::Either;
 use futures::StreamExt as _;
 use lb_blend_membership::Membership;
 use lb_blend_message::encap::{
-    ProofsVerifier as ProofsVerifierTrait, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    ProofsVerifier as ProofsVerifierTrait, encapsulated_message_encoded_size,
+    validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_blend_primitives::time::{Round, RoundClock, RoundCount};
 use lb_cryptarchia_engine::Epoch;
@@ -33,18 +34,21 @@ use crate::core::{
     poq_verification::{PendingPoQVerifications, PoQVerificationOutcome},
     with_core::{
         behaviour::{
+            blacklist::{BlacklistReason, PeerBlacklist},
             handler::{ConnectionHandler, FromBehaviour, ToBehaviour},
             liveness::PeerLivenessMap,
             message_cache::MessageCache,
             old_epoch::OldEpoch,
             utils::{
                 forward_validated_message_and_update_cache,
-                handle_received_serialized_encapsulated_message_and_update_cache,
+                handle_received_serialized_encapsulated_message,
             },
         },
-        error::{ReceiveError, SendError},
+        error::SendError,
     },
 };
+
+pub mod blacklist;
 
 pub(crate) mod liveness;
 
@@ -57,6 +61,10 @@ mod utils;
 mod tests;
 
 const LOG_TARGET: &str = blend::network::core::core::BEHAVIOUR;
+
+/// The blacklist holds `2·Φ_CC` peers: enough to exclude a whole peering's
+/// worth of offenders twice over.
+const BLACKLIST_TARGET_PEERING_DEGREE_MULTIPLIER: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 #[derive(Debug)]
 pub struct Config {
@@ -117,8 +125,6 @@ impl ConnectionDirection {
 pub struct RemotePeerConnectionDetails {
     /// Which side opened this connection.
     direction: ConnectionDirection,
-    /// Latest negotiated state of the peer.
-    negotiated_state: NegotiatedPeerState,
     /// The ID of the connection with the peer.
     connection_id: ConnectionId,
 }
@@ -127,11 +133,6 @@ impl RemotePeerConnectionDetails {
     #[must_use]
     pub const fn direction(&self) -> ConnectionDirection {
         self.direction
-    }
-
-    #[must_use]
-    pub const fn negotiated_state(&self) -> NegotiatedPeerState {
-        self.negotiated_state
     }
 
     #[must_use]
@@ -189,53 +190,18 @@ pub struct Behaviour<ProofsVerifier> {
     /// The clock every window and deadline of connectivity maintenance is
     /// measured against.
     round_clock: RoundClock,
+    /// The round this behaviour is currently in, read from the clock at the top
+    /// of every poll.
+    current_round: Round,
     /// `r₁`: what every connection of this node may carry in a round.
     connection_share_per_round: NonZeroU64,
     /// `η`: how long a message may wait for a connection.
     send_deadline: RoundCount,
     /// Which neighbours are still delivering messages.
     liveness: PeerLivenessMap,
-    /// The last round in which liveness was evaluated, so that the check runs
-    /// once a round rather than on every poll.
-    last_liveness_check: Round,
-}
-
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-pub enum NegotiatedPeerState {
-    Healthy,
-    Spammy(SpamReason),
-}
-
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-pub enum SpamReason {
-    UndeserializableMessage,
-    DuplicateMessage,
-    InvalidHeaderSignature,
-    InvalidProofOfQuota,
-}
-
-impl SpamReason {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::UndeserializableMessage => "undeserializable_message",
-            Self::DuplicateMessage => "duplicate_message",
-            Self::InvalidHeaderSignature => "invalid_header_signature",
-            Self::InvalidProofOfQuota => "invalid_proof_of_quota",
-        }
-    }
-}
-
-impl NegotiatedPeerState {
-    #[must_use]
-    pub const fn is_healthy(&self) -> bool {
-        matches!(*self, Self::Healthy)
-    }
-
-    #[must_use]
-    pub const fn is_spammy(&self) -> bool {
-        matches!(*self, Self::Spammy(_))
-    }
+    /// The peers this node refuses to exchange Blend messages with, for a
+    /// while, because they sent something no honest node would have.
+    blacklist: PeerBlacklist,
 }
 
 #[derive(Debug)]
@@ -269,9 +235,13 @@ pub enum Event {
         sender: PeerId,
         epoch: Epoch,
     },
-    /// A connection with a peer has dropped. The last state that was negotiated
-    /// with the peer is also returned.
-    PeerDisconnected(PeerId, NegotiatedPeerState),
+    /// A connection with a peer has dropped.
+    PeerDisconnected(PeerId),
+    /// A malicious peer has been detected and blacklisted.
+    PeerBlacklisted {
+        peer: PeerId,
+        reason: BlacklistReason,
+    },
     /// An outbound connection request was successfully negotiated with the
     /// remote peer.
     OutboundConnectionUpgradeSucceeded(PeerId),
@@ -308,7 +278,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             negotiated_peers: HashMap::with_capacity(config.target_peering_degree.get() + 1),
             events: VecDeque::new(),
             waker: None,
-            message_cache: MessageCache::new_with_peer_capacity(epoch_info.0.size()),
+            message_cache: MessageCache::new(),
             current_epoch_info: epoch_info,
             proofs_verifier: Arc::new(proofs_verifier),
             pending_poq_verifications: PendingPoQVerifications::new(),
@@ -320,10 +290,17 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             num_blend_layers: config.num_blend_layers,
             old_epoch: None,
             round_clock,
+            current_round,
             connection_share_per_round: config.connection_share_per_round,
             send_deadline: config.send_deadline_in_rounds,
             liveness: PeerLivenessMap::new(RoundCount::new(config.liveness_window_in_rounds)),
-            last_liveness_check: current_round,
+            blacklist: PeerBlacklist::new(
+                config
+                    .target_peering_degree
+                    .checked_mul(BLACKLIST_TARGET_PEERING_DEGREE_MULTIPLIER)
+                    .expect("Blacklist capacity overflowed `usize`."),
+                RoundCount::new(config.liveness_window_in_rounds),
+            ),
         }
     }
 
@@ -411,10 +388,11 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     }
 
     pub fn live_peers(&self) -> impl Iterator<Item = (&PeerId, &RemotePeerConnectionDetails)> {
-        let now = self.round_clock.current_round();
-        self.negotiated_peers
-            .iter()
-            .filter(move |(peer_id, _)| !self.liveness.is_connection_unhealthy(peer_id, now))
+        self.negotiated_peers.iter().filter(move |(peer_id, _)| {
+            !self
+                .liveness
+                .is_connection_unhealthy(peer_id, self.current_round)
+        })
     }
 
     pub fn num_live_peers(&self) -> usize {
@@ -547,10 +525,9 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         self.events.push_back(ToSwarm::NotifyHandler {
             peer_id,
             handler: NotifyHandler::One(*connection_id),
-            event: Either::Left(FromBehaviour::Message(
-                crate::OutgoingMessage::try_from_bytes(serialized_message)
-                    .map_err(|_| SendError::MessageTooLarge)?,
-            )),
+            event: Either::Left(FromBehaviour::Message(crate::OutgoingMessage::from_bytes(
+                serialized_message,
+            ))),
         });
         self.try_wake();
         Ok(())
@@ -720,12 +697,11 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             peer_id,
             RemotePeerConnectionDetails {
                 direction,
-                negotiated_state: NegotiatedPeerState::Healthy,
                 connection_id,
             },
         );
         self.liveness
-            .start_or_resume_observing(peer_id, self.round_clock.current_round());
+            .start_or_resume_observing(peer_id, self.current_round);
         // Notify the Swarm about the successful negotiation.
         self.notify_about_connection_upgrade_success(peer_id, direction);
     }
@@ -871,51 +847,46 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         }
     }
 
-    /// Mark the connection with the sender of a malformed message as malicious
-    /// and instruct its connection handler to drop the substream.
-    fn close_spammy_connection(
+    /// Blacklists the sender of a message.
+    fn blacklist_peer(&mut self, peer_id: PeerId, reason: BlacklistReason) {
+        tracing::debug!(target: LOG_TARGET, "Blacklisting peer {peer_id:?}: {reason:?}.");
+        self.blacklist
+            .insert_or_extend(peer_id, reason, self.current_round);
+        self.events
+            .push_back(ToSwarm::GenerateEvent(Event::PeerBlacklisted {
+                peer: peer_id,
+                reason,
+            }));
+        self.try_wake();
+    }
+
+    /// Blacklists the sender and instructs the connection it offended on to
+    /// drop its substreams.
+    fn blacklist_and_close_connection(
         &mut self,
         (peer_id, connection_id): (PeerId, ConnectionId),
-        reason: SpamReason,
+        reason: BlacklistReason,
     ) {
-        tracing::debug!(
-            target: LOG_TARGET,
-            "Closing connection {connection_id:?} with spammy peer {peer_id:?} for reason {reason:?}."
-        );
-        self.set_connection_to_spammy((peer_id, connection_id), reason);
+        self.blacklist_peer(peer_id, reason);
         self.close_connection((peer_id, connection_id));
     }
 
-    fn set_connection_to_spammy(
-        &mut self,
-        (peer_id, connection_id): (PeerId, ConnectionId),
-        reason: SpamReason,
-    ) {
-        self.update_state_for_negotiated_peer(
-            (peer_id, connection_id),
-            NegotiatedPeerState::Spammy(reason),
-        );
+    /// The peers this node currently refuses to exchange Blend messages with.
+    pub fn blacklisted_peers(&self) -> impl Iterator<Item = &PeerId> {
+        self.blacklist
+            .entries(self.current_round)
+            .map(|entry| &entry.peer)
     }
 
-    /// Update the state of an already negotiated peer if exists,
-    /// returning the previous state.
-    fn update_state_for_negotiated_peer(
-        &mut self,
-        (peer_id, connection_id): (PeerId, ConnectionId),
-        state: NegotiatedPeerState,
-    ) -> Option<NegotiatedPeerState> {
-        let peer_details = self.negotiated_peers.get_mut(&peer_id)?;
-        // We double check we are dealing with the expected connection.
-        // This could be false if `connection_id` is from the old epoch.
-        if peer_details.connection_id != connection_id {
-            tracing::trace!(
-                target: LOG_TARGET,
-                "Provided connection ID {connection_id:?} does not match the stored connection ID {:?} for peer {peer_id:?}. Ignoring state update.",
-                peer_details.connection_id
-            );
-            return None;
-        }
-        Some(mem::replace(&mut peer_details.negotiated_state, state))
+    /// Why this node currently refuses to deal with the peer, if it does.
+    fn blacklisted_reason(&self, peer: &PeerId) -> Option<BlacklistReason> {
+        self.blacklist.reason(peer, self.current_round)
+    }
+
+    #[must_use]
+    pub fn is_peer_unhealthy(&self, peer: &PeerId) -> bool {
+        self.liveness
+            .is_connection_unhealthy(peer, self.current_round)
     }
 
     /// Return `True` if this node has an established (negotiated or not)
@@ -961,7 +932,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         self.publish_message_with_validated_header(message, self.current_epoch_info.1)
     }
 
-    /// Forwards a message with a verified public header to all non-spammy peers
+    /// Forwards a message with a verified public header to all healthy peers
     /// in the specified epoch, except the [`except`] peer.
     ///
     /// If the epoch is the previous epoch, the message is forwarded to the
@@ -1001,6 +972,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         message: &EncapsulatedMessageWithVerifiedPublicHeader,
         excluded_peer: Option<PeerId>,
     ) -> Result<(), SendError> {
+        let current_round = self.current_round;
         tracing::trace!(
             target: LOG_TARGET,
             "Forwarding message with id {:?} to current epoch peers. Negotiated peers: {:?}. Excluded peer: {excluded_peer:?}",
@@ -1014,8 +986,8 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                 .iter()
                 // Exclude the peer the message was received from.
                 .filter(|(peer_id, _)| excluded_peer != Some(**peer_id))
-                // Exclude from the list of candidates spammy peers.
-                .filter(|(_, peer_state)| !peer_state.negotiated_state.is_spammy())
+                // Exclude blacklisted peers.
+                .filter(|(peer_id, _)| !self.blacklist.contains(peer_id, current_round))
                 // Take only the connection ID, which the inner function requires.
                 .map(
                     |(peer_id, RemotePeerConnectionDetails { connection_id, .. })| {
@@ -1030,7 +1002,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
 
     /// Acts on a completed `PoQ` verification: a message that verified is
     /// reported to the swarm, and a peer that could not prove its quota is
-    /// marked as spammy and disconnected, exactly like any other spammer this
+    /// blacklisted and disconnected, exactly like any other malicious peer this
     /// behaviour detects.
     fn handle_poq_verification_outcome(&mut self, outcome: PoQVerificationOutcome) {
         match outcome {
@@ -1060,9 +1032,9 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                 sender,
                 connection_id,
             } => {
-                self.close_spammy_connection(
+                self.blacklist_and_close_connection(
                     (sender, connection_id),
-                    SpamReason::InvalidProofOfQuota,
+                    BlacklistReason::InvalidProofOfQuota,
                 );
             }
         }
@@ -1075,11 +1047,15 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
 {
+    /// Runs the relay checks on a frame received from a peer, and reports
+    /// whether it counts toward that peer's liveness: only if the message was
+    /// received from a connection of the current epoch, which is what the
+    /// liveness map is keyed to.
     fn handle_received_serialized_encapsulated_message(
         &mut self,
         serialized_message: &[u8],
         (from_peer_id, from_connection_id): (PeerId, ConnectionId),
-    ) {
+    ) -> bool {
         // First, try to handle the message in the context of the old epoch.
         // If it is not part of the old epoch, try with the current epoch.
         if let Some(old_epoch) = &mut self.old_epoch {
@@ -1090,18 +1066,21 @@ where
             ) {
                 Ok(handled) => {
                     if handled {
-                        return;
+                        return false;
                     }
                 }
-                Err(_) => {
-                    return;
+                // The old epoch closes the offending connection itself but does not interact with
+                // the blacklist. We do that here.
+                Err(receive_error) => {
+                    self.blacklist_peer(from_peer_id, receive_error.into());
+                    return false;
                 }
             }
         }
 
-        if let Err(receive_error) = handle_received_serialized_encapsulated_message_and_update_cache(
+        if let Err(receive_error) = handle_received_serialized_encapsulated_message(
             serialized_message,
-            &mut self.message_cache,
+            &self.message_cache,
             (from_peer_id, from_connection_id),
             &self.pending_poq_verifications,
             &mut self.waker,
@@ -1110,13 +1089,15 @@ where
             &self.proofs_verifier,
         ) {
             tracing::debug!(target: LOG_TARGET, "Failed to handle message from the current epoch: {receive_error:?}");
-            let spam_reason = match receive_error {
-                ReceiveError::DuplicateMessageFromPeer(_) => SpamReason::DuplicateMessage,
-                ReceiveError::InvalidHeaderSignature => SpamReason::InvalidHeaderSignature,
-                ReceiveError::UndeserializableMessage => SpamReason::UndeserializableMessage,
-            };
-            self.close_spammy_connection((from_peer_id, from_connection_id), spam_reason);
+            self.blacklist_and_close_connection(
+                (from_peer_id, from_connection_id),
+                receive_error.into(),
+            );
         }
+
+        // No matter what error it is, we can attribute it to the sender, so we
+        // blacklist it.
+        true
     }
 }
 
@@ -1149,6 +1130,14 @@ where
         _: &Multiaddr,
         remote_addr: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
+        if let Some(blacklist_reason) = self.blacklisted_reason(&peer_id) {
+            tracing::debug!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded: the peer is blacklisted ({blacklist_reason:?}).");
+            // We don't return a dummy handler, which relies on the swarm timeout
+            // configuration to close the connection. We prevent the connection from being
+            // established at all.
+            return Err(ConnectionDenied::new(blacklist_reason));
+        }
+
         // A connection offered above either bound is refused: the maximum the node
         // holds at all, and the share of that maximum it lets other nodes fill.
         if !self.can_accept_connection() {
@@ -1184,6 +1173,7 @@ where
                 self.round_clock.clone(),
                 self.connection_share_per_round,
                 self.send_deadline,
+                encapsulated_message_encoded_size(self.num_blend_layers),
             ))
         } else {
             tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with edge peer {peer_id:?} with addr {remote_addr:?}.");
@@ -1203,6 +1193,14 @@ where
         _: Endpoint,
         _: PortUse,
     ) -> Result<THandler<Self>, ConnectionDenied> {
+        if let Some(blacklist_reason) = self.blacklisted_reason(&peer_id) {
+            tracing::debug!(target: LOG_TARGET, "Outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded: the peer is blacklisted ({blacklist_reason:?}).");
+            // We don't return a dummy handler, which relies on the swarm timeout
+            // configuration to close the connection. We prevent the connection from being
+            // established at all.
+            return Err(ConnectionDenied::new(blacklist_reason));
+        }
+
         // Only the overall maximum applies to a connection the node opened itself:
         // the share reserved for accepted connections exists to protect this
         // direction, not to limit it.
@@ -1238,6 +1236,7 @@ where
                 self.round_clock.clone(),
                 self.connection_share_per_round,
                 self.send_deadline,
+                encapsulated_message_encoded_size(self.num_blend_layers),
             ))
         } else {
             tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with edge peer {peer_id:?} with addr {remote_addr:?}.");
@@ -1290,13 +1289,9 @@ where
             let negotiated_connection_id = peer_details_entry.get().connection_id;
 
             if negotiated_connection_id == connection_id {
-                let negotiated_peer_details = peer_details_entry.remove();
-                self.message_cache.remove_peer_info(&peer_id);
+                peer_details_entry.remove();
                 self.events
-                    .push_back(ToSwarm::GenerateEvent(Event::PeerDisconnected(
-                        peer_id,
-                        negotiated_peer_details.negotiated_state,
-                    )));
+                    .push_back(ToSwarm::GenerateEvent(Event::PeerDisconnected(peer_id)));
                 self.try_wake();
             } else {
                 // We are closing a different connection for the same peer, so a
@@ -1319,20 +1314,20 @@ where
             Either::Left(event) => match event {
                 // A message was forwarded from the peer.
                 ToBehaviour::Message(message) => {
-                    if self
-                        .negotiated_peers
-                        .get(&peer_id)
-                        .is_some_and(|details| details.connection_id == connection_id)
-                    {
-                        self.liveness.record_message_from_neighbour(
-                            peer_id,
-                            self.round_clock.current_round(),
+                    let message_counts_against_peer_total = self
+                        .handle_received_serialized_encapsulated_message(
+                            message.as_ref(),
+                            (peer_id, connection_id),
                         );
+                    if message_counts_against_peer_total
+                        && self
+                            .negotiated_peers
+                            .get(&peer_id)
+                            .is_some_and(|details| details.connection_id == connection_id)
+                    {
+                        self.liveness
+                            .record_message_from_neighbour(peer_id, self.current_round);
                     }
-                    self.handle_received_serialized_encapsulated_message(
-                        message.as_ref(),
-                        (peer_id, connection_id),
-                    );
                 }
                 // The connection was fully negotiated by the peer, which means that
                 // the peer supports the blend protocol. We consider them healthy by
@@ -1356,9 +1351,10 @@ where
         // the task scheduled when nothing else is happening, and the liveness
         // window it drives is what closes connections that have gone silent.
         let current_round = self.round_clock.poll_current(cx);
-        if current_round > self.last_liveness_check {
-            self.last_liveness_check = current_round;
+        if current_round > self.current_round {
+            self.current_round = current_round;
             self.close_unhealthy_connections(current_round);
+            self.blacklist.prune_expired_entries(current_round);
         }
 
         if let Some(old_epoch) = &mut self.old_epoch
