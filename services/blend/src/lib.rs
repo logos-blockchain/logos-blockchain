@@ -122,7 +122,7 @@ where
     EdgeService: ServiceData<Message = CoreService::Message>
         + EdgeServiceComponents<
             BackendSettings: Clone + Send + Sync,
-            ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+            ChainService: CryptarchiaServiceData<Tx: Send>,
             TimeBackend: lb_time_service::backends::TimeBackend + Send,
         > + Send
         + 'static,
@@ -218,14 +218,11 @@ where
         // Wait until the chain becomes Online mode before subscribing to memberships.
         // Chain service provides the correct epoch state only after the chain becomes
         // Online.
-        let chain_api = CryptarchiaServiceApi::<
-            <EdgeService as EdgeServiceComponents>::ChainService,
-            RuntimeServiceId,
-        >::new(
-            overwatch_handle
-                .relay::<<EdgeService as EdgeServiceComponents>::ChainService>()
-                .await?,
-        );
+        let chain_api =
+            CryptarchiaServiceApi::<<EdgeService as EdgeServiceComponents>::ChainService>::from_overwatch_handle(
+                overwatch_handle,
+            )
+            .await;
         info!(target: LOG_TARGET, "Waiting for chain to become Online mode");
         chain_api
             .wait_until_chain_becomes_online()

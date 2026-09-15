@@ -68,7 +68,7 @@ where
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
-    ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+    ChainService: CryptarchiaServiceData<Tx: Send>,
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
         + AsServiceId<ChainService>

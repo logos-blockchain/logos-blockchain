@@ -258,7 +258,7 @@ where
     SdpService: ServiceData<Message = SdpMessage> + Send,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
-    ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+    ChainService: CryptarchiaServiceData<Tx: Send>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,

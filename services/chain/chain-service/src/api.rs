@@ -1,14 +1,22 @@
-use std::pin::Pin;
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    pin::Pin,
+};
 
 use futures::{Stream, TryStreamExt as _};
 use lb_core::{
     block::{Block, UncleHeaders},
     events::Events,
     header::HeaderId,
+    sdp::{Declaration, DeclarationId},
 };
 use lb_cryptarchia_engine::Slot;
 use lb_network_service::message::ChainSyncEvent;
-use overwatch::services::{ServiceData, relay::OutboundRelay};
+use overwatch::{
+    overwatch::OverwatchHandle,
+    services::{AsServiceId, ServiceData, relay::OutboundRelay},
+};
 use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
@@ -49,37 +57,54 @@ pub enum ApiError {
     Unexpected(String),
 }
 
-pub struct CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>
+pub struct CryptarchiaServiceApi<Cryptarchia>
 where
     Cryptarchia: CryptarchiaServiceData,
 {
     relay: OutboundRelay<Cryptarchia::Message>,
-    _id: std::marker::PhantomData<RuntimeServiceId>,
 }
 
-impl<Cryptarchia, RuntimeServiceId> Clone for CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>
+impl<Cryptarchia> Clone for CryptarchiaServiceApi<Cryptarchia>
 where
     Cryptarchia: CryptarchiaServiceData,
 {
     fn clone(&self) -> Self {
         Self {
             relay: self.relay.clone(),
-            _id: std::marker::PhantomData,
         }
     }
 }
 
-impl<Cryptarchia, RuntimeServiceId> CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>
+impl<Cryptarchia> CryptarchiaServiceApi<Cryptarchia>
 where
-    Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
-    RuntimeServiceId: Sync,
+    Cryptarchia: CryptarchiaServiceData<Tx: Send>,
 {
     #[must_use]
     pub const fn new(relay: OutboundRelay<Cryptarchia::Message>) -> Self {
-        Self {
-            relay,
-            _id: std::marker::PhantomData,
-        }
+        Self { relay }
+    }
+
+    /// Connect to the chain service through the overwatch `handle`.
+    ///
+    /// Fetches the relay for `Cryptarchia` itself, so the service type is
+    /// named once, on this wrapper. Use [`Self::new`] when a relay is already
+    /// at hand.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the relay cannot be established, which only happens before
+    /// the chain service has started.
+    pub async fn from_overwatch_handle<RuntimeServiceId>(
+        handle: &OverwatchHandle<RuntimeServiceId>,
+    ) -> Self
+    where
+        RuntimeServiceId: AsServiceId<Cryptarchia> + Debug + Display + Sync,
+    {
+        let relay = handle
+            .relay::<Cryptarchia>()
+            .await
+            .expect("Relay should be available after the service is started.");
+        Self::new(relay)
     }
 
     /// Get the current consensus info including LIB, tip, slot, height, and
@@ -140,16 +165,16 @@ where
     /// If `to_ancestor` is None, defaults to LIB
     pub async fn get_headers(
         &self,
-        from_descendant: HeaderId,
-        to_ancestor: HeaderId,
+        from_descendant: Option<HeaderId>,
+        to_ancestor: Option<HeaderId>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<HeaderId, ApiError>> + Send>>, ApiError> {
         let (reply_channel, rx) = oneshot::channel();
 
         self.relay
             .send(
                 Query::GetHeaders {
-                    from_descendant: Some(from_descendant),
-                    to_ancestor: Some(to_ancestor),
+                    from_descendant,
+                    to_ancestor,
                     reply_channel,
                 }
                 .into(),
@@ -190,6 +215,41 @@ where
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetLedgerState"))
+        })
+    }
+
+    /// All declarations in the current SDP registry at the tip, keyed by
+    /// declaration id. This is the live registry, not the epoch snapshot.
+    pub async fn get_sdp_declarations(
+        &self,
+    ) -> Result<HashMap<DeclarationId, Declaration>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(Query::GetSdpDeclarations { reply_channel }.into())
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending GetSdpDeclarations"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetSdpDeclarations"))
+        })
+    }
+
+    /// The SDP snapshot frozen for the tip's epoch, keyed by declaration id.
+    pub async fn get_sdp_snapshot(&self) -> Result<HashMap<DeclarationId, Declaration>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(Query::GetSdpSnapshot { reply_channel }.into())
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending GetSdpSnapshot"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetSdpSnapshot"))
         })
     }
 

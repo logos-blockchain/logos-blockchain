@@ -183,19 +183,11 @@ pub(crate) fn get_block_events_sync(
     let overwatch_handle = node.get_overwatch_handle();
 
     let events = runtime_handle.block_on(async move {
-        let relay = overwatch_handle
-            .relay::<CryptarchiaService<RuntimeServiceId>>()
-            .await
-            .map_err(|e| {
-                OperationStatus::error(
-                    OperationStatusCode::RelayError,
-                    format!("Failed to get relay to CryptarchiaService: {e}"),
-                )
-            })?;
         let api =
-            CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>::new(
-                relay,
-            );
+            CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>>::from_overwatch_handle(
+                overwatch_handle,
+            )
+            .await;
         api.get_block_events(lb_core::header::HeaderId::from(header_id))
             .await
             .map_err(|e| {
