@@ -307,7 +307,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        mantle::{batch::DeferredZkpVerifications, gas::test_utils::FixedThresholds},
+        mantle::{
+            batch::{Error as BatchError, test_utils::batch_verify},
+            gas::test_utils::FixedThresholds,
+        },
         proofs::leader_claim_proof::LeaderClaimPrivate,
     };
 
@@ -528,60 +531,29 @@ mod tests {
         );
     }
 
-    #[test]
-    fn verify_accepts_a_valid_proof_of_claim() {
-        let voucher_secret = VoucherSecret::from(Fr::from(7u64));
-        let voucher_cm = VoucherCm::from_secret(voucher_secret);
-        let (mmr, voucher_path) = MerkleMountainRange::<VoucherCm, ZkHasher>::new()
-            .push_with_paths(voucher_cm, &mut [])
-            .expect("MMR shouldn't be full");
-        let voucher_root = RewardsRoot::from(mmr.frontier_root());
-        let tx_hash = TxHash::from([11u8; 32]);
-        let proof = Groth16LeaderClaimProof::prove(
-            LeaderClaimPrivate::try_new(
-                LeaderClaimPublic::new(
-                    VoucherNullifier::from_secret(voucher_secret).into(),
-                    voucher_root.into(),
-                    tx_hash.to_fr(),
-                ),
-                &voucher_path,
-                voucher_secret,
-            )
-            .expect("voucher path should match the PoC circuit height"),
-        )
-        .expect("proof generation should succeed");
-        let op = LeaderClaimOp {
-            rewards_root: voucher_root,
-            voucher_nullifier: VoucherNullifier::from_secret(voucher_secret),
-            pk: ZkPublicKey::zero(),
-        };
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
-        let tx_hash_view = TxHashView::from(tx_hash);
-        let preverify_context = LeaderClaimPreverificationContext {
-            tx_hash_view: &tx_hash_view,
-        };
-        let verify_context = LeaderClaimVerificationContext {
-            nullifiers: &nullifiers,
-            claimable_vouchers_root: &voucher_root,
-            tx_hash_view: &tx_hash_view,
-        };
+    fn deferred_zkp_verified_over(tx_hash: TxHash) -> Option<DeferredZkpVerification> {
+        let (rewards_root, _, signed_operation) = preverified_claim(TxHash::from([11u8; 32]));
 
-        let unverified_signed_operation = SignedOperation::new(op, proof);
-        let preverified_signed_operation = unverified_signed_operation
-            .into_preverified(&preverify_context)
-            .expect("preverify should accept a valid proof");
-        let deferred_zkp = preverified_signed_operation
-            .into_verified(&verify_context)
-            .expect("verify should accept a valid claim");
-
-        std::iter::once(deferred_zkp)
-            .filter_map(|verified_signed_operation| {
-                let (_signed_operation, deferred_zkp) = verified_signed_operation.into_parts();
-                deferred_zkp
+        signed_operation
+            .verify(&LeaderClaimVerificationContext {
+                nullifiers: &rpds::HashTrieSetSync::new_sync(),
+                claimable_vouchers_root: &rewards_root,
+                tx_hash_view: &TxHashView::from(tx_hash),
             })
-            .collect::<DeferredZkpVerifications>()
-            .verify()
-            .unwrap();
+            .expect("verify leaves the proof to the batch")
+    }
+
+    #[test]
+    fn deferred_zkp_is_accepted() {
+        assert!(batch_verify(deferred_zkp_verified_over(TxHash::from([11u8; 32]))).is_ok());
+    }
+
+    #[test]
+    fn wrong_deferred_zkp_is_rejected() {
+        assert!(matches!(
+            batch_verify(deferred_zkp_verified_over(TxHash::from([12u8; 32]))),
+            Err(BatchError::InvalidLeaderClaimProofs)
+        ));
     }
 
     #[test]

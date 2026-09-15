@@ -99,6 +99,18 @@ pub enum Error {
 }
 
 #[cfg(test)]
+pub mod test_utils {
+    use super::{DeferredZkpVerification, DeferredZkpVerifications, Error};
+
+    pub fn batch_verify(deferred_zkp: Option<DeferredZkpVerification>) -> Result<(), Error> {
+        deferred_zkp
+            .into_iter()
+            .collect::<DeferredZkpVerifications>()
+            .verify()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{ZkKey, public_inputs_from_pks};

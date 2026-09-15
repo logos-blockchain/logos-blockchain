@@ -572,6 +572,22 @@ mod tests {
     }
 
     #[test]
+    fn has_no_deferred_zkp() {
+        let nullifiers = HashTrieMapSync::new_sync();
+        let ctx = accepting_context(&nullifiers);
+        let signed_operation = SignedOperation::new(claim_op(CURRENT_EPOCH), NoOpProof)
+            .into_preverified(&())
+            .unwrap();
+
+        assert!(
+            signed_operation
+                .verify(&ctx)
+                .expect("a claim with the current epoch nonce is accepted")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn verify_accepts_a_claim_with_the_current_epoch_nonce() {
         let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
@@ -579,12 +595,7 @@ mod tests {
         let signed_operation = SignedOperation::new(op, NoOpProof)
             .into_preverified(&())
             .unwrap();
-        assert!(
-            signed_operation
-                .verify(&ctx)
-                .expect("stateful verification must succeed")
-                .is_none()
-        );
+        assert!(signed_operation.verify(&ctx).is_ok());
     }
 
     #[test]
@@ -598,12 +609,7 @@ mod tests {
             .into_preverified(&())
             .unwrap();
 
-        assert!(
-            signed_operation
-                .verify(&ctx)
-                .expect("stateful verification must succeed")
-                .is_none()
-        );
+        assert!(signed_operation.verify(&ctx).is_ok());
     }
 
     #[test]
