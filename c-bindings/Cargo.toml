@@ -24,6 +24,7 @@ lb-node                       = { workspace = true }
 lb-pow-service                = { workspace = true }
 lb-time-service               = { workspace = true }
 lb-utils                      = { workspace = true }
+lb-version                    = { workspace = true }
 lb-wallet-service             = { workspace = true }
 multiaddr                     = { workspace = true }
 overwatch                     = { workspace = true }

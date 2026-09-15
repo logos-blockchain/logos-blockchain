@@ -1,6 +1,6 @@
 use core::num::NonZeroU64;
 
-use derivative::Derivative;
+use educe::Educe;
 use itertools::Itertools as _;
 use lb_blend_crypto::{ZkHash, cipher::Cipher, pseudo_random_sized_bytes, random_sized_bytes};
 use lb_blend_proofs::{
@@ -39,13 +39,13 @@ const LOG_TARGET: &str = blend::message::ROOT;
 pub type MessageIdentifier = ZkHash;
 
 /// An unverified encapsulated message that is received from a peer.
-#[derive(Derivative, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[derivative(Debug)]
+#[derive(Educe, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[educe(Debug)]
 pub struct EncapsulatedMessage {
     /// A public header that is not encapsulated.
     public_header: PublicHeader,
     /// Encapsulated parts
-    #[derivative(Debug = "ignore")] // too long
+    #[educe(Debug(ignore))] // too long
     encapsulated_part: EncapsulatedPart,
 }
 

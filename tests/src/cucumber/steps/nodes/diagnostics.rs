@@ -13,6 +13,7 @@ use hex::ToHex as _;
 use lb_chain_service::ChainServiceInfo;
 use lb_core::sdp::{ProviderId, ServiceType};
 use lb_http_api_common::TimeInfo;
+use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_node::config::DeploymentSettings;
 use lb_testing_framework::{NodeHttpClient, USER_CONFIG_FILE, configs::deployment::TopologyConfig};
 use time::OffsetDateTime;
@@ -27,7 +28,6 @@ use crate::cucumber::{
     world::{BlendDiagnosticPhase, CucumberWorld},
 };
 
-const DIAGNOSTIC: &str = "blend_tsi_outage";
 const TIMELINE_FILE: &str = "blend_diagnostic_timeline.ndjson";
 const DIAGNOSTIC_QUERY_TIMEOUT: Duration = Duration::from_millis(1_500);
 
@@ -72,7 +72,7 @@ fn append_timeline_record(world: &CucumberWorld, record: &serde_json::Value) {
     if let Err(error) = result {
         warn!(
             target: TARGET,
-            diagnostic = DIAGNOSTIC,
+            diagnostic = BLEND_REACHABILITY,
             event = "timeline_write_failure",
             path = %path.display(),
             error = %error,
@@ -91,7 +91,7 @@ pub fn log_blend_relay_event(
 ) {
     info!(
         target: TARGET,
-        diagnostic = DIAGNOSTIC,
+        diagnostic = BLEND_REACHABILITY,
         event,
         node = node_name,
         declared_addr = %declared_addr,
@@ -130,6 +130,9 @@ struct BlendDiagnosticParameterSet {
 impl BlendDiagnosticParameterSet {
     fn from_name(name: &str) -> Option<Self> {
         match name {
+            // No undue blend behaviour is expected with these parameters when running happy-path
+            // scenarios, so they are suitable for clean control tests when epoch have
+            // to complete in the shortest possible time.
             "clean_control" => Some(Self {
                 name: "clean_control",
                 security_parameter: 10,
@@ -138,6 +141,8 @@ impl BlendDiagnosticParameterSet {
                 epoch_period_nonce_buffer: 1,
                 epoch_period_nonce_stabilization: 1,
             }),
+            // These parameters are representative of the testnet, and are suitable for testing
+            // blend behaviour in a more realistic setting.
             "testnet_representative" => Some(Self {
                 name: "testnet_representative",
                 security_parameter: 5,
@@ -146,6 +151,9 @@ impl BlendDiagnosticParameterSet {
                 epoch_period_nonce_buffer: 3,
                 epoch_period_nonce_stabilization: 4,
             }),
+            // These parameters will invoke undue blend behaviour in a very short time, and are
+            // suitable for testing blend diagnostic measurements in a more extreme
+            // setting.
             "fast_repro" => Some(Self {
                 name: "fast_repro",
                 security_parameter: 3,
@@ -330,7 +338,7 @@ pub fn set_blend_diagnostic_parameter_set(
     let slots_per_epoch = geometry.slots_per_epoch;
     info!(
         target: TARGET,
-        diagnostic = DIAGNOSTIC,
+        diagnostic = BLEND_REACHABILITY,
         event = "blend_diagnostic_parameter_set",
         parameter_set = parameter_set.name,
         security_parameter = settings.cryptarchia.security_param.get(),
@@ -558,7 +566,7 @@ pub async fn observe_epoch_transitions(
     );
     info!(
         target: TARGET,
-        diagnostic = DIAGNOSTIC,
+        diagnostic = BLEND_REACHABILITY,
         event = "epoch_observation_start",
         phase = phase.as_str(),
         node = node_name,
@@ -787,7 +795,7 @@ async fn wait_for_epoch_transitions(
                 (previous_observed_epoch.saturating_add(1)..current_observed_epoch).collect();
             warn!(
                 target: TARGET,
-                diagnostic = DIAGNOSTIC,
+                diagnostic = BLEND_REACHABILITY,
                 event = "epoch_transition_gap",
                 phase = observation.phase.as_str(),
                 node = observation.node_name,
@@ -837,7 +845,7 @@ async fn query_observation_for_observation(
         Err(error) => {
             warn!(
                 target: TARGET,
-                diagnostic = DIAGNOSTIC,
+                diagnostic = BLEND_REACHABILITY,
                 event = "epoch_observation_query_failure",
                 phase = phase.as_str(),
                 node = node_name,
@@ -866,7 +874,7 @@ fn log_epoch_transition(observation: &EpochTransitionLog<'_>) {
     let chain_tip_slot = u64::from(info.slot);
     info!(
         target: TARGET,
-        diagnostic = DIAGNOSTIC,
+        diagnostic = BLEND_REACHABILITY,
         event = "epoch_transition",
         phase = observation.phase.as_str(),
         node = observation.node_name,
@@ -988,7 +996,7 @@ async fn log_epoch_checkpoint(
                 let source_tip_before_snapshot_close = chain_tip_slot < snapshot_close_slot;
                 info!(
                     target: TARGET,
-                    diagnostic = DIAGNOSTIC,
+                    diagnostic = BLEND_REACHABILITY,
                     event = "epoch_chain_checkpoint",
                     phase = phase.as_str(),
                     reference_node,
@@ -1048,7 +1056,7 @@ async fn log_epoch_checkpoint(
             Err(error) => {
                 warn!(
                     target: TARGET,
-                    diagnostic = DIAGNOSTIC,
+                    diagnostic = BLEND_REACHABILITY,
                     event = "epoch_chain_checkpoint_query_failure",
                     phase = phase.as_str(),
                     reference_node,
@@ -1140,7 +1148,7 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
 
         info!(
             target: TARGET,
-            diagnostic = DIAGNOSTIC,
+            diagnostic = BLEND_REACHABILITY,
             event = "diagnostic_identity",
             node = node_name,
             runtime_node = node_info.started_node.name.as_str(),
@@ -1213,7 +1221,7 @@ pub async fn log_node_lifecycle_marker(
     let timestamp = OffsetDateTime::now_utc();
     info!(
         target: TARGET,
-        diagnostic = DIAGNOSTIC,
+        diagnostic = BLEND_REACHABILITY,
         event,
         stage,
         node = node_name,
@@ -1247,7 +1255,7 @@ async fn lifecycle_reference_time<'a>(
     let Some(reference_node) = world.blend_diagnostics.reference_node.as_deref() else {
         warn!(
             target: TARGET,
-            diagnostic = DIAGNOSTIC,
+            diagnostic = BLEND_REACHABILITY,
             event,
             node = node_name,
             "Could not resolve diagnostic reference node for lifecycle marker"
@@ -1257,7 +1265,7 @@ async fn lifecycle_reference_time<'a>(
     let Ok(client) = world.resolve_node_http_client(reference_node) else {
         warn!(
             target: TARGET,
-            diagnostic = DIAGNOSTIC,
+            diagnostic = BLEND_REACHABILITY,
             event,
             node = node_name,
             reference_node,
@@ -1299,7 +1307,7 @@ fn log_reference_query_failure(
 ) {
     warn!(
         target: TARGET,
-        diagnostic = DIAGNOSTIC,
+        diagnostic = BLEND_REACHABILITY,
         event = "epoch_observation_query_failure",
         observation_event = event,
         node = node_name,
@@ -1359,7 +1367,7 @@ pub async fn log_majority_outage_summary(world: &CucumberWorld) {
     let timestamp = OffsetDateTime::now_utc();
     info!(
         target: TARGET,
-        diagnostic = DIAGNOSTIC,
+        diagnostic = BLEND_REACHABILITY,
         event = "node_stop_summary",
         phase = "outage",
         reference_node = ?reference_node,

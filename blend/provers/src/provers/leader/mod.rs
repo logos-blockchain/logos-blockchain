@@ -15,7 +15,7 @@ use lb_blend_proofs::{
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
-use lb_log_targets::blend;
+use lb_log_targets::{blend, diagnostic::BLEND_REACHABILITY};
 use lb_utils::tokio::{stream::Buffered, task::spawn_blocking};
 use tokio::time::Instant;
 
@@ -74,9 +74,9 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
         let start = Instant::now();
         let Some(proof) = self.proofs_stream.next().await else {
-            tracing::warn!(
+            tracing::debug!(
                 target: LOG_TARGET,
-                diagnostic = "blend_tsi_outage",
+                diagnostic = BLEND_REACHABILITY,
                 event = "leadership_proof_stream_ended",
                 epoch = u32::from(self.settings.epoch),
                 "Leadership proof stream ended. No proof is generated."

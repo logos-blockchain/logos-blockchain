@@ -1,4 +1,4 @@
-use derivative::Derivative;
+use educe::Educe;
 use lb_blend_crypto::random_sized_bytes;
 use lb_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
@@ -23,12 +23,12 @@ use crate::{
     reward::BlendingToken,
 };
 
-#[derive(Derivative, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
-#[derivative(Debug)]
+#[derive(Educe, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[educe(Debug)]
 /// An encapsulated message whose public header signature has been verified.
 pub struct EncapsulatedMessageWithVerifiedSignature {
     public_header_with_verified_signature: PublicHeaderWithVerifiedSignature,
-    #[derivative(Debug = "ignore")] // too long
+    #[educe(Debug(ignore))] // too long
     encapsulated_part: EncapsulatedPart,
 }
 
@@ -130,11 +130,11 @@ pub struct RequiredProofOfSelectionVerificationInputs {
 }
 
 /// An encapsulated message whose public header has been verified.
-#[derive(Derivative, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
-#[derivative(Debug)]
+#[derive(Educe, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[educe(Debug)]
 pub struct EncapsulatedMessageWithVerifiedPublicHeader {
     validated_public_header: VerifiedPublicHeader,
-    #[derivative(Debug = "ignore")] // too long
+    #[educe(Debug(ignore))] // too long
     encapsulated_part: EncapsulatedPart,
 }
 

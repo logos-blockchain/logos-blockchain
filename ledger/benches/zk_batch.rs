@@ -228,7 +228,7 @@ fn apply(
 ) -> (LedgerState, DeferredZkpVerifications) {
     let (state, _, deferred) = state
         .clone()
-        .try_apply_contents::<_, HeaderId, MainnetGasProfile>(&TX_POOL.config, txs)
+        .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(&TX_POOL.config, txs)
         .expect("block should apply");
     (state, deferred)
 }

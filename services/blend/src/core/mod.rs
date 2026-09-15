@@ -10,6 +10,7 @@ use std::{
 
 use async_trait::async_trait;
 use backends::BlendBackend;
+use diagnostics::log_pol_state_handoff;
 use dispatcher::PayloadDispatcher;
 use fork_stream::StreamExt as _;
 use futures::{
@@ -57,7 +58,7 @@ use lb_key_management_system_service::{
     keys::{KeyOperators, PublicKeyEncoding},
     operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
 };
-use lb_log_targets::blend;
+use lb_log_targets::{blend, diagnostic::BLEND_REACHABILITY};
 use lb_network_service::NetworkService;
 use lb_poq::Quota;
 use lb_sdp_service::SdpMessage;
@@ -118,6 +119,7 @@ use crate::{
 };
 
 pub mod backends;
+mod diagnostics;
 pub mod dispatcher;
 pub mod kms;
 pub mod settings;
@@ -1389,6 +1391,11 @@ fn apply_or_hold_secret_pol_info<NodeId, CorePoQGenerator, ProofsGenerator, Proo
 {
     if current_epoch.epoch_info().epoch == pol_secret_info.epoch {
         // Apply now: move the winning-slot stream into the current processor.
+        log_pol_state_handoff(
+            &pol_secret_info,
+            current_epoch.epoch_info().epoch,
+            &current_epoch.epoch_info().poq_leadership_public_inputs,
+        );
         current_epoch.crypto_processor_mut().set_epoch_private(
             pol_secret_info.winning_pol_info_stream,
             pol_secret_info.epoch,
@@ -1802,6 +1809,11 @@ where
                 let current_secret_info = current_secret_info
                     .take()
                     .expect("Secret PoL info presence checked above.");
+                log_pol_state_handoff(
+                    &current_secret_info,
+                    new_epoch_info.epoch,
+                    &new_epoch_info.poq_leadership_public_inputs,
+                );
                 new_processor.set_epoch_private(
                     current_secret_info.winning_pol_info_stream,
                     new_epoch_info.epoch,
@@ -2671,7 +2683,7 @@ async fn submit_activity_proof(
     let proof_epoch = proof.epoch();
     debug!(
         target: LOG_TARGET,
-        diagnostic = "blend_tsi_outage",
+        diagnostic = BLEND_REACHABILITY,
         event = "sdp_activity_proof_submission_requested",
         proof_epoch = u32::from(proof_epoch),
         signing_key = ?proof.token().signing_key(),
@@ -2686,7 +2698,7 @@ async fn submit_activity_proof(
     match &result {
         Ok(()) => debug!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "sdp_activity_proof_submitted",
             proof_epoch = u32::from(proof_epoch),
             signing_key = ?proof.token().signing_key(),
@@ -2694,7 +2706,7 @@ async fn submit_activity_proof(
         ),
         Err(error) => error!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "sdp_activity_proof_submission_failed",
             proof_epoch = u32::from(proof_epoch),
             signing_key = ?proof.token().signing_key(),

@@ -14,7 +14,7 @@ repos:
           ["--all", "--all-targets", "--all-features", "--", "-D", "warnings"]
         pass_filenames: false
   - repo: https://github.com/EmbarkStudios/cargo-deny
-    rev: 09faadcea2d0d1742492e6872b743d1e4d151a27 # 0.19.0
+    rev: bca0dde53651ee946720e4540b5ce2610bec8f06 # 0.20.2
     hooks:
       - id: cargo-deny
         args:

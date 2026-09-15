@@ -7,13 +7,13 @@ use futures::{
     stream::{once, repeat},
 };
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
-use lb_chain_service::Epoch;
-use lb_core::crypto::ZkHash;
-use lb_groth16::AdditiveGroup as _;
+use lb_chain_service::{Epoch, Slot};
+use lb_core::{crypto::ZkHash, header::HeaderId};
+use lb_groth16::{AdditiveGroup as _, Fr};
 use overwatch::overwatch::OverwatchHandle;
 use tokio::sync::watch;
 
-use crate::epoch_info::{PolEpochInfo, PolInfoProvider};
+use crate::epoch_info::{PolEpochInfo, PolEpochState, PolEpochStateSource, PolInfoProvider};
 
 pub struct OncePolStreamProvider;
 
@@ -26,6 +26,18 @@ impl<RuntimeServiceId> PolInfoProvider<RuntimeServiceId> for OncePolStreamProvid
     ) -> Option<Self::Stream> {
         Some(Box::new(once(ready(PolEpochInfo {
             epoch: Epoch::new(0),
+            state: PolEpochState {
+                nonce: Fr::ZERO,
+                aged_utxo_root: Fr::ZERO,
+                lottery_0: Fr::ZERO,
+                lottery_1: Fr::ZERO,
+                source: PolEpochStateSource {
+                    tip_id: HeaderId::from([0; 32]),
+                    tip_slot: Slot::from(0),
+                    lib_id: HeaderId::from([0; 32]),
+                    lib_slot: Slot::from(0),
+                },
+            },
             winning_pol_info_stream: Box::pin(repeat(ProofOfLeadershipQuotaInputs {
                 slot: 1,
                 note_value: 1,
@@ -84,6 +96,18 @@ impl<RuntimeServiceId> PolInfoProvider<RuntimeServiceId> for GatedPolStreamProvi
                 .expect("the gate should outlive the provider");
             PolEpochInfo {
                 epoch: Epoch::new(0),
+                state: PolEpochState {
+                    nonce: Fr::ZERO,
+                    aged_utxo_root: Fr::ZERO,
+                    lottery_0: Fr::ZERO,
+                    lottery_1: Fr::ZERO,
+                    source: PolEpochStateSource {
+                        tip_id: HeaderId::from([0; 32]),
+                        tip_slot: Slot::from(0),
+                        lib_id: HeaderId::from([0; 32]),
+                        lib_slot: Slot::from(0),
+                    },
+                },
                 winning_pol_info_stream: Box::pin(repeat(ProofOfLeadershipQuotaInputs {
                     slot: 1,
                     note_value: 1,

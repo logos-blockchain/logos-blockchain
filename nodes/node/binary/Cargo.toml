@@ -47,6 +47,7 @@ lb-tracing                       = { workspace = true }
 lb-tracing-service               = { workspace = true }
 lb-tx-service                    = { features = ["rocksdb-backend"], workspace = true }
 lb-utils                         = { features = ["time"], workspace = true }
+lb-version                       = { workspace = true }
 lb-wallet-service                = { workspace = true }
 libp2p                           = { features = ["autonat", "gossipsub", "identify", "kad", "macros"], workspace = true }
 num-bigint                       = { workspace = true }

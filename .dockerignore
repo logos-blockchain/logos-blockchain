@@ -1,5 +1,4 @@
 .circleci
-.git
 .github
 .gitignore
 .idea
@@ -8,3 +7,6 @@
 ci
 target
 tempo-data
+
+# Do not ignore the .git folder because the binary relies on git info to generate the proper version information.
+!.git

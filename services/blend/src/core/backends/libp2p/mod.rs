@@ -9,7 +9,7 @@ use lb_blend::message::encap::{
     ProofsVerifier as ProofsVerifierTrait, validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_chain_service::Epoch;
-use lb_log_targets::blend;
+use lb_log_targets::{blend, diagnostic::BLEND_REACHABILITY};
 use lb_utils::tokio::task::spawn_on;
 use libp2p::PeerId;
 use overwatch::overwatch::handle::OverwatchHandle;
@@ -117,7 +117,7 @@ where
         {
             tracing::error!(
                 target: LOG_TARGET,
-                diagnostic = "blend_tsi_outage",
+                diagnostic = BLEND_REACHABILITY,
                 event = "blend_send_failure",
                 epoch = u32::from(intended_epoch),
                 error = %e,

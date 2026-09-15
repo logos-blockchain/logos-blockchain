@@ -26,6 +26,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse};
+use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
 use lb_utils::bounded::UpperBoundedVec;
@@ -262,9 +263,9 @@ where
             };
 
             for query_source in query_sources {
-                warn!(
+                debug!(
                     target: LOG_TARGET,
-                    diagnostic = "blend_tsi_outage",
+                    diagnostic = BLEND_REACHABILITY,
                     event = "epoch_state_query_source_became_stale",
                     requested_epoch = u32::from(query_source.requested_epoch),
                     requested_slot = u64::from(query_source.requested_slot),
@@ -497,7 +498,7 @@ where
 }
 
 fn log_epoch_state_query(result: &EpochStateQueryResult) {
-    if !tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG) {
+    if !tracing::enabled!(target: LOG_TARGET, tracing::Level::TRACE) {
         return;
     }
     let returned_active_declaration_count = result
@@ -507,9 +508,9 @@ fn log_epoch_state_query(result: &EpochStateQueryResult) {
         .map(|(_, declarations)| declarations.len())
         .sum::<usize>();
 
-    debug!(
+    trace!(
         target: LOG_TARGET,
-        diagnostic = "blend_tsi_outage",
+        diagnostic = BLEND_REACHABILITY,
         event = "epoch_state_query",
         requested_slot = u64::from(result.requested_slot),
         requested_epoch = u32::from(result.requested_epoch),
@@ -549,7 +550,7 @@ fn log_canonical_tsi_transition<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx>
         .saturating_sub(1);
     info!(
         target: LOG_TARGET,
-        diagnostic = "blend_tsi_outage",
+        diagnostic = BLEND_REACHABILITY,
         event = "tsi_epoch_committed",
         canonical = true,
         from_epoch = u32::from(from_epoch),
@@ -605,13 +606,13 @@ where
 
             info!(
                 target: LOG_TARGET,
-                diagnostic = "blend_tsi_outage",
+                diagnostic = BLEND_REACHABILITY,
                 event = "sdp_activity_committed",
                 canonical = true,
                 provider_id = ?new_declaration.provider_id,
-                declaration_id = ?active.declaration_id,
+                declaration_id = %active.declaration_id,
                 proof_epoch = u32::from(active.metadata.origin_epoch()),
-                tx_id = ?tx.hash(),
+                tx_id = %tx.hash(),
                 block_id = %block.header().id(),
                 block_slot = u64::from(block.header().slot()),
                 epoch = u32::from(committed_state.epoch_state().epoch),
@@ -653,7 +654,7 @@ fn log_blend_snapshot_provider_decisions(
             .unwrap_or_default();
         debug!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = summary_event,
             canonical = true,
             epoch = u32::from(target_epoch),
@@ -669,15 +670,15 @@ fn log_blend_snapshot_provider_decisions(
             active_blend_declarations.and_then(|active| active.get(declaration_id));
         match snapshot_declaration {
             Some(snapshot_declaration) => {
-                debug!(
+                trace!(
                     target: LOG_TARGET,
-                    diagnostic = "blend_tsi_outage",
+                    diagnostic = BLEND_REACHABILITY,
                     event = provider_event,
                     canonical = true,
                     target_epoch = u32::from(target_epoch),
                     snapshot_slot = u64::from(snapshot_slot),
                     provider_id = ?snapshot_declaration.provider_id,
-                    declaration_id = ?declaration_id,
+                    declaration_id = %declaration_id,
                     snapshot_active_epoch = u32::from(snapshot_declaration.active),
                     snapshot_withdraw_at = ?snapshot_declaration.withdraw_at.map(u32::from),
                     frozen_included = true,
@@ -689,15 +690,15 @@ fn log_blend_snapshot_provider_decisions(
                 // historical active fields for an excluded provider are therefore
                 // unavailable here and must not be reconstructed from the current
                 // ledger declaration.
-                debug!(
+                trace!(
                     target: LOG_TARGET,
-                    diagnostic = "blend_tsi_outage",
+                    diagnostic = BLEND_REACHABILITY,
                     event = provider_event,
                     canonical = true,
                     target_epoch = u32::from(target_epoch),
                     snapshot_slot = u64::from(snapshot_slot),
                     provider_id = ?declaration.provider_id,
-                    declaration_id = ?declaration_id,
+                    declaration_id = %declaration_id,
                     frozen_included = false,
                     "Canonical frozen Blend provider snapshot decision"
                 );
@@ -945,7 +946,7 @@ async fn log_newly_canonical_blocks<Tx, Storage, RuntimeServiceId>(
         let Some(canonical_block) = canonical_block else {
             warn!(
                 target: LOG_TARGET,
-                diagnostic = "blend_tsi_outage",
+                diagnostic = BLEND_REACHABILITY,
                 event = "canonical_diagnostic_block_unavailable",
                 block_id = %block_id,
                 "Could not load a newly canonical block for diagnostics"

@@ -5,7 +5,7 @@ mod test;
 
 use std::sync::{Arc, LazyLock};
 
-use derivative::Derivative;
+use educe::Educe;
 use lb_core::{
     crypto::{ZkDigest, ZkHasher},
     events::TxEvent,
@@ -205,8 +205,8 @@ impl EpochState {
 ///
 /// NOTE: Most collection fields in this struct should use `rpds`
 /// since we keep a copy of this state for each block.
-#[derive(Derivative, serde::Serialize, serde::Deserialize)]
-#[derivative(Clone, PartialEq)]
+#[derive(Educe, serde::Serialize, serde::Deserialize)]
+#[educe(Clone, PartialEq)]
 pub struct LedgerState {
     // All available Unspent Transaction Outputs (UTXOs) at the current slot
     // TODO: move UTXOs in the mantle ledger. There is no reason to keep them here
@@ -224,10 +224,10 @@ pub struct LedgerState {
     // rolling snapshot of the state for the next epoch, used for epoch transitions
     pub next_epoch_state: EpochState,
     pub epoch_state: EpochState,
-    #[derivative(PartialEq = "ignore")]
+    #[educe(PartialEq(ignore))]
     block_density: BlockDensity,
     // Using an Arc wrapper here as this can be completely shared among instances of LedgerState
-    #[derivative(PartialEq = "ignore")]
+    #[educe(PartialEq(ignore))]
     stake_inference: Arc<StakeInference>,
     // rolling fee window of 120 blocks, used to derive block rewards
     #[serde(with = "serde_arrays")]

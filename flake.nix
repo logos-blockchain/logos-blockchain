@@ -24,6 +24,7 @@
 
   outputs =
     {
+      self,
       nixpkgs,
       rust-overlay,
       crane,
@@ -87,7 +88,15 @@
               pkgs.pkg-config
               pkgs.clang
               pkgs.llvmPackages.libclang.lib
+              pkgs.git
             ];
+            # The source is a git-less snapshot; give `git rev-parse HEAD` the flake's rev.
+            preBuild = pkgs.lib.optionalString (self ? rev) ''
+              if [ ! -e .git ]; then
+                git init -q
+                echo ${self.rev} > .git/HEAD
+              fi
+            '';
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
             LBC_ROOT_DIR = logos-blockchain-circuits.packages.${system}.default;
             RAPIDSNARK_LIB_DIR = rust-rapidsnark.packages.${system}.rapidsnark;

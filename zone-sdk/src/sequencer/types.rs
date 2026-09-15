@@ -93,9 +93,9 @@ impl PublishResult {
 /// The caller collects a signature from each key holder over
 /// [`Self::sign_payload`], assembles an ascending-by-index
 /// `Vec<IndexedSignature>`, and submits it alongside the (unchanged) prepared
-/// value. `tx` and `transfer_proof` are opaque to the caller — they carry the
-/// funded transaction and its fee-transfer proof straight back into
-/// submission.
+/// value. The funded transaction and its fee-transfer proof are readable via
+/// [`Self::tx`] / [`Self::transfer_proof`] so signers can inspect exactly what
+/// they authorize; they carry straight back into submission unmodified.
 #[derive(Debug, Clone)]
 pub struct PreparedChannelConfig {
     pub(crate) tx: Ops,
@@ -133,14 +133,49 @@ impl PreparedChannelConfig {
             .expect("a prepared channel config always carries a ChannelConfig op")
     }
 
+    /// The full transaction the collected signatures will authorize, ops in
+    /// execution order. The SDK builds `[CHANNEL_CONFIG, TRANSFER(fee)]`.
+    ///
+    /// A multi-sig signature is over the hash of *these ops*, and the ledger
+    /// accepts that same signature as proof for every channel op in the tx. A
+    /// signer must therefore inspect the whole list, not only
+    /// [`Self::proposed_config`]: any other channel op bundled here (a
+    /// transfer, a withdraw) would be authorized by the same signature.
+    #[must_use]
+    pub const fn tx(&self) -> &Ops {
+        &self.tx
+    }
+
+    /// The fee transfer's proof (spending the preparer's funding wallet), if
+    /// the tx was funded. Not covered by the signed hash, so it does not affect
+    /// what a signature authorizes; exposed so a signer can judge whether the
+    /// tx is landable.
+    #[must_use]
+    pub const fn transfer_proof(&self) -> Option<&OpProof> {
+        self.transfer_proof.as_ref()
+    }
+
     /// Sign this prepared config with `signing_key`.
     ///
     /// Convenience wrapper over [`sign_prepared`](super::sign_prepared) for the
-    /// common case where the signer holds the prepared value: signs
-    /// [`Self::sign_payload`] and indexes it against [`Self::accredited_keys`].
-    /// Returns [`Error`] if `signing_key` is not among the accredited keys.
+    /// common case where the signer holds the prepared value. Signs the hash of
+    /// [`Self::tx`] and indexes it against [`Self::accredited_keys`].
+    ///
+    /// The payload is derived from `tx`, never taken on trust: if
+    /// [`Self::sign_payload`] does not match the hash of the ops, signing is
+    /// refused, so a signer that inspected `tx` cannot be handed a payload for
+    /// a different transaction. Also returns [`Error`] if `signing_key` is not
+    /// among the accredited keys.
     pub fn sign_with(&self, signing_key: &Ed25519Key) -> Result<IndexedSignature, Error> {
-        sign_prepared(signing_key, &self.accredited_keys, &self.sign_payload)
+        let payload = self.tx.hash().as_signing_bytes();
+        if payload.as_ref() != self.sign_payload.as_slice() {
+            return Err(Error::Network(
+                "sign_payload does not match the hash of tx; refusing to sign a payload the \
+                 inspected ops do not account for"
+                    .into(),
+            ));
+        }
+        sign_prepared(signing_key, &self.accredited_keys, payload.as_ref())
     }
 }
 
@@ -739,15 +774,24 @@ mod tests {
     use lb_core::mantle::{
         Op,
         channel::{SlotTimeframe, SlotTimeout},
+        ledger::{Inputs, NoteId},
         ops::channel::{
             ChannelId, MsgId,
             config::{ChannelConfigOp, Keys},
+            withdraw::ChannelWithdrawOp,
         },
+        traits::Hashable as _,
         transactions::Ops,
     };
+    use lb_groth16::Fr;
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 
-    use super::{PreparedChannelConfig, sign_prepared};
+    use super::{Error, PreparedChannelConfig, sign_prepared};
+
+    /// The signing payload the SDK derives for `ops`.
+    fn payload_of(ops: &Ops) -> Vec<u8> {
+        ops.hash().as_signing_bytes().as_ref().to_vec()
+    }
 
     fn config_op(keys: Vec<Ed25519PublicKey>) -> ChannelConfigOp {
         ChannelConfigOp {
@@ -787,10 +831,11 @@ mod tests {
             Ed25519Key::from_bytes(&[4; 32]).public_key(),
             signer.public_key(),
         ];
+        let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited.clone()))]);
         let prepared = PreparedChannelConfig {
-            tx: Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited.clone()))]),
+            sign_payload: payload_of(&tx),
+            tx,
             transfer_proof: None,
-            sign_payload: vec![0x11; 32],
             accredited_keys: accredited.clone(),
             signing_threshold: 2,
         };
@@ -800,5 +845,52 @@ mod tests {
             sign_prepared(&signer, &accredited, &prepared.sign_payload)
                 .expect("signer is accredited"),
         );
+    }
+
+    #[test]
+    fn tx_exposes_every_op_in_order_so_a_bundled_op_is_visible() {
+        let accredited = vec![Ed25519Key::from_bytes(&[4; 32]).public_key()];
+        let config = Op::ChannelConfig(config_op(accredited.clone()));
+        // A preparer smuggling a withdraw in alongside the config: one
+        // signature over the tx hash would authorize both.
+        let smuggled = Op::ChannelWithdraw(ChannelWithdrawOp {
+            channel_id: ChannelId::from([7; 32]),
+            inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
+        });
+        let tx = Ops::new_unchecked(vec![config.clone(), smuggled.clone()]);
+        let prepared = PreparedChannelConfig {
+            sign_payload: payload_of(&tx),
+            tx,
+            transfer_proof: None,
+            accredited_keys: accredited,
+            signing_threshold: 1,
+        };
+
+        // `proposed_config` alone looks innocent…
+        assert!(matches!(prepared.proposed_config(), c if Op::ChannelConfig(c.clone()) == config));
+        // …but the full tx shows the extra op, in execution order.
+        let ops: Vec<&Op> = prepared.tx().iter().collect();
+        assert_eq!(ops, vec![&config, &smuggled]);
+        assert!(prepared.transfer_proof().is_none());
+    }
+
+    #[test]
+    fn sign_with_refuses_a_payload_that_does_not_match_tx() {
+        let signer = Ed25519Key::from_bytes(&[5; 32]);
+        let accredited = vec![signer.public_key()];
+        let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited.clone()))]);
+        // Honest-looking ops, but the payload belongs to some other tx.
+        let prepared = PreparedChannelConfig {
+            tx,
+            transfer_proof: None,
+            sign_payload: vec![0x11; 32],
+            accredited_keys: accredited,
+            signing_threshold: 1,
+        };
+
+        assert!(matches!(
+            prepared.sign_with(&signer),
+            Err(Error::Network(_))
+        ));
     }
 }

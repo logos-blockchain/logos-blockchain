@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 async-trait                   = { workspace = true }
-derivative                    = { workspace = true }
+educe                         = { features = ["Debug"], workspace = true }
 futures                       = { workspace = true }
 hex                           = { workspace = true }
 lb-blend-membership           = { workspace = true }

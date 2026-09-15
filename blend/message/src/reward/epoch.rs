@@ -5,7 +5,7 @@ use lb_blend_proofs::quota::Quota;
 use lb_core::crypto::ZkHash;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{Fr, FrBytes, fr_to_bytes};
-use lb_log_targets::blend;
+use lb_log_targets::{blend, diagnostic::BLEND_REACHABILITY};
 use lb_utils::math::{F64Ge1, NonNegativeF64};
 use serde::{Deserialize, Serialize};
 
@@ -102,7 +102,7 @@ impl BlendingTokenEvaluation {
         let satisfies_activity_threshold = distance <= self.activity_threshold;
         tracing::trace!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "blend_activity_token_distance",
             signing_key = ?token.signing_key(),
             hamming_distance = distance.value(),

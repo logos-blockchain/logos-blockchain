@@ -27,7 +27,7 @@ use lb_core::{
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_ledger::{Intent, IntentStatus, LedgerState};
-use lb_log_targets::sdp;
+use lb_log_targets::{diagnostic::BLEND_REACHABILITY, sdp};
 use lb_services_utils::overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -507,7 +507,7 @@ where
 
         tracing::debug!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "sdp_declaration_submission_requested",
             provider_id = ?provider_id,
             declaration_id = ?declaration_id,
@@ -530,7 +530,7 @@ where
         let tx_id = signed_tx.hash();
         tracing::debug!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "sdp_declaration_tx_created",
             provider_id = ?provider_id,
             declaration_id = ?declaration_id,
@@ -547,7 +547,7 @@ where
 
         tracing::info!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "sdp_declaration_submitted",
             provider_id = ?provider_id,
             declaration_id = ?declaration_id,
@@ -643,14 +643,14 @@ where
 
         tracing::debug!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "sdp_activity_submission_requested",
             proof_epoch,
             chain_epoch,
             chain_slot,
             provider_id = ?provider_id,
             zk_id = ?declaration.zk_id,
-            declaration_id = ?declaration.id,
+            declaration_id = %declaration.id,
             "Requested SDP activity transaction submission"
         );
 
@@ -670,7 +670,7 @@ where
             Err(e) => {
                 tracing::error!(
                     target: LOG_TARGET,
-                    diagnostic = "blend_tsi_outage",
+                    diagnostic = BLEND_REACHABILITY,
                     event = "sdp_activity_tx_failed",
                     proof_epoch,
                     chain_epoch,
@@ -690,22 +690,22 @@ where
         let tx_id = signed_tx.hash();
         tracing::debug!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "sdp_activity_tx_created",
             proof_epoch,
             chain_epoch,
             chain_slot,
             provider_id = ?provider_id,
             zk_id = ?declaration.zk_id,
-            declaration_id = ?declaration.id,
-            tx_id = ?tx_id,
+            declaration_id = %declaration.id,
+            tx_id = %tx_id,
             "Created SDP activity transaction"
         );
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             tracing::error!(
                 target: LOG_TARGET,
-                diagnostic = "blend_tsi_outage",
+                diagnostic = BLEND_REACHABILITY,
                 event = "sdp_activity_tx_failed",
                 proof_epoch,
                 chain_epoch,
@@ -724,15 +724,15 @@ where
 
         tracing::info!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "sdp_activity_tx_submitted",
             proof_epoch,
             chain_epoch,
             chain_slot,
             provider_id = ?provider_id,
             zk_id = ?declaration.zk_id,
-            declaration_id = ?declaration.id,
-            tx_id = ?tx_id,
+            declaration_id = %declaration.id,
+            tx_id = %tx_id,
             "Submitted SDP activity transaction"
         );
         metrics::activity_success_total();

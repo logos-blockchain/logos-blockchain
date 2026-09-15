@@ -1,4 +1,4 @@
-use lb_log_targets::ledger;
+use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 
 const LOG_TARGET: &str = ledger::cryptarchia::STAKE;
 
@@ -50,9 +50,9 @@ impl StakeInference {
         let new_total_stake_estimate =
             (total_stake_estimate_with_precision - correction) / i128::from(PRECISION);
 
-        tracing::debug!(
+        tracing::trace!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "tsi_calculated",
             old_total_stake = total_stake_estimate,
             new_total_stake = new_total_stake_estimate,

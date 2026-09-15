@@ -1,8 +1,28 @@
 use lb_blend_proofs::{quota::ProofOfQuota, selection::ProofOfSelection};
 use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
-use lb_cryptarchia_engine::Epoch;
+use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use serde::{Deserialize, Serialize};
+
+use crate::header::HeaderId;
+
+/// Chain-derived state shared by the Chain Leader and Blend `PoL` APIs.
+pub struct PolEpochState {
+    pub nonce: Fr,
+    pub aged_utxo_root: Fr,
+    pub lottery_0: Fr,
+    pub lottery_1: Fr,
+    pub source: PolEpochStateSource,
+}
+
+/// Tip/LIB provenance for shared chain-derived `PoL` state.
+pub struct PolEpochStateSource {
+    pub tip_id: HeaderId,
+    pub tip_slot: Slot,
+    pub lib_id: HeaderId,
+    pub lib_slot: Slot,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ActivityProof {

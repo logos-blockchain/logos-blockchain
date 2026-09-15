@@ -12,6 +12,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord, BinaryCodec)]
 pub struct TxHash(pub Hash);
 serde_bytes_newtype!(TxHash, 32);
+display_hex_bytes_newtype!(TxHash);
 
 /// Number of leading hash bytes a block proposal uses to refer to a
 /// transaction.

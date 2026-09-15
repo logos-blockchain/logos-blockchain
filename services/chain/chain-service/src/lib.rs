@@ -20,7 +20,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use derivative::Derivative;
+use educe::Educe;
 use futures::{Stream, TryStreamExt as _};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
@@ -136,8 +136,8 @@ struct RecoveryBlocks<Tx> {
     fell_back_to_lib: bool,
 }
 
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Educe)]
+#[educe(Debug)]
 pub enum ConsensusMsg<Tx> {
     /// Read-only queries and subscriptions.
     /// These are served in every service phase.
@@ -164,8 +164,8 @@ impl<Tx> From<Query> for ConsensusMsg<Tx> {
 }
 
 /// Read-only queries and subscriptions, served in every service phase.
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Educe)]
+#[educe(Debug)]
 pub enum Query {
     Info {
         reply_channel: oneshot::Sender<ChainServiceInfo>,
@@ -179,7 +179,7 @@ pub enum Query {
     GetHeaders {
         from_descendant: Option<HeaderId>,
         to_ancestor: Option<HeaderId>,
-        #[derivative(Debug = "ignore")]
+        #[educe(Debug(ignore))]
         reply_channel: oneshot::Sender<HeaderIdStream>,
     },
     GetLedgerState {

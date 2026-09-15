@@ -5,10 +5,11 @@ mod leadership;
 mod mempool;
 mod metrics;
 mod relays;
+mod tx_selection;
 mod wallet;
 
 use core::fmt::Debug;
-use std::{fmt::Display, iter, pin::Pin, time::Duration};
+use std::{fmt::Display, pin::Pin, time::Duration};
 
 use futures::{Stream, StreamExt as _, stream};
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
@@ -23,17 +24,17 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         OpRef, SignedOps,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         traits::{Hashable, MantleTx, SignedMantleTx, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
+    sdp::blend::PolEpochState,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
 use lb_ledger::LedgerState;
-use lb_log_targets::chain;
+use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
@@ -55,6 +56,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
+use tx_selection::{TransactionSelection, select_transactions};
 
 pub use crate::wallet::LeaderWalletConfig;
 use crate::{
@@ -82,11 +84,11 @@ where
             .map(|declaration| declaration.provider_id);
         tracing::debug!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "sdp_activity_selected_for_proposal",
-            tx_id = ?tx.hash(),
+            tx_id = %tx.hash(),
             provider_id = ?provider_id,
-            declaration_id = ?active.declaration_id,
+            declaration_id = %active.declaration_id,
             proof_epoch = u32::from(active.metadata.origin_epoch()),
             proposal_block_id = %block.header().id(),
             proposal_slot = u64::from(block.header().slot()),
@@ -95,8 +97,8 @@ where
     }
 }
 
-/// The per-subscriber stream of per-epoch winning slots. Each item
-/// carries a single epoch and that epoch's stream of winning slots.
+/// The per-subscriber stream of per-epoch winning slots. Each item carries the
+/// state used to construct its stream and that epoch's stream of winning slots.
 ///
 /// `Send` but not `Sync`: each item carries a [`WinningPolSlotStream`] of
 /// `Send`-only per-slot futures (see [`WinningSlotFuture`]), so the handoff is
@@ -106,6 +108,7 @@ pub type WinningPolEpochSlotsStream =
 
 pub struct WinningPolEpochSlots {
     pub epoch: Epoch,
+    pub state: PolEpochState,
     pub slots: WinningPolSlotStream,
 }
 
@@ -455,7 +458,7 @@ where
                 tokio::select! {
                     Some(SlotTick { slot, epoch }) = slot_timer.next() => {
                         trace!(target: LOG_TARGET, "Received SlotTick for slot {}, ep {}", u64::from(slot), u32::from(epoch));
-                        let Some(SlotContext { tip, epoch_state, eligible_aged }) =
+                        let Some(SlotContext { wallet_tip, epoch_state, eligible_aged, .. }) =
                             fetch_slot_context(&cryptarchia_api, &wallet_api, &ledger_config, slot).await
                         else {
                             error!(target: LOG_TARGET, "Failed to fetch epoch context for slot {slot:?}");
@@ -464,10 +467,10 @@ where
 
                         // The block-proposal proof must prove the winning note is still
                         // unspent, so it needs the latest tip ledger state (fetched per slot).
-                        let tip_state = match cryptarchia_api.get_ledger_state(tip).await {
+                        let tip_state = match cryptarchia_api.get_ledger_state(wallet_tip).await {
                             Ok(Some(state)) => state,
                             Ok(None) => {
-                                error!(target: LOG_TARGET, "Ledger state not found for tip {tip:?}");
+                                error!(target: LOG_TARGET, "Ledger state not found for tip {wallet_tip:?}");
                                 continue;
                             }
                             Err(e) => {
@@ -491,7 +494,7 @@ where
                             Err(e) => {
                                 error!(
                                     target: LOG_TARGET,
-                                    diagnostic = "blend_tsi_outage",
+                                    diagnostic = BLEND_REACHABILITY,
                                     event = "leadership_proof_failure",
                                     epoch = u32::from(ledger_config.epoch(slot)),
                                     slot = u64::from(slot),
@@ -505,7 +508,7 @@ where
                         if let Some((proof, signing_key)) = proof {
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
-                                tip,
+                                wallet_tip,
                                 slot,
                                 proof,
                                 &signing_key,
@@ -667,66 +670,13 @@ where
                 &uncle_headers.slots(),
                 ledger_config,
             )?;
-
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
-        let mut pending: Vec<_> = tx_stream.collect().await;
-
-        let mut valid_txs = Vec::new();
-
-        // A transaction may only become valid once another transaction it depends
-        // on has already been applied. Repeatedly attempt to apply the pending
-        // transactions, retrying the full set of failures each round, while a
-        // round keeps adding new transactions to the block.
-        let mut applied_any = true;
-        while applied_any {
-            applied_any = false;
-            let mut still_pending = Vec::with_capacity(pending.len());
-
-            for tx in pending {
-                match ledger_state
-                    .clone()
-                    .try_apply_contents::<_, HeaderId, MainnetGasProfile>(
-                        ledger_config,
-                        // Tx is cloned eagerly: `try_apply_contents` consumes the tx, but we need
-                        // it for the block if it is valid.
-                        // Avoidable if we made the ledger hand it back.
-                        iter::once(tx.clone()),
-                    ) {
-                    Ok((new_state, _events, deferred_zkps)) => match deferred_zkps.verify() {
-                        Ok(()) => {
-                            ledger_state = new_state;
-                            valid_txs.push(tx);
-                            applied_any = true;
-                        }
-                        Err(err) => {
-                            tracing::trace!(
-                                target: LOG_TARGET,
-                                tx = ?tx.hash(),
-                                %err,
-                                "deferred ZKP verification failed during block assembly",
-                            );
-                            still_pending.push(tx);
-                        }
-                    },
-                    Err(err) => {
-                        tracing::trace!(
-                            target: LOG_TARGET,
-                            "tx {:?} not (yet) applicable during block assembly: {:?}",
-                            tx.hash(),
-                            err
-                        );
-                        still_pending.push(tx);
-                    }
-                }
-            }
-
-            pending = still_pending;
-        }
-
-        // Transactions that never became applicable are genuinely invalid against
-        // this block's ledger state and can be evicted from the mempool.
-        let invalid_tx_hashes: Vec<_> = pending.iter().map(Hashable::hash).collect();
+        let TransactionSelection {
+            ledger_state,
+            selected_txs,
+            invalid_tx_hashes,
+        } = select_transactions(ledger_state, tx_stream.collect().await, ledger_config);
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays
@@ -737,7 +687,7 @@ where
             error!(target: LOG_TARGET, "Failed to remove invalid transactions from mempool: {e:?}");
         }
 
-        let valid_tx_stream = stream::iter(valid_txs);
+        let valid_tx_stream = stream::iter(selected_txs);
         let txs = txs_for_block(valid_tx_stream).await;
 
         let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
