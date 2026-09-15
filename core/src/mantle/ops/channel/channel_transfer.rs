@@ -223,7 +223,7 @@ impl<Mode: VerificationMode> ExecutableOperation
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::mantle::ledger::InputsError;
+    use crate::mantle::{gas::test_utils::FixedThresholds, ledger::InputsError};
 
     #[test]
     fn test_preverify_rejects_empty_inputs() {
@@ -256,6 +256,24 @@ mod test {
         assert_eq!(
             signed_operation.preverify(&()),
             Err(Error::Inputs(InputsError::EmptyInputs))
+        );
+    }
+
+    #[test]
+    fn channel_transfer_op_execution_gas_scales_with_the_threshold() {
+        for (threshold, expected) in [(1, 56), (2, 112), (3, 168)] {
+            assert_eq!(
+                ChannelTransferOp::sample().execution_gas(&FixedThresholds(threshold)),
+                Ok(Gas::new(expected))
+            );
+        }
+    }
+
+    #[test]
+    fn channel_transfer_op_execution_gas_is_zero_against_an_unknown_channel() {
+        assert_eq!(
+            ChannelTransferOp::sample().execution_gas(&FixedThresholds(0)),
+            Ok(Gas::new(0))
         );
     }
 }
