@@ -224,9 +224,8 @@ async fn duplicate_message_received_from_same_peer() {
 
     // Poll both swarms until the first message is fully received by the listener.
     // Without this, the message stays queued in the behaviour and is never sent
-    // over the wire, causing both messages to arrive in the same connection
-    // monitor window and triggering `TooManyMessages` instead of
-    // `DuplicateMessage`.
+    // over the wire, so the listener would never see the first copy and the
+    // second would not be recognised as a `DuplicateMessage`.
     loop {
         select! {
             _ = dialing_swarm.select_next_some() => {}
@@ -574,10 +573,6 @@ async fn duplicate_message_in_old_epoch_disconnects_peer_without_swarm_notificat
         (memberships[1].clone(), 1.into()),
         TestProofsVerifier::accepting(),
     );
-
-    // Wait long enough so that the connection monitor does not fire
-    // `TooManyMessages` instead.
-    sleep(Duration::from_secs(3)).await;
 
     // Sender sends X again, bypassing its own `Forwarded` guard. From
     // receiver's point of view this arrives over the old-epoch connection.
