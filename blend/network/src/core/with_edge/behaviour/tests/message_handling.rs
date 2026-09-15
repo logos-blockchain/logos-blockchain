@@ -31,12 +31,9 @@ async fn receive_valid_message() {
         .connect_and_upgrade_to_blend(&mut core_swarm)
         .await;
     let message = TestEncapsulatedMessage::new(b"test");
-    send_msg(
-        stream,
-        OutgoingMessage::try_from(&message.clone().into_inner()).unwrap(),
-    )
-    .await
-    .unwrap();
+    send_msg(stream, OutgoingMessage::from(&message.clone().into_inner()))
+        .await
+        .unwrap();
 
     loop {
         select! {
@@ -69,12 +66,9 @@ async fn reject_message_with_invalid_proof_of_quota() {
         .await;
     // The message is well-formed and correctly signed: only its `PoQ` fails.
     let message = TestEncapsulatedMessage::new(b"invalid-poq");
-    send_msg(
-        stream,
-        OutgoingMessage::try_from(&message.clone().into_inner()).unwrap(),
-    )
-    .await
-    .unwrap();
+    send_msg(stream, OutgoingMessage::from(&message.clone().into_inner()))
+        .await
+        .unwrap();
 
     let mut deadline = Delay::new(Duration::from_secs(2)).fuse();
     loop {
@@ -109,12 +103,9 @@ async fn reject_message_with_unexpected_layer_count() {
         .connect_and_upgrade_to_blend(&mut core_swarm)
         .await;
     let message = TestEncapsulatedMessage::new(b"unexpected_layer_count");
-    send_msg(
-        stream,
-        OutgoingMessage::try_from(&message.clone().into_inner()).unwrap(),
-    )
-    .await
-    .unwrap();
+    send_msg(stream, OutgoingMessage::from(&message.clone().into_inner()))
+        .await
+        .unwrap();
 
     loop {
         select! {
@@ -179,7 +170,7 @@ async fn receive_malformed_message() {
     let malformed_message = TestEncapsulatedMessage::new_with_invalid_signature(b"invalid_message");
     send_msg(
         stream,
-        OutgoingMessage::try_from(&malformed_message.clone().into_inner()).unwrap(),
+        OutgoingMessage::from(&malformed_message.clone().into_inner()),
     )
     .await
     .unwrap();

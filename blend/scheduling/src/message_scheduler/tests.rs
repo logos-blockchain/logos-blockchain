@@ -263,7 +263,7 @@ async fn rotate_epoch_leaves_queued_data_messages_with_the_old_epoch() {
     // Rotating into a new epoch must not silently drop the queued data messages,
     // but it must not hand them to the new epoch either: they carry the old
     // epoch's `PoQ`, so publishing them under the new epoch's number would get
-    // the proof rejected and this node closed as a spammer.
+    // the proof rejected and this node closed as malicious, and blacklisted.
     let (new_scheduler, old_scheduler) = scheduler.rotate_epoch(
         EpochInfo {
             core_quota: Quota::ONE,

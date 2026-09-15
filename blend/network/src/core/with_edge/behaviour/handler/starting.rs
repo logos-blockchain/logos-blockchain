@@ -1,4 +1,5 @@
 use core::{
+    num::NonZeroUsize,
     task::{Context, Poll, Waker},
     time::Duration,
 };
@@ -21,15 +22,19 @@ pub struct StartingState {
     /// timer is handed over to `ReadyToReceive`, so the deadline is not reset
     /// by the state transition.
     timeout_timer: TimerFuture,
+    /// How many bytes the one message this connection exists to carry occupies
+    /// on the wire, which the number of encapsulation layers fixes.
+    message_size: NonZeroUsize,
     /// The waker to wake when we need to force a new round of polling to
     /// progress the state machine.
     waker: Option<Waker>,
 }
 
 impl StartingState {
-    pub fn new(connection_timeout: Duration) -> Self {
+    pub fn new(connection_timeout: Duration, message_size: NonZeroUsize) -> Self {
         Self {
             timeout_timer: Box::pin(Delay::new(connection_timeout)),
+            message_size,
             waker: None,
         }
     }
@@ -53,8 +58,13 @@ impl StateTrait for StartingState {
                 ..
             }) => {
                 tracing::trace!(target: LOG_TARGET, "Transitioning from `Starting` to `ReadyToReceive`.");
-                ReadyToReceiveState::new(self.timeout_timer, inbound_stream, self.waker.take())
-                    .into()
+                ReadyToReceiveState::new(
+                    self.timeout_timer,
+                    inbound_stream,
+                    self.message_size,
+                    self.waker.take(),
+                )
+                .into()
             }
             ConnectionEvent::ListenUpgradeError(error) => {
                 tracing::trace!(target: LOG_TARGET, "Inbound upgrade error: {error:?}");
