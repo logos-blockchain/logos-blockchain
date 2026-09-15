@@ -1,10 +1,11 @@
-use std::pin::Pin;
+use std::{collections::HashMap, pin::Pin};
 
 use futures::{Stream, TryStreamExt as _};
 use lb_core::{
     block::{Block, UncleHeaders},
     events::Events,
     header::HeaderId,
+    sdp::{Declaration, DeclarationId},
 };
 use lb_cryptarchia_engine::Slot;
 use lb_network_service::message::ChainSyncEvent;
@@ -140,16 +141,16 @@ where
     /// If `to_ancestor` is None, defaults to LIB
     pub async fn get_headers(
         &self,
-        from_descendant: HeaderId,
-        to_ancestor: HeaderId,
+        from_descendant: Option<HeaderId>,
+        to_ancestor: Option<HeaderId>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<HeaderId, ApiError>> + Send>>, ApiError> {
         let (reply_channel, rx) = oneshot::channel();
 
         self.relay
             .send(
                 Query::GetHeaders {
-                    from_descendant: Some(from_descendant),
-                    to_ancestor: Some(to_ancestor),
+                    from_descendant,
+                    to_ancestor,
                     reply_channel,
                 }
                 .into(),
@@ -190,6 +191,41 @@ where
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetLedgerState"))
+        })
+    }
+
+    /// All declarations in the current SDP registry at the tip, keyed by
+    /// declaration id. This is the live registry, not the epoch snapshot.
+    pub async fn get_sdp_declarations(
+        &self,
+    ) -> Result<HashMap<DeclarationId, Declaration>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(Query::GetSdpDeclarations { reply_channel }.into())
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending GetSdpDeclarations"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetSdpDeclarations"))
+        })
+    }
+
+    /// The SDP snapshot frozen for the tip's epoch, keyed by declaration id.
+    pub async fn get_sdp_snapshot(&self) -> Result<HashMap<DeclarationId, Declaration>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(Query::GetSdpSnapshot { reply_channel }.into())
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending GetSdpSnapshot"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetSdpSnapshot"))
         })
     }
 

@@ -1672,7 +1672,7 @@ where
 
         // Fetch block IDs in [state.lib, tip]
         let missing_headers = cryptarchia_api
-            .get_headers(tip, state.lib())
+            .get_headers(Some(tip), Some(state.lib()))
             .await
             .map_err(WalletServiceError::CryptarchiaApi)
             .inspect_err(|e| {
