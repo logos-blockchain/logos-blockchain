@@ -971,7 +971,7 @@ pub struct IntentStatusCheckFailed(String);
 #[async_trait]
 impl<ChainService> intent::LedgerStateProvider for CryptarchiaServiceApi<ChainService>
 where
-    ChainService: CryptarchiaServiceData<Tx: Send + Sync> + Send + Sync,
+    ChainService: CryptarchiaServiceData<Tx: Send> + Send + Sync,
 {
     type Error = lb_chain_service::api::ApiError;
 

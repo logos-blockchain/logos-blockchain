@@ -122,7 +122,7 @@ where
     EdgeService: ServiceData<Message = CoreService::Message>
         + EdgeServiceComponents<
             BackendSettings: Clone + Send + Sync,
-            ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+            ChainService: CryptarchiaServiceData<Tx: Send>,
             TimeBackend: lb_time_service::backends::TimeBackend + Send,
         > + Send
         + 'static,

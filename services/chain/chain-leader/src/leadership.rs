@@ -289,7 +289,7 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
     ledger_config: lb_ledger::Config,
     epoch_handoff_sender: mpsc::Sender<WinningPolEpochSlots>,
 ) where
-    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     Wallet: WalletServiceData,
     RuntimeServiceId: AsServiceId<Wallet>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
@@ -420,7 +420,7 @@ pub async fn fetch_slot_context<CryptarchiaService, Wallet, RuntimeServiceId>(
     slot: Slot,
 ) -> Option<SlotContext>
 where
-    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     Wallet: WalletServiceData,
     RuntimeServiceId: AsServiceId<Wallet> + Debug + Display + Sync,
 {

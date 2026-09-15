@@ -39,7 +39,7 @@ pub struct ChainNetworkRelays<
     NetworkAdapter,
     RuntimeServiceId,
 > where
-    Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
+    Cryptarchia: CryptarchiaServiceData<Tx: Send>,
     Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash> + Send + Sync,
     MempoolNetAdapter: lb_tx_service::network::NetworkAdapter<RuntimeServiceId>,
     NetworkAdapter: network::NetworkAdapter<RuntimeServiceId>,
@@ -54,7 +54,7 @@ pub struct ChainNetworkRelays<
 impl<Cryptarchia, Mempool, MempoolNetAdapter, NetworkAdapter, RuntimeServiceId>
     ChainNetworkRelays<Cryptarchia, Mempool, MempoolNetAdapter, NetworkAdapter, RuntimeServiceId>
 where
-    Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
+    Cryptarchia: CryptarchiaServiceData<Tx: Send>,
     Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash> + Send + Sync,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Item: Debug

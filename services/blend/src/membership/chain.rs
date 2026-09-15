@@ -98,7 +98,7 @@ pub async fn subscribe<ChainService, NodeId, TimeRuntimeBackend, RuntimeServiceI
     component: &'static str,
 ) -> BlendEpochStateStream<NodeId>
 where
-    ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+    ChainService: CryptarchiaServiceData<Tx: Send>,
     NodeId: node_id::TryFrom + Clone + Debug + Hash + Eq + Send + Sync + 'static,
     TimeRuntimeBackend: TimeBackend + Send,
     RuntimeServiceId: AsServiceId<ChainService>

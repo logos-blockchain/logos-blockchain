@@ -380,7 +380,7 @@ impl<
         RuntimeServiceId,
     >
 where
-    Tx: Send + Sync + 'static,
+    Tx: Send + 'static,
     CryptarchiaService: CryptarchiaServiceData<Tx = Tx> + Sync + 'static,
     BlendService: BlendServiceData,
     BlendService::NodeId: Send,
@@ -806,7 +806,7 @@ async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, Runtime
     slot_window: NonZeroU64,
 ) -> bool
 where
-    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     BlendService: BlendServiceData,
     BlendService::NodeId: Send,
     WalletService: WalletServiceData,
@@ -864,7 +864,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     slot_window: NonZeroU64,
 ) where
-    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     BlendService: BlendServiceData,
     BlendService::NodeId: Send,
     RuntimeServiceId: Sync,
@@ -931,7 +931,7 @@ async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeSe
     slot_window: NonZeroU64,
 ) -> Result<Option<TxHash>, PoWError>
 where
-    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     BlendService: BlendServiceData,
     BlendService::NodeId: Send,
     WalletService: WalletServiceData,
@@ -967,7 +967,7 @@ async fn current_reward_pool<CryptarchiaService>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
 ) -> Result<Value, PoWError>
 where
-    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
     let tip = cryptarchia_api.info().await?.cryptarchia_info.tip;
     let ledger_state = cryptarchia_api
@@ -1006,7 +1006,7 @@ async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     available_pool: Value,
 ) -> Result<Option<PublishedClaim>, PoWError>
 where
-    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     BlendService: BlendServiceData,
     BlendService::NodeId: Send,
     RuntimeServiceId: Sync,
@@ -1127,7 +1127,7 @@ async fn respond_claimable_rewards<CryptarchiaService>(
     response: oneshot::Sender<ClaimableRewardsInfo>,
     slot_window: NonZeroU64,
 ) where
-    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
     let current_slot = match cryptarchia_api.info().await {
         Ok(info) => info.cryptarchia_info.slot,
@@ -1157,7 +1157,7 @@ async fn retire_settled_claims<CryptarchiaService>(
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     processed_block: Result<ProcessedBlockEvent, BroadcastStreamRecvError>,
 ) where
-    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
     let block_id = match processed_block {
         Ok(block) => block.block_id,
@@ -1194,7 +1194,7 @@ async fn prune_settled_pending<CryptarchiaService>(
     block_id: HeaderId,
 ) -> Result<usize, PoWError>
 where
-    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
     if state.pending_to_claim.is_empty() {
         return Ok(0);

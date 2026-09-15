@@ -854,7 +854,7 @@ async fn should_process_block<Cryptarchia>(
 ) -> Result<(), DoNotProcessBlock>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
 {
     if !is_after_lib(cryptarchia, block_id, block_slot).await {
         return Err(DoNotProcessBlock::OlderThanLib);
@@ -927,7 +927,7 @@ async fn is_after_lib<Cryptarchia>(
 ) -> bool
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
 {
     match cryptarchia.info().await {
         Ok(info) => {
