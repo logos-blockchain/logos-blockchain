@@ -295,9 +295,12 @@ fn apply_prepared_block_event(
     // Detect channel changes.
     // On first event (old_tip is None), check for existing inscriptions on
     // the channel — this handles clean start on an existing channel.
-    // On subsequent events, detect channel update if tip changed.
+    // On subsequent events, diff the channel view on every block, not only on
+    // a tip change: a fork block the node streams with the tip unchanged can
+    // still extend the view (the lineage walk bridges into stored blocks), and
+    // that extension must be reported when it happens, or it never is.
     let channel_update = match (old_tip, old_lineage) {
-        (Some(old), Some(old_lineage)) if old != tip => s.detect_channel_update(&old_lineage, tip),
+        (Some(_), Some(old_lineage)) => s.detect_channel_update(&old_lineage, tip),
         (None, _) => {
             // First event — no old canonical exists yet, so nothing can be
             // orphaned. Report any inscriptions on the initial tip as adopted.
@@ -313,7 +316,7 @@ fn apply_prepared_block_event(
                 })
             }
         }
-        _ => None, // tip unchanged
+        _ => None,
     };
 
     // On a pure extension (nothing orphaned — including the first event,
@@ -2038,6 +2041,330 @@ mod tests {
             update.adopted,
             update.orphaned,
         );
+    }
+
+    /// The node streams fork blocks too, tip unchanged. An uncontested
+    /// inscription first seen in one extends the channel view and is reported
+    /// adopted right then; the later switch onto its branch changes nothing.
+    /// Regression for the LEZ "missing 12375" incident (2026-09-13).
+    #[tokio::test]
+    async fn fork_block_inscription_is_adopted_when_first_seen_not_on_the_switch() {
+        // Chain: G(0) <- F(1)        canonical first, carries A
+        //        G(0) <- C(2)        sibling, carries A and Y (parent A)
+        //        C(2) <- E(3)        empty, makes C's branch canonical
+        let channel_id = ChannelId::from([0u8; 32]);
+
+        let a = inscribe_op(channel_id, MsgId::root(), b"a");
+        let a_id = a.id();
+        let y = inscribe_op(channel_id, a_id, b"y");
+        let y_id = y.id();
+        let a_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(a)]);
+        let y_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(y)]);
+
+        let block_f = api_block(1, 0, 1, vec![a_tx.clone()]);
+        let block_c = api_block(2, 0, 2, vec![a_tx, y_tx]);
+        let block_e = api_block(3, 2, 3, Vec::new());
+
+        let node = MockNode::default();
+        let mut state = None;
+        let mut current_tip = None;
+        let mut lib_slot = Slot::genesis();
+
+        let first = handle_block_event(
+            &live_event(&block_f),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing F succeeds");
+        assert!(
+            first.channel_update.is_some(),
+            "sanity: A is adopted on the first event"
+        );
+
+        // C arrives as a fork block: processed by the node, tip unchanged.
+        let fork_event = ProcessedBlockEvent {
+            block: block_c.clone(),
+            tip: block_f.header.id,
+            tip_slot: block_f.header.slot,
+            lib: header_id(0),
+            lib_slot: Slot::genesis(),
+        };
+        let second = handle_block_event(
+            &fork_event,
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing fork block C succeeds");
+        let update = second
+            .channel_update
+            .expect("Y extends the view uncontested; expected a channel update");
+        assert!(
+            update
+                .adopted
+                .iter()
+                .any(|t| t.inscription().is_some_and(|i| i.this_msg == y_id)),
+            "Y must be adopted when first seen, got adopted={:?}, orphaned={:?}",
+            update.adopted,
+            update.orphaned,
+        );
+        assert!(update.orphaned.is_empty(), "got {:?}", update.orphaned);
+
+        // E lands on C: the tip switches F -> E and Y is now canonical.
+        let third = handle_block_event(
+            &live_event(&block_e),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing E succeeds");
+        assert!(
+            third.channel_update.is_none(),
+            "the view was already i1, i2, i3; the L1 switch changes nothing, got {:?}",
+            third.channel_update
+        );
+    }
+
+    /// A fork block whose inscriptions do not continue the current view
+    /// (i2' competes with mined i2) is ignored while the tip stays. When its
+    /// branch wins, the diff reports the real change: i2 orphaned, i2' and i3'
+    /// adopted.
+    #[tokio::test]
+    async fn competing_fork_block_is_ignored_until_its_branch_wins() {
+        // Chain: G(0) <- F(1)        canonical first, carries i2 (parent i1)
+        //        G(0) <- C(2)        sibling, carries i2' (parent i1)
+        //        C(2) <- E(3)        carries i3' (parent i2'), tip moves
+        let channel_id = ChannelId::from([0u8; 32]);
+
+        let i1 = inscribe_op(channel_id, MsgId::root(), b"i1");
+        let i1_id = i1.id();
+        let i2 = inscribe_op(channel_id, i1_id, b"i2");
+        let i2_id = i2.id();
+        let i2_alt = inscribe_op(channel_id, i1_id, b"i2'");
+        let i2_alt_id = i2_alt.id();
+        let i3_alt = inscribe_op(channel_id, i2_alt_id, b"i3'");
+        let i3_alt_id = i3_alt.id();
+
+        let i1_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(i1)]);
+        let block_f = api_block(
+            1,
+            0,
+            1,
+            vec![
+                i1_tx.clone(),
+                unverified_tx_with_ops(vec![Op::ChannelInscribe(i2)]),
+            ],
+        );
+        let block_c = api_block(
+            2,
+            0,
+            2,
+            vec![
+                i1_tx,
+                unverified_tx_with_ops(vec![Op::ChannelInscribe(i2_alt)]),
+            ],
+        );
+        let block_e = api_block(
+            3,
+            2,
+            3,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(i3_alt)])],
+        );
+
+        let node = MockNode::default();
+        let mut state = None;
+        let mut current_tip = None;
+        let mut lib_slot = Slot::genesis();
+
+        handle_block_event(
+            &live_event(&block_f),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing F succeeds");
+
+        // C is a fork whose i2' competes with the mined i2: not an extension
+        // of the view, so nothing is reported while the tip stays at F.
+        let fork_event = ProcessedBlockEvent {
+            block: block_c.clone(),
+            tip: block_f.header.id,
+            tip_slot: block_f.header.slot,
+            lib: header_id(0),
+            lib_slot: Slot::genesis(),
+        };
+        let second = handle_block_event(
+            &fork_event,
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing fork block C succeeds");
+        assert!(
+            second.channel_update.is_none(),
+            "a competing fork does not change the view, got {:?}",
+            second.channel_update
+        );
+
+        // E lands on C: the view switches i1,i2 -> i1,i2',i3'.
+        let third = handle_block_event(
+            &live_event(&block_e),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing E succeeds");
+        let update = third
+            .channel_update
+            .expect("the switch replaced i2 with i2',i3'; expected a channel update");
+        let orphaned: Vec<MsgId> = update
+            .orphaned
+            .iter()
+            .filter_map(|t| t.inscription().map(|i| i.this_msg))
+            .collect();
+        let adopted: Vec<MsgId> = update
+            .adopted
+            .iter()
+            .filter_map(|t| t.inscription().map(|i| i.this_msg))
+            .collect();
+        assert_eq!(orphaned, vec![i2_id], "i2 lost its slot to i2'");
+        assert_eq!(
+            adopted,
+            vec![i2_alt_id, i3_alt_id],
+            "the new branch's suffix, in order"
+        );
+        assert_eq!(update.new_channel_tip, i3_alt_id);
+    }
+
+    /// A fork block's i3 extends the view and is adopted; then the canonical
+    /// chain itself extends with a competing i3'. The view switches
+    /// i1,i2,i3 -> i1,i2,i3': i3 orphaned, i3' adopted.
+    #[tokio::test]
+    async fn adopted_fork_extension_is_orphaned_when_canonical_mines_a_competitor() {
+        // Chain: G(0) <- F(1)        canonical, carries i2 (parent i1)
+        //        G(0) <- C(2)        fork, carries i3 (parent i2)
+        //        F(1) <- D(3)        canonical, carries i3' (parent i2)
+        let channel_id = ChannelId::from([0u8; 32]);
+
+        let i1 = inscribe_op(channel_id, MsgId::root(), b"i1");
+        let i1_id = i1.id();
+        let i2 = inscribe_op(channel_id, i1_id, b"i2");
+        let i2_id = i2.id();
+        let i3 = inscribe_op(channel_id, i2_id, b"i3");
+        let i3_id = i3.id();
+        let i3_alt = inscribe_op(channel_id, i2_id, b"i3'");
+        let i3_alt_id = i3_alt.id();
+
+        let block_f = api_block(
+            1,
+            0,
+            1,
+            vec![
+                unverified_tx_with_ops(vec![Op::ChannelInscribe(i1)]),
+                unverified_tx_with_ops(vec![Op::ChannelInscribe(i2)]),
+            ],
+        );
+        let block_c = api_block(
+            2,
+            0,
+            2,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(i3)])],
+        );
+        let block_d = api_block(
+            3,
+            1,
+            3,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(i3_alt)])],
+        );
+
+        let node = MockNode::default();
+        let mut state = None;
+        let mut current_tip = None;
+        let mut lib_slot = Slot::genesis();
+
+        handle_block_event(
+            &live_event(&block_f),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing F succeeds");
+
+        let fork_event = ProcessedBlockEvent {
+            block: block_c.clone(),
+            tip: block_f.header.id,
+            tip_slot: block_f.header.slot,
+            lib: header_id(0),
+            lib_slot: Slot::genesis(),
+        };
+        let second = handle_block_event(
+            &fork_event,
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing fork block C succeeds");
+        let update = second.channel_update.expect("i3 extends the view");
+        let adopted: Vec<MsgId> = update
+            .adopted
+            .iter()
+            .filter_map(|t| t.inscription().map(|i| i.this_msg))
+            .collect();
+        assert_eq!(adopted, vec![i3_id]);
+        assert!(update.orphaned.is_empty());
+
+        // D extends the canonical chain with i3', taking i3's slot.
+        let third = handle_block_event(
+            &live_event(&block_d),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing D succeeds");
+        let update = third
+            .channel_update
+            .expect("i3' replaced i3 in the view; expected a channel update");
+        let orphaned: Vec<MsgId> = update
+            .orphaned
+            .iter()
+            .filter_map(|t| t.inscription().map(|i| i.this_msg))
+            .collect();
+        let adopted: Vec<MsgId> = update
+            .adopted
+            .iter()
+            .filter_map(|t| t.inscription().map(|i| i.this_msg))
+            .collect();
+        assert_eq!(orphaned, vec![i3_id], "i3 lost its slot to i3'");
+        assert_eq!(adopted, vec![i3_alt_id]);
+        assert_eq!(update.new_channel_tip, i3_alt_id);
     }
 
     /// An L1 branch change served by the canonical backfill: the new branch
