@@ -312,6 +312,8 @@ fn config() -> Config {
                 rate_num: 0,
                 rate_den: NonZero::<u64>::MIN,
                 target_claim_per_block: NonZero::<u64>::MIN,
+                pow_share: 0,
+                share_den: NonZero::<u64>::MIN,
                 slot_window: NonZero::new(100).unwrap(),
             },
         },
