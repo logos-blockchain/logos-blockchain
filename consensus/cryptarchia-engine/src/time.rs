@@ -245,6 +245,7 @@ pub struct EpochConfig {
     pub epoch_period_nonce_stabilization: NonZero<u8>,
 }
 
+#[warn(clippy::arithmetic_side_effects)]
 impl EpochConfig {
     #[must_use]
     pub const fn epoch_length(&self, base_period_length: NonZero<u64>) -> u64 {
@@ -258,19 +259,30 @@ impl EpochConfig {
 
     #[must_use]
     pub fn epoch(&self, slot: Slot, base_period_length: NonZero<u64>) -> Epoch {
-        (u64::from(slot) / self.epoch_length(base_period_length))
+        u64::from(slot)
+            .strict_div(self.epoch_length(base_period_length))
             .try_into()
             .expect("Epoch should build from a correct configuration")
     }
 
+    /// Returns the first slot of `epoch`.
+    ///
+    /// # Panics
+    /// Panics if the first slot is greater than [`u64::MAX`].
     #[must_use]
     pub fn starting_slot(&self, epoch: &Epoch, base_period_length: NonZero<u64>) -> Slot {
-        Slot::from(u64::from(u32::from(*epoch)) * self.epoch_length(base_period_length))
+        Slot::from(u64::from(u32::from(*epoch)).strict_mul(self.epoch_length(base_period_length)))
     }
 
+    /// Returns the last slot of `epoch`.
+    ///
+    /// # Panics
+    /// Panics if the last slot is greater than [`u64::MAX`].
     #[must_use]
     pub fn last_slot(&self, epoch: Epoch, base_period_length: NonZero<u64>) -> Slot {
-        Slot::from(u64::from(epoch.into_inner() + 1) * self.epoch_length(base_period_length) - 1)
+        // The last slot can be representable even when the next epoch's start is not.
+        self.starting_slot(&epoch, base_period_length)
+            .strict_add(self.epoch_length(base_period_length).strict_sub(1).into())
     }
 }
 
@@ -328,5 +340,85 @@ impl SlotTimer {
         );
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         interval
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Epoch, EpochConfig, NonZero, Slot};
+
+    const EPOCH_CONFIG: EpochConfig = EpochConfig {
+        epoch_stake_distribution_stabilization: NonZero::<u8>::MIN,
+        epoch_period_nonce_buffer: NonZero::<u8>::MIN,
+        epoch_period_nonce_stabilization: NonZero::<u8>::MIN,
+    };
+
+    #[test]
+    fn epoch_slot_boundaries() {
+        let base_period_length = NonZero::<u64>::MIN;
+
+        assert!(
+            [(0, 0, 2), (1, 3, 5), (2, 6, 8)]
+                .into_iter()
+                .all(|(epoch, start, end)| {
+                    let epoch = Epoch::new(epoch);
+                    let start = Slot::from(start);
+                    let end = Slot::from(end);
+                    EPOCH_CONFIG.starting_slot(&epoch, base_period_length) == start
+                        && EPOCH_CONFIG.last_slot(epoch, base_period_length) == end
+                        && EPOCH_CONFIG.epoch(start, base_period_length) == epoch
+                        && EPOCH_CONFIG.epoch(end, base_period_length) == epoch
+                })
+        );
+    }
+
+    #[test]
+    fn last_slot_of_maximum_epoch() {
+        let epoch = Epoch::new(u32::MAX);
+        let base_period_length = NonZero::<u64>::MIN;
+        let last_slot = Slot::from(12_884_901_887);
+
+        assert_eq!(EPOCH_CONFIG.last_slot(epoch, base_period_length), last_slot);
+        assert_eq!(EPOCH_CONFIG.epoch(last_slot, base_period_length), epoch);
+    }
+
+    #[test]
+    fn epoch_can_end_at_maximum_slot() {
+        let config = EpochConfig {
+            epoch_period_nonce_stabilization: NonZero::new(2).unwrap(),
+            ..EPOCH_CONFIG
+        };
+        let base_period_length = NonZero::new(1 << 61).unwrap();
+        let epoch = Epoch::new(1);
+        let last_slot = Slot::from(u64::MAX);
+
+        assert_eq!(config.last_slot(epoch, base_period_length), last_slot);
+        assert_eq!(config.epoch(last_slot, base_period_length), epoch);
+    }
+
+    #[test]
+    fn saturated_epoch_length_preserves_representable_slots() {
+        let base_period_length = NonZero::new(u64::MAX).unwrap();
+
+        assert_eq!(
+            EPOCH_CONFIG.last_slot(Epoch::new(0), base_period_length),
+            Slot::from(u64::MAX.strict_sub(1)),
+        );
+        assert_eq!(
+            EPOCH_CONFIG.starting_slot(&Epoch::new(1), base_period_length),
+            Slot::from(u64::MAX),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to multiply with overflow")]
+    fn starting_slot_rejects_overflow() {
+        let _ = EPOCH_CONFIG.starting_slot(&Epoch::new(2), NonZero::new(u64::MAX).unwrap());
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to add with overflow")]
+    fn last_slot_rejects_overflow() {
+        let _ = EPOCH_CONFIG.last_slot(Epoch::new(1), NonZero::new(u64::MAX).unwrap());
     }
 }
