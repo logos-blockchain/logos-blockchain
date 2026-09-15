@@ -55,6 +55,7 @@ use rpds::HashTrieMapSync;
 use thiserror::Error;
 
 use crate::{
+    config::RewardPoWConfig,
     mantle::helpers::MantleOperationVerificationHelper,
     update::{BatchVerifiedUpdate, PreparedUpdate},
 };
@@ -390,19 +391,14 @@ impl LedgerState {
         mut self,
         total_fee_burned: GasCost,
         total_fee_tip: GasCost,
-        config: &Config,
+        reward_config: &RewardPoWConfig,
     ) -> Result<Self, LedgerError<Id>> {
         let window_index = self.block_number as usize % WINDOW_SIZE;
 
         // Divert the PoW share of the collected fees to the PoW reward pool
         // before the rest is pooled for block rewards. See the proof of work
         // specification: <https://lip.logos.co/blockchain/raw/proof-of-work.html>
-        let pow_refill = GasCost::from(
-            config
-                .pow_config
-                .reward
-                .pow_fee_share(total_fee_burned.into_inner()),
-        );
+        let pow_refill = GasCost::from(reward_config.pow_fee_share(total_fee_burned.into_inner()));
 
         // First update the fee pooled in the block, excluding the PoW share
         self.cryptarchia_ledger
@@ -550,7 +546,11 @@ impl LedgerState {
         }
 
         // Compute Block rewards and give tips
-        self = self.compute_block_rewards(gas_and_fees.fee_burned, gas_and_fees.fee_tip, config)?;
+        self = self.compute_block_rewards(
+            gas_and_fees.fee_burned,
+            gas_and_fees.fee_tip,
+            &config.pow_config.reward,
+        )?;
         // Update Execution market state
         self = self.update_execution_market(gas_and_fees.execution_gas);
         // Accumulate storage gas consumed so the storage market can update the
@@ -2864,7 +2864,6 @@ mod tests {
         };
 
         use super::*;
-        use crate::config::RewardPoWConfig;
 
         /// A reward config with claiming disabled (`rate_num = 0`), standing in
         /// for a real deployment config.
@@ -3276,7 +3275,11 @@ mod tests {
             let pool_before = state.mantle_ledger.pow.reward_pool();
 
             state = state
-                .compute_block_rewards::<HeaderId>(1_000.into(), 0.into(), &config)
+                .compute_block_rewards::<HeaderId>(
+                    1_000.into(),
+                    0.into(),
+                    &config.pow_config.reward,
+                )
                 .expect("reward computation should succeed");
 
             // `from_utxos` starts at block number 0, so the fees land at window index 0.
@@ -3301,7 +3304,11 @@ mod tests {
             let pool_before = state.mantle_ledger.pow.reward_pool();
 
             state = state
-                .compute_block_rewards::<HeaderId>(1_000.into(), 0.into(), &config)
+                .compute_block_rewards::<HeaderId>(
+                    1_000.into(),
+                    0.into(),
+                    &config.pow_config.reward,
+                )
                 .expect("reward computation should succeed");
 
             assert_eq!(
