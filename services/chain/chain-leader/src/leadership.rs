@@ -800,6 +800,8 @@ mod pol_tests {
             rate_num: 0,
             rate_den: core::num::NonZeroU64::MIN,
             target_claim_per_block: core::num::NonZeroU64::MIN,
+            pow_share: 0,
+            share_den: core::num::NonZeroU64::MIN,
             slot_window: core::num::NonZeroU64::new(100).unwrap(),
         }
     }

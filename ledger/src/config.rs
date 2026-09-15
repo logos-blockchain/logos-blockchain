@@ -1,7 +1,7 @@
 use core::num::NonZeroU32;
 use std::num::{NonZero, NonZeroU64, NonZeroU128};
 
-use lb_core::mantle::ops::pow::PowReward;
+use lb_core::mantle::{Value, ops::pow::PowReward};
 use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_groth16::ModulusShift;
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -175,6 +175,13 @@ pub struct RewardPoWConfig {
     /// epoch, is derived from the consensus schedule — see
     /// [`Config::expected_blocks_per_epoch`].
     pub target_claim_per_block: NonZeroU64,
+    /// `POW_SHARE`: numerator of the share of each block's collected fees
+    /// diverted to the `PoW` reward pool. `0` disables refilling.
+    /// Must not exceed [`Self::share_den`].
+    pub pow_share: u64,
+    /// `SHARE_DEN`: denominator of the share of each block's collected fees
+    /// diverted to the `PoW` reward pool.
+    pub share_den: NonZeroU64,
     /// Acceptance window, in slots: how far back a claim's anchor block (and
     /// its nullifier) may be from the current block.
     pub slot_window: NonZeroU64,
@@ -193,6 +200,8 @@ struct RewardPoWConfigFields {
     rate_num: u64,
     rate_den: NonZeroU64,
     target_claim_per_block: NonZeroU64,
+    pow_share: u64,
+    share_den: NonZeroU64,
     slot_window: NonZeroU64,
 }
 
@@ -210,6 +219,8 @@ impl TryFrom<RewardPoWConfigFields> for RewardPoWConfig {
             rate_num: fields.rate_num,
             rate_den: fields.rate_den,
             target_claim_per_block: fields.target_claim_per_block,
+            pow_share: fields.pow_share,
+            share_den: fields.share_den,
             slot_window: fields.slot_window,
         };
         config.validate()?;
@@ -229,6 +240,11 @@ pub enum RewardPoWConfigError {
     ClaimRateScaleOverflow {
         rate_den: NonZeroU64,
         target_claim_per_block: NonZeroU64,
+    },
+    #[error("PoW fee share ({pow_share}) must not exceed its denominator ({share_den})")]
+    PowShareExceedsDenominator {
+        pow_share: u64,
+        share_den: NonZeroU64,
     },
 }
 
@@ -250,6 +266,14 @@ impl RewardPoWConfig {
                 precision: self.ema_smoothing_precision,
             });
         }
+
+        if self.pow_share > self.share_den.get() {
+            return Err(RewardPoWConfigError::PowShareExceedsDenominator {
+                pow_share: self.pow_share,
+                share_den: self.share_den,
+            });
+        }
+
         // Only the errors matter here; the computed values are unused.
         self.checked_reward_target_floor()?;
         self.checked_claim_rate_scale()?;
@@ -322,6 +346,24 @@ impl RewardPoWConfig {
         self.checked_claim_rate_scale()
             .expect("claim rate scale overflow is rejected at config-load time")
     }
+
+    /// The share of a block's collected fees diverted to the `PoW` reward
+    /// pool: `collected_fees * POW_SHARE / SHARE_DEN`, rounded down.
+    ///
+    /// Never exceeds `collected_fees`, since `pow_share <= share_den` is
+    /// guaranteed by [`Self::validate`].
+    #[must_use]
+    pub(crate) fn pow_fee_share(&self, collected_fees: Value) -> Value {
+        assert!(
+            self.pow_share <= self.share_den.get(),
+            "PoW share must not exceed its denominator; guaranteed by RewardPoWConfig::validate"
+        );
+
+        // Convert u64 values to u128 to avoid overflow. Safe to use `strict_mul`.
+        let share = u128::from(collected_fees).strict_mul(u128::from(self.pow_share))
+            / NonZeroU128::from(self.share_den);
+        Value::try_from(share).expect("share cannot exceed collected_fees")
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -384,6 +426,8 @@ mod tests {
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
             target_claim_per_block: NonZeroU64::MIN,
+            pow_share: 0,
+            share_den: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
         }
     }
@@ -434,6 +478,28 @@ mod tests {
         assert_eq!(reward_target_floor(7, 10), 3);
         // ceil(0 / (10-0)) is 0, so the floor is raised to 1.
         assert_eq!(reward_target_floor(0, 10), 1);
+    }
+
+    #[test]
+    fn reward_config_rejects_pow_share_above_denominator() {
+        let mut config = disabled_reward_config();
+        config.pow_share = 11;
+        config.share_den = NonZeroU64::new(10).unwrap();
+        assert_eq!(
+            config.validate(),
+            Err(RewardPoWConfigError::PowShareExceedsDenominator {
+                pow_share: config.pow_share,
+                share_den: config.share_den,
+            })
+        );
+    }
+
+    #[test]
+    fn reward_config_accepts_pow_share_equal_to_denominator() {
+        let mut config = disabled_reward_config();
+        config.pow_share = 10;
+        config.share_den = NonZeroU64::new(10).unwrap();
+        assert_eq!(config.validate(), Ok(()));
     }
 
     #[test]
