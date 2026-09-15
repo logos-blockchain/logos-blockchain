@@ -20,10 +20,10 @@ repos:
         args:
           - --locked
           - --all-features
+          - --config
+          - .cargo-deny.toml
           - check
           - --hide-inclusion-graph
-          - -c
-          - .cargo-deny.toml
           - --show-stats
           - -D
           - warnings
