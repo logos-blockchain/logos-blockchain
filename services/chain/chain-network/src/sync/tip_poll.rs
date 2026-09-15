@@ -33,7 +33,7 @@ pub async fn poll_peer_tips_if_behind<NetAdapter, Cryptarchia, RuntimeServiceId>
 where
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: Send + Sync,
+    Cryptarchia::Tx: Send,
     RuntimeServiceId: Send + Sync + 'static,
 {
     // Cadence gate: only act roughly once per expected block interval.
@@ -78,7 +78,7 @@ async fn lagging_local_info<Cryptarchia>(
 ) -> Option<lb_chain_service::CryptarchiaInfo>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: Send + Sync,
+    Cryptarchia::Tx: Send,
 {
     let info = match cryptarchia.info().await {
         Ok(info) => info.cryptarchia_info,
@@ -148,7 +148,7 @@ impl TipPollParams {
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     ) -> Result<Self, DynError>
     where
-        Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
+        Cryptarchia: CryptarchiaServiceData<Tx: Send>,
     {
         let (_, consensus_config) = cryptarchia
             .get_epoch_config()

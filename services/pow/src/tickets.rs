@@ -117,7 +117,7 @@ impl TicketGenerator {
     where
         CryptarchiaServiceData:
             Send + Sync + overwatch::services::ServiceData<Message = ConsensusMsg<Tx>> + 'static,
-        Tx: Send + Sync + 'static,
+        Tx: Send + 'static,
     {
         let stream = BroadcastStream::new(cryptarchia_api.subscribe_new_blocks().await?);
         let processed_block_stream: Pin<
@@ -150,7 +150,7 @@ async fn process_block_event<Tx, CryptarchiaServiceData>(
 where
     CryptarchiaServiceData:
         Send + Sync + overwatch::services::ServiceData<Message = ConsensusMsg<Tx>> + 'static,
-    Tx: Send + Sync + 'static,
+    Tx: Send + 'static,
 {
     match event {
         Ok(event @ ProcessedBlockEvent { block_id, .. }) => {

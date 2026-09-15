@@ -70,7 +70,7 @@ where
 
 impl<Cryptarchia> CryptarchiaServiceApi<Cryptarchia>
 where
-    Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
+    Cryptarchia: CryptarchiaServiceData<Tx: Send>,
 {
     #[must_use]
     pub const fn new(relay: OutboundRelay<Cryptarchia::Message>) -> Self {
