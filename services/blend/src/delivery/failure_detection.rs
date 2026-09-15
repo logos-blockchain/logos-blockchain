@@ -4,7 +4,6 @@ use core::{
     num::NonZeroU64,
     pin::Pin,
     task::{Context, Poll},
-    time::Duration,
 };
 use std::collections::HashMap;
 
@@ -12,9 +11,7 @@ use futures::{
     Stream, StreamExt as _,
     stream::{BoxStream, Fuse},
 };
-use lb_blend::scheduling::message_scheduler::round_info::Round;
-use tokio::time::{MissedTickBehavior, interval};
-use tokio_stream::wrappers::IntervalStream;
+use lb_blend::primitives::time::{Round, RoundClock};
 
 use crate::{
     LOG_TARGET, core::dispatcher::PayloadDispatcher, delivery::broadcast_undelivered_messages,
@@ -28,7 +25,7 @@ struct BlendedPayloadDetails {
 
 pub struct FailureDetector {
     maximum_blending_delay: NonZeroU64,
-    rounds_clock: IntervalStream,
+    round_clock: RoundClock,
     current_round: Round,
     payload_broadcasts: Fuse<BoxStream<'static, DataPayload>>,
     /// Messages sent out via Blend, up to the round their deadline passes.
@@ -39,18 +36,14 @@ impl FailureDetector {
     #[must_use]
     pub fn new(
         maximum_blending_delay: NonZeroU64,
-        round_duration: Duration,
+        round_duration_in_seconds: NonZeroU64,
         payload_broadcasts: BoxStream<'static, DataPayload>,
     ) -> Self {
-        let clock = {
-            let mut clock = interval(round_duration);
-            clock.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            clock
-        };
+        let round_clock = RoundClock::new(round_duration_in_seconds);
         Self {
             maximum_blending_delay,
-            rounds_clock: IntervalStream::new(clock),
-            current_round: Round::from(0),
+            current_round: round_clock.current_round(),
+            round_clock,
             payload_broadcasts: payload_broadcasts.fuse(),
             unacknowledged_blended_payloads: HashMap::new(),
         }
@@ -76,7 +69,8 @@ impl FailureDetector {
         }
     }
 
-    fn take_expired_payloads(&mut self, now: Round) -> Vec<DataPayload> {
+    fn take_expired_payloads(&mut self) -> Vec<DataPayload> {
+        let now = self.current_round;
         let (expired, still_waiting): (HashMap<_, _>, HashMap<_, _>) =
             take(&mut self.unacknowledged_blended_payloads)
                 .into_iter()
@@ -157,22 +151,15 @@ impl Stream for FailureDetector {
                     }
                 }
             }
-            match self.rounds_clock.poll_next_unpin(cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(None) => return Poll::Ready(None),
-                Poll::Ready(Some(_)) => {
-                    let now = Round::from(
-                        self.current_round
-                            .inner()
-                            .checked_add(1)
-                            .expect("Round computation overflow."),
-                    );
-                    self.current_round = now;
-                    let expired = self.take_expired_payloads(now);
-                    if !expired.is_empty() {
-                        return Poll::Ready(Some(expired));
-                    }
-                }
+            let now = self.round_clock.poll_current(cx);
+            if now <= self.current_round {
+                return Poll::Pending;
+            }
+            self.current_round = now;
+
+            let expired = self.take_expired_payloads();
+            if !expired.is_empty() {
+                return Poll::Ready(Some(expired));
             }
         }
     }
@@ -180,14 +167,19 @@ impl Stream for FailureDetector {
 
 #[cfg(test)]
 mod tests {
-    use futures::{StreamExt as _, stream};
+    use core::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+
+    use futures::{Stream as _, StreamExt as _, stream, task::noop_waker_ref};
     use tokio::{sync::mpsc, time::Instant};
     use tokio_stream::wrappers::UnboundedReceiverStream;
 
     use crate::{
         delivery::{
             FailureDetector,
-            test_utils::{DEADLINE, ROUND, proposal, transaction, until},
+            test_utils::{DEADLINE, ROUND, ROUND_IN_SECONDS, proposal, transaction, until},
         },
         message::DataPayload,
         test_utils::dispatcher::TestPayloadDispatcher,
@@ -199,10 +191,34 @@ mod tests {
         let (channel, broadcasts) = mpsc::unbounded_channel();
         let detection = FailureDetector::new(
             DEADLINE,
-            ROUND,
+            ROUND_IN_SECONDS,
             UnboundedReceiverStream::new(broadcasts).boxed(),
         );
         (detection, Instant::now(), channel)
+    }
+
+    /// A detector too busy to be polled for several rounds must not lose them.
+    /// Counting ticks would lose them: the interval behind it skips what was
+    /// missed, so its clock would fall behind wall time for good and every
+    /// deadline after that would be owed more than it should be.
+    ///
+    /// Polled once, by hand, so the paused clock cannot auto-advance and hide
+    /// the difference.
+    #[tokio::test(start_paused = true)]
+    async fn rounds_that_pass_unobserved_still_count() {
+        let (mut detection, _start, _channel) = watching();
+        detection.mark_payload_as_blended(proposal());
+
+        // The whole deadline passes with nothing polling the detector.
+        tokio::time::advance(ROUND * u32::try_from(DEADLINE.get() + 2).unwrap()).await;
+
+        let mut context = Context::from_waker(noop_waker_ref());
+        assert_eq!(
+            Pin::new(&mut detection).poll_next(&mut context),
+            Poll::Ready(Some(vec![proposal()])),
+            "one poll after the deadline elapsed must reveal the payload, however \
+             many rounds went by unobserved"
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -337,7 +353,8 @@ mod tests {
     /// opposite of what the fallback is for.
     #[tokio::test(start_paused = true)]
     async fn losing_sight_of_the_broadcasting_channel_stops_the_detection() {
-        let mut detection = FailureDetector::new(DEADLINE, ROUND, stream::empty().boxed());
+        let mut detection =
+            FailureDetector::new(DEADLINE, ROUND_IN_SECONDS, stream::empty().boxed());
         let start = Instant::now();
         detection.mark_payload_as_blended(proposal());
 

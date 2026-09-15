@@ -85,16 +85,15 @@ impl ServiceConfig {
                     connection_share_per_round: self.deployment.connection_share_per_round(),
                     listening_address: self.user.core.backend.listening_address,
                     edge_node_connection_timeout: self
-                        .user
-                        .core
-                        .backend
-                        .edge_node_connection_timeout,
+                        .deployment
+                        .edge_node_connection_timeout(&slot_duration),
                     max_dial_attempts_per_peer: self.user.core.backend.max_dial_attempts_per_peer,
                     max_edge_node_incoming_connections: self
-                        .user
-                        .core
-                        .backend
-                        .max_edge_node_incoming_connections,
+                        .deployment
+                        .maximum_concurrent_edge_connections(),
+                    accepted_edge_connections_per_round: self
+                        .deployment
+                        .accepted_edge_connections_per_round(),
                     protocol_name: self.deployment.common.protocol_name.clone(),
                     peering_degree_check_interval: self
                         .user
