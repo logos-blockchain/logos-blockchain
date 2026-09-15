@@ -135,7 +135,7 @@ mod tests {
     }
 
     fn payload(byte: u8) -> OutgoingMessage {
-        OutgoingMessage::try_from_bytes([byte]).expect("A single byte fits on the wire.")
+        OutgoingMessage::from_bytes([byte])
     }
 
     #[test]
