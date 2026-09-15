@@ -152,6 +152,7 @@ pub fn run_node_from_config(
     // read it from the cryptarchia deployment config before that config is
     // moved into the cryptarchia service settings below.
     let pow_slot_window = config.deployment.cryptarchia.pow_config.reward.slot_window;
+    let pow_rewards_enabled = config.deployment.cryptarchia.pow_config.reward.rate_num > 0;
 
     let storage_config = StorageConfig {
         user: config.user.storage,
@@ -211,7 +212,7 @@ pub fn run_node_from_config(
     let pow_config = PoWConfig {
         user: config.user.pow,
     }
-    .into_pow_service_settings(recovery_data, pow_slot_window);
+    .into_pow_service_settings(recovery_data, pow_slot_window, pow_rewards_enabled);
 
     let tracing_config = config::tracing::ServiceConfig {
         user: config.user.tracing,
