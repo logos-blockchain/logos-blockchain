@@ -197,7 +197,8 @@ mod test {
 
     use super::*;
     use crate::mantle::{
-        Note, Utxo,
+        Note, Utxo, channel_notes,
+        gas::test_utils::FixedThresholds,
         ledger::InputsError,
         ops::channel::{config::Keys, verification::test_utils::create_channel_multi_sig_proof},
         transactions::{
@@ -263,7 +264,6 @@ mod test {
             .into_preverified(&())
             .expect("preverify accepts a non-empty input list")
     }
-    use crate::mantle::gas::test_utils::FixedThresholds;
 
     #[test]
     fn preverify_rejects_empty_inputs() {
@@ -294,14 +294,14 @@ mod test {
             channel_view(true),
             [((CHANNEL_ID, 0), signing_key().public_key())],
         );
-        let locked_notes = ServiceNotes::new();
+        let service_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
 
         assert!(
             signed_operation
                 .verify(&WithdrawValidationContext {
                     channels: &channels,
-                    service_notes: &locked_notes,
+                    service_notes: &service_notes,
                     utxos: &utxos,
                     tx_hash_view: &TxHashView::from(signed_hash),
                     op_index: 0,
@@ -314,7 +314,7 @@ mod test {
             signed_operation
                 .verify(&WithdrawValidationContext {
                     channels: &channels,
-                    service_notes: &locked_notes,
+                    service_notes: &service_notes,
                     utxos: &utxos,
                     tx_hash_view: &TxHashView::from(other_hash),
                     op_index: 0,
@@ -341,14 +341,14 @@ mod test {
             channel_view(true),
             [((CHANNEL_ID, 0), signing_key().public_key())],
         );
-        let locked_notes = ServiceNotes::new();
+        let service_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
 
         assert_eq!(
             signed_operation
                 .verify(&WithdrawValidationContext {
                     channels: &channels,
-                    service_notes: &locked_notes,
+                    service_notes: &service_notes,
                     utxos: &utxos,
                     tx_hash_view: &TxHashView::from(signed_hash),
                     op_index: 0,
@@ -372,14 +372,14 @@ mod test {
             channel_view(true),
             [((CHANNEL_ID, 0), signing_key().public_key())],
         );
-        let locked_notes = ServiceNotes::new();
+        let service_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
 
         assert_eq!(
             signed_operation
                 .verify(&WithdrawValidationContext {
                     channels: &channels,
-                    service_notes: &locked_notes,
+                    service_notes: &service_notes,
                     utxos: &utxos,
                     tx_hash_view: &TxHashView::from(signed_hash),
                     op_index: 0,
@@ -402,14 +402,14 @@ mod test {
             channel_view(true),
             [((CHANNEL_ID, 0), signing_key().public_key())],
         );
-        let locked_notes = ServiceNotes::new();
+        let service_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
 
         assert_eq!(
             signed_operation
                 .verify(&WithdrawValidationContext {
                     channels: &Channels::new(),
-                    service_notes: &locked_notes,
+                    service_notes: &service_notes,
                     utxos: &utxos,
                     tx_hash_view: &TxHashView::from(signed_hash),
                     op_index: 0,
@@ -435,14 +435,14 @@ mod test {
             channel_view(false),
             [((CHANNEL_ID, 0), signing_key().public_key())],
         );
-        let locked_notes = ServiceNotes::new();
+        let service_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
 
         assert_eq!(
             signed_operation
                 .verify(&WithdrawValidationContext {
                     channels: &channels,
-                    service_notes: &locked_notes,
+                    service_notes: &service_notes,
                     utxos: &utxos,
                     tx_hash_view: &TxHashView::from(signed_hash),
                     op_index: 0,
@@ -466,14 +466,14 @@ mod test {
             channel_view(true),
             [((CHANNEL_ID, 0), signing_key().public_key())],
         );
-        let locked_notes = ServiceNotes::new();
+        let service_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
 
         assert_eq!(
             signed_operation
                 .verify(&WithdrawValidationContext {
                     channels: &channels,
-                    service_notes: &locked_notes,
+                    service_notes: &service_notes,
                     utxos: &utxos,
                     tx_hash_view: &TxHashView::from(signed_hash),
                     op_index: 0,
@@ -485,6 +485,67 @@ mod test {
                 threshold: 2,
                 actual: 1,
             }
+        );
+    }
+
+    fn verified() -> SignedOperation<ChannelWithdrawOp, Verified, StandardMode> {
+        SignedOperation::<_, Unverified, StandardMode>::new(
+            ChannelWithdrawOp {
+                channel_id: CHANNEL_ID,
+                inputs: Inputs::new([utxo().id()]),
+            },
+            ChannelMultiSigProof::sample_with_signatures(1),
+        )
+        .into_state_trusted()
+    }
+
+    #[test]
+    fn execute_releases_the_inputs_from_the_channel() {
+        let (context, events) = verified()
+            .execute(WithdrawExecutionContext {
+                channels: channel_view(true),
+                tx_hash: TxHash::from([9u8; 32]),
+            })
+            .expect("the input is a channel note of this channel");
+
+        assert!(!context.channels.is_channel_note(&utxo().id()));
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn execute_rejects_an_input_no_channel_owns() {
+        assert_eq!(
+            verified()
+                .execute(WithdrawExecutionContext {
+                    channels: channel_view(false),
+                    tx_hash: TxHash::from([9u8; 32]),
+                })
+                .map(|_| ())
+                .map_err(|(_, error)| error),
+            Err(Error::ChannelNotes(channel_notes::Error::NotInChannel(
+                utxo().id()
+            )))
+        );
+    }
+
+    #[test]
+    fn execute_rejects_an_input_another_channel_owns() {
+        let channels = channel_view(false)
+            .register_channel_note(&utxo().id(), &ChannelId::from([19u8; 32]))
+            .expect("the note is not owned by another channel yet");
+
+        assert_eq!(
+            verified()
+                .execute(WithdrawExecutionContext {
+                    channels,
+                    tx_hash: TxHash::from([9u8; 32]),
+                })
+                .map(|_| ())
+                .map_err(|(_, error)| error),
+            Err(Error::ChannelNotes(channel_notes::Error::NotAChannelNote {
+                note_id: utxo().id(),
+                channel_id: CHANNEL_ID,
+            }))
         );
     }
 
