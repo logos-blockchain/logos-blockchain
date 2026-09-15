@@ -58,8 +58,6 @@ pub enum HeaderError {
     UnsupportedVersion(Version),
     #[error("Expected a non-genesis slot")]
     GenesisSlot,
-    #[error("Expected a parent block different from the header itself")]
-    SelfParent,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
@@ -348,9 +346,6 @@ pub fn verify_header_alone(header: &Header) -> Result<(), HeaderError> {
     }
     if header.slot() == Slot::genesis() {
         return Err(HeaderError::GenesisSlot);
-    }
-    if header.parent() == header.id() {
-        return Err(HeaderError::SelfParent);
     }
     Ok(())
 }
