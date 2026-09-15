@@ -131,11 +131,10 @@ where
             >
             + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
     {
-        let cryptarchia = CryptarchiaServiceApi::<Cryptarchia>::from_overwatch_handle(
-            &service_resources_handle.overwatch_handle,
-        )
-        .await
-        .expect("Relay connection with Cryptarchia should succeed");
+        let cryptarchia =
+            CryptarchiaServiceApi::<Cryptarchia>::new(&service_resources_handle.overwatch_handle)
+                .await
+                .expect("Relay connection with Cryptarchia should succeed");
         let network_relay = service_resources_handle
             .overwatch_handle
             .relay::<NetworkService<_, _>>()

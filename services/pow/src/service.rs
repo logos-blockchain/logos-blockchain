@@ -454,7 +454,7 @@ where
         .await?;
 
         // API wrapper over the chain service relay, used to query chain state.
-        let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService>::from_overwatch_handle(
+        let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService>::new(
             &service_resources_handle.overwatch_handle,
         )
         .await

@@ -80,15 +80,16 @@ where
     Cryptarchia: CryptarchiaServiceData<Tx: Send>,
 {
     #[must_use]
-    pub const fn new(relay: OutboundRelay<Cryptarchia::Message>) -> Self {
+    pub const fn from_relay(relay: OutboundRelay<Cryptarchia::Message>) -> Self {
         Self { relay }
     }
 
     /// Connect to the chain service through the overwatch `handle`.
     ///
     /// Fetches the relay for `Cryptarchia` itself, so the service type is
-    /// named once, on this wrapper.
-    pub async fn from_overwatch_handle<RuntimeServiceId>(
+    /// named once, on this wrapper. Use [`Self::from_relay`] when a relay is
+    /// already at hand.
+    pub async fn new<RuntimeServiceId>(
         handle: &OverwatchHandle<RuntimeServiceId>,
     ) -> Result<Self, ApiError>
     where
@@ -97,7 +98,7 @@ where
         let relay = handle.relay::<Cryptarchia>().await.map_err(|error| {
             ApiError::CommsFailure(format!("{error} while connecting to chain-service"))
         })?;
-        Ok(Self::new(relay))
+        Ok(Self::from_relay(relay))
     }
 
     /// Get the current consensus info including LIB, tip, slot, height, and

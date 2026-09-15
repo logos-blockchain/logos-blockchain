@@ -476,11 +476,10 @@ where
             .await?;
 
         // Create the API wrapper for cleaner communication
-        let cryptarchia_api = CryptarchiaServiceApi::<Cryptarchia>::from_overwatch_handle(
-            &service_resources_handle.overwatch_handle,
-        )
-        .await
-        .expect("Failed to estabilish connection with Cryptarchia");
+        let cryptarchia_api =
+            CryptarchiaServiceApi::<Cryptarchia>::new(&service_resources_handle.overwatch_handle)
+                .await
+                .expect("Failed to estabilish connection with Cryptarchia");
 
         // Create KMS API for transaction signing
         let kms = KmsServiceApi::<Kms, RuntimeServiceId>::new(
