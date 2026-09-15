@@ -52,9 +52,8 @@ impl error::Error for BlacklistReason {}
 pub struct Entry {
     pub peer: PeerId,
     pub reason: BlacklistReason,
-    /// The round the peer was last blacklisted, which its expiry is measured
-    /// from.
-    pub since: Round,
+    /// The round at which the entry is removed from the blacklist.
+    pub expires_at: Round,
 }
 
 /// The peers this node refuses to exchange Blend messages with, for a while.
@@ -100,7 +99,7 @@ impl PeerBlacklist {
         self.entries.push_back(Entry {
             peer,
             reason,
-            since: now,
+            expires_at: now.saturating_add(self.expiry),
         });
     }
 
@@ -108,7 +107,7 @@ impl PeerBlacklist {
     pub fn entries(&self, now: Round) -> impl Iterator<Item = &Entry> {
         self.entries
             .iter()
-            .filter(move |entry| self.is_unexpired(entry, now))
+            .filter(move |entry| is_unexpired(entry, now))
     }
 
     /// Why the peer is blacklisted as of `now`, if it is.
@@ -130,21 +129,21 @@ impl PeerBlacklist {
         while self
             .entries
             .front()
-            .is_some_and(|entry| !self.is_unexpired(entry, now))
+            .is_some_and(|entry| !is_unexpired(entry, now))
         {
             self.entries.pop_front();
         }
-    }
-
-    /// Whether the entry still falls inside the window trailing `now`.
-    const fn is_unexpired(&self, entry: &Entry, now: Round) -> bool {
-        now.rounds_since(entry.since) < self.expiry.get()
     }
 
     #[cfg(test)]
     fn len(&self) -> usize {
         self.entries.len()
     }
+}
+
+/// Whether the entry still has rounds left as of `now`.
+const fn is_unexpired(entry: &Entry, now: Round) -> bool {
+    now.inner() < entry.expires_at.inner()
 }
 
 #[cfg(test)]
