@@ -16,7 +16,7 @@ pub fn compute_new_reward_difficulty(
     // (P - F): the weight of the fresh observation, with q = F / P.
     let observation_weight = smoothing_precision
         .checked_sub(smoothing_factor)
-        .expect("EMA_SMOOTHING_FACTOR must not exceed EMA_SMOOTHING_PRECISION");
+        .expect("EMA_SMOOTHING_FACTOR must be below EMA_SMOOTHING_PRECISION");
 
     // The arithmetic happens on plain integers: `PowTarget` is a field
     // element, whose division (multiplication by the modular inverse) does
@@ -43,10 +43,13 @@ pub fn compute_new_reward_difficulty(
     let new_target = BigUint::from(target_claims_per_block) * demand_estimate_denominator
         / demand_estimate_numerator;
 
+    // Use REWARD_TARGET_FLOOR to prevent it from falling to a value it can
+    // never recover from (see `RewardPoWConfig::reward_target_floor`).
+    let target_floor = BigUint::from(config.reward_target_floor().get());
     // Cap at p - 1 (the maximum field element) so converting back into the
     // field cannot reduce mod p and wrap a large target into a tiny one.
     let max_target = BigUint::from_bytes_le(&fr_to_bytes(&-PowTarget::ONE));
-    PowTarget::from(new_target.min(max_target))
+    PowTarget::from(new_target.max(target_floor).min(max_target))
 }
 
 #[cfg(test)]
@@ -151,24 +154,43 @@ mod tests {
     }
 
     #[test]
-    fn claim_flood_drives_the_target_to_zero() {
-        // Pins current behaviour: an enormous claim count floors the target
-        // to zero. Zero is an absorbing state (0 stays 0 below), so whether
-        // this needs a floor of 1 is a design decision left open here.
+    fn claim_flood_stops_at_the_floor() {
+        // An enormous claim count would drive the target to zero.
+        // The floor prevents it: ceil(9 / (10-9)) = 9
         assert_eq!(
             compute_new_reward_difficulty(u64::MAX, PowTarget::from(1_000u64), &test_config()),
-            PowTarget::ZERO
+            PowTarget::from(9u64)
         );
     }
 
     #[test]
-    fn zero_target_is_absorbing() {
-        // Pins current behaviour: a zero target (e.g. the unset genesis
-        // default) stays zero forever — genesis must seed a real initial
-        // difficulty for the controller to operate.
+    fn zero_target_is_lifted_to_the_floor() {
+        // If `claims=0` and `current=0`, the new target is 0, which stays at 0
+        // forever. The floor prevents it: ceil(9 / (10-9)) = 9
         assert_eq!(
             compute_new_reward_difficulty(0, PowTarget::ZERO, &test_config()),
-            PowTarget::ZERO
+            PowTarget::from(9u64)
+        );
+    }
+
+    #[test]
+    fn target_below_the_floor_is_lifted_to_the_floor() {
+        // If `claims=0` and `current=8`, the new target is `8 * 10 / 9 = 8`,
+        // which is below the floor of 9. The floor lifts it to 9 instead.
+        assert_eq!(
+            compute_new_reward_difficulty(0, PowTarget::from(8u64), &test_config()),
+            PowTarget::from(9u64)
+        );
+    }
+
+    #[test]
+    fn target_at_the_floor_eases_on_its_own() {
+        // If `claims=0` and `current=9` (== floor), the new target is
+        // `9 * 10 / 9 = 10`. The target eases on its own, without the floor's
+        // help.
+        assert_eq!(
+            compute_new_reward_difficulty(0, PowTarget::from(9u64), &test_config()),
+            PowTarget::from(10u64)
         );
     }
 
@@ -188,23 +210,19 @@ mod tests {
     }
 
     #[test]
-    fn full_smoothing_freezes_the_target() {
-        // F == P is q = 1: the observation has zero weight, so the target
-        // never moves no matter what the block contained.
-        let full_smoothing = difficulty_config(10, 10, 10);
-        let target = PowTarget::from(1_000u64);
-        assert_eq!(
-            compute_new_reward_difficulty(0, target, &full_smoothing),
-            target
-        );
-        assert_eq!(
-            compute_new_reward_difficulty(1_000_000, target, &full_smoothing),
-            target
+    #[should_panic(expected = "reward_target_floor must be computed successfully")]
+    fn smoothing_factor_equal_to_precision_is_rejected() {
+        // F == P leaves P - F at zero, so the floor is undefined. Config
+        // validation rejects it at load time; here it surfaces as a panic.
+        let _ = compute_new_reward_difficulty(
+            0,
+            PowTarget::from(1_000u64),
+            &difficulty_config(10, 10, 10),
         );
     }
 
     #[test]
-    #[should_panic(expected = "EMA_SMOOTHING_FACTOR must not exceed")]
+    #[should_panic(expected = "EMA_SMOOTHING_FACTOR must be below")]
     fn smoothing_factor_above_precision_is_rejected() {
         // q > 1 would make the observation weight negative; the runtime
         // check turns a silent underflow into an explicit panic.

@@ -156,10 +156,13 @@ pub struct RewardPoWConfig {
     /// field-scale value, so the chain would start ~60 orders of magnitude
     /// too hard. Spec: 26.
     pub initial_difficulty: ModulusShift,
-    /// EMA smoothing factor `F` (weight of the prior estimate). Must not
-    /// exceed [`Self::ema_smoothing_precision`].
+    /// EMA smoothing factor `F` (weight of the prior estimate). Must be below
+    /// [`Self::ema_smoothing_precision`]: `P - F` is a divisor in
+    /// [`Self::reward_target_floor`].
     pub ema_smoothing_factor: u64,
     /// EMA smoothing precision `P`; the smoothing fraction is `F / P`.
+    /// Must be above [`Self::ema_smoothing_factor`]: `P - F` is a divisor in
+    /// [`Self::reward_target_floor`].
     pub ema_smoothing_precision: NonZeroU64,
     /// Target reward claims per block the controller aims for.
     pub target_claims_per_block: u64,
@@ -217,10 +220,8 @@ impl TryFrom<RewardPoWConfigFields> for RewardPoWConfig {
 /// Invariant violations in a [`RewardPoWConfig`], surfaced at config-load time.
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum RewardPoWConfigError {
-    #[error(
-        "EMA smoothing factor ({factor}) must not exceed EMA smoothing precision ({precision})"
-    )]
-    EmaSmoothingFactorExceedsPrecision { factor: u64, precision: NonZeroU64 },
+    #[error("EMA smoothing factor ({factor}) must be below EMA smoothing precision ({precision})")]
+    EmaSmoothingFactorNotBelowPrecision { factor: u64, precision: NonZeroU64 },
     #[error(
         "claim rate scale overflows u64: rate_den ({rate_den}) * \
          target_claim_per_block ({target_claim_per_block})"
@@ -239,19 +240,58 @@ impl RewardPoWConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`RewardPoWConfigError`] if the EMA smoothing factor exceeds the
-    /// precision, or the configured part of the payout-rate denominator
-    /// overflows `u64`.
+    /// Returns [`RewardPoWConfigError`] if the EMA smoothing factor is not
+    /// below the precision, or the configured part of the payout-rate
+    /// denominator overflows `u64`.
     pub fn validate(&self) -> Result<(), RewardPoWConfigError> {
-        if self.ema_smoothing_factor > self.ema_smoothing_precision.get() {
-            return Err(RewardPoWConfigError::EmaSmoothingFactorExceedsPrecision {
+        if self.ema_smoothing_factor >= self.ema_smoothing_precision.get() {
+            return Err(RewardPoWConfigError::EmaSmoothingFactorNotBelowPrecision {
                 factor: self.ema_smoothing_factor,
                 precision: self.ema_smoothing_precision,
             });
         }
-        // Discard the value; this call only checks that it does not overflow.
+        // Only the errors matter here; the computed values are unused.
+        self.checked_reward_target_floor()?;
         self.checked_claim_rate_scale()?;
         Ok(())
+    }
+
+    /// `REWARD_TARGET_FLOOR`: the retarget never returns a target below this to
+    /// prevent it from falling to a value it can never recover from.
+    ///
+    /// It is computed from `ceil(F / (P - F))`.
+    /// The formula is designed to prevent the floor from being too small.
+    /// If it is too small, the target stays the same value.
+    ///
+    /// With `F = 0` the formula gives 0, which defeats its purpose,
+    /// so the function sets a minimum of 1.
+    fn checked_reward_target_floor(&self) -> Result<NonZeroU64, RewardPoWConfigError> {
+        Ok(self
+            .ema_smoothing_factor
+            .div_ceil(
+                self.ema_smoothing_precision
+                    .get()
+                    .checked_sub(self.ema_smoothing_factor)
+                    .and_then(NonZeroU64::new)
+                    .ok_or(RewardPoWConfigError::EmaSmoothingFactorNotBelowPrecision {
+                        factor: self.ema_smoothing_factor,
+                        precision: self.ema_smoothing_precision,
+                    })?
+                    .get(),
+            )
+            .max(1)
+            .try_into()
+            .expect("floor is at least one"))
+    }
+
+    /// `REWARD_TARGET_FLOOR`: the retarget never returns a target below this to
+    /// prevent it from falling to a value it can never recover from.
+    ///
+    /// It is computed from `ceil(F / (P - F))` and at least 1.
+    #[must_use]
+    pub fn reward_target_floor(&self) -> NonZeroU64 {
+        self.checked_reward_target_floor()
+            .expect("reward_target_floor must be computed successfully")
     }
 
     /// The configured factors of the payout-rate denominator,
@@ -359,7 +399,7 @@ mod tests {
         config.ema_smoothing_factor = config.ema_smoothing_precision.get() + 1;
         assert_eq!(
             config.validate(),
-            Err(RewardPoWConfigError::EmaSmoothingFactorExceedsPrecision {
+            Err(RewardPoWConfigError::EmaSmoothingFactorNotBelowPrecision {
                 factor: config.ema_smoothing_factor,
                 precision: config.ema_smoothing_precision,
             })
@@ -367,11 +407,33 @@ mod tests {
     }
 
     #[test]
-    fn reward_config_accepts_ema_factor_equal_to_precision() {
-        // F == P is q = 1 (full smoothing): a valid boundary, not a rejection.
+    fn reward_config_rejects_ema_factor_equal_to_precision() {
+        // F == P leaves P - F at zero, so the reward target floor is undefined.
         let mut config = disabled_reward_config();
         config.ema_smoothing_factor = config.ema_smoothing_precision.get();
-        assert_eq!(config.validate(), Ok(()));
+        assert_eq!(
+            config.validate(),
+            Err(RewardPoWConfigError::EmaSmoothingFactorNotBelowPrecision {
+                factor: config.ema_smoothing_factor,
+                precision: config.ema_smoothing_precision,
+            })
+        );
+    }
+
+    #[test]
+    fn reward_target_floor() {
+        let reward_target_floor = |factor: u64, precision: u64| {
+            let mut config = disabled_reward_config();
+            config.ema_smoothing_factor = factor;
+            config.ema_smoothing_precision = NonZeroU64::new(precision).unwrap();
+            config.reward_target_floor().get()
+        };
+        // As per spec: ceil(9 / (10-9)).
+        assert_eq!(reward_target_floor(9, 10), 9);
+        // ceil(7 / (10-7)).
+        assert_eq!(reward_target_floor(7, 10), 3);
+        // ceil(0 / (10-0)) is 0, so the floor is raised to 1.
+        assert_eq!(reward_target_floor(0, 10), 1);
     }
 
     #[test]
