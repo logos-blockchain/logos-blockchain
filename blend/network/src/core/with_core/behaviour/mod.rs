@@ -80,6 +80,18 @@ pub struct Config {
     /// `η`: how long a message may wait for a connection before that
     /// connection gives up on it.
     pub send_deadline_in_rounds: RoundCount,
+    /// `T_H`: how long a handshake with a core node is given to complete
+    /// before the connection is abandoned and its degree slot released.
+    pub handshake_deadline_in_rounds: RoundCount,
+}
+
+/// A connection established but not yet negotiated for the Blend protocol.
+#[derive(Debug, Clone, Copy)]
+struct PendingUpgrade {
+    /// Which side opened it.
+    direction: ConnectionDirection,
+    /// The round the handshake began, which `T_H` is measured from.
+    started_at: Round,
 }
 
 /// Who opened a connection, from this node's point of view.
@@ -149,7 +161,7 @@ pub struct Behaviour<ProofsVerifier> {
     /// We use this to keep track of the connection direction (outgoing or
     /// incoming), to be used when deciding which connection to close when a
     /// duplicate connection to the same peer is detected.
-    connections_waiting_upgrade: HashMap<(PeerId, ConnectionId), ConnectionDirection>,
+    connections_waiting_upgrade: HashMap<(PeerId, ConnectionId), PendingUpgrade>,
     /// Queue of events to yield to the swarm.
     events: VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     /// Waker that handles polling
@@ -189,6 +201,8 @@ pub struct Behaviour<ProofsVerifier> {
     connection_share_per_round: NonZeroU64,
     /// `η`: how long a message may wait for a connection.
     send_deadline: RoundCount,
+    /// `T_H`: how long a handshake is given to complete.
+    handshake_deadline: RoundCount,
     /// Which neighbours are still delivering messages.
     liveness: PeerLivenessMap,
     /// The peers this node refuses to exchange Blend messages with, for a
@@ -207,6 +221,9 @@ pub enum ConnectionUpgradeFailureReason {
     /// The node has tried to establish a new connection with a peer, but the
     /// reverse direction is preferred, according to the Blend specification.
     ReverseDirectionPreferred,
+    /// The handshake did not complete within `T_H`, so the connection was
+    /// abandoned and the degree slot it held released.
+    HandshakeTimedOut,
     /// A failure happened during the connection upgrade that is not covered by
     /// any of the above cases.
     ConnectionFailure,
@@ -285,6 +302,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             current_round,
             connection_share_per_round: core_config.connection_share_per_round,
             send_deadline: core_config.send_deadline_in_rounds,
+            handshake_deadline: core_config.handshake_deadline_in_rounds,
             liveness: PeerLivenessMap::new(RoundCount::new(core_config.liveness_window_in_rounds)),
             blacklist: PeerBlacklist::new(
                 core_config
@@ -431,10 +449,15 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     }
 
     /// The connections the node could still hold before reaching `Φ_CC + 1`.
+    /// How many more connections with core nodes this node has room for.
+    ///
+    /// A handshake in progress holds a slot just as a negotiated connection
+    /// does.
     #[must_use]
     pub fn available_connection_slots(&self) -> usize {
         self.maximum_peers()
             .saturating_sub(self.negotiated_peers.len())
+            .saturating_sub(self.connections_waiting_upgrade.len())
     }
 
     #[must_use]
@@ -616,7 +639,10 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     /// ignore the stale event rather than acting on a connection that no longer
     /// belongs to the current epoch.
     fn handle_negotiated_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
-        let Some(new_connection_direction) = self
+        let Some(PendingUpgrade {
+            direction: new_connection_direction,
+            ..
+        }) = self
             .connections_waiting_upgrade
             .remove(&(peer_id, connection_id))
         else {
@@ -814,6 +840,37 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         }
     }
 
+    /// Give up on every handshake that has taken longer than `T_H`.
+    fn abandon_stale_handshakes(&mut self) {
+        let deadline = self.handshake_deadline.get();
+        let current_round = self.current_round;
+        let stale_handshakes = self
+            .connections_waiting_upgrade
+            .iter()
+            .filter_map(|(connection, pending_handshake)| {
+                (current_round.rounds_since(pending_handshake.started_at) >= deadline)
+                    .then_some((*connection, pending_handshake.direction))
+            })
+            .collect::<Vec<_>>();
+
+        for ((peer_id, connection_id), direction) in stale_handshakes {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "Abandoning handshake with peer {peer_id:?} on connection {connection_id:?}: it did not complete within `T_H`."
+            );
+            self.connections_waiting_upgrade
+                .remove(&(peer_id, connection_id));
+            self.close_connection((peer_id, connection_id));
+            self.notify_about_connection_upgrade_failure(
+                peer_id,
+                ConnectionUpgradeFailure {
+                    reason: ConnectionUpgradeFailureReason::HandshakeTimedOut,
+                    direction,
+                },
+            );
+        }
+    }
+
     /// Close the connection with every neighbour that has stopped delivering
     /// messages.
     fn close_unhealthy_connections(&mut self) {
@@ -887,8 +944,8 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             || self
                 .connections_waiting_upgrade
                 .iter()
-                .any(|((peer_id, _), pending_direction)| {
-                    peer_id == remote_peer && *pending_direction == direction
+                .any(|((peer_id, _), pending)| {
+                    peer_id == remote_peer && pending.direction == direction
                 })
     }
 
@@ -1148,8 +1205,13 @@ where
                 target: LOG_TARGET,
                 "Upgrading inbound connection {connection_id:?} with core peer {peer_id:?} with addr {remote_addr:?}."
             );
-            self.connections_waiting_upgrade
-                .insert((peer_id, connection_id), ConnectionDirection::Incoming);
+            self.connections_waiting_upgrade.insert(
+                (peer_id, connection_id),
+                PendingUpgrade {
+                    direction: ConnectionDirection::Incoming,
+                    started_at: self.current_round,
+                },
+            );
             Either::Left(ConnectionHandler::new(
                 self.protocol_name.clone(),
                 (peer_id, connection_id),
@@ -1211,8 +1273,13 @@ where
                 target: LOG_TARGET,
                 "Upgrading outbound connection {connection_id:?} with core peer {peer_id:?} with addr {remote_addr:?}."
             );
-            self.connections_waiting_upgrade
-                .insert((peer_id, connection_id), ConnectionDirection::Outgoing);
+            self.connections_waiting_upgrade.insert(
+                (peer_id, connection_id),
+                PendingUpgrade {
+                    direction: ConnectionDirection::Outgoing,
+                    started_at: self.current_round,
+                },
+            );
             Either::Left(ConnectionHandler::new(
                 self.protocol_name.clone(),
                 (peer_id, connection_id),
@@ -1246,7 +1313,10 @@ where
             }
 
             // We notify the swarm of any connection that failed to be upgraded.
-            if let Some(connection_direction) = self
+            if let Some(PendingUpgrade {
+                direction: connection_direction,
+                ..
+            }) = self
                 .connections_waiting_upgrade
                 .remove(&(peer_id, connection_id))
             {
@@ -1339,6 +1409,7 @@ where
             self.current_round = current_round;
             self.liveness
                 .enter_new_round_with_peers(self.negotiated_peers.keys());
+            self.abandon_stale_handshakes();
             self.close_unhealthy_connections();
             self.blacklist.prune_expired_entries(current_round);
         }
