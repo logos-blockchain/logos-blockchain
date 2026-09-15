@@ -16,9 +16,9 @@
 pub use lb_zone_sdk::sequencer::{
     AtomicWithdrawInfo, ChannelUpdate, ChannelUpdateTx, DepositInfo, Error, Event, FinalizedOp,
     FinalizedTx, FundingConfig, IndexedSignature, InscriptionId, InscriptionInfo, PendingTx,
-    PreparedChannelConfig, PublishResult, SequencerChannelView, SequencerCheckpoint,
-    SequencerClient, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
-    WithdrawArg, WithdrawInfo, WithdrawInputs,
+    PreparedAtomicBundle, PreparedChannelConfig, PublishResult, SequencerChannelView,
+    SequencerCheckpoint, SequencerClient, SequencerConfig, TurnNotification, TxSource, TxStatus,
+    TxStatusUpdate, WithdrawArg, WithdrawInfo, WithdrawInputs,
 };
 use lb_zone_sdk::{adapter, sequencer::ZoneSequencer};
 use tokio::{
