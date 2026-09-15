@@ -120,6 +120,7 @@ impl Settings {
                 .expect("Round duration must be greater than `0` seconds."),
             rounds_per_observation_window: self.rounds_per_observation_window(),
             network_absorption_in_rounds: self.common.network_absorption_in_rounds,
+            core_handshake_deadline_in_rounds: self.core.core_handshake_deadline_in_rounds,
             rounds_per_epoch: self.rounds_per_epoch(slots_per_epoch, slot_duration),
         }
     }
@@ -197,6 +198,10 @@ pub struct CoreSettings {
     /// `T_E`: the rounds an edge node is given to send its message, counted
     /// from the moment its connection is accepted.
     pub edge_node_send_deadline_in_rounds: NonZeroU64,
+    /// `T_H`: the rounds a handshake with a core node is given to complete,
+    /// covering the round trips of the transport handshake and of the
+    /// neighbour distinction process.
+    pub core_handshake_deadline_in_rounds: NonZeroU128,
     pub activity_threshold_sensitivity: u64,
 }
 
