@@ -17,7 +17,7 @@ where
 impl<ChainNetworkService, RuntimeServiceId>
     ChainNetworkServiceApi<ChainNetworkService, RuntimeServiceId>
 where
-    ChainNetworkService: ChainNetworkServiceData<Tx: Send + Sync>,
+    ChainNetworkService: ChainNetworkServiceData<Tx: Send>,
     RuntimeServiceId: Sync,
 {
     #[must_use]

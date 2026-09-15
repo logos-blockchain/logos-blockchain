@@ -1050,7 +1050,7 @@ async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool>(
 ) -> Result<(), Error>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
 {

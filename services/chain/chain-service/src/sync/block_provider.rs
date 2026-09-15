@@ -59,14 +59,14 @@ where
 {
     storage_relay: StorageRelay<Storage>,
     config: BlockProviderConfig,
-    _phantom: PhantomData<Tx>,
+    _phantom: PhantomData<fn() -> Tx>,
 }
 
 impl<Storage, Tx> BlockProvider<Storage, Tx>
 where
     Storage: StorageBackend + 'static,
     <Storage as StorageChainApi>::Block: TryInto<Block<Tx>> + Into<Bytes>,
-    Tx: Serialize + Clone + Eq + Send + Sync + 'static,
+    Tx: Serialize + Clone + Eq + Send + 'static,
 {
     #[must_use]
     pub const fn new(storage_relay: StorageRelay<Storage>, config: BlockProviderConfig) -> Self {
