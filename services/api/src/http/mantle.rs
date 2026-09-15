@@ -218,7 +218,8 @@ where
     Service: CryptarchiaServiceData<Tx = Transaction>,
     RuntimeServiceId: Debug + Sync + Display + AsServiceId<Service>,
 {
-    let new_blocks_receiver = CryptarchiaServiceApi::<Service>::new(handle.relay().await?)
+    let new_blocks_receiver = CryptarchiaServiceApi::<Service>::from_overwatch_handle(handle)
+        .await
         .subscribe_new_blocks()
         .await?;
 
@@ -847,7 +848,7 @@ where
         + 'static,
 {
     let chain_api =
-        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::new(handle.relay().await?);
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
     Ok(chain_api.get_sdp_declarations().await?)
 }
 
@@ -864,6 +865,6 @@ where
         + 'static,
 {
     let chain_api =
-        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::new(handle.relay().await?);
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
     Ok(chain_api.get_sdp_snapshot().await?)
 }
