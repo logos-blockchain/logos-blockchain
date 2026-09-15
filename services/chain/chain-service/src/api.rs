@@ -50,37 +50,31 @@ pub enum ApiError {
     Unexpected(String),
 }
 
-pub struct CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>
+pub struct CryptarchiaServiceApi<Cryptarchia>
 where
     Cryptarchia: CryptarchiaServiceData,
 {
     relay: OutboundRelay<Cryptarchia::Message>,
-    _id: std::marker::PhantomData<RuntimeServiceId>,
 }
 
-impl<Cryptarchia, RuntimeServiceId> Clone for CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>
+impl<Cryptarchia> Clone for CryptarchiaServiceApi<Cryptarchia>
 where
     Cryptarchia: CryptarchiaServiceData,
 {
     fn clone(&self) -> Self {
         Self {
             relay: self.relay.clone(),
-            _id: std::marker::PhantomData,
         }
     }
 }
 
-impl<Cryptarchia, RuntimeServiceId> CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>
+impl<Cryptarchia> CryptarchiaServiceApi<Cryptarchia>
 where
     Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
-    RuntimeServiceId: Sync,
 {
     #[must_use]
     pub const fn new(relay: OutboundRelay<Cryptarchia::Message>) -> Self {
-        Self {
-            relay,
-            _id: std::marker::PhantomData,
-        }
+        Self { relay }
     }
 
     /// Get the current consensus info including LIB, tip, slot, height, and

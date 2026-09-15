@@ -192,10 +192,7 @@ pub(crate) fn get_block_events_sync(
                     format!("Failed to get relay to CryptarchiaService: {e}"),
                 )
             })?;
-        let api =
-            CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>::new(
-                relay,
-            );
+        let api = CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>>::new(relay);
         api.get_block_events(lb_core::header::HeaderId::from(header_id))
             .await
             .map_err(|e| {

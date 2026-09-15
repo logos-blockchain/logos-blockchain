@@ -282,7 +282,7 @@ pub struct SlotContext {
     reason = "TODO: address this in a dedicated refactor"
 )]
 pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeServiceId>(
-    cryptarchia_api: CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+    cryptarchia_api: CryptarchiaServiceApi<CryptarchiaService>,
     wallet_api: WalletApi<Wallet, RuntimeServiceId>,
     kms: KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
     time_relay: OutboundRelay<TimeServiceMessage>,
@@ -414,7 +414,7 @@ async fn next_epoch_tick(
 /// slot's epoch state, and the wallet's eligible leader UTXOs (with the faucet
 /// UTXO filtered out). Returns `None` if any lookup fails.
 pub async fn fetch_slot_context<CryptarchiaService, Wallet, RuntimeServiceId>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
     ledger_config: &lb_ledger::Config,
     slot: Slot,

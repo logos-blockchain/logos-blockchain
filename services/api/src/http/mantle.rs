@@ -218,10 +218,9 @@ where
     Service: CryptarchiaServiceData<Tx = Transaction>,
     RuntimeServiceId: Debug + Sync + Display + AsServiceId<Service>,
 {
-    let new_blocks_receiver =
-        CryptarchiaServiceApi::<Service, RuntimeServiceId>::new(handle.relay().await?)
-            .subscribe_new_blocks()
-            .await?;
+    let new_blocks_receiver = CryptarchiaServiceApi::<Service>::new(handle.relay().await?)
+        .subscribe_new_blocks()
+        .await?;
 
     let processed_blocks_stream = BroadcastStream::new(new_blocks_receiver)
         .map(|item| item.map_err(|error| Box::new(error) as crate::http::DynError));
@@ -847,9 +846,8 @@ where
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + 'static,
 {
-    let chain_api = CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(
-        handle.relay().await?,
-    );
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::new(handle.relay().await?);
     Ok(chain_api.get_sdp_declarations().await?)
 }
 
@@ -865,8 +863,7 @@ where
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + 'static,
 {
-    let chain_api = CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(
-        handle.relay().await?,
-    );
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::new(handle.relay().await?);
     Ok(chain_api.get_sdp_snapshot().await?)
 }

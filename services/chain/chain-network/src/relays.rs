@@ -44,7 +44,7 @@ pub struct ChainNetworkRelays<
     MempoolNetAdapter: lb_tx_service::network::NetworkAdapter<RuntimeServiceId>,
     NetworkAdapter: network::NetworkAdapter<RuntimeServiceId>,
 {
-    cryptarchia: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    cryptarchia: CryptarchiaServiceApi<Cryptarchia>,
     network_relay: NetworkRelay<NetworkAdapter::Backend, RuntimeServiceId>,
     mempool_adapter: MempoolAdapter<Mempool::Item>,
     time_relay: TimeRelay,
@@ -77,7 +77,7 @@ where
     NetworkAdapter::PeerId: Clone + Eq + Hash + Send + Sync,
 {
     pub const fn new(
-        cryptarchia: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        cryptarchia: CryptarchiaServiceApi<Cryptarchia>,
         network_relay: NetworkRelay<NetworkAdapter::Backend, RuntimeServiceId>,
         mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Mempool::Item, Mempool::Item, TxHash>>,
         time_relay: TimeRelay,
@@ -131,7 +131,7 @@ where
             >
             + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
     {
-        let cryptarchia = CryptarchiaServiceApi::<Cryptarchia, _>::new(
+        let cryptarchia = CryptarchiaServiceApi::<Cryptarchia>::new(
             service_resources_handle
                 .overwatch_handle
                 .relay::<Cryptarchia>()
@@ -159,7 +159,7 @@ where
         Self::new(cryptarchia, network_relay, mempool_relay, time_relay)
     }
 
-    pub const fn cryptarchia(&self) -> &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId> {
+    pub const fn cryptarchia(&self) -> &CryptarchiaServiceApi<Cryptarchia> {
         &self.cryptarchia
     }
 
