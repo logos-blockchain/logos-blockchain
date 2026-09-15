@@ -493,7 +493,8 @@ where
             }
             lb_blend::network::core::with_core::behaviour::Event::OutboundConnectionUpgradeFailed { peer, reason } => {
                 match reason {
-                    reason @ ConnectionUpgradeFailureReason::ConnectionFailure => {
+                    reason @ (ConnectionUpgradeFailureReason::ConnectionFailure
+                    | ConnectionUpgradeFailureReason::HandshakeTimedOut) => {
                         Self::log_blend_peer_negotiation_failure(
                             self.current_epoch_info.epoch,
                             peer,

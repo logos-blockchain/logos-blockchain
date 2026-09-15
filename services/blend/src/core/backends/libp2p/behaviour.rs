@@ -44,6 +44,9 @@ where
                         send_deadline_in_rounds: RoundCount::new(NonZeroU128::from(
                             config.time.network_absorption_in_rounds,
                         )),
+                        handshake_deadline_in_rounds: RoundCount::new(
+                            config.time.core_handshake_deadline_in_rounds,
+                        ),
                     },
                     with_edge: lb_blend::network::core::with_edge::behaviour::Config {
                         connection_timeout: config.backend.edge_node_connection_timeout,

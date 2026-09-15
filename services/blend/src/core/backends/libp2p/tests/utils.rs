@@ -234,6 +234,7 @@ impl BlendBehaviourBuilder {
                     with_core: CoreToCoreConfig {
                         connection_share_per_round: NonZeroU64::new(1_000).unwrap(),
                         send_deadline_in_rounds: RoundCount::new(NonZeroU128::new(2).unwrap()),
+                        handshake_deadline_in_rounds: RoundCount::new(NonZeroU128::new(2).unwrap()),
                         target_peering_degree: peering_degree,
                         // Long enough that no connection in a test goes stale
                         // by accident.
