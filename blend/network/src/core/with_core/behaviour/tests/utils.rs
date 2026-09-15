@@ -1,6 +1,7 @@
 use core::{
     iter::repeat_n,
     num::{NonZeroU64, NonZeroU128, NonZeroUsize},
+    time::Duration,
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -203,6 +204,7 @@ impl BehaviourBuilder {
             handshake_deadline: self
                 .handshake_deadline_in_rounds
                 .unwrap_or_else(|| RoundCount::new(NonZeroU128::new(2).unwrap())),
+            handshake_upgrade_timeout: Duration::from_mins(1),
             round_clock: RoundClock::new(round_duration),
             liveness: PeerLivenessMap::new(RoundCount::new(liveness_window)),
             current_round: Round::from(0),
