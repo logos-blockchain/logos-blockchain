@@ -204,10 +204,10 @@ where
             .await?;
         let wallet_adapter = WalletAdapter::new(wallet_relay);
 
-        let chain_api = CryptarchiaServiceApi::<ChainService>::new(
+        let chain_api = CryptarchiaServiceApi::<ChainService>::from_overwatch_handle(
             &self.service_resources_handle.overwatch_handle,
         )
-        .await?;
+        .await;
 
         self.validate_initial_declaration_status(&chain_api).await?;
         self.restore_active_message_tracker(&chain_api).await;

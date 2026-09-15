@@ -63,8 +63,9 @@ pub fn subscribe_to_new_blocks_sync(
     let runtime_handler = node.get_runtime_handle();
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
-        let Ok(api) =
-            CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>>::new(overwatch).await
+        let Ok(relay) = overwatch
+            .relay::<CryptarchiaService<RuntimeServiceId>>()
+            .await
         else {
             return OperationStatus::error(
                 OperationStatusCode::RelayError,
@@ -77,6 +78,7 @@ pub fn subscribe_to_new_blocks_sync(
                 "Failed to get relay to StorageService.",
             );
         };
+        let api = CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>>::new(relay);
         match api.subscribe_new_blocks().await {
             Ok(mut block_stream) => {
                 runtime_handler.spawn(async move {

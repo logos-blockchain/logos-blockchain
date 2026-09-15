@@ -454,11 +454,10 @@ where
         .await?;
 
         // API wrapper over the chain service relay, used to query chain state.
-        let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService>::new(
+        let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService>::from_overwatch_handle(
             &service_resources_handle.overwatch_handle,
         )
-        .await
-        .expect("Relay connection with Cryptarchia chain service should succeed");
+        .await;
 
         // Wait till chain is online to mine
         info!(target: LOG_TARGET, "Waiting for the chain to become online");
