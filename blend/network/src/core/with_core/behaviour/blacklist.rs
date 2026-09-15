@@ -19,6 +19,9 @@ pub enum BlacklistReason {
     InvalidHeaderSignature,
     /// The sender could not prove it had the quota to send the message.
     InvalidProofOfQuota,
+    /// A message stopped part way through, or the stream failed while one was
+    /// being read.
+    StreamFramingViolation,
 }
 
 impl From<ReceiveError> for BlacklistReason {
@@ -33,6 +36,7 @@ impl From<ReceiveError> for BlacklistReason {
 impl AsRef<str> for BlacklistReason {
     fn as_ref(&self) -> &str {
         match self {
+            Self::StreamFramingViolation => "stream_framing_violation",
             Self::UndeserializableMessage => "undeserializable_message",
             Self::InvalidHeaderSignature => "invalid_header_signature",
             Self::InvalidProofOfQuota => "invalid_proof_of_quota",

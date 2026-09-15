@@ -2,6 +2,7 @@ use core::{
     num::NonZeroUsize,
     task::{Context, Poll, Waker},
 };
+use std::io;
 
 use futures::{FutureExt as _, TryFutureExt as _};
 use libp2p::{
@@ -70,7 +71,8 @@ impl StateTrait for ReadyToReceiveState {
                     self.timeout_timer,
                     Box::pin(
                         recv_msg(self.inbound_stream, self.message_size)
-                            .map_ok(|(_, message)| message),
+                            .map_ok(|received| received.map(|(_, message)| message))
+                            .map_err(io::Error::from),
                     ),
                     waker,
                 )
