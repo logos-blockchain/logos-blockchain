@@ -17,11 +17,6 @@ pub struct Config {
 #[serde(default)]
 pub struct BackendConfig {
     pub listening_address: Multiaddr,
-    #[serde_as(
-        as = "lb_utils::bounded_duration::MinimalBoundedDuration<1, lb_utils::bounded_duration::SECOND>"
-    )]
-    pub edge_node_connection_timeout: Duration,
-    pub max_edge_node_incoming_connections: u64,
     pub max_dial_attempts_per_peer: NonZeroU64,
     #[serde_as(
         as = "Option<lb_utils::bounded_duration::MinimalBoundedDuration<1, lb_utils::bounded_duration::SECOND>>"
@@ -50,8 +45,6 @@ impl Default for BackendConfig {
     fn default() -> Self {
         Self {
             listening_address: Self::default_listening_address(Self::default_port()),
-            edge_node_connection_timeout: Duration::from_secs(1),
-            max_edge_node_incoming_connections: 300,
             max_dial_attempts_per_peer: NonZeroU64::new(3).unwrap(),
             peering_degree_check_interval: Some(Duration::from_mins(1)),
         }
