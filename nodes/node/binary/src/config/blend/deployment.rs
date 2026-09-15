@@ -1,4 +1,7 @@
-use core::{num::NonZeroU64, time::Duration};
+use core::{
+    num::{NonZeroU64, NonZeroU128},
+    time::Duration,
+};
 
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_libp2p::protocol_name::StreamProtocol;
@@ -38,15 +41,15 @@ impl Settings {
     /// The Blend spec defines this as `10 * ∆max`, where `∆max` is the maximal
     /// delay time between two release rounds.
     #[must_use]
-    pub const fn rounds_per_observation_window(&self) -> NonZeroU64 {
+    pub const fn rounds_per_observation_window(&self) -> NonZeroU128 {
         // TODO: Is `10` fixed or can it be derived from some other value?
-        NonZeroU64::new(
+        NonZeroU128::new(
             10 * self
                 .core
                 .scheduler
                 .delayer
                 .maximum_release_delay_in_rounds
-                .get(),
+                .get() as u128,
         )
         .unwrap()
     }

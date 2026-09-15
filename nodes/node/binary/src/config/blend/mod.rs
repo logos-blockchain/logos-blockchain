@@ -78,7 +78,12 @@ impl ServiceConfig {
                     epoch_transition_period: self
                         .deployment
                         .epoch_transition(slots_per_block, &slot_duration),
-                    round_duration: self.deployment.round_duration(&slot_duration),
+                    round_duration_in_seconds: self
+                        .deployment
+                        .round_duration(&slot_duration)
+                        .as_secs()
+                        .try_into()
+                        .expect("Round duration must be greater than `0` seconds."),
                     rounds_per_observation_window: self.deployment.rounds_per_observation_window(),
                     rounds_per_epoch: self
                         .deployment

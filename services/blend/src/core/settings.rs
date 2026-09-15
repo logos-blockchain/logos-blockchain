@@ -1,3 +1,4 @@
+use core::time::Duration;
 use std::{num::NonZeroU64, sync::Arc};
 
 use lb_core::blend::core_quota;
@@ -81,7 +82,7 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
     ) -> lb_blend::scheduling::message_scheduler::Settings {
         lb_blend::scheduling::message_scheduler::Settings {
             maximum_release_delay_in_rounds: self.scheduler.delayer.maximum_release_delay_in_rounds,
-            round_duration: self.time.round_duration,
+            round_duration: Duration::from_secs(self.time.round_duration_in_seconds.get()),
             rounds_per_epoch: self.time.rounds_per_epoch,
             num_blend_layers: self.num_blend_layers,
         }
