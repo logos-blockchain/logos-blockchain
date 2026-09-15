@@ -19,7 +19,10 @@ use lb_api_service::http::{
 use lb_blend_service::message::ProxyServiceMessage;
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
-use lb_chain_service::{ChainServiceInfo, ConsensusMsg, Slot, api::CryptarchiaServiceApi};
+use lb_chain_service::{
+    ChainServiceInfo, Slot,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+};
 use lb_core::{
     block::Block,
     events::Events,
@@ -1140,7 +1143,7 @@ pub async fn post_declaration<
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
-    ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData + Send + Sync + 'static,
     StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Debug
         + Sync
@@ -1188,7 +1191,7 @@ pub async fn post_activity<
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
-    ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData + Send + Sync + 'static,
     StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Debug
         + Sync
@@ -1236,7 +1239,7 @@ pub async fn post_withdrawal<
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
-    ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData + Send + Sync + 'static,
     StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Debug
         + Sync
@@ -1284,7 +1287,7 @@ pub async fn post_set_declaration_id<
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
-    ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData + Send + Sync + 'static,
     StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Debug
         + Sync
@@ -1661,8 +1664,7 @@ where
         + TryInto<Block<SignedOps<Preverified, StandardMode>>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    ConsensusService:
-        ServiceData<Message = ConsensusMsg<SignedOps<Preverified, StandardMode>>> + 'static,
+    ConsensusService: CryptarchiaServiceData<Tx = SignedOps<Preverified, StandardMode>>,
     RuntimeServiceId: Debug
         + Sync
         + Display
