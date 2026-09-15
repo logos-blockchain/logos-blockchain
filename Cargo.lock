@@ -5447,7 +5447,6 @@ dependencies = [
  "bincode",
  "blake2",
  "clap",
- "futures-util",
  "hex",
  "logos-blockchain-codec",
  "logos-blockchain-groth16",
@@ -5461,7 +5460,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-stream",
  "tracing",
 ]
 

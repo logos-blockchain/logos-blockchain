@@ -20,4 +20,4 @@ pub use logos_sql::{LogosSql, LogosSqlConfig};
 pub use protocol::TxId;
 pub use rusqlite::types::ToSql;
 pub use sql::TransactionBuilder;
-pub use status::{WriteStatus, WriteStatusChange, WriteStatusChanges, WriteStatusChangesError};
+pub use status::{Displacement, DisplacementReason, WriteStatus};

@@ -1,20 +1,10 @@
-//! Local write statuses and notifications of status changes.
+//! Current local write status and displacements awaiting application handling.
 
-use std::{
-    pin::Pin,
-    task::{Context, Poll},
-};
-
-use futures_util::Stream;
-use tokio::sync::broadcast;
-use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
-
-use crate::TxId;
+use crate::{TxId, protocol::Transaction};
 
 /// The current status of a local write.
 ///
-/// A displaced write can become live again if a channel reorganization restores
-/// it. Once a write is [`Self::Finalized`], its status cannot change.
+/// A displaced write can return after a reorganization. Finalized is terminal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WriteStatus {
     /// The write's SQL changes are present in `LIVE.db`.
@@ -25,59 +15,28 @@ pub enum WriteStatus {
     Finalized,
 }
 
-/// A notification that a local write's status changed.
+/// Why Logos SQL removed a local write. Neither reason implies SQL failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WriteStatusChange {
-    /// The transaction ID returned when the write was submitted.
-    pub tx_id: TxId,
-    /// Current status after the change.
-    pub status: WriteStatus,
+pub enum DisplacementReason {
+    /// `ZoneSDK` reported the write orphaned from its channel history.
+    Orphaned,
+    /// Channel history changed underneath a pending local write.
+    /// Logos SQL removed its optimistic effects without re-executing its SQL.
+    PendingWriteInvalidated,
 }
 
-impl WriteStatusChange {
-    pub(crate) const fn new(tx_id: TxId, status: WriteStatus) -> Self {
-        Self { tx_id, status }
-    }
-}
-
-/// Error reported when the application reads status notifications too slowly.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum WriteStatusChangesError {
-    /// The number of notifications dropped before the application read them.
-    #[error("missed {0} write status changes; query the current status")]
-    Lagged(u64),
-}
-
-/// A stream of status changes for local writes.
+/// A displacement the application has not yet handled.
 ///
-/// Notifications are kept in memory and are lost on restart. Reading too
-/// slowly drops older notifications and produces
-/// [`Lagged`](WriteStatusChangesError::Lagged).
-/// Call [`LogosSql::write_status`](crate::LogosSql::write_status) for each
-/// write you are tracking to get its latest saved status.
-pub struct WriteStatusChanges {
-    inner: BroadcastStream<WriteStatusChange>,
-}
-
-impl WriteStatusChanges {
-    pub(crate) fn new(receiver: broadcast::Receiver<WriteStatusChange>) -> Self {
-        Self {
-            inner: BroadcastStream::new(receiver),
-        }
-    }
-}
-
-impl Stream for WriteStatusChanges {
-    type Item = Result<WriteStatusChange, WriteStatusChangesError>;
-
-    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match Pin::new(&mut self.inner).poll_next(context) {
-            Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(missed)))) => {
-                Poll::Ready(Some(Err(WriteStatusChangesError::Lagged(missed))))
-            }
-            Poll::Ready(Some(Ok(change))) => Poll::Ready(Some(Ok(change))),
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
-        }
-    }
+/// Retry through `LogosSql::retry_displacement`, or call
+/// `LogosSql::mark_displacement_handled` to continue without retrying.
+/// Its private identity prevents an older response from handling
+/// a later displacement of the same write.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Displacement {
+    /// The local write whose effects were removed.
+    pub tx_id: TxId,
+    /// What caused its removal.
+    pub reason: DisplacementReason,
+    pub(crate) id: TxId,
+    pub(crate) transaction: Transaction,
 }
