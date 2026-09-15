@@ -1,6 +1,7 @@
 use core::{
     mem::{self},
     num::{NonZeroU64, NonZeroU128, NonZeroUsize},
+    time::Duration,
 };
 use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
@@ -92,6 +93,26 @@ struct PendingUpgrade {
     direction: ConnectionDirection,
     /// The round the handshake began, which `T_H` is measured from.
     started_at: Round,
+}
+
+/// How long libp2p is given to complete a substream upgrade.
+///
+/// It's derived from `T_H` plus a few rounds on top to ensure our logic always
+/// fires first, and we don't let libp2p handle this instead, as we need to keep
+/// track of stale handshakes.
+fn handshake_upgrade_timeout(
+    round_duration_in_seconds: NonZeroU64,
+    handshake_deadline: RoundCount,
+) -> Duration {
+    const ROUNDS_BEYOND_THE_DEADLINE: u64 = 5;
+
+    let deadline_in_rounds = u64::try_from(handshake_deadline.get()).unwrap_or(u64::MAX);
+    Duration::from_secs(
+        round_duration_in_seconds
+            .get()
+            .saturating_mul(deadline_in_rounds)
+            .saturating_add(ROUNDS_BEYOND_THE_DEADLINE),
+    )
 }
 
 /// Who opened a connection, from this node's point of view.
@@ -203,6 +224,9 @@ pub struct Behaviour<ProofsVerifier> {
     send_deadline: RoundCount,
     /// `T_H`: how long a handshake is given to complete.
     handshake_deadline: RoundCount,
+    /// The outer bound libp2p puts on a substream upgrade, derived from `T_H`
+    /// so that the sweep above is always the one to act first.
+    handshake_upgrade_timeout: Duration,
     /// Which neighbours are still delivering messages.
     liveness: PeerLivenessMap,
     /// The peers this node refuses to exchange Blend messages with, for a
@@ -303,6 +327,10 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             connection_share_per_round: core_config.connection_share_per_round,
             send_deadline: core_config.send_deadline_in_rounds,
             handshake_deadline: core_config.handshake_deadline_in_rounds,
+            handshake_upgrade_timeout: handshake_upgrade_timeout(
+                common_config.round_duration_in_seconds,
+                core_config.handshake_deadline_in_rounds,
+            ),
             liveness: PeerLivenessMap::new(RoundCount::new(core_config.liveness_window_in_rounds)),
             blacklist: PeerBlacklist::new(
                 core_config
@@ -1221,6 +1249,7 @@ where
                 self.connection_share_per_round,
                 self.send_deadline,
                 encapsulated_message_encoded_size(self.num_blend_layers),
+                self.handshake_upgrade_timeout,
             ))
         } else {
             tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with edge peer {peer_id:?} with addr {remote_addr:?}.");
@@ -1289,6 +1318,7 @@ where
                 self.connection_share_per_round,
                 self.send_deadline,
                 encapsulated_message_encoded_size(self.num_blend_layers),
+                self.handshake_upgrade_timeout,
             ))
         } else {
             tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with edge peer {peer_id:?} with addr {remote_addr:?}.");
