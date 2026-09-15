@@ -3,6 +3,10 @@
 /// Errors returned by the `λSQL` library.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// Local displacements need an application decision before new writes.
+    #[error("handle displaced writes before submitting new writes")]
+    UnhandledDisplacements,
+
     /// A participant state file or directory could not be accessed.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

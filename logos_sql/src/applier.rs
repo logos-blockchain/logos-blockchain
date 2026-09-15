@@ -12,7 +12,6 @@ use crate::{
     db::{Databases, PendingPublish, SuffixWrite},
     error::Error,
     protocol::{self, ChannelInscription, TxId},
-    status::WriteStatusChange,
 };
 
 const TARGET: &str = lb_log_targets::logos_sql::APPLIER;
@@ -79,32 +78,17 @@ struct SqlChanges {
 /// adopted writes apply only to live state. A branch change reconstructs live
 /// state from finalized history and the retained canonical suffix.
 ///
-/// Retain `notifications` across retries and publish them only after success:
-/// status changes can commit before a rebuild or checkpoint save fails.
-///
 /// # Errors
 ///
 /// Returns an error if SQL cannot be applied, a channel payload cannot be
 /// decoded, or the checkpoint cannot be persisted.
-pub fn on_event(
-    db: &mut Databases,
-    event: &Event,
-    channel_id: ChannelId,
-    notifications: &mut Vec<WriteStatusChange>,
-) -> Result<(), Error> {
+pub fn on_event(db: &mut Databases, event: &Event, channel_id: ChannelId) -> Result<(), Error> {
     match event {
         Event::BlocksProcessed {
             checkpoint,
             channel_update,
             finalized,
-        } => process_blocks(
-            db,
-            checkpoint,
-            channel_update,
-            finalized,
-            channel_id,
-            notifications,
-        ),
+        } => process_blocks(db, checkpoint, channel_update, finalized, channel_id),
         Event::Ready => {
             tracing::info!(target: TARGET, "sequencer ready");
             Ok(())
@@ -123,7 +107,6 @@ fn process_blocks(
     channel_update: &ChannelUpdate,
     finalized: &[FinalizedTx],
     channel_id: ChannelId,
-    notifications: &mut Vec<WriteStatusChange>,
 ) -> Result<(), Error> {
     let changes = SqlChanges::from_block(channel_update, finalized, channel_id);
 
@@ -138,8 +121,8 @@ fn process_blocks(
     let plan = changes.application_plan(db)?;
 
     match plan {
-        ApplicationPlan::ApplyChanges => notifications.extend(changes.apply(db)?),
-        ApplicationPlan::Rebuild(cause) => changes.rebuild(db, &cause, notifications)?,
+        ApplicationPlan::ApplyChanges => changes.apply(db)?,
+        ApplicationPlan::Rebuild(cause) => changes.rebuild(db, &cause)?,
     }
 
     db.persist_checkpoint(checkpoint)?;
@@ -252,7 +235,7 @@ impl SqlChanges {
 
     /// Applies an event whose existing `LIVE.db` effects remain correctly
     /// ordered.
-    fn apply(&self, db: &mut Databases) -> Result<Vec<WriteStatusChange>, Error> {
+    fn apply(&self, db: &mut Databases) -> Result<(), Error> {
         Self::apply_inscriptions(db, &self.finalized, ApplyTarget::LibAndLive)?;
         Self::apply_inscriptions(db, &self.adopted, ApplyTarget::Live)?;
         self.apply_history_delta(db)
@@ -263,25 +246,16 @@ impl SqlChanges {
     /// The displacement, when applicable, and suffix are persisted before
     /// replacing `LIVE.db` so an interrupted rebuild can be recognized and
     /// safely repeated.
-    fn rebuild(
-        &self,
-        db: &mut Databases,
-        cause: &RebuildCause,
-        notifications: &mut Vec<WriteStatusChange>,
-    ) -> Result<(), Error> {
+    fn rebuild(&self, db: &mut Databases, cause: &RebuildCause) -> Result<(), Error> {
         match cause {
             RebuildCause::PendingWriteInvalidated(pending) => {
-                let change = db.record_pending_write_displacement(pending)?;
-
-                if !notifications.contains(&change) {
-                    notifications.push(change);
-                }
+                db.record_pending_write_displacement(pending)?;
             }
             RebuildCause::ChannelFork => {}
         }
 
         Self::apply_inscriptions(db, &self.finalized, ApplyTarget::Lib)?;
-        notifications.extend(self.apply_history_delta(db)?);
+        self.apply_history_delta(db)?;
         rebuild_live_from_suffix(db)?;
 
         Ok(())
@@ -300,7 +274,7 @@ impl SqlChanges {
     }
 
     /// Applies this event to the replayable suffix and local write statuses.
-    fn apply_history_delta(&self, db: &mut Databases) -> Result<Vec<WriteStatusChange>, Error> {
+    fn apply_history_delta(&self, db: &mut Databases) -> Result<(), Error> {
         let finalized = self
             .finalized
             .iter()
@@ -465,22 +439,14 @@ mod tests {
     use rusqlite::types::Value;
     use tempfile::TempDir;
 
-    fn on_event(
-        db: &mut Databases,
-        event: &Event,
-        channel_id: ChannelId,
-    ) -> Result<Vec<WriteStatusChange>, crate::Error> {
-        let mut changes = Vec::new();
-        super::on_event(db, event, channel_id, &mut changes)?;
-        Ok(changes)
-    }
+    use super::on_event;
     use crate::{
         db::{Databases, SuffixWrite},
         protocol::{
             CapturedFunctionCalls, ChannelInscription, EncodedWrite, PAYLOAD_MARKER, Statement,
             Transaction, TxId,
         },
-        status::{WriteStatus, WriteStatusChange},
+        status::WriteStatus,
     };
 
     const CHANNEL_ID: [u8; 32] = [9; 32];
@@ -1122,15 +1088,11 @@ mod tests {
             Vec::new(),
         );
 
-        let changes = on_event(&mut db, &orphan, ChannelId::from(CHANNEL_ID))
+        on_event(&mut db, &orphan, ChannelId::from(CHANNEL_ID))
             .expect("local write should be orphaned");
 
         assert!(!table_exists(&live_path, "local_write"));
         assert_status(&db, local_tx_id, Some(WriteStatus::Displaced));
-        assert_eq!(
-            changes,
-            [WriteStatusChange::new(local_tx_id, WriteStatus::Displaced)]
-        );
 
         drop(db);
         let mut db = Databases::open(dir.path()).expect("databases should reopen");
@@ -1142,15 +1104,11 @@ mod tests {
             Vec::new(),
         );
 
-        let changes = on_event(&mut db, &restore, ChannelId::from(CHANNEL_ID))
+        on_event(&mut db, &restore, ChannelId::from(CHANNEL_ID))
             .expect("original channel position should return");
 
         assert!(table_exists(&live_path, "local_write"));
         assert_status(&db, local_tx_id, Some(WriteStatus::Live));
-        assert_eq!(
-            changes,
-            [WriteStatusChange::new(local_tx_id, WriteStatus::Live)]
-        );
 
         let finalize = blocks_processed(
             checkpoint(4, 4),
@@ -1159,16 +1117,12 @@ mod tests {
             vec![finalized(&payload, 1)],
         );
 
-        let changes = on_event(&mut db, &finalize, ChannelId::from(CHANNEL_ID))
+        on_event(&mut db, &finalize, ChannelId::from(CHANNEL_ID))
             .expect("local write should finalize");
 
         assert!(table_exists(&live_path, "local_write"));
         assert!(table_exists(db.lib_path(), "local_write"));
         assert_status(&db, local_tx_id, Some(WriteStatus::Finalized));
-        assert_eq!(
-            changes,
-            [WriteStatusChange::new(local_tx_id, WriteStatus::Finalized)]
-        );
     }
 
     #[test]

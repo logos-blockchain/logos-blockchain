@@ -4,7 +4,7 @@ use rusqlite::types::{ToSql, ToSqlOutput, Value, ValueRef};
 
 use crate::{
     error::Error,
-    protocol::{Statement, Transaction, TxId},
+    protocol::{SqlParameter, Statement, Transaction, TxId},
 };
 
 /// A replicated SQL transaction with a current query.
@@ -25,6 +25,30 @@ struct TransactionDraft {
 }
 
 impl TransactionBuilder {
+    pub(crate) fn from_transaction(transaction: &Transaction) -> Self {
+        let (current, statements) = transaction
+            .statements()
+            .split_last()
+            .expect("a protocol transaction always contains a statement");
+
+        Self {
+            tx_id: TxId::generate(),
+            transaction: TransactionDraft {
+                statements: statements.to_vec(),
+                current: PendingStatement {
+                    sql: current.sql().to_owned(),
+                    params: current
+                        .params()
+                        .iter()
+                        .cloned()
+                        .map(SqlParameter::into_value)
+                        .collect(),
+                },
+                error: None,
+            },
+        }
+    }
+
     /// Starts a transaction with its first SQL query.
     pub fn new(sql: impl Into<String>) -> Self {
         Self {

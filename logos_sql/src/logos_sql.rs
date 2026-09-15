@@ -18,7 +18,7 @@ use crate::{
     protocol::TxId,
     runtime,
     sql::TransactionBuilder,
-    status::{WriteStatus, WriteStatusChanges},
+    status::{Displacement, WriteStatus},
 };
 
 /// Configuration for one `λSQL` database.
@@ -95,7 +95,7 @@ impl LogosSql {
     /// publication.
     ///
     /// ```no_run
-    /// # use logos_sql::{Error, LogosSql, TransactionBuilder, TxId};
+    /// # use logos_sql::{Error, LogosSql, TxId, TransactionBuilder};
     /// # async fn create_task(logos_sql: &LogosSql) -> Result<TxId, Error> {
     /// let transaction = TransactionBuilder::new(
     ///     "INSERT INTO tasks (id, title) VALUES (?1, ?2)",
@@ -119,7 +119,13 @@ impl LogosSql {
     ///
     /// Returns an error when a parameter cannot be represented by the `λSQL`
     /// protocol, validation or the local commit fails, the sequencer is not
-    /// ready, or the runtime has halted.
+    /// ready, or the runtime has halted. Returns
+    /// [`Error::UnhandledDisplacements`] without executing SQL while local
+    /// displacements await application handling.
+    ///
+    /// Coordinate conflict handling with all application writers: after
+    /// handling displacements, reconsider work prepared from the old state.
+    /// This is a participant-wide gate, not a per-transaction freshness check.
     pub async fn execute(&self, transaction: TransactionBuilder) -> Result<TxId, Error> {
         let (tx_id, transaction) = transaction.finish()?;
 
@@ -127,6 +133,28 @@ impl LogosSql {
             .as_ref()
             .ok_or(Error::RuntimeStopped)?
             .execute(tx_id, transaction)
+            .await
+    }
+
+    /// Resubmits a displaced write's original SQL and parameters.
+    ///
+    /// Unlike [`Self::execute`], this deliberately allows execution while
+    /// displacements await handling. It creates a fresh `TxId` and evaluates
+    /// time and random functions again. All other execution checks still apply.
+    ///
+    /// This does not mark the displacement handled. After a successful retry,
+    /// call [`Self::mark_displacement_handled`]. A crash between those calls
+    /// can lead to another retry, and the original write can also return after
+    /// a reorganization. Only use this with SQL designed to tolerate both.
+    ///
+    /// # Errors
+    /// Returns execution errors as [`Self::execute`] does, except that
+    /// unhandled displacements do not block this call.
+    pub async fn retry_displacement(&self, displacement: &Displacement) -> Result<TxId, Error> {
+        self.runtime
+            .as_ref()
+            .ok_or(Error::RuntimeStopped)?
+            .retry_displacement(displacement.clone())
             .await
     }
 
@@ -148,29 +176,42 @@ impl LogosSql {
             .await
     }
 
-    /// Subscribes to future status changes for local writes.
+    /// Lists local displacements that still need an application decision.
     ///
-    /// Notifications are kept in memory and are lost on restart. If the
-    /// application reads too slowly, older notifications are dropped and the
-    /// stream reports `Lagged`. Call [`Self::write_status`] for each write you
-    /// are tracking to get its latest saved status.
-    ///
-    /// Subscribe before querying current statuses so changes that happen
-    /// during those queries are included in the stream.
-    ///
-    /// Logos SQL does not retry or republish displaced writes.
+    /// Reading does not mark them handled. A displacement remains listed even
+    /// if the write has since returned; use `write_status` to check its current
+    /// status before deciding what to do.
+    /// Each displacement retains its original SQL and parameters, available
+    /// through [`Displacement::transaction`] for application-controlled
+    /// retries.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the runtime is no longer available.
-    pub fn write_status_changes(&self) -> Result<WriteStatusChanges, Error> {
-        let receiver = self
-            .runtime
+    /// Returns an error if the runtime is stopped, halted, or local state
+    /// cannot be read.
+    pub async fn unhandled_displacements(&self) -> Result<Vec<Displacement>, Error> {
+        self.runtime
             .as_ref()
             .ok_or(Error::RuntimeStopped)?
-            .subscribe_write_status_changes();
+            .unhandled_displacements()
+            .await
+    }
 
-        Ok(WriteStatusChanges::new(receiver))
+    /// Records that the application has considered this displacement.
+    ///
+    /// This does not discard, republish, or change the chain status of the
+    /// write. Handling an older displacement cannot clear a newer one.
+    /// Repeated calls are harmless. Execution stays blocked while any
+    /// displacement is unhandled.
+    ///
+    /// # Errors
+    /// Returns an error if the runtime is stopped, halted, or local state
+    /// cannot be saved.
+    pub async fn mark_displacement_handled(&self, displacement: Displacement) -> Result<(), Error> {
+        self.runtime
+            .as_ref()
+            .ok_or(Error::RuntimeStopped)?
+            .mark_displacement_handled(displacement)
+            .await
     }
 
     /// Opens a read-only connection to the replicated database.
