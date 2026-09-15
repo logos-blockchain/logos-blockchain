@@ -17,6 +17,7 @@ use crate::core::backends::{
         swarm::BlendSwarmMessage,
         tests::utils::{
             BlendBehaviourBuilder, SwarmBuilder, TestProofsVerifier, TestSwarm, build_membership,
+            test_peering_degree,
         },
     },
 };
@@ -108,11 +109,7 @@ async fn core_redial_different_peer_after_redial_limit() {
             .contains_key(&listening_node.id)
     );
     assert_eq!(
-        dialing_swarm
-            .behaviour()
-            .blend
-            .with_core()
-            .num_healthy_peers(),
+        dialing_swarm.behaviour().blend.with_core().num_live_peers(),
         1
     );
     assert!(
@@ -356,7 +353,9 @@ async fn core_epoch_rotation_clears_pending_retries() {
 /// the minimum.
 #[test(tokio::test)]
 async fn core_does_not_give_up_below_minimum_peering_degree() {
-    let min_peering_degree = 2;
+    let peering_degree = test_peering_degree();
+    // `Φ_CC - 1`: the fewest live connections the node settles for.
+    let min_peering_degree = peering_degree.get() - 1;
 
     // 4 membership nodes: [0] reachable listener, [1] local dialer, [2]/[3]
     // unreachable.
@@ -368,7 +367,7 @@ async fn core_does_not_give_up_below_minimum_peering_degree() {
         ..
     } = SwarmBuilder::new(identities.next().unwrap(), &nodes).build(|id, membership| {
         BlendBehaviourBuilder::new(id, membership)
-            .with_peering_degree(min_peering_degree..=3)
+            .with_peering_degree(peering_degree)
             .build()
     });
     let (reachable_node, _) = reachable_swarm
@@ -392,7 +391,7 @@ async fn core_does_not_give_up_below_minimum_peering_degree() {
         .with_max_dial_attempts(1.try_into().unwrap())
         .build(|id, membership| {
             BlendBehaviourBuilder::new(id, membership)
-                .with_peering_degree(min_peering_degree..=3)
+                .with_peering_degree(peering_degree)
                 .build()
         });
 
@@ -423,11 +422,7 @@ async fn core_does_not_give_up_below_minimum_peering_degree() {
         }
     }
 
-    let healthy = dialing_swarm
-        .behaviour()
-        .blend
-        .with_core()
-        .num_healthy_peers();
+    let healthy = dialing_swarm.behaviour().blend.with_core().num_live_peers();
     let ongoing = dialing_swarm.ongoing_dials().len();
     let pending = dialing_swarm.pending_retries_count();
     let full_retry = dialing_swarm.has_pending_full_membership_retry();
@@ -485,11 +480,7 @@ async fn core_maintenance_task_dials_to_maintain_peering_degree() {
     // Precondition: the node is idle and below the (default) minimum degree of 1.
     assert!(dialing_swarm.ongoing_dials().is_empty());
     assert_eq!(
-        dialing_swarm
-            .behaviour()
-            .blend
-            .with_core()
-            .num_healthy_peers(),
+        dialing_swarm.behaviour().blend.with_core().num_live_peers(),
         0
     );
 
@@ -585,14 +576,7 @@ async fn core_retry_skipped_when_peering_degree_satisfied() {
     // The pending retries queue should have been drained.
     assert_eq!(dialing_swarm.pending_retries_count(), 0);
     // Peering degree should be satisfied.
-    assert!(
-        dialing_swarm
-            .behaviour()
-            .blend
-            .with_core()
-            .num_healthy_peers()
-            >= 1
-    );
+    assert!(dialing_swarm.behaviour().blend.with_core().num_live_peers() >= 1);
 }
 
 #[test(tokio::test)]

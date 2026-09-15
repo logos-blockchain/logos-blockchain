@@ -10,6 +10,7 @@ blend:
         message_frequency_per_round: 1.0
       delayer:
         maximum_release_delay_in_rounds: 1
+    target_peering_degree: 4
     activity_threshold_sensitivity: 1
 network:
   kademlia_protocol_name: /logos-blockchain-ENV_PLACEHOLDER-VERSION_PLACEHOLDER/kad/1.0.0

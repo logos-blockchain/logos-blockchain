@@ -1,6 +1,6 @@
 use core::{
+    iter::repeat_n,
     num::{NonZeroU64, NonZeroU128, NonZeroUsize},
-    ops::RangeInclusive,
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -18,6 +18,7 @@ use lb_libp2p::{NetworkBehaviour, SwarmEvent};
 use libp2p::{
     Multiaddr, PeerId, Swarm,
     identity::{PublicKey, ed25519},
+    swarm::ConnectionId,
 };
 use libp2p_swarm_test::SwarmExt as _;
 
@@ -25,7 +26,8 @@ use crate::core::{
     poq_verification::PendingPoQVerifications,
     tests::utils::{PROTOCOL_NAME, TestProofsVerifier, TestSwarm},
     with_core::behaviour::{
-        Behaviour, Event, liveness::PeerLivenessMap, message_cache::MessageCache,
+        Behaviour, ConnectionDirection, Event, NegotiatedPeerState, RemotePeerConnectionDetails,
+        liveness::PeerLivenessMap, message_cache::MessageCache,
     },
 };
 
@@ -55,12 +57,27 @@ pub fn new_nodes_with_empty_address(
     (identities.into_iter(), nodes)
 }
 
+/// `Φ_CC` the tests build behaviours with unless they say otherwise.
+pub const PEERING_DEGREE: NonZeroUsize = NonZeroUsize::new(4).expect("must be non-zero");
+
+/// `Φ_CC + 1`: the most connections a test behaviour holds at once.
+pub const fn maximum_peers() -> usize {
+    PEERING_DEGREE.get() + 1
+}
+
+/// The most connections a test behaviour accepts, which is what is left of the
+/// maximum once the dial-out floor is reserved.
+pub const fn maximum_accepted_peers() -> usize {
+    maximum_peers() - (PEERING_DEGREE.get() - 2)
+}
+
 pub struct BehaviourBuilder {
     local_public_key: ed25519::PublicKey,
     membership: Option<Membership<PeerId>>,
     round_duration_in_seconds: Option<NonZeroU64>,
     liveness_window_in_rounds: Option<NonZeroU128>,
-    peering_degree: Option<RangeInclusive<usize>>,
+    peering_degree: Option<NonZeroUsize>,
+    existing_connections: Option<(usize, usize)>,
     minimum_network_size: Option<NonZeroUsize>,
     num_blend_layers: Option<NonZeroU64>,
     proofs_verifier: TestProofsVerifier,
@@ -74,6 +91,7 @@ impl BehaviourBuilder {
             round_duration_in_seconds: None,
             liveness_window_in_rounds: None,
             peering_degree: None,
+            existing_connections: None,
             minimum_network_size: None,
             num_blend_layers: None,
             proofs_verifier: TestProofsVerifier::accepting(),
@@ -105,7 +123,12 @@ impl BehaviourBuilder {
         self
     }
 
-    pub fn with_peering_degree(mut self, peering_degree: RangeInclusive<usize>) -> Self {
+    pub fn with_existing_connections(mut self, accepted: usize, dialed: usize) -> Self {
+        self.existing_connections = Some((accepted, dialed));
+        self
+    }
+
+    pub fn with_peering_degree(mut self, peering_degree: NonZeroUsize) -> Self {
         self.peering_degree = Some(peering_degree);
         self
     }
@@ -121,6 +144,7 @@ impl BehaviourBuilder {
     }
 
     pub fn build(self) -> TestBehaviour {
+        let existing_connections = self.existing_connections;
         let round_duration = self
             .round_duration_in_seconds
             .unwrap_or_else(|| 1.try_into().unwrap());
@@ -129,7 +153,7 @@ impl BehaviourBuilder {
         let liveness_window = self
             .liveness_window_in_rounds
             .unwrap_or_else(|| 1_000_000.try_into().unwrap());
-        Behaviour {
+        let mut behaviour = Behaviour {
             negotiated_peers: HashMap::new(),
             connections_waiting_upgrade: HashMap::new(),
             events: VecDeque::new(),
@@ -139,7 +163,7 @@ impl BehaviourBuilder {
                     .unwrap_or_else(|| Membership::new_without_local(&[])),
                 0.into(),
             ),
-            peering_degree: self.peering_degree.unwrap_or(1..=1),
+            target_peering_degree: self.peering_degree.unwrap_or(PEERING_DEGREE),
             local_peer_id: PublicKey::from(self.local_public_key).into(),
             protocol_name: PROTOCOL_NAME,
             minimum_network_size: self
@@ -155,7 +179,27 @@ impl BehaviourBuilder {
             message_cache: MessageCache::new(),
             proofs_verifier: Arc::new(self.proofs_verifier),
             pending_poq_verifications: PendingPoQVerifications::new(),
+        };
+
+        if let Some((accepted, dialed)) = existing_connections {
+            let now = behaviour.round_clock.current_round();
+            let roles = repeat_n(ConnectionDirection::Incoming, accepted)
+                .chain(repeat_n(ConnectionDirection::Outgoing, dialed));
+            for (index, role) in roles.enumerate() {
+                let peer_id = PeerId::random();
+                behaviour.negotiated_peers.insert(
+                    peer_id,
+                    RemotePeerConnectionDetails {
+                        direction: role,
+                        negotiated_state: NegotiatedPeerState::Healthy,
+                        connection_id: ConnectionId::new_unchecked(1_000 + index),
+                    },
+                );
+                behaviour.liveness.start_or_resume_observing(peer_id, now);
+            }
         }
+
+        behaviour
     }
 }
 
