@@ -1,6 +1,8 @@
 use std::path::Path;
 
 use color_eyre::eyre::Result;
+use lb_core::mantle::Value;
+use lb_pow_service::ClaimTarget;
 use libp2p::{Multiaddr, PeerId};
 use thiserror::Error;
 
@@ -104,6 +106,8 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> UserConfig {
 
     let kms_config = build_kms_config(keystore);
 
+    let pow_config = build_pow_config(keystore);
+
     UserConfig {
         network: network_config,
         blend: blend_config,
@@ -114,9 +118,7 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> UserConfig {
         storage: storage_config,
         kms: kms_config,
         wallet: wallet_config,
-        // Mining defaults, auto-claim off: a generated node mines and claims on
-        // demand, naming the destination key on each claim request.
-        pow: PoWConfig::default(),
+        pow: pow_config,
         tracing: tracing_config,
         state: state_config,
     }
@@ -203,6 +205,23 @@ fn build_kms_config(keystore: &Keystore) -> KmsConfig {
         .collect();
 
     kms_config
+}
+
+/// Mining defaults, with auto-claim paying the `PoWClaim` key without a cap,
+/// so a generated node claims its mined rewards unattended once mining is
+/// started.
+fn build_pow_config(keystore: &Keystore) -> PoWConfig {
+    let (_, pow_claim_key) = keystore
+        .get_zk(KeyTitle::POW_CLAIM)
+        .expect("PoW claim key set by default");
+
+    let mut pow_config = PoWConfig::default();
+    pow_config.auto_claim.targets = vec![ClaimTarget {
+        public_key: pow_claim_key.to_public_key(),
+        threshold: Value::MAX,
+    }];
+
+    pow_config
 }
 
 fn build_wallet_config(keystore: &Keystore) -> WalletConfig {
