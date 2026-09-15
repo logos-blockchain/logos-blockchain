@@ -5,7 +5,8 @@ use tokio::time::Instant;
 
 use crate::message::DataPayload;
 
-pub const ROUND: Duration = Duration::from_secs(1);
+pub const ROUND_IN_SECONDS: NonZeroU64 = NonZeroU64::new(1).unwrap();
+pub const ROUND: Duration = Duration::from_secs(ROUND_IN_SECONDS.get());
 pub const DEADLINE: NonZeroU64 = NonZeroU64::new(6).unwrap();
 
 #[must_use]

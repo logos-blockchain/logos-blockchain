@@ -18,7 +18,7 @@ use libp2p::{
 
 use crate::{
     OutgoingMessage,
-    core::with_core::behaviour::handler::admission::{RoundShare, SendQueue},
+    core::{admission::RoundShare, with_core::behaviour::handler::admission::SendQueue},
     message::IncomingMessage,
     recv_msg, send_msg,
 };

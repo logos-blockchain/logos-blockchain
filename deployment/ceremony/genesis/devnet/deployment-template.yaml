@@ -13,6 +13,7 @@ blend:
         maximum_release_delay_in_rounds: 1
     target_peering_degree: 4
     verification_rate_per_second: 156
+    edge_node_send_deadline_in_rounds: 1
     activity_threshold_sensitivity: 1
 network:
   kademlia_protocol_name: /logos-blockchain-ENV_PLACEHOLDER-VERSION_PLACEHOLDER/kad/1.0.0
