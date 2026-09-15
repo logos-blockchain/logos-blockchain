@@ -219,10 +219,10 @@ where
         // Chain service provides the correct epoch state only after the chain becomes
         // Online.
         let chain_api =
-            CryptarchiaServiceApi::<<EdgeService as EdgeServiceComponents>::ChainService>::new(
+            CryptarchiaServiceApi::<<EdgeService as EdgeServiceComponents>::ChainService>::from_overwatch_handle(
                 overwatch_handle,
             )
-            .await?;
+            .await;
         info!(target: LOG_TARGET, "Waiting for chain to become Online mode");
         chain_api
             .wait_until_chain_becomes_online()

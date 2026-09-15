@@ -1583,7 +1583,7 @@ where
         Ok(relay) => relay,
         Err(error) => return error.into_response(),
     };
-    let chain_api = CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_relay(relay);
+    let chain_api = CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::new(relay);
 
     match chain_api.get_block_events(id).await {
         Ok(Some(events)) => (StatusCode::OK, Json(events)).into_response(),
@@ -1617,7 +1617,7 @@ where
         Ok(relay) => relay,
         Err(error) => return error.into_response(),
     };
-    let chain_api = CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_relay(relay);
+    let chain_api = CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::new(relay);
 
     let block_id = match query.tip {
         Some(tip) => tip,
