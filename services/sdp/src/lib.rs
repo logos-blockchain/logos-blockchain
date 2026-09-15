@@ -204,7 +204,7 @@ where
             .await?;
         let wallet_adapter = WalletAdapter::new(wallet_relay);
 
-        let chain_api = CryptarchiaServiceApi::<ChainService>::from_overwatch_handle(
+        let chain_api = CryptarchiaServiceApi::<ChainService>::new(
             &self.service_resources_handle.overwatch_handle,
         )
         .await?;

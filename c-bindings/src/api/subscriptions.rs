@@ -64,10 +64,7 @@ pub fn subscribe_to_new_blocks_sync(
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
         let Ok(api) =
-            CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>>::from_overwatch_handle(
-                overwatch,
-            )
-            .await
+            CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>>::new(overwatch).await
         else {
             return OperationStatus::error(
                 OperationStatusCode::RelayError,
