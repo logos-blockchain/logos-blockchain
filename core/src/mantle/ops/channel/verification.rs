@@ -180,6 +180,49 @@ mod tests {
     }
 
     #[test]
+    fn rejects_signature_over_another_transaction() {
+        let channel_id = ChannelId::from([4u8; 32]);
+        let signed_hash = TxHash::from([9u8; 32]);
+        let other_hash = TxHash::from([10u8; 32]);
+        let key = Ed25519Key::from_bytes(&[0; 32]);
+        let proof = create_channel_multi_sig_proof(&signed_hash, &[&key]);
+
+        let channels = {
+            let mut channels = Channels::new();
+            channels
+                .channels
+                .insert_mut(channel_id, make_channel_state(1, None));
+            channels
+        };
+        let helper =
+            TestOperationVerificationHelper::new(channels, [((channel_id, 0), key.public_key())]);
+
+        assert_eq!(
+            verify_channel_multi_sig(
+                &channel_id,
+                &proof,
+                &signed_hash.as_signing_bytes(),
+                &helper,
+                0
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            verify_channel_multi_sig(
+                &channel_id,
+                &proof,
+                &other_hash.as_signing_bytes(),
+                &helper,
+                0
+            ),
+            Err(VerificationError::ChannelMultiSigProofInvalidSignature {
+                op_index: 0,
+                signature_index: 0,
+            })
+        );
+    }
+
+    #[test]
     fn rejects_invalid_signature() {
         let channel_id = ChannelId::from([4u8; 32]);
         let tx_hash = TxHash::from([9u8; 32]);
