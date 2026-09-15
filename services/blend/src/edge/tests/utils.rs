@@ -60,8 +60,11 @@ const TEST_MAX_BLEND_DELAY: NonZeroU64 = NonZeroU64::new(5).unwrap();
 /// the two settings above, so the tests wait exactly as long as the code they
 /// exercise and the two cannot drift apart. Pick a different deadline by
 /// changing one of those, never by restating this.
-pub const TEST_DELIVERY_DEADLINE: NonZeroU64 =
-    max_data_message_delay_in_rounds(TEST_BLEND_LAYERS, TEST_MAX_BLEND_DELAY);
+pub const TEST_DELIVERY_DEADLINE: NonZeroU64 = max_data_message_delay_in_rounds(
+    TEST_BLEND_LAYERS,
+    TEST_MAX_BLEND_DELAY,
+    NonZeroU64::new(2).unwrap(),
+);
 
 pub struct MockLeaderProofsGenerator;
 
@@ -190,6 +193,7 @@ pub fn settings(
         time: TimingSettings {
             rounds_per_epoch: NonZeroU64::new(1).unwrap(),
             round_duration_in_seconds: TEST_ROUND,
+            network_absorption_in_rounds: NonZeroU64::new(2).unwrap(),
             rounds_per_observation_window: NonZeroU128::new(1).unwrap(),
             epoch_transition_period: Duration::from_secs(1),
         },

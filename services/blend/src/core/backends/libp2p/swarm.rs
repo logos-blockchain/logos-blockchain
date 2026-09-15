@@ -10,19 +10,25 @@ use std::{
 
 use futures::{Stream, StreamExt as _, future::OptionFuture, stream::FuturesUnordered};
 use lb_blend::{
-    message::encap::{
-        ProofsVerifier as ProofsVerifierTrait,
-        validated::EncapsulatedMessageWithVerifiedPublicHeader,
-    },
-    network::core::{
-        NetworkBehaviourEvent,
-        with_core::{
-            behaviour::{
-                ConnectionUpgradeFailureReason, Event as CoreToCoreEvent, NegotiatedPeerState,
-            },
-            error::SendError,
+    message::{
+        encap::{
+            ProofsVerifier as ProofsVerifierTrait,
+            validated::EncapsulatedMessageWithVerifiedPublicHeader,
         },
-        with_edge::behaviour::Event as CoreToEdgeEvent,
+        encapsulated_message_encoded_size,
+    },
+    network::{
+        core::{
+            NetworkBehaviourEvent,
+            with_core::{
+                behaviour::{
+                    ConnectionUpgradeFailureReason, Event as CoreToCoreEvent, NegotiatedPeerState,
+                },
+                error::SendError,
+            },
+            with_edge::behaviour::Event as CoreToEdgeEvent,
+        },
+        message::FRAME_LENGTH_WIRE_SIZE,
     },
 };
 use lb_chain_service::Epoch;
@@ -99,6 +105,32 @@ impl DialAttempt {
     }
 }
 
+/// The bytes a connection may hold for us before its sender feels backpressure.
+///
+/// Sized as twice the rounds a message may wait at one hop, so a neighbour
+/// sending at the rate the protocol expects is never the one stalled.
+fn connection_receive_window(
+    connection_share_per_round: NonZeroU64,
+    network_absorption_in_rounds: NonZeroU64,
+    num_blend_layers: NonZeroU64,
+) -> u32 {
+    // Every part of a Blend message is fixed-size, so the frame it occupies is
+    // known exactly. Asking the message crate for it keeps this window and the
+    // wire format from drifting apart.
+    let frame_size = encapsulated_message_encoded_size(num_blend_layers)
+        .saturating_add(FRAME_LENGTH_WIRE_SIZE)
+        .get();
+
+    let rounds_of_slack = network_absorption_in_rounds.get().saturating_mul(2);
+    u32::try_from(
+        connection_share_per_round
+            .get()
+            .saturating_mul(rounds_of_slack)
+            .saturating_mul(u64::try_from(frame_size).unwrap()),
+    )
+    .unwrap_or(u32::MAX)
+}
+
 type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, DialAttempt)> + Send>>>;
 type FullMembershipRetry = Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
 
@@ -157,9 +189,29 @@ where
         }: SwarmParams<Rng, ProofsVerifier>,
     ) -> Self {
         let listening_address = config.backend.listening_address.clone();
+        // The read share only pushes back on a neighbour if the transport stops
+        // accepting what it is not being read. libp2p-quic's default receive
+        // window is 10 MB per stream, which at Blend's frame size is some five
+        // hundred unread messages — twenty-five rounds of share — so a node
+        // would go on absorbing at full rate long after it stopped reading. The window
+        // is instead sized to a few rounds of one connection's share: enough
+        // that a neighbour sending at the rate the protocol expects never
+        // stalls, and that the `η` rounds it may hold a message for are not
+        // spent waiting on flow control.
+        let receive_window = connection_receive_window(
+            config.backend.connection_share_per_round,
+            config.time.network_absorption_in_rounds,
+            config.num_blend_layers,
+        );
         let mut swarm = SwarmBuilder::with_existing_identity(config.keypair())
             .with_tokio()
-            .with_quic()
+            .with_quic_config(|mut quic| {
+                quic.max_stream_data = receive_window;
+                // A Blend connection carries one substream in each direction,
+                // and only the inbound one is read under a share.
+                quic.max_connection_data = receive_window.saturating_mul(2);
+                quic
+            })
             .with_dns()
             .expect("DNS transport should be supported")
             .with_behaviour(|_| {
@@ -749,7 +801,7 @@ where
 
     fn log_blend_send_failure(epoch: Epoch, error: &SendError, tag: &str) {
         match error {
-            SendError::NoPeers => tracing::warn!(
+            SendError::NoPeers | SendError::MessageTooLarge => tracing::warn!(
                 target: LOG_TARGET,
                 diagnostic = BLEND_REACHABILITY,
                 event = "blend_send_failure",

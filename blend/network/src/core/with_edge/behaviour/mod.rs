@@ -325,7 +325,7 @@ where
         match event {
             Either::Left(ToBehaviour::Message(message)) => {
                 self.handle_received_serialized_encapsulated_message(
-                    &message,
+                    message.as_ref(),
                     (peer_id, connection_id),
                 );
             }

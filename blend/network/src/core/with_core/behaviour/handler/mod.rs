@@ -1,7 +1,11 @@
-use core::task::{Context, Poll, Waker};
+use core::{
+    num::NonZeroU64,
+    task::{Context, Poll, Waker},
+};
 use std::{collections::VecDeque, io};
 
 use futures::{FutureExt as _, future::BoxFuture};
+use lb_blend_primitives::time::{Round, RoundClock, RoundCount};
 use lb_log_targets::blend;
 use libp2p::{
     PeerId, Stream, StreamProtocol,
@@ -12,14 +16,24 @@ use libp2p::{
     },
 };
 
-use crate::{recv_msg, send_msg};
+use crate::{
+    OutgoingMessage,
+    core::with_core::behaviour::handler::admission::{RoundShare, SendQueue},
+    message::IncomingMessage,
+    recv_msg, send_msg,
+};
+
+pub mod admission;
 
 const LOG_TARGET: &str = blend::network::core::core::conn::HANDLER;
 
 pub struct ConnectionHandler {
     inbound_substream: Option<InboundSubstreamState>,
     outbound_substream: Option<OutboundSubstreamState>,
-    outbound_msgs: VecDeque<Vec<u8>>,
+    send_queue: SendQueue,
+    /// `r₁`: what this connection may still be read for this round.
+    read_share: RoundShare,
+    round_clock: RoundClock,
     pending_events_to_behaviour: VecDeque<ToBehaviour>,
     protocol_name: StreamProtocol,
     waker: Option<Waker>,
@@ -34,11 +48,16 @@ pub struct ConnectionHandler {
 }
 
 type MsgSendFuture = BoxFuture<'static, Result<Stream, io::Error>>;
-type MsgRecvFuture = BoxFuture<'static, Result<(Stream, Vec<u8>), io::Error>>;
+type MsgRecvFuture = BoxFuture<'static, Result<(Stream, IncomingMessage), io::Error>>;
 
 enum InboundSubstreamState {
-    /// A message is being received on the inbound substream.
-    PendingRecv(MsgRecvFuture),
+    /// The substream is open with no frame in flight.
+    ///
+    /// This is the only state in which reading may be suspended, and so the
+    /// only safe place to stop.
+    Idle(Stream),
+    /// A frame is being received on the inbound substream.
+    Receiving(MsgRecvFuture),
     /// A substream has been dropped proactively.
     Dropped,
 }
@@ -55,18 +74,46 @@ enum OutboundSubstreamState {
 }
 
 impl ConnectionHandler {
-    pub fn new(protocol_name: StreamProtocol, connection_details: (PeerId, ConnectionId)) -> Self {
+    pub fn new(
+        protocol_name: StreamProtocol,
+        connection_details: (PeerId, ConnectionId),
+        round_clock: RoundClock,
+        share_per_round: NonZeroU64,
+        send_deadline: RoundCount,
+    ) -> Self {
         tracing::trace!(target: LOG_TARGET, "Initializing core->core connection handler for connection {connection_details:?}.");
+        let current_round = round_clock.current_round();
         Self {
             inbound_substream: None,
             outbound_substream: None,
-            outbound_msgs: VecDeque::new(),
+            send_queue: SendQueue::new(
+                RoundShare::new(share_per_round, current_round),
+                send_deadline,
+            ),
+            read_share: RoundShare::new(share_per_round, current_round),
+            round_clock,
             pending_events_to_behaviour: VecDeque::new(),
             protocol_name,
             waker: None,
             connection_details,
             upgrade_notified: false,
         }
+    }
+
+    /// Refreshes both shares for the round now in progress, and gives up on
+    /// whatever has waited too long to be sent.
+    fn process_current_round(&mut self, cx: &mut Context<'_>) -> Round {
+        let current_round = self.round_clock.poll_current(cx);
+        self.read_share.refill_for(current_round);
+        let discarded = self.send_queue.enter_round(current_round);
+        if discarded > 0 {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "Gave up on {discarded} message(s) waiting to be sent on connection {:?}: they waited longer than a message may spend at one hop. Copies queued for other neighbours are unaffected.",
+                self.connection_details
+            );
+        }
+        current_round
     }
 
     /// Emit a [`ToBehaviour::FullyNegotiated`] event if one has not already
@@ -91,7 +138,7 @@ impl ConnectionHandler {
     fn close_substreams(&mut self) {
         self.inbound_substream = Some(InboundSubstreamState::Dropped);
         self.outbound_substream = Some(OutboundSubstreamState::Dropped);
-        self.outbound_msgs.clear();
+        self.send_queue.clear();
         self.pending_events_to_behaviour.clear();
     }
 
@@ -105,7 +152,7 @@ impl ConnectionHandler {
 #[derive(Debug)]
 pub enum FromBehaviour {
     /// A message to be sent to the connection.
-    Message(Vec<u8>),
+    Message(OutgoingMessage),
     /// Close inbound/outbound substreams.
     /// This happens when [`crate::Behaviour`] determines that one of the
     /// followings is true.
@@ -121,7 +168,7 @@ pub enum ToBehaviour {
     /// of either the inbound or outbound substream.
     FullyNegotiated,
     /// A message has been received from the connection.
-    Message(Vec<u8>),
+    Message(IncomingMessage),
     /// An IO error from the connection.
     /// The inbound/outbound streams to the peer are closed proactively.
     IOError(io::Error),
@@ -161,46 +208,66 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
             return Poll::Pending;
         }
 
+        self.process_current_round(cx);
+
         // Process pending events to be sent to the behaviour
         if let Some(event) = self.pending_events_to_behaviour.pop_front() {
             return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(event));
         }
 
         // Process inbound stream
-        // TODO: Refactor this to a separate function.
-        match self.inbound_substream.take() {
-            None => {}
-            Some(InboundSubstreamState::PendingRecv(mut msg_recv_fut)) => match msg_recv_fut
-                .poll_unpin(cx)
-            {
-                Poll::Ready(Ok((stream, msg))) => {
+        loop {
+            match self.inbound_substream.take() {
+                None => break,
+                Some(InboundSubstreamState::Dropped) => {
+                    self.inbound_substream = Some(InboundSubstreamState::Dropped);
+                    break;
+                }
+                Some(InboundSubstreamState::Idle(stream)) => {
+                    if self.read_share.try_spend() {
+                        self.inbound_substream =
+                            Some(InboundSubstreamState::Receiving(recv_msg(stream).boxed()));
+                        continue;
+                    }
+                    // The share for this round is spent, so no read is issued.
+                    // The bytes stay in the transport, where the flow control
+                    // of the connection pushes back on the neighbour, and the
+                    // clock polled above will wake us when the share refreshes.
                     tracing::trace!(
                         target: LOG_TARGET,
-                        "Received message from inbound stream {:?}; notifying behaviour",
+                        "Read share for connection {:?} is spent; not reading again until the next round.",
                         self.connection_details
                     );
-
-                    self.inbound_substream =
-                        Some(InboundSubstreamState::PendingRecv(recv_msg(stream).boxed()));
-
-                    // Notify behaviour.
-                    return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
-                        ToBehaviour::Message(msg),
-                    ));
+                    self.inbound_substream = Some(InboundSubstreamState::Idle(stream));
+                    break;
                 }
-                Poll::Ready(Err(e)) => {
-                    tracing::error!(target: LOG_TARGET, "Failed to receive message from inbound stream {:?}: {e:?}. Dropping both inbound/outbound substreams", self.connection_details);
-                    self.close_substreams();
-                    return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
-                        ToBehaviour::IOError(e),
-                    ));
+                Some(InboundSubstreamState::Receiving(mut msg_recv_fut)) => {
+                    match msg_recv_fut.poll_unpin(cx) {
+                        Poll::Ready(Ok((stream, msg))) => {
+                            tracing::trace!(
+                                target: LOG_TARGET,
+                                "Received message from inbound stream {:?}; notifying behaviour",
+                                self.connection_details
+                            );
+                            self.inbound_substream = Some(InboundSubstreamState::Idle(stream));
+                            return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
+                                ToBehaviour::Message(msg),
+                            ));
+                        }
+                        Poll::Ready(Err(e)) => {
+                            tracing::error!(target: LOG_TARGET, "Failed to receive message from inbound stream {:?}: {e:?}. Dropping both inbound/outbound substreams", self.connection_details);
+                            self.close_substreams();
+                            return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
+                                ToBehaviour::IOError(e),
+                            ));
+                        }
+                        Poll::Pending => {
+                            self.inbound_substream =
+                                Some(InboundSubstreamState::Receiving(msg_recv_fut));
+                            break;
+                        }
+                    }
                 }
-                Poll::Pending => {
-                    self.inbound_substream = Some(InboundSubstreamState::PendingRecv(msg_recv_fut));
-                }
-            },
-            Some(InboundSubstreamState::Dropped) => {
-                self.inbound_substream = Some(InboundSubstreamState::Dropped);
             }
         }
 
@@ -217,7 +284,7 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                 }
                 // If the substream is idle, and if it's time to send a message, send it.
                 Some(OutboundSubstreamState::Idle(stream)) => {
-                    if let Some(msg) = self.outbound_msgs.pop_front() {
+                    if let Some(msg) = self.send_queue.pop_front() {
                         tracing::trace!(target: LOG_TARGET, "Sending message to outbound stream {:?}", self.connection_details);
                         self.outbound_substream = Some(OutboundSubstreamState::PendingSend(
                             send_msg(stream, msg).boxed(),
@@ -276,7 +343,11 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
     fn on_behaviour_event(&mut self, event: Self::FromBehaviour) {
         match event {
             FromBehaviour::Message(msg) => {
-                self.outbound_msgs.push_back(msg);
+                // The deadline runs from the round the message joined this
+                // connection's queue, so it is set here rather than when the
+                // message reaches the front.
+                self.send_queue
+                    .enqueue(msg, self.round_clock.current_round());
             }
             FromBehaviour::CloseSubstreams => {
                 self.close_substreams();
@@ -312,8 +383,7 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                     drop(stream);
                 } else {
                     tracing::trace!(target: LOG_TARGET, "Fully negotiated inbound for connection {:?}; creating inbound substream", self.connection_details);
-                    self.inbound_substream =
-                        Some(InboundSubstreamState::PendingRecv(recv_msg(stream).boxed()));
+                    self.inbound_substream = Some(InboundSubstreamState::Idle(stream));
                     self.check_and_notify_about_upgrade();
                 }
             }

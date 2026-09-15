@@ -74,6 +74,12 @@ pub struct Config {
     /// `W`: the observation window, in rounds. A connection whose neighbour has
     /// delivered nothing within the trailing window is closed.
     pub liveness_window_in_rounds: NonZeroU128,
+    /// `r₁`: the messages a core connection may carry in one round, in each
+    /// direction.
+    pub connection_share_per_round: NonZeroU64,
+    /// `η`: how long a message may wait for a connection before that
+    /// connection gives up on it.
+    pub send_deadline_in_rounds: RoundCount,
 }
 
 /// Who opened a connection, from this node's point of view.
@@ -183,6 +189,10 @@ pub struct Behaviour<ProofsVerifier> {
     /// The clock every window and deadline of connectivity maintenance is
     /// measured against.
     round_clock: RoundClock,
+    /// `r₁`: what every connection of this node may carry in a round.
+    connection_share_per_round: NonZeroU64,
+    /// `η`: how long a message may wait for a connection.
+    send_deadline: RoundCount,
     /// Which neighbours are still delivering messages.
     liveness: PeerLivenessMap,
     /// The last round in which liveness was evaluated, so that the check runs
@@ -310,6 +320,8 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             num_blend_layers: config.num_blend_layers,
             old_epoch: None,
             round_clock,
+            connection_share_per_round: config.connection_share_per_round,
+            send_deadline: config.send_deadline_in_rounds,
             liveness: PeerLivenessMap::new(RoundCount::new(config.liveness_window_in_rounds)),
             last_liveness_check: current_round,
         }
@@ -485,7 +497,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     ) -> Result<(), SendError> {
         let serialized_message =
             lb_blend_message::serialize_encapsulated_message_with_verified_public_header(message);
-        self.force_send_serialized_message_to_peer_at_epoch(serialized_message, peer_id, epoch)
+        self.force_send_serialized_message_to_peer_at_epoch(&serialized_message, peer_id, epoch)
     }
 
     /// Force send a serialized message to a peer (without trying to deserialize
@@ -494,7 +506,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     #[cfg(test)]
     fn force_send_serialized_message_to_current_epoch_peer(
         &mut self,
-        serialized_message: Vec<u8>,
+        serialized_message: &[u8],
         peer_id: PeerId,
     ) -> Result<(), SendError> {
         self.force_send_serialized_message_to_peer_at_epoch(
@@ -507,7 +519,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     #[cfg(any(test, feature = "unsafe-test-functions"))]
     pub fn force_send_serialized_message_to_peer_at_epoch(
         &mut self,
-        serialized_message: Vec<u8>,
+        serialized_message: &[u8],
         peer_id: PeerId,
         epoch: Epoch,
     ) -> Result<(), SendError> {
@@ -535,7 +547,10 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         self.events.push_back(ToSwarm::NotifyHandler {
             peer_id,
             handler: NotifyHandler::One(*connection_id),
-            event: Either::Left(FromBehaviour::Message(serialized_message)),
+            event: Either::Left(FromBehaviour::Message(
+                crate::OutgoingMessage::try_from_bytes(serialized_message)
+                    .map_err(|_| SendError::MessageTooLarge)?,
+            )),
         });
         self.try_wake();
         Ok(())
@@ -1164,6 +1179,11 @@ where
             Either::Left(ConnectionHandler::new(
                 self.protocol_name.clone(),
                 (peer_id, connection_id),
+                // Aligned with this node's other connections, so they all agree
+                // on where a round boundary falls.
+                self.round_clock.clone(),
+                self.connection_share_per_round,
+                self.send_deadline,
             ))
         } else {
             tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with edge peer {peer_id:?} with addr {remote_addr:?}.");
@@ -1213,6 +1233,11 @@ where
             Either::Left(ConnectionHandler::new(
                 self.protocol_name.clone(),
                 (peer_id, connection_id),
+                // Aligned with this node's other connections, so they all agree
+                // on where a round boundary falls.
+                self.round_clock.clone(),
+                self.connection_share_per_round,
+                self.send_deadline,
             ))
         } else {
             tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with edge peer {peer_id:?} with addr {remote_addr:?}.");
@@ -1305,7 +1330,7 @@ where
                         );
                     }
                     self.handle_received_serialized_encapsulated_message(
-                        &message,
+                        message.as_ref(),
                         (peer_id, connection_id),
                     );
                 }

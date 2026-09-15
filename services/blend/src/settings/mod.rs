@@ -136,10 +136,6 @@ impl<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>
     }
 }
 
-/// `η`: the network absorption of one hop, the rounds a message spends crossing
-/// the network between two blend nodes.
-const NETWORK_ABSORPTION_IN_ROUNDS: u64 = 2;
-
 /// `T_M`: the message traversal time, which is what a sender waits for its
 /// payload to appear on the broadcasting channel before treating the message
 /// carrying it as lost.
@@ -153,12 +149,13 @@ const NETWORK_ABSORPTION_IN_ROUNDS: u64 = 2;
 pub const fn max_data_message_delay_in_rounds(
     num_blend_layers: NonZeroU64,
     max_blend_delay_in_rounds: NonZeroU64,
+    network_absorption_in_rounds: NonZeroU64,
 ) -> NonZeroU64 {
     match NonZeroU64::new(
         num_blend_layers.get().saturating_mul(
             max_blend_delay_in_rounds
                 .get()
-                .saturating_add(NETWORK_ABSORPTION_IN_ROUNDS),
+                .saturating_add(network_absorption_in_rounds.get()),
         ),
     ) {
         Some(delay) => delay,
