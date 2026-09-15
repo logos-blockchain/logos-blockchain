@@ -1,5 +1,9 @@
-use std::fmt::{Display, Formatter};
+use std::{
+    fmt::{Display, Formatter},
+    path::Path,
+};
 
+use color_eyre::eyre::Result;
 use serde_yaml::{Mapping, Value as YamlValue};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,10 +24,12 @@ fn key_as_str(key: &YamlValue) -> String {
 }
 
 impl YamlKey {
+    #[must_use]
     pub const fn root() -> Self {
         Self { keys: Vec::new() }
     }
 
+    #[must_use]
     pub fn push(mut self, step: YamlValue) -> Self {
         self.keys.push(step);
         self
@@ -63,7 +69,7 @@ pub enum MergeError {
 pub fn merge(
     source: YamlValue,
     destination: &mut YamlValue,
-    extra: YamlValue,
+    extra: Option<YamlValue>,
     flags: &MergeFlags,
 ) -> Vec<MergeError> {
     let key = YamlKey::root();
@@ -75,12 +81,34 @@ pub fn merge(
         destination,
         flags.source_insert_missing,
     );
-    let merge_extra_errors = merge_value(key, extra, destination, flags.extra_insert_missing);
-
     errors.extend(merge_source_errors);
-    errors.extend(merge_extra_errors);
+
+    if let Some(extra) = extra {
+        let merge_extra_errors = merge_value(key, extra, destination, flags.extra_insert_missing);
+        errors.extend(merge_extra_errors);
+    }
 
     errors
+}
+
+pub fn run(
+    source_path: &Path,
+    destination_path: &Path,
+    extra: Option<YamlValue>,
+    flags: &MergeFlags,
+) -> Result<Vec<MergeError>> {
+    let source_yaml = std::fs::read_to_string(source_path)?;
+    let source: YamlValue = serde_yaml::from_str(&source_yaml)?;
+
+    let destination_yaml = std::fs::read_to_string(destination_path)?;
+    let mut destination: YamlValue = serde_yaml::from_str(&destination_yaml)?;
+
+    let errors = merge(source, &mut destination, extra, flags);
+
+    let destination_yaml = serde_yaml::to_string(&destination)?;
+    std::fs::write(destination_path, destination_yaml)?;
+
+    Ok(errors)
 }
 
 fn merge_value(
@@ -161,6 +189,8 @@ fn merge_mapping(
 
 #[cfg(test)]
 mod tests {
+    use tempfile::TempDir;
+
     use super::*;
 
     const NO_INSERT: MergeFlags = MergeFlags {
@@ -216,7 +246,7 @@ mod tests {
     fn extra_value_overrides_source_value() {
         let source = yaml("a: 2");
         let mut destination = yaml("a: 1");
-        let extra = yaml("a: 3");
+        let extra = Some(yaml("a: 3"));
 
         let errors = merge(source, &mut destination, extra, &NO_INSERT);
 
@@ -228,7 +258,7 @@ mod tests {
     fn source_insert_flag_only_inserts_source_keys() {
         let source = yaml("b: 2");
         let mut destination = yaml("a: 1");
-        let extra = yaml("c: 3");
+        let extra = Some(yaml("c: 3"));
 
         let errors = merge(source, &mut destination, extra, &SOURCE_INSERT);
 
@@ -246,7 +276,7 @@ mod tests {
     fn extra_insert_flag_only_inserts_extra_keys() {
         let source = yaml("b: 2");
         let mut destination = yaml("a: 1");
-        let extra = yaml("c: 3");
+        let extra = Some(yaml("c: 3"));
 
         let errors = merge(source, &mut destination, extra, &EXTRA_INSERT);
 
@@ -261,10 +291,46 @@ mod tests {
     }
 
     #[test]
+    fn run_writes_merged_destination_file_and_returns_errors() {
+        let temp_dir = TempDir::new().unwrap();
+        let source_path = temp_dir.path().join("source.yaml");
+        let destination_path = temp_dir.path().join("destination.yaml");
+        std::fs::write(&source_path, "{ a: 2, b: 2 }").unwrap();
+        std::fs::write(&destination_path, "{ a: 1, c: 1 }").unwrap();
+        let extra = Some(yaml("c: 3"));
+
+        let errors = run(&source_path, &destination_path, extra, &NO_INSERT).unwrap();
+
+        assert_eq!(
+            errors,
+            vec![MergeError::NotFound {
+                key: key(&["b"]),
+                source_value: yaml("2"),
+            }]
+        );
+        let destination = yaml(&std::fs::read_to_string(&destination_path).unwrap());
+        assert_eq!(destination, yaml("{ a: 2, c: 3 }"));
+    }
+
+    #[test]
+    fn run_fails_and_keeps_destination_file_when_source_file_is_missing() {
+        let temp_dir = TempDir::new().unwrap();
+        let source_path = temp_dir.path().join("source.yaml");
+        let destination_path = temp_dir.path().join("destination.yaml");
+        std::fs::write(&destination_path, "a: 1").unwrap();
+
+        let result = run(&source_path, &destination_path, None, &NO_INSERT);
+
+        assert!(result.is_err());
+        let destination = std::fs::read_to_string(&destination_path).unwrap();
+        assert_eq!(destination, "a: 1");
+    }
+
+    #[test]
     fn null_is_kept() {
         let source = yaml("a: null");
         let mut destination = yaml("a: null");
-        let extra = yaml("{}");
+        let extra = None;
 
         let errors = merge(source, &mut destination, extra, &NO_INSERT);
 
@@ -276,7 +342,7 @@ mod tests {
     fn bool_is_replaced() {
         let source = yaml("a: true");
         let mut destination = yaml("a: false");
-        let extra = yaml("{}");
+        let extra = None;
 
         let errors = merge(source, &mut destination, extra, &NO_INSERT);
 
@@ -288,7 +354,7 @@ mod tests {
     fn number_is_replaced() {
         let source = yaml("a: 10");
         let mut destination = yaml("a: 1");
-        let extra = yaml("{}");
+        let extra = None;
 
         let errors = merge(source, &mut destination, extra, &NO_INSERT);
 
@@ -300,7 +366,7 @@ mod tests {
     fn string_is_replaced() {
         let source = yaml("a: new");
         let mut destination = yaml("a: old");
-        let extra = yaml("{}");
+        let extra = None;
 
         let errors = merge(source, &mut destination, extra, &NO_INSERT);
 
@@ -312,7 +378,7 @@ mod tests {
     fn sequence_is_replaced_whole() {
         let source = yaml("a: [9]");
         let mut destination = yaml("a: [1, 2, 3]");
-        let extra = yaml("{}");
+        let extra = None;
 
         let errors = merge(source, &mut destination, extra, &NO_INSERT);
 
@@ -324,7 +390,7 @@ mod tests {
     fn mapping_merges_recursively_and_keeps_unmatched_destination_keys() {
         let source = yaml("a: { b: { c: 10 } }");
         let mut destination = yaml("a: { b: { c: 1, d: 2 }, e: 3 }");
-        let extra = yaml("{}");
+        let extra = None;
 
         let errors = merge(source, &mut destination, extra, &NO_INSERT);
 
@@ -336,7 +402,7 @@ mod tests {
     fn tagged_is_replaced_including_tag() {
         let source = yaml("a: !x 1");
         let mut destination = yaml("a: !y 2");
-        let extra = yaml("{}");
+        let extra = None;
 
         let errors = merge(source, &mut destination, extra, &NO_INSERT);
 
@@ -348,7 +414,7 @@ mod tests {
     fn type_mismatch_keeps_destination_value_and_reports_path() {
         let source = yaml("a: { b: text }");
         let mut destination = yaml("a: { b: 1 }");
-        let extra = yaml("{}");
+        let extra = None;
 
         let errors = merge(source, &mut destination, extra, &NO_INSERT);
 
@@ -367,7 +433,7 @@ mod tests {
     fn type_mismatch_at_root_reports_root_path() {
         let source = yaml("[1]");
         let mut destination = yaml("a: 1");
-        let extra = yaml("{}");
+        let extra = None;
 
         let errors = merge(source, &mut destination, extra, &NO_INSERT);
 
@@ -386,7 +452,7 @@ mod tests {
     fn type_mismatch_does_not_stop_sibling_keys() {
         let source = yaml("{ a: text, b: 2 }");
         let mut destination = yaml("{ a: 1, b: 1 }");
-        let extra = yaml("{}");
+        let extra = None;
 
         let errors = merge(source, &mut destination, extra, &NO_INSERT);
 
@@ -405,7 +471,7 @@ mod tests {
     fn missing_key_is_inserted_with_its_subtree_when_flag_set() {
         let source = yaml("a: { b: { c: 1 } }");
         let mut destination = yaml("a: {}");
-        let extra = yaml("{}");
+        let extra = None;
 
         let errors = merge(source, &mut destination, extra, &SOURCE_INSERT);
 
@@ -417,7 +483,7 @@ mod tests {
     fn insert_flag_does_not_change_existing_keys_handling() {
         let source = yaml("{ a: 10, b: text, c: 3 }");
         let mut destination = yaml("{ a: 1, b: 1 }");
-        let extra = yaml("{}");
+        let extra = None;
 
         let errors = merge(source, &mut destination, extra, &SOURCE_INSERT);
 
@@ -436,7 +502,7 @@ mod tests {
     fn missing_key_is_reported_with_full_path_and_not_inserted() {
         let source = yaml("a: { b: 1 }");
         let mut destination = yaml("a: {}");
-        let extra = yaml("{}");
+        let extra = None;
 
         let errors = merge(source, &mut destination, extra, &NO_INSERT);
 
