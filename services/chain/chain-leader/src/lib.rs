@@ -364,13 +364,11 @@ where
         .await;
 
         // Create the API wrapper for chain service communication
-        let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService>::new(
-            self.service_resources_handle
-                .overwatch_handle
-                .relay::<CryptarchiaService>()
-                .await
-                .expect("Failed to estabilish connection with Cryptarchia"),
-        );
+        let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService>::from_overwatch_handle(
+            &self.service_resources_handle.overwatch_handle,
+        )
+        .await
+        .expect("Failed to estabilish connection with Cryptarchia");
 
         let chain_network_api = ChainNetworkServiceApi::<ChainNetwork, RuntimeServiceId>::new(
             self.service_resources_handle
