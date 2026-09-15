@@ -1579,11 +1579,9 @@ where
     RuntimeServiceId:
         AsServiceId<Cryptarchia<RuntimeServiceId>> + Debug + Sync + Display + Send + 'static,
 {
-    let relay = match get_relay(&handle).await {
-        Ok(relay) => relay,
-        Err(error) => return error.into_response(),
-    };
-    let chain_api = CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::new(relay);
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(&handle)
+            .await;
 
     match chain_api.get_block_events(id).await {
         Ok(Some(events)) => (StatusCode::OK, Json(events)).into_response(),
@@ -1613,11 +1611,9 @@ where
     RuntimeServiceId:
         AsServiceId<Cryptarchia<RuntimeServiceId>> + Debug + Sync + Display + Send + 'static,
 {
-    let relay = match get_relay(&handle).await {
-        Ok(relay) => relay,
-        Err(error) => return error.into_response(),
-    };
-    let chain_api = CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::new(relay);
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(&handle)
+            .await;
 
     let block_id = match query.tip {
         Some(tip) => tip,

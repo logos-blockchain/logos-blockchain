@@ -30,7 +30,7 @@ where
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
     let chain_api =
-        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::new(handle.relay().await?);
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
     Ok(chain_api.info().await?)
 }
 
@@ -46,7 +46,7 @@ where
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
     let chain_api =
-        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::new(handle.relay().await?);
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
     let stream = chain_api.get_headers(from_descendant, to_ancestor).await?;
     Ok(stream.take(HEADERS_LIMIT).try_collect().await?)
 }
@@ -59,7 +59,7 @@ where
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
     let chain_api =
-        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::new(handle.relay().await?);
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
     let ChainServiceInfo {
         cryptarchia_info, ..
     } = chain_api.info().await?;
