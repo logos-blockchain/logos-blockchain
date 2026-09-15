@@ -40,7 +40,7 @@ pub trait IbdBlockProcessor<B> {
 pub struct ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
 {
@@ -52,7 +52,7 @@ impl<Cryptarchia, Mempool> IbdBlockProcessor<Block<Cryptarchia::Tx>>
     for ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
 {

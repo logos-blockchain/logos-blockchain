@@ -25,7 +25,7 @@ impl<Tx> MempoolAdapter<Tx> {
 #[async_trait::async_trait]
 impl<Tx> MempoolAdapterTrait<Tx> for MempoolAdapter<Tx>
 where
-    Tx: Hashable<Hash = TxHash> + Send + Sync + 'static,
+    Tx: Hashable<Hash = TxHash> + Send + 'static,
 {
     async fn get_mempool_view(
         &self,
