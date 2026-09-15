@@ -18,8 +18,9 @@ use libp2p::{
 };
 
 use crate::{
-    OutgoingMessage,
+    FramingViolationError, OutgoingMessage,
     core::{admission::RoundShare, with_core::behaviour::handler::admission::SendQueue},
+    flush_and_close_stream,
     message::IncomingMessage,
     recv_msg, send_msg,
 };
@@ -62,7 +63,9 @@ pub struct ConnectionHandler {
 }
 
 type MsgSendFuture = BoxFuture<'static, Result<Stream, io::Error>>;
-type MsgRecvFuture = BoxFuture<'static, Result<(Stream, IncomingMessage), io::Error>>;
+type MsgRecvFuture =
+    BoxFuture<'static, Result<Option<(Stream, IncomingMessage)>, FramingViolationError>>;
+type StreamCloseFuture = BoxFuture<'static, ()>;
 
 enum InboundSubstreamState {
     /// The substream is open with no frame in flight.
@@ -83,6 +86,11 @@ enum OutboundSubstreamState {
     Idle(Stream),
     /// A message is being sent on the outbound substream.
     PendingSend(MsgSendFuture),
+    /// The connection is being closed, but a message is already part way onto
+    /// the wire.
+    ClosingAfterSend(MsgSendFuture),
+    /// The stream is being ended cleanly.
+    Closing(StreamCloseFuture),
     /// A substream has been dropped proactively.
     Dropped,
 }
@@ -153,9 +161,25 @@ impl ConnectionHandler {
     ///
     /// Also, this clears all pending messages and events
     /// to avoid confusions for event recipients.
+    /// Closes both substreams, letting a message already part way onto the wire
+    /// finish first.
     fn close_substreams(&mut self) {
         self.inbound_substream = Some(InboundSubstreamState::Dropped);
-        self.outbound_substream = Some(OutboundSubstreamState::Dropped);
+        self.outbound_substream = Some(match self.outbound_substream.take() {
+            Some(OutboundSubstreamState::PendingSend(sending)) => {
+                OutboundSubstreamState::ClosingAfterSend(sending)
+            }
+            Some(OutboundSubstreamState::Idle(stream)) => {
+                OutboundSubstreamState::Closing(flush_and_close_stream(stream).boxed())
+            }
+            Some(
+                state @ (OutboundSubstreamState::ClosingAfterSend(_)
+                | OutboundSubstreamState::Closing(_)),
+            ) => state,
+            _ => OutboundSubstreamState::Dropped,
+        });
+        // Messages that never reached the wire are simply dropped: nothing is
+        // owed to a neighbour for a message it has seen no byte of.
         self.send_queue.clear();
         self.pending_events_to_behaviour.clear();
     }
@@ -187,7 +211,13 @@ pub enum ToBehaviour {
     FullyNegotiated,
     /// A message has been received from the connection.
     Message(IncomingMessage),
-    /// An IO error from the connection.
+    /// The inbound stream broke the connection's framing. Attributable to the
+    /// neighbour: the transport authenticates every byte it carries, and this
+    /// node never leaves a message half-written, not even while closing.
+    /// The inbound/outbound streams to the peer are closed proactively.
+    InboundFramingViolation(io::Error),
+    /// An IO error from the connection that is nobody's fault: this node's own
+    /// send failed.
     /// The inbound/outbound streams to the peer are closed proactively.
     IOError(io::Error),
 }
@@ -216,10 +246,13 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
     ) -> Poll<
         ConnectionHandlerEvent<Self::OutboundProtocol, Self::OutboundOpenInfo, Self::ToBehaviour>,
     > {
-        // Short-circuit so that we do no further work once either of the two
-        // substreams has been dropped.
+        // Nothing left to do once both substreams are gone. The outbound one
+        // may still be finishing a message and ending the stream cleanly even
+        // though the inbound one is already gone, and that work is exactly what
+        // keeps a neighbour from reading this node's close as a fault, so it
+        // has to keep being polled.
         if matches!(self.inbound_substream, Some(InboundSubstreamState::Dropped))
-            || matches!(
+            && matches!(
                 self.outbound_substream,
                 Some(OutboundSubstreamState::Dropped)
             )
@@ -263,7 +296,7 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                 }
                 Some(InboundSubstreamState::Receiving(mut msg_recv_fut)) => {
                     match msg_recv_fut.poll_unpin(cx) {
-                        Poll::Ready(Ok((stream, msg))) => {
+                        Poll::Ready(Ok(Some((stream, msg)))) => {
                             tracing::trace!(
                                 target: LOG_TARGET,
                                 "Received message from inbound stream {:?}; notifying behaviour",
@@ -274,19 +307,26 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                                 ToBehaviour::Message(msg),
                             ));
                         }
-                        // A stream that ends early — between messages or part
-                        // way through one — is reported, not judged. The spec
-                        // makes a framing violation a blacklisting, but this
-                        // node's own close drops its substreams outright, so a
-                        // neighbour closed while a send was in flight produces
-                        // the same signal through no fault of its own.
-                        // TODO: We will start blacklisting once we introduce flushing of in-flight
-                        // sends before connection shut-down, to be done in a follow-up PR.
-                        Poll::Ready(Err(e)) => {
-                            tracing::error!(target: LOG_TARGET, "Failed to receive message from inbound stream {:?}: {e}. Dropping both inbound/outbound substreams", self.connection_details);
+                        // The neighbour ended the stream between messages,
+                        // which is how a connection ends when the protocol asks
+                        // for it.
+                        Poll::Ready(Ok(None)) => {
+                            tracing::trace!(
+                                target: LOG_TARGET,
+                                "Peer closed inbound stream {:?} between messages. Dropping both inbound/outbound substreams",
+                                self.connection_details
+                            );
+                            self.close_substreams();
+                        }
+                        // A message that stops part way through. This node
+                        // finishes what it has already started before closing,
+                        // so the only way a neighbour is left holding half a
+                        // message is if the neighbour left it that way.
+                        Poll::Ready(Err(FramingViolationError(error))) => {
+                            tracing::debug!(target: LOG_TARGET, "Inbound stream {:?} broke the connection's framing: {error}. Dropping both inbound/outbound substreams", self.connection_details);
                             self.close_substreams();
                             return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
-                                ToBehaviour::IOError(e),
+                                ToBehaviour::InboundFramingViolation(error),
                             ));
                         }
                         Poll::Pending => {
@@ -340,6 +380,47 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                         Poll::Pending => {
                             self.outbound_substream =
                                 Some(OutboundSubstreamState::PendingSend(msg_send_fut));
+                            self.waker = Some(cx.waker().clone());
+                            return Poll::Pending;
+                        }
+                    }
+                }
+                // Finishing the message already on the wire, and then letting
+                // the substream go. Whether the send succeeds no longer
+                // matters — the connection is closing either way — only that
+                // the neighbour is not left holding part of a message.
+                Some(OutboundSubstreamState::ClosingAfterSend(mut sending)) => {
+                    match sending.poll_unpin(cx) {
+                        Poll::Ready(Ok(stream)) => {
+                            tracing::trace!(target: LOG_TARGET, "Finished the message in flight on outbound stream {:?}; ending the stream", self.connection_details);
+                            self.outbound_substream = Some(OutboundSubstreamState::Closing(
+                                flush_and_close_stream(stream).boxed(),
+                            ));
+                        }
+                        // The send failed, so there is no stream left to end
+                        // cleanly and nothing further this node can do for the
+                        // neighbour on the other side of it.
+                        Poll::Ready(Err(e)) => {
+                            tracing::debug!(target: LOG_TARGET, "The message in flight on outbound stream {:?} could not be finished: {e}", self.connection_details);
+                            self.outbound_substream = Some(OutboundSubstreamState::Dropped);
+                        }
+                        Poll::Pending => {
+                            self.outbound_substream =
+                                Some(OutboundSubstreamState::ClosingAfterSend(sending));
+                            self.waker = Some(cx.waker().clone());
+                            return Poll::Pending;
+                        }
+                    }
+                }
+                Some(OutboundSubstreamState::Closing(mut closing)) => {
+                    match closing.poll_unpin(cx) {
+                        Poll::Ready(()) => {
+                            tracing::trace!(target: LOG_TARGET, "Ended outbound stream {:?} cleanly", self.connection_details);
+                            self.outbound_substream = Some(OutboundSubstreamState::Dropped);
+                        }
+                        Poll::Pending => {
+                            self.outbound_substream =
+                                Some(OutboundSubstreamState::Closing(closing));
                             self.waker = Some(cx.waker().clone());
                             return Poll::Pending;
                         }

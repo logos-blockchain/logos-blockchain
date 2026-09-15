@@ -33,7 +33,7 @@ const LOG_TARGET: &str = blend::network::core::handler::CORE_EDGE;
 
 type TimerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 type MessageReceiveFuture =
-    Pin<Box<dyn Future<Output = Result<IncomingMessage, io::Error>> + Send>>;
+    Pin<Box<dyn Future<Output = Result<Option<IncomingMessage>, io::Error>> + Send>>;
 type PollResult<T> = (
     Poll<
         ConnectionHandlerEvent<
@@ -129,6 +129,7 @@ impl ConnectionHandler {
 pub enum FailureReason {
     Timeout,
     MessageStream,
+    ClosedWithoutMessage,
     UpgradeError,
 }
 
