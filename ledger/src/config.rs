@@ -353,7 +353,12 @@ impl RewardPoWConfig {
     /// Never exceeds `collected_fees`, since `pow_share <= share_den` is
     /// guaranteed by [`Self::validate`].
     #[must_use]
-    pub fn pow_fee_share(&self, collected_fees: Value) -> Value {
+    pub(crate) fn pow_fee_share(&self, collected_fees: Value) -> Value {
+        assert!(
+            self.pow_share <= self.share_den.get(),
+            "PoW share must not exceed its denominator; guaranteed by RewardPoWConfig::validate"
+        );
+
         // Convert u64 values to u128 to avoid overflow. Safe to use `strict_mul`.
         let share = u128::from(collected_fees).strict_mul(u128::from(self.pow_share))
             / NonZeroU128::from(self.share_den);
