@@ -111,7 +111,7 @@ where
         + Unpin
         + 'static,
 {
-    let chain_service = CryptarchiaServiceApi::<ChainService, RuntimeServiceId>::new(
+    let chain_service = CryptarchiaServiceApi::<ChainService>::new(
         overwatch_handle
             .relay::<ChainService>()
             .await

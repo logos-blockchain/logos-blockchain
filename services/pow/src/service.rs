@@ -451,7 +451,7 @@ where
         .await?;
 
         // API wrapper over the chain service relay, used to query chain state.
-        let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService, RuntimeServiceId>::new(
+        let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService>::new(
             service_resources_handle
                 .overwatch_handle
                 .relay::<CryptarchiaService>()
@@ -494,7 +494,7 @@ where
         let pool = build_search_pool(settings.mining.max_threads);
 
         // Stream of winning PoW tickets, one per solved puzzle.
-        let mut winning_tickets = TicketGenerator::new::<Tx, _, _>(
+        let mut winning_tickets = TicketGenerator::new::<Tx, _>(
             cryptarchia_api.clone(),
             pool,
             settings.mining.max_tickets_per_block,
@@ -792,7 +792,7 @@ fn neediest_target(
 /// the ticker until an operator re-arms it with
 /// [`PoWServiceMessage::StartAutoClaim`].
 async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
     wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
     targets: &[ClaimTarget],
@@ -852,7 +852,7 @@ where
 /// local balance stops the loop when the funds are spoken for; the next tick
 /// starts again from whatever the chain actually reports.
 async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
@@ -917,7 +917,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
 /// `claim_address`, or to the target auto-claim would pick when the caller did
 /// not name a key.
 async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
     wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
     claim_address: Option<ZkPublicKey>,
@@ -958,12 +958,11 @@ where
 }
 
 /// The reward pool at the current tip: the opening balance for a run of claims.
-async fn current_reward_pool<CryptarchiaService, RuntimeServiceId>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+async fn current_reward_pool<CryptarchiaService>(
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
 ) -> Result<Value, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
-    RuntimeServiceId: Sync,
 {
     let tip = cryptarchia_api.info().await?.cryptarchia_info.tip;
     let ledger_state = cryptarchia_api
@@ -994,7 +993,7 @@ struct PublishedClaim {
 /// On any failure the ready set is left untouched so the tickets can be
 /// retried.
 async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
@@ -1116,15 +1115,14 @@ fn prune_expired_tickets(state: &mut PoWServiceState, current_slot: Slot, slot_w
 /// Answers a [`PoWServiceMessage::ClaimableRewardsInfo`] query: prunes expired
 /// tickets against the current slot, persists the pruned state, then reports
 /// the still-claimable ones.
-async fn respond_claimable_rewards<CryptarchiaService, RuntimeServiceId>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+async fn respond_claimable_rewards<CryptarchiaService>(
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     response: oneshot::Sender<ClaimableRewardsInfo>,
     slot_window: NonZeroU64,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
-    RuntimeServiceId: Sync,
 {
     let current_slot = match cryptarchia_api.info().await {
         Ok(info) => info.cryptarchia_info.slot,
@@ -1148,14 +1146,13 @@ async fn respond_claimable_rewards<CryptarchiaService, RuntimeServiceId>(
 ///
 /// A missed broadcast event is logged and ignored; a fresh subscription always
 /// re-emits the current tip, so a later block covers any settlement in the gap.
-async fn retire_settled_claims<CryptarchiaService, RuntimeServiceId>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+async fn retire_settled_claims<CryptarchiaService>(
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     processed_block: Result<ProcessedBlockEvent, BroadcastStreamRecvError>,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
-    RuntimeServiceId: Sync,
 {
     let block_id = match processed_block {
         Ok(block) => block.block_id,
@@ -1186,14 +1183,13 @@ async fn retire_settled_claims<CryptarchiaService, RuntimeServiceId>(
 /// The event carries the spent solution's [`PowNullifier`], which is exactly a
 /// claim's puzzle ticket, so a pending ticket is matched by re-deriving that
 /// nullifier from its claim. Returns the number of tickets retired.
-async fn prune_settled_pending<CryptarchiaService, RuntimeServiceId>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+async fn prune_settled_pending<CryptarchiaService>(
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     state: &mut PoWServiceState,
     block_id: HeaderId,
 ) -> Result<usize, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
-    RuntimeServiceId: Sync,
 {
     if state.pending_to_claim.is_empty() {
         return Ok(0);

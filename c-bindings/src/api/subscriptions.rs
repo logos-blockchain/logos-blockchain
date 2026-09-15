@@ -78,10 +78,7 @@ pub fn subscribe_to_new_blocks_sync(
                 "Failed to get relay to StorageService.",
             );
         };
-        let api =
-            CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>::new(
-                relay,
-            );
+        let api = CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>>::new(relay);
         match api.subscribe_new_blocks().await {
             Ok(mut block_stream) => {
                 runtime_handler.spawn(async move {

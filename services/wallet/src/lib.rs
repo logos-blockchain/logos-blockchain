@@ -476,7 +476,7 @@ where
             .await?;
 
         // Create the API wrapper for cleaner communication
-        let cryptarchia_api = CryptarchiaServiceApi::<Cryptarchia, _>::new(
+        let cryptarchia_api = CryptarchiaServiceApi::<Cryptarchia>::new(
             service_resources_handle
                 .overwatch_handle
                 .relay::<Cryptarchia>()
@@ -591,7 +591,7 @@ where
 {
     async fn msg_tip_or_latest(
         msg_tip: Option<HeaderId>,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     ) -> Result<HeaderId, WalletServiceError> {
         if let Some(tip) = msg_tip {
             Ok(tip)
@@ -605,7 +605,7 @@ where
 
     async fn ledger_state_at(
         tip: HeaderId,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     ) -> Result<LedgerState, WalletServiceError> {
         cryptarchia
             .get_ledger_state(tip)
@@ -623,7 +623,7 @@ where
         state: &mut ServiceState<'_>,
         voucher_master_key_id: &KeyId,
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         epoch_config: &EpochConfig,
     ) {
@@ -857,7 +857,7 @@ where
         pk: ZkPublicKey,
         resp_tx: Sender<Result<TipResponse<Option<WalletBalance>>, WalletServiceError>>,
         wallet: &Wallet,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     ) {
         let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
             Ok(tip) => tip,
@@ -1195,7 +1195,7 @@ where
     async fn leader_aged_notes_at(
         tip: Option<HeaderId>,
         wallet: &Wallet,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     ) -> Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError> {
         let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
         let ledger_state = Self::ledger_state_at(tip, cryptarchia).await?;
@@ -1339,7 +1339,7 @@ where
         tip: Option<HeaderId>,
         resp_tx: Sender<Result<TipResponse<ClaimableVouchersInfo>, WalletServiceError>>,
         state: &ServiceState<'_>,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     ) {
         let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
             Ok(tip) => tip,
@@ -1453,7 +1453,7 @@ where
         tip: Option<HeaderId>,
         state: &mut ServiceState<'_>,
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
         epoch_config: &EpochConfig,
     ) -> Result<(), WalletServiceError> {
         let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
@@ -1485,7 +1485,7 @@ where
         header_id: HeaderId,
         state: &mut ServiceState<'_>,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
-        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         epoch_config: &EpochConfig,
     ) {
         let Ok(block) = Self::load_block(header_id, storage_adapter)
@@ -1573,7 +1573,7 @@ where
         lib_update: &LibUpdate,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         state: &mut ServiceState<'_>,
-        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         epoch_config: &EpochConfig,
     ) {
         log_lib_update(lib_update);
@@ -1660,7 +1660,7 @@ where
         tip: HeaderId,
         state: &mut ServiceState<'_>,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
-        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         epoch_config: &EpochConfig,
     ) -> Result<(), WalletServiceError> {
         debug!(
@@ -1745,7 +1745,7 @@ where
     async fn get_tx_context(
         block_id: Option<HeaderId>,
         resp_tx: Sender<Result<OpsContext, WalletServiceError>>,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     ) {
         let block_id = match Self::msg_tip_or_latest(block_id, cryptarchia).await {
             Ok(block_id) => block_id,

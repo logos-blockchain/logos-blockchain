@@ -124,8 +124,7 @@ where
     declaration_id: Option<DeclarationId>,
     wallet_config: SdpWalletConfig,
     active_message_tracker_config: intent::Config,
-    active_message_tracker:
-        Option<IntentTracker<Activity, CryptarchiaServiceApi<ChainService, RuntimeServiceId>>>,
+    active_message_tracker: Option<IntentTracker<Activity, CryptarchiaServiceApi<ChainService>>>,
     /// Activity message restored from the previous run, to be tracked again.
     restored_activity: Option<Activity>,
     _phantom: std::marker::PhantomData<(ChainService, StateStorage)>,
@@ -210,7 +209,7 @@ where
             .overwatch_handle
             .relay::<ChainService>()
             .await?;
-        let chain_api: CryptarchiaServiceApi<ChainService, RuntimeServiceId> =
+        let chain_api: CryptarchiaServiceApi<ChainService> =
             CryptarchiaServiceApi::new(chain_relay);
 
         self.validate_initial_declaration_status(&chain_api).await?;
@@ -262,7 +261,7 @@ where
         msg: SdpMessage,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
     ) {
         match msg {
             SdpMessage::PostActivity { metadata, .. } => {
@@ -311,7 +310,7 @@ where
         event: ProcessedBlockEvent,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
     ) {
         let Some(tracker) = self.active_message_tracker.as_mut() else {
             trace!(target: LOG_TARGET, "no active message tracker exists");
@@ -339,7 +338,7 @@ where
         outcome: intent::Outcome<Activity>,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
     ) {
         match outcome {
             intent::Outcome::StatusChecked {
@@ -372,7 +371,7 @@ where
         status: IntentStatus,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
     ) {
         match status {
             IntentStatus::NotApplied => {
@@ -394,7 +393,7 @@ where
     async fn try_fetch_runtime_declaration(
         &self,
         declaration_id: DeclarationId,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Result<RuntimeDeclarationContext, SdpError> {
         self.fetch_declaration_from_ledger(chain_api, declaration_id)
             .await?
@@ -420,7 +419,7 @@ where
     /// Fetch declaration info from the ledger via chain service.
     async fn fetch_declaration_from_ledger(
         &self,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
         declaration_id: DeclarationId,
     ) -> Result<Option<RuntimeDeclarationContext>, DynError> {
         // Get current chain info to find the tip
@@ -460,7 +459,7 @@ where
 
     async fn validate_initial_declaration_status(
         &self,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Result<(), DynError> {
         let Some(id) = self.declaration_id else {
             return Ok(());
@@ -571,7 +570,7 @@ where
         metadata: ActivityMetadata,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
     ) {
         let Some(declaration_id) = self.declaration_id else {
             tracing::error!(target: LOG_TARGET, "No declaration_id set. Cannot post activity without declaration.");
@@ -613,7 +612,7 @@ where
         activity: Activity,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Option<HeaderId> {
         trace!(
             target: LOG_TARGET,
@@ -748,7 +747,7 @@ where
         declaration_id: DeclarationId,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
     ) {
         let Ok(RuntimeDeclarationContext { declaration, .. }) = self
             .try_fetch_runtime_declaration(declaration_id, chain_api)
@@ -802,7 +801,7 @@ where
         &mut self,
         declaration_id: Option<DeclarationId>,
         reply_channel: oneshot::Sender<Result<(), SdpError>>,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
     ) {
         let result = self
             .validate_declaration_id(declaration_id, chain_api)
@@ -816,7 +815,7 @@ where
     async fn validate_declaration_id(
         &mut self,
         declaration_id: Option<DeclarationId>,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Result<(), SdpError> {
         let validated_id = match declaration_id {
             Some(id) => self
@@ -837,7 +836,7 @@ where
     /// already passed.
     async fn restore_active_message_tracker(
         &mut self,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
     ) {
         let Some(activity) = self.restored_activity.take() else {
             return;
@@ -866,7 +865,7 @@ where
     async fn validate_restored_active_message(
         &self,
         activity: &Activity,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Result<(), DynError> {
         let tip_epoch = self.fetch_tip_epoch(chain_api).await?;
         Ok(activity.validate(self.declaration_id, tip_epoch)?)
@@ -874,7 +873,7 @@ where
 
     async fn fetch_tip_epoch(
         &self,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Result<Epoch, DynError> {
         let tip = chain_api.info().await?.cryptarchia_info.tip;
         let ledger_state = chain_api
@@ -970,11 +969,9 @@ enum InvalidActiveMessageError {
 pub struct IntentStatusCheckFailed(String);
 
 #[async_trait]
-impl<ChainService, RuntimeServiceId> intent::LedgerStateProvider
-    for CryptarchiaServiceApi<ChainService, RuntimeServiceId>
+impl<ChainService> intent::LedgerStateProvider for CryptarchiaServiceApi<ChainService>
 where
     ChainService: CryptarchiaServiceData<Tx: Send + Sync> + Send + Sync,
-    RuntimeServiceId: AsServiceId<ChainService> + Send + Sync,
 {
     type Error = lb_chain_service::api::ApiError;
 

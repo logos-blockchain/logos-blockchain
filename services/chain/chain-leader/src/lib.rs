@@ -364,7 +364,7 @@ where
         .await;
 
         // Create the API wrapper for chain service communication
-        let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService, RuntimeServiceId>::new(
+        let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService>::new(
             self.service_resources_handle
                 .overwatch_handle
                 .relay::<CryptarchiaService>()
@@ -635,7 +635,7 @@ where
         slot: Slot,
         proof: Groth16LeaderProof,
         signing_key: &Ed25519Key,
-        cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+        cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
         relays: &CryptarchiaConsensusRelays<
             BlendService,
             Mempool,
@@ -738,7 +738,7 @@ where
     )]
     async fn handle_inbound_message(
         msg: LeaderMsg,
-        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         kms: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
         time_relay: &OutboundRelay<TimeServiceMessage>,
@@ -777,7 +777,7 @@ where
     }
 
     async fn handle_claim_message(
-        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         config: &LeaderWalletConfig,
         mempool: &MempoolAdapter<Mempool::Item>,
@@ -790,7 +790,7 @@ where
     }
 
     async fn build_and_submit_claim_tx(
-        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         mempool: &MempoolAdapter<Mempool::Item>,
         config: &LeaderWalletConfig,
@@ -815,7 +815,7 @@ where
     }
 
     async fn get_tip_ledger_state(
-        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
     ) -> Result<(HeaderId, LedgerState), Error> {
         let tip = cryptarchia.info().await?.cryptarchia_info.tip;
         let ledger_state = cryptarchia

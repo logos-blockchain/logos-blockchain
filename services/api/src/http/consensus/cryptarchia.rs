@@ -29,9 +29,8 @@ where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
-    let chain_api = CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(
-        handle.relay().await?,
-    );
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::new(handle.relay().await?);
     Ok(chain_api.info().await?)
 }
 
@@ -46,9 +45,8 @@ where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
-    let chain_api = CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(
-        handle.relay().await?,
-    );
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::new(handle.relay().await?);
     let stream = chain_api.get_headers(from_descendant, to_ancestor).await?;
     Ok(stream.take(HEADERS_LIMIT).try_collect().await?)
 }
@@ -60,9 +58,8 @@ where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
-    let chain_api = CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(
-        handle.relay().await?,
-    );
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::new(handle.relay().await?);
     let ChainServiceInfo {
         cryptarchia_info, ..
     } = chain_api.info().await?;
