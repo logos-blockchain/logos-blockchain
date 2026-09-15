@@ -1,5 +1,5 @@
 use core::{
-    num::NonZeroU64,
+    num::{NonZeroU64, NonZeroUsize},
     task::{Context, Poll, Waker},
 };
 use std::{collections::VecDeque, io};
@@ -45,6 +45,9 @@ pub struct ConnectionHandler {
     /// [`Self::close_substreams`], a late-arriving upgrade event does not
     /// cause a second notification.
     upgrade_notified: bool,
+    /// How many bytes one message occupies on this connection, which is fixed
+    /// by the number of encapsulation layers and so the same for every message.
+    message_size: NonZeroUsize,
 }
 
 type MsgSendFuture = BoxFuture<'static, Result<Stream, io::Error>>;
@@ -80,6 +83,7 @@ impl ConnectionHandler {
         round_clock: RoundClock,
         share_per_round: NonZeroU64,
         send_deadline: RoundCount,
+        message_size: NonZeroUsize,
     ) -> Self {
         tracing::trace!(target: LOG_TARGET, "Initializing core->core connection handler for connection {connection_details:?}.");
         let current_round = round_clock.current_round();
@@ -97,6 +101,7 @@ impl ConnectionHandler {
             waker: None,
             connection_details,
             upgrade_notified: false,
+            message_size,
         }
     }
 
@@ -157,7 +162,7 @@ pub enum FromBehaviour {
     /// This happens when [`crate::Behaviour`] determines that one of the
     /// followings is true.
     /// - Max peering degree is reached.
-    /// - The peer has been detected as spammy.
+    /// - The peer has been detected as malicious.
     CloseSubstreams,
 }
 
@@ -225,8 +230,9 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                 }
                 Some(InboundSubstreamState::Idle(stream)) => {
                     if self.read_share.try_spend() {
-                        self.inbound_substream =
-                            Some(InboundSubstreamState::Receiving(recv_msg(stream).boxed()));
+                        self.inbound_substream = Some(InboundSubstreamState::Receiving(
+                            recv_msg(stream, self.message_size).boxed(),
+                        ));
                         continue;
                     }
                     // The share for this round is spent, so no read is issued.
@@ -254,8 +260,16 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                                 ToBehaviour::Message(msg),
                             ));
                         }
+                        // A stream that ends early — between messages or part
+                        // way through one — is reported, not judged. The spec
+                        // makes a framing violation a blacklisting, but this
+                        // node's own close drops its substreams outright, so a
+                        // neighbour closed while a send was in flight produces
+                        // the same signal through no fault of its own.
+                        // TODO: We will start blacklisting once we introduce flushing of in-flight
+                        // sends before connection shut-down, to be done in a follow-up PR.
                         Poll::Ready(Err(e)) => {
-                            tracing::error!(target: LOG_TARGET, "Failed to receive message from inbound stream {:?}: {e:?}. Dropping both inbound/outbound substreams", self.connection_details);
+                            tracing::error!(target: LOG_TARGET, "Failed to receive message from inbound stream {:?}: {e}. Dropping both inbound/outbound substreams", self.connection_details);
                             self.close_substreams();
                             return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
                                 ToBehaviour::IOError(e),

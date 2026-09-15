@@ -595,18 +595,7 @@ async fn send_message_over_new_stream(
         }
     };
 
-    let outgoing_message = match OutgoingMessage::try_from(&message) {
-        Ok(outgoing_message) => outgoing_message,
-        Err(e) => {
-            error!(target: LOG_TARGET, "Refusing to send a message the wire format cannot frame: {e} to peer {peer_id:?} on connection {connection_id:?}.");
-            return SendOutcome::Failed {
-                peer_id,
-                connection_id,
-            };
-        }
-    };
-
-    let stream = match send_msg(stream, outgoing_message).await {
+    let stream = match send_msg(stream, OutgoingMessage::from(&message)).await {
         Ok(stream) => stream,
         Err(e) => {
             error!(target: LOG_TARGET, "Failed to send message: {e} to peer {peer_id:?} on connection {connection_id:?}.");

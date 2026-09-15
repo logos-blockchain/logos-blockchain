@@ -1,40 +1,16 @@
 pub mod codec;
-pub mod crypto;
-pub mod encap;
-pub mod input;
-pub mod reward;
-
-mod error;
-mod fixtures;
-mod message;
-
-use core::num::{NonZeroU64, NonZeroUsize};
-
 pub use codec::{
     deserialize_encapsulated_message, serialize_encapsulated_message_with_verified_public_header,
     serialize_encapsulated_message_with_verified_signature,
 };
+pub mod crypto;
+pub mod encap;
 pub use encap::encapsulated::MessageIdentifier;
-pub use error::Error;
-pub use message::payload::{MAX_PAYLOAD_BODY_SIZE, PaddedPayloadBody, PayloadType};
-use message::{
-    blending_header::BLENDING_HEADER_ENCODED_SIZE, payload::PAYLOAD_ENCODED_SIZE,
-    public_header::PUBLIC_HEADER_ENCODED_SIZE,
-};
+pub mod input;
+pub mod reward;
 
-/// The number of bytes an encapsulated message can encode to at most on the
-/// wire, given the maximum number of per-message encapsulations.
-#[must_use]
-pub fn encapsulated_message_encoded_size(num_blend_layers: NonZeroU64) -> NonZeroUsize {
-    PUBLIC_HEADER_ENCODED_SIZE
-        .checked_add(
-            BLENDING_HEADER_ENCODED_SIZE
-                .checked_mul(num_blend_layers.get() as usize)
-                .expect("The encoded size of the blending headers must not overflow."),
-        )
-        .expect("The encoded size of a message must not overflow.")
-        .checked_add(PAYLOAD_ENCODED_SIZE)
-        .expect("The encoded size of a message must not overflow.")
-        .try_into()
-        .expect("The encoded size of a message is greater than `0`.")
-}
+mod error;
+pub use error::Error;
+mod fixtures;
+mod message;
+pub use message::payload::{MAX_PAYLOAD_BODY_SIZE, PaddedPayloadBody, PayloadType};
