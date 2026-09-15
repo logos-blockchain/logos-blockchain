@@ -215,7 +215,7 @@ impl BehaviourBuilder {
                         connection_id: ConnectionId::new_unchecked(1_000 + index),
                     },
                 );
-                behaviour.liveness.start_or_resume_observing(peer_id, now);
+                behaviour.liveness.start_or_resume_observing(peer_id);
             }
         }
 
