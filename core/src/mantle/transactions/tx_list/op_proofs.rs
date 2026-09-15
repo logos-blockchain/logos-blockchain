@@ -87,3 +87,25 @@ impl<'de> Deserialize<'de> for OpProofs {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::DeserializeOp as _;
+
+    #[test]
+    fn deserialize_from_json() {
+        let op_proofs = OpProofs::sample();
+        let json = serde_json::to_value(op_proofs.inner()).expect("the inner column serializes");
+
+        assert_eq!(
+            serde_json::from_value::<OpProofs>(json).expect("the human-readable arm deserializes"),
+            op_proofs
+        );
+    }
+
+    #[test]
+    fn deserialize_rejects_binary() {
+        OpProofs::from_bytes(&[0u8; 8]).expect_err("Context-less binary decoding is unsupported.");
+    }
+}
