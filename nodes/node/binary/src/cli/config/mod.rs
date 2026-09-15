@@ -1,5 +1,6 @@
 pub mod init;
 pub mod keystore;
+mod merge;
 pub mod migrate;
 pub mod migrate_0_1_2;
 pub mod update;
