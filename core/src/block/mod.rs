@@ -16,7 +16,7 @@ pub use uncle::{SignedHeader, UncleHeaders};
 use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},
     crypto::{Digest as _, Hasher},
-    header::{ContentId, Header, HeaderId},
+    header::{ContentId, Header, HeaderId, Version},
     mantle::{
         traits::{Hashable, StorageSize},
         transactions::hash::{TxHash, TxHashPrefix},
@@ -54,8 +54,12 @@ pub enum Error {
 /// Why a header fails the checks that need the header alone.
 #[derive(Debug, thiserror::Error)]
 pub enum HeaderError {
+    #[error("Unsupported header version: {0:?}")]
+    UnsupportedVersion(Version),
     #[error("Expected a non-genesis slot")]
     GenesisSlot,
+    #[error("Expected a parent block different from the header itself")]
+    SelfParent,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
@@ -336,12 +340,18 @@ impl<Tx> Block<Tx> {
 /// This does not check `body_root` because it commits to a body this function
 /// does not have. It should be checked separately by the caller.
 ///
-/// This does not check `proof_of_leadership` since it requires a ledger state.
+/// This does not check `proof_of_leadership` and the parent header
+/// since they require a ledger state.
 pub fn verify_header_alone(header: &Header) -> Result<(), HeaderError> {
+    if *header.version() != Version::Bedrock {
+        return Err(HeaderError::UnsupportedVersion(*header.version()));
+    }
     if header.slot() == Slot::genesis() {
         return Err(HeaderError::GenesisSlot);
     }
-    // TODO: check version and parent_block.
+    if header.parent() == header.id() {
+        return Err(HeaderError::SelfParent);
+    }
     Ok(())
 }
 
