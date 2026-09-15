@@ -12,7 +12,7 @@ use test_log::test;
 use tokio::{select, time::timeout};
 
 use crate::core::{
-    tests::utils::{PROTOCOL_NAME, TestSwarm, undecodable_message_bytes},
+    tests::utils::{PROTOCOL_NAME, TestEncapsulatedMessage, TestSwarm, undecodable_message_bytes},
     with_core::behaviour::{
         Event,
         blacklist::BlacklistReason,
@@ -100,19 +100,25 @@ async fn wait_for_upgrade(
 }
 
 fn pair(window_in_rounds: NonZeroU128) -> (TestSwarm<TestBehaviour>, TestSwarm<TestBehaviour>) {
+    pair_with_share(window_in_rounds, NonZeroU64::new(1_000).unwrap())
+}
+
+/// A pair whose connections carry at most `share_per_round` messages a round,
+/// so that a backlog can be made to outlast whatever the test is waiting for.
+fn pair_with_share(
+    window_in_rounds: NonZeroU128,
+    share_per_round: NonZeroU64,
+) -> (TestSwarm<TestBehaviour>, TestSwarm<TestBehaviour>) {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
-    let offender = TestSwarm::new(&identities.next().unwrap(), |id| {
+    let build = |id: &_| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
             .with_liveness(ROUND, window_in_rounds)
+            .with_connection_share_per_round(share_per_round)
             .build()
-    });
-    let listener = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .with_liveness(ROUND, window_in_rounds)
-            .build()
-    });
+    };
+    let offender = TestSwarm::new(&identities.next().unwrap(), build);
+    let listener = TestSwarm::new(&identities.next().unwrap(), build);
     (offender, listener)
 }
 
@@ -244,15 +250,16 @@ fn core_and_raw_peer() -> (TestSwarm<StreamBehaviour>, TestSwarm<TestBehaviour>)
 }
 
 /// A message that stops part way through is a framing violation, and the spec
-/// makes it a blacklisting. This node does not act on it yet, and that is
-/// deliberate: its own close drops the substreams outright, so a neighbour
-/// closed while a send was in flight produces exactly this signal through no
-/// fault of its own — and the protocol asks nodes to close, at every epoch
-/// boundary among other times. Blacklisting here would turn a rotation into a
-/// mutual partition. This assertion flips once closing flushes what is in
-/// flight, at which point the signal becomes attributable.
+/// makes it a blacklisting: the transport authenticates every byte, so the
+/// bytes cannot have been truncated on the way.
+///
+/// This became attributable once closing stopped producing the same signal.
+/// Until a node finished the message already on the wire before dropping its
+/// substreams, a neighbour closed mid-send handed the far end half a message
+/// through no fault of its own — and the protocol asks nodes to close, at every
+/// epoch boundary among other times.
 #[test(tokio::test)]
-async fn a_message_that_stops_part_way_through_is_not_yet_a_fault() {
+async fn a_message_that_stops_part_way_through_blacklists_the_sender() {
     let (mut offender, mut listener) = core_and_raw_peer();
     listener.listen().with_memory_addr_external().await;
     let (mut stream, _incoming) = open_raw_core_stream(&mut offender, &mut listener).await;
@@ -263,17 +270,58 @@ async fn a_message_that_stops_part_way_through_is_not_yet_a_fault() {
     stream.close().await.unwrap();
 
     assert_eq!(
-        wait_for_blacklisting(&mut offender, &mut listener, Duration::from_secs(3)).await,
-        None,
-        "a truncated message must not be attributed to the sender while an \
-         ordinary close produces the same signal"
+        wait_for_blacklisting(&mut offender, &mut listener, Duration::from_secs(5)).await,
+        Some(BlacklistReason::StreamFramingViolation)
     );
 }
 
-/// Ending the stream between messages is how a connection ends, not a fault,
-/// and must stay that way — blacklisting for it would exclude every peer that
-/// restarts. This holds today because no read failure is a fault at all, and
-/// it must still hold once truncation becomes one.
+/// Closing with traffic in flight must not look like a fault either.
+#[test(tokio::test)]
+async fn closing_a_connection_carrying_traffic_blacklists_nobody() {
+    // One message a round against a backlog of many, so the connection still
+    // has messages to send when the two give up on each other, rather than
+    // having gone quiet long before.
+    let (mut one, mut other) = pair_with_share(WINDOW_IN_ROUNDS, NonZeroU64::new(1).unwrap());
+    other.listen().with_memory_addr_external().await;
+    one.connect_and_wait_for_upgrade(&mut other).await;
+
+    // Enough distinct messages that a send is in flight whenever the close
+    // lands, rather than the connection sitting idle at a boundary.
+    for nonce in 0..64 {
+        let message = TestEncapsulatedMessage::new_distinct(nonce, b"in flight");
+        one.behaviour_mut()
+            .publish_message_with_validated_header_to_current_epoch(message.as_ref())
+            .unwrap();
+    }
+
+    let window = Duration::from_secs(u64::try_from(WINDOW_IN_ROUNDS.get()).unwrap() * ROUND.get());
+    let blacklisted = timeout(window + Duration::from_secs(3), async {
+        loop {
+            select! {
+                event = one.select_next_some() => {
+                    if let SwarmEvent::Behaviour(Event::PeerBlacklisted { .. }) = event {
+                        return "the sender blacklisted the peer that closed on it";
+                    }
+                }
+                event = other.select_next_some() => {
+                    if let SwarmEvent::Behaviour(Event::PeerBlacklisted { .. }) = event {
+                        return "the receiver blacklisted the peer whose close interrupted a send";
+                    }
+                }
+            }
+        }
+    })
+    .await;
+
+    if let Ok(blacklisted) = blacklisted {
+        panic!("Closing must not be a fault, but {blacklisted}.");
+    }
+}
+
+/// Ending the stream between messages is how a connection ends, not a fault:
+/// blacklisting for it would exclude every peer that restarts. The line between
+/// this and the test above is the whole of what makes a framing violation
+/// attributable.
 #[test(tokio::test)]
 async fn closing_between_messages_is_not_a_fault() {
     let (mut offender, mut listener) = core_and_raw_peer();
