@@ -2,7 +2,11 @@ use core::time::Duration;
 
 use futures::StreamExt as _;
 use lb_libp2p::SwarmEvent;
-use libp2p::swarm::{ConnectionId, dummy};
+use libp2p::swarm::{
+    ConnectionId,
+    dial_opts::{DialOpts, PeerCondition},
+    dummy,
+};
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
 use tokio::{select, time::sleep};
@@ -339,9 +343,14 @@ async fn outgoing_attempt_with_max_negotiated_peering_degree() {
         .connect_and_wait_for_upgrade(&mut listening_swarm_1)
         .await;
 
-    // We can call `connect` since a new connection will be established, but
-    // will fail to upgrade (which we test below).
-    dialing_swarm.connect(&mut listening_swarm_2).await;
+    dialing_swarm
+        .dial(
+            DialOpts::peer_id(*listening_swarm_2.local_peer_id())
+                .addresses(listening_swarm_2.external_addresses().cloned().collect())
+                .condition(PeerCondition::Always)
+                .build(),
+        )
+        .unwrap();
 
     // The refusal has to be reported, not just acted on. A connection this node
     // opened and then refused never becomes one waiting for its upgrade and

@@ -468,3 +468,30 @@ async fn a_blacklisted_peer_does_not_take_over_the_connection_being_closed() {
     );
     assert_dial_refused(&behaviour, peer);
 }
+
+/// A peer can offend once per message it is allowed to send in a round, and
+/// every one of them reaches the behaviour. Reporting each would turn a count
+/// of the peers this node has had to shut out into a count of how talkative
+/// they were on their way out.
+#[test(tokio::test)]
+async fn a_peer_that_offends_again_is_reported_once() {
+    let (mut identities, _) = new_nodes_with_empty_address(1);
+    let mut behaviour = BehaviourBuilder::new(&identities.next().unwrap()).build();
+    let peer = PeerId::random();
+
+    behaviour.blacklist_peer(peer, BlacklistReason::InvalidProofOfQuota);
+    behaviour.blacklist_peer(peer, BlacklistReason::UndeserializableMessage);
+
+    let times_reported = behaviour
+        .events
+        .iter()
+        .filter(|event| matches!(event, ToSwarm::GenerateEvent(Event::PeerBlacklisted { .. })))
+        .count();
+
+    assert_eq!(times_reported, 1);
+    assert_eq!(
+        behaviour.blacklisted_peers().count(),
+        1,
+        "and the peer still occupies exactly one of the entries there is room for"
+    );
+}

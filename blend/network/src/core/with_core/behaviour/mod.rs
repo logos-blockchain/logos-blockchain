@@ -36,7 +36,7 @@ use crate::core::{
     poq_verification::{PendingPoQVerifications, PoQVerificationOutcome},
     with_core::{
         behaviour::{
-            blacklist::{BlacklistReason, PeerBlacklist},
+            blacklist::{BlacklistReason, InsertionOutcome, PeerBlacklist},
             handler::{ConnectionHandler, FromBehaviour, ToBehaviour},
             liveness::PeerLivenessMap,
             message_cache::MessageCache,
@@ -1017,10 +1017,33 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
 
     /// Blacklists the sender of a message.
     fn blacklist_peer(&mut self, peer_id: PeerId, reason: BlacklistReason) {
-        tracing::debug!(target: LOG_TARGET, "Blacklisting peer {peer_id:?}: {reason:?}.");
-        self.blacklist
+        let InsertionOutcome {
+            is_first_offence,
+            evicted,
+        } = self
+            .blacklist
             .insert_or_extend(peer_id, reason, self.current_round);
         self.close_every_connection_with(&peer_id);
+
+        if let Some(evicted) = evicted {
+            tracing::trace!(
+                target: LOG_TARGET,
+                "Peer {:?} is no longer blacklisted: it was the oldest entry when the blacklist filled up, and made room before the window it was excluded for, after {}, had passed.",
+                evicted.peer,
+                evicted.reason
+            );
+        }
+
+        // A peer offending again is one peer blacklisted, not two. It can offend
+        // once per message it is allowed to send in a round, and reporting each
+        // would put a peer's talkativeness into a count of how many peers this
+        // node has had to shut out.
+        if !is_first_offence {
+            tracing::trace!(target: LOG_TARGET, "Blacklisted peer {peer_id:?} offended again ({reason:?}); its window starts over.");
+            return;
+        }
+
+        tracing::debug!(target: LOG_TARGET, "Blacklisting peer {peer_id:?}: {reason:?}.");
         self.events
             .push_back(ToSwarm::GenerateEvent(Event::PeerBlacklisted {
                 peer: peer_id,

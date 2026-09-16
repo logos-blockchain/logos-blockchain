@@ -579,12 +579,12 @@ where
         reason = "TODO: address this in a dedicated refactor"
     )]
     fn handle_event(&mut self, event: SwarmEvent<BlendBehaviourEvent<ProofsVerifier>>) {
-        // Blacklist entries expire silently, so we re-report the blacklist size on new
-        // connections.
-        self.report_blacklist_size();
         match event {
             SwarmEvent::ConnectionEstablished { peer_id, .. }
             | SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                // Blacklist entries expire silently, so the size is re-reported
+                // whenever a connection comes or goes.
+                self.report_blacklist_size();
                 let negotiated_count = self
                     .swarm
                     .behaviour()

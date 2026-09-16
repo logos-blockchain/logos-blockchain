@@ -48,6 +48,15 @@ impl Display for BlacklistReason {
 
 impl error::Error for BlacklistReason {}
 
+/// What blacklisting a peer did, beyond the entry itself.
+#[derive(Debug, Clone, Copy)]
+pub struct InsertionOutcome {
+    /// Whether the peer was not already blacklisted.
+    pub is_first_offence: bool,
+    /// The entry dropped to make room, if the blacklist was full.
+    pub evicted: Option<Entry>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Entry {
     pub peer: PeerId,
@@ -91,17 +100,35 @@ impl PeerBlacklist {
     ///
     /// Refreshing moves the peer to the back, so re-offending both restarts its
     /// expiry and makes it the last to be evicted rather than the first.
-    pub fn insert_or_extend(&mut self, peer: PeerId, reason: BlacklistReason, now: Round) {
+    ///
+    /// The two things the caller cannot see afterwards are returned: whether
+    /// this was a first offence, and who was pushed out to make room. Both
+    /// leave the caller's hands the moment this returns, and both are worth
+    /// saying out loud — the first because a peer offending twice in a round is
+    /// not two peers blacklisted, the second because a peer evicted early is
+    /// admissible again without its window ever having passed.
+    pub fn insert_or_extend(
+        &mut self,
+        peer: PeerId,
+        reason: BlacklistReason,
+        now: Round,
+    ) -> InsertionOutcome {
+        let mut outcome = InsertionOutcome {
+            is_first_offence: true,
+            evicted: None,
+        };
         if let Some(position) = self.entries.iter().position(|entry| entry.peer == peer) {
             self.entries.remove(position);
+            outcome.is_first_offence = false;
         } else if self.entries.len() >= self.capacity.get() {
-            self.entries.pop_front();
+            outcome.evicted = self.entries.pop_front();
         }
         self.entries.push_back(Entry {
             peer,
             reason,
             expires_at: now.saturating_add(self.expiry),
         });
+        outcome
     }
 
     /// The peers blacklisted as of `now`.
@@ -191,17 +218,22 @@ mod tests {
     #[test]
     fn re_offending_restarts_the_window_without_adding_an_entry() {
         let (mut blacklist, peer) = (blacklist(), PeerId::random());
-        blacklist.insert_or_extend(
+        let first = blacklist.insert_or_extend(
             peer,
             BlacklistReason::UndeserializableMessage,
             Round::from(0),
         );
-        blacklist.insert_or_extend(
+        let second = blacklist.insert_or_extend(
             peer,
             BlacklistReason::InvalidHeaderSignature,
             Round::from(20),
         );
 
+        assert!(first.is_first_offence);
+        assert!(
+            !second.is_first_offence,
+            "a peer offending twice must not read as two peers shut out"
+        );
         assert_eq!(
             blacklist.len(),
             1,
@@ -232,13 +264,21 @@ mod tests {
         assert_eq!(blacklist.len(), CAPACITY.get());
 
         let newcomer = PeerId::random();
-        blacklist.insert_or_extend(
+        let insertion = blacklist.insert_or_extend(
             newcomer,
             BlacklistReason::InvalidProofOfQuota,
             Round::from(10),
         );
 
         assert_eq!(blacklist.len(), CAPACITY.get(), "the cap is never exceeded");
+        // An entry evicted early is admissible again without its window ever
+        // having passed, and pruning never sees it, so this is the one chance
+        // to say so.
+        assert_eq!(
+            insertion.evicted.map(|entry| entry.peer),
+            Some(peers[0]),
+            "the entry that made room left without anyone being told"
+        );
         assert!(
             !blacklist.contains(&peers[0], Round::from(10)),
             "the oldest entry made room"
