@@ -166,6 +166,19 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
         self.events
     }
 
+    /// Drops the connection this epoch holds with `peer_id`, if it holds one.
+    pub fn close_connection_with_peer(&mut self, peer_id: &PeerId) {
+        let Some(&connection_id) = self.negotiated_peers.get(peer_id) else {
+            return;
+        };
+        self.events.push_back(ToSwarm::NotifyHandler {
+            peer_id: *peer_id,
+            handler: NotifyHandler::One(connection_id),
+            event: Either::Left(FromBehaviour::CloseSubstreams),
+        });
+        self.try_wake();
+    }
+
     /// Checks if the connection is part of the old epoch.
     #[must_use]
     pub fn is_negotiated(&self, (peer_id, connection_id): &(PeerId, ConnectionId)) -> bool {
