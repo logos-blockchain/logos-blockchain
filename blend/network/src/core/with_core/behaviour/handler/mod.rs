@@ -3,7 +3,7 @@ use core::{
     task::{Context, Poll, Waker},
     time::Duration,
 };
-use std::{collections::VecDeque, io};
+use std::io;
 
 use futures::{FutureExt as _, future::BoxFuture};
 use lb_blend_primitives::time::{Round, RoundClock, RoundCount};
@@ -36,17 +36,11 @@ pub struct ConnectionHandler {
     /// `r₁`: what this connection may still be read for this round.
     read_share: RoundShare,
     round_clock: RoundClock,
-    pending_events_to_behaviour: VecDeque<ToBehaviour>,
+    /// What the behaviour has been told about this connection coming up.
+    upgrade_notice: Option<UpgradeNotice>,
     protocol_name: StreamProtocol,
     waker: Option<Waker>,
     connection_details: (PeerId, ConnectionId),
-    /// Whether the behaviour has already been notified of a successful upgrade
-    /// for this connection. Both inbound and outbound substreams must be
-    /// negotiated, but the behaviour only needs to hear about it once. Once
-    /// set, it stays set for the lifetime of the handler so that after
-    /// [`Self::close_substreams`], a late-arriving upgrade event does not
-    /// cause a second notification.
-    upgrade_notified: bool,
     /// How many bytes one message occupies on this connection, which is fixed
     /// by the number of encapsulation layers and so the same for every message.
     message_size: NonZeroUsize,
@@ -76,6 +70,33 @@ enum InboundSubstreamState {
     Receiving(MsgRecvFuture),
     /// A substream has been dropped proactively.
     Dropped,
+}
+
+/// What the behaviour has been told about a connection coming up.
+#[derive(Debug)]
+enum UpgradeNotice {
+    /// The connection came up and the behaviour has yet to hear it.
+    Due,
+    /// The behaviour has heard, or never will. Either way it is not told
+    /// again, so a substream negotiated late cannot announce a connection
+    /// twice, nor announce one that is already closing.
+    Settled,
+}
+
+impl UpgradeNotice {
+    const fn new() -> Self {
+        Self::Due
+    }
+
+    const fn new_settled() -> Self {
+        Self::Settled
+    }
+
+    const fn consume(&mut self) -> bool {
+        let due = matches!(self, Self::Due);
+        *self = Self::Settled;
+        due
+    }
 }
 
 enum OutboundSubstreamState {
@@ -115,11 +136,10 @@ impl ConnectionHandler {
             ),
             read_share: RoundShare::new(share_per_round, current_round),
             round_clock,
-            pending_events_to_behaviour: VecDeque::new(),
+            upgrade_notice: None,
             protocol_name,
             waker: None,
             connection_details,
-            upgrade_notified: false,
             message_size,
             upgrade_timeout,
         }
@@ -139,18 +159,6 @@ impl ConnectionHandler {
             );
         }
         current_round
-    }
-
-    /// Emit a [`ToBehaviour::FullyNegotiated`] event if one has not already
-    /// been emitted for this connection. Both inbound and outbound substreams
-    /// need to be negotiated before the connection is usable, but the
-    /// behaviour only needs to hear about the upgrade once, so we dedupe here.
-    fn check_and_notify_about_upgrade(&mut self) {
-        if !self.upgrade_notified {
-            self.pending_events_to_behaviour
-                .push_back(ToBehaviour::FullyNegotiated);
-            self.upgrade_notified = true;
-        }
     }
 
     /// Mark the inbound/outbound substream state as Dropped.
@@ -180,7 +188,28 @@ impl ConnectionHandler {
         // Messages that never reached the wire are simply dropped: nothing is
         // owed to a neighbour for a message it has seen no byte of.
         self.send_queue.clear();
-        self.pending_events_to_behaviour.clear();
+        // A connection that is closing never came up as far as the behaviour
+        // is concerned.
+        self.drop_notice();
+    }
+
+    const fn raise_notice(&mut self) {
+        if self.upgrade_notice.is_some() {
+            return;
+        }
+        self.upgrade_notice = Some(UpgradeNotice::new());
+    }
+
+    fn consume_notice(&mut self) -> bool {
+        self.upgrade_notice
+            .as_mut()
+            .is_some_and(UpgradeNotice::consume)
+    }
+
+    const fn drop_notice(&mut self) {
+        // Set as `Some` instead of `consume()` if not `None` to avoid re-entrancy
+        // attacks.
+        self.upgrade_notice = Some(UpgradeNotice::new_settled());
     }
 
     fn try_wake(&mut self) {
@@ -256,9 +285,10 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
 
         self.process_current_round(cx);
 
-        // Process pending events to be sent to the behaviour
-        if let Some(event) = self.pending_events_to_behaviour.pop_front() {
-            return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(event));
+        if self.consume_notice() {
+            return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
+                ToBehaviour::FullyNegotiated,
+            ));
         }
 
         // Process inbound stream
@@ -481,7 +511,7 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                 } else {
                     tracing::trace!(target: LOG_TARGET, "Fully negotiated inbound for connection {:?}; creating inbound substream", self.connection_details);
                     self.inbound_substream = Some(InboundSubstreamState::Idle(stream));
-                    self.check_and_notify_about_upgrade();
+                    self.raise_notice();
                 }
             }
             ConnectionEvent::FullyNegotiatedOutbound(FullyNegotiatedOutbound {
@@ -497,7 +527,7 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                 } else {
                     tracing::trace!(target: LOG_TARGET, "Fully negotiated outbound for connection {:?}; creating outbound substream", self.connection_details);
                     self.outbound_substream = Some(OutboundSubstreamState::Idle(stream));
-                    self.check_and_notify_about_upgrade();
+                    self.raise_notice();
                 }
             }
             ConnectionEvent::DialUpgradeError(e) => {

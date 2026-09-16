@@ -174,7 +174,7 @@ pub struct Behaviour<ProofsVerifier> {
     ///
     /// Only connections with other core nodes that are established before the
     /// specified connection limit is reached will be upgraded and the state of
-    /// the peer negotiated, monitored, and reported to the swarm.
+    /// the peer negotiated and reported to the swarm.
     negotiated_peers: HashMap<PeerId, RemotePeerConnectionDetails>,
     /// The set of connections established but not yet upgraded.
     ///
@@ -403,10 +403,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     /// `Φ_CC - 1`: the fewest live connections the node settles for.
     #[must_use]
     const fn minimum_live_peers(&self) -> usize {
-        self.target_peering_degree
-            .get()
-            .checked_sub(1)
-            .expect("Target peering degree is greater than 0.")
+        self.target_peering_degree.get().saturating_sub(1)
     }
 
     /// `Φ_CC - 2`: the fewest live connections the node must have opened
@@ -424,11 +421,11 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
 
     /// `(Φ_CC + 1) - (Φ_CC - 2)`: the most connections the node accepts.
     #[must_use]
-    pub const fn maximum_accepted_peers(&self) -> usize {
+    const fn maximum_accepted_peers(&self) -> usize {
         self.maximum_peers() - self.minimum_live_dialed_peers()
     }
 
-    pub fn live_peers(&self) -> impl Iterator<Item = (&PeerId, &RemotePeerConnectionDetails)> {
+    fn live_peers(&self) -> impl Iterator<Item = (&PeerId, &RemotePeerConnectionDetails)> {
         self.negotiated_peers
             .iter()
             .filter(move |(peer_id, _)| !self.liveness.is_connection_unhealthy(peer_id))
@@ -731,9 +728,12 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         // actually upgraded, we downgrade it again if we do not have space left for it.
         // By not adding the new connection to the map of negotiated peers, the swarm
         // will not be notified about this dropped connection, which is what we want.
+        // Only an accepted connection can have lost its room since it was
+        // admitted: this node opens one only when a slot is free, and holds
+        // that slot for as long as the handshake runs.
         let has_room = match direction {
             ConnectionDirection::Incoming => self.can_accept_connection(),
-            ConnectionDirection::Outgoing => self.available_connection_slots() > 0,
+            ConnectionDirection::Outgoing => true,
         };
         if !has_room {
             tracing::debug!(target: LOG_TARGET, "Connection {connection_id:?} with peer {peer_id:?} must be closed because peering degree limit has already been reached.");
@@ -747,10 +747,6 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             );
             return;
         }
-        debug_assert!(
-            !self.negotiated_peers.contains_key(&peer_id),
-            "We are assuming the peer is not connected to us."
-        );
         tracing::trace!(
             target: LOG_TARGET,
             "Connection {connection_id:?} with peer {peer_id:?} has been negotiated."
@@ -1089,8 +1085,8 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         self.publish_message_with_validated_header(message, self.current_epoch_info.1)
     }
 
-    /// Forwards a message with a verified public header to all healthy peers
-    /// in the specified epoch, except the [`except`] peer.
+    /// Forwards a message with a verified public header to every neighbour in
+    /// the specified epoch, other than `except` and any that are blacklisted.
     ///
     /// If the epoch is the previous epoch, the message is forwarded to the
     /// peers in the old epoch. Otherwise, it is forwarded to the peers in
@@ -1101,9 +1097,9 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     /// service has verified its `PoQ`. The behaviour itself only verifies the
     /// public header signature, so it cannot produce such a value on its own.
     ///
-    /// Returns [`Error::NoPeers`] if there are no connected peers that support
-    /// the blend protocol, and [`Error::InvalidEpoch`] if the provided
-    /// epoch does not match neither the current epoch nor the old epoch.
+    /// Returns [`SendError::NoPeers`] if there are no connected peers that
+    /// support the blend protocol, and [`SendError::InvalidEpoch`] if the
+    /// provided epoch matches neither the current epoch nor the old epoch.
     pub fn forward_message_with_verified_public_header(
         &mut self,
         message: &EncapsulatedMessageWithVerifiedPublicHeader,

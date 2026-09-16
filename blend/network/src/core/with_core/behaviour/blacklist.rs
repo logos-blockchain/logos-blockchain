@@ -58,10 +58,11 @@ pub struct Entry {
 
 /// The peers this node refuses to exchange Blend messages with, for a while.
 ///
-/// Instead of pro-actively clearing expired entries, the blacklist maintains
-/// full capacity and start overriding oldest entries. This is fine for small
-/// values of `capacity`, as it does not justify introducing a complex
-/// round-based machinery to clean up expired entries.
+/// Whether a peer is excluded is decided by reading its entry against the
+/// round asked about, never by the entry being present, so an entry that has
+/// outlived its window stops counting the moment it does. Pruning them only
+/// reclaims room, and is also where they are reported: an entry is added in
+/// reaction to something a peer did, but leaves only because time passed.
 #[derive(Debug)]
 pub struct PeerBlacklist {
     /// Ordered oldest-first, which is both the eviction order and the expiry
@@ -165,37 +166,41 @@ mod tests {
         PeerBlacklist::new(CAPACITY, RoundCount::new(EXPIRY_ROUNDS))
     }
 
-    fn round(round: u128) -> Round {
-        Round::from(round)
-    }
-
     #[test]
     fn a_blacklisted_peer_is_excluded_until_its_entry_expires() {
         let (mut blacklist, peer) = (blacklist(), PeerId::random());
-        blacklist.insert_or_extend(peer, BlacklistReason::InvalidProofOfQuota, round(10));
+        blacklist.insert_or_extend(peer, BlacklistReason::InvalidProofOfQuota, Round::from(10));
 
-        assert!(blacklist.contains(&peer, round(10)));
+        assert!(blacklist.contains(&peer, Round::from(10)));
         assert!(
-            blacklist.contains(&peer, round(10 + EXPIRY_ROUNDS.get() - 1)),
+            blacklist.contains(&peer, Round::from(10 + EXPIRY_ROUNDS.get() - 1)),
             "the last round of the window still excludes the peer"
         );
         assert!(
-            !blacklist.contains(&peer, round(10 + EXPIRY_ROUNDS.get())),
+            !blacklist.contains(&peer, Round::from(10 + EXPIRY_ROUNDS.get())),
             "`W` rounds after the offence the peer may be dialed again"
         );
     }
 
     #[test]
     fn an_unknown_peer_is_never_excluded() {
-        assert!(!blacklist().contains(&PeerId::random(), round(0)));
-        assert_eq!(blacklist().reason(&PeerId::random(), round(0)), None);
+        assert!(!blacklist().contains(&PeerId::random(), Round::from(0)));
+        assert_eq!(blacklist().reason(&PeerId::random(), Round::from(0)), None);
     }
 
     #[test]
     fn re_offending_restarts_the_window_without_adding_an_entry() {
         let (mut blacklist, peer) = (blacklist(), PeerId::random());
-        blacklist.insert_or_extend(peer, BlacklistReason::UndeserializableMessage, round(0));
-        blacklist.insert_or_extend(peer, BlacklistReason::InvalidHeaderSignature, round(20));
+        blacklist.insert_or_extend(
+            peer,
+            BlacklistReason::UndeserializableMessage,
+            Round::from(0),
+        );
+        blacklist.insert_or_extend(
+            peer,
+            BlacklistReason::InvalidHeaderSignature,
+            Round::from(20),
+        );
 
         assert_eq!(
             blacklist.len(),
@@ -203,12 +208,12 @@ mod tests {
             "the same peer must not occupy two slots"
         );
         assert_eq!(
-            blacklist.reason(&peer, round(20)),
+            blacklist.reason(&peer, Round::from(20)),
             Some(BlacklistReason::InvalidHeaderSignature),
             "the latest reason is the one kept"
         );
         assert!(
-            blacklist.contains(&peer, round(EXPIRY_ROUNDS.get() + 10)),
+            blacklist.contains(&peer, Round::from(EXPIRY_ROUNDS.get() + 10)),
             "the window runs from the second offence, not the first"
         );
     }
@@ -221,30 +226,38 @@ mod tests {
             blacklist.insert_or_extend(
                 *peer,
                 BlacklistReason::InvalidProofOfQuota,
-                round(offset as u128),
+                Round::from(offset as u128),
             );
         }
         assert_eq!(blacklist.len(), CAPACITY.get());
 
         let newcomer = PeerId::random();
-        blacklist.insert_or_extend(newcomer, BlacklistReason::InvalidProofOfQuota, round(10));
+        blacklist.insert_or_extend(
+            newcomer,
+            BlacklistReason::InvalidProofOfQuota,
+            Round::from(10),
+        );
 
         assert_eq!(blacklist.len(), CAPACITY.get(), "the cap is never exceeded");
         assert!(
-            !blacklist.contains(&peers[0], round(10)),
+            !blacklist.contains(&peers[0], Round::from(10)),
             "the oldest entry made room"
         );
-        assert!(blacklist.contains(&peers[1], round(10)));
-        assert!(blacklist.contains(&newcomer, round(10)));
+        assert!(blacklist.contains(&peers[1], Round::from(10)));
+        assert!(blacklist.contains(&newcomer, Round::from(10)));
     }
 
     #[test]
     fn expiring_reclaims_room_without_changing_who_is_excluded() {
         let (mut blacklist, old, recent) = (blacklist(), PeerId::random(), PeerId::random());
-        blacklist.insert_or_extend(old, BlacklistReason::InvalidProofOfQuota, round(0));
-        blacklist.insert_or_extend(recent, BlacklistReason::InvalidProofOfQuota, round(20));
+        blacklist.insert_or_extend(old, BlacklistReason::InvalidProofOfQuota, Round::from(0));
+        blacklist.insert_or_extend(
+            recent,
+            BlacklistReason::InvalidProofOfQuota,
+            Round::from(20),
+        );
 
-        let now = round(EXPIRY_ROUNDS.get() + 1);
+        let now = Round::from(EXPIRY_ROUNDS.get() + 1);
         // The answer is the same before and after the sweep: pruning only
         // reclaims room, it never decides who is excluded.
         assert!(!blacklist.contains(&old, now));
@@ -267,10 +280,14 @@ mod tests {
     #[test]
     fn iterating_lists_only_unexpired_entries() {
         let (mut blacklist, old, recent) = (blacklist(), PeerId::random(), PeerId::random());
-        blacklist.insert_or_extend(old, BlacklistReason::InvalidProofOfQuota, round(0));
-        blacklist.insert_or_extend(recent, BlacklistReason::InvalidProofOfQuota, round(20));
+        blacklist.insert_or_extend(old, BlacklistReason::InvalidProofOfQuota, Round::from(0));
+        blacklist.insert_or_extend(
+            recent,
+            BlacklistReason::InvalidProofOfQuota,
+            Round::from(20),
+        );
 
-        let now = round(EXPIRY_ROUNDS.get() + 1);
+        let now = Round::from(EXPIRY_ROUNDS.get() + 1);
         let listed: Vec<_> = blacklist.entries(now).map(|entry| entry.peer).collect();
 
         assert_eq!(listed, vec![recent]);
