@@ -211,6 +211,7 @@ impl BehaviourBuilder {
             message_cache: MessageCache::new(),
             proofs_verifier: Arc::new(self.proofs_verifier),
             pending_poq_verifications: PendingPoQVerifications::new(),
+            below_target_degree_since: None,
             blacklist: PeerBlacklist::new(
                 self.peering_degree
                     .unwrap_or(PEERING_DEGREE)

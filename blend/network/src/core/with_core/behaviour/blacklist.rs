@@ -124,15 +124,17 @@ impl PeerBlacklist {
         self.reason(peer, now).is_some()
     }
 
-    /// Drops entries that have outlived their expiry.
-    pub fn prune_expired_entries(&mut self, now: Round) {
+    /// Drops entries that have outlived their expiry, and returns them.
+    pub fn prune_expired_entries(&mut self, now: Round) -> impl Iterator<Item = Entry> {
+        let mut expired = Vec::new();
         while self
             .entries
             .front()
             .is_some_and(|entry| !is_unexpired(entry, now))
         {
-            self.entries.pop_front();
+            expired.extend(self.entries.pop_front());
         }
+        expired.into_iter()
     }
 
     #[cfg(test)]
@@ -243,16 +245,23 @@ mod tests {
         blacklist.insert_or_extend(recent, BlacklistReason::InvalidProofOfQuota, round(20));
 
         let now = round(EXPIRY_ROUNDS.get() + 1);
-        // The answer is the same before and after the sweep: `expire` only
+        // The answer is the same before and after the sweep: pruning only
         // reclaims room, it never decides who is excluded.
         assert!(!blacklist.contains(&old, now));
         assert!(blacklist.contains(&recent, now));
 
-        blacklist.prune_expired_entries(now);
+        let expired: Vec<_> = blacklist.prune_expired_entries(now).collect();
 
         assert_eq!(blacklist.len(), 1);
         assert!(!blacklist.contains(&old, now));
         assert!(blacklist.contains(&recent, now));
+
+        // An entry is added in reaction to something a peer did, and is
+        // reported there; it leaves only because time passed, so pruning is
+        // the one chance to report that.
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].peer, old);
+        assert_eq!(expired[0].reason, BlacklistReason::InvalidProofOfQuota);
     }
 
     #[test]
