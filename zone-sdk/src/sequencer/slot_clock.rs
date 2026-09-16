@@ -49,6 +49,34 @@ impl SlotClock {
 
         slot_from_u64(from_chain_start.max(from_anchor))
     }
+
+    /// Earliest instant at which [`Self::current_slot`] reaches `slot`; now
+    /// if it already has, `None` if it lies beyond what the clock can hold.
+    pub(super) fn instant_of(&self, slot: Slot) -> Option<Instant> {
+        let now = Instant::now();
+        let target = slot_to_u64(slot);
+        let from_anchor = self.last_observed_at.checked_add(duration_for_slots(
+            target.saturating_sub(slot_to_u64(self.last_observed_slot)),
+            self.slot_duration,
+        ));
+        let from_chain_start = self
+            .chain_start_time
+            .checked_add(duration_for_slots(target, self.slot_duration))
+            .map(|at| {
+                at.duration_since(SystemTime::now())
+                    .map_or(now, |until| now + until)
+            });
+        [from_anchor, from_chain_start]
+            .into_iter()
+            .flatten()
+            .min()
+            .map(|at| at.max(now))
+    }
+}
+
+fn duration_for_slots(slots: u64, slot_duration: Duration) -> Duration {
+    let nanos = u128::from(slots) * slot_duration.as_nanos();
+    u64::try_from(nanos).map_or(Duration::MAX, Duration::from_nanos)
 }
 
 const fn slots_from_duration(elapsed: Duration, slot_duration: Duration) -> u64 {
@@ -70,4 +98,23 @@ pub(super) const fn slot_to_u64(slot: Slot) -> u64 {
 
 fn slot_from_u64(value: u64) -> Slot {
     Slot::from(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instant_of_uses_the_earlier_of_anchor_and_chain_start() {
+        let slot_duration = Duration::from_millis(100);
+        let mut clock = SlotClock::from_chain_start_time(SystemTime::now(), slot_duration);
+        clock.observe_slot(Slot::from(10));
+        let anchor = clock.last_observed_at;
+
+        let at = clock.instant_of(Slot::from(13)).unwrap();
+        assert!(at >= anchor + slot_duration * 3);
+        assert!(at < anchor + slot_duration * 4);
+
+        assert!(clock.instant_of(Slot::from(5)).unwrap() <= Instant::now());
+    }
 }

@@ -121,6 +121,8 @@ pub struct ZoneSequencer<Node> {
 
     // Buffered events — when one drive step produces multiple events.
     pub(super) buffered_events: VecDeque<Event>,
+    /// Next slot boundary at which the turn is re-evaluated.
+    pub(super) turn_boundary: Option<tokio::time::Instant>,
 
     // Incremental backfill state — processes one batch per next_event() call
     pub(super) backfill_from: Option<Slot>,
@@ -321,6 +323,7 @@ where
             resubmit_active: Arc::new(AtomicBool::new(false)),
             posting: HashSet::new(),
             buffered_events: VecDeque::new(),
+            turn_boundary: None,
             backfill_from: None,
             backfill_to: None,
             backfill_from_genesis,
@@ -541,6 +544,12 @@ where
             _ = self.resubmit_interval.tick(), if self.current_tip.is_some() => {
                 self.resubmit_pending();
                 None
+            }
+            () = tokio::time::sleep_until(
+                self.turn_boundary.unwrap_or_else(tokio::time::Instant::now),
+            ), if self.turn_boundary.is_some() => {
+                self.publish_channel_view();
+                self.buffered_events.pop_front().map(|event| self.emit_now(event))
             }
             Some(results) = self.in_flight.next() => {
                 for (tx_hash, success) in results {

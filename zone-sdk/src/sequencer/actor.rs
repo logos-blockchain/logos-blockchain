@@ -22,6 +22,10 @@ use super::{
 };
 use crate::adapter;
 
+/// Slack after a slot boundary before re-evaluating the turn, so the wake-up
+/// lands inside the new slot.
+const TURN_BOUNDARY_GRACE: std::time::Duration = std::time::Duration::from_millis(10);
+
 impl<Node> ZoneSequencer<Node>
 where
     Node: adapter::Node + Clone + Send + Sync + 'static,
@@ -305,6 +309,36 @@ where
             self.buffered_events
                 .push_back(Event::TurnNotification { notification });
         }
+        self.turn_boundary = self.next_turn_boundary();
+    }
+
+    /// The next slot at which `round_robin` can change hands: the next
+    /// timeframe multiple from the tip sequencer's start, or the next timeout
+    /// multiple from the last landed inscription, whichever comes first.
+    fn next_turn_boundary(&self) -> Option<tokio::time::Instant> {
+        let slot_clock = self.slot_clock.as_ref()?;
+        let channel = self.channel_state.as_ref()?;
+        let current = slot_to_u64(slot_clock.current_slot());
+        let next_multiple = |anchor: Slot, period: u32| {
+            let period = u64::from(period);
+            (period != 0).then(|| {
+                let anchor = slot_to_u64(anchor);
+                let elapsed = current.saturating_sub(anchor);
+                anchor.saturating_add((elapsed / period).saturating_add(1).saturating_mul(period))
+            })
+        };
+        let slot = [
+            next_multiple(
+                channel.tip_sequencer_starting_slot,
+                u32::from(channel.posting_timeframe.clone()),
+            ),
+            next_multiple(channel.tip_slot, u32::from(channel.posting_timeout.clone())),
+        ]
+        .into_iter()
+        .flatten()
+        .min()?;
+        let at = slot_clock.instant_of(Slot::from(slot))? + TURN_BOUNDARY_GRACE;
+        Some(tokio::time::Instant::from_std(at))
     }
 
     fn turn_notification(&self, our_turn_to_write: bool) -> TurnNotification {
@@ -1157,6 +1191,70 @@ mod tests {
         assert_eq!(
             cleared, 1,
             "the cleared turn must be broadcast exactly once"
+        );
+    }
+
+    /// The turn is re-evaluated on its own slot boundary: with no block after
+    /// the first one, `next_event` still yields the alternating turn changes.
+    #[tokio::test]
+    async fn turn_notification_fires_on_timeframe_boundary_without_blocks() {
+        assert_turns_alternate_without_blocks(1, 0).await;
+    }
+
+    /// Same for the timeout rotation, anchored at the last landed inscription.
+    #[tokio::test]
+    async fn turn_notification_fires_on_timeout_boundary_without_blocks() {
+        assert_turns_alternate_without_blocks(0, 1).await;
+    }
+
+    async fn assert_turns_alternate_without_blocks(posting_timeframe: u32, posting_timeout: u32) {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let mut channel = single_key_channel_state();
+        channel.accredited_keys = Keys::try_from(vec![
+            sequencer_key.public_key(),
+            Ed25519Key::from_bytes(&[1; 32]).public_key(),
+        ])
+        .unwrap()
+        .into();
+        channel.posting_timeframe = posting_timeframe.into();
+        channel.posting_timeout = posting_timeout.into();
+        let node = MockNode {
+            channel_state: Some(channel),
+            slot_duration_ms: 100,
+            ..MockNode::default()
+        };
+        let config = SequencerConfig {
+            resubmit_interval: std::time::Duration::from_secs(600),
+            ..SequencerConfig::new(funding_config())
+        };
+        let mut sequencer =
+            ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+
+        let started = std::time::Instant::now();
+        let mut turns = Vec::new();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while turns.len() < 4 {
+                if let Event::TurnNotification { notification } = sequencer.next_event().await {
+                    turns.push(notification.our_turn_to_write);
+                }
+            }
+        })
+        .await
+        .expect("turn changes must arrive without blocks");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "turn changes should follow the 100ms slots, took {:?}",
+            started.elapsed()
+        );
+        assert!(
+            turns.windows(2).all(|pair| pair[0] != pair[1]),
+            "a two-key channel rotating every slot alternates: {turns:?}"
         );
     }
 
