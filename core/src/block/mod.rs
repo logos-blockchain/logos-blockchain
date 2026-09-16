@@ -16,7 +16,7 @@ pub use uncle::{SignedHeader, UncleHeaders};
 use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},
     crypto::{Digest as _, Hasher},
-    header::{ContentId, Header, HeaderId},
+    header::{ContentId, Header, HeaderId, Version},
     mantle::{
         traits::{Hashable, StorageSize},
         transactions::hash::{TxHash, TxHashPrefix},
@@ -37,6 +37,8 @@ pub type BlockNumber = u64;
 pub enum Error {
     #[error("Failed to serialize: {0}")]
     Serialisation(#[from] crate::codec::Error),
+    #[error("Invalid block signature")]
+    Signature,
     #[error("Failed to verify header alone: {0}")]
     Header(#[from] HeaderError),
     #[error("Body root mismatch: calculated body does not match header")]
@@ -52,10 +54,10 @@ pub enum Error {
 /// Why a header fails the checks that need the header alone.
 #[derive(Debug, thiserror::Error)]
 pub enum HeaderError {
+    #[error("Unsupported header version: {0:?}")]
+    UnsupportedVersion(Version),
     #[error("Expected a non-genesis slot")]
     GenesisSlot,
-    #[error("Signature error.")]
-    Signature,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
@@ -237,13 +239,16 @@ impl<Tx> Block<Tx> {
         Tx: Hashable<Hash = TxHash> + StorageSize,
     {
         // 1. Checks that need the header alone
-        verify_header_alone(&self.header, &self.signature)?;
+        verify_header_alone(&self.header)?;
 
         // 2. Size is ok
         self.validate_total_transactions_size()?;
 
         // 3. Body root matches the carried uncle headers and transactions
         self.validate_body_root()?;
+
+        // 4. Signature is valid over the header bytes
+        verify_header_signature(&self.header, &self.signature)?;
 
         Ok(self)
     }
@@ -328,26 +333,31 @@ impl<Tx> Block<Tx> {
     }
 }
 
-/// The checks that the header and the signature over it settle on their own:
-/// the header's slot must not be the genesis one, and the signature must verify
-/// by the leader key.
+/// Validates the header using only the content within the header.
 ///
 /// This does not check `body_root` because it commits to a body this function
 /// does not have. It should be checked separately by the caller.
-pub fn verify_header_alone(
-    header: &Header,
-    signature: &Ed25519Signature,
-) -> Result<(), HeaderError> {
+///
+/// This does not check `proof_of_leadership` and the parent header
+/// since they require a ledger state.
+pub fn verify_header_alone(header: &Header) -> Result<(), HeaderError> {
+    if *header.version() != Version::Bedrock {
+        return Err(HeaderError::UnsupportedVersion(*header.version()));
+    }
     if header.slot() == Slot::genesis() {
         return Err(HeaderError::GenesisSlot);
     }
+    Ok(())
+}
 
-    let header_bytes = header.to_bytes().map_err(|_| HeaderError::Signature)?;
+/// Verifies the signature of block header.
+pub fn verify_header_signature(header: &Header, signature: &Ed25519Signature) -> Result<(), Error> {
+    let header_bytes = header.to_bytes()?;
     header
         .leader_proof()
         .leader_key()
         .verify(&header_bytes, signature)
-        .map_err(|_| HeaderError::Signature)
+        .map_err(|_| Error::Signature)
 }
 
 /// The commitment to a block body: its uncle headers and its txs

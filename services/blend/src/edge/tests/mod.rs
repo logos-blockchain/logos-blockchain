@@ -299,6 +299,75 @@ async fn run_shuts_down_if_new_membership_is_small() {
     assert!(matches!(join_handle.await.unwrap(), Ok(())));
 }
 
+#[test_log::test(tokio::test(start_paused = true))]
+async fn run_processes_new_epoch_after_transition_expiry_while_idle() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+    let mut service = spawn_run_without_direct_broadcast(
+        local_node,
+        1,
+        Some(membership(&[core_node], local_node)),
+    )
+    .await;
+
+    service
+        .epochs
+        .send(membership(&[core_node], local_node))
+        .await
+        .expect("channel opened");
+    // The fixture uses a zero-length transition period. Let it expire while
+    // the message channel stays open and idle.
+    sleep(TEST_ROUND).await;
+
+    service
+        .epochs
+        .send(membership(&[], local_node))
+        .await
+        .expect("channel opened");
+    let result = timeout(TEST_ROUND, &mut service.handle).await;
+    service.handle.abort();
+    assert!(
+        matches!(result, Ok(Ok(Ok(())))),
+        "the next epoch must be processed without an inbound message: {result:?}"
+    );
+}
+
+#[test_log::test(tokio::test(start_paused = true))]
+async fn run_processes_new_epoch_after_transition_expiry_with_closed_messages() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+    let RunningEdgeService {
+        handle: mut join_handle,
+        epochs: epoch_sender,
+        messages: msg_sender,
+        ..
+    } = spawn_run_without_direct_broadcast(
+        local_node,
+        1,
+        Some(membership(&[core_node], local_node)),
+    )
+    .await;
+    drop(msg_sender);
+
+    epoch_sender
+        .send(membership(&[core_node], local_node))
+        .await
+        .expect("channel opened");
+    sleep(TEST_ROUND).await;
+    assert!(!join_handle.is_finished());
+
+    epoch_sender
+        .send(membership(&[], local_node))
+        .await
+        .expect("channel opened");
+    let result = timeout(TEST_ROUND, &mut join_handle).await;
+    join_handle.abort();
+    assert!(
+        matches!(result, Ok(Ok(Ok(())))),
+        "the next epoch must be processed after the message channel closes: {result:?}"
+    );
+}
+
 /// [`run`] fails if the local node is not edge in a new membership.
 #[test_log::test(tokio::test(start_paused = true))]
 async fn run_fails_if_local_is_core_in_new_membership() {

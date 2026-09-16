@@ -76,6 +76,8 @@ const REWARD_POW_TARGET_CLAIMS_PER_BLOCK: u64 = 100;
 const REWARD_POW_RATE_NUM: u64 = 0;
 const REWARD_POW_RATE_DEN: u64 = 1;
 const REWARD_POW_TARGET_CLAIM_PER_BLOCK: u64 = 1;
+const REWARD_POW_SHARE: u64 = 10;
+const REWARD_POW_SHARE_DEN: u64 = 100;
 const REWARD_POW_SLOT_WINDOW: u64 = 100;
 
 const MEMPOOL_TOPIC: &str = "mantle_e2e_tests";
@@ -189,6 +191,8 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     rate_den: NonZero::new(REWARD_POW_RATE_DEN).unwrap(),
                     target_claim_per_block: NonZero::new(REWARD_POW_TARGET_CLAIM_PER_BLOCK)
                         .unwrap(),
+                    pow_share: REWARD_POW_SHARE,
+                    share_den: NonZero::new(REWARD_POW_SHARE_DEN).unwrap(),
                     slot_window: NonZero::new(REWARD_POW_SLOT_WINDOW).unwrap(),
                 },
             },

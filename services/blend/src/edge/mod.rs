@@ -373,8 +373,8 @@ where
 
     loop {
         tokio::select! {
-            Some(EpochEvent::NewEpoch(new_public_epoch_info)) = remaining_public_epoch_stream.next() => {
-                match CurrentEpoch::try_new(new_public_epoch_info, &settings) {
+            Some(epoch_event) = remaining_public_epoch_stream.next() => match epoch_event {
+                EpochEvent::NewEpoch(new_public_epoch_info) => match CurrentEpoch::try_new(new_public_epoch_info, &settings) {
                     Err(Error::NetworkIsTooSmall(_)) => {
                         info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
                         if let Some(failure_detection) = failure_detection {
@@ -394,8 +394,11 @@ where
                     // under the new one would spend the quota its own block
                     // needs.
                     Ok(next) => current_epoch = next.with_available_secret_info(&mut current_secret_epoch_info, settings.clone(), overwatch_handle.clone()),
-                }
-            }
+                },
+                // A pattern mismatch in the select arm would stop polling
+                // epochs until another branch completes.
+                EpochEvent::TransitionPeriodExpired => {}
+            },
             Some(undelivered_messages) = next_undelivered_messages(failure_detection.as_mut()) => {
                 broadcast_undelivered_messages(undelivered_messages.into_iter(), &payload_dispatcher).await;
             }

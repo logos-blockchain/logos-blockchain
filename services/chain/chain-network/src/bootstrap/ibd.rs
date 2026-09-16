@@ -964,6 +964,8 @@ mod tests {
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
             target_claim_per_block: NonZeroU64::MIN,
+            pow_share: 0,
+            share_den: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).unwrap(),
         }
     }

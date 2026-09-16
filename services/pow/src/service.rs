@@ -177,6 +177,9 @@ pub struct PoWServiceSettings {
     /// match the network's consensus `slot_window` (sourced from the same
     /// deployment configuration); a ticket outside it can never be claimed.
     pub slot_window: NonZeroU64,
+    /// Whether the network pays `PoW` rewards (i.e., `rate_num` > 0).
+    /// When it is not, no claim can succeed, so auto-claim is disabled.
+    pub rewards_enabled: bool,
     /// Storage-recovery bookkeeping, populated by the runtime on startup.
     #[serde(skip)]
     pub recovery_data: RecoveryData,
@@ -514,12 +517,12 @@ where
         // restarted node does not resume mining automatically.
         let mut mining = false;
 
-        // Auto-claim arms itself when targets are configured, and disarms once
-        // every target has reached its threshold. Like `mining` it is a
-        // runtime flag, so a restart re-arms it and the thresholds are
-        // re-evaluated against fresh balances.
+        // Auto-claim arms itself when the network pays rewards and targets are
+        // configured, and disarms once every target has reached its
+        // threshold. Like `mining` it is a runtime flag, so a restart re-arms
+        // it and the thresholds are re-evaluated against fresh balances.
         let auto_claim = &settings.auto_claim;
-        let mut auto_claiming = !auto_claim.targets.is_empty();
+        let mut auto_claiming = settings.rewards_enabled && !auto_claim.targets.is_empty();
 
         // One stream for either pacing, so the run loop has a single arm and
         // neither kind needs a guard. Slot pacing rides the time service's own
@@ -550,7 +553,9 @@ where
                             mining = false;
                         }
                         PoWServiceMessage::StartAutoClaim => {
-                            if auto_claim.targets.is_empty() {
+                            if !settings.rewards_enabled {
+                                warn!(target: LOG_TARGET, "PoW auto-claim not started: rewards disabled");
+                            } else if auto_claim.targets.is_empty() {
                                 warn!(target: LOG_TARGET, "PoW auto-claim not started: no claim targets configured");
                             } else {
                                 if !auto_claiming {

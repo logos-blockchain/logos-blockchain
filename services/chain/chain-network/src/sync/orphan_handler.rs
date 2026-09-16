@@ -145,6 +145,11 @@ where
         self.rejected_blocks.insert(block_id);
     }
 
+    #[cfg(test)]
+    pub fn has_rejected_block(&self, block_id: &HeaderId) -> bool {
+        self.rejected_blocks.contains(block_id)
+    }
+
     #[expect(
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
