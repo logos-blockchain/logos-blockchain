@@ -27,7 +27,7 @@ use lb_core::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
     sdp::ServiceParameters,
 };
-use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
+use lb_cryptarchia_engine::{Epoch, EpochConfig, Slot, UncleSlots};
 use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
@@ -56,7 +56,8 @@ use tokio::{
 use crate::{
     Cryptarchia, CryptarchiaConsensus, Error,
     relays::CryptarchiaConsensusRelays,
-    service::{get_block_ids, process_block},
+    service::{get_block_ids, persist_epoch_states, process_block},
+    storage::StorageAdapter as _,
 };
 
 #[test]
@@ -108,7 +109,7 @@ fn cryptarchia_switch_to_online() {
 
     // Now, the chain is [G, B1, B2, B3].
     // We now switch to Online and check that LIB advances to B2.
-    let (cryptarchia, pruned_blocks) = cryptarchia.online();
+    let (cryptarchia, pruned_blocks, epoch_states) = cryptarchia.online();
     assert_eq!(cryptarchia.lib(), block_ids[2]);
     // All immutable blocks (G, B1, excluding LIB) should have been pruned
     assert_eq!(
@@ -122,6 +123,142 @@ fn cryptarchia_switch_to_online() {
     // Check the ledger states of immutable blocks have been pruned
     assert!(cryptarchia.ledger.state(&block_ids[0]).is_none());
     assert!(cryptarchia.ledger.state(&block_ids[1]).is_none());
+
+    // The pruned immutable blocks are all in epoch 0, so exactly that epoch's
+    // state was captured for persistence before pruning.
+    assert_eq!(
+        epoch_states.iter().map(|s| s.epoch).collect::<Vec<_>>(),
+        vec![Epoch::new(0)]
+    );
+}
+
+fn count_declarations(declarations: &lb_core::sdp::Declarations) -> usize {
+    declarations
+        .iter()
+        .map(|(_, declarations)| declarations.len())
+        .sum()
+}
+
+fn genesis_only_cryptarchia() -> (Cryptarchia, HeaderId) {
+    let k = NonZero::<u32>::new(1).unwrap();
+    let config = ledger_config(k);
+    let (_, utxo) = utxo();
+    let genesis_id: HeaderId = [0; 32].into();
+    let cryptarchia = Cryptarchia::from_lib(
+        genesis_id,
+        LedgerState::from_utxos([utxo], &config),
+        genesis_id,
+        config,
+        lb_cryptarchia_engine::State::Bootstrapping,
+        Slot::new(0),
+        0,
+        UncleSlots::default(),
+    );
+    (cryptarchia, genesis_id)
+}
+
+#[test]
+fn epoch_state_summary_by_epoch() {
+    let (cryptarchia, genesis_id) = genesis_only_cryptarchia();
+    let genesis_state = cryptarchia.ledger.state(&genesis_id).unwrap();
+    let current_epoch = genesis_state.epoch_state().epoch();
+    let next_epoch = genesis_state.next_epoch_state().epoch();
+    assert_eq!(current_epoch, Epoch::new(0));
+    assert_eq!(next_epoch, Epoch::new(1));
+
+    // `None` and the tip's epoch both serve the tip's epoch state, with the
+    // UTXO tree reduced to its root.
+    let by_default = cryptarchia.epoch_state_summary(None).unwrap();
+    let by_epoch = cryptarchia
+        .epoch_state_summary(Some(current_epoch))
+        .unwrap();
+    assert_eq!(by_default, by_epoch);
+    assert_eq!(by_default.epoch, current_epoch);
+    assert_eq!(
+        by_default.utxos_root,
+        genesis_state.epoch_state().utxos.root()
+    );
+    assert_eq!(
+        by_default.utxos_count,
+        genesis_state.epoch_state().utxos.size()
+    );
+    assert_eq!(
+        count_declarations(&by_default.active_declarations),
+        count_declarations(&genesis_state.epoch_state().active_declarations)
+    );
+
+    // The next epoch's state is frozen at its stake-distribution snapshot
+    // slot, which for epoch 1 is the genesis slot, so it is already served.
+    let next = cryptarchia.epoch_state_summary(Some(next_epoch)).unwrap();
+    assert_eq!(next.epoch, next_epoch);
+
+    // Anything further ahead has no frozen state yet.
+    let too_far = next_epoch.strict_add(Epoch::new(1));
+    assert!(matches!(
+        cryptarchia.epoch_state_summary(Some(too_far)),
+        Err(Error::EpochStateUnavailable { epoch, .. }) if epoch == too_far
+    ));
+}
+
+#[test]
+fn unpersisted_epoch_states_dedupes_and_respects_watermark() {
+    let (mut cryptarchia, genesis_id) = genesis_only_cryptarchia();
+
+    // Listing the same block twice yields one record per epoch.
+    let states = cryptarchia.unpersisted_epoch_states([&genesis_id, &genesis_id]);
+    assert_eq!(states.len(), 1);
+    assert_eq!(states[0].epoch, Epoch::new(0));
+
+    // Unknown (already pruned) blocks are skipped rather than failing.
+    let unknown: HeaderId = [9; 32].into();
+    assert!(cryptarchia.unpersisted_epoch_states([&unknown]).is_empty());
+
+    // Once an epoch is marked persisted it is not emitted again.
+    cryptarchia.mark_epoch_state_persisted(Epoch::new(0));
+    assert!(
+        cryptarchia
+            .unpersisted_epoch_states([&genesis_id])
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn epoch_state_round_trips_through_storage() {
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    let _storage_svc = spawn_storage_service(storage_rx);
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays = CryptarchiaConsensusRelays::<
+        SignedOps<Preverified, StandardMode>,
+        RocksBackend,
+        TestRuntimeServiceId,
+    >::new(
+        OutboundRelay::new(broadcast_tx),
+        OutboundRelay::new(storage_tx),
+        OutboundRelay::new(time_tx),
+    )
+    .await;
+    let storage = relays.storage_adapter();
+
+    let (mut cryptarchia, genesis_id) = genesis_only_cryptarchia();
+    let epoch_states = cryptarchia.unpersisted_epoch_states([&genesis_id]);
+    let expected = epoch_states[0].clone();
+
+    assert!(storage.get_epoch_state(expected.epoch).await.is_none());
+
+    persist_epoch_states(&mut cryptarchia, epoch_states, storage).await;
+
+    assert_eq!(
+        storage.get_epoch_state(expected.epoch).await,
+        Some(expected)
+    );
+    // A successful write advances the watermark.
+    assert!(
+        cryptarchia
+            .unpersisted_epoch_states([&genesis_id])
+            .is_empty()
+    );
+    assert!(storage.get_epoch_state(Epoch::new(7)).await.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]

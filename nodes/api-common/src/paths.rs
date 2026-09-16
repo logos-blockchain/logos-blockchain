@@ -1,12 +1,12 @@
 pub const MANTLE_METRICS: &str = "/mantle/metrics";
 pub const MANTLE_STATUS: &str = "/mantle/status";
 pub const MANTLE_SDP_DECLARATIONS: &str = "/mantle/sdp/declarations";
-pub const MANTLE_SDP_SNAPSHOT: &str = "/mantle/sdp/snapshot";
 pub const MANTLE_GAS_PRICES: &str = "/mantle/gas-prices";
 pub const CHAIN_ID: &str = "/chain/id";
 pub const CRYPTARCHIA_INFO: &str = "/cryptarchia/info";
 pub const CRYPTARCHIA_HEADERS: &str = "/cryptarchia/headers";
 pub const CRYPTARCHIA_LIB_STREAM: &str = "/cryptarchia/lib-stream";
+pub const CRYPTARCHIA_EPOCH_STATE: &str = "/cryptarchia/epoch_state";
 pub const TIME_INFO: &str = "/time/info";
 pub const NETWORK_INFO: &str = "/network/info";
 pub const BLEND_NETWORK_INFO: &str = "/blend/info";

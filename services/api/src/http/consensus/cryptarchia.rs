@@ -1,14 +1,14 @@
 use std::fmt::{Debug, Display};
 
 use futures::{StreamExt as _, TryStreamExt as _};
-use lb_chain_service::{ChainServiceInfo, CryptarchiaConsensus, Query};
+use lb_chain_service::{ChainServiceInfo, CryptarchiaConsensus, Epoch, Query};
 use lb_core::{
     header::HeaderId,
     mantle::{
         SignedOps, ledger::verification_mode::StandardMode, transactions::states::Preverified,
     },
 };
-use lb_ledger::LedgerState;
+use lb_ledger::{EpochStateSummary, LedgerState};
 use lb_storage_service::backends::rocksdb::RocksBackend;
 use lb_time_service::backends::ntp::NtpTimeBackend;
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
@@ -72,6 +72,35 @@ where
 
     let stream = receiver.await?;
     Ok(stream.take(HEADERS_LIMIT).try_collect().await?)
+}
+
+/// The epoch state frozen for `epoch`, or for the tip's epoch when `None`,
+/// with the UTXO tree reduced to its root.
+///
+/// Fails with [`lb_chain_service::Error::EpochStateUnavailable`] when the
+/// node holds no epoch state for that epoch, in memory or in storage.
+pub async fn cryptarchia_epoch_state<RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+    epoch: Option<Epoch>,
+) -> Result<EpochStateSummary, DynError>
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let relay = handle.relay().await?;
+    let (sender, receiver) = oneshot::channel();
+    relay
+        .send(
+            Query::GetEpochStateSummary {
+                epoch,
+                reply_channel: sender,
+            }
+            .into(),
+        )
+        .await
+        .map_err(|(e, _)| e)?;
+
+    receiver.await?.map_err(|error| Box::new(error) as DynError)
 }
 
 pub async fn cryptarchia_ledger_state<RuntimeServiceId>(

@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _, stream};
 use lb_core::{header::HeaderId, mantle::TxHash};
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_log_targets::storage;
 use rocksdb::WriteBatch;
 
@@ -27,6 +27,7 @@ use crate::{
 const IMMUTABLE_BLOCK_PREFIX: &str = "immutable_block/slot/";
 const BLOCK_PARENT_PREFIX: &str = "block_parent/";
 const BLOCK_EVENTS_PREFIX: &str = "block_events/";
+const EPOCH_STATE_PREFIX: &str = "epoch_state/epoch/";
 const LOG_TARGET: &str = storage::rocksdb::CHAIN;
 
 #[async_trait]
@@ -186,6 +187,16 @@ impl StorageChainApi for RocksBackend {
             .map(|bytes| bytes.as_ref().try_into().map_err(Into::into));
 
         Ok(Box::pin(stream::iter(mapped)))
+    }
+
+    async fn store_epoch_state(&mut self, epoch: Epoch, state: Bytes) -> Result<(), Self::Error> {
+        let key = key_bytes(EPOCH_STATE_PREFIX, u32::from(epoch).to_be_bytes());
+        self.store(key, state).await.map_err(Into::into)
+    }
+
+    async fn get_epoch_state(&mut self, epoch: Epoch) -> Result<Option<Bytes>, Self::Error> {
+        let key = key_bytes(EPOCH_STATE_PREFIX, u32::from(epoch).to_be_bytes());
+        self.load(&key).await.map_err(Into::into)
     }
 
     async fn store_transactions(

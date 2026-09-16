@@ -4,7 +4,8 @@ use std::{collections::BTreeMap, pin::Pin};
 
 use futures::{Stream, future::join_all};
 use lb_core::{header::HeaderId, mantle::transactions::hash::TxHash};
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_ledger::EpochStateSummary;
 use lb_storage_service::{StorageService, backends::StorageBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 
@@ -87,4 +88,12 @@ pub trait StorageAdapter<RuntimeServiceId> {
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, overwatch::DynError>;
 
     async fn remove_transactions(&self, tx_hashes: &[TxHash]) -> Result<(), overwatch::DynError>;
+
+    /// Persist the epoch state frozen for `state.epoch`, so it stays
+    /// queryable after the ledger states of that epoch's blocks are pruned.
+    async fn store_epoch_state(&self, state: &EpochStateSummary)
+    -> Result<(), overwatch::DynError>;
+
+    /// The persisted epoch state for `epoch`, if one was stored.
+    async fn get_epoch_state(&self, epoch: Epoch) -> Option<EpochStateSummary>;
 }

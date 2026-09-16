@@ -13,7 +13,8 @@ use lb_core::{
     header::HeaderId,
     mantle::{traits::Hashable, transactions::hash::TxHash},
 };
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_ledger::EpochStateSummary;
 use lb_log_targets::chain;
 use lb_storage_service::{
     StorageMsg, StorageService, api::chain::StorageChainApi, backends::StorageBackend,
@@ -184,6 +185,59 @@ where
             .map_err(|_| "Failed to convert block to storage format.")?;
 
         Ok(Some(deserialized_block))
+    }
+
+    async fn store_epoch_state(
+        &self,
+        state: &EpochStateSummary,
+    ) -> Result<(), overwatch::DynError> {
+        let bytes = state
+            .to_bytes()
+            .map_err(|e| format!("Failed to serialize epoch state: {e}"))?;
+        let (sender, receiver) = oneshot::channel();
+
+        self.storage_relay
+            .send(StorageMsg::store_epoch_state_request(
+                state.epoch,
+                bytes,
+                sender,
+            ))
+            .await
+            .map_err(|_| "Failed to send store_epoch_state request to storage relay")?;
+
+        receiver
+            .await
+            .map_err(|e| format!("Failed to receive store epoch state response from storage: {e}"))?
+            .map_err(|e| format!("Failed to store epoch state in storage: {e}").into())
+    }
+
+    async fn get_epoch_state(&self, epoch: Epoch) -> Option<EpochStateSummary> {
+        let (sender, receiver) = oneshot::channel();
+
+        if let Err((e, _)) = self
+            .storage_relay
+            .send(StorageMsg::get_epoch_state_request(epoch, sender))
+            .await
+        {
+            tracing::error!(target: LOG_TARGET, "Failed to send get_epoch_state request to storage relay: {e}");
+            return None;
+        }
+
+        let bytes = match receiver.await {
+            Ok(maybe_bytes) => maybe_bytes?,
+            Err(e) => {
+                tracing::error!(target: LOG_TARGET, "Failed to receive epoch state from storage relay: {e}");
+                return None;
+            }
+        };
+
+        match EpochStateSummary::from_bytes(&bytes) {
+            Ok(state) => Some(state),
+            Err(e) => {
+                tracing::error!(target: LOG_TARGET, "Failed to deserialize stored epoch state for {epoch}: {e}");
+                None
+            }
+        }
     }
 
     async fn store_immutable_block_ids(
