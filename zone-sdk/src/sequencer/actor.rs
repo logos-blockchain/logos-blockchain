@@ -319,24 +319,24 @@ where
         let slot_clock = self.slot_clock.as_ref()?;
         let channel = self.channel_state.as_ref()?;
         let current = slot_to_u64(slot_clock.current_slot());
-        let next_multiple = |anchor: Slot, period: u32| {
-            let period = u64::from(period);
-            (period != 0).then(|| {
-                let anchor = slot_to_u64(anchor);
-                let elapsed = current.saturating_sub(anchor);
-                anchor.saturating_add((elapsed / period).saturating_add(1).saturating_mul(period))
-            })
+
+        // First slot after `current` on the grid of `period` slots from `anchor`.
+        let next_on_grid = |anchor: Slot, period: u32| -> Option<u64> {
+            if period == 0 {
+                return None;
+            }
+            let (anchor, period) = (slot_to_u64(anchor), u64::from(period));
+            let periods_elapsed = current.saturating_sub(anchor) / period;
+            anchor.checked_add(periods_elapsed.checked_add(1)?.checked_mul(period)?)
         };
-        let slot = [
-            next_multiple(
-                channel.tip_sequencer_starting_slot,
-                u32::from(channel.posting_timeframe.clone()),
-            ),
-            next_multiple(channel.tip_slot, u32::from(channel.posting_timeout.clone())),
-        ]
-        .into_iter()
-        .flatten()
-        .min()?;
+
+        let by_timeframe = next_on_grid(
+            channel.tip_sequencer_starting_slot,
+            u32::from(channel.posting_timeframe.clone()),
+        );
+        let by_timeout = next_on_grid(channel.tip_slot, u32::from(channel.posting_timeout.clone()));
+        let slot = by_timeframe.into_iter().chain(by_timeout).min()?;
+
         let at = slot_clock.instant_of(Slot::from(slot))? + TURN_BOUNDARY_GRACE;
         Some(tokio::time::Instant::from_std(at))
     }
