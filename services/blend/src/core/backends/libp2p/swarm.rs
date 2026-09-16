@@ -269,6 +269,16 @@ where
 
         let exclude_peers: HashSet<PeerId> = negotiated_peers
             .chain(self.swarm.behaviour().blend.with_core().blacklisted_peers())
+            // A peer part way through a handshake already holds a degree slot,
+            // so dialing it would take a second one until the two connections
+            // are resolved against each other.
+            .chain(
+                self.swarm
+                    .behaviour()
+                    .blend
+                    .with_core()
+                    .peers_with_handshake_in_progress(),
+            )
             .chain(self.ongoing_dials.keys())
             .chain(self.unrecoverable_peers.iter())
             .chain(except.iter())

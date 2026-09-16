@@ -3,6 +3,10 @@ use core::{num::NonZeroU128, time::Duration};
 use futures::StreamExt as _;
 use lb_blend_primitives::time::RoundCount;
 use lb_libp2p::SwarmEvent;
+use libp2p::{
+    Multiaddr,
+    swarm::{ConnectionId, NetworkBehaviour as _},
+};
 use test_log::test;
 use tokio::time::timeout;
 
@@ -10,7 +14,9 @@ use crate::core::{
     tests::utils::TestSwarm,
     with_core::behaviour::{
         ConnectionUpgradeFailureReason, Event,
-        tests::utils::{BehaviourBuilder, PEERING_DEGREE, maximum_accepted_peers},
+        tests::utils::{
+            BehaviourBuilder, PEERING_DEGREE, maximum_accepted_peers, new_nodes_with_empty_address,
+        },
     },
 };
 
@@ -90,5 +96,42 @@ async fn pending_inbound_handshakes_count_against_what_the_node_accepts() {
     assert!(
         with_room.behaviour().can_accept_connection(),
         "a node below its accepted share must still take a connection"
+    );
+}
+
+/// A peer part way through a handshake is already a neighbour as far as the
+/// degree rule is concerned, so the node must not also draw it at random and
+/// dial it.
+///
+/// Dialing it opens a second connection, which holds a second degree slot
+/// until the two are resolved against each other by comparing identities. The
+/// swarm decides who to dial, so what the behaviour owes it is the list.
+#[test(tokio::test)]
+async fn a_peer_part_way_through_a_handshake_is_reported_as_one_to_leave_alone() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let local_identity = identities.next().unwrap();
+    let peer_id = nodes[1].id;
+
+    let mut behaviour = BehaviourBuilder::new(&local_identity)
+        .with_membership(&nodes)
+        .build();
+
+    assert_eq!(behaviour.peers_with_handshake_in_progress().count(), 0);
+
+    let addr = Multiaddr::empty();
+    let _handler = behaviour
+        .handle_established_inbound_connection(
+            ConnectionId::new_unchecked(0),
+            peer_id,
+            &addr,
+            &addr,
+        )
+        .expect("an inbound connection with a core peer is accepted");
+
+    assert!(
+        behaviour
+            .peers_with_handshake_in_progress()
+            .any(|pending| *pending == peer_id),
+        "a peer being accepted was left open to being dialed as well"
     );
 }
