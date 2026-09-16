@@ -4,6 +4,25 @@ use lb_blend_primitives::time::{Round, RoundCount};
 
 use crate::{OutgoingMessage, core::admission::RoundShare};
 
+/// What a connection may put on the wire right now.
+pub enum OutgoingItem {
+    /// The message to send.
+    Message(OutgoingMessage),
+    /// Messages are waiting, but this connection has already carried its share
+    /// for the round.
+    ShareSpent,
+}
+
+impl OutgoingItem {
+    #[cfg(test)]
+    fn take_message(self) -> Option<OutgoingMessage> {
+        match self {
+            Self::Message(message) => Some(message),
+            Self::ShareSpent => None,
+        }
+    }
+}
+
 /// A message waiting for its turn on a connection.
 struct MessageEntry {
     message: OutgoingMessage,
@@ -62,11 +81,21 @@ impl SendQueue {
 
     /// The next message to put on the wire, if there is one and the share
     /// allows it.
-    pub fn pop_front(&mut self) -> Option<OutgoingMessage> {
-        if self.queue.is_empty() || !self.share.try_spend() {
+    ///
+    /// An empty queue and a spent share are both "nothing to send now", but
+    /// only one of them is the protocol throttling a connection that has more
+    /// to say, and that one is worth reporting. Telling them apart is the
+    /// caller's only way to know which it is.
+    pub fn pop_front(&mut self) -> Option<OutgoingItem> {
+        if self.queue.is_empty() {
             return None;
         }
-        self.queue.pop_front().map(|queued| queued.message)
+        if !self.share.try_spend() {
+            return Some(OutgoingItem::ShareSpent);
+        }
+        self.queue
+            .pop_front()
+            .map_or(None, |queued| Some(OutgoingItem::Message(queued.message)))
     }
 
     pub fn clear(&mut self) {
@@ -82,7 +111,7 @@ mod tests {
 
     use crate::{
         OutgoingMessage,
-        core::with_core::behaviour::handler::admission::{RoundShare, SendQueue},
+        core::with_core::behaviour::handler::admission::{OutgoingItem, RoundShare, SendQueue},
     };
 
     const SHARE: NonZeroU64 = NonZeroU64::new(3).unwrap();
@@ -142,15 +171,26 @@ mod tests {
 
         for byte in 0..u8::try_from(SHARE.get()).unwrap() {
             assert_eq!(
-                queue.pop_front().map(|msg| msg.as_ref().to_vec()),
+                queue
+                    .pop_front()
+                    .unwrap()
+                    .take_message()
+                    .map(|msg| msg.as_ref().to_vec()),
                 Some(vec![byte])
             );
         }
-        assert!(queue.pop_front().is_none(), "the share is spent");
+        assert!(
+            matches!(queue.pop_front(), Some(OutgoingItem::ShareSpent)),
+            "the share is spent, which is not the same as having nothing to send"
+        );
 
         queue.enter_round(Round::from(1));
         assert_eq!(
-            queue.pop_front().map(|msg| msg.as_ref().to_vec()),
+            queue
+                .pop_front()
+                .unwrap()
+                .take_message()
+                .map(|msg| msg.as_ref().to_vec()),
             Some(vec![3])
         );
     }
@@ -168,7 +208,11 @@ mod tests {
         // joined the queue later.
         assert_eq!(queue.enter_round(Round::from(3)), 1);
         assert_eq!(
-            queue.pop_front().map(|msg| msg.as_ref().to_vec()),
+            queue
+                .pop_front()
+                .unwrap()
+                .take_message()
+                .map(|msg| msg.as_ref().to_vec()),
             Some(vec![1])
         );
     }
