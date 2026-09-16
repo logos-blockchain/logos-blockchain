@@ -27,7 +27,7 @@ fn inscription_signer(tx: &SignedOps<Unverified, StandardMode>) -> Option<Ed2551
 }
 
 use super::{
-    block_fetch::channel_inscriptions,
+    block_fetch::{channel_inscriptions, channel_transfers},
     channel_wallet::{ChannelWallet, NoteOp},
     types::{
         AtomicWithdrawInfo, ChannelNote, ChannelUpdateTx, ChannelWalletView, InscriptionInfo,
@@ -60,8 +60,7 @@ pub struct ChannelUpdateInfo {
 #[derive(Debug, Clone)]
 struct PendingOtherTx {
     signed_tx: SignedOps<Unverified, StandardMode>,
-    /// The tx's channel inscriptions in op order; its share of the view
-    /// while pending.
+    /// The tx's channel inscriptions in op order.
     infos: Vec<InscriptionInfo>,
     first_parent: Option<MsgId>,
     last_msg: Option<MsgId>,
@@ -147,8 +146,7 @@ pub struct TxState {
     parent_map: HashMap<HeaderId, HeaderId>,
     /// Current LIB for pruning.
     current_lib: HeaderId,
-    /// Per L1 block channel content (unfinalized window only), canonical or
-    /// not; pruned with the block.
+    /// Per L1 block channel content (unfinalized window), canonical or not.
     block_txs: HashMap<HeaderId, StoredBlock>,
     /// Last finalized channel tip — used as parent when pending is empty.
     finalized_msg: MsgId,
@@ -178,13 +176,10 @@ pub struct TxState {
 /// One stored L1 block's channel content.
 #[derive(Debug, Default)]
 struct StoredBlock {
-    /// Channel-touching txs, classified at block scan by
-    /// `block_fetch::classify_channel_txs`.
+    /// Channel-touching txs, classified at block scan.
     channel_txs: Vec<BlockChannelTx>,
-    /// The block's txs carrying channel inscriptions, kept for the block's
-    /// lifetime in the window: the source for (re-)mirroring into pending
-    /// whenever the block is on the canonical path — it may have arrived as
-    /// a fork, or had its entries shed on an earlier switch.
+    /// Mirrorable channel txs, the source for (re-)mirroring into pending
+    /// whenever the block is on the canonical path.
     ///
     /// TODO(zone-sdk): a canonical block's bytes are duplicated here and in
     /// pending; share them (`Arc`) between the store and the pending entries
@@ -692,11 +687,7 @@ impl TxState {
             .iter()
             .map(|i| i.tx_hash)
             .collect();
-        let safe: HashSet<TxHash> = self
-            .block_states
-            .get(&tip)
-            .map(|s| s.iter().copied().collect())
-            .unwrap_or_default();
+        let safe = self.safe_at(tip);
 
         let eligible: HashSet<TxHash> = self
             .pending
@@ -773,6 +764,108 @@ impl TxState {
         ordered
     }
 
+    /// Tx hashes mined on `tip`'s branch (its cumulative safe set).
+    fn safe_at(&self, tip: HeaderId) -> HashSet<TxHash> {
+        self.block_states
+            .get(&tip)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Blocks on `tip`'s branch strictly above LIB, oldest first.
+    fn branch_blocks_above_lib(&self, tip: HeaderId) -> Vec<HeaderId> {
+        let mut blocks = Vec::new();
+        let mut current = tip;
+        while current != self.current_lib {
+            blocks.push(current);
+            match self.parent_map.get(&current) {
+                Some(&parent) => current = parent,
+                None => break,
+            }
+        }
+        blocks.reverse();
+        blocks
+    }
+
+    /// Pending bundles chaining from `tip`'s channel tip that are not mined
+    /// on its branch, in lineage order.
+    fn unmined_bundles_in_suffix(
+        &self,
+        tip: HeaderId,
+    ) -> Vec<(InscriptionInfo, &PendingInscription)> {
+        let safe = self.safe_at(tip);
+        self.collect_pending_suffix(self.channel_tip_at(tip))
+            .into_iter()
+            .filter(|info| !safe.contains(&info.tx_hash))
+            .filter_map(|info| self.pending.get(&info.tx_hash).map(|p| (info, p)))
+            .filter(|(_, p)| !matches!(p.bundle, PendingBundle::Plain))
+            .collect()
+    }
+
+    /// Notes a new bundle may spend at `tip`: the branch view minus what
+    /// un-mined pending bundles already consume. Their outputs are not
+    /// offered.
+    #[must_use]
+    pub fn spendable_wallet_view(
+        &self,
+        tip: Option<HeaderId>,
+        channel_id: ChannelId,
+    ) -> ChannelWalletView {
+        let mut view = self.channel_wallet_view(tip);
+        let Some(tip) = tip else {
+            return view;
+        };
+        let reserved: HashSet<NoteId> = self
+            .unmined_bundles_in_suffix(tip)
+            .into_iter()
+            .flat_map(|(_, p)| channel_transfers(&p.signed_tx, channel_id))
+            .flat_map(|t| t.inputs.iter().copied())
+            .collect();
+        view.finalized.retain(|n| !reserved.contains(&n.note_id));
+        view.unfinalized.retain(|n| !reserved.contains(&n.note_id));
+        view
+    }
+
+    /// Shed pending bundles whose transfer inputs are gone from this branch
+    /// (e.g. their deposit reorged out) — they can never land — together with
+    /// every pending entry chaining on them, parent first, as typed
+    /// [`PendingTx`].
+    pub fn shed_bundles_with_missing_inputs(
+        &mut self,
+        tip: HeaderId,
+        channel_id: ChannelId,
+    ) -> Vec<PendingTx> {
+        if self.pending.is_empty() {
+            return Vec::new();
+        }
+        let view = self.channel_wallet_view(Some(tip));
+        let mut available: HashSet<NoteId> = view
+            .finalized
+            .iter()
+            .chain(view.unfinalized.iter())
+            .map(|n| n.note_id)
+            .collect();
+        let mut shed: HashSet<TxHash> = HashSet::new();
+        for (info, pending) in self.unmined_bundles_in_suffix(tip) {
+            let transfers: Vec<_> = channel_transfers(&pending.signed_tx, channel_id).collect();
+            if transfers
+                .iter()
+                .all(|t| t.inputs.iter().all(|id| available.contains(id)))
+            {
+                available.extend(transfers.iter().flat_map(|t| t.utxos().map(|u| u.id())));
+            } else {
+                // A bundle that cannot land takes everything chained on it.
+                shed.insert(info.tx_hash);
+                shed.extend(
+                    self.collect_pending_suffix(info.this_msg)
+                        .iter()
+                        .map(|child| child.tx_hash),
+                );
+            }
+        }
+        self.drain_pending_in_lineage_order(&shed)
+    }
+
     /// On a config-tip change, shed the pending entries **not on this branch's
     /// tip** (not in the safe set) — the not-yet-mined tail a config may have
     /// invalidated. Mined/on-branch entries are excluded: a config never
@@ -787,11 +880,7 @@ impl TxState {
         }
         self.observed_config_tip = config_tip;
 
-        let safe: HashSet<TxHash> = self
-            .block_states
-            .get(&tip)
-            .map(|s| s.iter().copied().collect())
-            .unwrap_or_default();
+        let safe = self.safe_at(tip);
         let eligible: HashSet<TxHash> = self
             .pending
             .keys()
@@ -834,11 +923,7 @@ impl TxState {
                 break;
             }
         }
-        let safe: HashSet<TxHash> = self
-            .block_states
-            .get(&tip)
-            .map(|s| s.iter().copied().collect())
-            .unwrap_or_default();
+        let safe = self.safe_at(tip);
 
         let mut shed: Vec<TxHash> = self
             .pending_other
@@ -890,11 +975,7 @@ impl TxState {
                 break;
             }
         }
-        let safe: HashSet<TxHash> = self
-            .block_states
-            .get(&tip)
-            .map(|s| s.iter().copied().collect())
-            .unwrap_or_default();
+        let safe = self.safe_at(tip);
 
         let mut shed: Vec<TxHash> = self
             .pending_other
@@ -1166,10 +1247,8 @@ impl TxState {
     /// `adopted`/`orphaned` — the tip still moved, and callers must run
     /// their shed pass on every reported update.
     ///
-    /// `finalized_now` are the msg-ids finalized by the same event: an
-    /// old-lineage entry that just fell below LIB is history, not an orphan,
-    /// even when the LIB jump pruned its block before the new lineage was
-    /// computed.
+    /// `finalized_now`: msg-ids finalized by this event, masked so a LIB jump
+    /// never reads as an orphan.
     #[must_use]
     pub fn detect_channel_update(
         &self,
@@ -1308,18 +1387,9 @@ impl TxState {
     /// and below LIB reach the base via the finalized-backfill path.
     #[must_use]
     pub fn channel_wallet_view(&self, tip: Option<HeaderId>) -> ChannelWalletView {
-        let mut blocks = Vec::new();
-        if let Some(tip) = tip {
-            let mut current = tip;
-            while current != self.current_lib {
-                blocks.push(current);
-                match self.parent_map.get(&current) {
-                    Some(&parent) => current = parent,
-                    None => break,
-                }
-            }
-            blocks.reverse();
-        }
+        let blocks = tip
+            .map(|tip| self.branch_blocks_above_lib(tip))
+            .unwrap_or_default();
         self.wallet.view(blocks.iter())
     }
 
@@ -1341,8 +1411,7 @@ impl TxState {
         self.wallet.restore_base(notes);
     }
 
-    /// Keep a stored block's signed channel txs with the block (see
-    /// [`StoredBlock::signed_txs`]).
+    /// Keep a stored block's signed channel txs with the block.
     pub fn store_block_signed_txs(
         &mut self,
         block: HeaderId,
@@ -1353,27 +1422,15 @@ impl TxState {
         }
     }
 
-    /// Signed channel txs of blocks on `tip`'s branch strictly above LIB
-    /// (oldest first) that are not in pending — what the mirror still has to
-    /// insert for the branch. Empty in steady state. The LIB block is
-    /// excluded: its content is finalized, removed from pending for good.
+    /// Signed channel txs on `tip`'s branch strictly above LIB (finalized never
+    /// returns to pending) that pending lacks; empty in steady state.
     #[must_use]
     pub fn untracked_signed_txs_on_branch(
         &self,
         tip: HeaderId,
     ) -> Vec<SignedOps<Unverified, StandardMode>> {
-        let mut blocks = Vec::new();
-        let mut current = tip;
-        while current != self.current_lib {
-            blocks.push(current);
-            match self.parent_map.get(&current) {
-                Some(&parent) => current = parent,
-                None => break,
-            }
-        }
-        blocks
+        self.branch_blocks_above_lib(tip)
             .into_iter()
-            .rev()
             .filter_map(|id| self.block_txs.get(&id))
             .flat_map(|block| block.signed_txs.iter())
             .filter(|tx| !self.is_tracked(&tx.hash()))
@@ -1381,13 +1438,9 @@ impl TxState {
             .collect()
     }
 
-    /// The channel view at an L1 tip: the inscriptions mined on its branch,
-    /// followed by the pending suffix chaining from the mined tip — our own
-    /// publishes and mirrored canonical entries awaiting (re-)inclusion.
-    /// Mined vs pending is immaterial to the view; only what it contains is.
-    ///
-    /// Capture this at the *old* tip before inserting a new block, so the
-    /// block's own inscriptions cannot land on the "before" side.
+    /// The channel view at an L1 tip: mined inscriptions on its branch plus the
+    /// pending suffix chaining from the mined tip. Capture at the *old* tip
+    /// before storing a new block.
     #[must_use]
     pub(crate) fn channel_lineage(&self, tip: HeaderId) -> Vec<InscriptionInfo> {
         let mut lineage = self.infos_on_branch(tip);
@@ -1429,9 +1482,7 @@ impl TxState {
                     queue.push_back(pending.this_msg);
                 }
             }
-            // Opaque txs enter at their first inscription's parent and leave
-            // at their last; their infos are part of the suffix like any
-            // pending inscription.
+            // Opaque txs enter at their first inscription's parent, leave at their last.
             for other in self.pending_other.values() {
                 if other.first_parent == Some(current)
                     && let Some(last_msg) = other.last_msg

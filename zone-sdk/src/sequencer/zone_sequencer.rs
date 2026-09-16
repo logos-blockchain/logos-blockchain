@@ -402,6 +402,15 @@ where
             .unwrap_or_default()
     }
 
+    /// The notes a new bundle may spend: [`Self::channel_wallet`] minus what
+    /// un-mined pending bundles already consume.
+    fn spendable_channel_wallet(&self) -> ChannelWalletView {
+        self.state
+            .as_ref()
+            .map(|s| s.spendable_wallet_view(self.current_tip, self.channel_id))
+            .unwrap_or_default()
+    }
+
     /// Subscribe to readiness. Returns a [`watch::Receiver<bool>`] that
     /// transitions `false → true` exactly once on cold-start completion and
     /// stays `true`. The first `.changed().await` returns immediately with
@@ -924,7 +933,7 @@ where
         inputs: &WithdrawInputs,
     ) -> Result<(ChannelTransferOp, ChannelWithdrawOp), Error> {
         let funding_pk = self.config.funding.funding_pk;
-        let view = self.channel_wallet();
+        let view = self.spendable_channel_wallet();
         let selected = select_channel_notes(&view, funding_pk, amount, inputs)?;
         let by_id: HashMap<_, _> = view
             .finalized
@@ -1093,7 +1102,7 @@ where
         &self,
         consumed_notes: &[NoteId],
     ) -> Result<ChannelTransferOp, Error> {
-        let view = self.channel_wallet();
+        let view = self.spendable_channel_wallet();
         let by_id: HashMap<NoteId, (Value, _)> = view
             .finalized
             .iter()

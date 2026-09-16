@@ -628,15 +628,17 @@ where
     /// combines the on-chain delta with our own shed pending (lineage and
     /// opaque), deduped by `tx_hash`.
     fn build_channel_update(&mut self, u: ChannelUpdateInfo) -> ChannelUpdate {
+        let channel_id = self.channel_id;
         let (shed, shed_other) = match (self.state.as_mut(), self.current_tip) {
-            (Some(s), Some(tip)) => (
-                s.shed_off_branch_pending(tip),
-                s.shed_off_branch_pending_other(tip),
-            ),
+            (Some(s), Some(tip)) => {
+                // Inputs shed first: it drains a dead bundle's children too.
+                let mut shed = s.shed_bundles_with_missing_inputs(tip, channel_id);
+                shed.extend(s.shed_off_branch_pending(tip));
+                (shed, s.shed_off_branch_pending_other(tip))
+            }
             _ => (Vec::new(), Vec::new()),
         };
         let mut orphaned: Vec<ChannelUpdateTx> = shed.into_iter().map(orphan_from_shed).collect();
-        let channel_id = self.channel_id;
         orphaned.extend(
             shed_other
                 .into_iter()
