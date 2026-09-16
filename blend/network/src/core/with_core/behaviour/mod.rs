@@ -977,6 +977,19 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             .map(|entry| &entry.peer)
     }
 
+    /// The peers this node is part way through a handshake with, in either
+    /// direction.
+    ///
+    /// The spec counts such a peer as a neighbour already, which is what keeps
+    /// the node from drawing it at random and dialing it while it is being
+    /// accepted. Two connections with one peer then have to be resolved by
+    /// comparing identities, and until they are both hold a degree slot.
+    pub fn peers_with_handshake_in_progress(&self) -> impl Iterator<Item = &PeerId> {
+        self.connections_waiting_upgrade
+            .keys()
+            .map(|(peer_id, _)| peer_id)
+    }
+
     /// Why this node currently refuses to deal with the peer, if it does.
     fn blacklisted_reason(&self, peer: &PeerId) -> Option<BlacklistReason> {
         self.blacklist.reason(peer, self.current_round)
