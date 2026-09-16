@@ -403,6 +403,10 @@ where
 
     /// Called when a pending retry fires. Re-checks peering degree before
     /// actually dialing, so we don't waste a slot on a peer we no longer need.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address in a dedicated refactor"
+    )]
     fn execute_retry(&mut self, peer_id: PeerId, dial_attempt: DialAttempt) {
         if self.connections_to_open() == 0 {
             tracing::debug!(
@@ -900,6 +904,10 @@ where
     /// * `EpochDialAttempt::OngoingEpoch(Some)` if the maximum attempts have
     ///   been reached and the peer has been removed from the map of ongoing
     ///   dials.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address in a dedicated refactor"
+    )]
     fn schedule_retry(&mut self, peer_id: PeerId) -> EpochDialAttempt {
         let Some(dial_attempt) = self.ongoing_dials.remove(&peer_id) else {
             tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new epoch has cleared the map of pending dials.");

@@ -95,7 +95,7 @@ impl SendQueue {
         }
         self.queue
             .pop_front()
-            .map_or(None, |queued| Some(OutgoingItem::Message(queued.message)))
+            .map(|queued| OutgoingItem::Message(queued.message))
     }
 
     pub fn clear(&mut self) {
