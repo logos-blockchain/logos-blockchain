@@ -4,7 +4,9 @@ use core::{
 };
 
 use futures::StreamExt as _;
+use lb_blend_primitives::time::RoundCount;
 use lb_libp2p::SwarmEvent;
+use libp2p::identity::ed25519;
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
 use tokio::{select, time::sleep};
@@ -13,7 +15,9 @@ use crate::core::{
     tests::utils::{TestEncapsulatedMessage, TestSwarm},
     with_core::behaviour::{
         Event,
-        tests::utils::{BehaviourBuilder, SwarmExt as _, new_nodes_with_empty_address},
+        tests::utils::{
+            BehaviourBuilder, PEERING_DEGREE, SwarmExt as _, new_nodes_with_empty_address,
+        },
     },
 };
 
@@ -165,5 +169,41 @@ async fn a_delivered_message_extends_the_window() {
             .negotiated_peers()
             .contains_key(talking_swarm.local_peer_id()),
         "the connection should still be negotiated"
+    );
+}
+
+/// A node below the connections the protocol asks it to hold is one a
+/// partition or an eclipse would be working towards, so the spec asks that the
+/// period be recorded. Recording it means noticing when it starts and when it
+/// ends, rather than restating it every round for as long as it lasts.
+#[test(tokio::test)]
+async fn the_period_below_the_target_degree_is_tracked_from_start_to_end() {
+    let mut behaviour = BehaviourBuilder::new(&ed25519::Keypair::generate()).build();
+
+    behaviour.check_and_report_low_peering_degree();
+    let entered = behaviour
+        .below_target_degree_since
+        .expect("a node holding no connections at all is below the floor");
+
+    // The period continues rather than starting again on every round that
+    // passes within it.
+    behaviour.current_round = behaviour.current_round.saturating_add(RoundCount::new(
+        NonZeroU128::new(5).expect("must be non-zero"),
+    ));
+    behaviour.check_and_report_low_peering_degree();
+    assert_eq!(
+        behaviour.below_target_degree_since,
+        Some(entered),
+        "the period restarted instead of continuing"
+    );
+
+    // Enough live connections, of which enough are this node's own, ends it.
+    let mut peering = BehaviourBuilder::new(&ed25519::Keypair::generate())
+        .with_existing_connections(1, PEERING_DEGREE.get() - 2)
+        .build();
+    peering.check_and_report_low_peering_degree();
+    assert_eq!(
+        peering.below_target_degree_since, None,
+        "a node holding what the protocol asks for was reported as below it"
     );
 }

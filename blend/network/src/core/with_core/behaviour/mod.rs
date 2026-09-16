@@ -231,6 +231,9 @@ pub struct Behaviour<ProofsVerifier> {
     /// The peers this node refuses to exchange Blend messages with, for a
     /// while, because they sent something no honest node would have.
     blacklist: PeerBlacklist,
+    /// When this node last dropped below the connections the spec asks it to
+    /// hold, if it is still below them.
+    below_target_degree_since: Option<Round>,
 }
 
 #[derive(Debug)]
@@ -331,6 +334,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                 core_config.handshake_deadline_in_rounds,
             ),
             liveness: PeerLivenessMap::new(RoundCount::new(core_config.liveness_window_in_rounds)),
+            below_target_degree_since: None,
             blacklist: PeerBlacklist::new(
                 core_config
                     .target_peering_degree
@@ -932,6 +936,48 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         }
     }
 
+    /// Reports the peers this node has stopped refusing to deal with.
+    fn prune_and_report_expired_blacklist_entries(&mut self) {
+        for entry in self.blacklist.prune_expired_entries(self.current_round) {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "Peer {:?} is no longer blacklisted: the window it was excluded for, after {}, has passed.",
+                entry.peer,
+                entry.reason
+            );
+        }
+    }
+
+    /// Reports the node crossing into or out of holding fewer connections than
+    /// the spec asks it to.
+    fn check_and_report_low_peering_degree(&mut self) {
+        let live = self.num_live_peers();
+        let dialed = self.num_live_dialed_peers();
+        let below_live = live < self.minimum_live_peers();
+        let below_dialed = dialed < self.minimum_live_dialed_peers();
+
+        match (self.below_target_degree_since, below_live || below_dialed) {
+            (None, true) => {
+                self.below_target_degree_since = Some(self.current_round);
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    "Holding fewer connections than the protocol asks for: {live} live of {} wanted, {dialed} of {} opened by this node.",
+                    self.minimum_live_peers(),
+                    self.minimum_live_dialed_peers()
+                );
+            }
+            (Some(since), false) => {
+                self.below_target_degree_since = None;
+                tracing::info!(
+                    target: LOG_TARGET,
+                    "Back to the connections the protocol asks for after {} round(s): {live} live, {dialed} opened by this node.",
+                    self.current_round.rounds_since(since)
+                );
+            }
+            _ => {}
+        }
+    }
+
     /// Blacklists the sender of a message.
     fn blacklist_peer(&mut self, peer_id: PeerId, reason: BlacklistReason) {
         tracing::debug!(target: LOG_TARGET, "Blacklisting peer {peer_id:?}: {reason:?}.");
@@ -1479,7 +1525,8 @@ where
                 .enter_new_round_with_peers(self.negotiated_peers.keys());
             self.abandon_stale_handshakes();
             self.close_unhealthy_connections();
-            self.blacklist.prune_expired_entries(current_round);
+            self.prune_and_report_expired_blacklist_entries();
+            self.check_and_report_low_peering_degree();
         }
 
         if let Some(old_epoch) = &mut self.old_epoch
