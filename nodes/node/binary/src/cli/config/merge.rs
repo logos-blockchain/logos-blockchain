@@ -19,7 +19,7 @@ fn key_as_str(key: &YamlValue) -> String {
                 .trim_end()
                 .to_owned()
         },
-        ToOwned::to_owned,
+        |key| key.escape_debug().to_string(),
     )
 }
 
@@ -53,15 +53,32 @@ pub struct MergeFlags {
     pub extra_insert_missing: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeOrigin {
+    OldConfig,
+    Extra,
+}
+
+impl Display for MergeOrigin {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OldConfig => write!(f, "old config"),
+            Self::Extra => write!(f, "extra values"),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum MergeConflict {
     TypeMismatch {
         key: YamlKey,
+        origin: MergeOrigin,
         source_value: YamlValue,
         destination_value: YamlValue,
     },
     KeyNotFoundInDestination {
         key: YamlKey,
+        origin: MergeOrigin,
         source_value: YamlValue,
     },
 }
@@ -87,25 +104,35 @@ impl Display for MergeConflict {
         match self {
             Self::TypeMismatch {
                 key,
+                origin,
                 source_value,
                 destination_value,
             } => write!(
                 f,
-                "Type mismatch at '{key}'. Old config has {} ({}) but new config has {} ({}). Kept new value.",
+                "Type mismatch at '{key}': {origin} has {} ({}) but new config has {} ({}). Kept new value.",
                 type_name(source_value),
                 value_as_str(source_value),
                 type_name(destination_value),
                 value_as_str(destination_value),
             ),
-            Self::KeyNotFoundInDestination { key, source_value } => write!(
+            Self::KeyNotFoundInDestination {
+                key,
+                origin,
+                source_value,
+            } => write!(
                 f,
-                "Key '{key}' not found in new config. Value in old config: {}",
+                "Key '{key}' not found in new config. Value in {origin}: {}",
                 value_as_str(source_value),
             ),
         }
     }
 }
 
+/// Merges `source` onto `destination`. Then `extra`.
+///
+/// - Maps are merged key by key.
+/// - Lists and tagged values are replaced whole: changes nested inside them are
+///   neither merged nor reported as conflicts.
 pub fn merge(
     source: YamlValue,
     destination: &mut YamlValue,
@@ -119,13 +146,19 @@ pub fn merge(
         key.clone(),
         source,
         destination,
+        MergeOrigin::OldConfig,
         flags.source_insert_missing,
     );
     conflicts.extend(merge_source_conflicts);
 
     if let Some(extra) = extra {
-        let merge_extra_conflicts =
-            merge_value(key, extra, destination, flags.extra_insert_missing);
+        let merge_extra_conflicts = merge_value(
+            key,
+            extra,
+            destination,
+            MergeOrigin::Extra,
+            flags.extra_insert_missing,
+        );
         conflicts.extend(merge_extra_conflicts);
     }
 
@@ -156,10 +189,12 @@ fn merge_value(
     source_key: YamlKey,
     source: YamlValue,
     destination: &mut YamlValue,
+    origin: MergeOrigin,
     insert_if_missing: bool,
 ) -> Vec<MergeConflict> {
     match (source, destination) {
-        (YamlValue::Null, YamlValue::Null) => {}
+        (YamlValue::Null, destination) => *destination = YamlValue::Null,
+        (source, destination @ YamlValue::Null) => *destination = source,
         (YamlValue::Bool(source_value), YamlValue::Bool(destination_value)) => {
             *destination_value = source_value;
         }
@@ -177,6 +212,7 @@ fn merge_value(
                 &source_key,
                 source_mapping,
                 destination_mapping,
+                origin,
                 insert_if_missing,
             );
         }
@@ -186,6 +222,7 @@ fn merge_value(
         (source_value, destination_value) => {
             let mismatch = MergeConflict::TypeMismatch {
                 key: source_key,
+                origin,
                 source_value,
                 destination_value: destination_value.clone(),
             };
@@ -200,6 +237,7 @@ fn merge_mapping(
     source_key: &YamlKey,
     source_mapping: Mapping,
     destination_mapping: &mut Mapping,
+    origin: MergeOrigin,
     insert_if_missing: bool,
 ) -> Vec<MergeConflict> {
     let mut conflicts = Vec::new();
@@ -212,6 +250,7 @@ fn merge_mapping(
                 source_mapping_key,
                 value,
                 destination_mapping_value,
+                origin,
                 insert_if_missing,
             );
             conflicts.extend(merge_value_conflicts);
@@ -220,6 +259,7 @@ fn merge_mapping(
         } else {
             let not_found = MergeConflict::KeyNotFoundInDestination {
                 key: source_mapping_key,
+                origin,
                 source_value: value,
             };
             conflicts.push(not_found);
@@ -284,16 +324,24 @@ mod tests {
     }
 
     #[test]
+    fn yaml_key_escapes_invisible_characters_in_string_steps() {
+        let key = key(&["a\nb", "c\0d"]);
+
+        assert_eq!(key.to_string(), r"a\nb.c\0d");
+    }
+
+    #[test]
     fn type_mismatch_displays_key_types_and_values() {
         let conflict = MergeConflict::TypeMismatch {
             key: key(&["a", "b"]),
+            origin: MergeOrigin::OldConfig,
             source_value: yaml("{ c: [1, text] }"),
             destination_value: yaml("1"),
         };
 
         assert_eq!(
             conflict.to_string(),
-            r#"Type mismatch at 'a.b'. Old config has map ({"c":[1,"text"]}) but new config has number (1). Kept new value."#
+            r#"Type mismatch at 'a.b': old config has map ({"c":[1,"text"]}) but new config has number (1). Kept new value."#
         );
     }
 
@@ -301,12 +349,27 @@ mod tests {
     fn not_found_displays_key_and_source_value() {
         let conflict = MergeConflict::KeyNotFoundInDestination {
             key: key(&["a", "b"]),
+            origin: MergeOrigin::OldConfig,
             source_value: yaml("text"),
         };
 
         assert_eq!(
             conflict.to_string(),
             r#"Key 'a.b' not found in new config. Value in old config: "text""#
+        );
+    }
+
+    #[test]
+    fn conflict_displays_extra_origin() {
+        let conflict = MergeConflict::KeyNotFoundInDestination {
+            key: key(&["a"]),
+            origin: MergeOrigin::Extra,
+            source_value: yaml("1"),
+        };
+
+        assert_eq!(
+            conflict.to_string(),
+            "Key 'a' not found in new config. Value in extra values: 1"
         );
     }
 
@@ -334,6 +397,7 @@ mod tests {
             conflicts,
             vec![MergeConflict::KeyNotFoundInDestination {
                 key: key(&["c"]),
+                origin: MergeOrigin::Extra,
                 source_value: yaml("3"),
             }]
         );
@@ -352,6 +416,7 @@ mod tests {
             conflicts,
             vec![MergeConflict::KeyNotFoundInDestination {
                 key: key(&["b"]),
+                origin: MergeOrigin::OldConfig,
                 source_value: yaml("2"),
             }]
         );
@@ -373,6 +438,7 @@ mod tests {
             conflicts,
             vec![MergeConflict::KeyNotFoundInDestination {
                 key: key(&["b"]),
+                origin: MergeOrigin::OldConfig,
                 source_value: yaml("2"),
             }]
         );
@@ -398,6 +464,30 @@ mod tests {
     fn null_is_kept() {
         let source = yaml("a: null");
         let mut destination = yaml("a: null");
+        let extra = None;
+
+        let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
+
+        assert!(conflicts.is_empty());
+        assert_eq!(destination, yaml("a: null"));
+    }
+
+    #[test]
+    fn source_value_replaces_destination_null() {
+        let source = yaml("a: 30");
+        let mut destination = yaml("a: null");
+        let extra = None;
+
+        let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
+
+        assert!(conflicts.is_empty());
+        assert_eq!(destination, yaml("a: 30"));
+    }
+
+    #[test]
+    fn source_null_replaces_destination_value() {
+        let source = yaml("a: null");
+        let mut destination = yaml("a: 30");
         let extra = None;
 
         let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
@@ -490,6 +580,7 @@ mod tests {
             conflicts,
             vec![MergeConflict::TypeMismatch {
                 key: key(&["a", "b"]),
+                origin: MergeOrigin::OldConfig,
                 source_value: yaml("text"),
                 destination_value: yaml("1"),
             }]
@@ -509,6 +600,7 @@ mod tests {
             conflicts,
             vec![MergeConflict::TypeMismatch {
                 key: YamlKey::root(),
+                origin: MergeOrigin::OldConfig,
                 source_value: yaml("[1]"),
                 destination_value: yaml("a: 1"),
             }]
@@ -528,6 +620,7 @@ mod tests {
             conflicts,
             vec![MergeConflict::TypeMismatch {
                 key: key(&["a"]),
+                origin: MergeOrigin::OldConfig,
                 source_value: yaml("text"),
                 destination_value: yaml("1"),
             }]
@@ -559,6 +652,7 @@ mod tests {
             conflicts,
             vec![MergeConflict::TypeMismatch {
                 key: key(&["b"]),
+                origin: MergeOrigin::OldConfig,
                 source_value: yaml("text"),
                 destination_value: yaml("1"),
             }]
@@ -578,6 +672,7 @@ mod tests {
             conflicts,
             vec![MergeConflict::KeyNotFoundInDestination {
                 key: key(&["a", "b"]),
+                origin: MergeOrigin::OldConfig,
                 source_value: yaml("1"),
             }]
         );

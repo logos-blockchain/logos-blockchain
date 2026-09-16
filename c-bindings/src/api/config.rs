@@ -325,14 +325,20 @@ impl From<MergeConfigFlags> for MergeFlags {
 
 /// Result type for [`merge_user_config`].
 ///
-/// On success, `value` is either null (no merge conflicts) or a pointer to a NUL-terminated C
-/// string with one merge conflict per line.
+/// On success, `value` is either null (no merge conflicts) or a pointer to a
+/// NUL-terminated C string with one merge conflict per line.
 pub type FfiMergeUserConfigResult = FfiStatusResult<*mut c_char>;
 
 /// Merges the values of a source config file, and optionally extra YAML values,
 /// onto a destination config file.
 ///
 /// Extra values take precedence over source values.
+///
+/// Merges `source`, then `extra`, onto `destination`.
+///
+/// - Maps are merged key by key.
+/// - Lists and tagged values are replaced whole: changes nested inside them are
+///   neither merged nor reported as conflicts.
 ///
 /// The destination file is overwritten with the result.
 ///
@@ -346,12 +352,13 @@ pub type FfiMergeUserConfigResult = FfiStatusResult<*mut c_char>;
 ///
 /// # Returns
 ///
-/// A [`FfiMergeUserConfigResult`] containing the merge conflicts report (null if there are none) on
-/// success, or an [`OperationStatus`] error if the merge could not run.
+/// A [`FfiMergeUserConfigResult`] containing the merge conflicts report (null
+/// if there are none) on success, or an [`OperationStatus`] error if the merge
+/// could not run.
 ///
-/// Conflicts do not mean the merge failed: the destination file is still written.
-/// Each conflict is a value that could not be merged, and the destination keeps its own value for
-/// that key.
+/// Conflicts do not mean the merge failed: the destination file is still
+/// written. Each conflict is a value that could not be merged, and the
+/// destination keeps its own value for that key.
 ///
 /// # Safety
 ///
