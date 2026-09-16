@@ -171,8 +171,6 @@ pub struct TxState {
     wallet: ChannelWallet,
 }
 
-/// A channel-touching tx's tip-advancing content, classified once at block
-/// scan and stored per block.
 /// One stored L1 block's channel content.
 #[derive(Debug, Default)]
 struct StoredBlock {
@@ -187,6 +185,8 @@ struct StoredBlock {
     signed_txs: Vec<SignedOps<Unverified, StandardMode>>,
 }
 
+/// A channel-touching tx's tip-advancing content, classified once at block
+/// scan and stored per block.
 #[derive(Debug, Clone)]
 pub enum BlockChannelTx {
     /// `publish` shape: a single inscription.
