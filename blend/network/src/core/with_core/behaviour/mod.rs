@@ -442,13 +442,28 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             .count()
     }
 
-    /// The connections other nodes opened to this one, live or not.
+    /// The connections other nodes opened to this one, live or not, and
+    /// counting those still shaking hands.
+    ///
+    /// A handshake in progress holds a slot exactly as a negotiated connection
+    /// does, so leaving pending ones out here would let peers fill every slot
+    /// with handshakes they never complete. The node would then be at its
+    /// maximum and open nothing itself, which is what the floor of `Φ_CC - 2`
+    /// self-opened connections exists to prevent.
     #[must_use]
     fn num_total_accepted_peers(&self) -> usize {
-        self.negotiated_peers
+        let negotiated = self
+            .negotiated_peers
             .values()
             .filter(|details| details.direction.is_incoming())
-            .count()
+            .count();
+        let waiting_upgrade = self
+            .connections_waiting_upgrade
+            .values()
+            .filter(|pending| pending.direction.is_incoming())
+            .count();
+
+        negotiated.saturating_add(waiting_upgrade)
     }
 
     #[must_use]

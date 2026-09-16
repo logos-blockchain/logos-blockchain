@@ -211,8 +211,11 @@ async fn concurrent_incoming_connections() {
     loop {
         select! {
             // We make sure that after 11 seconds one of the two connections is dropped (the swarm used in the tests uses a default timeout of 10s).
-            // We cannot prevent both connections from being upgraded, but we can test that one of the two is dropped once the listener realized it is above the maximum peering degree.
-            // We do not know which one beforehand because they are started in parallel.
+            // Only one of the two can be taken: a handshake in progress holds a
+            // slot, so once the first is pending the listener is at the share
+            // of connections it lets other nodes fill and refuses the second
+            // outright. We do not know which one beforehand because they are
+            // started in parallel.
             () = sleep(Duration::from_secs(11)) => {
                 break;
             }
@@ -230,7 +233,10 @@ async fn concurrent_incoming_connections() {
                         assert!(endpoint.is_dialer());
                         dialer_1_dropped = true;
                     }
-                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id)) if peer_id == *listening_swarm.local_peer_id() => {
+                    SwarmEvent::Behaviour(
+                        Event::PeerDisconnected(peer_id)
+                        | Event::OutboundConnectionUpgradeFailed { peer: peer_id, .. },
+                    ) if peer_id == *listening_swarm.local_peer_id() => {
                         dialer_1_notified = true;
                     }
                     _ => {}
@@ -244,7 +250,10 @@ async fn concurrent_incoming_connections() {
                         assert!(endpoint.is_dialer());
                         dialer_2_dropped = true;
                     }
-                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id)) if peer_id == *listening_swarm.local_peer_id() => {
+                    SwarmEvent::Behaviour(
+                        Event::PeerDisconnected(peer_id)
+                        | Event::OutboundConnectionUpgradeFailed { peer: peer_id, .. },
+                    ) if peer_id == *listening_swarm.local_peer_id() => {
                         dialer_2_notified = true;
                     }
                     _ => {}
@@ -253,8 +262,8 @@ async fn concurrent_incoming_connections() {
         }
     }
 
-    // We check whether the dialer whose connection was dropped was also notified by
-    // its behaviour that the dialed peer got disconnected.
+    // We check whether the dialer whose connection was dropped was also notified
+    // by its behaviour that the connection did not work out.
     assert!((dialer_1_dropped && dialer_1_notified) ^ (dialer_2_dropped && dialer_2_notified));
 }
 
