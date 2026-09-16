@@ -60,10 +60,50 @@ pub enum MergeError {
         source_value: YamlValue,
         destination_value: YamlValue,
     },
-    NotFound {
+    KeyNotFoundInDestination {
         key: YamlKey,
         source_value: YamlValue,
     },
+}
+
+fn value_as_str(value: &YamlValue) -> String {
+    serde_json::to_string(value).unwrap_or_default()
+}
+
+const fn type_name(value: &YamlValue) -> &'static str {
+    match value {
+        YamlValue::Null => "null",
+        YamlValue::Bool(_) => "boolean",
+        YamlValue::Number(_) => "number",
+        YamlValue::String(_) => "string",
+        YamlValue::Sequence(_) => "list",
+        YamlValue::Mapping(_) => "map",
+        YamlValue::Tagged(_) => "tagged value",
+    }
+}
+
+impl Display for MergeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TypeMismatch {
+                key,
+                source_value,
+                destination_value,
+            } => write!(
+                f,
+                "Type mismatch at '{key}'. Old config has {} ({}) but new config has {} ({}). Kept new value.",
+                type_name(source_value),
+                value_as_str(source_value),
+                type_name(destination_value),
+                value_as_str(destination_value),
+            ),
+            Self::KeyNotFoundInDestination { key, source_value } => write!(
+                f,
+                "Key '{key}' not found in new config. Value in old config: {}",
+                value_as_str(source_value),
+            ),
+        }
+    }
 }
 
 pub fn merge(
@@ -177,7 +217,7 @@ fn merge_mapping(
         } else if insert_if_missing {
             destination_mapping.insert(key, value);
         } else {
-            let not_found = MergeError::NotFound {
+            let not_found = MergeError::KeyNotFoundInDestination {
                 key: source_mapping_key,
                 source_value: value,
             };
@@ -243,6 +283,33 @@ mod tests {
     }
 
     #[test]
+    fn type_mismatch_displays_key_types_and_values() {
+        let error = MergeError::TypeMismatch {
+            key: key(&["a", "b"]),
+            source_value: yaml("{ c: [1, text] }"),
+            destination_value: yaml("1"),
+        };
+
+        assert_eq!(
+            error.to_string(),
+            r#"Type mismatch at 'a.b'. Old config has map ({"c":[1,"text"]}) but new config has number (1). Kept new value."#
+        );
+    }
+
+    #[test]
+    fn not_found_displays_key_and_source_value() {
+        let error = MergeError::KeyNotFoundInDestination {
+            key: key(&["a", "b"]),
+            source_value: yaml("text"),
+        };
+
+        assert_eq!(
+            error.to_string(),
+            r#"Key 'a.b' not found in new config. Value in old config: "text""#
+        );
+    }
+
+    #[test]
     fn extra_value_overrides_source_value() {
         let source = yaml("a: 2");
         let mut destination = yaml("a: 1");
@@ -264,7 +331,7 @@ mod tests {
 
         assert_eq!(
             errors,
-            vec![MergeError::NotFound {
+            vec![MergeError::KeyNotFoundInDestination {
                 key: key(&["c"]),
                 source_value: yaml("3"),
             }]
@@ -282,7 +349,7 @@ mod tests {
 
         assert_eq!(
             errors,
-            vec![MergeError::NotFound {
+            vec![MergeError::KeyNotFoundInDestination {
                 key: key(&["b"]),
                 source_value: yaml("2"),
             }]
@@ -303,7 +370,7 @@ mod tests {
 
         assert_eq!(
             errors,
-            vec![MergeError::NotFound {
+            vec![MergeError::KeyNotFoundInDestination {
                 key: key(&["b"]),
                 source_value: yaml("2"),
             }]
@@ -508,7 +575,7 @@ mod tests {
 
         assert_eq!(
             errors,
-            vec![MergeError::NotFound {
+            vec![MergeError::KeyNotFoundInDestination {
                 key: key(&["a", "b"]),
                 source_value: yaml("1"),
             }]
