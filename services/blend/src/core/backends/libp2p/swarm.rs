@@ -527,7 +527,7 @@ where
                         };
                         self.check_and_dial_new_peers_except(&failed_peers);
                     }
-                    upgrade_error @ (ConnectionUpgradeFailureReason::DuplicateConnection | ConnectionUpgradeFailureReason::MaximumPeeringDegreeReached | ConnectionUpgradeFailureReason::ReverseDirectionPreferred) => {
+                    upgrade_error @ (ConnectionUpgradeFailureReason::DuplicateConnection | ConnectionUpgradeFailureReason::MaximumPeeringDegreeReached | ConnectionUpgradeFailureReason::ReverseDirectionPreferred | ConnectionUpgradeFailureReason::Refused) => {
                         Self::log_blend_peer_negotiation_failure(
                             self.current_epoch_info.epoch,
                             peer,

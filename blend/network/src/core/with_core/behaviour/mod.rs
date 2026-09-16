@@ -253,6 +253,10 @@ pub enum ConnectionUpgradeFailureReason {
     /// A failure happened during the connection upgrade that is not covered by
     /// any of the above cases.
     ConnectionFailure,
+    /// This node declined to speak Blend on the connection: the peer is not a
+    /// core node of the current epoch, or the network is too small for this
+    /// node to peer at all. Dialing the same peer again does not fix either.
+    Refused,
 }
 
 #[derive(Debug)]
@@ -618,6 +622,22 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             event: Either::Left(FromBehaviour::CloseSubstreams),
         });
         self.try_wake();
+    }
+
+    /// Refuses a connection this node opened itself, and tells the swarm so.
+    fn refuse_outgoing_connection_attempt(
+        &mut self,
+        peer_id: PeerId,
+        reason: ConnectionUpgradeFailureReason,
+    ) -> Either<ConnectionHandler, DummyConnectionHandler> {
+        self.notify_about_connection_upgrade_failure(
+            peer_id,
+            ConnectionUpgradeFailure {
+                reason,
+                direction: ConnectionDirection::Outgoing,
+            },
+        );
+        Either::Right(DummyConnectionHandler)
     }
 
     fn notify_about_connection_upgrade_failure(
@@ -1362,7 +1382,10 @@ where
         // direction, not to limit it.
         if self.available_connection_slots() == 0 {
             tracing::trace!(target: LOG_TARGET, "Outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since we are already at maximum peering capacity.");
-            return Ok(Either::Right(DummyConnectionHandler));
+            return Ok(self.refuse_outgoing_connection_attempt(
+                peer_id,
+                ConnectionUpgradeFailureReason::MaximumPeeringDegreeReached,
+            ));
         }
 
         // If there is already an established outbound connection with the given peer,
@@ -1371,12 +1394,18 @@ where
         // connections depending on the comparison result of local and remote peer IDs.
         if self.has_connection_with_peer(&peer_id, ConnectionDirection::Outgoing) {
             tracing::trace!(target: LOG_TARGET, "Outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since there is already an outbound connection established.");
-            return Ok(Either::Right(DummyConnectionHandler));
+            return Ok(self.refuse_outgoing_connection_attempt(
+                peer_id,
+                ConnectionUpgradeFailureReason::DuplicateConnection,
+            ));
         }
 
         Ok(if !self.is_network_large_enough() {
             tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} because membership size is too small.");
-            Either::Right(DummyConnectionHandler)
+            self.refuse_outgoing_connection_attempt(
+                peer_id,
+                ConnectionUpgradeFailureReason::Refused,
+            )
         } else if self.current_epoch_info.0.contains(&peer_id) {
             tracing::trace!(
                 target: LOG_TARGET,
@@ -1402,7 +1431,10 @@ where
             ))
         } else {
             tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with edge peer {peer_id:?} with addr {remote_addr:?}.");
-            Either::Right(DummyConnectionHandler)
+            self.refuse_outgoing_connection_attempt(
+                peer_id,
+                ConnectionUpgradeFailureReason::Refused,
+            )
         })
     }
 

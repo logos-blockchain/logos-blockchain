@@ -10,7 +10,7 @@ use tokio::{select, time::sleep};
 use crate::core::{
     tests::utils::TestSwarm,
     with_core::behaviour::{
-        ConnectionDirection, Event,
+        ConnectionDirection, ConnectionUpgradeFailureReason, Event,
         tests::utils::{
             BehaviourBuilder, PEERING_DEGREE, SwarmExt as _, maximum_accepted_peers, maximum_peers,
             new_nodes_with_empty_address,
@@ -343,13 +343,32 @@ async fn outgoing_attempt_with_max_negotiated_peering_degree() {
     // will fail to upgrade (which we test below).
     dialing_swarm.connect(&mut listening_swarm_2).await;
 
-    loop {
+    // The refusal has to be reported, not just acted on. A connection this node
+    // opened and then refused never becomes one waiting for its upgrade and
+    // never becomes negotiated, so closing it produces no event of its own: if
+    // the refusal itself said nothing, whoever asked for the dial would still be
+    // counting it as in flight, and would pass the peer over in every later
+    // draw for the rest of the epoch.
+    let mut refusal_reported = false;
+    let mut connection_closed = false;
+    while !(refusal_reported && connection_closed) {
         select! {
             dialer_swarm_event = dialing_swarm.select_next_some() => {
-                if let SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } = dialer_swarm_event {
-                    assert_eq!(peer_id, *listening_swarm_2.local_peer_id());
-                    assert!(endpoint.is_dialer());
-                    break;
+                match dialer_swarm_event {
+                    SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {
+                        assert_eq!(peer_id, *listening_swarm_2.local_peer_id());
+                        assert!(endpoint.is_dialer());
+                        connection_closed = true;
+                    }
+                    SwarmEvent::Behaviour(Event::OutboundConnectionUpgradeFailed { peer, reason }) => {
+                        assert_eq!(peer, *listening_swarm_2.local_peer_id());
+                        assert!(matches!(
+                            reason,
+                            ConnectionUpgradeFailureReason::MaximumPeeringDegreeReached
+                        ));
+                        refusal_reported = true;
+                    }
+                    _ => {}
                 }
             }
             _ = listening_swarm_1.select_next_some() => {}
