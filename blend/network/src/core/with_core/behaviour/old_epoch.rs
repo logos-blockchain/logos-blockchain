@@ -1,3 +1,4 @@
+use core::fmt::{self, Display, Formatter};
 use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
     convert::Infallible,
@@ -34,6 +35,23 @@ use crate::core::{
 };
 
 const LOG_TARGET: &str = blend::network::core::core::behaviour::OLD;
+
+#[derive(Debug, Clone, Copy)]
+enum CloseReason {
+    EpochTransitionOver,
+    PeerBlacklisted,
+    MessageHandlingFailed,
+}
+
+impl Display for CloseReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::EpochTransitionOver => "the epoch transition period has passed",
+            Self::PeerBlacklisted => "the peer is blacklisted",
+            Self::MessageHandlingFailed => "the received message could not be handled",
+        })
+    }
+}
 
 /// Defines behaviours for processing messages from the old epoch
 /// until the epoch transition period has passed.
@@ -156,12 +174,13 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
     /// handlers before the corresponding substreams are closed.
     pub fn stop(mut self) -> VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>> {
         self.events.reserve(self.negotiated_peers.len());
-        for (&peer_id, &connection_id) in &self.negotiated_peers {
-            self.events.push_back(ToSwarm::NotifyHandler {
-                peer_id,
-                handler: NotifyHandler::One(connection_id),
-                event: Either::Left(FromBehaviour::CloseSubstreams),
-            });
+        let closing = self
+            .negotiated_peers
+            .iter()
+            .map(|(&peer_id, &connection_id)| (peer_id, connection_id))
+            .collect::<Vec<_>>();
+        for connection in closing {
+            self.close(connection, CloseReason::EpochTransitionOver);
         }
         self.events
     }
@@ -171,12 +190,21 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
         let Some(&connection_id) = self.negotiated_peers.get(peer_id) else {
             return;
         };
+        self.close((*peer_id, connection_id), CloseReason::PeerBlacklisted);
+        self.try_wake();
+    }
+
+    /// Asks a handler of this epoch to close its substreams, saying why.
+    fn close(&mut self, (peer_id, connection_id): (PeerId, ConnectionId), reason: CloseReason) {
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Closing old-epoch connection {connection_id:?} with peer {peer_id:?}: {reason}."
+        );
         self.events.push_back(ToSwarm::NotifyHandler {
-            peer_id: *peer_id,
+            peer_id,
             handler: NotifyHandler::One(connection_id),
             event: Either::Left(FromBehaviour::CloseSubstreams),
         });
-        self.try_wake();
     }
 
     /// Checks if the connection is part of the old epoch.
@@ -276,12 +304,11 @@ where
             self.num_blend_layers,
             &self.proofs_verifier,
         ).inspect_err(|receive_error| {
-            tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old epoch: {receive_error:?}. Closing connection with malicious peer.");
-            self.events.push_back(ToSwarm::NotifyHandler {
-                peer_id: from_peer_id,
-                handler: NotifyHandler::One(from_connection_id),
-                event: Either::Left(FromBehaviour::CloseSubstreams),
-            });
+            tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old epoch: {receive_error:?}.");
+            self.close(
+                (from_peer_id, from_connection_id),
+                CloseReason::MessageHandlingFailed,
+            );
             self.try_wake();
         })?;
 

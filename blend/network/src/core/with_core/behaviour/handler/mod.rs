@@ -19,7 +19,10 @@ use libp2p::{
 
 use crate::{
     OutgoingMessage,
-    core::{admission::RoundShare, with_core::behaviour::handler::admission::SendQueue},
+    core::{
+        admission::RoundShare,
+        with_core::behaviour::handler::admission::{OutgoingItem, SendQueue},
+    },
     flush_and_close_stream,
     message::IncomingMessage,
     recv_msg, send_msg,
@@ -369,15 +372,28 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                 }
                 // If the substream is idle, and if it's time to send a message, send it.
                 Some(OutboundSubstreamState::Idle(stream)) => {
-                    if let Some(msg) = self.send_queue.pop_front() {
-                        tracing::trace!(target: LOG_TARGET, "Sending message to outbound stream {:?}", self.connection_details);
-                        self.outbound_substream = Some(OutboundSubstreamState::PendingSend(
-                            send_msg(stream, msg).boxed(),
-                        ));
-                    } else {
-                        self.outbound_substream = Some(OutboundSubstreamState::Idle(stream));
-                        self.waker = Some(cx.waker().clone());
-                        return Poll::Pending;
+                    match self.send_queue.pop_front() {
+                        Some(OutgoingItem::Message(msg)) => {
+                            tracing::trace!(target: LOG_TARGET, "Sending message to outbound stream {:?}", self.connection_details);
+                            self.outbound_substream = Some(OutboundSubstreamState::PendingSend(
+                                send_msg(stream, msg).boxed(),
+                            ));
+                        }
+                        item => {
+                            // The messages still queued keep their place and
+                            // their deadline; the clock polled above wakes us
+                            // when the share refreshes.
+                            if matches!(item, Some(OutgoingItem::ShareSpent)) {
+                                tracing::trace!(
+                                    target: LOG_TARGET,
+                                    "Send share for connection {:?} is spent; nothing more goes out until the next round.",
+                                    self.connection_details
+                                );
+                            }
+                            self.outbound_substream = Some(OutboundSubstreamState::Idle(stream));
+                            self.waker = Some(cx.waker().clone());
+                            return Poll::Pending;
+                        }
                     }
                 }
                 // If a message is being sent, check if it's done.

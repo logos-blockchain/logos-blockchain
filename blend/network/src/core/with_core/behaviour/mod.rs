@@ -1,4 +1,5 @@
 use core::{
+    fmt::{self, Display, Formatter},
     mem::{self},
     num::{NonZeroU64, NonZeroU128, NonZeroUsize},
     time::Duration,
@@ -260,6 +261,44 @@ pub enum ConnectionUpgradeFailureReason {
     Refused,
 }
 
+/// Why this node is dropping a connection.
+#[derive(Debug, Clone, Copy)]
+enum CloseReason {
+    /// The epoch the connection belonged to is over.
+    EpochOver,
+    /// The neighbour delivered nothing within the observation window.
+    NotLive,
+    /// The handshake did not finish within `T_H`.
+    HandshakeDeadlineMissed,
+    /// This node is already holding as many connections as it may.
+    NoRoomLeft,
+    /// A second connection in the same direction with a peer this node is
+    /// already connected to.
+    AlreadyConnected,
+    /// The connection with this peer in the other direction is the one to keep.
+    ReverseDirectionPreferred,
+    /// This node refuses to exchange Blend messages with the peer.
+    PeerBlacklisted,
+}
+
+impl Display for CloseReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::EpochOver => "the epoch it belongs to is over",
+            Self::NotLive => "the neighbour delivered nothing within the observation window",
+            Self::HandshakeDeadlineMissed => "the handshake did not finish within `T_H`",
+            Self::NoRoomLeft => "this node is already at its peering degree",
+            Self::AlreadyConnected => {
+                "there is already a connection with this peer in the same direction"
+            }
+            Self::ReverseDirectionPreferred => {
+                "the connection with this peer in the other direction is the one to keep"
+            }
+            Self::PeerBlacklisted => "the peer is blacklisted",
+        })
+    }
+}
+
 #[derive(Debug)]
 struct ConnectionUpgradeFailure {
     direction: ConnectionDirection,
@@ -364,7 +403,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         // since the entry is no longer pending here.
         let pending_upgrades = mem::take(&mut self.connections_waiting_upgrade);
         for (connection, _) in pending_upgrades {
-            self.close_connection(connection);
+            self.close_connection(connection, CloseReason::EpochOver);
         }
         self.current_epoch_info = new_epoch_info;
         let current_epoch_proofs_verifier =
@@ -616,7 +655,15 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     ///
     /// This function does not perform any checks to verify whether the
     /// specified connection is stored or not.
-    fn close_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
+    fn close_connection(
+        &mut self,
+        (peer_id, connection_id): (PeerId, ConnectionId),
+        reason: CloseReason,
+    ) {
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Closing connection {connection_id:?} with peer {peer_id:?}: {reason}."
+        );
         self.events.push_back(ToSwarm::NotifyHandler {
             peer_id,
             handler: NotifyHandler::One(connection_id),
@@ -724,9 +771,9 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         if let Some(reason) = self.blacklisted_reason(&peer_id) {
             tracing::debug!(
                 target: LOG_TARGET,
-                "Refusing connection {connection_id:?} negotiated with blacklisted peer {peer_id:?}: {reason:?}."
+                "Connection {connection_id:?} finished negotiating with peer {peer_id:?} after it was blacklisted for {reason:?}."
             );
-            self.close_connection((peer_id, connection_id));
+            self.close_connection((peer_id, connection_id), CloseReason::PeerBlacklisted);
             self.notify_about_connection_upgrade_failure(
                 peer_id,
                 ConnectionUpgradeFailure {
@@ -777,8 +824,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             ConnectionDirection::Outgoing => true,
         };
         if !has_room {
-            tracing::debug!(target: LOG_TARGET, "Connection {connection_id:?} with peer {peer_id:?} must be closed because peering degree limit has already been reached.");
-            self.close_connection((peer_id, connection_id));
+            self.close_connection((peer_id, connection_id), CloseReason::NoRoomLeft);
             self.notify_about_connection_upgrade_failure(
                 peer_id,
                 ConnectionUpgradeFailure {
@@ -851,8 +897,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         (peer_id, new_connection_id): (PeerId, ConnectionId),
         new_direction: ConnectionDirection,
     ) {
-        tracing::trace!(target: LOG_TARGET, "Connection {new_connection_id:?} with peer {peer_id:?} will be closed since there is already a connection established in the same direction.");
-        self.close_connection((peer_id, new_connection_id));
+        self.close_connection((peer_id, new_connection_id), CloseReason::AlreadyConnected);
         self.notify_about_connection_upgrade_failure(
             peer_id,
             ConnectionUpgradeFailure {
@@ -906,13 +951,15 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             // After the old connection details have been updated with the new
             // ones, notify the Swarm that the new connection has been upgraded.
             let existing_connection_direction = existing_connection_details.direction;
-            self.close_connection(existing_connection);
+            self.close_connection(existing_connection, CloseReason::ReverseDirectionPreferred);
             self.notify_about_connection_upgrade_success(peer_id, existing_connection_direction);
         } else {
-            tracing::trace!(target: LOG_TARGET, "Dropping upgraded connection {new_connection_id:?} with peer {peer_id:?} in favor of currently established connection {:?}", existing_connection_details.connection_id);
             // Notify the new connection handler to drop the substreams, and we do not
             // alter the storage.
-            self.close_connection((peer_id, new_connection_id));
+            self.close_connection(
+                (peer_id, new_connection_id),
+                CloseReason::ReverseDirectionPreferred,
+            );
             self.notify_about_connection_upgrade_failure(
                 peer_id,
                 ConnectionUpgradeFailure {
@@ -937,13 +984,12 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             .collect::<Vec<_>>();
 
         for ((peer_id, connection_id), direction) in stale_handshakes {
-            tracing::debug!(
-                target: LOG_TARGET,
-                "Abandoning handshake with peer {peer_id:?} on connection {connection_id:?}: it did not complete within `T_H`."
-            );
             self.connections_waiting_upgrade
                 .remove(&(peer_id, connection_id));
-            self.close_connection((peer_id, connection_id));
+            self.close_connection(
+                (peer_id, connection_id),
+                CloseReason::HandshakeDeadlineMissed,
+            );
             self.notify_about_connection_upgrade_failure(
                 peer_id,
                 ConnectionUpgradeFailure {
@@ -965,11 +1011,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             .collect::<Vec<_>>();
 
         for (peer_id, connection_id) in unhealthy_connections {
-            tracing::debug!(
-                target: LOG_TARGET,
-                "Closing connection {connection_id:?} with peer {peer_id:?}: it has delivered no message within the observation window."
-            );
-            self.close_connection((peer_id, connection_id));
+            self.close_connection((peer_id, connection_id), CloseReason::NotLive);
         }
     }
 
@@ -1067,7 +1109,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             .collect::<Vec<_>>();
 
         for connection_id in negotiated.into_iter().chain(waiting_upgrade) {
-            self.close_connection((*peer_id, connection_id));
+            self.close_connection((*peer_id, connection_id), CloseReason::PeerBlacklisted);
         }
 
         if let Some(old_epoch) = &mut self.old_epoch {
