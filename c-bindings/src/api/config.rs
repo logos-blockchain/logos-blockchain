@@ -324,8 +324,9 @@ impl From<MergeConfigFlags> for MergeFlags {
 }
 
 /// Result type for [`merge_user_config`].
-/// On success, `value` is either null (no merge errors) or a pointer to a
-/// NUL-terminated C string with one merge error per line.
+///
+/// On success, `value` is either null (no merge conflicts) or a pointer to a NUL-terminated C
+/// string with one merge conflict per line.
 pub type FfiMergeUserConfigResult = FfiStatusResult<*mut c_char>;
 
 /// Merges the values of a source config file, and optionally extra YAML values,
@@ -345,13 +346,12 @@ pub type FfiMergeUserConfigResult = FfiStatusResult<*mut c_char>;
 ///
 /// # Returns
 ///
-/// A [`FfiMergeUserConfigResult`] containing the merge errors report (null if
-/// there are none) on success, or an [`OperationStatus`] error if the merge
-/// could not run.
+/// A [`FfiMergeUserConfigResult`] containing the merge conflicts report (null if there are none) on
+/// success, or an [`OperationStatus`] error if the merge could not run.
 ///
-/// Merge errors do not mean the merge failed: the destination file is still
-/// written. Each error is a value that could not be merged, and the destination
-/// keeps its own value for that key.
+/// Conflicts do not mean the merge failed: the destination file is still written.
+/// Each conflict is a value that could not be merged, and the destination keeps its own value for
+/// that key.
 ///
 /// # Safety
 ///
@@ -391,13 +391,13 @@ pub unsafe extern "C" fn merge_user_config(
 
     let flags = MergeFlags::from(flags);
 
-    let errors = match lb_node::cli::config::merge::run(
+    let conflicts = match lb_node::cli::config::merge::run(
         &unsafe { cstr_to_path(source_path) },
         &unsafe { cstr_to_path(destination_path) },
         extra_yaml,
         &flags,
     ) {
-        Ok(errors) => errors,
+        Ok(conflicts) => conflicts,
         Err(error) => {
             return FfiMergeUserConfigResult::err(OperationStatus::error(
                 OperationStatusCode::ConfigurationError,
@@ -406,11 +406,11 @@ pub unsafe extern "C" fn merge_user_config(
         }
     };
 
-    if errors.is_empty() {
+    if conflicts.is_empty() {
         return FfiMergeUserConfigResult::ok(ptr::null_mut());
     }
 
-    let report = errors
+    let report = conflicts
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>()
@@ -420,7 +420,7 @@ pub unsafe extern "C" fn merge_user_config(
         Ok(report) => FfiMergeUserConfigResult::ok(report.into_raw()),
         Err(error) => FfiMergeUserConfigResult::err(OperationStatus::error(
             OperationStatusCode::RuntimeError,
-            format!("Failed to create error report: {error}"),
+            format!("Failed to create conflicts report: {error}"),
         )),
     }
 }
@@ -646,7 +646,7 @@ mod test {
     }
 
     #[test]
-    fn test_merge_user_config_returns_null_report_without_errors() {
+    fn test_merge_user_config_returns_null_report_without_conflicts() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let source_path = temp_dir.path().join("source.yaml");
         let destination_path = temp_dir.path().join("destination.yaml");

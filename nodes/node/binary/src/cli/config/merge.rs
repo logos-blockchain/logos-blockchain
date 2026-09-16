@@ -54,7 +54,7 @@ pub struct MergeFlags {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum MergeError {
+pub enum MergeConflict {
     TypeMismatch {
         key: YamlKey,
         source_value: YamlValue,
@@ -82,7 +82,7 @@ const fn type_name(value: &YamlValue) -> &'static str {
     }
 }
 
-impl Display for MergeError {
+impl Display for MergeConflict {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::TypeMismatch {
@@ -111,24 +111,25 @@ pub fn merge(
     destination: &mut YamlValue,
     extra: Option<YamlValue>,
     flags: &MergeFlags,
-) -> Vec<MergeError> {
+) -> Vec<MergeConflict> {
     let key = YamlKey::root();
-    let mut errors = Vec::new();
+    let mut conflicts = Vec::new();
 
-    let merge_source_errors = merge_value(
+    let merge_source_conflicts = merge_value(
         key.clone(),
         source,
         destination,
         flags.source_insert_missing,
     );
-    errors.extend(merge_source_errors);
+    conflicts.extend(merge_source_conflicts);
 
     if let Some(extra) = extra {
-        let merge_extra_errors = merge_value(key, extra, destination, flags.extra_insert_missing);
-        errors.extend(merge_extra_errors);
+        let merge_extra_conflicts =
+            merge_value(key, extra, destination, flags.extra_insert_missing);
+        conflicts.extend(merge_extra_conflicts);
     }
 
-    errors
+    conflicts
 }
 
 pub fn run(
@@ -136,19 +137,19 @@ pub fn run(
     destination_path: &Path,
     extra: Option<YamlValue>,
     flags: &MergeFlags,
-) -> Result<Vec<MergeError>> {
+) -> Result<Vec<MergeConflict>> {
     let source_yaml = std::fs::read_to_string(source_path)?;
     let source: YamlValue = serde_yaml::from_str(&source_yaml)?;
 
     let destination_yaml = std::fs::read_to_string(destination_path)?;
     let mut destination: YamlValue = serde_yaml::from_str(&destination_yaml)?;
 
-    let errors = merge(source, &mut destination, extra, flags);
+    let conflicts = merge(source, &mut destination, extra, flags);
 
     let destination_yaml = serde_yaml::to_string(&destination)?;
     std::fs::write(destination_path, destination_yaml)?;
 
-    Ok(errors)
+    Ok(conflicts)
 }
 
 fn merge_value(
@@ -156,7 +157,7 @@ fn merge_value(
     source: YamlValue,
     destination: &mut YamlValue,
     insert_if_missing: bool,
-) -> Vec<MergeError> {
+) -> Vec<MergeConflict> {
     match (source, destination) {
         (YamlValue::Null, YamlValue::Null) => {}
         (YamlValue::Bool(source_value), YamlValue::Bool(destination_value)) => {
@@ -183,7 +184,7 @@ fn merge_value(
             *destination_value = source_value;
         }
         (source_value, destination_value) => {
-            let mismatch = MergeError::TypeMismatch {
+            let mismatch = MergeConflict::TypeMismatch {
                 key: source_key,
                 source_value,
                 destination_value: destination_value.clone(),
@@ -200,31 +201,31 @@ fn merge_mapping(
     source_mapping: Mapping,
     destination_mapping: &mut Mapping,
     insert_if_missing: bool,
-) -> Vec<MergeError> {
-    let mut errors = Vec::new();
+) -> Vec<MergeConflict> {
+    let mut conflicts = Vec::new();
     for (key, value) in source_mapping {
         let mapping_key = destination_mapping.get_mut(&key);
         let source_mapping_key = source_key.clone().push(key.clone());
 
         if let Some(destination_mapping_value) = mapping_key {
-            let merge_value_errors = merge_value(
+            let merge_value_conflicts = merge_value(
                 source_mapping_key,
                 value,
                 destination_mapping_value,
                 insert_if_missing,
             );
-            errors.extend(merge_value_errors);
+            conflicts.extend(merge_value_conflicts);
         } else if insert_if_missing {
             destination_mapping.insert(key, value);
         } else {
-            let not_found = MergeError::KeyNotFoundInDestination {
+            let not_found = MergeConflict::KeyNotFoundInDestination {
                 key: source_mapping_key,
                 source_value: value,
             };
-            errors.push(not_found);
+            conflicts.push(not_found);
         }
     }
-    errors
+    conflicts
 }
 
 #[cfg(test)]
@@ -284,27 +285,27 @@ mod tests {
 
     #[test]
     fn type_mismatch_displays_key_types_and_values() {
-        let error = MergeError::TypeMismatch {
+        let conflict = MergeConflict::TypeMismatch {
             key: key(&["a", "b"]),
             source_value: yaml("{ c: [1, text] }"),
             destination_value: yaml("1"),
         };
 
         assert_eq!(
-            error.to_string(),
+            conflict.to_string(),
             r#"Type mismatch at 'a.b'. Old config has map ({"c":[1,"text"]}) but new config has number (1). Kept new value."#
         );
     }
 
     #[test]
     fn not_found_displays_key_and_source_value() {
-        let error = MergeError::KeyNotFoundInDestination {
+        let conflict = MergeConflict::KeyNotFoundInDestination {
             key: key(&["a", "b"]),
             source_value: yaml("text"),
         };
 
         assert_eq!(
-            error.to_string(),
+            conflict.to_string(),
             r#"Key 'a.b' not found in new config. Value in old config: "text""#
         );
     }
@@ -315,9 +316,9 @@ mod tests {
         let mut destination = yaml("a: 1");
         let extra = Some(yaml("a: 3"));
 
-        let errors = merge(source, &mut destination, extra, &NO_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(errors.is_empty());
+        assert!(conflicts.is_empty());
         assert_eq!(destination, yaml("a: 3"));
     }
 
@@ -327,11 +328,11 @@ mod tests {
         let mut destination = yaml("a: 1");
         let extra = Some(yaml("c: 3"));
 
-        let errors = merge(source, &mut destination, extra, &SOURCE_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &SOURCE_INSERT);
 
         assert_eq!(
-            errors,
-            vec![MergeError::KeyNotFoundInDestination {
+            conflicts,
+            vec![MergeConflict::KeyNotFoundInDestination {
                 key: key(&["c"]),
                 source_value: yaml("3"),
             }]
@@ -345,11 +346,11 @@ mod tests {
         let mut destination = yaml("a: 1");
         let extra = Some(yaml("c: 3"));
 
-        let errors = merge(source, &mut destination, extra, &EXTRA_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &EXTRA_INSERT);
 
         assert_eq!(
-            errors,
-            vec![MergeError::KeyNotFoundInDestination {
+            conflicts,
+            vec![MergeConflict::KeyNotFoundInDestination {
                 key: key(&["b"]),
                 source_value: yaml("2"),
             }]
@@ -358,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn run_writes_merged_destination_file_and_returns_errors() {
+    fn run_writes_merged_destination_file_and_returns_conflicts() {
         let temp_dir = TempDir::new().unwrap();
         let source_path = temp_dir.path().join("source.yaml");
         let destination_path = temp_dir.path().join("destination.yaml");
@@ -366,11 +367,11 @@ mod tests {
         std::fs::write(&destination_path, "{ a: 1, c: 1 }").unwrap();
         let extra = Some(yaml("c: 3"));
 
-        let errors = run(&source_path, &destination_path, extra, &NO_INSERT).unwrap();
+        let conflicts = run(&source_path, &destination_path, extra, &NO_INSERT).unwrap();
 
         assert_eq!(
-            errors,
-            vec![MergeError::KeyNotFoundInDestination {
+            conflicts,
+            vec![MergeConflict::KeyNotFoundInDestination {
                 key: key(&["b"]),
                 source_value: yaml("2"),
             }]
@@ -399,9 +400,9 @@ mod tests {
         let mut destination = yaml("a: null");
         let extra = None;
 
-        let errors = merge(source, &mut destination, extra, &NO_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(errors.is_empty());
+        assert!(conflicts.is_empty());
         assert_eq!(destination, yaml("a: null"));
     }
 
@@ -411,9 +412,9 @@ mod tests {
         let mut destination = yaml("a: false");
         let extra = None;
 
-        let errors = merge(source, &mut destination, extra, &NO_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(errors.is_empty());
+        assert!(conflicts.is_empty());
         assert_eq!(destination, yaml("a: true"));
     }
 
@@ -423,9 +424,9 @@ mod tests {
         let mut destination = yaml("a: 1");
         let extra = None;
 
-        let errors = merge(source, &mut destination, extra, &NO_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(errors.is_empty());
+        assert!(conflicts.is_empty());
         assert_eq!(destination, yaml("a: 10"));
     }
 
@@ -435,9 +436,9 @@ mod tests {
         let mut destination = yaml("a: old");
         let extra = None;
 
-        let errors = merge(source, &mut destination, extra, &NO_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(errors.is_empty());
+        assert!(conflicts.is_empty());
         assert_eq!(destination, yaml("a: new"));
     }
 
@@ -447,9 +448,9 @@ mod tests {
         let mut destination = yaml("a: [1, 2, 3]");
         let extra = None;
 
-        let errors = merge(source, &mut destination, extra, &NO_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(errors.is_empty());
+        assert!(conflicts.is_empty());
         assert_eq!(destination, yaml("a: [9]"));
     }
 
@@ -459,9 +460,9 @@ mod tests {
         let mut destination = yaml("a: { b: { c: 1, d: 2 }, e: 3 }");
         let extra = None;
 
-        let errors = merge(source, &mut destination, extra, &NO_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(errors.is_empty());
+        assert!(conflicts.is_empty());
         assert_eq!(destination, yaml("a: { b: { c: 10, d: 2 }, e: 3 }"));
     }
 
@@ -471,9 +472,9 @@ mod tests {
         let mut destination = yaml("a: !y 2");
         let extra = None;
 
-        let errors = merge(source, &mut destination, extra, &NO_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(errors.is_empty());
+        assert!(conflicts.is_empty());
         assert_eq!(destination, yaml("a: !x 1"));
     }
 
@@ -483,11 +484,11 @@ mod tests {
         let mut destination = yaml("a: { b: 1 }");
         let extra = None;
 
-        let errors = merge(source, &mut destination, extra, &NO_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
         assert_eq!(
-            errors,
-            vec![MergeError::TypeMismatch {
+            conflicts,
+            vec![MergeConflict::TypeMismatch {
                 key: key(&["a", "b"]),
                 source_value: yaml("text"),
                 destination_value: yaml("1"),
@@ -502,11 +503,11 @@ mod tests {
         let mut destination = yaml("a: 1");
         let extra = None;
 
-        let errors = merge(source, &mut destination, extra, &NO_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
         assert_eq!(
-            errors,
-            vec![MergeError::TypeMismatch {
+            conflicts,
+            vec![MergeConflict::TypeMismatch {
                 key: YamlKey::root(),
                 source_value: yaml("[1]"),
                 destination_value: yaml("a: 1"),
@@ -521,11 +522,11 @@ mod tests {
         let mut destination = yaml("{ a: 1, b: 1 }");
         let extra = None;
 
-        let errors = merge(source, &mut destination, extra, &NO_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
         assert_eq!(
-            errors,
-            vec![MergeError::TypeMismatch {
+            conflicts,
+            vec![MergeConflict::TypeMismatch {
                 key: key(&["a"]),
                 source_value: yaml("text"),
                 destination_value: yaml("1"),
@@ -540,9 +541,9 @@ mod tests {
         let mut destination = yaml("a: {}");
         let extra = None;
 
-        let errors = merge(source, &mut destination, extra, &SOURCE_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &SOURCE_INSERT);
 
-        assert!(errors.is_empty());
+        assert!(conflicts.is_empty());
         assert_eq!(destination, yaml("a: { b: { c: 1 } }"));
     }
 
@@ -552,11 +553,11 @@ mod tests {
         let mut destination = yaml("{ a: 1, b: 1 }");
         let extra = None;
 
-        let errors = merge(source, &mut destination, extra, &SOURCE_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &SOURCE_INSERT);
 
         assert_eq!(
-            errors,
-            vec![MergeError::TypeMismatch {
+            conflicts,
+            vec![MergeConflict::TypeMismatch {
                 key: key(&["b"]),
                 source_value: yaml("text"),
                 destination_value: yaml("1"),
@@ -571,11 +572,11 @@ mod tests {
         let mut destination = yaml("a: {}");
         let extra = None;
 
-        let errors = merge(source, &mut destination, extra, &NO_INSERT);
+        let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
         assert_eq!(
-            errors,
-            vec![MergeError::KeyNotFoundInDestination {
+            conflicts,
+            vec![MergeConflict::KeyNotFoundInDestination {
                 key: key(&["a", "b"]),
                 source_value: yaml("1"),
             }]
