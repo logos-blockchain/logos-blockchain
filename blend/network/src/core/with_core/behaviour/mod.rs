@@ -937,6 +937,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         tracing::debug!(target: LOG_TARGET, "Blacklisting peer {peer_id:?}: {reason:?}.");
         self.blacklist
             .insert_or_extend(peer_id, reason, self.current_round);
+        self.close_every_connection_with(&peer_id);
         self.events
             .push_back(ToSwarm::GenerateEvent(Event::PeerBlacklisted {
                 peer: peer_id,
@@ -945,15 +946,28 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         self.try_wake();
     }
 
-    /// Blacklists the sender and instructs the connection it offended on to
-    /// drop its substreams.
-    fn blacklist_and_close_connection(
-        &mut self,
-        (peer_id, connection_id): (PeerId, ConnectionId),
-        reason: BlacklistReason,
-    ) {
-        self.blacklist_peer(peer_id, reason);
-        self.close_connection((peer_id, connection_id));
+    /// Drops every connection this node holds with a peer: the negotiated one,
+    /// any still shaking hands, and any left over from the previous epoch.
+    fn close_every_connection_with(&mut self, peer_id: &PeerId) {
+        let negotiated = self
+            .negotiated_peers
+            .get(peer_id)
+            .map(|details| details.connection_id);
+        let waiting_upgrade = self
+            .connections_waiting_upgrade
+            .keys()
+            .filter(|(pending_peer, _)| pending_peer == peer_id)
+            .map(|(_, connection_id)| *connection_id)
+            .collect::<Vec<_>>();
+
+        for connection_id in negotiated.into_iter().chain(waiting_upgrade) {
+            self.close_connection((*peer_id, connection_id));
+        }
+
+        if let Some(old_epoch) = &mut self.old_epoch {
+            old_epoch.close_connection_with_peer(peer_id);
+            self.try_wake();
+        }
     }
 
     /// The peers this node currently refuses to exchange Blend messages with.
@@ -1112,14 +1126,10 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                         epoch,
                     }));
             }
-            PoQVerificationOutcome::Failed {
-                sender,
-                connection_id,
-            } => {
-                self.blacklist_and_close_connection(
-                    (sender, connection_id),
-                    BlacklistReason::InvalidProofOfQuota,
-                );
+            // The connection it came in on is not singled out: blacklisting
+            // drops every connection this node holds with the peer.
+            PoQVerificationOutcome::Failed { sender, .. } => {
+                self.blacklist_peer(sender, BlacklistReason::InvalidProofOfQuota);
             }
         }
     }
@@ -1154,7 +1164,8 @@ where
                     }
                 }
                 // The old epoch closes the offending connection itself but does not interact with
-                // the blacklist. We do that here.
+                // the blacklist. We do that here, which also drops whatever
+                // else this node holds with the peer.
                 Err(receive_error) => {
                     self.blacklist_peer(from_peer_id, receive_error.into());
                     return false;
@@ -1175,10 +1186,7 @@ where
             tracing::debug!(target: LOG_TARGET, "Failed to handle message from the current epoch: {receive_error:?}");
             // No matter what error it is, we can attribute it to the sender, so
             // we blacklist it.
-            self.blacklist_and_close_connection(
-                (from_peer_id, from_connection_id),
-                receive_error.into(),
-            );
+            self.blacklist_peer(from_peer_id, receive_error.into());
             // Nevertheless, bytes that did not amount to a message are not a delivery: a
             // neighbour cannot hold its slot by sending garbage.
             return false;
