@@ -2,7 +2,7 @@
 //!
 //! Spec: [Wallet Technical Standard](https://lip.logos.co/blockchain/raw/wallet-technical-standard.html)
 
-use std::sync::LazyLock;
+use std::{fmt, sync::LazyLock};
 
 pub use arbitrary_int::u31;
 use blake2::{
@@ -18,8 +18,11 @@ use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::keys::ZkKey;
 
+mod path;
 #[cfg(test)]
 mod tests;
+
+pub use path::{NoteRole, Path, PathError};
 
 const BLAKE2B_PERSONA_SIZE: usize = 16;
 const MASTER_KEY_PERSONALIZATION: &[u8; BLAKE2B_PERSONA_SIZE] = b"Logos_MasterKGen";
@@ -32,6 +35,29 @@ const HALF_HASH_SIZE: usize = div_exact(HASH_SIZE, 2);
 #[derive(ZeroizeOnDrop)]
 pub struct MasterSeed([u8; 64]);
 
+impl MasterSeed {
+    /// Derives the master key.
+    #[must_use]
+    pub fn to_key(&self) -> MasterKey {
+        MasterKey(ExtendedSecretKey::from_hash(&blake2b512(
+            MASTER_KEY_PERSONALIZATION,
+            &[&self.0],
+        )))
+    }
+}
+
+/// The root of the key hierarchy, from which every leaf is derived.
+#[derive(Clone, ZeroizeOnDrop)]
+pub struct MasterKey(ExtendedSecretKey);
+
+impl MasterKey {
+    /// Derives the key at `path`.
+    #[must_use]
+    pub fn derive_key(&self, path: &Path) -> ExtendedSecretKey {
+        path.derive(self)
+    }
+}
+
 /// A secret key with a chain code, from which hardened child keys are derived.
 #[derive(Clone, ZeroizeOnDrop)]
 pub struct ExtendedSecretKey {
@@ -40,15 +66,8 @@ pub struct ExtendedSecretKey {
 }
 
 impl ExtendedSecretKey {
-    /// Derives the master key from a seed.
-    #[must_use]
-    pub fn from_seed(seed: &MasterSeed) -> Self {
-        Self::from_hash(&blake2b512(MASTER_KEY_PERSONALIZATION, &[&seed.0]))
-    }
-
     /// Derives the hardened child key at `index`.
-    #[must_use]
-    pub fn derive_child(&self, index: HardenedIndex) -> Self {
+    fn derive_child(&self, index: HardenedIndex) -> Self {
         Self::from_hash(&blake2b512(
             CHILD_KEY_PERSONALIZATION,
             &[&self.chain_code, &[0x00], &self.key, &index.to_be_bytes()],
@@ -63,13 +82,6 @@ impl ExtendedSecretKey {
                 .try_into()
                 .expect("Hash half is HALF_HASH_SIZE bytes"),
         }
-    }
-
-    /// Derives the key at `path`, one hardened child per level.
-    #[must_use]
-    pub fn derive_path(&self, path: &Path) -> Self {
-        path.iter()
-            .fold(self.clone(), |key, index| key.derive_child(*index))
     }
 
     /// Converts this key into the [`ZkKey`] used in logos-blockchain.
@@ -89,10 +101,9 @@ impl ExtendedSecretKey {
     }
 }
 
-/// HD path, a sequence of hardened child indices.
-pub type Path = [HardenedIndex];
-
 /// The index of a hardened child key, in the range `[2^31, 2^32)`.
+///
+/// It is displayed in the BIP-32 notation, e.g. `3'` for the child number 3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HardenedIndex(u32);
 
@@ -112,8 +123,20 @@ impl HardenedIndex {
         Self(child_number.value() + Self::OFFSET)
     }
 
+    /// The child number this index was converted from.
+    #[must_use]
+    pub const fn child_number(self) -> u31 {
+        u31::new(self.0 - Self::OFFSET)
+    }
+
     const fn to_be_bytes(self) -> [u8; 4] {
         self.0.to_be_bytes()
+    }
+}
+
+impl fmt::Display for HardenedIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}'", self.child_number())
     }
 }
 
