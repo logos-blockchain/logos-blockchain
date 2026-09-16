@@ -369,7 +369,7 @@ where
         )
         .await;
 
-        let chain_network_api = ChainNetworkServiceApi::<ChainNetwork, RuntimeServiceId>::new(
+        let chain_network_api = ChainNetworkServiceApi::<ChainNetwork>::new(
             self.service_resources_handle
                 .overwatch_handle
                 .relay::<ChainNetwork>()
@@ -707,7 +707,7 @@ where
     /// network.
     async fn apply_and_publish_block_proposal(
         block: Block<Mempool::Item>,
-        chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
+        chain_network_api: &ChainNetworkServiceApi<ChainNetwork>,
         blend_adapter: &BlendAdapter<BlendService>,
     ) {
         if let Err(e) = chain_network_api
