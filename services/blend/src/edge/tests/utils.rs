@@ -49,7 +49,7 @@ use crate::{
 /// The tests that sit through a whole delivery deadline are not slow for it:
 /// they run on a paused clock, which jumps to the next timer the moment every
 /// task is idle.
-pub const TEST_ROUND: NonZeroU64 = NonZeroU64::new(1).unwrap();
+pub const TEST_ROUND_IN_SECONDS: NonZeroU64 = NonZeroU64::new(1).unwrap();
 
 /// `ß_c` for the tests.
 const TEST_BLEND_LAYERS: NonZeroU64 = NonZeroU64::new(1).unwrap();
@@ -192,7 +192,7 @@ pub fn settings(
         abstain_on_failure: false,
         time: TimingSettings {
             rounds_per_epoch: NonZeroU64::new(1).unwrap(),
-            round_duration_in_seconds: TEST_ROUND,
+            round_duration_in_seconds: TEST_ROUND_IN_SECONDS,
             core_handshake_deadline_in_rounds: NonZeroU128::new(2).unwrap(),
             network_absorption_in_rounds: NonZeroU64::new(2).unwrap(),
             rounds_per_observation_window: NonZeroU128::new(1).unwrap(),
