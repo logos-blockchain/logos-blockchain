@@ -9,7 +9,7 @@ use futures::Stream;
 use tokio::time::{Instant, Interval, MissedTickBehavior, interval_at};
 
 /// A round of the Blend clock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Round(u128);
 
 impl Round {
@@ -37,12 +37,6 @@ impl From<u128> for Round {
     }
 }
 
-impl From<Round> for u128 {
-    fn from(round: Round) -> Self {
-        round.0
-    }
-}
-
 impl Display for Round {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -50,7 +44,7 @@ impl Display for Round {
 }
 
 /// A number of rounds, for the windows and deadlines the protocol defines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RoundCount(NonZeroU128);
 
 impl RoundCount {
@@ -62,12 +56,6 @@ impl RoundCount {
     #[must_use]
     pub const fn get(self) -> u128 {
         self.0.get()
-    }
-}
-
-impl From<NonZeroU128> for RoundCount {
-    fn from(rounds: NonZeroU128) -> Self {
-        Self::new(rounds)
     }
 }
 
@@ -97,8 +85,7 @@ impl RoundClock {
     }
 
     /// Starts a clock whose round `0` begins at `origin`.
-    #[must_use]
-    pub fn starting_at(start_time: Instant, round_duration_in_seconds: NonZeroU64) -> Self {
+    fn starting_at(start_time: Instant, round_duration_in_seconds: NonZeroU64) -> Self {
         let round_duration = Duration::from_secs(round_duration_in_seconds.get());
         let mut interval = interval_at(
             start_time

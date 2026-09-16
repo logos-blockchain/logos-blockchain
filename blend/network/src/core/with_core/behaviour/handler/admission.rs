@@ -88,17 +88,13 @@ mod tests {
     const SHARE: NonZeroU64 = NonZeroU64::new(3).unwrap();
     const LIFETIME: RoundCount = RoundCount::new(NonZeroU128::new(2).unwrap());
 
-    fn round(round: u128) -> Round {
-        Round::from(round)
-    }
-
     fn payload(byte: u8) -> OutgoingMessage {
         OutgoingMessage::from_bytes([byte])
     }
 
     #[test]
     fn a_share_is_spent_at_most_once_per_message() {
-        let mut share = RoundShare::new(SHARE, round(0));
+        let mut share = RoundShare::new(SHARE, Round::from(0));
 
         for _ in 0..SHARE.get() {
             assert!(share.try_spend());
@@ -109,27 +105,27 @@ mod tests {
 
     #[test]
     fn a_share_refreshes_once_per_round_however_often_it_is_asked() {
-        let mut share = RoundShare::new(SHARE, round(0));
+        let mut share = RoundShare::new(SHARE, Round::from(0));
         assert!(share.try_spend());
 
         // Being told about the same round again must not refill it.
-        share.refill_for(round(0));
+        share.refill_for(Round::from(0));
         assert!(share.try_spend());
         assert!(share.try_spend());
         assert!(!share.try_spend());
 
-        share.refill_for(round(1));
+        share.refill_for(Round::from(1));
         assert!(share.try_spend());
     }
 
     #[test]
     fn a_skipped_round_refreshes_the_share_exactly_once() {
-        let mut share = RoundShare::new(SHARE, round(0));
+        let mut share = RoundShare::new(SHARE, Round::from(0));
         while share.try_spend() {}
 
         // Ten rounds pass without the share being refreshed. It comes back to
         // one round's worth, not ten.
-        share.refill_for(round(10));
+        share.refill_for(Round::from(10));
 
         for _ in 0..SHARE.get() {
             assert!(share.try_spend());
@@ -139,9 +135,9 @@ mod tests {
 
     #[test]
     fn the_queue_sends_at_most_a_round_s_share() {
-        let mut queue = SendQueue::new(RoundShare::new(SHARE, round(0)), LIFETIME);
+        let mut queue = SendQueue::new(RoundShare::new(SHARE, Round::from(0)), LIFETIME);
         for byte in 0..5 {
-            queue.enqueue(payload(byte), round(0));
+            queue.enqueue(payload(byte), Round::from(0));
         }
 
         for byte in 0..u8::try_from(SHARE.get()).unwrap() {
@@ -152,7 +148,7 @@ mod tests {
         }
         assert!(queue.pop_front().is_none(), "the share is spent");
 
-        queue.enter_round(round(1));
+        queue.enter_round(Round::from(1));
         assert_eq!(
             queue.pop_front().map(|msg| msg.as_ref().to_vec()),
             Some(vec![3])
@@ -161,16 +157,16 @@ mod tests {
 
     #[test]
     fn a_message_that_waits_longer_than_its_lifetime_is_given_up_on() {
-        let mut queue = SendQueue::new(RoundShare::new(SHARE, round(0)), LIFETIME);
-        queue.enqueue(payload(0), round(0));
+        let mut queue = SendQueue::new(RoundShare::new(SHARE, Round::from(0)), LIFETIME);
+        queue.enqueue(payload(0), Round::from(0));
 
         // Still within the lifetime: the message is kept.
-        assert_eq!(queue.enter_round(round(2)), 0);
-        queue.enqueue(payload(1), round(2));
+        assert_eq!(queue.enter_round(Round::from(2)), 0);
+        queue.enqueue(payload(1), Round::from(2));
 
         // Past it: the first message is dropped, the second is not, since it
         // joined the queue later.
-        assert_eq!(queue.enter_round(round(3)), 1);
+        assert_eq!(queue.enter_round(Round::from(3)), 1);
         assert_eq!(
             queue.pop_front().map(|msg| msg.as_ref().to_vec()),
             Some(vec![1])

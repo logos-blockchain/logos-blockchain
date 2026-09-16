@@ -35,8 +35,8 @@ pub struct PeerLivenessMap {
 struct Observation {
     /// How many rounds the node has held a connection with this identity.
     connection_duration_in_rounds: u128,
-    /// The value of `connected_rounds` when this neighbour last delivered a
-    /// message, if it has delivered one at all.
+    /// How many rounds this identity had been connected for when it last
+    /// delivered a message, if it has delivered one at all.
     connection_maturity_at_last_delivery: Option<u128>,
 }
 

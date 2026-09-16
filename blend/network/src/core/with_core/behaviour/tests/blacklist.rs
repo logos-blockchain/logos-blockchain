@@ -12,7 +12,9 @@ use test_log::test;
 use tokio::{select, time::timeout};
 
 use crate::core::{
-    tests::utils::{PROTOCOL_NAME, TestEncapsulatedMessage, TestSwarm, undecodable_message_bytes},
+    tests::utils::{
+        PROTOCOL_NAME, TestEncapsulatedMessage, TestSwarm, drive_for, undecodable_message_bytes,
+    },
     with_core::behaviour::{
         Event,
         blacklist::BlacklistReason,
@@ -54,24 +56,6 @@ async fn provoke_blacklisting(
             }
         }
     }
-}
-
-/// Drives both swarms for `duration`, so connections close and rounds elapse
-/// while nothing in particular is being waited for.
-async fn drive_for(
-    one: &mut TestSwarm<TestBehaviour>,
-    other: &mut TestSwarm<TestBehaviour>,
-    duration: Duration,
-) {
-    let _: Result<(), _> = timeout(duration, async {
-        loop {
-            select! {
-                _ = one.select_next_some() => {}
-                _ = other.select_next_some() => {}
-            }
-        }
-    })
-    .await;
 }
 
 /// Drives both swarms until the listener upgrades an inbound connection with
