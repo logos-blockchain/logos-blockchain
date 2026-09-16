@@ -214,7 +214,7 @@ pub async fn get_processed_blocks_event_stream<Transaction, Service, RuntimeServ
     super::DynError,
 >
 where
-    Transaction: Send + Sync + 'static,
+    Transaction: Send + 'static,
     Service: CryptarchiaServiceData<Tx = Transaction>,
     RuntimeServiceId: Debug + Sync + Display + AsServiceId<Service>,
 {
