@@ -411,6 +411,15 @@ where
             );
             return;
         }
+        // The peer may have been blacklisted while this retry was sleeping.
+        if self.is_peer_blacklisted(&peer_id) {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "Dropping retry for peer {peer_id:?}: it has been blacklisted since the retry was scheduled. Dialing another peer instead."
+            );
+            self.check_and_dial_new_peers_except(&dial_attempt.failed_peers);
+            return;
+        }
         tracing::debug!(
             target: LOG_TARGET,
             "Executing backoff retry for peer {peer_id:?} (attempt {}).",
@@ -788,6 +797,15 @@ impl<Rng, ProofsVerifier> BlendSwarm<Rng, ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
+    /// Whether the behaviour currently refuses to deal with the peer.
+    fn is_peer_blacklisted(&self, peer_id: &PeerId) -> bool {
+        self.swarm
+            .behaviour()
+            .blend
+            .with_core()
+            .is_peer_blacklisted(peer_id)
+    }
+
     fn log_blend_peer_negotiation_failure(
         epoch: Epoch,
         peer_id: PeerId,
@@ -887,6 +905,13 @@ where
             tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new epoch has cleared the map of pending dials.");
             return EpochDialAttempt::PreviousEpoch;
         };
+        // Blacklisting a peer closes the connection this node was still shaking
+        // hands on, which surfaces here as a dial failure. Do not retry with that peer
+        // anymore.
+        if self.is_peer_blacklisted(&peer_id) {
+            tracing::debug!(target: LOG_TARGET, "Not retrying blacklisted peer {peer_id:?}. Dialing another peer instead.");
+            return EpochDialAttempt::OngoingEpoch(Some(dial_attempt));
+        }
         let new_attempt_number = dial_attempt.attempt_number.checked_add(1).unwrap();
         if new_attempt_number > self.max_dial_attempts_per_connection {
             tracing::debug!(target: LOG_TARGET, "Maximum attempts ({}) reached for peer {peer_id:?}. Re-dialing stopped.", self.max_dial_attempts_per_connection);
