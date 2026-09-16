@@ -38,10 +38,6 @@ fn core_node(round_duration_in_seconds: NonZeroU64) -> TestSwarm<TestBehaviour> 
     })
 }
 
-/// Drives both swarms for `duration`, as a running node's swarm is driven
-/// continuously. The accept share is refilled from the behaviour's `poll`, so a
-/// test that only slept would be leaning on `poll` happening to run before the
-/// next connection is offered.
 /// Drives both swarms until the core node closes the edge node's connection.
 async fn wait_until_closed(
     edge: &mut TestSwarm<StreamBehaviour>,
