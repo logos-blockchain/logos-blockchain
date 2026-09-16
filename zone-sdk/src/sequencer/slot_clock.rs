@@ -55,23 +55,30 @@ impl SlotClock {
     pub(super) fn instant_of(&self, slot: Slot) -> Option<Instant> {
         let now = Instant::now();
         let target = slot_to_u64(slot);
-        let from_anchor = self.last_observed_at.checked_add(duration_for_slots(
-            target.saturating_sub(slot_to_u64(self.last_observed_slot)),
-            self.slot_duration,
-        ));
+
+        let slots_from_anchor = target.saturating_sub(slot_to_u64(self.last_observed_slot));
+        let from_anchor = self
+            .last_observed_at
+            .checked_add(duration_for_slots(slots_from_anchor, self.slot_duration));
+
         let from_chain_start = self
             .chain_start_time
             .checked_add(duration_for_slots(target, self.slot_duration))
-            .map(|at| {
-                at.duration_since(SystemTime::now())
-                    .map_or(now, |until| now + until)
-            });
-        [from_anchor, from_chain_start]
+            .map(|at| system_time_to_instant(at, now));
+
+        // `current_slot` takes the later of its two slot estimates, so the
+        // slot is reached at the earlier of the two instants.
+        from_anchor
             .into_iter()
-            .flatten()
+            .chain(from_chain_start)
             .min()
             .map(|at| at.max(now))
     }
+}
+
+fn system_time_to_instant(at: SystemTime, now: Instant) -> Instant {
+    at.duration_since(SystemTime::now())
+        .map_or(now, |until| now + until)
 }
 
 fn duration_for_slots(slots: u64, slot_duration: Duration) -> Duration {
