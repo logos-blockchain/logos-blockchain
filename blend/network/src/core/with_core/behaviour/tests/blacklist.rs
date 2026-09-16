@@ -249,17 +249,9 @@ fn core_and_raw_peer() -> (TestSwarm<StreamBehaviour>, TestSwarm<TestBehaviour>)
     (offender, listener)
 }
 
-/// A message that stops part way through is a framing violation, and the spec
-/// makes it a blacklisting: the transport authenticates every byte, so the
-/// bytes cannot have been truncated on the way.
-///
-/// This became attributable once closing stopped producing the same signal.
-/// Until a node finished the message already on the wire before dropping its
-/// substreams, a neighbour closed mid-send handed the far end half a message
-/// through no fault of its own — and the protocol asks nodes to close, at every
-/// epoch boundary among other times.
+/// A message that stops part way through ends the connection and nothing more.
 #[test(tokio::test)]
-async fn a_message_that_stops_part_way_through_blacklists_the_sender() {
+async fn a_message_that_stops_part_way_through_blacklists_nobody() {
     let (mut offender, mut listener) = core_and_raw_peer();
     listener.listen().with_memory_addr_external().await;
     let (mut stream, _incoming) = open_raw_core_stream(&mut offender, &mut listener).await;
@@ -271,7 +263,7 @@ async fn a_message_that_stops_part_way_through_blacklists_the_sender() {
 
     assert_eq!(
         wait_for_blacklisting(&mut offender, &mut listener, Duration::from_secs(5)).await,
-        Some(BlacklistReason::StreamFramingViolation)
+        None
     );
 }
 

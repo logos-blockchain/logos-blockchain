@@ -1,9 +1,5 @@
 use std::{io, num::NonZeroUsize};
 
-use ::core::{
-    error,
-    fmt::{self, Display, Formatter},
-};
 use futures::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
 use libp2p::Stream;
 
@@ -19,36 +15,7 @@ pub async fn send_msg(mut stream: Stream, msg: OutgoingMessage) -> io::Result<St
     Ok(stream)
 }
 
-/// A message that stopped part way through, or a stream that failed while one
-/// was being read.
-///
-/// This is the spec's "failure of the authenticated stream", which it defines
-/// as a violation of the framing of the stream. The transport authenticates
-/// every byte it carries, so bytes cannot be truncated or mangled on the way:
-/// a message that stops part way through stopped because the neighbour stopped
-/// it there.
-#[derive(Debug)]
-pub struct FramingViolationError(io::Error);
-
-impl Display for FramingViolationError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "The stream broke the connection's framing: {}", self.0)
-    }
-}
-
-impl error::Error for FramingViolationError {}
-
-impl From<FramingViolationError> for io::Error {
-    fn from(error: FramingViolationError) -> Self {
-        error.0
-    }
-}
-
-/// End a stream cleanly, so that the neighbour reading it sees the end of the
-/// stream rather than a reset.
-///
-/// That distinction is the whole of what makes a framing violation
-/// attributable.
+/// End a stream cleanly, once whatever was on it has been written.
 pub(crate) async fn flush_and_close_stream(mut stream: Stream) {
     drop(stream.flush().await);
     drop(stream.close().await);
@@ -56,34 +23,25 @@ pub(crate) async fn flush_and_close_stream(mut stream: Stream) {
 
 /// Read one message of `message_size` bytes from the stream.
 ///
-/// Returns `Ok(None)` when the stream ends before any byte of the to-be-read
-/// message has arrived, which signals a graceful shutdown by the remote node,
-/// for e.g., peering degree enforcement or epoch rotations.
+/// Every message is the same size, fixed by the number of encapsulation
+/// layers, so there is nothing to frame and nothing to agree on: either the
+/// whole message arrives or the stream is over.
+///
+/// An `Err` is the stream being over, however it came about — the neighbour
+/// closing it between messages, the neighbour stopping part way through one,
+/// or the connection going away under the read. The reader cannot tell those
+/// apart and does not need to: none of them delivered a message, and it is
+/// deliveries that keep a neighbour its place.
 pub(crate) async fn recv_msg<Reader>(
     mut stream: Reader,
     message_size: NonZeroUsize,
-) -> Result<Option<(Reader, IncomingMessage)>, FramingViolationError>
+) -> io::Result<(Reader, IncomingMessage)>
 where
     Reader: AsyncRead + Unpin,
 {
     let mut buf = vec![0; message_size.get()].into_boxed_slice();
-    let (first_byte, rest) = buf.split_at_mut(1);
-
-    // If the stream is dropped before any bytes is sent, then it is considered a
-    // graceful shutdown and no action is taken.
-    let Ok(1..) = stream.read(first_byte).await else {
-        return Ok(None);
-    };
-
-    // Past the first byte a message is under way. This node finishes one it has
-    // started before it closes, so a message that stops here stopped because
-    // the neighbour decided to, and is considered an attributable framing
-    // violation.
-    stream
-        .read_exact(rest)
-        .await
-        .map_err(FramingViolationError)?;
-    Ok(Some((stream, buf.into())))
+    stream.read_exact(&mut buf).await?;
+    Ok((stream, buf.into()))
 }
 
 #[cfg(test)]
@@ -101,10 +59,39 @@ mod tests {
 
     const MESSAGE_SIZE: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
-    /// A stream that hands over `delivers` bytes and then fails or ends.
+    /// The error kinds a dying connection reaches a blocked reader as. Quinn
+    /// reports a lost connection as `NotConnected`; the others are what the
+    /// same event looks like through other transports and platforms.
+    const TRANSPORT_FAILURES: [io::ErrorKind; 4] = [
+        io::ErrorKind::NotConnected,
+        io::ErrorKind::ConnectionReset,
+        io::ErrorKind::ConnectionAborted,
+        io::ErrorKind::BrokenPipe,
+    ];
+
+    /// A stream that hands over `delivers` bytes and then ends, or fails with
+    /// `fails_with`.
     struct Stops {
         delivers: usize,
-        with_failure: bool,
+        fails_with: Option<io::ErrorKind>,
+    }
+
+    impl Stops {
+        /// Ends cleanly, which is what a neighbour finishing its half of the
+        /// stream looks like from here.
+        const fn then_ends(delivers: usize) -> Self {
+            Self {
+                delivers,
+                fails_with: None,
+            }
+        }
+
+        const fn then_fails(delivers: usize, kind: io::ErrorKind) -> Self {
+            Self {
+                delivers,
+                fails_with: Some(kind),
+            }
+        }
     }
 
     impl AsyncRead for Stops {
@@ -114,13 +101,10 @@ mod tests {
             buf: &mut [u8],
         ) -> Poll<io::Result<usize>> {
             if self.delivers == 0 {
-                return Poll::Ready(if self.with_failure {
-                    // What a stream reset looks like from the reading end, and
-                    // so what an ungraceful close looks like.
-                    Err(io::Error::from(io::ErrorKind::ConnectionReset))
-                } else {
-                    Ok(0)
-                });
+                return Poll::Ready(
+                    self.fails_with
+                        .map_or(Ok(0), |kind| Err(io::Error::from(kind))),
+                );
             }
             let handed_over = self.delivers.min(buf.len());
             self.delivers -= handed_over;
@@ -128,66 +112,52 @@ mod tests {
         }
     }
 
-    /// Before any byte of a message has arrived there is nothing framed to
-    /// violate, so neither the end of the stream nor a failure on it is a
-    /// fault. Closing is something the protocol asks nodes to do — at every
-    /// epoch rotation among other times — and a node that read its neighbour's
-    /// close as a fault would exclude it for `W`, both ways, across the network
-    /// at once.
+    /// A stream that ends before a message begins is how a connection ends
+    /// when the protocol asks for it, at an epoch rotation among other times.
+    /// It reads as the stream being over, which is all the reader needs to
+    /// know.
     #[tokio::test]
-    async fn a_stream_that_ends_before_a_message_begins_is_not_a_fault() {
-        for with_failure in [false, true] {
-            let outcome = recv_msg(
-                Stops {
-                    delivers: 0,
-                    with_failure,
-                },
-                MESSAGE_SIZE,
-            )
-            .await;
+    async fn a_stream_that_ends_before_a_message_begins_is_over() {
+        assert!(recv_msg(Stops::then_ends(0), MESSAGE_SIZE).await.is_err());
 
+        for kind in TRANSPORT_FAILURES {
             assert!(
-                matches!(outcome, Ok(None)),
-                "a stream ending before a message began was read as a fault \
-                 (with_failure: {with_failure})"
+                recv_msg(Stops::then_fails(0, kind), MESSAGE_SIZE)
+                    .await
+                    .is_err(),
+                "a {kind:?} before a message began did not end the stream"
             );
         }
     }
 
-    /// Past the first byte a message is under way, and a node finishes one it
-    /// has started before closing — so a message that stops here stopped
-    /// because the neighbour stopped it there.
+    /// The same, part way through a message. The neighbour may have stopped
+    /// there or the connection may have gone away under the read; from here
+    /// they are one event, and neither delivered a message.
     #[tokio::test]
-    async fn a_message_that_stops_part_way_through_is_a_fault() {
-        for with_failure in [false, true] {
-            let outcome = recv_msg(
-                Stops {
-                    delivers: MESSAGE_SIZE.get() - 1,
-                    with_failure,
-                },
-                MESSAGE_SIZE,
-            )
-            .await;
+    async fn a_message_that_stops_part_way_through_ends_the_stream() {
+        assert!(
+            recv_msg(Stops::then_ends(MESSAGE_SIZE.get() - 1), MESSAGE_SIZE)
+                .await
+                .is_err()
+        );
 
+        for kind in TRANSPORT_FAILURES {
             assert!(
-                outcome.is_err(),
-                "a message that stopped part way through was not attributed to its sender \
-                 (with_failure: {with_failure})"
+                recv_msg(
+                    Stops::then_fails(MESSAGE_SIZE.get() - 1, kind),
+                    MESSAGE_SIZE
+                )
+                .await
+                .is_err(),
+                "a {kind:?} part way through a message was read as a whole message"
             );
         }
     }
 
     #[tokio::test]
     async fn a_whole_message_is_handed_over() {
-        let outcome = recv_msg(
-            Stops {
-                delivers: MESSAGE_SIZE.get(),
-                with_failure: false,
-            },
-            MESSAGE_SIZE,
-        )
-        .await;
+        let outcome = recv_msg(Stops::then_ends(MESSAGE_SIZE.get()), MESSAGE_SIZE).await;
 
-        assert!(matches!(outcome, Ok(Some(_))));
+        assert!(outcome.is_ok());
     }
 }
