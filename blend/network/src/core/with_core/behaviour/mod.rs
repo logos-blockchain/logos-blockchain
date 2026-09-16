@@ -108,10 +108,9 @@ fn handshake_upgrade_timeout(
 
     let deadline_in_rounds = u64::try_from(handshake_deadline.get()).unwrap_or(u64::MAX);
     Duration::from_secs(
-        round_duration_in_seconds
-            .get()
-            .saturating_mul(deadline_in_rounds)
-            .saturating_add(ROUNDS_BEYOND_THE_DEADLINE),
+        deadline_in_rounds
+            .saturating_add(ROUNDS_BEYOND_THE_DEADLINE)
+            .saturating_mul(round_duration_in_seconds.get()),
     )
 }
 
