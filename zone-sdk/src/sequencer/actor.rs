@@ -115,16 +115,6 @@ where
         let became_ready = self.maybe_signal_ready();
         let (channel_update, finalized, mined) = self.apply_block_result(result);
 
-        // Failed posts (still `!posted`) get retried by the turn-change
-        // handler and the `resubmit_interval` self-heal tick. Don't queue
-        // unconditionally on every block.
-        //
-        // Refresh the channel view so `our_turn_to_write` re-evaluates
-        // against the just-advanced slot clock — the turn-change handler
-        // inside relies on this to fire `resubmit_pending` when our turn
-        // arrives.
-        self.publish_channel_view();
-
         self.queue_block_status_events(&channel_update, &finalized, &mined);
 
         let block_event = self
@@ -134,21 +124,29 @@ where
                 channel_update,
                 finalized,
             });
+        if let Some(ev) = block_event {
+            self.buffered_events.push_back(ev);
+        }
+
+        // Failed posts (still `!posted`) get retried by the turn-change
+        // handler and the `resubmit_interval` self-heal tick. Don't queue
+        // unconditionally on every block.
+        //
+        // Refresh the channel view so `our_turn_to_write` re-evaluates
+        // against the just-advanced slot clock — the turn-change handler
+        // inside relies on this to fire `resubmit_pending` when our turn
+        // arrives. Runs after the block event is queued so a turn change
+        // is reported after the block that caused it.
+        self.publish_channel_view();
 
         // Re-announce readiness after a mid-life reconnect: with funding
         // configured, publishes fail fast with `Unavailable` while
         // disconnected, so consumers need a positive "you can publish again"
         // signal once a live block confirms the connection.
         if became_ready || (reconnected && self.is_ready()) {
-            if let Some(ev) = block_event {
-                self.buffered_events.push_back(ev);
-            }
             return Some(self.emit_now(Event::Ready));
         }
 
-        if let Some(ev) = block_event {
-            self.buffered_events.push_back(ev);
-        }
         self.buffered_events.pop_front()
     }
 
@@ -304,7 +302,8 @@ where
             self.resubmit_pending();
         }
         if let Some(notification) = emitted {
-            drop(self.event_tx.send(Event::TurnNotification { notification }));
+            self.buffered_events
+                .push_back(Event::TurnNotification { notification });
         }
     }
 
@@ -821,6 +820,10 @@ mod tests {
             sequencer.next_event().await,
             Event::BlocksProcessed { .. }
         ));
+        assert!(matches!(
+            sequencer.next_event().await,
+            Event::TurnNotification { .. }
+        ));
 
         while calls_rx.try_recv().is_ok() {}
         gate_tx.send(false).unwrap();
@@ -902,6 +905,10 @@ mod tests {
         assert!(matches!(
             sequencer.next_event().await,
             Event::BlocksProcessed { .. }
+        ));
+        assert!(matches!(
+            sequencer.next_event().await,
+            Event::TurnNotification { .. }
         ));
 
         while calls_rx.try_recv().is_ok() {}
@@ -1056,6 +1063,70 @@ mod tests {
                 .any(|op| matches!(op, OpRef::ChannelInscribe(_))),
             "posted tx should carry the inscription published during reconnect"
         );
+    }
+
+    /// `TurnNotification` reaches `next_event` callers, not only the events
+    /// broadcast, and follows the block that changed the turn.
+    #[tokio::test]
+    async fn next_event_yields_turn_notifications() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let (up_tx, up_rx) = watch::channel(true);
+        let (mut node, _posted_txs) = MockNode::with_posted_channel();
+        node.up = Some(up_rx);
+        let config = SequencerConfig {
+            reconnect_delay: std::time::Duration::from_millis(20),
+            resubmit_interval: std::time::Duration::from_millis(20),
+            ..SequencerConfig::new(funding_config())
+        };
+        let mut sequencer =
+            ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
+        let mut events_rx = sequencer.subscribe_events();
+
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+
+        // Single-key channel: the block that made us ready also made it our
+        // turn. `BlocksProcessed` comes first, then the turn.
+        let first = sequencer.next_event().await;
+        assert!(
+            matches!(first, Event::BlocksProcessed { .. }),
+            "block event should precede the turn change, got {first:?}"
+        );
+        let second = sequencer.next_event().await;
+        let Event::TurnNotification { notification } = second else {
+            panic!("expected TurnNotification after the block event, got {second:?}");
+        };
+        assert!(notification.our_turn_to_write);
+
+        // The broadcast still carries it.
+        let mut broadcast_turn = None;
+        while let Ok(event) = events_rx.try_recv() {
+            if let Event::TurnNotification { notification } = event {
+                broadcast_turn = Some(notification);
+            }
+        }
+        assert!(
+            broadcast_turn.is_some_and(|n| n.our_turn_to_write),
+            "turn notification must also reach subscribe_events"
+        );
+
+        // A stream drop clears the turn; that change is returned too.
+        up_tx.send(false).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Event::TurnNotification { notification } = sequencer.next_event().await
+                    && !notification.our_turn_to_write
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("stream drop must yield a not-our-turn notification via next_event");
     }
 
     /// A `submit_signed_tx` bundle chains subsequent publishes off its last
