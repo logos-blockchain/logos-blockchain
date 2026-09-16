@@ -1158,14 +1158,17 @@ where
             &self.proofs_verifier,
         ) {
             tracing::debug!(target: LOG_TARGET, "Failed to handle message from the current epoch: {receive_error:?}");
+            // No matter what error it is, we can attribute it to the sender, so
+            // we blacklist it.
             self.blacklist_and_close_connection(
                 (from_peer_id, from_connection_id),
                 receive_error.into(),
             );
+            // Nevertheless, bytes that did not amount to a message are not a delivery: a
+            // neighbour cannot hold its slot by sending garbage.
+            return false;
         }
 
-        // No matter what error it is, we can attribute it to the sender, so we
-        // blacklist it.
         true
     }
 }
