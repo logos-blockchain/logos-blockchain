@@ -446,8 +446,12 @@ where
     // is actually disconnected.
     fn handle_blacklisted_peer(&self, peer_id: PeerId, reason: BlacklistReason) {
         tracing::debug!(target: LOG_TARGET, "Blacklisted peer {peer_id:?} for reason {reason:?}.");
-        metrics::core_peer_blocked(
-            reason,
+        metrics::core_peer_blacklisted(reason);
+        self.report_blacklist_size();
+    }
+
+    fn report_blacklist_size(&self) {
+        metrics::core_blacklist_size(
             self.swarm
                 .behaviour()
                 .blend
@@ -556,6 +560,9 @@ where
         reason = "TODO: address this in a dedicated refactor"
     )]
     fn handle_event(&mut self, event: SwarmEvent<BlendBehaviourEvent<ProofsVerifier>>) {
+        // Blacklist entries expire silently, so we re-report the blacklist size on new
+        // connections.
+        self.report_blacklist_size();
         match event {
             SwarmEvent::ConnectionEstablished { peer_id, .. }
             | SwarmEvent::ConnectionClosed { peer_id, .. } => {
