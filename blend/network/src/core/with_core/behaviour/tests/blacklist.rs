@@ -3,9 +3,13 @@ use core::{
     time::Duration,
 };
 
+use either::Either;
 use futures::{AsyncWriteExt as _, StreamExt as _};
 use lb_libp2p::SwarmEvent;
-use libp2p::{Multiaddr, Stream};
+use libp2p::{
+    Multiaddr, PeerId, Stream,
+    swarm::{ConnectionId, NetworkBehaviour as _, ToSwarm},
+};
 use libp2p_stream::{Behaviour as StreamBehaviour, IncomingStreams};
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
@@ -16,8 +20,10 @@ use crate::core::{
         PROTOCOL_NAME, TestEncapsulatedMessage, TestSwarm, drive_for, undecodable_message_bytes,
     },
     with_core::behaviour::{
-        Event,
+        ConnectionDirection, ConnectionUpgradeFailureReason, Event, PendingUpgrade,
+        RemotePeerConnectionDetails,
         blacklist::BlacklistReason,
+        handler::ToBehaviour,
         tests::utils::{
             BehaviourBuilder, SwarmExt as _, TestBehaviour, new_nodes_with_empty_address,
         },
@@ -348,4 +354,117 @@ async fn a_connection_closed_by_the_protocol_blacklists_nobody() {
     if let Ok(blacklisted) = blacklisted {
         panic!("Closing a connection must not be a fault, but {blacklisted}.");
     }
+}
+
+/// Asserts that the one thing the behaviour has queued for the swarm is a
+/// refusal of the dial to `peer`, which is what stops the swarm tracking it and
+/// sends it looking for another peer.
+fn assert_dial_refused(behaviour: &TestBehaviour, peer: PeerId) {
+    let failures = behaviour
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            ToSwarm::GenerateEvent(Event::OutboundConnectionUpgradeFailed { peer, reason }) => {
+                Some((*peer, reason))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let [(failed_peer, reason)] = failures[..] else {
+        panic!("the swarm was told nothing about the dial it is still tracking: {failures:?}");
+    };
+    assert_eq!(failed_peer, peer);
+    assert!(
+        matches!(reason, ConnectionUpgradeFailureReason::Refused),
+        "the refusal must not read as a transport failure, which the swarm answers with a retry ladder toward the same peer: {reason:?}"
+    );
+}
+
+/// Blacklisting asks every connection with the peer to close, but a handshake
+/// that finished just before cannot be recalled: the `FullyNegotiated` for it
+/// is already on its way to the behaviour. Acting on it would file the peer as
+/// a neighbour — holding a degree slot, earning liveness credit, and reported
+/// to the swarm as a dial that worked — moments after this node decided it
+/// wants nothing to do with it.
+#[test(tokio::test)]
+async fn a_handshake_that_finishes_after_its_peer_is_blacklisted_is_refused() {
+    let (mut identities, _) = new_nodes_with_empty_address(1);
+    let mut behaviour = BehaviourBuilder::new(&identities.next().unwrap()).build();
+
+    let peer = PeerId::random();
+    let connection = ConnectionId::new_unchecked(1);
+    behaviour.connections_waiting_upgrade.insert(
+        (peer, connection),
+        PendingUpgrade {
+            direction: ConnectionDirection::Outgoing,
+            started_at: behaviour.current_round,
+        },
+    );
+    behaviour.blacklist_peer(peer, BlacklistReason::InvalidProofOfQuota);
+    behaviour.events.clear();
+
+    behaviour.on_connection_handler_event(
+        peer,
+        connection,
+        Either::Left(ToBehaviour::FullyNegotiated),
+    );
+
+    assert!(
+        !behaviour.negotiated_peers.contains_key(&peer),
+        "a blacklisted peer was taken on as a neighbour"
+    );
+    assert_dial_refused(&behaviour, peer);
+}
+
+/// The same race, but with a connection to the peer already in place. Here the
+/// stale handshake is not merely admitted: the reverse-direction tie-break
+/// hands it the record of the connection that is on its way out, so the peer
+/// this node just blacklisted ends up holding a live slot with no close
+/// pending against it.
+#[test(tokio::test)]
+async fn a_blacklisted_peer_does_not_take_over_the_connection_being_closed() {
+    // `new_nodes_with_empty_address` orders identities by peer id, and every
+    // identity is ed25519, so the two ids share a length and a prefix and read
+    // in the same order as the base58 the tie-break compares. Taking the higher
+    // one as the local node is what makes the tie-break hand the new connection
+    // the record, which is the outcome worth guarding against.
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let peer = nodes[0].id;
+    let mut behaviour = BehaviourBuilder::new(&identities.nth(1).unwrap()).build();
+    assert!(
+        behaviour.local_peer_id.to_base58() > peer.to_base58(),
+        "the tie-break would not have replaced the connection, so the test would prove nothing"
+    );
+
+    let established = ConnectionId::new_unchecked(1);
+    let negotiating = ConnectionId::new_unchecked(2);
+    behaviour.negotiated_peers.insert(
+        peer,
+        RemotePeerConnectionDetails {
+            direction: ConnectionDirection::Incoming,
+            connection_id: established,
+        },
+    );
+    behaviour.connections_waiting_upgrade.insert(
+        (peer, negotiating),
+        PendingUpgrade {
+            direction: ConnectionDirection::Outgoing,
+            started_at: behaviour.current_round,
+        },
+    );
+    behaviour.blacklist_peer(peer, BlacklistReason::InvalidProofOfQuota);
+    behaviour.events.clear();
+
+    behaviour.on_connection_handler_event(
+        peer,
+        negotiating,
+        Either::Left(ToBehaviour::FullyNegotiated),
+    );
+
+    assert_eq!(
+        behaviour.negotiated_peers[&peer].connection_id, established,
+        "the blacklisted peer was handed the record of the connection being closed, so nothing closes it any more"
+    );
+    assert_dial_refused(&behaviour, peer);
 }

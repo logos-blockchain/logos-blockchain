@@ -253,9 +253,10 @@ pub enum ConnectionUpgradeFailureReason {
     /// A failure happened during the connection upgrade that is not covered by
     /// any of the above cases.
     ConnectionFailure,
-    /// This node declined to speak Blend on the connection: the peer is not a
-    /// core node of the current epoch, or the network is too small for this
-    /// node to peer at all. Dialing the same peer again does not fix either.
+    /// This node declined to speak Blend on the connection: the peer is
+    /// blacklisted, or it is not a core node of the current epoch, or the
+    /// network is too small for this node to peer at all. Dialing the same
+    /// peer again does not fix any of them.
     Refused,
 }
 
@@ -716,6 +717,26 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             return;
         };
 
+        // A handshake that finished just as the peer was blacklisted must not be
+        // taken up. The blacklisting already asked every connection with the peer
+        // to close, but this one was past that point, so it has to be refused
+        // here.
+        if let Some(reason) = self.blacklisted_reason(&peer_id) {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "Refusing connection {connection_id:?} negotiated with blacklisted peer {peer_id:?}: {reason:?}."
+            );
+            self.close_connection((peer_id, connection_id));
+            self.notify_about_connection_upgrade_failure(
+                peer_id,
+                ConnectionUpgradeFailure {
+                    reason: ConnectionUpgradeFailureReason::Refused,
+                    direction: new_connection_direction,
+                },
+            );
+            return;
+        }
+
         if self.negotiated_peers.contains_key(&peer_id) {
             self.handle_negotiated_connection_for_existing_peer(
                 (peer_id, connection_id),
@@ -1055,6 +1076,12 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     /// Why this node currently refuses to deal with the peer, if it does.
     fn blacklisted_reason(&self, peer: &PeerId) -> Option<BlacklistReason> {
         self.blacklist.reason(peer, self.current_round)
+    }
+
+    /// Whether this node currently refuses to deal with the peer.
+    #[must_use]
+    pub fn is_peer_blacklisted(&self, peer: &PeerId) -> bool {
+        self.blacklisted_reason(peer).is_some()
     }
 
     #[must_use]
