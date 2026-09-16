@@ -18,7 +18,7 @@ use libp2p::{
 };
 
 use crate::{
-    FramingViolationError, OutgoingMessage,
+    OutgoingMessage,
     core::{admission::RoundShare, with_core::behaviour::handler::admission::SendQueue},
     flush_and_close_stream,
     message::IncomingMessage,
@@ -63,8 +63,7 @@ pub struct ConnectionHandler {
 }
 
 type MsgSendFuture = BoxFuture<'static, Result<Stream, io::Error>>;
-type MsgRecvFuture =
-    BoxFuture<'static, Result<Option<(Stream, IncomingMessage)>, FramingViolationError>>;
+type MsgRecvFuture = BoxFuture<'static, io::Result<(Stream, IncomingMessage)>>;
 type StreamCloseFuture = BoxFuture<'static, ()>;
 
 enum InboundSubstreamState {
@@ -211,13 +210,8 @@ pub enum ToBehaviour {
     FullyNegotiated,
     /// A message has been received from the connection.
     Message(IncomingMessage),
-    /// The inbound stream broke the connection's framing. Attributable to the
-    /// neighbour: the transport authenticates every byte it carries, and this
-    /// node never leaves a message half-written, not even while closing.
-    /// The inbound/outbound streams to the peer are closed proactively.
-    InboundFramingViolation(io::Error),
-    /// An IO error from the connection that is nobody's fault: this node's own
-    /// send failed.
+    /// An IO error from the connection, which is nobody's fault: this node's
+    /// own send failed.
     /// The inbound/outbound streams to the peer are closed proactively.
     IOError(io::Error),
 }
@@ -296,7 +290,7 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                 }
                 Some(InboundSubstreamState::Receiving(mut msg_recv_fut)) => {
                     match msg_recv_fut.poll_unpin(cx) {
-                        Poll::Ready(Ok(Some((stream, msg)))) => {
+                        Poll::Ready(Ok((stream, msg))) => {
                             tracing::trace!(
                                 target: LOG_TARGET,
                                 "Received message from inbound stream {:?}; notifying behaviour",
@@ -307,27 +301,20 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                                 ToBehaviour::Message(msg),
                             ));
                         }
-                        // The neighbour ended the stream between messages,
-                        // which is how a connection ends when the protocol asks
-                        // for it.
-                        Poll::Ready(Ok(None)) => {
+                        // The inbound stream is over: the neighbour closed it
+                        // between messages, which is how a connection ends when
+                        // the protocol asks for it; or it stopped part way
+                        // through one; or the connection went away under the
+                        // read. They arrive here as one event and need one
+                        // response, since none of them delivered a message and
+                        // it is deliveries that keep a neighbour its place.
+                        Poll::Ready(Err(error)) => {
                             tracing::trace!(
                                 target: LOG_TARGET,
-                                "Peer closed inbound stream {:?} between messages. Dropping both inbound/outbound substreams",
+                                "Inbound stream {:?} ended: {error}. Dropping both inbound/outbound substreams",
                                 self.connection_details
                             );
                             self.close_substreams();
-                        }
-                        // A message that stops part way through. This node
-                        // finishes what it has already started before closing,
-                        // so the only way a neighbour is left holding half a
-                        // message is if the neighbour left it that way.
-                        Poll::Ready(Err(FramingViolationError(error))) => {
-                            tracing::debug!(target: LOG_TARGET, "Inbound stream {:?} broke the connection's framing: {error}. Dropping both inbound/outbound substreams", self.connection_details);
-                            self.close_substreams();
-                            return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
-                                ToBehaviour::InboundFramingViolation(error),
-                            ));
                         }
                         Poll::Pending => {
                             self.inbound_substream =
