@@ -193,6 +193,7 @@ pub fn settings(
         time: TimingSettings {
             rounds_per_epoch: NonZeroU64::new(1).unwrap(),
             round_duration_in_seconds: TEST_ROUND,
+            core_handshake_deadline_in_rounds: NonZeroU128::new(2).unwrap(),
             network_absorption_in_rounds: NonZeroU64::new(2).unwrap(),
             rounds_per_observation_window: NonZeroU128::new(1).unwrap(),
             epoch_transition_period: Duration::from_secs(1),

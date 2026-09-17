@@ -349,6 +349,10 @@ async fn outgoing_attempt_with_max_negotiated_peering_degree() {
     }
 }
 
+/// One free slot, two dials racing for it.
+///
+/// A handshake in progress holds a degree slot, so the second dial is refused
+/// before it is ever upgraded.
 #[test(tokio::test)]
 async fn concurrent_outgoing_connections() {
     let (mut identities, nodes) = new_nodes_with_empty_address(3);
@@ -373,48 +377,39 @@ async fn concurrent_outgoing_connections() {
     dialing_swarm.dial(listening_address_1).unwrap();
     dialing_swarm.dial(listening_address_2).unwrap();
 
-    let mut listener_1_dropped = false;
-    let mut listener_1_notified = false;
-    let mut listener_2_dropped = false;
-    let mut listener_2_notified = false;
+    let mut upgraded = 0u8;
+    let mut disconnections_reported = 0u8;
     loop {
         select! {
-            // We make sure that after 11 seconds one of the two connections is dropped (the swarm used in the tests uses a default timeout of 10s).
-            // We cannot prevent both connections from being upgraded, but we can test that one of the two is dropped once the dialer realized it is above the maximum peering degree.
-            // We do not know which one beforehand because they are started in parallel.
+            // Long enough for the refused connection to be closed as idle (the
+            // swarm used in these tests has a ten second timeout), so the
+            // negative below is observed and not merely unobserved.
             () = sleep(Duration::from_secs(11)) => {
                 break;
             },
             dialing_swarm_event = dialing_swarm.select_next_some() => {
-                // We check that the dialing swarm never generates a `PeerDisconnected` event because it knows the dropped connection is meant to be ignored.
                 if let SwarmEvent::Behaviour(Event::PeerDisconnected(_)) = dialing_swarm_event {
                     panic!("Should not generate a `PeerDisconnected` event for a peer that went above our peering degree.");
                 }
             }
             listener_swarm_1_event = listening_swarm_1.select_next_some() => {
                 match listener_swarm_1_event {
-                    SwarmEvent::ConnectionClosed { endpoint, peer_id, .. } => {
-                        assert!(!listener_2_dropped);
-                        assert_eq!(peer_id, *dialing_swarm.local_peer_id());
-                        assert!(endpoint.is_listener());
-                        listener_1_dropped = true;
+                    SwarmEvent::Behaviour(Event::InboundConnectionUpgradeSucceeded(peer_id)) if peer_id == *dialing_swarm.local_peer_id() => {
+                        upgraded += 1;
                     }
                     SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id)) if peer_id == *dialing_swarm.local_peer_id() => {
-                        listener_1_notified = true;
+                        disconnections_reported += 1;
                     }
                     _ => {}
                 }
             }
             listener_swarm_2_event = listening_swarm_2.select_next_some() => {
                 match listener_swarm_2_event {
-                    SwarmEvent::ConnectionClosed { endpoint, peer_id, .. } => {
-                        assert!(!listener_1_dropped);
-                        assert_eq!(peer_id, *dialing_swarm.local_peer_id());
-                        assert!(endpoint.is_listener());
-                        listener_2_dropped = true;
+                    SwarmEvent::Behaviour(Event::InboundConnectionUpgradeSucceeded(peer_id)) if peer_id == *dialing_swarm.local_peer_id() => {
+                        upgraded += 1;
                     }
                     SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id)) if peer_id == *dialing_swarm.local_peer_id() => {
-                        listener_2_notified = true;
+                        disconnections_reported += 1;
                     }
                     _ => {}
                 }
@@ -422,10 +417,14 @@ async fn concurrent_outgoing_connections() {
         }
     }
 
-    // We check whether the listener whose connection was dropped was also notified
-    // by its behaviour that the dialed peer got disconnected.
-    assert!(
-        (listener_1_dropped && listener_1_notified) || (listener_2_dropped && listener_2_notified)
+    assert_eq!(
+        upgraded, 1,
+        "the one free slot must go to exactly one of the two dials"
+    );
+    assert_eq!(
+        disconnections_reported, 0,
+        "and the other must be refused before it is upgraded, so no peer on the \
+         far end ever counts it as a neighbour it then loses"
     );
 }
 

@@ -1,6 +1,7 @@
 use core::{
     num::{NonZeroU64, NonZeroUsize},
     task::{Context, Poll, Waker},
+    time::Duration,
 };
 use std::{collections::VecDeque, io};
 
@@ -48,6 +49,16 @@ pub struct ConnectionHandler {
     /// How many bytes one message occupies on this connection, which is fixed
     /// by the number of encapsulation layers and so the same for every message.
     message_size: NonZeroUsize,
+    /// How long libp2p gives a substream upgrade before giving up on it.
+    ///
+    /// Sits outside `T_H` on purpose: the behaviour's own sweep is what should
+    /// abandon a stalled handshake, because it is the behaviour that holds the
+    /// degree slot and that can say why the handshake was given up on. This is
+    /// the outer bound for when that does not happen, and it is derived from
+    /// `T_H` rather than left at libp2p's defaults, which is tied to
+    /// nothing in this protocol and would fire instead if we were to increase
+    /// `T_H` above 10 seconds.
+    upgrade_timeout: Duration,
 }
 
 type MsgSendFuture = BoxFuture<'static, Result<Stream, io::Error>>;
@@ -84,6 +95,7 @@ impl ConnectionHandler {
         share_per_round: NonZeroU64,
         send_deadline: RoundCount,
         message_size: NonZeroUsize,
+        upgrade_timeout: Duration,
     ) -> Self {
         tracing::trace!(target: LOG_TARGET, "Initializing core->core connection handler for connection {connection_details:?}.");
         let current_round = round_clock.current_round();
@@ -102,6 +114,7 @@ impl ConnectionHandler {
             connection_details,
             upgrade_notified: false,
             message_size,
+            upgrade_timeout,
         }
     }
 
@@ -189,6 +202,7 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
 
     fn listen_protocol(&self) -> SubstreamProtocol<Self::InboundProtocol, Self::InboundOpenInfo> {
         SubstreamProtocol::new(ReadyUpgrade::new(self.protocol_name.clone()), ())
+            .with_timeout(self.upgrade_timeout)
     }
 
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
@@ -347,7 +361,8 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                         protocol: SubstreamProtocol::new(
                             ReadyUpgrade::new(self.protocol_name.clone()),
                             (),
-                        ),
+                        )
+                        .with_timeout(self.upgrade_timeout),
                     });
                 }
             }
