@@ -197,30 +197,8 @@ impl<Tx: Serialize> StorageApi<Tx> {
 
 impl<Tx> StorageApi<Tx>
 where
-    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
+    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash>,
 {
-    pub async fn get_block(&self, id: &HeaderId) -> Option<Block<Tx>> {
-        let bytes = self
-            .optional_request(|sender| StorageMsg::get_block_request(*id, sender))
-            .await?;
-        Block::try_from(bytes).ok()
-    }
-
-    /// Read and verify a block, returning storage and decoding errors.
-    pub async fn try_get_block(&self, id: &HeaderId) -> Result<Option<Block<Tx>>, DynError> {
-        self.get_block_bytes(id)
-            .await?
-            .map(Block::try_from)
-            .transpose()
-            .map_err(Into::into)
-    }
-
-    /// Decode a stored block without the additional `into_verified` pass.
-    pub async fn load_block(&self, id: &HeaderId) -> Result<Option<Block<Tx>>, DynError> {
-        self.load(Bytes::copy_from_slice(&<[u8; 32]>::from(*id)))
-            .await
-    }
-
     pub async fn store_block_data(
         &self,
         id: HeaderId,
@@ -243,6 +221,33 @@ where
         })
         .await?
         .map_err(Into::into)
+    }
+}
+
+impl<Tx> StorageApi<Tx>
+where
+    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
+{
+    pub async fn get_block(&self, id: &HeaderId) -> Option<Block<Tx>> {
+        let bytes = self
+            .optional_request(|sender| StorageMsg::get_block_request(*id, sender))
+            .await?;
+        Block::try_from(bytes).ok()
+    }
+
+    /// Read and verify a block, returning storage and decoding errors.
+    pub async fn try_get_block(&self, id: &HeaderId) -> Result<Option<Block<Tx>>, DynError> {
+        self.get_block_bytes(id)
+            .await?
+            .map(Block::try_from)
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    /// Decode a stored block without the additional `into_verified` pass.
+    pub async fn load_block(&self, id: &HeaderId) -> Result<Option<Block<Tx>>, DynError> {
+        self.load(Bytes::copy_from_slice(&<[u8; 32]>::from(*id)))
+            .await
     }
 
     pub async fn remove_block(&self, id: HeaderId) -> Result<Option<Block<Tx>>, DynError> {

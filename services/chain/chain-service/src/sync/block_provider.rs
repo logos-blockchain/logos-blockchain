@@ -56,12 +56,16 @@ enum BlockLocation {
     Storage,
 }
 
-pub struct BlockProvider<Tx>
-where
-    Tx: Clone + Eq,
-{
+pub struct BlockProvider<Tx> {
     storage: StorageApi<Tx>,
     config: BlockProviderConfig,
+}
+
+impl<Tx> BlockProvider<Tx> {
+    #[must_use]
+    pub const fn new(storage: StorageApi<Tx>, config: BlockProviderConfig) -> Self {
+        Self { storage, config }
+    }
 }
 
 impl<Tx> BlockProvider<Tx>
@@ -69,11 +73,6 @@ where
     Tx: DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
     Tx: Serialize + Clone + Eq + Send + Sync + 'static,
 {
-    #[must_use]
-    pub const fn new(storage: StorageApi<Tx>, config: BlockProviderConfig) -> Self {
-        Self { storage, config }
-    }
-
     /// Creates a block stream that leads from one of the [`known_blocks`]
     /// to the [`target_block`], and sends it to the [`reply_sender`].
     pub async fn send_blocks(
