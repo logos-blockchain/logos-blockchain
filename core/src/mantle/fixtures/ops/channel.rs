@@ -1,5 +1,5 @@
+use lb_binary_codec::canonical::codec_fixtures;
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
-use lb_serialization::canonical::codec_fixtures;
 
 use crate::{
     mantle::{

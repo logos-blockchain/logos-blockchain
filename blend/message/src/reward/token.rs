@@ -2,9 +2,9 @@ use blake2::{
     Blake2bVar,
     digest::{Update as _, VariableOutput as _},
 };
+use lb_binary_codec::bincode::SerializeOp as _;
 use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use lb_serialization::bincode::SerializeOp as _;
 use serde::{Deserialize, Serialize};
 
 use crate::reward::epoch::EpochRandomness;

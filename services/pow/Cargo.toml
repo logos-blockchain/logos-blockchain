@@ -20,6 +20,7 @@ tokio        = { features = ["sync", "time"], workspace = true }
 tokio-stream = { workspace = true }
 tracing      = { workspace = true }
 
+lb-binary-codec               = { workspace = true }
 lb-blend-service              = { workspace = true }
 lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
@@ -27,7 +28,6 @@ lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-ledger                     = { workspace = true }
 lb-log-targets                = { workspace = true }
-lb-serialization              = { workspace = true }
 lb-services-utils             = { workspace = true }
 lb-storage-service            = { workspace = true }
 lb-time-service               = { workspace = true }

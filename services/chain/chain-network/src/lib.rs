@@ -84,7 +84,7 @@ pub enum Error {
     #[error(transparent)]
     Cryptarchia(#[from] lb_chain_service::api::ApiError),
     #[error("Serialization error: {0}")]
-    Serialisation(#[from] lb_serialization::bincode::Error),
+    Serialisation(#[from] lb_binary_codec::bincode::Error),
     #[error("Invalid block: {0}")]
     InvalidBlock(String),
     #[error("Header is not valid on its own: {0}")]
@@ -1188,6 +1188,7 @@ mod tests {
     };
 
     use futures::stream;
+    use lb_binary_codec::canonical::BinaryDecodeExt as _;
     use lb_core::{
         block::UncleHeaders,
         mantle::{
@@ -1199,7 +1200,6 @@ mod tests {
     use lb_cryptarchia_sync::GetTipResponse;
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
     use lb_network_service::{backends::mock::Mock, message::ChainSyncEvent};
-    use lb_serialization::canonical::BinaryDecodeExt as _;
     use lb_tx_service::TxsWithCommonPrefix;
     use overwatch::services::relay::OutboundRelay;
 

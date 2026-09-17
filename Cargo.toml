@@ -29,6 +29,8 @@ strip    = "none"    # Don't strip symbols to allow for better profiling results
 [workspace]
 # Make sure any excluded crates are still clipped in our CI. Also, make sure they use the same Clippy and rustc lints we specify in this file down below.
 members = [
+  "binary-codec",
+  "binary-codec/macros",
   "blend/core",
   "blend/crypto",
   "blend/membership",
@@ -57,8 +59,6 @@ members = [
   "nodes/node/binary",
   "nodes/node/http-client",
   "nodes/version",
-  "serialization",
-  "serialization/macros",
   "services/api",
   "services/blend",
   "services/chain/broadcast-service",
@@ -107,6 +107,8 @@ common-http-client                 = { default-features = false, package = "logo
 hasher                             = { default-features = false, version = "0.1.4" }
 jf-poseidon2                       = { default-features = false, git = "https://github.com/EspressoSystems/jellyfish.git", rev = "8d80230358e900f8d63765a937f63f4978ca1daa" }
 lb-api-service                     = { default-features = false, package = "logos-blockchain-api-service", path = "./services/api" }
+lb-binary-codec                    = { default-features = false, package = "logos-blockchain-binary-codec", path = "./binary-codec" }
+lb-binary-codec-macros             = { default-features = false, package = "logos-blockchain-binary-codec-macros", path = "./binary-codec/macros" }
 lb-blake2btree                     = { default-features = false, package = "logos-blockchain-blake2btree", path = "merkle/blake2btree" }
 lb-blend                           = { default-features = false, package = "logos-blockchain-blend", path = "./blend/core" }
 lb-blend-crypto                    = { default-features = false, package = "logos-blockchain-blend-crypto", path = "./blend/crypto" }
@@ -149,8 +151,6 @@ lb-poq                             = { default-features = false, package = "logo
 lb-poseidon2                       = { default-features = false, package = "logos-blockchain-poseidon2", path = "./zk/poseidon2" }
 lb-pow-service                     = { default-features = false, package = "logos-blockchain-pow-service", path = "./services/pow" }
 lb-sdp-service                     = { default-features = false, package = "logos-blockchain-sdp-service", path = "./services/sdp" }
-lb-serialization                   = { default-features = false, package = "logos-blockchain-serialization", path = "./serialization" }
-lb-serialization-macros            = { default-features = false, package = "logos-blockchain-serialization-macros", path = "./serialization/macros" }
 lb-services-utils                  = { default-features = false, package = "logos-blockchain-services-utils", path = "./services/utils" }
 lb-storage-service                 = { default-features = false, package = "logos-blockchain-storage-service", path = "./services/storage" }
 lb-system-sig-service              = { default-features = false, package = "logos-blockchain-system-sig-service", path = "./services/system-sig" }

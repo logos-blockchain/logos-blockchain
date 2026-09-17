@@ -1,6 +1,6 @@
+use lb_binary_codec::canonical::BinaryCodec;
 use lb_cryptarchia_engine::{MAX_UNCLES, Slot, UncleSlots};
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_serialization::canonical::BinaryCodec;
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 

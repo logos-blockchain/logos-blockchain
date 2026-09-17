@@ -1,7 +1,7 @@
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
+use lb_binary_codec::{bincode::BoundedSerializeOp, canonical::BinaryCodec};
 use lb_groth16::Fr;
-use lb_serialization::{bincode::BoundedSerializeOp, canonical::BinaryCodec};
 
 use crate::{
     crypto::Hash,
@@ -160,7 +160,7 @@ impl From<TxHash> for TxHashView {
 
 #[cfg(test)]
 mod tests {
-    use lb_serialization::bincode::{BoundedSerializeOp as _, SerializeOp as _};
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp as _};
 
     use crate::mantle::{
         TxHash,

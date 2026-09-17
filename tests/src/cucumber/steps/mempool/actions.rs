@@ -1,5 +1,6 @@
 use std::{collections::BTreeSet, time::Duration};
 
+use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_core::mantle::{
     SignedOps, TxHash,
     ledger::verification_mode::StandardMode,
@@ -7,7 +8,6 @@ use lb_core::mantle::{
     transactions::{OpProofs, states::Preverified},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_serialization::bincode::DeserializeOp as _;
 use lb_storage_service::{
     backends::rocksdb::RocksBackendSettings,
     recovery::{load_recovery_data, recovery_key},

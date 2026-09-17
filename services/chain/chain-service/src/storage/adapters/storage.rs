@@ -6,6 +6,7 @@ use std::{
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _};
+use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::{
     block::Block,
     events::Events,
@@ -14,7 +15,6 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Slot;
 use lb_log_targets::chain;
-use lb_serialization::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_storage_service::{
     StorageMsg, StorageService, api::chain::StorageChainApi, backends::StorageBackend,
 };

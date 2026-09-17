@@ -1,4 +1,5 @@
 use futures::Stream;
+use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::block::MAX_BLOCK_TRANSACTIONS_SIZE;
 use lb_log_targets::mempool;
 use lb_network_service::{
@@ -6,7 +7,6 @@ use lb_network_service::{
     backends::libp2p::{Command, Libp2p, Message, PubSubCommand, TopicHash},
     message::NetworkMsg,
 };
-use lb_serialization::bincode::{DeserializeOp as _, SerializeOp as _};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio_stream::StreamExt as _;
@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn transaction_gossipsub_bound_accounts_for_the_bincode_envelope() {
         let transaction = SignedOps::<Preverified, StandardMode>::empty();
-        let bytes = <SignedOps<Preverified, StandardMode> as lb_serialization::bincode::SerializeOp>::to_bytes(&transaction).unwrap();
+        let bytes = <SignedOps<Preverified, StandardMode> as lb_binary_codec::bincode::SerializeOp>::to_bytes(&transaction).unwrap();
 
         assert_eq!(bytes.len(), transaction.storage_size() + size_of::<u64>());
         assert_eq!(

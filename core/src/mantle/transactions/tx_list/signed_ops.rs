@@ -1,4 +1,4 @@
-use lb_serialization::canonical::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::bounded::BoundedError;
 
 #[cfg(feature = "test-utils")]
@@ -285,7 +285,7 @@ mod mantle_spec {
     //! there rather than from [`Ops`], which stays bare.
     //!
     //! The binary arm carries none of this:
-    //! [`BinaryEncode`](lb_serialization::canonical::BinaryEncode) writes a
+    //! [`BinaryEncode`](lb_binary_codec::canonical::BinaryEncode) writes a
     //! single count covering both columns, so position alone identifies
     //! them.
     //!
@@ -293,7 +293,7 @@ mod mantle_spec {
     //! [count][ops...][proofs...]
     //! ```
 
-    use lb_serialization::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
+    use lb_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     use crate::mantle::{

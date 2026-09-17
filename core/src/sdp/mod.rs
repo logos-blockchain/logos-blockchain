@@ -9,13 +9,13 @@ use std::{collections::HashMap, hash::Hash};
 
 use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
-use lb_cryptarchia_engine::Epoch;
-use lb_groth16::fr_to_bytes;
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
-use lb_serialization::{
+use lb_binary_codec::{
     bincode::{self, BoundedSerializeOp, DeserializeOp as _, SerializeOp as _},
     canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
 };
+use lb_cryptarchia_engine::Epoch;
+use lb_groth16::fr_to_bytes;
+use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
 use serde::{Deserialize, Serialize};
@@ -618,10 +618,10 @@ impl BinaryDecode for ActivityMetadata {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp as _};
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
-    use lb_serialization::bincode::{BoundedSerializeOp as _, SerializeOp as _};
     use multiaddr::Multiaddr;
 
     use crate::sdp::{

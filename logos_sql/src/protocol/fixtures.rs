@@ -1,6 +1,6 @@
 //! Well-known examples that pin the protocol's binary representation.
 
-use lb_serialization::canonical::codec_fixtures;
+use lb_binary_codec::canonical::codec_fixtures;
 use rusqlite::types::Value;
 
 use super::{

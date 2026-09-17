@@ -5,7 +5,7 @@
 //! and network paths. They remain separate contracts even when a type happens
 //! to have identical bytes under both encodings.
 
-extern crate self as lb_serialization;
+extern crate self as lb_binary_codec;
 
 pub mod bincode;
 pub mod canonical;

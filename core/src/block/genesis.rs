@@ -1287,9 +1287,9 @@ impl GenesisBlockBuilder<WithGenesisTx> {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::canonical::BinaryEncode as _;
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
-    use lb_serialization::canonical::BinaryEncode as _;
     use num_bigint::BigUint;
 
     use super::*;

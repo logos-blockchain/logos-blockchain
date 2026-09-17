@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 
+use lb_binary_codec::bincode::{BoundedSerializeOp, UpperBoundedVec};
 use lb_core::{
     block::{BlockTransactions, MAX_BLOCK_TRANSACTIONS_SIZE},
     header::{HEADER_BINCODE_SIZE, HeaderId},
 };
 use lb_cryptarchia_engine::MAX_UNCLES;
-use lb_serialization::bincode::{BoundedSerializeOp, UpperBoundedVec};
 use serde::{Deserialize, Deserializer, Serialize, de::Visitor};
 
 use crate::{BlocksUnavailableReason, SerialisedBlock, libp2p::provider::MAX_ADDITIONAL_BLOCKS};
@@ -173,10 +173,8 @@ impl BoundedSerializeOp for DownloadBlocksResponse {
 mod tests {
     use std::collections::HashSet;
 
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, DeserializeOp as _, SerializeOp as _};
     use lb_core::header::HeaderId;
-    use lb_serialization::bincode::{
-        BoundedSerializeOp as _, DeserializeOp as _, SerializeOp as _,
-    };
 
     use super::{
         DownloadBlocksRequest, DownloadBlocksResponse, KnownBlocks,

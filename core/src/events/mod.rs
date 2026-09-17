@@ -1,6 +1,6 @@
 use bytes::Bytes;
+use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_serialization::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
@@ -158,7 +158,7 @@ pub enum HeaderEvent {
 }
 
 impl TryFrom<Bytes> for Events {
-    type Error = lb_serialization::bincode::Error;
+    type Error = lb_binary_codec::bincode::Error;
 
     fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
         Self::from_bytes(&bytes)
@@ -166,7 +166,7 @@ impl TryFrom<Bytes> for Events {
 }
 
 impl TryFrom<Events> for Bytes {
-    type Error = lb_serialization::bincode::Error;
+    type Error = lb_binary_codec::bincode::Error;
 
     fn try_from(events: Events) -> Result<Self, Self::Error> {
         events.to_bytes()

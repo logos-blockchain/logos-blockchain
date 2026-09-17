@@ -1,5 +1,5 @@
+use lb_binary_codec::canonical::codec_fixtures;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_serialization::canonical::codec_fixtures;
 use num_bigint::BigUint;
 
 use crate::mantle::ledger::{Inputs, Note, NoteId, Outputs};

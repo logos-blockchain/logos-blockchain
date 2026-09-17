@@ -2,11 +2,11 @@ use core::fmt::Debug;
 use std::sync::LazyLock;
 
 use ark_ff::{AdditiveGroup as _, PrimeField as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_log_targets::proofs;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
-use lb_serialization::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_utxotree::MerklePath;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

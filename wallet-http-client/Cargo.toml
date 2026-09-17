@@ -14,9 +14,9 @@ workspace = true
 
 [dependencies]
 hex                           = { workspace = true }
+lb-binary-codec               = { workspace = true }
 lb-common-http-client         = { workspace = true }
 lb-core                       = { workspace = true }
 lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-lb-serialization              = { workspace = true }
 url                           = { workspace = true }

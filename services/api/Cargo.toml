@@ -16,6 +16,7 @@ workspace = true
 async-trait                   = { workspace = true }
 bytes                         = { workspace = true }
 futures                       = { workspace = true }
+lb-binary-codec               = { workspace = true }
 lb-blend-service              = { workspace = true }
 lb-chain-broadcast-service    = { workspace = true }
 lb-chain-leader-service       = { workspace = true }
@@ -28,7 +29,6 @@ lb-log-targets                = { workspace = true }
 lb-network-service            = { features = ["openapi"], workspace = true }
 lb-pow-service                = { workspace = true }
 lb-sdp-service                = { workspace = true }
-lb-serialization              = { workspace = true }
 lb-storage-service            = { features = ["rocksdb-backend"], workspace = true }
 lb-time-service               = { workspace = true }
 lb-tx-service                 = { features = ["openapi"], workspace = true }

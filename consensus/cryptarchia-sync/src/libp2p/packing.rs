@@ -1,7 +1,7 @@
 use std::io;
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-use lb_serialization::bincode::{self, BoundedBytes, BoundedSerializeOp, DeserializeOp as _};
+use lb_binary_codec::bincode::{self, BoundedBytes, BoundedSerializeOp, DeserializeOp as _};
 use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
 use serde::de::DeserializeOwned;
 use thiserror::Error;

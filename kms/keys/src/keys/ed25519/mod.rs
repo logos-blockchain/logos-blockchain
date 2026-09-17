@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use bytes::Bytes;
 use ed25519_dalek::SigningKey;
-use lb_serialization::canonical::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use rand_core::CryptoRngCore;
 use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;

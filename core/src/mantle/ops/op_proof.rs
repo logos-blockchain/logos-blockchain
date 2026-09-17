@@ -1,5 +1,5 @@
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use lb_serialization::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -211,9 +211,9 @@ pub mod placeholders {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::canonical::BinaryEncode as _;
     use lb_groth16::{COMPRESSED_PROOF_SIZE, CompressedGroth16Proof};
     use lb_key_management_system_keys::keys::ZkPublicKey;
-    use lb_serialization::canonical::BinaryEncode as _;
     use num_bigint::BigUint;
 
     use crate::{

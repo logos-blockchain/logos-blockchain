@@ -1,4 +1,4 @@
-use lb_serialization::canonical::codec_fixtures;
+use lb_binary_codec::canonical::codec_fixtures;
 
 use crate::mantle::transactions::hash::{TxHash, TxHashPrefix};
 

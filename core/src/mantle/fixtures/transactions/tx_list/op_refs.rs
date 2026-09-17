@@ -1,8 +1,8 @@
 use std::sync::LazyLock;
 
 use ark_ff::AdditiveGroup as _;
+use lb_binary_codec::canonical::codec_fixtures;
 use lb_groth16::Fr;
-use lb_serialization::canonical::codec_fixtures;
 
 use crate::mantle::{
     NoteId, OpRef, ledger::Outputs, ops::transfer::TransferOp, transactions::OpRefs,

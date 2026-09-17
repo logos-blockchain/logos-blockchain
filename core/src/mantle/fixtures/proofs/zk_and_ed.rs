@@ -1,6 +1,6 @@
+use lb_binary_codec::canonical::codec_fixtures;
 use lb_groth16::CompressedGroth16Proof;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use lb_serialization::canonical::codec_fixtures;
 
 use crate::mantle::ops::ZkAndEd25519Proof;
 

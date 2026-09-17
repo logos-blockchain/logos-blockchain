@@ -125,13 +125,13 @@ mod tests {
         sync::Arc,
     };
 
+    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
     use lb_ledger::{
         config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
-    use lb_serialization::bincode::{DeserializeOp as _, SerializeOp as _};
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
     use super::*;

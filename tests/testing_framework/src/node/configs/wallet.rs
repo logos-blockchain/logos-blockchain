@@ -1,8 +1,8 @@
 use std::{collections::HashSet, num::NonZeroUsize};
 
 use hex::ToHex as _;
+use lb_binary_codec::bincode::SerializeOp as _;
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
-use lb_serialization::bincode::SerializeOp as _;
 use num_bigint::BigUint;
 use rand::Rng as _;
 use thiserror::Error;

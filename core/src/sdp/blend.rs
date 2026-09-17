@@ -1,8 +1,8 @@
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_blend_proofs::{quota::ProofOfQuota, selection::ProofOfSelection};
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use lb_serialization::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use serde::{Deserialize, Serialize};
 
 use crate::header::HeaderId;
@@ -85,12 +85,12 @@ impl BinaryDecode for ActivityProof {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _, DecodeError};
     use lb_blend_proofs::{
         quota::{ProofOfQuota, VerifiedProofOfQuota},
         selection::{ProofOfSelection, VerifiedProofOfSelection},
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
-    use lb_serialization::canonical::{BinaryDecodeExt as _, BinaryEncode as _, DecodeError};
 
     use crate::sdp::blend::{ActivityProof, BLEND_ACTIVE_METADATA_VERSION_BYTE};
 

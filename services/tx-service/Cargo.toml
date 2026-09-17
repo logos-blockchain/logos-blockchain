@@ -23,10 +23,10 @@ workspace = true
 async-trait        = { workspace = true }
 futures            = { workspace = true }
 indexmap           = { features = ["serde", "std"], workspace = true }
+lb-binary-codec    = { workspace = true }
 lb-core            = { workspace = true }
 lb-log-targets     = { workspace = true }
 lb-network-service = { workspace = true }
-lb-serialization   = { workspace = true }
 lb-services-utils  = { workspace = true }
 lb-storage-service = { workspace = true }
 lb-tracing         = { workspace = true }

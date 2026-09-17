@@ -25,7 +25,7 @@ pub use fixtures::{
     assert_codec_fixtures_decode_only, assert_codec_fixtures_decode_only_with,
     assert_codec_fixtures_encode_only, assert_codec_fixtures_with, decode_fixture_hex,
 };
-pub use lb_serialization_macros::{BinaryCodec, codec_fixtures};
+pub use lb_binary_codec_macros::{BinaryCodec, codec_fixtures};
 
 /// Sealed marker that gates [`CodecExamples`] to the blessed macro path.
 ///

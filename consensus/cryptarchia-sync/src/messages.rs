@@ -1,7 +1,7 @@
 use bytes::Bytes;
+use lb_binary_codec::bincode::{BoundedSerializeOp, UpperBoundedVec};
 use lb_core::header::HeaderId;
 use lb_cryptarchia_engine::Slot;
-use lb_serialization::bincode::{BoundedSerializeOp, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 
 const BINCODE_ENUM_DISCRIMINANT_SIZE: usize = size_of::<u32>();
@@ -40,7 +40,7 @@ impl BoundedSerializeOp for GetTipResponse {
 
 #[cfg(test)]
 mod tests {
-    use lb_serialization::bincode::{DeserializeOp as _, SerializeOp as _};
+    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 
     use super::*;
 

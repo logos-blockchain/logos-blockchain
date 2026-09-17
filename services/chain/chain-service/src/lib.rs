@@ -106,7 +106,7 @@ pub enum Error {
     #[error("Consensus error: {0}")]
     Consensus(#[from] lb_cryptarchia_engine::Error<HeaderId>),
     #[error("Serialization error: {0}")]
-    Serialisation(#[from] lb_serialization::bincode::Error),
+    Serialisation(#[from] lb_binary_codec::bincode::Error),
     #[error("Invalid block: {0}")]
     InvalidBlock(String),
     #[error("Storage error: {0}")]

@@ -1,10 +1,10 @@
 use std::num::NonZeroU64;
 
 use ark_ff::Zero as _;
+use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Fr, fr_from_mod_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_serialization::canonical::{BinaryCodec, BinaryEncode as _};
 use rpds::HashTrieMapSync;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

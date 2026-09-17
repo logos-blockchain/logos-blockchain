@@ -1,5 +1,5 @@
+use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
 use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
-use lb_serialization::canonical::{BinaryCodec, BinaryEncode as _};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

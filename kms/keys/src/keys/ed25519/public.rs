@@ -1,7 +1,7 @@
 use core::fmt::{self, Debug, Formatter};
 
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SignatureError, Verifier as _, VerifyingKey};
-use lb_serialization::bincode::BoundedSerializeOp;
+use lb_binary_codec::bincode::BoundedSerializeOp;
 use lb_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 
@@ -102,7 +102,7 @@ impl AsRef<[u8]> for PublicKey {
 
 #[cfg(test)]
 mod tests {
-    use lb_serialization::bincode::{BoundedSerializeOp as _, SerializeOp};
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp};
 
     use super::PublicKey;
 

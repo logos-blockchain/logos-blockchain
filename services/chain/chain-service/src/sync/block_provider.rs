@@ -596,6 +596,7 @@ where
 mod tests {
     use std::{collections::BTreeMap, num::NonZero};
 
+    use lb_binary_codec::bincode::DeserializeOp as _;
     use lb_core::{
         block::{BlockTransactions, UncleHeaders},
         crypto::ZkHasher,
@@ -611,7 +612,6 @@ mod tests {
     use lb_cryptarchia_engine::{Config, UncleSlots};
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
-    use lb_serialization::bincode::DeserializeOp as _;
     use lb_storage_service::{
         StorageService,
         backends::rocksdb::{RocksBackend, RocksBackendSettings},

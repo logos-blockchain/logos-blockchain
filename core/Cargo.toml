@@ -19,6 +19,7 @@ bincode                       = { workspace = true }
 blake2                        = { workspace = true }
 bytes                         = { workspace = true }
 hex                           = { features = ["alloc"], workspace = true }
+lb-binary-codec               = { workspace = true }
 lb-blend-proofs               = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
@@ -28,7 +29,6 @@ lb-mmr                        = { workspace = true }
 lb-poc                        = { workspace = true }
 lb-pol                        = { workspace = true }
 lb-poseidon2                  = { workspace = true }
-lb-serialization              = { workspace = true }
 lb-utils                      = { workspace = true }
 lb-utxotree                   = { workspace = true }
 lb-zksign                     = { workspace = true }

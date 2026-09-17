@@ -188,7 +188,7 @@ where
 mod tests {
     use lb_utils::bounded::BoundedVec;
 
-    use super::super::{
+    use crate::canonical::{
         BinaryDecodeExt as _, BinaryEncode as _, CodecExamples as _, DecodeError,
         assert_codec_fixtures,
     };
@@ -437,7 +437,7 @@ mod allocation_tests {
 
     use lb_utils::bounded::BoundedVec;
 
-    use super::super::{BinaryDecodeExt as _, DecodeError};
+    use crate::canonical::{BinaryDecodeExt as _, DecodeError};
 
     /// Runs `f` and reports how many bytes it allocated on this thread.
     fn bytes_allocated_by<F, R>(f: F) -> (R, usize)

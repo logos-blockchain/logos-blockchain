@@ -1,7 +1,7 @@
 use core::fmt::{self, Display, Formatter};
 
+use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::Fr;
-use lb_serialization::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::bounded::{BoundedString, BoundedVec, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;

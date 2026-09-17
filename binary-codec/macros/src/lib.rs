@@ -1,5 +1,5 @@
 //! Procedural macros for the unified binary codec
-//! (`BinaryEncode`/`BinaryDecode`, crate `lb-serialization`).
+//! (`BinaryEncode`/`BinaryDecode`, crate `lb-binary-codec`).
 //!
 //! - [`macro@BinaryCodec`] — `#[derive(BinaryCodec)]` for named or tuple
 //!   structs. Generates *only* the codec: `BinaryEncode` (field-order
@@ -17,9 +17,9 @@
 //!   generated test can build a context.
 //!
 //! Generated code refers to the codec crate by the absolute path
-//! `::lb_serialization::canonical::…`, so the macros expand correctly in any
-//! crate that depends on `lb-serialization` (the crate itself aliases its root
-//! as `lb_serialization`).
+//! `::lb_binary_codec::canonical::…`, so the macros expand correctly in any
+//! crate that depends on `lb-binary-codec` (the crate itself aliases its root
+//! as `lb_binary_codec`).
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -72,27 +72,27 @@ fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     Ok(quote! {
         #[automatically_derived]
-        impl ::lb_serialization::canonical::BinaryEncode for #ident {
+        impl ::lb_binary_codec::canonical::BinaryEncode for #ident {
             fn encoded_length(&self) -> usize {
-                0usize #( + ::lb_serialization::canonical::BinaryEncode::encoded_length(&#encode_accessors) )*
+                0usize #( + ::lb_binary_codec::canonical::BinaryEncode::encoded_length(&#encode_accessors) )*
             }
 
             fn encode_into(&self, out: &mut ::std::vec::Vec<u8>) {
-                #( ::lb_serialization::canonical::BinaryEncode::encode_into(&#encode_accessors, out); )*
+                #( ::lb_binary_codec::canonical::BinaryEncode::encode_into(&#encode_accessors, out); )*
             }
         }
 
         #[automatically_derived]
-        impl ::lb_serialization::canonical::BinaryDecode for #ident {
+        impl ::lb_binary_codec::canonical::BinaryDecode for #ident {
             type Context = ();
 
             fn decode<'input>(
                 input: &'input [u8],
                 (): &Self::Context,
-            ) -> ::core::result::Result<(&'input [u8], Self), ::lb_serialization::canonical::DecodeError> {
+            ) -> ::core::result::Result<(&'input [u8], Self), ::lb_binary_codec::canonical::DecodeError> {
                 #(
                     let (input, #decode_bindings) =
-                        <#field_types as ::lb_serialization::canonical::BinaryDecode>::decode(input, &())?;
+                        <#field_types as ::lb_binary_codec::canonical::BinaryDecode>::decode(input, &())?;
                 )*
                 ::core::result::Result::Ok((input, #constructor))
             }
@@ -179,11 +179,11 @@ fn fixture_tokens(fixture: &Fixture) -> TokenStream2 {
     let bytes = match &fixture.bytes {
         FixtureBytes::Literal(bytes) => quote!(::std::borrow::Cow::Borrowed(&[ #(#bytes),* ])),
         FixtureBytes::HexStr(expr) => {
-            quote!(::std::borrow::Cow::Owned(::lb_serialization::canonical::decode_fixture_hex(#expr)))
+            quote!(::std::borrow::Cow::Owned(::lb_binary_codec::canonical::decode_fixture_hex(#expr)))
         }
     };
     quote! {
-        ::lb_serialization::canonical::CodecFixture {
+        ::lb_binary_codec::canonical::CodecFixture {
             value: #value,
             bytes: #bytes,
         }
@@ -235,29 +235,29 @@ pub fn codec_fixtures(input: TokenStream) -> TokenStream {
 
     let round_trip = match (mode, context) {
         (FixtureMode::Both, None) => quote! {
-            ::lb_serialization::canonical::assert_codec_fixtures::<#ty>();
+            ::lb_binary_codec::canonical::assert_codec_fixtures::<#ty>();
         },
         (FixtureMode::Both, Some(context)) => quote! {
-            ::lb_serialization::canonical::assert_codec_fixtures_with::<#ty, _>(|| #context);
+            ::lb_binary_codec::canonical::assert_codec_fixtures_with::<#ty, _>(|| #context);
         },
         (FixtureMode::EncodeOnly, _) => quote! {
-            ::lb_serialization::canonical::assert_codec_fixtures_encode_only::<#ty>();
+            ::lb_binary_codec::canonical::assert_codec_fixtures_encode_only::<#ty>();
         },
         (FixtureMode::DecodeOnly, None) => quote! {
-            ::lb_serialization::canonical::assert_codec_fixtures_decode_only::<#ty>();
+            ::lb_binary_codec::canonical::assert_codec_fixtures_decode_only::<#ty>();
         },
         (FixtureMode::DecodeOnly, Some(context)) => quote! {
-            ::lb_serialization::canonical::assert_codec_fixtures_decode_only_with::<#ty, _>(|| #context);
+            ::lb_binary_codec::canonical::assert_codec_fixtures_decode_only_with::<#ty, _>(|| #context);
         },
     };
 
     quote! {
         #[automatically_derived]
-        impl ::lb_serialization::canonical::sealed::Sealed for #ty {}
+        impl ::lb_binary_codec::canonical::sealed::Sealed for #ty {}
 
         #[automatically_derived]
-        impl ::lb_serialization::canonical::CodecExamples for #ty {
-            fn fixtures() -> ::lb_serialization::canonical::CodecFixtures<Self> {
+        impl ::lb_binary_codec::canonical::CodecExamples for #ty {
+            fn fixtures() -> ::lb_binary_codec::canonical::CodecFixtures<Self> {
                 [ #(#fixture_exprs),* ].into()
             }
         }

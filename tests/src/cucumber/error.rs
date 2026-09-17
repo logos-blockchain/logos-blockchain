@@ -1,8 +1,8 @@
 use std::io::Error as IoError;
 
 use hex::FromHexError;
+use lb_binary_codec::bincode::Error;
 use lb_core::mantle::transactions::VerificationError;
-use lb_serialization::bincode::Error;
 use lb_testing_framework::configs::wallet::WalletConfigError;
 use lb_utils::bounded::BoundedError;
 use lb_wallet::WalletError;

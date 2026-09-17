@@ -13,8 +13,8 @@ use std::{
 use async_trait::async_trait;
 use backends::{StorageBackend, StorageTransaction};
 use bytes::Bytes;
+use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_log_targets::storage;
-use lb_serialization::bincode::DeserializeOp as _;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{

@@ -7,7 +7,7 @@ pub mod withdraw;
 
 use std::fmt::{Display, Formatter};
 
-use lb_serialization::{bincode::BoundedSerializeOp, canonical::BinaryCodec};
+use lb_binary_codec::{bincode::BoundedSerializeOp, canonical::BinaryCodec};
 
 use crate::utils::serde_bytes_newtype;
 
@@ -90,7 +90,7 @@ impl From<ChannelId> for [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use lb_serialization::bincode::{BoundedSerializeOp as _, SerializeOp as _};
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp as _};
 
     use super::{ChannelId, MsgId};
 

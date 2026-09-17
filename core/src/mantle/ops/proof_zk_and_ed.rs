@@ -1,5 +1,5 @@
+use lb_binary_codec::canonical::BinaryCodec;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use lb_serialization::canonical::BinaryCodec;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]

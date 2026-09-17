@@ -16,9 +16,9 @@ workspace = true
 [dependencies]
 bincode                          = { workspace = true }
 blake2                           = { workspace = true }
+lb-binary-codec                  = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-log-targets                   = { workspace = true }
-lb-serialization                 = { workspace = true }
 lb-utils                         = { workspace = true }
 lb-zone-sdk                      = { workspace = true }
 rand                             = { features = ["getrandom"], workspace = true }

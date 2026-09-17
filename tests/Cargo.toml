@@ -30,6 +30,7 @@ futures                          = { workspace = true }
 futures-util                     = { workspace = true }
 hex                              = { workspace = true }
 lb-api-service                   = { workspace = true }
+lb-binary-codec                  = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-config                        = { workspace = true }
@@ -43,7 +44,6 @@ lb-log-targets                   = { workspace = true }
 lb-mmr                           = { workspace = true }
 lb-node                          = { features = ["testing"], workspace = true }
 lb-pow-service                   = { workspace = true }
-lb-serialization                 = { workspace = true }
 lb-storage-service               = { features = ["rocksdb-backend"], workspace = true }
 lb-testing-framework             = { workspace = true }
 lb-tx-service                    = { workspace = true }

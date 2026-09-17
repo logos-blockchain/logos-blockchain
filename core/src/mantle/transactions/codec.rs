@@ -1,6 +1,6 @@
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_key_management_system_keys::keys::ED25519_SIGNATURE_SIZE;
-use lb_serialization::canonical::BinaryEncode as _;
 
 use crate::{
     mantle::{
@@ -73,13 +73,13 @@ mod tests {
     use std::collections::HashMap;
 
     use ark_ff::AdditiveGroup as _;
+    use lb_binary_codec::canonical::{BinaryDecodeExt as _, DecodeError};
     use lb_blend_proofs::{
         quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
         selection::VerifiedProofOfSelection,
     };
     use lb_groth16::{CompressedGroth16Proof, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey};
-    use lb_serialization::canonical::{BinaryDecodeExt as _, DecodeError};
     use lb_utils::bounded::BoundedError;
     use multiaddr::Multiaddr;
     use num_bigint::BigUint;

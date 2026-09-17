@@ -1,13 +1,13 @@
 use core::fmt::{self, Debug, Formatter};
 
 use blake2::Digest as _;
-use lb_cryptarchia_engine::Slot;
-use lb_groth16::fr_to_bytes;
-use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
-use lb_serialization::{
+use lb_binary_codec::{
     bincode::{BoundedSerializeOp, SerializeOp as _},
     canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
 };
+use lb_cryptarchia_engine::Slot;
+use lb_groth16::fr_to_bytes;
+use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 mod fixtures;
@@ -319,7 +319,7 @@ pub enum Error {
 
 #[test]
 fn test_serde() {
-    use lb_serialization::bincode::{DeserializeOp as _, SerializeOp as _};
+    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
     let header = HeaderId([0; 32]);
     assert_eq!(
         HeaderId::from_bytes(
@@ -334,7 +334,7 @@ fn test_serde() {
 
 #[test]
 fn fixed_size_bincode_serialization_matches_for_header_types() {
-    use lb_serialization::canonical::CodecExamples as _;
+    use lb_binary_codec::canonical::CodecExamples as _;
 
     let header_id = HeaderId([0x11; 32]);
     let content_id = ContentId([0x22; 32]);

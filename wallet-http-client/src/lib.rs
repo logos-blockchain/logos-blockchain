@@ -1,3 +1,4 @@
+use lb_binary_codec::bincode::SerializeOp as _;
 use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
 use lb_core::header::HeaderId;
 use lb_http_api_common::{
@@ -11,7 +12,6 @@ use lb_http_api_common::{
     paths,
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_serialization::bincode::SerializeOp as _;
 use url::Url;
 
 pub struct WalletHttpClient {
@@ -76,7 +76,7 @@ impl WalletHttpClient {
 
 #[cfg(test)]
 mod tests {
-    use lb_serialization::bincode::DeserializeOp as _;
+    use lb_binary_codec::bincode::DeserializeOp as _;
 
     use super::*;
 

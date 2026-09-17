@@ -10,6 +10,7 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
+use lb_binary_codec::bincode::{Error as CodecError, SerializeOp};
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
     message::{DataPayload, MAX_PAYLOAD_BODY_SIZE, TransactionNotBlendable},
@@ -45,7 +46,6 @@ use lb_key_management_system_keys::keys::{
 };
 use lb_ledger::LedgerState;
 use lb_log_targets::pow;
-use lb_serialization::bincode::{Error as CodecError, SerializeOp};
 use lb_services_utils::{
     overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings},
     wait_until_services_are_ready,
@@ -1537,6 +1537,7 @@ fn estimate_reward_claim_fee(
 mod tests {
     use std::{collections::HashMap, num::NonZeroU64};
 
+    use lb_binary_codec::bincode::SerializeOp as _;
     use lb_chain_service::Slot;
     use lb_core::{
         header::HeaderId,
@@ -1553,7 +1554,6 @@ mod tests {
         },
     };
     use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
-    use lb_serialization::bincode::SerializeOp as _;
 
     use super::{
         AutoClaimSettings, AutoClaimTick, ClaimTarget, MAX_CLAIMS_BY_PAYLOAD_SIZE,

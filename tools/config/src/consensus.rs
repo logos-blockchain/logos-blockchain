@@ -1,5 +1,6 @@
 use core::time::Duration;
 
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
@@ -21,7 +22,6 @@ use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
 use lb_node::{Hashable as _, SignedOps};
-use lb_serialization::canonical::BinaryEncode as _;
 use num_bigint::BigUint;
 
 use crate::unique::unique_test_context;

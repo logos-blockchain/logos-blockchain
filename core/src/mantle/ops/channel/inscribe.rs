@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_serialization::canonical::{BinaryCodec, BinaryEncode as _};
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 

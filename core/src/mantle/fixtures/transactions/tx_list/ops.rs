@@ -1,7 +1,7 @@
 use ark_ff::AdditiveGroup as _;
+use lb_binary_codec::canonical::codec_fixtures;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use lb_serialization::canonical::codec_fixtures;
 
 use crate::mantle::{
     NoteId, Op,

@@ -17,6 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     Note, SignedOps, Utxo,
@@ -31,7 +32,6 @@ use lb_core::mantle::{
         tx_list::ops::{OpsContext, OpsGasContext},
     },
 };
-use lb_serialization::canonical::BinaryEncode as _;
 use lb_testing_framework::configs::wallet::WalletAccount;
 
 use crate::common::wallet::transfer_proofs_for_funded_wallet_tx;

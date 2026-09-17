@@ -2,11 +2,11 @@ use generic_array::{
     GenericArray,
     typenum::{U32, U64},
 };
-use lb_groth16::COMPRESSED_PROOF_SIZE;
-use lb_serialization::{
+use lb_binary_codec::{
     bincode::BoundedSerializeOp,
     canonical::{BinaryDecode, BinaryEncode, DecodeError},
 };
+use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_zksign::ZkSignProof;
 use serde::{Deserialize, Serialize};
 
@@ -110,9 +110,9 @@ declare_serde_generic_array!(serde_generic_array_u64, U64);
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp};
     use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr};
     use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
-    use lb_serialization::bincode::{BoundedSerializeOp as _, SerializeOp};
     use lb_zksign::{ZkSignPrivateKeysData, ZkSignProof, ZkSignWitnessInputs, prove, verify};
     use num_bigint::BigUint;
     use rand_core::RngCore as _;

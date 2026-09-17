@@ -47,7 +47,7 @@ pub fn decode_fixture_hex(hex_str: &str) -> Vec<u8> {
 /// invariants. Called by the round-trip test the macros generate.
 ///
 /// `#[doc(hidden)] pub` (not `#[cfg(test)]`) because the generated test lives
-/// in *downstream* crates and calls this against `lb-serialization`'s non-test
+/// in *downstream* crates and calls this against `lb-binary-codec`'s non-test
 /// build.
 #[doc(hidden)]
 pub fn assert_codec_fixtures<T>()

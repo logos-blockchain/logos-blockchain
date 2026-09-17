@@ -13,25 +13,24 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-ed25519-dalek    = { workspace = true }
-generic-array    = { workspace = true }
-hex              = { workspace = true }
-lb-blend-crypto  = { workspace = true }
-lb-groth16       = { workspace = true }
-lb-pol           = { workspace = true }
-lb-poq           = { workspace = true }
-lb-poseidon2     = { workspace = true }
-lb-serialization = { workspace = true }
-lb-utils         = { workspace = true }
-num-bigint       = { workspace = true }
-rand             = { workspace = true }
-serde            = { workspace = true }
-thiserror        = { workspace = true }
-zeroize          = { workspace = true }
+ed25519-dalek   = { workspace = true }
+generic-array   = { workspace = true }
+hex             = { workspace = true }
+lb-binary-codec = { workspace = true }
+lb-blend-crypto = { workspace = true }
+lb-groth16      = { workspace = true }
+lb-pol          = { workspace = true }
+lb-poq          = { workspace = true }
+lb-poseidon2    = { workspace = true }
+lb-utils        = { workspace = true }
+num-bigint      = { workspace = true }
+rand            = { workspace = true }
+serde           = { workspace = true }
+thiserror       = { workspace = true }
+zeroize         = { workspace = true }
 
 [dev-dependencies]
 const-hex                     = { workspace = true }
-lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 
 [features]

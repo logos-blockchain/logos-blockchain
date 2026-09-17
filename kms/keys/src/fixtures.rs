@@ -1,5 +1,5 @@
+use lb_binary_codec::canonical::codec_fixtures;
 use lb_groth16::Fr;
-use lb_serialization::canonical::codec_fixtures;
 use lb_zksign::ZkSignProof;
 
 use crate::keys::{Ed25519PublicKey, Ed25519Signature, ZkPublicKey, ZkSignature};

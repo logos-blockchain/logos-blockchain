@@ -1,10 +1,10 @@
-use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, serde::serde_fr};
-use lb_log_targets::proofs;
-use lb_mmr::MerklePath;
-use lb_serialization::{
+use lb_binary_codec::{
     bincode::BoundedSerializeOp,
     canonical::{BinaryDecode, BinaryEncode, DecodeError},
 };
+use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, serde::serde_fr};
+use lb_log_targets::proofs;
+use lb_mmr::MerklePath;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
@@ -190,8 +190,8 @@ mod proof_serde {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp as _};
     use lb_poc::PoCProof;
-    use lb_serialization::bincode::{BoundedSerializeOp as _, SerializeOp as _};
 
     use super::Groth16LeaderClaimProof;
 

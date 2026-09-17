@@ -1,7 +1,7 @@
 use core::hash::{Hash, Hasher};
 
 use ed25519_dalek::SIGNATURE_LENGTH;
-use lb_serialization::{
+use lb_binary_codec::{
     bincode::BoundedSerializeOp,
     canonical::{BinaryDecode, BinaryEncode, DecodeError},
 };
@@ -103,7 +103,7 @@ impl BoundedSerializeOp for Signature {
 
 #[cfg(test)]
 mod tests {
-    use lb_serialization::bincode::{BoundedSerializeOp as _, SerializeOp};
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp};
 
     use super::Signature;
 

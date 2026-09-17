@@ -16,7 +16,7 @@ pub type OpProofRefs<'a> = TxList<OpProofRef<'a>>;
 /// round-trips fine.
 ///
 /// Refusing binary also neuters the blanket `SerializeOp` impl in
-/// [`lb_serialization::bincode`]: `OpProofRefs::to_bytes` still exists, but fails instead of
+/// [`lb_binary_codec::bincode`]: `OpProofRefs::to_bytes` still exists, but fails instead of
 /// emitting a column that carries no way to type itself.
 impl Serialize for OpProofRefs<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
