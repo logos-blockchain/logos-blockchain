@@ -37,7 +37,7 @@ use crate::core::{
     poq_verification::{PendingPoQVerifications, PoQVerificationOutcome},
     with_core::{
         behaviour::{
-            blacklist::{BlacklistReason, InsertionOutcome, PeerBlacklist},
+            blacklist::{BlacklistReason, PeerBlacklist},
             handler::{ConnectionHandler, FromBehaviour, ToBehaviour},
             liveness::PeerLivenessMap,
             message_cache::MessageCache,
@@ -1016,15 +1016,8 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     }
 
     /// Reports the peers this node has stopped refusing to deal with.
-    fn prune_and_report_expired_blacklist_entries(&mut self) {
-        for entry in self.blacklist.prune_expired_entries(self.current_round) {
-            tracing::debug!(
-                target: LOG_TARGET,
-                "Peer {:?} is no longer blacklisted: the window it was excluded for, after {}, has passed.",
-                entry.peer,
-                entry.reason
-            );
-        }
+    fn prune_expired_blacklist_entries(&mut self) {
+        drop(self.blacklist.prune_expired_entries(self.current_round));
     }
 
     /// Reports the node crossing into or out of holding fewer connections than
@@ -1059,33 +1052,17 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
 
     /// Blacklists the sender of a message.
     fn blacklist_peer(&mut self, peer_id: PeerId, reason: BlacklistReason) {
-        let InsertionOutcome {
-            is_first_offence,
-            evicted,
-        } = self
+        let outcome = self
             .blacklist
             .insert_or_extend(peer_id, reason, self.current_round);
         self.close_every_connection_with(&peer_id);
 
-        if let Some(evicted) = evicted {
-            tracing::trace!(
-                target: LOG_TARGET,
-                "Peer {:?} is no longer blacklisted: it was the oldest entry when the blacklist filled up, and made room before the window it was excluded for, after {}, had passed.",
-                evicted.peer,
-                evicted.reason
-            );
-        }
-
-        // A peer offending again is one peer blacklisted, not two. It can offend
-        // once per message it is allowed to send in a round, and reporting each
-        // would put a peer's talkativeness into a count of how many peers this
-        // node has had to shut out.
-        if !is_first_offence {
-            tracing::trace!(target: LOG_TARGET, "Blacklisted peer {peer_id:?} offended again ({reason:?}); its window starts over.");
+        // We need to not re-report the peer as blacklisted if it's just an extension of
+        // an existing entry.
+        if !outcome.is_first_offence() {
             return;
         }
 
-        tracing::debug!(target: LOG_TARGET, "Blacklisting peer {peer_id:?}: {reason:?}.");
         self.events
             .push_back(ToSwarm::GenerateEvent(Event::PeerBlacklisted {
                 peer: peer_id,
@@ -1645,7 +1622,7 @@ where
                 .enter_new_round_with_peers(self.negotiated_peers.keys());
             self.abandon_stale_handshakes();
             self.close_unhealthy_connections();
-            self.prune_and_report_expired_blacklist_entries();
+            self.prune_expired_blacklist_entries();
             self.check_and_report_low_peering_degree();
         }
 

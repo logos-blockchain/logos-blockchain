@@ -5,7 +5,7 @@ use lb_blend_primitives::time::{Round, RoundCount};
 use crate::{OutgoingMessage, core::admission::RoundShare};
 
 /// What a connection may put on the wire right now.
-pub enum OutgoingItem {
+pub enum PollOutcome {
     /// The message to send.
     Message(OutgoingMessage),
     /// Messages are waiting, but this connection has already carried its share
@@ -13,7 +13,7 @@ pub enum OutgoingItem {
     ShareSpent,
 }
 
-impl OutgoingItem {
+impl PollOutcome {
     #[cfg(test)]
     fn take_message(self) -> Option<OutgoingMessage> {
         match self {
@@ -49,10 +49,6 @@ impl SendQueue {
     }
 
     /// Adds a message to what this connection owes its neighbour.
-    ///
-    /// Infallible: whether the wire format can carry the message was settled
-    /// when the [`OutgoingMessage`] was built, so a queue cannot be the place
-    /// that discovers it cannot.
     pub fn enqueue(&mut self, message: OutgoingMessage, current_round: Round) {
         self.queue.push_back(MessageEntry {
             message,
@@ -62,7 +58,7 @@ impl SendQueue {
 
     /// Refreshes the share and gives up on whatever has waited too long,
     /// reporting how many messages that was.
-    pub fn enter_round(&mut self, new_round: Round) -> usize {
+    pub fn enter_new_round(&mut self, new_round: Round) -> usize {
         self.share.refill_for(new_round);
 
         // The queue is FIFO and every message is given the same lifetime, so deadlines
@@ -86,16 +82,16 @@ impl SendQueue {
     /// only one of them is the protocol throttling a connection that has more
     /// to say, and that one is worth reporting. Telling them apart is the
     /// caller's only way to know which it is.
-    pub fn pop_front(&mut self) -> Option<OutgoingItem> {
+    pub fn pop_front(&mut self) -> Option<PollOutcome> {
         if self.queue.is_empty() {
             return None;
         }
         if !self.share.try_spend() {
-            return Some(OutgoingItem::ShareSpent);
+            return Some(PollOutcome::ShareSpent);
         }
         self.queue
             .pop_front()
-            .map(|queued| OutgoingItem::Message(queued.message))
+            .map(|queued| PollOutcome::Message(queued.message))
     }
 
     pub fn clear(&mut self) {
@@ -111,7 +107,7 @@ mod tests {
 
     use crate::{
         OutgoingMessage,
-        core::with_core::behaviour::handler::admission::{OutgoingItem, RoundShare, SendQueue},
+        core::with_core::behaviour::handler::send::{PollOutcome, RoundShare, SendQueue},
     };
 
     const SHARE: NonZeroU64 = NonZeroU64::new(3).unwrap();
@@ -180,11 +176,11 @@ mod tests {
             );
         }
         assert!(
-            matches!(queue.pop_front(), Some(OutgoingItem::ShareSpent)),
+            matches!(queue.pop_front(), Some(PollOutcome::ShareSpent)),
             "the share is spent, which is not the same as having nothing to send"
         );
 
-        queue.enter_round(Round::from(1));
+        queue.enter_new_round(Round::from(1));
         assert_eq!(
             queue
                 .pop_front()
@@ -201,12 +197,12 @@ mod tests {
         queue.enqueue(payload(0), Round::from(0));
 
         // Still within the lifetime: the message is kept.
-        assert_eq!(queue.enter_round(Round::from(2)), 0);
+        assert_eq!(queue.enter_new_round(Round::from(2)), 0);
         queue.enqueue(payload(1), Round::from(2));
 
         // Past it: the first message is dropped, the second is not, since it
         // joined the queue later.
-        assert_eq!(queue.enter_round(Round::from(3)), 1);
+        assert_eq!(queue.enter_new_round(Round::from(3)), 1);
         assert_eq!(
             queue
                 .pop_front()
