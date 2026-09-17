@@ -43,6 +43,7 @@ impl Config {
                 loki: None,
                 gelf: None,
                 otlp: None,
+                format: logger::LogFormat::Text,
                 stdout: false,
                 stderr: false,
             },

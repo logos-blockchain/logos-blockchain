@@ -72,6 +72,20 @@ target/release/logos-blockchain-node --deployment standalone-deployment-config.y
 
 The node stores state in the `state` directory. If you encounter issues on restart, try removing it before starting the node again.
 
+### Structured logs
+
+Local file, stdout, and stderr sinks use text records by default. Set
+`tracing.logger.format` to `Json` to emit one ANSI-free JSON object per line:
+
+```yaml
+tracing:
+  logger:
+    format: Json
+```
+
+Loki, GELF, and OTLP sinks keep their own structured formats regardless of this
+setting.
+
 ### Docker
 
 ```bash

@@ -4,12 +4,21 @@ use serde::{Deserialize, Serialize};
 use tracing_appender::{non_blocking::WorkerGuard, rolling::Rotation};
 use tracing_subscriber::fmt::{
     Layer,
-    format::{DefaultFields, Format},
+    format::{DefaultFields, Format, Json, JsonFields},
 };
 
 use crate::compressed_appender::CompressedRollingAppender;
 
 pub type FmtLayer<S> = Layer<S, DefaultFields, Format, tracing_appender::non_blocking::NonBlocking>;
+pub type JsonFmtLayer<S> =
+    Layer<S, JsonFields, Format<Json>, tracing_appender::non_blocking::NonBlocking>;
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum LogFormat {
+    #[default]
+    Text,
+    Json,
+}
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum RetentionType {
@@ -62,6 +71,19 @@ pub struct FileConfig {
 }
 
 pub fn create_file_layer<S>(file_config: FileConfig) -> (FmtLayer<S>, WorkerGuard) {
+    create_file_layer_with_writer(file_config, |writer| create_writer_layer::<S, _>(writer))
+}
+
+pub fn create_json_file_layer<S>(file_config: FileConfig) -> (JsonFmtLayer<S>, WorkerGuard) {
+    create_file_layer_with_writer(file_config, |writer| {
+        create_json_writer_layer::<S, _>(writer)
+    })
+}
+
+fn create_file_layer_with_writer<L, W>(file_config: FileConfig, create_layer: L) -> (W, WorkerGuard)
+where
+    L: FnOnce(Box<dyn Write + Send>) -> (W, WorkerGuard),
+{
     let prefix = file_config
         .prefix
         .unwrap_or_else(|| "logos-blockchain.log".into());
@@ -101,9 +123,9 @@ pub fn create_file_layer<S>(file_config: FileConfig) -> (FmtLayer<S>, WorkerGuar
                 prefix_str,
                 compression_threshold,
             );
-            create_writer_layer(appender)
+            create_layer(Box::new(appender))
         }
-        CompressionType::None => create_writer_layer(rolling_appender),
+        CompressionType::None => create_layer(Box::new(rolling_appender)),
     }
 }
 
@@ -116,4 +138,69 @@ where
     let layer = Layer::new().with_level(true).with_writer(non_blocking);
 
     (layer, guard)
+}
+
+pub fn create_json_writer_layer<S, W>(writer: W) -> (JsonFmtLayer<S>, WorkerGuard)
+where
+    W: Write + Send + 'static,
+{
+    let (non_blocking, guard) = tracing_appender::non_blocking(writer);
+
+    let layer = Layer::new()
+        .json()
+        .with_level(true)
+        .with_ansi(false)
+        .with_writer(non_blocking);
+
+    (layer, guard)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use tracing_subscriber::prelude::*;
+
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("buffer lock should not be poisoned")
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn json_writer_emits_one_json_record_without_ansi() {
+        let buffer = Buffer::default();
+        let output = Arc::clone(&buffer.0);
+        let (layer, guard) = create_json_writer_layer::<tracing_subscriber::Registry, _>(buffer);
+        let subscriber = tracing_subscriber::registry().with(layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "json-log-test", answer = 42, "hello");
+        });
+        drop(guard);
+
+        let bytes = output
+            .lock()
+            .expect("buffer lock should not be poisoned")
+            .clone();
+        let line = std::str::from_utf8(&bytes).expect("JSON log should be UTF-8");
+        let record: serde_json::Value = serde_json::from_str(line).expect("log should be JSON");
+        assert_eq!(record["target"], "json-log-test");
+        assert_eq!(record["fields"]["message"], "hello");
+        assert_eq!(record["fields"]["answer"], 42);
+        assert!(!line.contains('\u{1b}'));
+    }
 }

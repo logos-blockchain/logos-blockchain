@@ -5225,6 +5225,7 @@ dependencies = [
  "opentelemetry_sdk",
  "rand 0.8.6",
  "serde",
+ "serde_json",
  "tokio",
  "tonic",
  "tracing",
@@ -8951,12 +8952,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
