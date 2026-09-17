@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 
-pub use lb_key_management_system_keys::keys;
 use lb_key_management_system_keys::keys::secured_key::SecuredKey;
+pub use lb_key_management_system_keys::{hd, keys};
 pub use lb_key_management_system_operators as operators;
 use lb_log_targets::kms;
 use overwatch::{

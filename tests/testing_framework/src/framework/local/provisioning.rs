@@ -644,9 +644,9 @@ fn plan_local_node_config(
 
         let keys = &mut config.kms_config.backend.keys;
         for account in &descriptors.config().wallet_config.accounts {
-            let key = account.secret_key.clone().into();
+            let key: Key = account.secret_key.clone().into();
             let key_id = key_id_for_preload_backend(&key);
-            keys.entry(key_id).or_insert(key);
+            keys.entry(key_id).or_insert_with(|| key.into());
         }
 
         config
@@ -756,13 +756,11 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
                 config
                     .kms_config
                     .backend
-                    .keys
-                    .values()
-                    .filter_map(|key| match key {
-                        Key::Zk(sk) => Some((
-                            key_id_for_preload_backend(&Key::Zk(sk.clone())),
-                            sk.as_public_key(),
-                        )),
+                    .resolve_keys()
+                    .expect("KMS keys of a provisioned config are resolvable")
+                    .into_values()
+                    .filter_map(|key| match &key {
+                        Key::Zk(sk) => Some((key_id_for_preload_backend(&key), sk.as_public_key())),
                         Key::Ed25519(_) => None,
                     }),
             )
@@ -779,6 +777,8 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
         },
         kms: config::kms::serde::Config {
             backend: config::kms::serde::PreloadKmsBackendSettings {
+                mnemonic: config.kms_config.backend.mnemonic,
+                passphrase: config.kms_config.backend.passphrase,
                 keys: config.kms_config.backend.keys,
             },
         },

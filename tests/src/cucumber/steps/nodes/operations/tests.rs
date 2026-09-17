@@ -101,14 +101,14 @@ mod scenario_wallet_key_tests {
         {
             let key: Key = account.secret_key.clone().into();
             let key_id = key_id_for_preload_backend(&key);
-            kms_keys.insert(key_id.clone(), key);
+            kms_keys.insert(key_id.clone(), key.into());
             known_keys.insert(key_id, account.secret_key.as_public_key());
         }
 
         let unrelated = WalletAccount::deterministic(102, 0, true).expect("account");
         let unrelated_key: Key = unrelated.secret_key.clone().into();
         let unrelated_key_id = key_id_for_preload_backend(&unrelated_key);
-        kms_keys.insert(unrelated_key_id.clone(), unrelated_key);
+        kms_keys.insert(unrelated_key_id.clone(), unrelated_key.into());
         known_keys.insert(
             unrelated_key_id.clone(),
             unrelated.secret_key.as_public_key(),
@@ -116,11 +116,11 @@ mod scenario_wallet_key_tests {
 
         let ed25519_key: Key = Ed25519Key::from_bytes(&[9; 32]).into();
         let ed25519_key_id = key_id_for_preload_backend(&ed25519_key);
-        kms_keys.insert(ed25519_key_id.clone(), ed25519_key);
+        kms_keys.insert(ed25519_key_id.clone(), ed25519_key.into());
         let voucher_master = WalletAccount::deterministic(104, 0, true).expect("account");
         let voucher_key: Key = voucher_master.secret_key.clone().into();
         let voucher_master_key_id = key_id_for_preload_backend(&voucher_key);
-        kms_keys.insert(voucher_master_key_id.clone(), voucher_key);
+        kms_keys.insert(voucher_master_key_id.clone(), voucher_key.into());
         known_keys.insert(
             voucher_master_key_id.clone(),
             voucher_master.secret_key.as_public_key(),
@@ -155,7 +155,7 @@ mod scenario_wallet_key_tests {
         let account = WalletAccount::deterministic(105, 0, true).expect("account");
         let key: Key = account.secret_key.clone().into();
         let key_id = key_id_for_preload_backend(&key);
-        kms_keys.insert(key_id.clone(), key);
+        kms_keys.insert(key_id.clone(), key.into());
         known_keys.insert(key_id, account.secret_key.as_public_key());
         let before_kms = kms_keys.clone();
         let before_known_keys = known_keys.clone();
