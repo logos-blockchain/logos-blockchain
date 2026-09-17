@@ -85,6 +85,7 @@ impl From<MigrateArgs> for InitArgs {
             state: migrate.state,
             storage_path: None,
             overwrite: false,
+            mnemonic: None,
         }
     }
 }

@@ -107,26 +107,27 @@ fn build_kms_config_for_node(
 
     KmsConfig {
         backend: lb_node::config::kms::serde::PreloadKmsBackendSettings {
+            mnemonic: None,
             keys: [
                 (
                     blend_conf.non_ephemeral_signing_key_id.clone(),
-                    Key::Ed25519(private_key.clone()),
+                    Key::Ed25519(private_key.clone()).into(),
                 ),
                 (
                     blend_conf.core.zk.secret_key_kms_id.clone(),
-                    Key::Zk(secret_zk_key.clone()),
+                    Key::Zk(secret_zk_key.clone()).into(),
                 ),
                 (
                     key_id_for_preload_backend(&Key::Zk(consensus_config.blend_note.sk.clone())),
-                    Key::Zk(consensus_config.blend_note.sk.clone()),
+                    Key::Zk(consensus_config.blend_note.sk.clone()).into(),
                 ),
                 (
                     key_id_for_preload_backend(&Key::Zk(consensus_config.known_key.clone())),
-                    Key::Zk(consensus_config.known_key.clone()),
+                    Key::Zk(consensus_config.known_key.clone()).into(),
                 ),
                 (
                     key_id_for_preload_backend(&Key::Zk(consensus_config.funding_sk.clone())),
-                    Key::Zk(consensus_config.funding_sk.clone()),
+                    Key::Zk(consensus_config.funding_sk.clone()).into(),
                 ),
             ]
             .into(),
