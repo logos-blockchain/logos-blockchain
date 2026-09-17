@@ -31,6 +31,7 @@ use libp2p::{
 };
 
 use crate::core::{
+    CommonConfig,
     poq_verification::{PendingPoQVerifications, PoQVerificationOutcome},
     with_core::{
         behaviour::{
@@ -70,15 +71,6 @@ const BLACKLIST_TARGET_PEERING_DEGREE_MULTIPLIER: NonZeroUsize = NonZeroUsize::n
 pub struct Config {
     /// `Φ_CC`: the peering degree of this node.
     pub target_peering_degree: NonZeroUsize,
-    /// The minimum Blend network size for messages to be relayed between peers.
-    pub minimum_network_size: NonZeroUsize,
-    /// `ß_c`: the fixed number of encapsulation layers every well-formed Blend
-    /// message carries. Used to validate the layout of messages received from
-    /// remote peers before processing them.
-    pub num_blend_layers: NonZeroU64,
-    /// The duration of a Blend round, the unit every rate and window of
-    /// connectivity maintenance is expressed in.
-    pub round_duration_in_seconds: NonZeroU64,
     /// `W`: the observation window, in rounds. A connection whose neighbour has
     /// delivered nothing within the trailing window is closed.
     pub liveness_window_in_rounds: NonZeroU128,
@@ -266,40 +258,40 @@ pub enum Event {
 impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     #[must_use]
     pub fn new(
-        config: &Config,
+        (common_config, core_config): (&CommonConfig, &Config),
         epoch_info: (Membership<PeerId>, Epoch),
         proofs_verifier: ProofsVerifier,
         local_peer_id: PeerId,
+        round_clock: RoundClock,
         protocol_name: StreamProtocol,
     ) -> Self {
-        let round_clock = RoundClock::new(config.round_duration_in_seconds);
         let current_round = round_clock.current_round();
         Self {
-            negotiated_peers: HashMap::with_capacity(config.target_peering_degree.get() + 1),
+            negotiated_peers: HashMap::with_capacity(core_config.target_peering_degree.get() + 1),
             events: VecDeque::new(),
             waker: None,
             message_cache: MessageCache::new(),
             current_epoch_info: epoch_info,
             proofs_verifier: Arc::new(proofs_verifier),
             pending_poq_verifications: PendingPoQVerifications::new(),
-            target_peering_degree: config.target_peering_degree,
+            target_peering_degree: core_config.target_peering_degree,
             connections_waiting_upgrade: HashMap::new(),
             local_peer_id,
             protocol_name,
-            minimum_network_size: config.minimum_network_size,
-            num_blend_layers: config.num_blend_layers,
+            minimum_network_size: common_config.minimum_network_size,
+            num_blend_layers: common_config.num_blend_layers,
             old_epoch: None,
             round_clock,
             current_round,
-            connection_share_per_round: config.connection_share_per_round,
-            send_deadline: config.send_deadline_in_rounds,
-            liveness: PeerLivenessMap::new(RoundCount::new(config.liveness_window_in_rounds)),
+            connection_share_per_round: core_config.connection_share_per_round,
+            send_deadline: core_config.send_deadline_in_rounds,
+            liveness: PeerLivenessMap::new(RoundCount::new(core_config.liveness_window_in_rounds)),
             blacklist: PeerBlacklist::new(
-                config
+                core_config
                     .target_peering_degree
                     .checked_mul(BLACKLIST_TARGET_PEERING_DEGREE_MULTIPLIER)
                     .expect("Blacklist capacity overflowed `usize`."),
-                RoundCount::new(config.liveness_window_in_rounds),
+                RoundCount::new(core_config.liveness_window_in_rounds),
             ),
         }
     }

@@ -10,6 +10,7 @@ use std::{
 use async_trait::async_trait;
 use futures::StreamExt as _;
 use lb_blend_membership::{Membership, Node};
+use lb_blend_primitives::time::RoundClock;
 use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
 use lb_libp2p::SwarmEvent;
 use libp2p::{Multiaddr, PeerId, Stream, Swarm};
@@ -17,6 +18,7 @@ use libp2p_stream::Behaviour as StreamBehaviour;
 use libp2p_swarm_test::SwarmExt as _;
 
 use crate::core::{
+    admission::RoundShare,
     poq_verification::PendingPoQVerifications,
     tests::utils::{PROTOCOL_NAME, TestProofsVerifier},
     with_edge::behaviour::{Behaviour, Event as BehaviourEvent},
@@ -28,6 +30,8 @@ pub type TestBehaviour = Behaviour<TestProofsVerifier>;
 pub struct BehaviourBuilder {
     core_peer_ids: Vec<PeerId>,
     max_incoming_connections: Option<usize>,
+    accepts_per_round: Option<NonZeroU64>,
+    round_duration_in_seconds: Option<NonZeroU64>,
     timeout: Option<Duration>,
     minimum_network_size: Option<NonZeroUsize>,
     num_blend_layers: Option<NonZeroU64>,
@@ -39,6 +43,8 @@ impl BehaviourBuilder {
         Self {
             core_peer_ids: vec![core_peer_id],
             max_incoming_connections: None,
+            accepts_per_round: None,
+            round_duration_in_seconds: None,
             timeout: None,
             minimum_network_size: None,
             num_blend_layers: None,
@@ -67,6 +73,16 @@ impl BehaviourBuilder {
         self
     }
 
+    pub fn with_accepts_per_round(mut self, accepts_per_round: NonZeroU64) -> Self {
+        self.accepts_per_round = Some(accepts_per_round);
+        self
+    }
+
+    pub fn with_round_duration_in_seconds(mut self, round_duration_in_seconds: NonZeroU64) -> Self {
+        self.round_duration_in_seconds = Some(round_duration_in_seconds);
+        self
+    }
+
     pub fn with_minimum_network_size(mut self, minimum_network_size: usize) -> Self {
         self.minimum_network_size = Some(minimum_network_size.try_into().unwrap());
         self
@@ -85,6 +101,10 @@ impl BehaviourBuilder {
                 .collect::<Vec<_>>()
                 .as_ref(),
         );
+        let round_clock = RoundClock::new(
+            self.round_duration_in_seconds
+                .unwrap_or(NonZeroU64::new(1).unwrap()),
+        );
         Behaviour {
             events: VecDeque::new(),
             waker: None,
@@ -95,6 +115,12 @@ impl BehaviourBuilder {
             connection_timeout: self.timeout.unwrap_or(Duration::from_secs(1)),
             upgraded_edge_peers: HashSet::new(),
             max_incoming_connections: self.max_incoming_connections.unwrap_or(100),
+            accept_share: RoundShare::new(
+                self.accepts_per_round
+                    .unwrap_or(NonZeroU64::new(1_000).unwrap()),
+                round_clock.current_round(),
+            ),
+            round_clock,
             protocol_name: PROTOCOL_NAME,
             minimum_network_size: self
                 .minimum_network_size

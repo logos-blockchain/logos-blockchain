@@ -32,6 +32,8 @@ use crate::{
 };
 
 /// `V`: the messages per second the slowest targeted node can verify.
+/// `T_E`: the rounds an edge node is given to send its message.
+const BLEND_EDGE_NODE_SEND_DEADLINE_IN_ROUNDS: u64 = 1;
 const BLEND_VERIFICATION_RATE_PER_SECOND: u32 = 156;
 /// `η`: the rounds a message spends crossing the network at one hop.
 const BLEND_NETWORK_ABSORPTION_IN_ROUNDS: u64 = 2;
@@ -120,6 +122,10 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     BLEND_VERIFICATION_RATE_PER_SECOND,
                 )
                 .expect("Verification rate cannot be zero."),
+                edge_node_send_deadline_in_rounds: NonZeroU64::try_from(
+                    BLEND_EDGE_NODE_SEND_DEADLINE_IN_ROUNDS,
+                )
+                .expect("`T_E` cannot be zero."),
                 scheduler: SchedulerSettings {
                     cover: CoverTrafficSettings {
                         message_frequency_per_round: PositiveF64::try_from(
