@@ -52,7 +52,7 @@ async fn publish_message() {
         TestProofsVerifier::accepting(),
     );
 
-    // Send a message but expect [`Error::NoPeers`]
+    // Send a message but expect [`SendError::NoPeers`]
     // because we haven't establish connections for the new epoch.
     let test_message = TestEncapsulatedMessageWithEpoch::new(epoch, b"msg");
     let result = dialer

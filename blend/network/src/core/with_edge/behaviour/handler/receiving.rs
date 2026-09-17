@@ -15,19 +15,19 @@ use crate::{
 /// What a completed read amounts to: the message it delivered, or the reason
 /// the connection is being dropped without one.
 fn classify_read_outcome(
-    result: Result<Option<IncomingMessage>, io::Error>,
+    result: io::Result<IncomingMessage>,
 ) -> Result<IncomingMessage, FailureReason> {
     match result {
-        Ok(Some(message)) => {
+        Ok(message) => {
             tracing::trace!(target: LOG_TARGET, "Message received successfully. Transitioning from `Receiving` to `Dropped`.");
             Ok(message)
         }
-        Ok(None) => {
-            tracing::debug!(target: LOG_TARGET, "Edge node closed its stream without sending a message.");
-            Err(FailureReason::ClosedWithoutMessage)
-        }
+        // The edge node closed or lost its stream before a whole message
+        // arrived. It holds no peering slot and the connection was only ever
+        // going to carry the one message, so there is nothing to do but drop
+        // it.
         Err(error) => {
-            tracing::error!(target: LOG_TARGET, "Failed to receive message. Error {error:?}");
+            tracing::debug!(target: LOG_TARGET, "Edge node's stream ended before a message arrived: {error}");
             Err(FailureReason::MessageStream)
         }
     }

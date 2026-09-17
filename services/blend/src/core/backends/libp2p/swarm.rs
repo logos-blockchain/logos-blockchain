@@ -269,6 +269,16 @@ where
 
         let exclude_peers: HashSet<PeerId> = negotiated_peers
             .chain(self.swarm.behaviour().blend.with_core().blacklisted_peers())
+            // A peer part way through a handshake already holds a degree slot,
+            // so dialing it would take a second one until the two connections
+            // are resolved against each other.
+            .chain(
+                self.swarm
+                    .behaviour()
+                    .blend
+                    .with_core()
+                    .peers_with_handshake_in_progress(),
+            )
             .chain(self.ongoing_dials.keys())
             .chain(self.unrecoverable_peers.iter())
             .chain(except.iter())
@@ -393,12 +403,25 @@ where
 
     /// Called when a pending retry fires. Re-checks peering degree before
     /// actually dialing, so we don't waste a slot on a peer we no longer need.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address in a dedicated refactor"
+    )]
     fn execute_retry(&mut self, peer_id: PeerId, dial_attempt: DialAttempt) {
         if self.connections_to_open() == 0 {
             tracing::debug!(
                 target: LOG_TARGET,
                 "Skipping retry for peer {peer_id:?}: peering degree already satisfied."
             );
+            return;
+        }
+        // The peer may have been blacklisted while this retry was sleeping.
+        if self.is_peer_blacklisted(&peer_id) {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "Dropping retry for peer {peer_id:?}: it has been blacklisted since the retry was scheduled. Dialing another peer instead."
+            );
+            self.check_and_dial_new_peers_except(&dial_attempt.failed_peers);
             return;
         }
         tracing::debug!(
@@ -446,8 +469,12 @@ where
     // is actually disconnected.
     fn handle_blacklisted_peer(&self, peer_id: PeerId, reason: BlacklistReason) {
         tracing::debug!(target: LOG_TARGET, "Blacklisted peer {peer_id:?} for reason {reason:?}.");
-        metrics::core_peer_blocked(
-            reason,
+        metrics::core_peer_blacklisted(reason);
+        self.report_blacklist_size();
+    }
+
+    fn report_blacklist_size(&self) {
+        metrics::core_blacklist_size(
             self.swarm
                 .behaviour()
                 .blend
@@ -513,7 +540,7 @@ where
                         };
                         self.check_and_dial_new_peers_except(&failed_peers);
                     }
-                    upgrade_error @ (ConnectionUpgradeFailureReason::DuplicateConnection | ConnectionUpgradeFailureReason::MaximumPeeringDegreeReached | ConnectionUpgradeFailureReason::ReverseDirectionPreferred) => {
+                    upgrade_error @ (ConnectionUpgradeFailureReason::DuplicateConnection | ConnectionUpgradeFailureReason::MaximumPeeringDegreeReached | ConnectionUpgradeFailureReason::ReverseDirectionPreferred | ConnectionUpgradeFailureReason::Refused) => {
                         Self::log_blend_peer_negotiation_failure(
                             self.current_epoch_info.epoch,
                             peer,
@@ -559,6 +586,9 @@ where
         match event {
             SwarmEvent::ConnectionEstablished { peer_id, .. }
             | SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                // Blacklist entries expire silently, so the size is re-reported
+                // whenever a connection comes or goes.
+                self.report_blacklist_size();
                 let negotiated_count = self
                     .swarm
                     .behaviour()
@@ -771,6 +801,15 @@ impl<Rng, ProofsVerifier> BlendSwarm<Rng, ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
+    /// Whether the behaviour currently refuses to deal with the peer.
+    fn is_peer_blacklisted(&self, peer_id: &PeerId) -> bool {
+        self.swarm
+            .behaviour()
+            .blend
+            .with_core()
+            .is_peer_blacklisted(peer_id)
+    }
+
     fn log_blend_peer_negotiation_failure(
         epoch: Epoch,
         peer_id: PeerId,
@@ -865,11 +904,22 @@ where
     /// * `EpochDialAttempt::OngoingEpoch(Some)` if the maximum attempts have
     ///   been reached and the peer has been removed from the map of ongoing
     ///   dials.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address in a dedicated refactor"
+    )]
     fn schedule_retry(&mut self, peer_id: PeerId) -> EpochDialAttempt {
         let Some(dial_attempt) = self.ongoing_dials.remove(&peer_id) else {
             tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new epoch has cleared the map of pending dials.");
             return EpochDialAttempt::PreviousEpoch;
         };
+        // Blacklisting a peer closes the connection this node was still shaking
+        // hands on, which surfaces here as a dial failure. Do not retry with that peer
+        // anymore.
+        if self.is_peer_blacklisted(&peer_id) {
+            tracing::debug!(target: LOG_TARGET, "Not retrying blacklisted peer {peer_id:?}. Dialing another peer instead.");
+            return EpochDialAttempt::OngoingEpoch(Some(dial_attempt));
+        }
         let new_attempt_number = dial_attempt.attempt_number.checked_add(1).unwrap();
         if new_attempt_number > self.max_dial_attempts_per_connection {
             tracing::debug!(target: LOG_TARGET, "Maximum attempts ({}) reached for peer {peer_id:?}. Re-dialing stopped.", self.max_dial_attempts_per_connection);
