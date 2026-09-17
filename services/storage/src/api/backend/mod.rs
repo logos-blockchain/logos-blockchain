@@ -1,10 +1,16 @@
-use core::{error::Error, num::NonZeroUsize, ops::RangeInclusive, pin::Pin};
+use core::{error::Error, pin::Pin};
+#[cfg(feature = "rocksdb-backend")]
+use core::{num::NonZeroUsize, ops::RangeInclusive};
 
-use futures::{Stream, TryStreamExt as _};
+use futures::Stream;
+#[cfg(feature = "rocksdb-backend")]
+use futures::TryStreamExt as _;
 use lb_core::header::HeaderId;
+#[cfg(feature = "rocksdb-backend")]
 use lb_cryptarchia_engine::Slot;
 
-use crate::{StorageServiceError, backends::StorageBackend};
+#[cfg(feature = "rocksdb-backend")]
+use crate::{StorageServiceError, backends::rocksdb::RocksBackend};
 
 #[cfg(feature = "rocksdb-backend")]
 pub mod rocksdb;
@@ -16,8 +22,9 @@ pub type HeaderIdStream =
     Pin<Box<dyn Stream<Item = Result<HeaderId, Box<dyn Error + Send + Sync>>> + Send>>;
 
 /// Helper to collect a stream of immutable `HeaderId`s into a reversed `Vec`.
-pub async fn streamed_immutable_block_ids_reverse_vec<Backend: StorageBackend>(
-    backend: &mut Backend,
+#[cfg(feature = "rocksdb-backend")]
+pub async fn streamed_immutable_block_ids_reverse_vec(
+    backend: &mut RocksBackend,
     slot_range: RangeInclusive<Slot>,
     limit: NonZeroUsize,
 ) -> Result<Vec<HeaderId>, StorageServiceError> {
@@ -32,8 +39,9 @@ pub async fn streamed_immutable_block_ids_reverse_vec<Backend: StorageBackend>(
 }
 
 /// Helper to collect a stream of immutable `HeaderId`s into a `Vec`.
-pub async fn streamed_immutable_block_ids_vec<Backend: StorageBackend>(
-    backend: &mut Backend,
+#[cfg(feature = "rocksdb-backend")]
+pub async fn streamed_immutable_block_ids_vec(
+    backend: &mut RocksBackend,
     slot_range: RangeInclusive<Slot>,
     limit: NonZeroUsize,
 ) -> Result<Vec<HeaderId>, StorageServiceError> {

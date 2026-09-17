@@ -1,11 +1,8 @@
-use core::fmt::{self, Debug, Display};
+use core::fmt::{self, Debug};
 use std::{collections::HashSet, pin::Pin, time::Duration};
 
-use bytes::Bytes;
 use futures::StreamExt as _;
 use lb_core::{
-    block::Block,
-    events::Events,
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
@@ -14,7 +11,7 @@ use lb_core::{
     },
 };
 use lb_cryptarchia_engine::Slot;
-use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
+use lb_storage_service::backends::StorageBackend;
 use overwatch::services::{relay::InboundRelay, state::StateUpdater};
 use serde::{Serialize, de::DeserializeOwned};
 use time::OffsetDateTime;
@@ -52,7 +49,7 @@ impl Debug for AwaitingGenesisTime {
     }
 }
 
-impl<Tx, Storage, RuntimeServiceId> Service<AwaitingGenesisTime, Tx, Storage, RuntimeServiceId>
+impl<Tx, Storage> Service<AwaitingGenesisTime, Tx, Storage>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
@@ -67,10 +64,6 @@ where
         + Unpin
         + 'static,
     Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Display + 'static,
 {
     /// Create a [`Service`] in its first phase.
     #[expect(clippy::too_many_arguments, reason = "Need all ingredients")]
@@ -84,7 +77,7 @@ where
         chain_online_notifier: ChainOnlineNotifier,
         current_slot: Slot,
         storage_blocks_to_remove: HashSet<HeaderId>,
-        relays: CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
+        relays: CryptarchiaConsensusRelays<Tx, Storage>,
         sync_blocks_provider: BlockProvider<Storage, Tx>,
         slot_timer: lb_time_service::EpochSlotTickStream,
         state_recording_timer: tokio::time::Interval,
@@ -118,7 +111,7 @@ where
     /// skipped, in which case the next phase is a no-op.
     pub async fn process_awaiting_genesis_time(
         mut self,
-    ) -> Service<InitialBlockDownload, Tx, Storage, RuntimeServiceId> {
+    ) -> Service<InitialBlockDownload, Tx, Storage> {
         info!(target: LOG_TARGET, "entering {:?} phase", self.phase);
 
         let Some(genesis_timer) = self.phase.genesis_timer.take() else {

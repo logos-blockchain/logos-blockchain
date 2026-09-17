@@ -135,12 +135,11 @@ async fn get_block_ids_from_memory_and_storage() {
     let (storage_tx, storage_rx) = mpsc::channel(10);
     let _storage_svc = spawn_storage_service(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays = CryptarchiaConsensusRelays::<_, RocksBackend, TestRuntimeServiceId>::new(
+    let relays = CryptarchiaConsensusRelays::<_, RocksBackend>::new(
         OutboundRelay::new(broadcast_tx),
         OutboundRelay::new(storage_tx),
         OutboundRelay::new(time_tx),
-    )
-    .await;
+    );
     let (new_block_tx, _new_block_rx) = broadcast::channel(10);
     let (lib_tx, _lib_rx) = broadcast::channel(10);
 
@@ -192,7 +191,7 @@ async fn get_block_ids_from_memory_and_storage() {
         &cryptarchia,
         block_ids[2],
         block_ids[0],
-        relays.storage_adapter().clone(),
+        relays.storage().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[2]);
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
@@ -204,7 +203,7 @@ async fn get_block_ids_from_memory_and_storage() {
         &cryptarchia,
         block_ids[2],
         [99; 32].into(), // unknown block ID
-        relays.storage_adapter().clone(),
+        relays.storage().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[2]);
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
@@ -245,7 +244,7 @@ async fn get_block_ids_from_memory_and_storage() {
         &cryptarchia,
         block_ids[5],
         block_ids[0],
-        relays.storage_adapter().clone(),
+        relays.storage().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[5]);
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[4]);
@@ -260,7 +259,7 @@ async fn get_block_ids_from_memory_and_storage() {
         &cryptarchia,
         block_ids[1],
         [99; 32].into(), // unknown block ID
-        relays.storage_adapter().clone(),
+        relays.storage().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[0]);
@@ -276,16 +275,12 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     let (storage_tx, storage_rx) = mpsc::channel(10);
     let _storage_svc = spawn_storage_service(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays = CryptarchiaConsensusRelays::<
-        SignedOps<Preverified, StandardMode>,
-        RocksBackend,
-        TestRuntimeServiceId,
-    >::new(
-        OutboundRelay::new(broadcast_tx),
-        OutboundRelay::new(storage_tx),
-        OutboundRelay::new(time_tx),
-    )
-    .await;
+    let relays =
+        CryptarchiaConsensusRelays::<SignedOps<Preverified, StandardMode>, RocksBackend>::new(
+            OutboundRelay::new(broadcast_tx),
+            OutboundRelay::new(storage_tx),
+            OutboundRelay::new(time_tx),
+        );
 
     let lib = [0; 32].into();
     let missing_tip = [1; 32].into();
@@ -296,7 +291,7 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
         SystemTimeBackend,
         TestRuntimeServiceId,
     >::load_recovery_blocks_or_fall_back_to_lib(
-        missing_tip, lib, relays.storage_adapter().clone()
+        missing_tip, lib, relays.storage().clone()
     )
     .await;
 
@@ -312,16 +307,12 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     // request fails.
     drop(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays = CryptarchiaConsensusRelays::<
-        SignedOps<Preverified, StandardMode>,
-        RocksBackend,
-        TestRuntimeServiceId,
-    >::new(
-        OutboundRelay::new(broadcast_tx),
-        OutboundRelay::new(storage_tx),
-        OutboundRelay::new(time_tx),
-    )
-    .await;
+    let relays =
+        CryptarchiaConsensusRelays::<SignedOps<Preverified, StandardMode>, RocksBackend>::new(
+            OutboundRelay::new(broadcast_tx),
+            OutboundRelay::new(storage_tx),
+            OutboundRelay::new(time_tx),
+        );
     let (new_block_tx, mut new_block_rx) = broadcast::channel(10);
     let (lib_tx, mut lib_rx) = broadcast::channel(10);
 

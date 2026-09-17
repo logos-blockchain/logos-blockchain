@@ -1,20 +1,15 @@
-use core::fmt::{self, Debug, Display};
+use core::fmt::{self, Debug};
 use std::collections::HashSet;
 
-use bytes::Bytes;
 use futures::StreamExt as _;
-use lb_core::{
-    block::Block,
-    events::Events,
-    mantle::{
-        ledger::verification_mode::StandardMode,
-        traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
-        transactions::states::Preverified,
-    },
+use lb_core::mantle::{
+    ledger::verification_mode::StandardMode,
+    traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
+    transactions::states::Preverified,
 };
 use lb_cryptarchia_sync::{GetTipResponse, ProviderResponse};
 use lb_network_service::message::ChainSyncEvent;
-use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
+use lb_storage_service::backends::StorageBackend;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{debug, error, info, trace};
 
@@ -34,7 +29,7 @@ impl Debug for Following {
     }
 }
 
-impl<Tx, Storage, RuntimeServiceId> Service<Following, Tx, Storage, RuntimeServiceId>
+impl<Tx, Storage> Service<Following, Tx, Storage>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
@@ -49,10 +44,6 @@ where
         + Unpin
         + 'static,
     Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Display + 'static,
 {
     /// Runs the phase forever.
     pub async fn process_following(mut self) {

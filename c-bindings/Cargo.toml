@@ -22,6 +22,7 @@ lb-key-management-system-keys = { workspace = true }
 lb-network-service            = { workspace = true }
 lb-node                       = { workspace = true }
 lb-pow-service                = { workspace = true }
+lb-storage-service            = { workspace = true }
 lb-time-service               = { workspace = true }
 lb-utils                      = { workspace = true }
 lb-version                    = { workspace = true }

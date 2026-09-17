@@ -1,32 +1,44 @@
 pub mod api;
 pub mod backends;
+#[cfg(feature = "rocksdb-backend")]
 mod metrics;
 pub mod recovery;
 
+#[cfg(feature = "rocksdb-backend")]
+use std::{fmt::Display, time::Instant};
 use std::{
-    fmt::{Debug, Display, Formatter},
+    fmt::{Debug, Formatter},
     marker::PhantomData,
     num::NonZeroUsize,
-    time::Instant,
 };
 
+#[cfg(feature = "rocksdb-backend")]
 use async_trait::async_trait;
 use backends::{StorageBackend, StorageTransaction};
 use bytes::Bytes;
 use lb_core::codec::DeserializeOp as _;
+#[cfg(feature = "rocksdb-backend")]
 use lb_log_targets::storage;
+#[cfg(feature = "rocksdb-backend")]
 use overwatch::{
-    DynError, OpaqueServiceResourcesHandle,
+    DynError,
+    services::{AsServiceId, ServiceCore},
+};
+use overwatch::{
+    OpaqueServiceResourcesHandle,
     services::{
-        AsServiceId, ServiceCore, ServiceData,
+        ServiceData,
         state::{NoOperator, NoState},
     },
 };
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot::Sender;
 
-use crate::api::{StorageApiRequest, StorageOperation};
+use crate::api::chain::requests::ChainApiRequest;
+#[cfg(feature = "rocksdb-backend")]
+use crate::backends::rocksdb::RocksBackend;
 
+#[cfg(feature = "rocksdb-backend")]
 const LOG_TARGET: &str = storage::ROOT;
 
 /// Storage message that maps to [`StorageBackend`] trait
@@ -55,7 +67,7 @@ pub enum StorageMsg<Backend: StorageBackend> {
         reply_channel: Sender<<Backend::Transaction as StorageTransaction>::Result>,
     },
     Api {
-        request: StorageApiRequest<Backend>,
+        request: ChainApiRequest,
     },
 }
 
@@ -155,6 +167,13 @@ pub enum StorageServiceError {
 }
 
 /// Storage service that wraps a [`StorageBackend`]
+///
+/// Chain requests execute against `RocksDB`. Without `rocksdb-backend`, this
+/// type provides the service metadata used by relay clients, but no runner.
+#[cfg_attr(
+    not(feature = "rocksdb-backend"),
+    expect(dead_code, reason = "Service fields are used by the RocksDB runner")
+)]
 pub struct StorageService<Backend, RuntimeServiceId>
 where
     Backend: StorageBackend + Send + Sync + 'static,
@@ -163,11 +182,9 @@ where
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
 }
 
-impl<Backend, RuntimeServiceId> StorageService<Backend, RuntimeServiceId>
-where
-    Backend: StorageBackend + Send + Sync + 'static,
-{
-    pub async fn handle_storage_message(msg: StorageMsg<Backend>, backend: &mut Backend) {
+#[cfg(feature = "rocksdb-backend")]
+impl<RuntimeServiceId> StorageService<RocksBackend, RuntimeServiceId> {
+    pub async fn handle_storage_message(msg: StorageMsg<RocksBackend>, backend: &mut RocksBackend) {
         let started_at = Instant::now();
 
         let result = match msg {
@@ -204,7 +221,7 @@ where
     }
     /// Handle load message
     async fn handle_load(
-        backend: &mut Backend,
+        backend: &mut RocksBackend,
         key: Bytes,
         reply_channel: Sender<Option<Bytes>>,
     ) -> Result<(), StorageServiceError> {
@@ -221,7 +238,7 @@ where
 
     /// Handle load prefix message
     async fn handle_load_prefix(
-        backend: &mut Backend,
+        backend: &mut RocksBackend,
         prefix: Bytes,
         start_key: Option<Bytes>,
         end_key: Option<Bytes>,
@@ -241,7 +258,7 @@ where
 
     /// Handle remove message
     async fn handle_remove(
-        backend: &mut Backend,
+        backend: &mut RocksBackend,
         key: Bytes,
         reply_channel: Sender<Option<Bytes>>,
     ) -> Result<(), StorageServiceError> {
@@ -258,7 +275,7 @@ where
 
     /// Handle store message
     async fn handle_store(
-        backend: &mut Backend,
+        backend: &mut RocksBackend,
         key: Bytes,
         value: Bytes,
     ) -> Result<(), StorageServiceError> {
@@ -270,9 +287,11 @@ where
 
     /// Handle execute message
     async fn handle_execute(
-        backend: &mut Backend,
-        transaction: Backend::Transaction,
-        reply_channel: Sender<<Backend::Transaction as StorageTransaction>::Result>,
+        backend: &mut RocksBackend,
+        transaction: <RocksBackend as StorageBackend>::Transaction,
+        reply_channel: Sender<
+            <<RocksBackend as StorageBackend>::Transaction as StorageTransaction>::Result,
+        >,
     ) -> Result<(), StorageServiceError> {
         let result = backend
             .execute(transaction)
@@ -286,20 +305,21 @@ where
     }
 
     async fn handle_api_call(
-        api_call: StorageApiRequest<Backend>,
-        api_backend: &mut Backend,
+        api_call: ChainApiRequest,
+        api_backend: &mut RocksBackend,
     ) -> Result<(), StorageServiceError> {
-        <StorageApiRequest<Backend> as StorageOperation<Backend>>::execute(api_call, api_backend)
+        api_call
+            .execute(api_backend)
             .await
             .map_err(|e| StorageServiceError::BackendError(e.into()))
     }
 }
 
+#[cfg(feature = "rocksdb-backend")]
 #[async_trait]
-impl<Backend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for StorageService<Backend, RuntimeServiceId>
+impl<RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for StorageService<RocksBackend, RuntimeServiceId>
 where
-    Backend: StorageBackend + Send + Sync + 'static,
     RuntimeServiceId: AsServiceId<Self> + Display + Send,
 {
     fn init(
@@ -307,7 +327,7 @@ where
         _initial_state: Self::State,
     ) -> Result<Self, DynError> {
         Ok(Self {
-            backend: Backend::new(
+            backend: RocksBackend::new(
                 service_resources_handle
                     .settings_handle
                     .notifier()

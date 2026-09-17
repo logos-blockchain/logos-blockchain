@@ -7,8 +7,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 pub use lb_core::codec::SerdeOp;
 
-use crate::api::StorageBackendApi;
-
 /// Trait to abstract storage transactions return and operation types
 pub trait StorageTransaction: Send + Sync {
     type Result: Send + Sync;
@@ -17,7 +15,7 @@ pub trait StorageTransaction: Send + Sync {
 
 /// Main storage functionality trait
 #[async_trait]
-pub trait StorageBackend: StorageBackendApi + Sized {
+pub trait StorageBackend: Sized {
     /// Backend settings
     type Settings: Clone + Send + Sync + 'static;
     /// Backend operations error type

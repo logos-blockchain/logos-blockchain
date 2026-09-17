@@ -93,13 +93,9 @@ pub type TimeService = generic_services::TimeService<RuntimeServiceId>;
 
 pub type PoWService = generic_services::PoWService<RuntimeServiceId>;
 
-pub type ApiStorageAdapter<RuntimeServiceId> =
-    lb_api_service::http::storage::adapters::rocksdb::RocksAdapter<RuntimeServiceId>;
-
 pub type ApiService = lb_api_service::ApiService<
     AxumBackend<
         NtpTimeBackend,
-        ApiStorageAdapter<RuntimeServiceId>,
         RocksStorageAdapter<SignedOps<Preverified, StandardMode>, TxHash>,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
