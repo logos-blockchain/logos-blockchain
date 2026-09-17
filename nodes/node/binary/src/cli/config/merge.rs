@@ -133,6 +133,17 @@ impl Display for MergeConflict {
 /// - Maps are merged key by key.
 /// - Lists and tagged values are replaced whole: changes nested inside them are
 ///   neither merged nor reported as conflicts.
+///
+/// # Important
+///
+/// Cryptographic keys are not handled specially: key IDs are merged like any
+/// other value.
+///
+/// This means that if `destination` was generated from a different keystore
+/// than `source`, the result will reference keys it doesn't have.
+///
+/// Generate `destination` from the source's keystore with
+/// [`migrate::run`](super::migrate::run) to avoid this.
 pub fn merge(
     source: YamlValue,
     destination: &mut YamlValue,

@@ -342,6 +342,11 @@ pub type FfiMergeUserConfigResult = FfiStatusResult<*mut c_char>;
 ///
 /// The destination file is overwritten with the result.
 ///
+/// # Requirements
+///
+/// Running [`migrate_user_config`] before merging (calling this function) is
+/// recommended, it will cleanly handle the keystore migration.
+///
 /// # Arguments
 ///
 /// - `source_path`: Path to the config YAML file whose values are merged.
