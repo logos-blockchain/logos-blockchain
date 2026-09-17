@@ -9,8 +9,7 @@ use lb_blend::{
         encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
     },
     network::core::{
-        Config, NetworkBehaviour,
-        with_core::behaviour::{Config as CoreToCoreConfig, IntervalStreamProvider},
+        Config, NetworkBehaviour, with_core::behaviour::Config as CoreToCoreConfig,
         with_edge::behaviour::Config as CoreToEdgeConfig,
     },
     proofs::{
@@ -30,17 +29,14 @@ use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
 use tokio::{
     sync::{broadcast, mpsc},
-    time::{Interval, interval},
+    time::Interval,
 };
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
-    core::{
-        backends::{
-            BackendEpochInfo,
-            libp2p::{BlendSwarm, behaviour::BlendBehaviour, swarm::BlendSwarmMessage},
-        },
-        settings::StartingBlendConfig as BlendConfig,
+    core::backends::{
+        BackendEpochInfo,
+        libp2p::{BlendSwarm, behaviour::BlendBehaviour, swarm::BlendSwarmMessage},
     },
     test_utils::PROTOCOL_NAME,
 };
@@ -79,7 +75,7 @@ impl ProofsVerifier for TestProofsVerifier {
     }
 }
 
-pub type InnerSwarm = BlendSwarm<ChaCha20Rng, TestObservationWindowProvider, TestProofsVerifier>;
+pub type InnerSwarm = BlendSwarm<ChaCha20Rng, TestProofsVerifier>;
 
 pub struct TestSwarm {
     pub swarm: InnerSwarm,
@@ -167,11 +163,7 @@ impl SwarmBuilder {
     ) -> TestSwarm
     where
         BehaviourConstructor:
-            FnOnce(
-                PeerId,
-                Membership<PeerId>,
-            )
-                -> BlendBehaviour<TestObservationWindowProvider, TestProofsVerifier>,
+            FnOnce(PeerId, Membership<PeerId>) -> BlendBehaviour<TestProofsVerifier>,
     {
         let (swarm_message_sender, swarm_message_receiver) = mpsc::channel(100);
         let (incoming_message_sender, incoming_message_receiver) = broadcast::channel(100);
@@ -201,7 +193,6 @@ impl SwarmBuilder {
 pub struct BlendBehaviourBuilder {
     peer_id: PeerId,
     membership: Membership<PeerId>,
-    observation_window: Option<(Duration, RangeInclusive<u64>)>,
     peering_degree: Option<RangeInclusive<usize>>,
     proofs_verifier: TestProofsVerifier,
 }
@@ -211,19 +202,9 @@ impl BlendBehaviourBuilder {
         Self {
             peer_id,
             membership,
-            observation_window: None,
             peering_degree: None,
             proofs_verifier: TestProofsVerifier,
         }
-    }
-
-    pub fn with_observation_window(
-        mut self,
-        round_duration: Duration,
-        expected_message_range: RangeInclusive<u64>,
-    ) -> Self {
-        self.observation_window = Some((round_duration, expected_message_range));
-        self
     }
 
     pub fn with_peering_degree(mut self, peering_degree: RangeInclusive<usize>) -> Self {
@@ -231,10 +212,7 @@ impl BlendBehaviourBuilder {
         self
     }
 
-    pub fn build(self) -> BlendBehaviour<TestObservationWindowProvider, TestProofsVerifier> {
-        let observation_window_values = self
-            .observation_window
-            .unwrap_or((Duration::from_secs(1), u64::MIN..=u64::MAX));
+    pub fn build(self) -> BlendBehaviour<TestProofsVerifier> {
         let peering_degree = self.peering_degree.unwrap_or(1..=100);
 
         BlendBehaviour {
@@ -252,10 +230,6 @@ impl BlendBehaviourBuilder {
                         num_blend_layers: 3.try_into().unwrap(),
                     },
                 },
-                TestObservationWindowProvider {
-                    expected_message_range: observation_window_values.1,
-                    interval: observation_window_values.0,
-                },
                 (self.membership, 1.into()),
                 self.proofs_verifier,
                 self.peer_id,
@@ -263,38 +237,6 @@ impl BlendBehaviourBuilder {
             ),
             blocked_peers: allow_block_list::Behaviour::default(),
         }
-    }
-}
-
-pub struct TestObservationWindowProvider {
-    interval: Duration,
-    expected_message_range: RangeInclusive<u64>,
-}
-
-#[expect(
-    clippy::fallible_impl_from,
-    reason = "We need this `From` impl to fulfill the behaviour requirements, but for tests we are actually expect it not to use it."
-)]
-impl<Settings, NetworkSettings> From<&BlendConfig<Settings, NetworkSettings>>
-    for TestObservationWindowProvider
-{
-    fn from(_: &BlendConfig<Settings, NetworkSettings>) -> Self {
-        panic!(
-            "This function should never be called in tests since we are hard-coding expected values for the test observation window provider."
-        );
-    }
-}
-
-impl IntervalStreamProvider for TestObservationWindowProvider {
-    type IntervalStream = Box<dyn Stream<Item = RangeInclusive<u64>> + Send + Unpin + 'static>;
-    type IntervalItem = RangeInclusive<u64>;
-
-    fn interval_stream(&self) -> Self::IntervalStream {
-        let expected_message_range = self.expected_message_range.clone();
-        Box::new(
-            IntervalStream::new(interval(self.interval))
-                .map(move |_| expected_message_range.clone()),
-        )
     }
 }
 
@@ -307,7 +249,7 @@ pub trait SwarmExt: libp2p_swarm_test::SwarmExt {
 }
 
 #[async_trait]
-impl SwarmExt for Swarm<BlendBehaviour<TestObservationWindowProvider, TestProofsVerifier>> {
+impl SwarmExt for Swarm<BlendBehaviour<TestProofsVerifier>> {
     async fn listen_and_return_membership_entry(
         &mut self,
         addr: Option<Multiaddr>,

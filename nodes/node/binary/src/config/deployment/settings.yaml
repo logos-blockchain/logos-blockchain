@@ -10,8 +10,6 @@ blend:
         message_frequency_per_round: 1.0
       delayer:
         maximum_release_delay_in_rounds: 1
-    minimum_messages_coefficient: 1
-    normalization_constant: 1.03
     activity_threshold_sensitivity: 1
 network:
   kademlia_protocol_name: /logos-blockchain/kad/X.Y.Z
