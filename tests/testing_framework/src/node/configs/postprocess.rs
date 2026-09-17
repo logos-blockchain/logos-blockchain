@@ -219,7 +219,12 @@ pub fn apply_wallet_genesis_overrides(
         for (secret_key, _) in wallet_accounts {
             let key = Key::Zk(secret_key.clone());
             let key_id = key_id_for_preload_backend(&key);
-            general.kms_config.backend.keys.entry(key_id).or_insert(key);
+            general
+                .kms_config
+                .backend
+                .keys
+                .entry(key_id)
+                .or_insert_with(|| key.into());
         }
     }
 

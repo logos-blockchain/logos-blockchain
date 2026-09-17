@@ -1,15 +1,13 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::net::SocketAddr;
 
-use lb_key_management_system_service::{
-    backend::preload::KeyId,
-    keys::{Key, secured_key::SecuredKey as _},
-};
+use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
 use lb_node::{
     UserConfig,
     config::{
         ApiConfig, CryptarchiaConfig, PoWConfig, SdpConfig, StorageConfig, WalletConfig,
         api::serde::AxumBackendSettings,
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
+        kms::serde::PreloadKmsBackendSettings,
         sdp::serde::RequiredValues as SdpConfigRequiredValues, state::Config as StateConfig,
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
@@ -48,7 +46,7 @@ pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
         api: api_config,
         storage: StorageConfig::default(),
         sdp: sdp_config,
-        wallet: create_wallet_config(&config.consensus_config, &config.kms_config.backend.keys),
+        wallet: create_wallet_config(&config.consensus_config, &config.kms_config.backend),
         // Mining defaults, auto-claim off: generated nodes mine and claim on
         // demand, naming the destination key on each claim request.
         pow: PoWConfig::default(),
@@ -73,8 +71,11 @@ fn create_axum_backend_settings(listen_address: SocketAddr) -> AxumBackendSettin
 
 fn create_wallet_config(
     consensus: &GeneralConsensusConfig,
-    kms_keys: &HashMap<KeyId, Key>,
+    kms: &PreloadKmsBackendSettings,
 ) -> WalletConfig {
+    let kms_keys = kms
+        .resolve_keys()
+        .expect("KMS keys of a generated config are resolvable");
     let known_keys = [
         (
             key_id_for_preload_backend(&Key::Zk(consensus.known_key.clone())),

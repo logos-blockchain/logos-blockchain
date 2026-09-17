@@ -44,6 +44,8 @@ pub struct GenerateConfigArgs {
     pub skip_ibd: *const bool,
     pub log_filter: *const c_char,
     pub kms_file: *const c_char,
+    pub mnemonic: *const c_char,
+    pub mnemonic_passphrase: *const c_char,
 }
 
 impl From<GenerateConfigArgs> for EmbeddedInitArgs {
@@ -136,6 +138,18 @@ impl From<GenerateConfigArgs> for EmbeddedInitArgs {
         if !value.kms_file.is_null() {
             let kms_file = unsafe { CStr::from_ptr(value.kms_file) };
             init_args.kms_file = Some(kms_file.to_string_lossy().to_string().into());
+        }
+
+        // ---- mnemonic ----
+        if !value.mnemonic.is_null() {
+            let mnemonic = unsafe { CStr::from_ptr(value.mnemonic) };
+            init_args.mnemonic = Some(mnemonic.to_string_lossy().to_string());
+        }
+
+        // ---- mnemonic_passphrase ----
+        if !value.mnemonic_passphrase.is_null() {
+            let passphrase = unsafe { CStr::from_ptr(value.mnemonic_passphrase) };
+            init_args.mnemonic_passphrase = Some(passphrase.to_string_lossy().to_string());
         }
 
         init_args

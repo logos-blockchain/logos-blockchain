@@ -27,6 +27,8 @@ pub fn create_kms_configs(
         .enumerate()
         .map(|(i, (blend_conf, private_key, zk_secret_key))| KmsConfig {
             backend: PreloadKmsBackendSettings {
+                mnemonic: None,
+                passphrase: None,
                 keys: [
                     (
                         blend_conf.non_ephemeral_signing_key_id.clone(),
@@ -60,7 +62,7 @@ pub fn create_kms_configs(
         for key in shared_keys {
             let key_id = key_id_for_preload_backend(key);
             for kms in &mut kms_configs {
-                kms.backend.keys.insert(key_id.clone(), key.clone());
+                kms.backend.keys.insert(key_id.clone(), key.clone().into());
             }
         }
     }
