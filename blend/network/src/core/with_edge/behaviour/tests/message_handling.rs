@@ -2,7 +2,6 @@ use core::time::Duration;
 
 use futures::{FutureExt as _, StreamExt as _, select};
 use futures_timer::Delay;
-use lb_blend_message::serialize_encapsulated_message_with_verified_public_header;
 use lb_libp2p::SwarmEvent;
 use libp2p::PeerId;
 use libp2p_stream::Behaviour as StreamBehaviour;
@@ -10,6 +9,7 @@ use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
 
 use crate::{
+    OutgoingMessage,
     core::{
         tests::utils::{TestEncapsulatedMessage, TestSwarm},
         with_edge::behaviour::{
@@ -33,7 +33,7 @@ async fn receive_valid_message() {
     let message = TestEncapsulatedMessage::new(b"test");
     send_msg(
         stream,
-        serialize_encapsulated_message_with_verified_public_header(message.as_ref()),
+        OutgoingMessage::try_from(&message.clone().into_inner()).unwrap(),
     )
     .await
     .unwrap();
@@ -71,7 +71,7 @@ async fn reject_message_with_invalid_proof_of_quota() {
     let message = TestEncapsulatedMessage::new(b"invalid-poq");
     send_msg(
         stream,
-        serialize_encapsulated_message_with_verified_public_header(message.as_ref()),
+        OutgoingMessage::try_from(&message.clone().into_inner()).unwrap(),
     )
     .await
     .unwrap();
@@ -111,7 +111,7 @@ async fn reject_message_with_unexpected_layer_count() {
     let message = TestEncapsulatedMessage::new(b"unexpected_layer_count");
     send_msg(
         stream,
-        serialize_encapsulated_message_with_verified_public_header(message.as_ref()),
+        OutgoingMessage::try_from(&message.clone().into_inner()).unwrap(),
     )
     .await
     .unwrap();
@@ -179,7 +179,7 @@ async fn receive_malformed_message() {
     let malformed_message = TestEncapsulatedMessage::new_with_invalid_signature(b"invalid_message");
     send_msg(
         stream,
-        serialize_encapsulated_message_with_verified_public_header(malformed_message.as_ref()),
+        OutgoingMessage::try_from(&malformed_message.clone().into_inner()).unwrap(),
     )
     .await
     .unwrap();

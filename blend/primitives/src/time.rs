@@ -23,6 +23,12 @@ impl Round {
     pub const fn rounds_since(self, earlier: Self) -> u128 {
         self.0.saturating_sub(earlier.0)
     }
+
+    /// The round `rounds` later than this one.
+    #[must_use]
+    pub const fn saturating_add(self, rounds: RoundCount) -> Self {
+        Self(self.0.saturating_add(rounds.get()))
+    }
 }
 
 impl From<u128> for Round {
@@ -74,6 +80,13 @@ pub struct RoundClock {
     round_duration_in_seconds: NonZeroU64,
     start_time: Instant,
     interval: Interval,
+}
+
+// Manual impl because `Interval` does not implement `Clone`.
+impl Clone for RoundClock {
+    fn clone(&self) -> Self {
+        Self::starting_at(self.start_time, self.round_duration_in_seconds)
+    }
 }
 
 impl RoundClock {

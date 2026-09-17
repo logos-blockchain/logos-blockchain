@@ -8,6 +8,8 @@ pub enum SendError {
     DuplicateMessage,
     /// The epoch associated with the message being sent is invalid.
     InvalidEpoch,
+    /// The message is too large for the wire format to frame.
+    MessageTooLarge,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]

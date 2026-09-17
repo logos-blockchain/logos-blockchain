@@ -93,6 +93,7 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
         max_data_message_delay_in_rounds(
             self.num_blend_layers,
             self.scheduler.delayer.maximum_release_delay_in_rounds,
+            self.time.network_absorption_in_rounds,
         )
     }
 }

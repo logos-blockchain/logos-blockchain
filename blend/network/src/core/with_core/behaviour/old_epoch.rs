@@ -119,7 +119,7 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
     #[cfg(any(test, feature = "unsafe-test-functions"))]
     pub(super) fn force_send_serialized_message_to_peer_at_epoch(
         &mut self,
-        serialized_message: Vec<u8>,
+        serialized_message: &[u8],
         peer_id: PeerId,
         epoch: Epoch,
     ) -> Result<(), SendError> {
@@ -137,7 +137,10 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
         self.events.push_back(ToSwarm::NotifyHandler {
             peer_id,
             handler: NotifyHandler::One(*connection_id),
-            event: Either::Left(FromBehaviour::Message(serialized_message)),
+            event: Either::Left(FromBehaviour::Message(
+                crate::OutgoingMessage::try_from_bytes(serialized_message)
+                    .map_err(|_| SendError::MessageTooLarge)?,
+            )),
         });
         self.try_wake();
         Ok(())

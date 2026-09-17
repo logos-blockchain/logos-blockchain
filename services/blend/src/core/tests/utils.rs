@@ -134,6 +134,7 @@ pub fn seeded_release_delay_rng() -> ChaCha20Rng {
 
 pub fn timing_settings() -> TimingSettings {
     TimingSettings {
+        network_absorption_in_rounds: NonZeroU64::new(2).unwrap(),
         rounds_per_epoch: 10.try_into().unwrap(),
         round_duration_in_seconds: 1.try_into().unwrap(),
         rounds_per_observation_window: 5.try_into().unwrap(),
