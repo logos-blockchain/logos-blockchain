@@ -22,10 +22,6 @@ use super::{
 };
 use crate::adapter;
 
-/// Slack after a slot boundary before re-evaluating the turn, so the wake-up
-/// lands inside the new slot.
-const TURN_BOUNDARY_GRACE: std::time::Duration = std::time::Duration::from_millis(10);
-
 impl<Node> ZoneSequencer<Node>
 where
     Node: adapter::Node + Clone + Send + Sync + 'static,
@@ -309,36 +305,11 @@ where
             self.buffered_events
                 .push_back(Event::TurnNotification { notification });
         }
-        self.turn_boundary = self.next_turn_boundary();
-    }
-
-    /// The next slot at which `round_robin` can change hands: the next
-    /// timeframe multiple from the tip sequencer's start, or the next timeout
-    /// multiple from the last landed inscription, whichever comes first.
-    fn next_turn_boundary(&self) -> Option<tokio::time::Instant> {
-        let slot_clock = self.slot_clock.as_ref()?;
-        let channel = self.channel_state.as_ref()?;
-        let current = slot_to_u64(slot_clock.current_slot());
-
-        // First slot after `current` on the grid of `period` slots from `anchor`.
-        let next_on_grid = |anchor: Slot, period: u32| -> Option<u64> {
-            if period == 0 {
-                return None;
-            }
-            let (anchor, period) = (slot_to_u64(anchor), u64::from(period));
-            let periods_elapsed = current.saturating_sub(anchor) / period;
-            anchor.checked_add(periods_elapsed.checked_add(1)?.checked_mul(period)?)
-        };
-
-        let by_timeframe = next_on_grid(
-            channel.tip_sequencer_starting_slot,
-            u32::from(channel.posting_timeframe.clone()),
-        );
-        let by_timeout = next_on_grid(channel.tip_slot, u32::from(channel.posting_timeout.clone()));
-        let slot = by_timeframe.into_iter().chain(by_timeout).min()?;
-
-        let at = slot_clock.instant_of(Slot::from(slot))? + TURN_BOUNDARY_GRACE;
-        Some(tokio::time::Instant::from_std(at))
+        self.turn_boundary = self
+            .slot_clock
+            .as_ref()
+            .zip(self.channel_state.as_ref())
+            .and_then(|(clock, channel)| channel.next_round_robin_boundary(clock.current_slot()));
     }
 
     fn turn_notification(&self, our_turn_to_write: bool) -> TurnNotification {

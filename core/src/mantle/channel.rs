@@ -253,6 +253,30 @@ impl ChannelState {
             .unwrap_or(self.tip_sequencer_starting_slot);
         (index, starting_slot)
     }
+
+    /// The first slot after `slot` at which [`Self::round_robin`] can change
+    /// hands: the next timeframe multiple from the tip sequencer's starting
+    /// slot, or the next timeout multiple from the tip slot, whichever comes
+    /// first. `None` when neither period is set.
+    #[must_use]
+    pub fn next_round_robin_boundary(&self, slot: Slot) -> Option<Slot> {
+        let slot = slot.into_inner();
+        let next_on_grid = |anchor: Slot, period: u32| -> Option<u64> {
+            if period == 0 {
+                return None;
+            }
+            let (anchor, period) = (anchor.into_inner(), u64::from(period));
+            let periods_elapsed = slot.saturating_sub(anchor) / period;
+            anchor.checked_add(periods_elapsed.checked_add(1)?.checked_mul(period)?)
+        };
+        let by_timeframe = next_on_grid(self.tip_sequencer_starting_slot, self.posting_timeframe.0);
+        let by_timeout = next_on_grid(self.tip_slot, self.posting_timeout.0);
+        by_timeframe
+            .into_iter()
+            .chain(by_timeout)
+            .min()
+            .map(Slot::from)
+    }
 }
 
 #[cfg(test)]
@@ -592,6 +616,82 @@ mod tests {
     fn infinite_timeframe_multiple_timeouts() {
         let channel = make_channel(100, 1, 90, 0, 50, 4);
         assert_eq!(channel.round_robin(220.into()), (3, 200.into()));
+    }
+
+    #[test]
+    fn next_boundary_none_without_periods() {
+        let channel = make_channel(100, 2, 80, 0, 0, 5);
+        assert_eq!(channel.next_round_robin_boundary(100.into()), None);
+    }
+
+    #[test]
+    fn next_boundary_follows_timeout_grid_from_tip_slot() {
+        let channel = make_channel(100, 1, 90, 0, 50, 4);
+        assert_eq!(
+            channel.next_round_robin_boundary(100.into()),
+            Some(150.into())
+        );
+        assert_eq!(
+            channel.next_round_robin_boundary(149.into()),
+            Some(150.into())
+        );
+        assert_eq!(
+            channel.next_round_robin_boundary(150.into()),
+            Some(200.into())
+        );
+    }
+
+    #[test]
+    fn next_boundary_follows_timeframe_grid_from_starting_slot() {
+        let channel = make_channel(100, 0, 95, 10, 0, 3);
+        assert_eq!(
+            channel.next_round_robin_boundary(100.into()),
+            Some(105.into())
+        );
+        assert_eq!(
+            channel.next_round_robin_boundary(105.into()),
+            Some(115.into())
+        );
+    }
+
+    #[test]
+    fn next_boundary_takes_the_earlier_grid() {
+        let channel = make_channel(100, 0, 95, 10, 7, 3);
+        // timeframe grid: 105, 115, ...; timeout grid: 107, 114, ...
+        assert_eq!(
+            channel.next_round_robin_boundary(100.into()),
+            Some(105.into())
+        );
+        assert_eq!(
+            channel.next_round_robin_boundary(105.into()),
+            Some(107.into())
+        );
+        assert_eq!(
+            channel.next_round_robin_boundary(107.into()),
+            Some(114.into())
+        );
+    }
+
+    #[test]
+    fn round_robin_is_constant_between_boundaries() {
+        let channels = [
+            make_channel(100, 1, 90, 0, 50, 4),
+            make_channel(100, 0, 95, 10, 0, 3),
+            make_channel(100, 0, 95, 10, 7, 3),
+            make_channel(100, 2, 100, 3, 8, 2),
+        ];
+        for channel in &channels {
+            for start in 100u64..200 {
+                let boundary = channel
+                    .next_round_robin_boundary(start.into())
+                    .unwrap()
+                    .into_inner();
+                let expected = channel.round_robin(start.into());
+                for slot in start..boundary {
+                    assert_eq!(channel.round_robin(slot.into()), expected, "slot {slot}");
+                }
+            }
+        }
     }
 
     // 2. Normal timeframe rotation (no timeout triggered)

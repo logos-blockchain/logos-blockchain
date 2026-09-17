@@ -122,7 +122,7 @@ pub struct ZoneSequencer<Node> {
     // Buffered events — when one drive step produces multiple events.
     pub(super) buffered_events: VecDeque<Event>,
     /// Next slot boundary at which the turn is re-evaluated.
-    pub(super) turn_boundary: Option<tokio::time::Instant>,
+    pub(super) turn_boundary: Option<Slot>,
 
     // Incremental backfill state — processes one batch per next_event() call
     pub(super) backfill_from: Option<Slot>,
@@ -529,6 +529,12 @@ where
             return None;
         }
 
+        let turn_wakeup = self
+            .slot_clock
+            .as_ref()
+            .zip(self.turn_boundary)
+            .and_then(|(clock, slot)| clock.sleep_until(slot));
+        let turn_armed = turn_wakeup.is_some();
         let stream = self.blocks_stream.as_mut()?;
 
         tokio::select! {
@@ -545,9 +551,7 @@ where
                 self.resubmit_pending();
                 None
             }
-            () = tokio::time::sleep_until(
-                self.turn_boundary.unwrap_or_else(tokio::time::Instant::now),
-            ), if self.turn_boundary.is_some() => {
+            () = turn_wakeup.unwrap_or_else(|| tokio::time::sleep_until(tokio::time::Instant::now())), if turn_armed => {
                 self.publish_channel_view();
                 self.buffered_events.pop_front().map(|event| self.emit_now(event))
             }

@@ -2,6 +2,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use lb_common_http_client::Slot;
 
+/// Slack after a slot boundary so a wake-up lands inside the new slot; tokio
+/// timers tick at millisecond granularity.
+const BOUNDARY_GRACE: Duration = Duration::from_millis(10);
+
 #[derive(Clone, Debug)]
 pub(super) struct SlotClock {
     slot_duration: Duration,
@@ -50,9 +54,16 @@ impl SlotClock {
         slot_from_u64(from_chain_start.max(from_anchor))
     }
 
+    /// Sleep until [`Self::current_slot`] has reached `slot`; `None` if the
+    /// slot lies beyond what the clock can hold.
+    pub(super) fn sleep_until(&self, slot: Slot) -> Option<tokio::time::Sleep> {
+        let at = self.instant_of(slot)? + BOUNDARY_GRACE;
+        Some(tokio::time::sleep_until(tokio::time::Instant::from_std(at)))
+    }
+
     /// Earliest instant at which [`Self::current_slot`] reaches `slot`; now
     /// if it already has, `None` if it lies beyond what the clock can hold.
-    pub(super) fn instant_of(&self, slot: Slot) -> Option<Instant> {
+    fn instant_of(&self, slot: Slot) -> Option<Instant> {
         let now = Instant::now();
         let target = slot_to_u64(slot);
 
