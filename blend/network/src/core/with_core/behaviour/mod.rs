@@ -1052,9 +1052,17 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
 
     /// Blacklists the sender of a message.
     fn blacklist_peer(&mut self, peer_id: PeerId, reason: BlacklistReason) {
-        self.blacklist
+        let outcome = self
+            .blacklist
             .insert_or_extend(peer_id, reason, self.current_round);
         self.close_every_connection_with(&peer_id);
+
+        // We need to not re-report the peer as blacklisted if it's just an extension of
+        // an existing entry.
+        if !outcome.is_first_offence() {
+            return;
+        }
+
         self.events
             .push_back(ToSwarm::GenerateEvent(Event::PeerBlacklisted {
                 peer: peer_id,
