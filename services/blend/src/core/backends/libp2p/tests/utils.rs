@@ -1,4 +1,8 @@
-use core::{num::NonZeroU64, ops::RangeInclusive, pin::Pin, time::Duration};
+use core::{
+    num::{NonZeroU64, NonZeroUsize},
+    pin::Pin,
+    time::Duration,
+};
 use std::iter::repeat_with;
 
 use async_trait::async_trait;
@@ -190,10 +194,14 @@ impl SwarmBuilder {
     }
 }
 
+pub fn test_peering_degree() -> NonZeroUsize {
+    NonZeroUsize::new(4).unwrap()
+}
+
 pub struct BlendBehaviourBuilder {
     peer_id: PeerId,
     membership: Membership<PeerId>,
-    peering_degree: Option<RangeInclusive<usize>>,
+    peering_degree: Option<NonZeroUsize>,
     proofs_verifier: TestProofsVerifier,
 }
 
@@ -207,19 +215,20 @@ impl BlendBehaviourBuilder {
         }
     }
 
-    pub fn with_peering_degree(mut self, peering_degree: RangeInclusive<usize>) -> Self {
+    /// Sets `Φ_CC`, which must be within the range the specification allows.
+    pub fn with_peering_degree(mut self, peering_degree: NonZeroUsize) -> Self {
         self.peering_degree = Some(peering_degree);
         self
     }
 
     pub fn build(self) -> BlendBehaviour<TestProofsVerifier> {
-        let peering_degree = self.peering_degree.unwrap_or(1..=100);
+        let peering_degree = self.peering_degree.unwrap_or_else(test_peering_degree);
 
         BlendBehaviour {
             blend: NetworkBehaviour::new(
                 &Config {
                     with_core: CoreToCoreConfig {
-                        peering_degree,
+                        target_peering_degree: peering_degree,
                         minimum_network_size: 1.try_into().unwrap(),
                         num_blend_layers: 3.try_into().unwrap(),
                         round_duration_in_seconds: 1.try_into().unwrap(),

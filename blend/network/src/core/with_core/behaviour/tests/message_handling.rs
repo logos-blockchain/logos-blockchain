@@ -17,7 +17,8 @@ use crate::core::{
             Event, NegotiatedPeerState, SpamReason,
             message_cache::MessageStatus,
             tests::utils::{
-                BehaviourBuilder, SwarmExt as _, build_memberships, new_nodes_with_empty_address,
+                BehaviourBuilder, PEERING_DEGREE, SwarmExt as _, build_memberships,
+                new_nodes_with_empty_address,
             },
         },
         error::SendError,
@@ -287,7 +288,7 @@ async fn duplicate_message_received_from_different_peers() {
     let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
-            .with_peering_degree(1..=2)
+            .with_peering_degree(PEERING_DEGREE)
             .build()
     });
 
@@ -768,7 +769,7 @@ async fn duplicate_message_from_old_epoch_after_epoch_rotation_is_suppressed() {
     let mut receiver = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
-            .with_peering_degree(1..=2)
+            .with_peering_degree(PEERING_DEGREE)
             .build()
     });
 
