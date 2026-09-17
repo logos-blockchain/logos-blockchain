@@ -2,6 +2,7 @@ use std::path::Path;
 
 use color_eyre::eyre::Result;
 use lb_core::mantle::Value;
+use lb_key_management_system_service::hd::Mnemonic;
 use lb_pow_service::ClaimTarget;
 use libp2p::{Multiaddr, PeerId};
 use thiserror::Error;
@@ -51,7 +52,11 @@ pub fn run(args: InitArgs) -> Result<()> {
         return Err(InitError::KeystoreFileExists.into());
     }
 
-    let keystore = Keystore::default();
+    let mnemonic = match &args.mnemonic {
+        Some(mnemonic) => mnemonic.parse()?,
+        None => Mnemonic::generate(),
+    };
+    let keystore = Keystore::new(mnemonic, args.mnemonic_passphrase.clone());
     let user_config = build_user_config(&keystore, args);
 
     let user_config_yaml = serde_yaml::to_string(&user_config)?;
@@ -198,13 +203,9 @@ fn build_sdp_config(keystore: &Keystore, sdp_args: SdpArgs) -> SdpConfig {
 }
 
 fn build_kms_config(keystore: &Keystore) -> KmsConfig {
-    let mut kms_config = KmsConfig::default();
-    kms_config.backend.keys = keystore
-        .get_all()
-        .map(|(id, key)| (id, key.clone()))
-        .collect();
-
-    kms_config
+    KmsConfig {
+        backend: keystore.kms_backend_settings(),
+    }
 }
 
 /// Mining defaults, with auto-claim paying the `PoWClaim` key without a cap,

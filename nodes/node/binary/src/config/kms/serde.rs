@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 
-use lb_key_management_system_service::{backend::preload::KeyId, keys::Key};
+use lb_key_management_system_service::{
+    backend::preload::KeyId,
+    hd::{Mnemonic, Path},
+    keys::{Ed25519Key, Key, ZkKey},
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -12,41 +16,83 @@ pub struct Config {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct PreloadKmsBackendSettings {
-    pub keys: HashMap<KeyId, Key>,
+    /// The BIP-39 mnemonic that the [`KeyEntry::Hd`] keys are derived from.
+    pub mnemonic: Option<Mnemonic>,
+    /// The BIP-39 passphrase of the mnemonic, which is empty if not set.
+    pub passphrase: Option<String>,
+    pub keys: HashMap<KeyId, KeyEntry>,
+}
+
+/// A key to load into the KMS, either given as is or derived from the
+/// mnemonic.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum KeyEntry {
+    Ed25519(Ed25519Key),
+    Zk(ZkKey),
+    /// The ZK key of the leaf at the HD path.
+    Hd(Path),
+}
+
+impl From<Key> for KeyEntry {
+    fn from(key: Key) -> Self {
+        match &key {
+            Key::Ed25519(key) => Self::Ed25519(key.clone()),
+            Key::Zk(key) => Self::Zk(key.clone()),
+        }
+    }
+}
+
+impl From<Ed25519Key> for KeyEntry {
+    fn from(key: Ed25519Key) -> Self {
+        Self::Ed25519(key)
+    }
+}
+
+impl From<ZkKey> for KeyEntry {
+    fn from(key: ZkKey) -> Self {
+        Self::Zk(key)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_service::keys::{Ed25519Key, Key, ZkKey};
     use num_bigint::BigUint;
     use rand::rngs::OsRng;
 
-    use crate::config::kms::serde::PreloadKmsBackendSettings;
+    use super::*;
 
     #[test]
     fn serde_keys_from_yaml() {
-        let preloaded_keys = PreloadKmsBackendSettings {
+        let settings = PreloadKmsBackendSettings {
+            mnemonic: Some(Mnemonic::generate()),
+            passphrase: Some("passphrase".to_owned()),
             keys: [
                 (
-                    "test1".into(),
-                    Key::Ed25519(Ed25519Key::generate(&mut OsRng)),
+                    "ed25519".into(),
+                    KeyEntry::Ed25519(Ed25519Key::generate(&mut OsRng)),
                 ),
                 (
-                    "test2".into(),
-                    Key::Zk(ZkKey::new(BigUint::from_bytes_le(&[1u8; 32]).into())),
+                    "zk".into(),
+                    KeyEntry::Zk(ZkKey::new(BigUint::from_bytes_le(&[1u8; 32]).into())),
+                ),
+                (
+                    "hd".into(),
+                    KeyEntry::Hd("m/154'/0'/0'/0'".parse().unwrap()),
                 ),
             ]
             .into(),
         };
 
-        let mut serialized_output = Vec::new();
-        serde_yaml::to_writer(&mut serialized_output, &preloaded_keys).unwrap();
+        let yaml = serde_yaml::to_string(&settings).unwrap();
+        let deserialized: PreloadKmsBackendSettings = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(deserialized.mnemonic, settings.mnemonic);
+        assert_eq!(deserialized.passphrase, settings.passphrase);
+        assert_eq!(deserialized.keys, settings.keys);
+    }
 
-        let deserialized_keys: PreloadKmsBackendSettings =
-            serde_yaml::from_slice(&serialized_output).unwrap();
-
-        assert_eq!(preloaded_keys.keys.len(), deserialized_keys.keys.len());
-        let original_key = preloaded_keys.keys.keys().next().unwrap();
-        assert!(deserialized_keys.keys.contains_key(original_key));
+    #[test]
+    fn invalid_mnemonic_is_rejected() {
+        let yaml = "mnemonic: abandon abandon about";
+        assert!(serde_yaml::from_str::<PreloadKmsBackendSettings>(yaml).is_err());
     }
 }
