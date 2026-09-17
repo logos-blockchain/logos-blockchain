@@ -1419,6 +1419,14 @@ where
                 ToBehaviour::FullyNegotiated => {
                     self.handle_negotiated_connection((peer_id, connection_id));
                 }
+                // The spec's "failure of the authenticated stream", which it
+                // defines as a violation of the framing of the stream. The
+                // handler has already dropped the substreams, so all that is
+                // left is to exclude the neighbour.
+                ToBehaviour::InboundFramingViolation(error) => {
+                    tracing::debug!(target: LOG_TARGET, "Peer {peer_id:?} broke the framing of connection {connection_id:?}: {error}");
+                    self.blacklist_peer(peer_id, BlacklistReason::StreamFramingViolation);
+                }
                 ToBehaviour::IOError(e) => {
                     tracing::trace!(target: LOG_TARGET, "IO error {e:?} with peer {peer_id:?} on connection {connection_id:?}");
                 }
