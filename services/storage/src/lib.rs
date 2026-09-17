@@ -4,76 +4,31 @@
 #![cfg(feature = "rocksdb-backend")]
 
 pub mod api;
-pub mod backends;
-#[cfg(feature = "rocksdb-backend")]
+pub mod backend;
 mod metrics;
 pub mod recovery;
+pub mod rocksdb;
 
-#[cfg(feature = "rocksdb-backend")]
 use std::{fmt::Display, time::Instant};
-use std::{
-    fmt::{Debug, Formatter},
-    num::NonZeroUsize,
-};
 
-#[cfg(feature = "rocksdb-backend")]
+pub use api::requests::StorageMsg;
 use async_trait::async_trait;
-use backends::{StorageBackend, StorageTransaction};
+use backend::StorageBackend as _;
 use bytes::Bytes;
 use lb_binary_codec::bincode::DeserializeOp as _;
-#[cfg(feature = "rocksdb-backend")]
 use lb_log_targets::storage;
-#[cfg(feature = "rocksdb-backend")]
 use overwatch::{
-    DynError,
-    services::{AsServiceId, ServiceCore},
-};
-use overwatch::{
-    OpaqueServiceResourcesHandle,
+    DynError, OpaqueServiceResourcesHandle,
     services::{
-        ServiceData,
+        AsServiceId, ServiceCore, ServiceData,
         state::{NoOperator, NoState},
     },
 };
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::sync::oneshot::Sender;
 
-use crate::api::chain::requests::ChainApiRequest;
-#[cfg(feature = "rocksdb-backend")]
-use crate::backends::rocksdb::{RocksBackend, RocksBackendSettings, Transaction};
+use crate::rocksdb::{RocksBackend, RocksBackendSettings, handle_request};
 
-#[cfg(feature = "rocksdb-backend")]
 const LOG_TARGET: &str = storage::ROOT;
-
-/// Storage message that maps to [`StorageBackend`] trait
-pub enum StorageMsg {
-    Load {
-        key: Bytes,
-        reply_channel: Sender<Option<Bytes>>,
-    },
-    LoadPrefix {
-        prefix: Bytes,
-        start_key: Option<Bytes>,
-        end_key: Option<Bytes>,
-        limit: Option<NonZeroUsize>,
-        reply_channel: Sender<Vec<Bytes>>,
-    },
-    Store {
-        key: Bytes,
-        value: Bytes,
-    },
-    Remove {
-        key: Bytes,
-        reply_channel: Sender<Option<Bytes>>,
-    },
-    Execute {
-        transaction: Transaction,
-        reply_channel: Sender<<Transaction as StorageTransaction>::Result>,
-    },
-    Api {
-        request: ChainApiRequest,
-    },
-}
 
 /// Reply channel for storage messages
 pub struct StorageReplyReceiver<T> {
@@ -113,39 +68,6 @@ impl StorageReplyReceiver<Option<Bytes>> {
     }
 }
 
-// Transactions contain closures that cannot derive `Debug`.
-impl Debug for StorageMsg {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Load { key, .. } => {
-                write!(f, "Load {{ {key:?} }}")
-            }
-            Self::LoadPrefix {
-                prefix,
-                start_key,
-                end_key,
-                limit,
-                ..
-            } => {
-                write!(
-                    f,
-                    "LoadPrefix {{ {prefix:?} {start_key:?}, {end_key:?}, limit: {limit:?} }}"
-                )
-            }
-            Self::Store { key, value } => {
-                write!(f, "Store {{ {key:?}, {value:?}}}")
-            }
-            Self::Remove { key, .. } => {
-                write!(f, "Remove {{ {key:?} }}")
-            }
-            Self::Execute { .. } => write!(f, "Execute transaction"),
-            Self::Api { .. } => {
-                write!(f, "Api {{ .. }}")
-            }
-        }
-    }
-}
-
 /// Storage error
 /// Errors that may happen when performing storage operations
 #[derive(Debug, thiserror::Error)]
@@ -162,35 +84,11 @@ pub struct StorageService<RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
 }
 
-#[cfg(feature = "rocksdb-backend")]
 impl<RuntimeServiceId> StorageService<RuntimeServiceId> {
     pub async fn handle_storage_message(msg: StorageMsg, backend: &mut RocksBackend) {
         let started_at = Instant::now();
 
-        let result = match msg {
-            StorageMsg::Load { key, reply_channel } => {
-                Self::handle_load(backend, key, reply_channel).await
-            }
-            StorageMsg::LoadPrefix {
-                prefix,
-                start_key,
-                end_key,
-                limit,
-                reply_channel,
-            } => {
-                Self::handle_load_prefix(backend, prefix, start_key, end_key, limit, reply_channel)
-                    .await
-            }
-            StorageMsg::Store { key, value } => Self::handle_store(backend, key, value).await,
-            StorageMsg::Remove { key, reply_channel } => {
-                Self::handle_remove(backend, key, reply_channel).await
-            }
-            StorageMsg::Execute {
-                transaction,
-                reply_channel,
-            } => Self::handle_execute(backend, transaction, reply_channel).await,
-            StorageMsg::Api { request: api_call } => Self::handle_api_call(api_call, backend).await,
-        };
+        let result = handle_request(msg, backend).await;
 
         if let Err(err) = result {
             metrics::storage_request_failed();
@@ -199,103 +97,8 @@ impl<RuntimeServiceId> StorageService<RuntimeServiceId> {
             metrics::storage_observe_request_ok(started_at);
         }
     }
-    /// Handle load message
-    async fn handle_load(
-        backend: &mut RocksBackend,
-        key: Bytes,
-        reply_channel: Sender<Option<Bytes>>,
-    ) -> Result<(), StorageServiceError> {
-        let result: Option<Bytes> = backend
-            .load(&key)
-            .await
-            .map_err(|e| StorageServiceError::BackendError(e.into()))?;
-        reply_channel
-            .send(result)
-            .map_err(|_| StorageServiceError::ReplyError {
-                message: format!("Load {key:?}"),
-            })
-    }
-
-    /// Handle load prefix message
-    async fn handle_load_prefix(
-        backend: &mut RocksBackend,
-        prefix: Bytes,
-        start_key: Option<Bytes>,
-        end_key: Option<Bytes>,
-        limit: Option<NonZeroUsize>,
-        reply_channel: Sender<Vec<Bytes>>,
-    ) -> Result<(), StorageServiceError> {
-        let result: Vec<Bytes> = backend
-            .load_prefix(&prefix, start_key.as_deref(), end_key.as_deref(), limit)
-            .await
-            .map_err(|e| StorageServiceError::BackendError(e.into()))?;
-        reply_channel
-            .send(result)
-            .map_err(|_| StorageServiceError::ReplyError {
-                message: format!("LoadPrefix {prefix:?}"),
-            })
-    }
-
-    /// Handle remove message
-    async fn handle_remove(
-        backend: &mut RocksBackend,
-        key: Bytes,
-        reply_channel: Sender<Option<Bytes>>,
-    ) -> Result<(), StorageServiceError> {
-        let result: Option<Bytes> = backend
-            .remove(&key)
-            .await
-            .map_err(|e| StorageServiceError::BackendError(e.into()))?;
-        reply_channel
-            .send(result)
-            .map_err(|_| StorageServiceError::ReplyError {
-                message: format!("Remove {key:?}"),
-            })
-    }
-
-    /// Handle store message
-    async fn handle_store(
-        backend: &mut RocksBackend,
-        key: Bytes,
-        value: Bytes,
-    ) -> Result<(), StorageServiceError> {
-        backend
-            .store(key, value)
-            .await
-            .map_err(|e| StorageServiceError::BackendError(e.into()))
-    }
-
-    /// Handle execute message
-    async fn handle_execute(
-        backend: &mut RocksBackend,
-        transaction: <RocksBackend as StorageBackend>::Transaction,
-        reply_channel: Sender<
-            <<RocksBackend as StorageBackend>::Transaction as StorageTransaction>::Result,
-        >,
-    ) -> Result<(), StorageServiceError> {
-        let result = backend
-            .execute(transaction)
-            .await
-            .map_err(|e| StorageServiceError::BackendError(e.into()))?;
-        reply_channel
-            .send(result)
-            .map_err(|_| StorageServiceError::ReplyError {
-                message: "Execute transaction".to_owned(),
-            })
-    }
-
-    async fn handle_api_call(
-        api_call: ChainApiRequest,
-        api_backend: &mut RocksBackend,
-    ) -> Result<(), StorageServiceError> {
-        api_call
-            .execute(api_backend)
-            .await
-            .map_err(|e| StorageServiceError::BackendError(e.into()))
-    }
 }
 
-#[cfg(feature = "rocksdb-backend")]
 #[async_trait]
 impl<RuntimeServiceId> ServiceCore<RuntimeServiceId> for StorageService<RuntimeServiceId>
 where

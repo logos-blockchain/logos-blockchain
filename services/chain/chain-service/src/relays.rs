@@ -2,7 +2,7 @@ use std::fmt::{Debug, Display};
 
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService};
 use lb_core::mantle::traits::{PreverifiedMantleTransaction, StorageSize};
-use lb_storage_service::{StorageMsg, StorageService, api::StorageApi};
+use lb_storage_service::{StorageService, api::StorageApi};
 use lb_time_service::{TimeService, TimeServiceMessage};
 use overwatch::{
     OpaqueServiceResourcesHandle,
@@ -13,8 +13,6 @@ use serde::{Serialize, de::DeserializeOwned};
 use crate::CryptarchiaConsensus;
 
 pub type BroadcastRelay = OutboundRelay<BlockBroadcastMsg>;
-
-pub type StorageRelay = OutboundRelay<StorageMsg>;
 
 pub type TimeRelay = OutboundRelay<TimeServiceMessage>;
 
@@ -40,10 +38,9 @@ where
 {
     pub const fn new(
         broadcast_relay: BroadcastRelay,
-        storage_relay: StorageRelay,
+        storage: StorageApi<Tx>,
         time_relay: TimeRelay,
     ) -> Self {
-        let storage = StorageApi::<Tx>::new(storage_relay);
         Self {
             broadcast_relay,
             storage,
@@ -79,9 +76,7 @@ where
         succeed",
             );
 
-        let storage_relay = service_resources_handle
-            .overwatch_handle
-            .relay::<StorageService<_>>()
+        let storage = StorageApi::from_overwatch_handle(&service_resources_handle.overwatch_handle)
             .await
             .expect("Relay connection with StorageService should succeed");
 
@@ -91,7 +86,7 @@ where
             .await
             .expect("Relay connection with TimeService should succeed");
 
-        Self::new(broadcast_relay, storage_relay, time_relay)
+        Self::new(broadcast_relay, storage, time_relay)
     }
 
     pub const fn broadcast_relay(&self) -> &BroadcastRelay {

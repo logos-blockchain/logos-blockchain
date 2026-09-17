@@ -2,24 +2,26 @@ use std::{fmt::Display, marker::PhantomData};
 
 use bytes::Bytes;
 use lb_binary_codec::bincode::DeserializeOp as _;
-#[cfg(all(test, feature = "rocksdb-backend"))]
+#[cfg(test)]
 use lb_binary_codec::bincode::SerializeOp as _;
-#[cfg(feature = "rocksdb-backend")]
-use lb_services_utils::overwatch::recovery::RecoveryData;
 pub use lb_services_utils::overwatch::recovery::StorageRecoverySettings;
-use lb_services_utils::overwatch::recovery::{RecoveryBackend, RecoveryError, RecoveryResult};
-#[cfg(feature = "rocksdb-backend")]
-use overwatch::DynError;
+use lb_services_utils::overwatch::recovery::{
+    RecoveryBackend, RecoveryData, RecoveryError, RecoveryResult,
+};
 use overwatch::{
+    DynError,
     overwatch::OverwatchHandle,
     services::{AsServiceId, state::ServiceState},
 };
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::OnceCell;
 
-#[cfg(feature = "rocksdb-backend")]
-use crate::backends::rocksdb::{RocksBackend, RocksBackendSettings};
-use crate::{StorageService, api::StorageApi, backends::StorageBackend as _};
+use crate::{
+    StorageService,
+    api::StorageApi,
+    backend::StorageBackend as _,
+    rocksdb::{RocksBackend, RocksBackendSettings},
+};
 
 const RECOVERY_PREFIX: &[u8] = b"recovery/";
 
@@ -31,13 +33,11 @@ pub fn recovery_key(suffix: &[u8]) -> Bytes {
     key.into()
 }
 
-#[cfg(feature = "rocksdb-backend")]
 pub fn load_recovery_data(settings: RocksBackendSettings) -> Result<RecoveryData, DynError> {
     let backend = RocksBackend::new(settings)?;
     recovery_data_from_backend(&backend)
 }
 
-#[cfg(feature = "rocksdb-backend")]
 fn recovery_data_from_backend(backend: &RocksBackend) -> Result<RecoveryData, DynError> {
     backend
         .load_prefix_entries(RECOVERY_PREFIX)
@@ -112,10 +112,8 @@ where
         let storage = self
             .storage
             .get_or_try_init(async || {
-                self.overwatch_handle
-                    .relay::<StorageService<RuntimeServiceId>>()
+                StorageApi::from_overwatch_handle(&self.overwatch_handle)
                     .await
-                    .map(StorageApi::new)
                     .map_err(|error| RecoveryError::Backend(error.to_string()))
             })
             .await?;
@@ -127,7 +125,7 @@ where
     }
 }
 
-#[cfg(all(test, feature = "rocksdb-backend"))]
+#[cfg(test)]
 mod tests {
     use serde::{Deserialize, Serialize};
 

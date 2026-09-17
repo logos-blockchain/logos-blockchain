@@ -1,6 +1,3 @@
-#[cfg(feature = "rocksdb-backend")]
-pub mod rocksdb;
-
 use std::{error::Error, num::NonZeroUsize};
 
 use async_trait::async_trait;

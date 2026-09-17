@@ -573,10 +573,10 @@ mod tests {
     use lb_cryptarchia_engine::{Config, UncleSlots};
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
-    use lb_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBackendSettings};
+    use lb_storage_service::{StorageMsg, StorageService, rocksdb::RocksBackendSettings};
     use lb_utils::math::NonNegativeRatio;
     use lb_utxotree::UtxoTree;
-    use overwatch::{derive_services, overwatch::OverwatchRunner};
+    use overwatch::{derive_services, overwatch::OverwatchRunner, services::relay::OutboundRelay};
     use tempfile::TempDir;
     use tokio::{
         runtime::Handle,
@@ -584,7 +584,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::relays::StorageRelay;
 
     #[tokio::test]
     async fn test_only_engine_path() {
@@ -743,7 +742,7 @@ mod tests {
     #[expect(dead_code, reason = "Fix in a separate PR")]
     struct TestEnv {
         service: overwatch::overwatch::Overwatch<RuntimeServiceId>,
-        storage_relay: StorageRelay,
+        storage_relay: OutboundRelay<StorageMsg>,
         cryptarchia: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         proof: lb_core::proofs::leader_proof::Groth16LeaderProof,
         provider: BlockProvider<SignedOps<Unverified, StandardMode>>,
@@ -775,7 +774,7 @@ mod tests {
 
         async fn setup_storage() -> (
             overwatch::overwatch::Overwatch<RuntimeServiceId>,
-            StorageRelay,
+            OutboundRelay<StorageMsg>,
         ) {
             let temp_path = TempDir::new().unwrap();
             let service = OverwatchRunner::<TestServices>::run(

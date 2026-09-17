@@ -29,8 +29,8 @@ use lb_services_utils::overwatch::{
 };
 use lb_storage_service::{
     StorageService,
-    backends::rocksdb,
     recovery::{StorageRecoveryBackend, load_recovery_data},
+    rocksdb,
 };
 use lb_tracing_service::{Tracing, TracingSettings};
 use lb_utils::noop_service::NoService;
