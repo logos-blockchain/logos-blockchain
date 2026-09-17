@@ -144,7 +144,7 @@ where
         // disconnected, so consumers need a positive "you can publish again"
         // signal once a live block confirms the connection.
         if became_ready || (reconnected && self.is_ready()) {
-            return Some(self.emit_now(Event::Ready));
+            return Some(Event::Ready);
         }
 
         self.buffered_events.pop_front()
@@ -1065,8 +1065,9 @@ mod tests {
         );
     }
 
-    /// `TurnNotification` reaches `next_event` callers, not only the events
-    /// broadcast, and follows the block that changed the turn.
+    /// `TurnNotification` reaches `next_event` callers and the events
+    /// broadcast once each, in the same order, after the block that changed
+    /// the turn; the turn watch flips as soon as the change is detected.
     #[tokio::test]
     async fn next_event_yields_turn_notifications() {
         let channel_id = ChannelId::from([0; 32]);
@@ -1082,12 +1083,19 @@ mod tests {
         let mut sequencer =
             ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
         let mut events_rx = sequencer.subscribe_events();
+        let mut turn_rx = sequencer.subscribe_turn_to_write();
+        turn_rx.mark_unchanged();
 
         loop {
             if matches!(sequencer.next_event().await, Event::Ready) {
                 break;
             }
         }
+
+        // The watch already reflects the turn before either channel delivers
+        // the event.
+        assert!(turn_rx.has_changed().unwrap());
+        assert!(turn_rx.borrow_and_update().our_turn_to_write);
 
         // Single-key channel: the block that made us ready also made it our
         // turn. `BlocksProcessed` comes first, then the turn.
@@ -1102,19 +1110,31 @@ mod tests {
         };
         assert!(notification.our_turn_to_write);
 
-        // The broadcast still carries it.
-        let mut broadcast_turn = None;
+        // The broadcast carries the same events, once each, in the same order.
+        let mut broadcast = Vec::new();
         while let Ok(event) = events_rx.try_recv() {
-            if let Event::TurnNotification { notification } = event {
-                broadcast_turn = Some(notification);
-            }
+            broadcast.push(event);
         }
-        assert!(
-            broadcast_turn.is_some_and(|n| n.our_turn_to_write),
-            "turn notification must also reach subscribe_events"
+        let kinds: Vec<_> = broadcast
+            .iter()
+            .map(|event| match event {
+                Event::Ready => "ready",
+                Event::BlocksProcessed { .. } => "block",
+                Event::TurnNotification { notification } if notification.our_turn_to_write => {
+                    "our turn"
+                }
+                Event::TurnNotification { .. } => "not our turn",
+                Event::MempoolPending(_) => "mempool",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            ["not our turn", "block", "ready", "block", "our turn"],
+            "broadcast: {broadcast:?}"
         );
 
-        // A stream drop clears the turn; that change is returned too.
+        // A stream drop clears the turn; that change is returned too, and
+        // broadcast exactly once.
         up_tx.send(false).unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
@@ -1127,6 +1147,17 @@ mod tests {
         })
         .await
         .expect("stream drop must yield a not-our-turn notification via next_event");
+        let mut cleared = 0;
+        while let Ok(event) = events_rx.try_recv() {
+            if let Event::TurnNotification { notification } = event {
+                assert!(!notification.our_turn_to_write);
+                cleared += 1;
+            }
+        }
+        assert_eq!(
+            cleared, 1,
+            "the cleared turn must be broadcast exactly once"
+        );
     }
 
     /// A `submit_signed_tx` bundle chains subsequent publishes off its last
