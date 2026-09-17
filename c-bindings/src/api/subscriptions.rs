@@ -14,7 +14,7 @@ use lb_core::{
     },
 };
 use lb_node::{
-    RocksBackend, RuntimeServiceId, SignedOps, StorageService,
+    RuntimeServiceId, SignedOps, StorageService,
     api::serializers::blocks::ApiProcessedBlockEventOwned, generic_services::CryptarchiaService,
 };
 use lb_storage_service::api::StorageApi;
@@ -76,8 +76,7 @@ pub fn subscribe_to_new_blocks_sync(
             .await;
         match api.subscribe_new_blocks().await {
             Ok(mut block_stream) => {
-                let storage =
-                    StorageApi::<_, SignedOps<Unverified, StandardMode>>::new(storage_relay);
+                let storage = StorageApi::<SignedOps<Unverified, StandardMode>>::new(storage_relay);
                 runtime_handler.spawn(async move {
                     while let Ok(event) = block_stream.recv().await {
                         let res = storage.load_block(&event.block_id).await;
@@ -178,7 +177,6 @@ pub fn subscribe_to_processed_blocks_sync(
     runtime_handler.block_on(async move {
         let stream = match lb_api_service::http::mantle::get_new_blocks_stream::<
             SignedOps<Preverified, StandardMode>,
-            RocksBackend,
             CryptarchiaService<RuntimeServiceId>,
             RuntimeServiceId,
         >(overwatch)

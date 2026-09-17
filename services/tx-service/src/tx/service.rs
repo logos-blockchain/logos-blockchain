@@ -66,20 +66,18 @@ type TxMempoolRecoverySettings<Pool, NetworkAdapter, RuntimeServiceId> = TxMempo
     <NetworkAdapter as NetworkAdapterTrait<RuntimeServiceId>>::Settings,
 >;
 
-type TxMempoolRecoveryBackend<Pool, NetworkAdapter, StorageAdapter, RuntimeServiceId> =
-    StorageRecoveryBackend<
-        TxMempoolRecoveryState<Pool, NetworkAdapter, RuntimeServiceId>,
-        TxMempoolRecoverySettings<Pool, NetworkAdapter, RuntimeServiceId>,
-        <StorageAdapter as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
-        RuntimeServiceId,
-    >;
+type TxMempoolRecoveryBackend<Pool, NetworkAdapter, RuntimeServiceId> = StorageRecoveryBackend<
+    TxMempoolRecoveryState<Pool, NetworkAdapter, RuntimeServiceId>,
+    TxMempoolRecoverySettings<Pool, NetworkAdapter, RuntimeServiceId>,
+    RuntimeServiceId,
+>;
 
 /// A tx mempool service that stores recovery state in its storage backend.
 pub type TxMempoolService<MempoolNetworkAdapter, Pool, StorageAdapter, RuntimeServiceId> =
     GenericTxMempoolService<
         Pool,
         MempoolNetworkAdapter,
-        TxMempoolRecoveryBackend<Pool, MempoolNetworkAdapter, StorageAdapter, RuntimeServiceId>,
+        TxMempoolRecoveryBackend<Pool, MempoolNetworkAdapter, RuntimeServiceId>,
         StorageAdapter,
         RuntimeServiceId,
     >;
@@ -184,12 +182,7 @@ where
         + 'static
         + AsServiceId<Self>
         + AsServiceId<NetworkService<NetworkAdapter::Backend, RuntimeServiceId>>
-        + AsServiceId<
-            StorageService<
-                <StorageAdapter as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
-                RuntimeServiceId,
-            >,
-        >,
+        + AsServiceId<StorageService<RuntimeServiceId>>,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -210,10 +203,7 @@ where
         let overwatch_handle = &self.service_resources_handle.overwatch_handle;
 
         let storage_relay = overwatch_handle
-            .relay::<StorageService<
-                <StorageAdapter as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
-                RuntimeServiceId,
-            >>()
+            .relay::<StorageService<RuntimeServiceId>>()
             .await
             .expect("Storage service relay should be available");
 

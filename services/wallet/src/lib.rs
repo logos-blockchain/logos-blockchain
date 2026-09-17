@@ -49,9 +49,7 @@ use lb_services_utils::{
     overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings},
     wait_until_services_are_ready,
 };
-use lb_storage_service::{
-    api::StorageApi, backends::StorageBackend, recovery::StorageRecoveryBackend,
-};
+use lb_storage_service::{api::StorageApi, recovery::StorageRecoveryBackend};
 use lb_utils::{bounded::BoundedError, tokio::task::spawn_blocking};
 use lb_wallet::{WalletBalance, WalletBlock, WalletError};
 use overwatch::{
@@ -380,31 +378,25 @@ impl StorageRecoverySettings for WalletServiceSettings {
     }
 }
 
-pub struct WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
-where
-    Storage: StorageBackend + Send + Sync + 'static,
-{
+pub struct WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     initial_state: RecoveryState,
-    _marker: std::marker::PhantomData<(Kms, Cryptarchia, Tx, Storage)>,
+    _marker: std::marker::PhantomData<(Kms, Cryptarchia, Tx)>,
 }
 
-impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceData
-    for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
-where
-    Storage: StorageBackend + Send + Sync + 'static,
+impl<Kms, Cryptarchia, Tx, RuntimeServiceId> ServiceData
+    for WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId>
 {
     type Settings = WalletServiceSettings;
     type State = RecoveryState;
-    type StateOperator = RecoveryOperator<
-        StorageRecoveryBackend<Self::State, Self::Settings, Storage, RuntimeServiceId>,
-    >;
+    type StateOperator =
+        RecoveryOperator<StorageRecoveryBackend<Self::State, Self::Settings, RuntimeServiceId>>;
     type Message = WalletMsg;
 }
 
 #[async_trait]
-impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
+impl<Kms, Cryptarchia, Tx, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId>
 where
     Kms: KmsServiceData<Backend = KmsBackend> + Send + Sync,
     Tx: SignedMantleTx<Preverified, StandardMode>
@@ -417,10 +409,9 @@ where
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
-    Storage: StorageBackend + Send + Sync + 'static,
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<Cryptarchia>
-        + AsServiceId<lb_storage_service::StorageService<Storage, RuntimeServiceId>>
+        + AsServiceId<lb_storage_service::StorageService<RuntimeServiceId>>
         + AsServiceId<Kms>
         + std::fmt::Debug
         + std::fmt::Display
@@ -449,7 +440,7 @@ where
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
             Some(Duration::from_mins(1)),
-            lb_storage_service::StorageService<_, _>,
+            lb_storage_service::StorageService<_>,
             Kms
         )
         .await?;
@@ -468,7 +459,7 @@ where
 
         let storage_relay = service_resources_handle
             .overwatch_handle
-            .relay::<lb_storage_service::StorageService<Storage, RuntimeServiceId>>()
+            .relay::<lb_storage_service::StorageService<RuntimeServiceId>>()
             .await?;
 
         // Create the API wrapper for cleaner communication
@@ -486,7 +477,7 @@ where
         );
 
         // Create the shared typed storage API
-        let storage = StorageApi::<Storage, Tx>::new(storage_relay);
+        let storage = StorageApi::<Tx>::new(storage_relay);
 
         // Query chain service for current state using the API
         let ChainServiceInfo {
@@ -561,8 +552,7 @@ where
     }
 }
 
-impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
-    WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
+impl<Kms, Cryptarchia, Tx, RuntimeServiceId> WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId>
 where
     Kms: KmsServiceData<Backend = KmsBackend>,
     Tx: SignedMantleTx<Preverified, StandardMode>
@@ -575,7 +565,6 @@ where
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
     RuntimeServiceId:
         AsServiceId<Cryptarchia> + AsServiceId<Kms> + std::fmt::Debug + std::fmt::Display + Sync,
 {
@@ -612,7 +601,7 @@ where
         msg: WalletMsg,
         state: &mut ServiceState<'_>,
         voucher_master_key_id: &KeyId,
-        storage: &StorageApi<Storage, Tx>,
+        storage: &StorageApi<Tx>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         epoch_config: &EpochConfig,
@@ -1442,7 +1431,7 @@ where
     async fn backfill_if_not_in_sync(
         tip: Option<HeaderId>,
         state: &mut ServiceState<'_>,
-        storage: &StorageApi<Storage, Tx>,
+        storage: &StorageApi<Tx>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
         epoch_config: &EpochConfig,
     ) -> Result<(), WalletServiceError> {
@@ -1474,7 +1463,7 @@ where
     async fn handle_new_block(
         header_id: HeaderId,
         state: &mut ServiceState<'_>,
-        storage: &StorageApi<Storage, Tx>,
+        storage: &StorageApi<Tx>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         epoch_config: &EpochConfig,
     ) {
@@ -1531,7 +1520,7 @@ where
 
     async fn load_block(
         header_id: HeaderId,
-        storage: &StorageApi<Storage, Tx>,
+        storage: &StorageApi<Tx>,
     ) -> Result<Block<Tx>, WalletServiceError> {
         storage
             .get_block(&header_id)
@@ -1539,7 +1528,7 @@ where
             .ok_or(WalletServiceError::BlockNotFoundInStorage(header_id))
     }
 
-    async fn load_block_events(header_id: HeaderId, storage: &StorageApi<Storage, Tx>) -> Events {
+    async fn load_block_events(header_id: HeaderId, storage: &StorageApi<Tx>) -> Events {
         storage
             .get_block_events(&header_id)
             .await
@@ -1555,7 +1544,7 @@ where
 
     async fn handle_lib_update(
         lib_update: &LibUpdate,
-        storage: &StorageApi<Storage, Tx>,
+        storage: &StorageApi<Tx>,
         state: &mut ServiceState<'_>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         epoch_config: &EpochConfig,
@@ -1613,7 +1602,7 @@ where
 
     async fn collect_claimed_nullifiers_from_blocks(
         blocks: impl Iterator<Item = &HeaderId>,
-        storage: &StorageApi<Storage, Tx>,
+        storage: &StorageApi<Tx>,
     ) -> Vec<VoucherNullifier> {
         let immutable_blocks: Vec<Block<Tx>> = futures::stream::iter(blocks)
             .filter_map(async |header_id| storage.get_block(header_id).await)
@@ -1643,7 +1632,7 @@ where
     async fn backfill_missing_blocks(
         tip: HeaderId,
         state: &mut ServiceState<'_>,
-        storage: &StorageApi<Storage, Tx>,
+        storage: &StorageApi<Tx>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         epoch_config: &EpochConfig,
     ) -> Result<(), WalletServiceError> {

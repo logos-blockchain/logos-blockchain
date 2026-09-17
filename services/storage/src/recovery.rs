@@ -19,7 +19,7 @@ use tokio::sync::OnceCell;
 
 #[cfg(feature = "rocksdb-backend")]
 use crate::backends::rocksdb::{RocksBackend, RocksBackendSettings};
-use crate::{StorageService, api::StorageApi, backends::StorageBackend};
+use crate::{StorageService, api::StorageApi, backends::StorageBackend as _};
 
 const RECOVERY_PREFIX: &[u8] = b"recovery/";
 
@@ -45,17 +45,16 @@ fn recovery_data_from_backend(backend: &RocksBackend) -> Result<RecoveryData, Dy
         .map_err(Into::into)
 }
 
-pub struct StorageRecoveryBackend<State, Settings, Storage: StorageBackend, RuntimeServiceId> {
+pub struct StorageRecoveryBackend<State, Settings, RuntimeServiceId> {
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
-    storage: OnceCell<StorageApi<Storage>>,
+    storage: OnceCell<StorageApi>,
     state: PhantomData<fn() -> State>,
     settings: PhantomData<fn() -> Settings>,
 }
 
-impl<State, Settings, Storage, RuntimeServiceId> Clone
-    for StorageRecoveryBackend<State, Settings, Storage, RuntimeServiceId>
+impl<State, Settings, RuntimeServiceId> Clone
+    for StorageRecoveryBackend<State, Settings, RuntimeServiceId>
 where
-    Storage: StorageBackend,
     OverwatchHandle<RuntimeServiceId>: Clone,
 {
     fn clone(&self) -> Self {
@@ -69,19 +68,18 @@ where
 }
 
 #[async_trait::async_trait]
-impl<State, Settings, Storage, RuntimeServiceId> RecoveryBackend<RuntimeServiceId>
-    for StorageRecoveryBackend<State, Settings, Storage, RuntimeServiceId>
+impl<State, Settings, RuntimeServiceId> RecoveryBackend<RuntimeServiceId>
+    for StorageRecoveryBackend<State, Settings, RuntimeServiceId>
 where
     State: ServiceState<Settings = Settings> + Serialize + DeserializeOwned + Send,
     Settings: StorageRecoverySettings + Send,
-    Storage: StorageBackend + Send + Sync + 'static,
     RuntimeServiceId: Clone
         + std::fmt::Debug
         + Display
         + Send
         + Sync
         + 'static
-        + AsServiceId<StorageService<Storage, RuntimeServiceId>>,
+        + AsServiceId<StorageService<RuntimeServiceId>>,
 {
     type State = State;
 
@@ -115,7 +113,7 @@ where
             .storage
             .get_or_try_init(async || {
                 self.overwatch_handle
-                    .relay::<StorageService<Storage, RuntimeServiceId>>()
+                    .relay::<StorageService<RuntimeServiceId>>()
                     .await
                     .map(StorageApi::new)
                     .map_err(|error| RecoveryError::Backend(error.to_string()))
@@ -135,8 +133,7 @@ mod tests {
 
     use super::*;
 
-    type TestBackend =
-        StorageRecoveryBackend<TestState, TestSettings, RocksBackend, TestRuntimeServiceId>;
+    type TestBackend = StorageRecoveryBackend<TestState, TestSettings, TestRuntimeServiceId>;
 
     #[derive(Clone, Debug)]
     enum TestRuntimeServiceId {
@@ -149,7 +146,7 @@ mod tests {
         }
     }
 
-    impl AsServiceId<StorageService<RocksBackend, Self>> for TestRuntimeServiceId {
+    impl AsServiceId<StorageService<Self>> for TestRuntimeServiceId {
         const SERVICE_ID: Self = Self::Storage;
     }
 

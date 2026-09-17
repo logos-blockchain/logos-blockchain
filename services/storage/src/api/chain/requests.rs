@@ -11,7 +11,7 @@ use lb_core::{header::HeaderId, mantle::TxHash};
 use lb_cryptarchia_engine::Slot;
 use tokio::sync::oneshot::Sender;
 
-use crate::{StorageMsg, backends::StorageBackend};
+use crate::{StorageMsg, StorageReplyReceiver};
 #[cfg(feature = "rocksdb-backend")]
 use crate::{
     StorageServiceError,
@@ -342,7 +342,15 @@ async fn handle_scan_immutable_block_ids_reverse(
     Ok(())
 }
 
-impl<Api: StorageBackend> StorageMsg<Api> {
+impl StorageMsg {
+    pub fn new_load_message(key: Bytes) -> (Self, StorageReplyReceiver<Option<Bytes>>) {
+        let (reply_channel, receiver) = tokio::sync::oneshot::channel();
+        (
+            Self::Load { key, reply_channel },
+            StorageReplyReceiver::new(receiver),
+        )
+    }
+
     #[must_use]
     pub const fn get_block_request(
         header_id: HeaderId,

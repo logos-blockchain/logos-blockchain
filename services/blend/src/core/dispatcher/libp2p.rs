@@ -241,12 +241,7 @@ where
         + Send
         + Sync
         + 'static
-        + AsServiceId<
-            StorageService<
-                <Mempool::Storage as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
-                RuntimeServiceId,
-            >,
-        >,
+        + AsServiceId<StorageService<RuntimeServiceId>>,
 {
     type Backend = Libp2p;
     type ChainNetworkService = ChainNetwork;

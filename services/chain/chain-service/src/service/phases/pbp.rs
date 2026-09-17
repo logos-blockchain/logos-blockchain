@@ -8,7 +8,7 @@ use lb_core::mantle::{
 };
 use lb_cryptarchia_engine::{PrunedBlocks, Slot};
 use lb_cryptarchia_sync::HeaderId;
-use lb_storage_service::{api::StorageApi, backends::StorageBackend};
+use lb_storage_service::api::StorageApi;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{debug, error, info};
 
@@ -34,7 +34,7 @@ impl Debug for ProlongedBootstrapPeriod {
     }
 }
 
-impl<Tx, Storage> Service<ProlongedBootstrapPeriod, Tx, Storage>
+impl<Tx> Service<ProlongedBootstrapPeriod, Tx>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
@@ -48,12 +48,11 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
 {
     /// Runs the phase until PBP is over,
     /// and then switches `Cryptarchia` to online.
     /// A no-op if `Cryptarchia` was initialized as online.
-    pub async fn process_prolonged_bootstrap_period(mut self) -> Service<Following, Tx, Storage> {
+    pub async fn process_prolonged_bootstrap_period(mut self) -> Service<Following, Tx> {
         info!(target: LOG_TARGET, "entering {:?} phase", self.phase);
 
         if !self.cryptarchia.is_bootstrapping() {
@@ -134,7 +133,7 @@ where
         prev_lib: Option<HeaderId>,
         new_lib: HeaderId,
         new_lib_slot: Slot,
-        storage: &StorageApi<Storage, Tx>,
+        storage: &StorageApi<Tx>,
     ) -> Result<(), Error> {
         let immutable_blocks =
             immutable_blocks_index(pruned_blocks, prev_lib, new_lib, new_lib_slot);

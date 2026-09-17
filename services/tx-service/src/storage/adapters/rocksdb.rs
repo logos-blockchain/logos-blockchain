@@ -3,7 +3,7 @@ use std::{marker::PhantomData, pin::Pin};
 use async_trait::async_trait;
 use futures::Stream;
 use lb_core::mantle::transactions::hash::TxHash;
-use lb_storage_service::{StorageService, api::StorageApi, backends::rocksdb::RocksBackend};
+use lb_storage_service::{StorageService, api::StorageApi};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +12,7 @@ use crate::{backend::MempoolError, storage::MempoolStorageAdapter};
 /// Maps the mempool's item/key interface to the shared storage API.
 #[derive(Clone)]
 pub struct RocksStorageAdapter<Item, Key> {
-    storage: StorageApi<RocksBackend, Item>,
+    storage: StorageApi<Item>,
     key: PhantomData<fn() -> Key>,
 }
 
@@ -23,15 +23,12 @@ where
     Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     Key: Clone + Send + Sync + 'static + Into<TxHash>,
 {
-    type Backend = RocksBackend;
     type Item = Item;
     type Key = Key;
     type Error = MempoolError;
 
     fn new(
-        storage_relay: OutboundRelay<
-            <StorageService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        storage_relay: OutboundRelay<<StorageService<RuntimeServiceId> as ServiceData>::Message>,
     ) -> Self {
         Self {
             storage: StorageApi::new(storage_relay),

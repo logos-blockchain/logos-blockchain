@@ -6,7 +6,6 @@ use lb_core::mantle::{
     traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
     transactions::states::Preverified,
 };
-use lb_storage_service::backends::StorageBackend;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::info;
 
@@ -39,7 +38,7 @@ impl Debug for InitialBlockDownload {
     }
 }
 
-impl<Tx, Storage> Service<InitialBlockDownload, Tx, Storage>
+impl<Tx> Service<InitialBlockDownload, Tx>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
@@ -53,13 +52,10 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
 {
     /// Runs the phase until IBD completes.
     /// A no-op if IBD has been already skipped during previous phases.
-    pub async fn process_initial_block_download(
-        mut self,
-    ) -> Service<ProlongedBootstrapPeriod, Tx, Storage> {
+    pub async fn process_initial_block_download(mut self) -> Service<ProlongedBootstrapPeriod, Tx> {
         info!(target: LOG_TARGET, "entering {:?} phase", self.phase);
 
         if self.phase.ibd_skipped {
