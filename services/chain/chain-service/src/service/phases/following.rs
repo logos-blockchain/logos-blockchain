@@ -9,7 +9,6 @@ use lb_core::mantle::{
 };
 use lb_cryptarchia_sync::{GetTipResponse, ProviderResponse};
 use lb_network_service::message::ChainSyncEvent;
-use lb_storage_service::backends::StorageBackend;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{debug, error, info, trace};
 
@@ -29,7 +28,7 @@ impl Debug for Following {
     }
 }
 
-impl<Tx, Storage> Service<Following, Tx, Storage>
+impl<Tx> Service<Following, Tx>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
@@ -43,7 +42,6 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
 {
     /// Runs the phase forever.
     pub async fn process_following(mut self) {

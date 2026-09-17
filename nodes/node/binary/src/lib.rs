@@ -131,7 +131,7 @@ pub type ApiService = lb_api_service::ApiService<
     RuntimeServiceId,
 >;
 
-pub type StorageService = lb_storage_service::StorageService<RocksBackend, RuntimeServiceId>;
+pub type StorageService = lb_storage_service::StorageService<RuntimeServiceId>;
 
 pub type SystemSigService = SystemSig<RuntimeServiceId>;
 

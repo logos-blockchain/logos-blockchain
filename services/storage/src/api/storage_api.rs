@@ -18,15 +18,15 @@ use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 
 use super::chain::requests::ChainApiRequest;
-use crate::{StorageMsg, backends::StorageBackend};
+use crate::StorageMsg;
 
 /// Typed API for the storage service.
-pub struct StorageApi<Backend: StorageBackend, Tx = ()> {
-    relay: OutboundRelay<StorageMsg<Backend>>,
+pub struct StorageApi<Tx = ()> {
+    relay: OutboundRelay<StorageMsg>,
     transaction: PhantomData<fn() -> Tx>,
 }
 
-impl<Backend: StorageBackend, Tx> Clone for StorageApi<Backend, Tx> {
+impl<Tx> Clone for StorageApi<Tx> {
     fn clone(&self) -> Self {
         Self {
             relay: self.relay.clone(),
@@ -35,9 +35,9 @@ impl<Backend: StorageBackend, Tx> Clone for StorageApi<Backend, Tx> {
     }
 }
 
-impl<Backend: StorageBackend, Tx> StorageApi<Backend, Tx> {
+impl<Tx> StorageApi<Tx> {
     #[must_use]
-    pub const fn new(relay: OutboundRelay<StorageMsg<Backend>>) -> Self {
+    pub const fn new(relay: OutboundRelay<StorageMsg>) -> Self {
         Self {
             relay,
             transaction: PhantomData,
@@ -61,7 +61,7 @@ impl<Backend: StorageBackend, Tx> StorageApi<Backend, Tx> {
 
     async fn request<Reply>(
         &self,
-        message: impl FnOnce(oneshot::Sender<Reply>) -> StorageMsg<Backend>,
+        message: impl FnOnce(oneshot::Sender<Reply>) -> StorageMsg,
     ) -> Result<Reply, DynError> {
         let (sender, receiver) = oneshot::channel();
         self.relay.send(message(sender)).await?;
@@ -92,7 +92,7 @@ impl<Backend: StorageBackend, Tx> StorageApi<Backend, Tx> {
 
     async fn optional_request<Reply>(
         &self,
-        message: impl FnOnce(oneshot::Sender<Option<Reply>>) -> StorageMsg<Backend>,
+        message: impl FnOnce(oneshot::Sender<Option<Reply>>) -> StorageMsg,
     ) -> Option<Reply> {
         let (sender, receiver) = oneshot::channel();
         self.relay.send(message(sender)).await.unwrap();
@@ -148,7 +148,7 @@ impl<Backend: StorageBackend, Tx> StorageApi<Backend, Tx> {
     }
 }
 
-impl<Backend: StorageBackend, Tx: Serialize> StorageApi<Backend, Tx> {
+impl<Tx: Serialize> StorageApi<Tx> {
     /// Store an item under its externally supplied transaction hash.
     pub async fn store_transaction(&self, hash: TxHash, transaction: Tx) -> Result<(), DynError> {
         let transactions = [(hash, transaction.to_bytes()?)].into();
@@ -159,7 +159,7 @@ impl<Backend: StorageBackend, Tx: Serialize> StorageApi<Backend, Tx> {
     }
 }
 
-impl<Backend: StorageBackend, Tx> StorageApi<Backend, Tx>
+impl<Tx> StorageApi<Tx>
 where
     Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
 {
@@ -226,7 +226,7 @@ where
     }
 }
 
-impl<Backend: StorageBackend, Tx: Serialize + Hashable<Hash = TxHash>> StorageApi<Backend, Tx> {
+impl<Tx: Serialize + Hashable<Hash = TxHash>> StorageApi<Tx> {
     pub async fn store_transactions(&self, transactions: Vec<Tx>) -> Result<(), DynError> {
         let transactions = transactions
             .into_iter()
@@ -239,7 +239,7 @@ impl<Backend: StorageBackend, Tx: Serialize + Hashable<Hash = TxHash>> StorageAp
     }
 }
 
-impl<Backend: StorageBackend, Tx: DeserializeOwned + Send + 'static> StorageApi<Backend, Tx> {
+impl<Tx: DeserializeOwned + Send + 'static> StorageApi<Tx> {
     pub async fn get_transactions(
         &self,
         hashes: Vec<TxHash>,
@@ -277,12 +277,8 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::backends::rocksdb::RocksBackend;
 
-    fn api<Tx>() -> (
-        StorageApi<RocksBackend, Tx>,
-        mpsc::Receiver<StorageMsg<RocksBackend>>,
-    ) {
+    fn api<Tx>() -> (StorageApi<Tx>, mpsc::Receiver<StorageMsg>) {
         let (sender, receiver) = mpsc::channel(4);
         (StorageApi::new(OutboundRelay::new(sender)), receiver)
     }

@@ -18,7 +18,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{Branch, Slot};
 use lb_cryptarchia_sync::{BlocksResponse, BlocksUnavailableReason, ProviderResponse};
 use lb_log_targets::chain;
-use lb_storage_service::{api::StorageApi, backends::StorageBackend};
+use lb_storage_service::api::StorageApi;
 use overwatch::DynError;
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
@@ -56,23 +56,21 @@ enum BlockLocation {
     Storage,
 }
 
-pub struct BlockProvider<Storage, Tx>
+pub struct BlockProvider<Tx>
 where
-    Storage: StorageBackend,
     Tx: Clone + Eq,
 {
-    storage: StorageApi<Storage, Tx>,
+    storage: StorageApi<Tx>,
     config: BlockProviderConfig,
 }
 
-impl<Storage, Tx> BlockProvider<Storage, Tx>
+impl<Tx> BlockProvider<Tx>
 where
-    Storage: StorageBackend + 'static,
     Tx: DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
     Tx: Serialize + Clone + Eq + Send + Sync + 'static,
 {
     #[must_use]
-    pub const fn new(storage: StorageApi<Storage, Tx>, config: BlockProviderConfig) -> Self {
+    pub const fn new(storage: StorageApi<Tx>, config: BlockProviderConfig) -> Self {
         Self { storage, config }
     }
 
@@ -505,7 +503,7 @@ where
 
     async fn load_block(
         id: HeaderId,
-        storage: &StorageApi<Storage, Tx>,
+        storage: &StorageApi<Tx>,
     ) -> Result<Option<Block<Tx>>, GetBlocksError> {
         storage
             .try_get_block(&id)
@@ -515,7 +513,7 @@ where
 
     async fn load_block_bytes(
         id: HeaderId,
-        storage: &StorageApi<Storage, Tx>,
+        storage: &StorageApi<Tx>,
     ) -> Result<Option<Bytes>, GetBlocksError> {
         storage
             .get_block_bytes(&id)
@@ -575,10 +573,7 @@ mod tests {
     use lb_cryptarchia_engine::{Config, UncleSlots};
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
-    use lb_storage_service::{
-        StorageMsg, StorageService,
-        backends::rocksdb::{RocksBackend, RocksBackendSettings},
-    };
+    use lb_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBackendSettings};
     use lb_utils::math::NonNegativeRatio;
     use lb_utxotree::UtxoTree;
     use overwatch::{derive_services, overwatch::OverwatchRunner};
@@ -735,7 +730,7 @@ mod tests {
 
     #[derive_services]
     pub struct TestServices {
-        pub storage: StorageService<RocksBackend, RuntimeServiceId>,
+        pub storage: StorageService<RuntimeServiceId>,
     }
 
     type TestBlock = (
@@ -748,10 +743,10 @@ mod tests {
     #[expect(dead_code, reason = "Fix in a separate PR")]
     struct TestEnv {
         service: overwatch::overwatch::Overwatch<RuntimeServiceId>,
-        storage_relay: StorageRelay<RocksBackend>,
+        storage_relay: StorageRelay,
         cryptarchia: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         proof: lb_core::proofs::leader_proof::Groth16LeaderProof,
-        provider: BlockProvider<RocksBackend, SignedOps<Unverified, StandardMode>>,
+        provider: BlockProvider<SignedOps<Unverified, StandardMode>>,
     }
 
     impl TestEnv {
@@ -780,7 +775,7 @@ mod tests {
 
         async fn setup_storage() -> (
             overwatch::overwatch::Overwatch<RuntimeServiceId>,
-            StorageRelay<RocksBackend>,
+            StorageRelay,
         ) {
             let temp_path = TempDir::new().unwrap();
             let service = OverwatchRunner::<TestServices>::run(
@@ -804,7 +799,7 @@ mod tests {
 
             let storage_relay = service
                 .handle()
-                .relay::<StorageService<RocksBackend, RuntimeServiceId>>()
+                .relay::<StorageService<RuntimeServiceId>>()
                 .await
                 .expect("Relay connection with StorageService should succeed");
 

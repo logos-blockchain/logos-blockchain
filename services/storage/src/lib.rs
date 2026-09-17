@@ -1,3 +1,8 @@
+//! `RocksDB` storage service and its typed API.
+//!
+//! Enable `rocksdb-backend` to use this crate.
+#![cfg(feature = "rocksdb-backend")]
+
 pub mod api;
 pub mod backends;
 #[cfg(feature = "rocksdb-backend")]
@@ -8,7 +13,6 @@ pub mod recovery;
 use std::{fmt::Display, time::Instant};
 use std::{
     fmt::{Debug, Formatter},
-    marker::PhantomData,
     num::NonZeroUsize,
 };
 
@@ -36,13 +40,13 @@ use tokio::sync::oneshot::Sender;
 
 use crate::api::chain::requests::ChainApiRequest;
 #[cfg(feature = "rocksdb-backend")]
-use crate::backends::rocksdb::RocksBackend;
+use crate::backends::rocksdb::{RocksBackend, RocksBackendSettings, Transaction};
 
 #[cfg(feature = "rocksdb-backend")]
 const LOG_TARGET: &str = storage::ROOT;
 
 /// Storage message that maps to [`StorageBackend`] trait
-pub enum StorageMsg<Backend: StorageBackend> {
+pub enum StorageMsg {
     Load {
         key: Bytes,
         reply_channel: Sender<Option<Bytes>>,
@@ -63,8 +67,8 @@ pub enum StorageMsg<Backend: StorageBackend> {
         reply_channel: Sender<Option<Bytes>>,
     },
     Execute {
-        transaction: Backend::Transaction,
-        reply_channel: Sender<<Backend::Transaction as StorageTransaction>::Result>,
+        transaction: Transaction,
+        reply_channel: Sender<<Transaction as StorageTransaction>::Result>,
     },
     Api {
         request: ChainApiRequest,
@@ -72,18 +76,14 @@ pub enum StorageMsg<Backend: StorageBackend> {
 }
 
 /// Reply channel for storage messages
-pub struct StorageReplyReceiver<T, Backend> {
+pub struct StorageReplyReceiver<T> {
     channel: tokio::sync::oneshot::Receiver<T>,
-    _backend: PhantomData<Backend>,
 }
 
-impl<T, Backend> StorageReplyReceiver<T, Backend> {
+impl<T> StorageReplyReceiver<T> {
     #[must_use]
     pub const fn new(channel: tokio::sync::oneshot::Receiver<T>) -> Self {
-        Self {
-            channel,
-            _backend: PhantomData,
-        }
+        Self { channel }
     }
 
     #[must_use]
@@ -92,7 +92,7 @@ impl<T, Backend> StorageReplyReceiver<T, Backend> {
     }
 }
 
-impl<Backend: StorageBackend> StorageReplyReceiver<Option<Bytes>, Backend> {
+impl StorageReplyReceiver<Option<Bytes>> {
     /// Receive and transform the reply into the desired type
     /// Target type must implement `From` from the original backend stored type.
     pub async fn recv<Output>(
@@ -113,18 +113,8 @@ impl<Backend: StorageBackend> StorageReplyReceiver<Option<Bytes>, Backend> {
     }
 }
 
-impl<Backend: StorageBackend> StorageMsg<Backend> {
-    pub fn new_load_message(key: Bytes) -> (Self, StorageReplyReceiver<Option<Bytes>, Backend>) {
-        let (reply_channel, receiver) = tokio::sync::oneshot::channel();
-        (
-            Self::Load { key, reply_channel },
-            StorageReplyReceiver::new(receiver),
-        )
-    }
-}
-
-// Implement `Debug` manually to avoid constraining `Backend` to `Debug`
-impl<Backend: StorageBackend> Debug for StorageMsg<Backend> {
+// Transactions contain closures that cannot derive `Debug`.
+impl Debug for StorageMsg {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Load { key, .. } => {
@@ -166,25 +156,15 @@ pub enum StorageServiceError {
     BackendError(Box<dyn std::error::Error + Send + Sync>),
 }
 
-/// Storage service that wraps a [`StorageBackend`]
-///
-/// Chain requests execute against `RocksDB`. Without `rocksdb-backend`, this
-/// type provides the service metadata used by relay clients, but no runner.
-#[cfg_attr(
-    not(feature = "rocksdb-backend"),
-    expect(dead_code, reason = "Service fields are used by the RocksDB runner")
-)]
-pub struct StorageService<Backend, RuntimeServiceId>
-where
-    Backend: StorageBackend + Send + Sync + 'static,
-{
-    backend: Backend,
+/// Storage service backed by `RocksDB`.
+pub struct StorageService<RuntimeServiceId> {
+    backend: RocksBackend,
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
 }
 
 #[cfg(feature = "rocksdb-backend")]
-impl<RuntimeServiceId> StorageService<RocksBackend, RuntimeServiceId> {
-    pub async fn handle_storage_message(msg: StorageMsg<RocksBackend>, backend: &mut RocksBackend) {
+impl<RuntimeServiceId> StorageService<RuntimeServiceId> {
+    pub async fn handle_storage_message(msg: StorageMsg, backend: &mut RocksBackend) {
         let started_at = Instant::now();
 
         let result = match msg {
@@ -317,8 +297,7 @@ impl<RuntimeServiceId> StorageService<RocksBackend, RuntimeServiceId> {
 
 #[cfg(feature = "rocksdb-backend")]
 #[async_trait]
-impl<RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for StorageService<RocksBackend, RuntimeServiceId>
+impl<RuntimeServiceId> ServiceCore<RuntimeServiceId> for StorageService<RuntimeServiceId>
 where
     RuntimeServiceId: AsServiceId<Self> + Display + Send,
 {
@@ -366,12 +345,9 @@ where
     }
 }
 
-impl<Backend, RuntimeServiceId> ServiceData for StorageService<Backend, RuntimeServiceId>
-where
-    Backend: StorageBackend + Send + Sync + 'static,
-{
-    type Settings = Backend::Settings;
+impl<RuntimeServiceId> ServiceData for StorageService<RuntimeServiceId> {
+    type Settings = RocksBackendSettings;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = StorageMsg<Backend>;
+    type Message = StorageMsg;
 }

@@ -1,7 +1,7 @@
 use std::ffi::{CString, c_char};
 
 use lb_core::mantle::{ledger::verification_mode::StandardMode, transactions::states::Unverified};
-use lb_node::{RocksBackend, RuntimeServiceId, SignedOps};
+use lb_node::{RuntimeServiceId, SignedOps};
 
 use crate::{
     LogosBlockchainNode, OperationStatus,
@@ -37,7 +37,6 @@ pub(crate) fn get_block_sync(
     let block = runtime_handle
         .block_on(lb_api_service::http::mantle::get_block::<
             SignedOps<Unverified, StandardMode>,
-            RocksBackend,
             RuntimeServiceId,
         >(
             overwatch_handle,
@@ -142,7 +141,6 @@ pub(crate) fn get_transaction_sync(
     let tx = runtime_handle
         .block_on(lb_api_service::http::mantle::get_transaction::<
             SignedOps<Unverified, StandardMode>,
-            RocksBackend,
             RuntimeServiceId,
         >(overwatch_handle, tx_hash))
         .map_err(|e| {
@@ -245,7 +243,6 @@ pub(crate) fn get_blocks_sync(
     let blocks = runtime_handle
         .block_on(lb_api_service::http::mantle::get_immutable_blocks::<
             SignedOps<Unverified, StandardMode>,
-            RocksBackend,
             RuntimeServiceId,
         >(overwatch_handle, from_slot, to_slot))
         .map_err(|e| {

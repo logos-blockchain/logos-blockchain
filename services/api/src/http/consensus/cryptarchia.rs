@@ -9,18 +9,13 @@ use lb_core::{
     },
 };
 use lb_ledger::LedgerState;
-use lb_storage_service::backends::rocksdb::RocksBackend;
 use lb_time_service::backends::ntp::NtpTimeBackend;
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 
 use crate::http::DynError;
 
-pub type Cryptarchia<RuntimeServiceId> = CryptarchiaConsensus<
-    SignedOps<Preverified, StandardMode>,
-    RocksBackend,
-    NtpTimeBackend,
-    RuntimeServiceId,
->;
+pub type Cryptarchia<RuntimeServiceId> =
+    CryptarchiaConsensus<SignedOps<Preverified, StandardMode>, NtpTimeBackend, RuntimeServiceId>;
 
 pub async fn cryptarchia_info<RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,

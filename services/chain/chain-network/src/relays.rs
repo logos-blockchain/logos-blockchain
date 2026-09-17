@@ -120,12 +120,7 @@ where
             + 'static
             + AsServiceId<Cryptarchia>
             + AsServiceId<NetworkService<NetworkAdapter::Backend, RuntimeServiceId>>
-            + AsServiceId<
-                StorageService<
-                    <Mempool::Storage as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
-                    RuntimeServiceId,
-                >,
-            >
+            + AsServiceId<StorageService<RuntimeServiceId>>
             + AsServiceId<
                 TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
             >

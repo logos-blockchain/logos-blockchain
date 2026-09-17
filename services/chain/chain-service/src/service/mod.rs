@@ -26,7 +26,7 @@ use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, GetTipResponseReason, ProviderResponse};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
-use lb_storage_service::{api::StorageApi, backends::StorageBackend};
+use lb_storage_service::api::StorageApi;
 use lb_utils::bounded::UpperBoundedVec;
 use overwatch::{
     DynError,
@@ -111,11 +111,10 @@ impl EpochStateQuerySourceTracker {
 }
 
 /// The chain service in the phase `P`.
-pub struct Service<Phase, Tx, Storage>
+pub struct Service<Phase, Tx>
 where
     Phase: phases::Phase,
     Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
-    Storage: StorageBackend + Send + Sync + 'static,
 {
     phase: Phase,
     cryptarchia: Cryptarchia,
@@ -126,15 +125,15 @@ where
     chain_online_notifier: ChainOnlineNotifier,
     current_slot: Slot,
     storage_blocks_to_remove: HashSet<HeaderId>,
-    relays: CryptarchiaConsensusRelays<Tx, Storage>,
-    sync_blocks_provider: BlockProvider<Storage, Tx>,
+    relays: CryptarchiaConsensusRelays<Tx>,
+    sync_blocks_provider: BlockProvider<Tx>,
     slot_timer: lb_time_service::EpochSlotTickStream,
     state_recording_timer: tokio::time::Interval,
     prolonged_bootstrap_period: Duration,
     epoch_state_query_sources: EpochStateQuerySourceTracker,
 }
 
-impl<Phase, Tx, Storage> Service<Phase, Tx, Storage>
+impl<Phase, Tx> Service<Phase, Tx>
 where
     Phase: phases::Phase,
     Tx: PreverifiedMantleTransaction
@@ -149,13 +148,9 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
 {
     /// Move to the `NextPhase`, carrying all the shared ingredients over.
-    fn with_phase<NextPhase: phases::Phase>(
-        self,
-        phase: NextPhase,
-    ) -> Service<NextPhase, Tx, Storage> {
+    fn with_phase<NextPhase: phases::Phase>(self, phase: NextPhase) -> Service<NextPhase, Tx> {
         Service {
             phase,
             cryptarchia: self.cryptarchia,
@@ -759,12 +754,12 @@ fn log_canonical_blend_snapshots<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx
     skip(cryptarchia, block, relays, new_block_subscription_sender, lib_broadcaster),
     fields(block_id = %block.header().id(), tx_count = block.transactions_iter().count(), current_slot = ?current_slot)
 )]
-pub async fn process_block<Tx, Storage>(
+pub async fn process_block<Tx>(
     cryptarchia: &mut Cryptarchia,
     block: Block<Tx>,
     current_slot: Slot,
     origin: BlockOrigin,
-    relays: &CryptarchiaConsensusRelays<Tx, Storage>,
+    relays: &CryptarchiaConsensusRelays<Tx>,
     new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
     lib_broadcaster: &broadcast::Sender<LibUpdate>,
 ) -> Result<ProcessBlockOutcome<Tx>, Error>
@@ -781,7 +776,6 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
 {
     debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
     let header = block.header().clone();
@@ -896,11 +890,11 @@ where
     })
 }
 
-async fn log_newly_canonical_blocks<Tx, Storage>(
+async fn log_newly_canonical_blocks<Tx>(
     cryptarchia: &Cryptarchia,
     applied_block: &Block<Tx>,
     newly_canonical_blocks: &[HeaderId],
-    storage: &StorageApi<Storage, Tx>,
+    storage: &StorageApi<Tx>,
 ) where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
@@ -914,7 +908,6 @@ async fn log_newly_canonical_blocks<Tx, Storage>(
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
 {
     if !tracing::enabled!(target: LOG_TARGET, tracing::Level::INFO) {
         return;
@@ -951,11 +944,11 @@ async fn log_newly_canonical_blocks<Tx, Storage>(
 ///
 /// First tries to find blocks from memory. If any block is missing from
 /// memory, it falls back to loading all subsequent blocks from storage.
-pub fn get_block_ids<Tx, Storage>(
+pub fn get_block_ids<Tx>(
     cryptarchia: &Cryptarchia,
     from_descendant: HeaderId,
     to_ancestor: HeaderId,
-    storage: StorageApi<Storage, Tx>,
+    storage: StorageApi<Tx>,
 ) -> Pin<Box<dyn Stream<Item = Result<HeaderId, Error>> + Send>>
 where
     Tx: PreverifiedMantleTransaction
@@ -970,7 +963,6 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
 {
     let branches = cryptarchia.consensus.branches();
 
@@ -1006,10 +998,10 @@ where
 /// This is implemented here, and not as a method of `StorageApi`, to
 /// simplify the panic and error message handling.
 #[expect(closure_returning_async_block, reason = "required by try_unfold")]
-pub fn load_block_ids_from_storage<Tx, Storage>(
+pub fn load_block_ids_from_storage<Tx>(
     from_descendant: HeaderId,
     to_ancestor: HeaderId,
-    storage: StorageApi<Storage, Tx>,
+    storage: StorageApi<Tx>,
 ) -> impl Stream<Item = Result<HeaderId, Error>>
 where
     Tx: PreverifiedMantleTransaction
@@ -1024,7 +1016,6 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
 {
     // Yield `from_descendant` first since we already know it,
     // and yield subsequent parents by loading them from storage lazily.
@@ -1064,10 +1055,10 @@ where
 ///
 /// This function returns any block that fails to be deleted from the
 /// storage layer.
-pub async fn delete_stale_blocks_from_storage<Tx, Storage>(
+pub async fn delete_stale_blocks_from_storage<Tx>(
     stale_blocks: impl Iterator<Item = HeaderId> + Send,
     additional_blocks: &HashSet<HeaderId>,
-    storage: &StorageApi<Storage, Tx>,
+    storage: &StorageApi<Tx>,
 ) -> HashSet<HeaderId>
 where
     Tx: PreverifiedMantleTransaction
@@ -1082,7 +1073,6 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
 {
     match delete_blocks_from_storage(
         stale_blocks.chain(additional_blocks.iter().copied()),
@@ -1106,9 +1096,9 @@ where
 /// If any request fails, the header ID and the generated error for each
 /// failing request are collected and returned as part of the `Err`
 /// result.
-async fn delete_blocks_from_storage<Headers, Tx, Storage>(
+async fn delete_blocks_from_storage<Headers, Tx>(
     block_headers: Headers,
-    storage: &StorageApi<Storage, Tx>,
+    storage: &StorageApi<Tx>,
 ) -> Result<(), Vec<(HeaderId, DynError)>>
 where
     Headers: Iterator<Item = HeaderId> + Send,
@@ -1124,7 +1114,6 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
 {
     let blocks_to_delete = block_headers.collect::<Vec<_>>();
     let block_deletion_outcomes = blocks_to_delete.iter().copied().zip(

@@ -2,7 +2,7 @@ use std::fmt::{Debug, Display};
 
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService};
 use lb_core::mantle::traits::{PreverifiedMantleTransaction, StorageSize};
-use lb_storage_service::{StorageMsg, StorageService, api::StorageApi, backends::StorageBackend};
+use lb_storage_service::{StorageMsg, StorageService, api::StorageApi};
 use lb_time_service::{TimeService, TimeServiceMessage};
 use overwatch::{
     OpaqueServiceResourcesHandle,
@@ -14,20 +14,17 @@ use crate::CryptarchiaConsensus;
 
 pub type BroadcastRelay = OutboundRelay<BlockBroadcastMsg>;
 
-pub type StorageRelay<Storage> = OutboundRelay<StorageMsg<Storage>>;
+pub type StorageRelay = OutboundRelay<StorageMsg>;
 
 pub type TimeRelay = OutboundRelay<TimeServiceMessage>;
 
-pub struct CryptarchiaConsensusRelays<Tx, Storage>
-where
-    Storage: StorageBackend + Send + Sync + 'static,
-{
+pub struct CryptarchiaConsensusRelays<Tx> {
     broadcast_relay: BroadcastRelay,
-    storage: StorageApi<Storage, Tx>,
+    storage: StorageApi<Tx>,
     time_relay: TimeRelay,
 }
 
-impl<Tx, Storage> CryptarchiaConsensusRelays<Tx, Storage>
+impl<Tx> CryptarchiaConsensusRelays<Tx>
 where
     Tx: PreverifiedMantleTransaction
         + Debug
@@ -39,15 +36,14 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
     Tx: StorageSize,
 {
     pub const fn new(
         broadcast_relay: BroadcastRelay,
-        storage_relay: StorageRelay<Storage>,
+        storage_relay: StorageRelay,
         time_relay: TimeRelay,
     ) -> Self {
-        let storage = StorageApi::<Storage, Tx>::new(storage_relay);
+        let storage = StorageApi::<Tx>::new(storage_relay);
         Self {
             broadcast_relay,
             storage,
@@ -58,7 +54,7 @@ where
     #[expect(clippy::allow_attributes_without_reason)]
     pub async fn from_service_resources_handle<TimeBackend, RuntimeServiceId>(
         service_resources_handle: &OpaqueServiceResourcesHandle<
-            CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>,
+            CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>,
             RuntimeServiceId,
         >,
     ) -> Self
@@ -71,7 +67,7 @@ where
             + Display
             + 'static
             + AsServiceId<BlockBroadcastService<RuntimeServiceId>>
-            + AsServiceId<StorageService<Storage, RuntimeServiceId>>
+            + AsServiceId<StorageService<RuntimeServiceId>>
             + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
     {
         let broadcast_relay = service_resources_handle
@@ -85,7 +81,7 @@ where
 
         let storage_relay = service_resources_handle
             .overwatch_handle
-            .relay::<StorageService<_, _>>()
+            .relay::<StorageService<_>>()
             .await
             .expect("Relay connection with StorageService should succeed");
 
@@ -102,7 +98,7 @@ where
         &self.broadcast_relay
     }
 
-    pub const fn storage(&self) -> &StorageApi<Storage, Tx> {
+    pub const fn storage(&self) -> &StorageApi<Tx> {
         &self.storage
     }
 

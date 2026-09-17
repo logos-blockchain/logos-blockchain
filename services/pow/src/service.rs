@@ -50,9 +50,7 @@ use lb_services_utils::{
     overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings},
     wait_until_services_are_ready,
 };
-use lb_storage_service::{
-    StorageService, backends::StorageBackend, recovery::StorageRecoveryBackend,
-};
+use lb_storage_service::{StorageService, recovery::StorageRecoveryBackend};
 use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend};
 use lb_utils::bounded::BoundedError;
 use lb_wallet_service::api::{WalletApi, WalletApiError, WalletServiceData};
@@ -325,11 +323,8 @@ pub struct PoWService<
     BlendService,
     WalletService,
     TimeBackendType,
-    Storage,
     RuntimeServiceId,
-> where
-    Storage: StorageBackend + Send + Sync + 'static,
-{
+> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     state: PoWServiceState,
     settings: PoWServiceSettings,
@@ -338,47 +333,33 @@ pub struct PoWService<
         BlendService,
         WalletService,
         TimeBackendType,
-        Storage,
     )>,
 }
 
-impl<CryptarchiaService, BlendService, WalletService, TimeBackendType, Storage, RuntimeServiceId>
-    ServiceData
+impl<CryptarchiaService, BlendService, WalletService, TimeBackendType, RuntimeServiceId> ServiceData
     for PoWService<
         CryptarchiaService,
         BlendService,
         WalletService,
         TimeBackendType,
-        Storage,
         RuntimeServiceId,
     >
-where
-    Storage: StorageBackend + Send + Sync + 'static,
 {
     type Settings = PoWServiceSettings;
     type State = PoWServiceState;
-    type StateOperator = RecoveryOperator<
-        StorageRecoveryBackend<Self::State, Self::Settings, Storage, RuntimeServiceId>,
-    >;
+    type StateOperator =
+        RecoveryOperator<StorageRecoveryBackend<Self::State, Self::Settings, RuntimeServiceId>>;
     type Message = PoWServiceMessage;
 }
 
 #[async_trait::async_trait]
-impl<
-    Tx,
-    CryptarchiaService,
-    BlendService,
-    WalletService,
-    TimeBackendType,
-    Storage,
-    RuntimeServiceId,
-> ServiceCore<RuntimeServiceId>
+impl<Tx, CryptarchiaService, BlendService, WalletService, TimeBackendType, RuntimeServiceId>
+    ServiceCore<RuntimeServiceId>
     for PoWService<
         CryptarchiaService,
         BlendService,
         WalletService,
         TimeBackendType,
-        Storage,
         RuntimeServiceId,
     >
 where
@@ -391,7 +372,6 @@ where
     <WalletService as ServiceData>::Message: Send + 'static,
     TimeBackendType: TimeBackend + Send + Sync + 'static,
     TimeBackendType::Settings: Send + Sync,
-    Storage: StorageBackend + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Clone
         + Send
@@ -404,7 +384,7 @@ where
         + AsServiceId<BlendService>
         + AsServiceId<WalletService>
         + AsServiceId<TimeService<TimeBackendType, RuntimeServiceId>>
-        + AsServiceId<StorageService<Storage, RuntimeServiceId>>,
+        + AsServiceId<StorageService<RuntimeServiceId>>,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
