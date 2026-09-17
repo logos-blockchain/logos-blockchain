@@ -654,7 +654,7 @@ fn remove_external_scenario_wallet_keys(
 
 pub(super) fn remove_external_scenario_wallet_keys_from_maps(
     known_keys: &mut HashMap<KeyId, lb_key_management_system_service::keys::ZkPublicKey>,
-    kms_keys: &mut HashMap<KeyId, Key>,
+    kms_keys: &mut HashMap<KeyId, lb_node::config::kms::serde::KeyEntry>,
     scenario_wallet_key_ids: &HashSet<KeyId>,
 ) {
     for key_id in scenario_wallet_key_ids {

@@ -165,10 +165,7 @@ fn update_sdp_config(keystore: &Keystore, sdp_config: &mut SdpConfig, sdp_args: 
 }
 
 fn update_kms_config(keystore: &Keystore, kms_config: &mut KmsConfig) {
-    kms_config.backend.keys = keystore
-        .get_all()
-        .map(|(id, key)| (id, key.clone()))
-        .collect();
+    kms_config.backend = keystore.kms_backend_settings();
 }
 
 fn update_wallet_config(keystore: &Keystore, wallet_config: &mut WalletConfig) {
