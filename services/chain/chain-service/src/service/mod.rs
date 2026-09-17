@@ -15,9 +15,9 @@ use lb_core::{
     block::{Block, SignedHeader, UncleHeaders},
     header::HeaderId,
     mantle::{
-        OpRef,
+        OpRef, TxHash,
         ledger::verification_mode::StandardMode,
-        traits::{MantleTx, PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
+        traits::{Hashable, MantleTx, PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
         transactions::states::Preverified,
     },
     sdp::ServiceType,
@@ -1061,18 +1061,7 @@ pub async fn delete_stale_blocks_from_storage<Tx>(
     storage: &StorageApi<Tx>,
 ) -> HashSet<HeaderId>
 where
-    Tx: PreverifiedMantleTransaction
-        + SignedMantleTx<Preverified, StandardMode>
-        + StorageSize
-        + Debug
-        + Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + Unpin
-        + 'static,
+    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
 {
     match delete_blocks_from_storage(
         stale_blocks.chain(additional_blocks.iter().copied()),
@@ -1102,18 +1091,7 @@ async fn delete_blocks_from_storage<Headers, Tx>(
 ) -> Result<(), Vec<(HeaderId, DynError)>>
 where
     Headers: Iterator<Item = HeaderId> + Send,
-    Tx: PreverifiedMantleTransaction
-        + SignedMantleTx<Preverified, StandardMode>
-        + StorageSize
-        + Debug
-        + Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + Unpin
-        + 'static,
+    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
 {
     let blocks_to_delete = block_headers.collect::<Vec<_>>();
     let block_deletion_outcomes = blocks_to_delete.iter().copied().zip(

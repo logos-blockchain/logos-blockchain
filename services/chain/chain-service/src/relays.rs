@@ -22,20 +22,7 @@ pub struct CryptarchiaConsensusRelays<Tx> {
     time_relay: TimeRelay,
 }
 
-impl<Tx> CryptarchiaConsensusRelays<Tx>
-where
-    Tx: PreverifiedMantleTransaction
-        + Debug
-        + Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + Unpin
-        + 'static,
-    Tx: StorageSize,
-{
+impl<Tx> CryptarchiaConsensusRelays<Tx> {
     pub const fn new(
         broadcast_relay: BroadcastRelay,
         storage: StorageApi<Tx>,
@@ -56,6 +43,17 @@ where
         >,
     ) -> Self
     where
+        Tx: PreverifiedMantleTransaction
+            + Debug
+            + Clone
+            + Eq
+            + Serialize
+            + DeserializeOwned
+            + Send
+            + Sync
+            + Unpin
+            + 'static
+            + StorageSize,
         TimeBackend: lb_time_service::backends::TimeBackend,
         TimeBackend::Settings: Clone + Send + Sync + 'static,
         RuntimeServiceId: Debug

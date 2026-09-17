@@ -726,15 +726,7 @@ pub async fn get_transactions<Transaction, RuntimeServiceId>(
     tx_hashes: Vec<TxHash>,
 ) -> Result<impl Stream<Item = Transaction> + use<Transaction, RuntimeServiceId>, super::DynError>
 where
-    Transaction: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + 'static
-        + Hashable<Hash = TxHash>
-        + StorageSize,
+    Transaction: DeserializeOwned + Send + 'static,
     RuntimeServiceId:
         Debug + Sync + Display + AsServiceId<StorageService<RuntimeServiceId>> + 'static,
 {
@@ -760,15 +752,7 @@ pub async fn get_transaction<Transaction, RuntimeServiceId>(
     tx_hash: TxHash,
 ) -> Result<Option<Transaction>, super::DynError>
 where
-    Transaction: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + 'static
-        + Hashable<Hash = TxHash>
-        + StorageSize,
+    Transaction: DeserializeOwned + Send + 'static,
     RuntimeServiceId:
         Debug + Sync + Display + AsServiceId<StorageService<RuntimeServiceId>> + 'static,
 {
