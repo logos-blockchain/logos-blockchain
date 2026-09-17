@@ -14,8 +14,8 @@ use lb_core::{
     },
 };
 use lb_node::{
-    RuntimeServiceId, SignedOps, StorageService,
-    api::serializers::blocks::ApiProcessedBlockEventOwned, generic_services::CryptarchiaService,
+    RuntimeServiceId, SignedOps, api::serializers::blocks::ApiProcessedBlockEventOwned,
+    generic_services::CryptarchiaService,
 };
 use lb_storage_service::api::StorageApi;
 use serde::Serialize;
@@ -63,7 +63,10 @@ pub fn subscribe_to_new_blocks_sync(
     let runtime_handler = node.get_runtime_handle();
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
-        let Ok(storage_relay) = overwatch.relay::<StorageService>().await else {
+        let Ok(storage) =
+            StorageApi::<SignedOps<Unverified, StandardMode>>::from_overwatch_handle(overwatch)
+                .await
+        else {
             return OperationStatus::error(
                 OperationStatusCode::RelayError,
                 "Failed to get relay to StorageService.",
@@ -76,7 +79,6 @@ pub fn subscribe_to_new_blocks_sync(
             .await;
         match api.subscribe_new_blocks().await {
             Ok(mut block_stream) => {
-                let storage = StorageApi::<SignedOps<Unverified, StandardMode>>::new(storage_relay);
                 runtime_handler.spawn(async move {
                     while let Ok(event) = block_stream.recv().await {
                         let res = storage.load_block(&event.block_id).await;

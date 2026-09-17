@@ -1,4 +1,4 @@
-use lb_storage_service::backends::rocksdb::RocksBackendSettings;
+use lb_storage_service::rocksdb::RocksBackendSettings;
 
 use crate::config::{state::Config as StateConfig, storage::serde::Config};
 

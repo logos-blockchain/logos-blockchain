@@ -1521,13 +1521,14 @@ pub async fn block<RuntimeServiceId>(
 where
     RuntimeServiceId: AsServiceId<StorageService<RuntimeServiceId>> + Debug + Sync + Display,
 {
-    let relay = match get_relay(&handle).await {
-        Ok(relay) => relay,
-        Err(error) => return error.into_response(),
-    };
-    let block = StorageApi::<SignedOps<Unverified, StandardMode>>::new(relay)
-        .load_block(&id)
-        .await;
+    let storage =
+        match StorageApi::<SignedOps<Unverified, StandardMode>>::from_overwatch_handle(&handle)
+            .await
+        {
+            Ok(storage) => storage,
+            Err(error) => return ApiError::internal(error).into_response(),
+        };
+    let block = storage.try_get_block(&id).await;
     match block {
         Ok(Some(block)) => {
             let api_block = ApiBlock::from(&block);
@@ -1745,14 +1746,14 @@ pub async fn transaction<RuntimeServiceId>(
 where
     RuntimeServiceId: AsServiceId<StorageService<RuntimeServiceId>> + Debug + Sync + Display,
 {
-    let relay = match get_relay(&handle).await {
-        Ok(relay) => relay,
-        Err(error) => return error.into_response(),
-    };
-    let Ok(transactions) = StorageApi::<SignedOps<Unverified, StandardMode>>::new(relay)
-        .try_get_transactions(vec![id])
-        .await
-    else {
+    let storage =
+        match StorageApi::<SignedOps<Unverified, StandardMode>>::from_overwatch_handle(&handle)
+            .await
+        {
+            Ok(storage) => storage,
+            Err(error) => return ApiError::internal(error).into_response(),
+        };
+    let Ok(transactions) = storage.try_get_transactions(vec![id]).await else {
         return ApiError::InternalServerError.into_response();
     };
     let Ok(transactions) = transactions.try_collect::<Vec<_>>().await else {

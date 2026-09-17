@@ -252,8 +252,7 @@ where
         )
         .await?;
 
-    let relay = handle.relay::<StorageService<RuntimeServiceId>>().await?;
-    let storage = StorageApi::<Transaction>::new(relay);
+    let storage = StorageApi::<Transaction>::from_overwatch_handle(handle).await?;
 
     let new_blocks_stream = processed_blocks_stream.filter_map(move |event| {
         let storage = storage.clone();
@@ -283,8 +282,8 @@ async fn get_immutable_block_ids_in_slot_range<RuntimeServiceId>(
 where
     RuntimeServiceId: Debug + Sync + Display + AsServiceId<StorageService<RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
-    StorageApi::<()>::new(relay)
+    StorageApi::<()>::from_overwatch_handle(handle)
+        .await?
         .scan_immutable_block_ids(slot_from..=slot_to, limit, descending)
         .await
 }
@@ -530,8 +529,7 @@ where
     validate_blocks_slot_range(slot_from, slot_to, immutable_only, chain_info)
         .map_err(|e| Box::new(e) as super::DynError)?;
 
-    let relay = handle.relay::<StorageService<RuntimeServiceId>>().await?;
-    let storage = StorageApi::<Transaction>::new(relay);
+    let storage = StorageApi::<Transaction>::from_overwatch_handle(handle).await?;
 
     let mut blocks = Vec::with_capacity(blocks_limit.get().min(1024));
     let mut remaining = blocks_limit.get();
@@ -710,8 +708,7 @@ where
     RuntimeServiceId:
         Debug + Sync + Display + AsServiceId<StorageService<RuntimeServiceId>> + 'static,
 {
-    let relay = handle.relay().await?;
-    let storage = StorageApi::<_>::new(relay);
+    let storage = StorageApi::<_>::from_overwatch_handle(handle).await?;
     Ok(storage.get_block(&header_id).await)
 }
 
@@ -744,8 +741,7 @@ where
     RuntimeServiceId:
         Debug + Sync + Display + AsServiceId<StorageService<RuntimeServiceId>> + 'static,
 {
-    let relay = handle.relay().await?;
-    let storage = StorageApi::<_>::new(relay);
+    let storage = StorageApi::<_>::from_overwatch_handle(handle).await?;
     storage.get_transactions(tx_hashes).await
 }
 

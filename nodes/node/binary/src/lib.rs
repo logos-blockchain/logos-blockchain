@@ -17,11 +17,11 @@ pub use lb_core::{
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
-pub use lb_storage_service::backends::{
-    SerdeOp, StorageBackend,
+use lb_storage_service::recovery::load_recovery_data;
+pub use lb_storage_service::{
+    backend::{SerdeOp, StorageBackend},
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
-use lb_storage_service::recovery::load_recovery_data;
 pub use lb_system_sig_service::SystemSig;
 use lb_time_service::backends::NtpTimeBackend;
 pub use lb_tracing_service::Tracing;

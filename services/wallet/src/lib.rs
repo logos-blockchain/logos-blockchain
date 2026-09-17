@@ -457,10 +457,9 @@ where
             .notifier()
             .get_updated_settings();
 
-        let storage_relay = service_resources_handle
-            .overwatch_handle
-            .relay::<lb_storage_service::StorageService<RuntimeServiceId>>()
-            .await?;
+        let storage =
+            StorageApi::<Tx>::from_overwatch_handle(&service_resources_handle.overwatch_handle)
+                .await?;
 
         // Create the API wrapper for cleaner communication
         let cryptarchia_api = CryptarchiaServiceApi::<Cryptarchia>::from_overwatch_handle(
@@ -475,9 +474,6 @@ where
                 .relay::<Kms>()
                 .await?,
         );
-
-        // Create the shared typed storage API
-        let storage = StorageApi::<Tx>::new(storage_relay);
 
         // Query chain service for current state using the API
         let ChainServiceInfo {

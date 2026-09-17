@@ -38,10 +38,9 @@ use lb_ledger::{
 };
 use lb_storage_service::{
     StorageMsg, StorageService,
-    backends::{
-        StorageBackend as _,
-        rocksdb::{RocksBackend, RocksBackendSettings},
-    },
+    api::StorageApi,
+    backend::StorageBackend as _,
+    rocksdb::{RocksBackend, RocksBackendSettings},
 };
 use lb_time_service::backends::SystemTimeBackend;
 use lb_utils::math::NonNegativeRatio;
@@ -137,7 +136,7 @@ async fn get_block_ids_from_memory_and_storage() {
     let (time_tx, _time_rx) = mpsc::channel(10);
     let relays = CryptarchiaConsensusRelays::<_>::new(
         OutboundRelay::new(broadcast_tx),
-        OutboundRelay::new(storage_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
         OutboundRelay::new(time_tx),
     );
     let (new_block_tx, _new_block_rx) = broadcast::channel(10);
@@ -277,7 +276,7 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     let (time_tx, _time_rx) = mpsc::channel(10);
     let relays = CryptarchiaConsensusRelays::<SignedOps<Preverified, StandardMode>>::new(
         OutboundRelay::new(broadcast_tx),
-        OutboundRelay::new(storage_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
         OutboundRelay::new(time_tx),
     );
 
@@ -303,7 +302,7 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     let (time_tx, _time_rx) = mpsc::channel(10);
     let relays = CryptarchiaConsensusRelays::<SignedOps<Preverified, StandardMode>>::new(
         OutboundRelay::new(broadcast_tx),
-        OutboundRelay::new(storage_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
         OutboundRelay::new(time_tx),
     );
     let (new_block_tx, mut new_block_rx) = broadcast::channel(10);
