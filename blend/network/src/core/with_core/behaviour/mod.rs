@@ -380,11 +380,9 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     }
 
     pub fn live_peers(&self) -> impl Iterator<Item = (&PeerId, &RemotePeerConnectionDetails)> {
-        self.negotiated_peers.iter().filter(move |(peer_id, _)| {
-            !self
-                .liveness
-                .is_connection_unhealthy(peer_id, self.current_round)
-        })
+        self.negotiated_peers
+            .iter()
+            .filter(move |(peer_id, _)| !self.liveness.is_connection_unhealthy(peer_id))
     }
 
     pub fn num_live_peers(&self) -> usize {
@@ -692,8 +690,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                 connection_id,
             },
         );
-        self.liveness
-            .start_or_resume_observing(peer_id, self.current_round);
+        self.liveness.start_or_resume_observing(peer_id);
         // Notify the Swarm about the successful negotiation.
         self.notify_about_connection_upgrade_success(peer_id, direction);
     }
@@ -819,14 +816,11 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
 
     /// Close the connection with every neighbour that has stopped delivering
     /// messages.
-    fn close_unhealthy_connections(&mut self, current_round: Round) {
+    fn close_unhealthy_connections(&mut self) {
         let unhealthy_connections = self
             .negotiated_peers
             .iter()
-            .filter(|(peer_id, _)| {
-                self.liveness
-                    .is_connection_unhealthy(peer_id, current_round)
-            })
+            .filter(|(peer_id, _)| self.liveness.is_connection_unhealthy(peer_id))
             .map(|(peer_id, details)| (*peer_id, details.connection_id))
             .collect::<Vec<_>>();
 
@@ -877,8 +871,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
 
     #[must_use]
     pub fn is_peer_unhealthy(&self, peer: &PeerId) -> bool {
-        self.liveness
-            .is_connection_unhealthy(peer, self.current_round)
+        self.liveness.is_connection_unhealthy(peer)
     }
 
     /// Return `True` if this node has an established (negotiated or not)
@@ -1317,8 +1310,7 @@ where
                             .get(&peer_id)
                             .is_some_and(|details| details.connection_id == connection_id)
                     {
-                        self.liveness
-                            .record_message_from_neighbour(peer_id, self.current_round);
+                        self.liveness.record_message_from_neighbour(peer_id);
                     }
                 }
                 // The connection was fully negotiated by the peer, which means that
@@ -1345,7 +1337,9 @@ where
         let current_round = self.round_clock.poll_current(cx);
         if current_round > self.current_round {
             self.current_round = current_round;
-            self.close_unhealthy_connections(current_round);
+            self.liveness
+                .enter_new_round_with_peers(self.negotiated_peers.keys());
+            self.close_unhealthy_connections();
             self.blacklist.prune_expired_entries(current_round);
         }
 
