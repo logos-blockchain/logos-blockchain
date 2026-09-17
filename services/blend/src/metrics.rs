@@ -1,4 +1,6 @@
 mod imp {
+    use lb_blend::network::core::with_core::behaviour::blacklist::BlacklistReason;
+
     use crate::message::DataPayloadType;
 
     const ACTION_PUBLISH: &str = "publish";
@@ -65,10 +67,16 @@ mod imp {
         lb_tracing::increase_counter_u64!(blend_inbound_messages_dropped_total, count);
     }
 
-    /// Reports core peers blocked for spamming, labelled with what they were
-    /// caught doing — an invalid `PoQ` among the reasons.
-    pub fn core_peer_blocked(reason: &'static str) {
-        lb_tracing::increase_counter_u64!(blend_core_peers_blocked_total, 1, reason = reason);
+    /// Reports core peers blacklisted, labelled with the reason: a frame that
+    /// did not decode, a header signature that did not verify, or an invalid
+    /// `PoQ`. Volume is never a reason, and neither is a duplicate.
+    pub fn core_peer_blocked(reason: BlacklistReason, blacklist_size: usize) {
+        lb_tracing::increase_counter_u64!(
+            blend_core_peers_blocked_total,
+            1,
+            reason = reason.as_ref()
+        );
+        lb_tracing::increase_counter_u64!(blend_core_blacklist_size, blacklist_size as u64);
     }
 
     /// Reports a data payload the Blend network failed to deliver within the

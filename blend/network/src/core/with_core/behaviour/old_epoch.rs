@@ -26,7 +26,7 @@ use crate::core::{
             message_cache::MessageCache,
             utils::{
                 forward_validated_message_and_update_cache,
-                handle_received_serialized_encapsulated_message_and_update_cache,
+                handle_received_serialized_encapsulated_message,
             },
         },
         error::{ReceiveError, SendError},
@@ -137,10 +137,9 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
         self.events.push_back(ToSwarm::NotifyHandler {
             peer_id,
             handler: NotifyHandler::One(*connection_id),
-            event: Either::Left(FromBehaviour::Message(
-                crate::OutgoingMessage::try_from_bytes(serialized_message)
-                    .map_err(|_| SendError::MessageTooLarge)?,
-            )),
+            event: Either::Left(FromBehaviour::Message(crate::OutgoingMessage::from_bytes(
+                serialized_message,
+            ))),
         });
         self.try_wake();
         Ok(())
@@ -207,7 +206,6 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
             && entry.get() == connection_id
         {
             entry.remove();
-            self.message_cache.remove_peer_info(peer_id);
             return true;
         }
         false
@@ -255,9 +253,9 @@ where
             return Ok(false);
         }
 
-        handle_received_serialized_encapsulated_message_and_update_cache(
+        handle_received_serialized_encapsulated_message(
             serialized_message,
-            &mut self.message_cache,
+            &self.message_cache,
             (from_peer_id, from_connection_id),
             pending_verifications,
             &mut self.waker,
@@ -265,7 +263,7 @@ where
             self.num_blend_layers,
             &self.proofs_verifier,
         ).inspect_err(|receive_error| {
-            tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old epoch: {receive_error:?}. Closing connection with spammy peer.");
+            tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old epoch: {receive_error:?}. Closing connection with malicious peer.");
             self.events.push_back(ToSwarm::NotifyHandler {
                 peer_id: from_peer_id,
                 handler: NotifyHandler::One(from_connection_id),

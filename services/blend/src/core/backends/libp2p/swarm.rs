@@ -10,25 +10,20 @@ use std::{
 
 use futures::{Stream, StreamExt as _, future::OptionFuture, stream::FuturesUnordered};
 use lb_blend::{
-    message::{
-        encap::{
-            ProofsVerifier as ProofsVerifierTrait,
-            validated::EncapsulatedMessageWithVerifiedPublicHeader,
-        },
-        encapsulated_message_encoded_size,
+    message::encap::{
+        ProofsVerifier as ProofsVerifierTrait, encapsulated_message_encoded_size,
+        validated::EncapsulatedMessageWithVerifiedPublicHeader,
     },
-    network::{
-        core::{
-            NetworkBehaviourEvent,
-            with_core::{
-                behaviour::{
-                    ConnectionUpgradeFailureReason, Event as CoreToCoreEvent, NegotiatedPeerState,
-                },
-                error::SendError,
+    network::core::{
+        NetworkBehaviourEvent,
+        with_core::{
+            behaviour::{
+                ConnectionUpgradeFailureReason, Event as CoreToCoreEvent,
+                blacklist::BlacklistReason,
             },
-            with_edge::behaviour::Event as CoreToEdgeEvent,
+            error::SendError,
         },
-        message::FRAME_LENGTH_WIRE_SIZE,
+        with_edge::behaviour::Event as CoreToEdgeEvent,
     },
 };
 use lb_chain_service::Epoch;
@@ -114,12 +109,7 @@ fn connection_receive_window(
     network_absorption_in_rounds: NonZeroU64,
     num_blend_layers: NonZeroU64,
 ) -> u32 {
-    // Every part of a Blend message is fixed-size, so the frame it occupies is
-    // known exactly. Asking the message crate for it keeps this window and the
-    // wire format from drifting apart.
-    let frame_size = encapsulated_message_encoded_size(num_blend_layers)
-        .saturating_add(FRAME_LENGTH_WIRE_SIZE)
-        .get();
+    let frame_size = encapsulated_message_encoded_size(num_blend_layers).get();
 
     let rounds_of_slack = network_absorption_in_rounds.get().saturating_mul(2);
     u32::try_from(
@@ -278,7 +268,7 @@ where
         let current_membership = self.current_epoch_info.membership.clone();
 
         let exclude_peers: HashSet<PeerId> = negotiated_peers
-            .chain(self.swarm.behaviour().blocked_peers.blocked_peers())
+            .chain(self.swarm.behaviour().blend.with_core().blacklisted_peers())
             .chain(self.ongoing_dials.keys())
             .chain(self.unrecoverable_peers.iter())
             .chain(except.iter())
@@ -447,22 +437,32 @@ where
         self.dial_random_peers_except(connections_to_establish, except);
     }
 
-    fn handle_disconnected_peer(&mut self, peer_id: PeerId, peer_state: NegotiatedPeerState) {
-        tracing::trace!(target: LOG_TARGET, "Peer {peer_id} disconnected with state {peer_state:?}.");
-        if let NegotiatedPeerState::Spammy(reason) = peer_state {
-            tracing::debug!(target: LOG_TARGET, "Blocking spammy peer {peer_id} for reason {reason:?}.");
-            self.swarm.behaviour_mut().blocked_peers.block_peer(peer_id);
-            metrics::core_peer_blocked(reason.as_str());
-        }
+    fn handle_disconnected_peer(&mut self, peer_id: PeerId) {
+        tracing::trace!(target: LOG_TARGET, "Peer {peer_id} disconnected.");
         self.check_and_dial_new_peers_except(&HashSet::from([peer_id]));
+    }
+
+    // Report metrics and log. Re-connections are handled once the blacklisted peer
+    // is actually disconnected.
+    fn handle_blacklisted_peer(&self, peer_id: PeerId, reason: BlacklistReason) {
+        tracing::debug!(target: LOG_TARGET, "Blacklisted peer {peer_id:?} for reason {reason:?}.");
+        metrics::core_peer_blocked(
+            reason,
+            self.swarm
+                .behaviour()
+                .blend
+                .with_core()
+                .blacklisted_peers()
+                .count(),
+        );
     }
 
     fn collect_network_info(&self) -> NetworkInfo<PeerId> {
         let core_behaviour = self.swarm.behaviour().blend.with_core();
         let current_epoch_peers = core_behaviour
             .negotiated_peers()
-            .iter()
-            .map(|(peer_id, peer_state)| (*peer_id, peer_state.negotiated_state().is_healthy()))
+            .keys()
+            .map(|peer_id| (*peer_id, !core_behaviour.is_peer_unhealthy(peer_id)))
             .collect();
         let old_epoch_peers = core_behaviour
             .old_epoch_peer_ids()
@@ -485,11 +485,11 @@ where
                 // Bubble up to service for decapsulation and delaying.
                 self.report_message_to_service(*message, epoch, metrics::InboundMessageType::Core);
             }
-            lb_blend::network::core::with_core::behaviour::Event::PeerDisconnected(
-                peer_id,
-                peer_state,
-            ) => {
-                self.handle_disconnected_peer(peer_id, peer_state);
+            lb_blend::network::core::with_core::behaviour::Event::PeerDisconnected(peer_id) => {
+                self.handle_disconnected_peer(peer_id);
+            }
+            lb_blend::network::core::with_core::behaviour::Event::PeerBlacklisted { peer, reason } => {
+                self.handle_blacklisted_peer(peer, reason);
             }
             lb_blend::network::core::with_core::behaviour::Event::OutboundConnectionUpgradeFailed { peer, reason } => {
                 match reason {
@@ -801,7 +801,7 @@ where
 
     fn log_blend_send_failure(epoch: Epoch, error: &SendError, tag: &str) {
         match error {
-            SendError::NoPeers | SendError::MessageTooLarge => tracing::warn!(
+            SendError::NoPeers => tracing::warn!(
                 target: LOG_TARGET,
                 diagnostic = BLEND_REACHABILITY,
                 event = "blend_send_failure",
