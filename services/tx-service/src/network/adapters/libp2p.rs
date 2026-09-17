@@ -1,5 +1,5 @@
 use futures::Stream;
-use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
+use lb_binary_codec::bincode::{self, DeserializeOp as _, SerializeOp as _};
 use lb_core::block::MAX_BLOCK_TRANSACTIONS_SIZE;
 use lb_log_targets::mempool;
 use lb_network_service::{
@@ -22,7 +22,7 @@ const LOG_TARGET: &str = mempool::network::LIBP2P;
 /// bincode `u64` length prefix of overhead.
 /// This is the application payload limit, not the Gossipsub protobuf limit.
 pub const MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE: usize =
-    MAX_BLOCK_TRANSACTIONS_SIZE + size_of::<u64>();
+    MAX_BLOCK_TRANSACTIONS_SIZE + bincode::BINCODE_LENGTH_PREFIX_SIZE;
 
 #[must_use]
 const fn transaction_gossip_size_is_valid(size: usize) -> bool {
@@ -82,9 +82,7 @@ where
 
         let stream = receiver.await.unwrap();
         Box::new(Box::pin(stream.filter_map(move |message| match message {
-            Ok(Message { data, topic, .. })
-                if topic == topic_hash && transaction_gossip_size_is_valid(data.len()) =>
-            {
+            Ok(Message { data, topic, .. }) if topic == topic_hash => {
                 match Item::from_bytes(&data) {
                     Ok(item) => Some((id(&item), item)),
                     Err(e) => {
@@ -92,15 +90,6 @@ where
                         None
                     }
                 }
-            }
-            Ok(Message { data, topic, .. }) if topic == topic_hash => {
-                tracing::debug!(
-                    target: LOG_TARGET,
-                    size = data.len(),
-                    maximum = MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
-                    "Discarding oversized transaction gossip message"
-                );
-                None
             }
             _ => None,
         })))
@@ -155,12 +144,17 @@ mod tests {
     #[test]
     fn transaction_gossipsub_bound_accounts_for_the_bincode_envelope() {
         let transaction = SignedOps::<Preverified, StandardMode>::empty();
-        let bytes = <SignedOps<Preverified, StandardMode> as lb_binary_codec::bincode::SerializeOp>::to_bytes(&transaction).unwrap();
+        let bytes =
+            <SignedOps<Preverified, StandardMode> as bincode::SerializeOp>::to_bytes(&transaction)
+                .unwrap();
 
-        assert_eq!(bytes.len(), transaction.storage_size() + size_of::<u64>());
+        assert_eq!(
+            bytes.len(),
+            transaction.storage_size() + bincode::BINCODE_LENGTH_PREFIX_SIZE
+        );
         assert_eq!(
             MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
-            MAX_BLOCK_TRANSACTIONS_SIZE + size_of::<u64>()
+            MAX_BLOCK_TRANSACTIONS_SIZE + bincode::BINCODE_LENGTH_PREFIX_SIZE
         );
     }
 

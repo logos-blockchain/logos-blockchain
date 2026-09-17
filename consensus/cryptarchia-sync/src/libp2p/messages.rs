@@ -1,42 +1,45 @@
 use std::collections::HashSet;
 
-use lb_binary_codec::bincode::{BoundedSerializeOp, UpperBoundedVec};
+use lb_binary_codec::bincode::{self, BoundedSerializeOp, UpperBoundedVec};
 use lb_core::{
     block::{BlockTransactions, MAX_BLOCK_TRANSACTIONS_SIZE},
-    header::{HEADER_BINCODE_SIZE, HeaderId},
+    header::HeaderId,
 };
 use lb_cryptarchia_engine::MAX_UNCLES;
+use lb_key_management_system_keys::keys::Ed25519Signature;
 use serde::{Deserialize, Deserializer, Serialize, de::Visitor};
 
-use crate::{BlocksUnavailableReason, SerialisedBlock, libp2p::provider::MAX_ADDITIONAL_BLOCKS};
-
-const BINCODE_ENUM_DISCRIMINANT_SIZE: usize = size_of::<u32>();
-const BINCODE_LENGTH_PREFIX_SIZE: usize = size_of::<u64>();
-const ED25519_SIGNATURE_BINCODE_SIZE: usize = 64;
+use crate::{
+    BlocksUnavailableReason, GetTipResponse, SerialisedBlock,
+    libp2p::provider::MAX_ADDITIONAL_BLOCKS,
+};
 
 /// Maximum configured-bincode size of a request, including five additional
 /// known block identifiers.
-pub const MAX_REQUEST_MESSAGE_BINCODE_SIZE: usize = BINCODE_ENUM_DISCRIMINANT_SIZE
-    + size_of::<HeaderId>()
-    + 2 * size_of::<HeaderId>()
-    + BINCODE_LENGTH_PREFIX_SIZE
-    + MAX_ADDITIONAL_BLOCKS * size_of::<HeaderId>();
+pub const MAX_REQUEST_MESSAGE_BINCODE_SIZE: usize = bincode::BINCODE_ENUM_DISCRIMINANT_SIZE
+    + 3 * <HeaderId as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + bincode::BINCODE_LENGTH_PREFIX_SIZE
+    + MAX_ADDITIONAL_BLOCKS * <HeaderId as BoundedSerializeOp>::MAX_ENCODED_SIZE;
 
 /// Maximum configured-bincode size of one stored block. The block stores each
 /// transaction as its canonical bytes inside a bincode byte envelope, so the
 /// existing total transaction-content and transaction-count limits account for
 /// all variable-sized block data.
-pub const MAX_SERIALISED_BLOCK_BINCODE_SIZE: usize = HEADER_BINCODE_SIZE
-    + ED25519_SIGNATURE_BINCODE_SIZE
-    + BINCODE_LENGTH_PREFIX_SIZE
-    + MAX_UNCLES * (HEADER_BINCODE_SIZE + ED25519_SIGNATURE_BINCODE_SIZE)
-    + BINCODE_LENGTH_PREFIX_SIZE
-    + MAX_BLOCK_TRANSACTIONS_SIZE
-    + BlockTransactions::<()>::MAX * BINCODE_LENGTH_PREFIX_SIZE;
+pub const MAX_SERIALISED_BLOCK_BINCODE_SIZE: usize =
+    <lb_core::header::Header as BoundedSerializeOp>::MAX_ENCODED_SIZE
+        + <Ed25519Signature as BoundedSerializeOp>::MAX_ENCODED_SIZE
+        + bincode::BINCODE_LENGTH_PREFIX_SIZE
+        + MAX_UNCLES
+            * (<lb_core::header::Header as BoundedSerializeOp>::MAX_ENCODED_SIZE
+                + <Ed25519Signature as BoundedSerializeOp>::MAX_ENCODED_SIZE)
+        + bincode::BINCODE_LENGTH_PREFIX_SIZE
+        + MAX_BLOCK_TRANSACTIONS_SIZE
+        + BlockTransactions::<()>::MAX * bincode::BINCODE_LENGTH_PREFIX_SIZE;
 
 /// Maximum configured-bincode size of a `DownloadBlocksResponse` frame.
-pub const MAX_DOWNLOAD_BLOCKS_RESPONSE_BINCODE_SIZE: usize =
-    BINCODE_ENUM_DISCRIMINANT_SIZE + BINCODE_LENGTH_PREFIX_SIZE + MAX_SERIALISED_BLOCK_BINCODE_SIZE;
+pub const MAX_DOWNLOAD_BLOCKS_RESPONSE_BINCODE_SIZE: usize = bincode::BINCODE_ENUM_DISCRIMINANT_SIZE
+    + bincode::BINCODE_LENGTH_PREFIX_SIZE
+    + MAX_SERIALISED_BLOCK_BINCODE_SIZE;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum RequestMessage {
@@ -169,11 +172,30 @@ impl BoundedSerializeOp for DownloadBlocksResponse {
     type Bytes = UpperBoundedVec<u8, MAX_DOWNLOAD_BLOCKS_RESPONSE_BINCODE_SIZE>;
 }
 
+// These compile-time guards justify removing the former shared Chain Sync
+// admission ceiling without making it runtime policy again.
+const _: () = {
+    assert!(
+        <RequestMessage as BoundedSerializeOp>::MAX_ENCODED_SIZE
+            <= lb_utils::net::MAX_WIRE_MESSAGE_SIZE
+    );
+    assert!(
+        <GetTipResponse as BoundedSerializeOp>::MAX_ENCODED_SIZE
+            <= lb_utils::net::MAX_WIRE_MESSAGE_SIZE
+    );
+    assert!(
+        <DownloadBlocksResponse as BoundedSerializeOp>::MAX_ENCODED_SIZE
+            <= lb_utils::net::MAX_WIRE_MESSAGE_SIZE
+    );
+};
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
-    use lb_binary_codec::bincode::{BoundedSerializeOp as _, DeserializeOp as _, SerializeOp as _};
+    use lb_binary_codec::bincode::{
+        self, BoundedSerializeOp, DeserializeOp as _, SerializeOp as _,
+    };
     use lb_core::header::HeaderId;
 
     use super::{
@@ -217,7 +239,7 @@ mod tests {
         let ordinary = request.to_bytes().unwrap();
         let bounded = request.to_bounded_bytes().unwrap();
 
-        assert_eq!(ordinary.len(), size_of::<u32>());
+        assert_eq!(ordinary.len(), bincode::BINCODE_ENUM_DISCRIMINANT_SIZE);
         assert_eq!(bounded.as_slice(), ordinary.as_ref());
     }
 
@@ -277,13 +299,17 @@ mod tests {
         let reasons = [
             (
                 BlocksUnavailableReason::BlockNotFound(HeaderId::from([0; 32])),
-                2 * size_of::<u32>() + size_of::<HeaderId>(),
+                2 * bincode::BINCODE_ENUM_DISCRIMINANT_SIZE
+                    + <HeaderId as BoundedSerializeOp>::MAX_ENCODED_SIZE,
             ),
             (
                 BlocksUnavailableReason::StartBlockNotFound,
-                2 * size_of::<u32>(),
+                2 * bincode::BINCODE_ENUM_DISCRIMINANT_SIZE,
             ),
-            (BlocksUnavailableReason::Unknown, 2 * size_of::<u32>()),
+            (
+                BlocksUnavailableReason::Unknown,
+                2 * bincode::BINCODE_ENUM_DISCRIMINANT_SIZE,
+            ),
         ];
 
         for (reason, expected_size) in reasons {

@@ -38,7 +38,10 @@ pub type Groth16VerificationKeyJsonDeser = verification_key::VerificationKeyJson
 pub type Groth16Input = public_input::Input<Bn254>;
 pub type Groth16InputDeser = public_input::InputDeser;
 
-pub type FrBytes = [u8; 32];
+/// The fixed-width byte representation used for a field element.
+pub const FR_BYTES_SIZE: usize = 32;
+
+pub type FrBytes = [u8; FR_BYTES_SIZE];
 
 #[must_use]
 pub fn fr_to_bytes(fr: &Fr) -> FrBytes {

@@ -8,6 +8,19 @@ use ::bincode::{
     },
 };
 
+/// The width of an enum discriminant in the configured bincode format.
+pub const BINCODE_ENUM_DISCRIMINANT_SIZE: usize = size_of::<u32>();
+
+/// The width of a u8 in the configured bincode format.
+pub const BINCODE_U8_SIZE: usize = size_of::<u8>();
+
+/// The width of a u64 in the configured bincode format.
+pub const BINCODE_U64_SIZE: usize = size_of::<u64>();
+
+/// The width of sequence and byte-sequence length prefixes in the configured
+/// bincode format.
+pub const BINCODE_LENGTH_PREFIX_SIZE: usize = BINCODE_U64_SIZE;
+
 // Type composition is cool but also makes naming types a bit awkward
 pub type BincodeOptions = WithOtherTrailing<
     WithOtherIntEncoding<

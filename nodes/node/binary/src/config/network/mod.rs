@@ -1,7 +1,6 @@
-use lb_libp2p::{
-    ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig,
-    behaviour::gossipsub::{GossipsubTopicSizeLimit, GossipsubTopicSizeLimitError},
-};
+use std::collections::HashMap;
+
+use lb_libp2p::{ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig};
 use lb_network_service::{backends::libp2p::config::Libp2pConfig, config::NetworkConfig};
 
 use crate::config::network::{deployment::Settings as DeploymentSettings, serde::Config};
@@ -22,22 +21,14 @@ pub struct ServiceConfig {
 impl ServiceConfig {
     pub fn into_network_config(
         self,
-        topic_size_limits: impl IntoIterator<Item = GossipsubTopicSizeLimit>,
-    ) -> Result<NetworkConfig<Libp2pConfig>, GossipsubTopicSizeLimitError> {
+        max_data_size_by_topic: HashMap<lb_libp2p::gossipsub::TopicHash, usize>,
+    ) -> NetworkConfig<Libp2pConfig> {
         let Self { user, deployment } = self;
-        let keypair = lb_libp2p::identity::Keypair::from(lb_libp2p::ed25519::Keypair::from(
-            user.backend.swarm.node_key.clone(),
-        ));
-        let author = lb_libp2p::PeerId::from(keypair.public());
-        let gossipsub_config = lb_libp2p::behaviour::gossipsub::configure_topic_size_limits(
-            user.backend.swarm.gossipsub.into(),
-            author,
-            topic_size_limits,
-        )?;
 
-        Ok(NetworkConfig {
+        NetworkConfig {
             backend: Libp2pConfig {
                 initial_peers: user.backend.initial_peers,
+                max_data_size_by_topic,
                 inner: SwarmConfig {
                     host: user.backend.swarm.host,
                     port: user.backend.swarm.port,
@@ -45,7 +36,7 @@ impl ServiceConfig {
                     kad_protocol_name: deployment.kademlia_protocol_name,
                     identify_protocol_name: deployment.identify_protocol_name,
                     chain_sync_protocol_name: deployment.chain_sync_protocol_name,
-                    gossipsub_config,
+                    gossipsub_config: user.backend.swarm.gossipsub.into(),
                     kademlia_config: KademliaSettings {
                         caching: user.backend.swarm.kademlia.caching.map(Into::into),
                         replication_factor: user.backend.swarm.kademlia.replication_factor,
@@ -83,21 +74,23 @@ impl ServiceConfig {
                     nat_config: user.backend.swarm.nat.into(),
                 },
             },
-        })
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use lb_core::block::Proposal;
     use lb_libp2p::{
         PeerId,
-        behaviour::gossipsub::{GossipsubTopicSizeLimit, configure_topic_size_limits},
+        behaviour::gossipsub::configure_topic_size_limits,
         gossipsub::{self, RawMessage},
         identity::{self, ed25519},
     };
-    use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
 
-    use crate::{MAX_PROPOSAL_CANONICAL_SIZE, MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE};
+    use crate::MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE;
 
     #[test]
     fn production_payload_maxima_fit_the_author_envelopes() {
@@ -111,16 +104,19 @@ mod tests {
             ),
             (
                 "/logos-blockchain-standalone-local/cryptarchia/1.0.0",
-                MAX_PROPOSAL_CANONICAL_SIZE,
+                Proposal::MAX_ENCODED_SIZE,
             ),
         ];
 
         let config = configure_topic_size_limits(
             gossipsub::Config::default(),
             author,
-            limits.iter().map(|(topic, max_payload_size)| {
-                GossipsubTopicSizeLimit::new(*topic, *max_payload_size)
-            }),
+            limits
+                .iter()
+                .map(|(topic, max_data_size)| {
+                    (gossipsub::IdentTopic::new(*topic).hash(), *max_data_size)
+                })
+                .collect::<HashMap<_, _>>(),
         )
         .unwrap();
 
@@ -140,8 +136,6 @@ mod tests {
                 config.max_transmit_size_for_topic(&topic_hash),
                 raw_message.raw_protobuf_len()
             );
-            assert!(config.max_transmit_size_for_topic(&topic_hash) <= MAX_WIRE_MESSAGE_SIZE);
-
             let config = gossipsub::ConfigBuilder::from(config.clone())
                 .validation_mode(gossipsub::ValidationMode::None)
                 .build()

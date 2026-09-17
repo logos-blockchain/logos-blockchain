@@ -6,19 +6,18 @@ pub mod panic;
 
 pub mod global_allocators;
 
-use std::panic::set_hook;
+use std::{collections::HashMap, panic::set_hook};
 
 use color_eyre::eyre::{Result, eyre};
 pub use lb_blend_service::core::backends::libp2p::Libp2pBlendBackend as BlendBackend;
 use lb_core::{
-    block::MAX_PROPOSAL_CANONICAL_SIZE,
+    block::Proposal,
     mantle::{ledger::verification_mode::StandardMode, transactions::states::Preverified},
 };
 pub use lb_core::{
     header::HeaderId,
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };
-use lb_libp2p::behaviour::gossipsub::GossipsubTopicSizeLimit;
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 pub use lb_storage_service::backends::{
     SerdeOp, StorageBackend,
@@ -58,6 +57,27 @@ use crate::{
     generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
     panic::log_and_exit_hook,
 };
+
+fn max_data_size_by_topic(
+    transaction_topic: &str,
+    proposal_topic: &str,
+) -> HashMap<lb_libp2p::gossipsub::TopicHash, usize> {
+    let mut limits: HashMap<lb_libp2p::gossipsub::TopicHash, usize> = HashMap::new();
+    for (topic, required) in [
+        (
+            transaction_topic,
+            MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
+        ),
+        (proposal_topic, Proposal::MAX_ENCODED_SIZE),
+    ] {
+        let topic = lb_libp2p::gossipsub::IdentTopic::new(topic).hash();
+        limits
+            .entry(topic)
+            .and_modify(|existing| *existing = (*existing).max(required))
+            .or_insert(required);
+    }
+    limits
+}
 pub use crate::{
     cli::Command,
     config::{ApiArgs, LogArgs, NetworkArgs, UserConfig},
@@ -201,13 +221,7 @@ pub fn run_node_from_config(
         user: config.user.network,
         deployment: config.deployment.network,
     }
-    .into_network_config([
-        GossipsubTopicSizeLimit::new(
-            transaction_topic,
-            MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
-        ),
-        GossipsubTopicSizeLimit::new(proposal_topic, MAX_PROPOSAL_CANONICAL_SIZE),
-    ])?;
+    .into_network_config(max_data_size_by_topic(&transaction_topic, &proposal_topic));
 
     let wallet_config = WalletConfig {
         user: config.user.wallet,
@@ -297,4 +311,21 @@ pub async fn get_services_to_start(
     }
 
     Ok(service_ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_application_topics_use_the_largest_data_limit() {
+        let topic = "/shared/application/topic";
+        let limits = max_data_size_by_topic(topic, topic);
+        let topic_hash = lb_libp2p::gossipsub::IdentTopic::new(topic).hash();
+
+        assert_eq!(
+            limits.get(&topic_hash),
+            Some(&MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE.max(Proposal::MAX_ENCODED_SIZE))
+        );
+    }
 }

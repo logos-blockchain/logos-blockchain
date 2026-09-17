@@ -27,6 +27,9 @@ impl<'de> Deserialize<'de> for Signature {
 }
 
 impl Signature {
+    /// The fixed-size canonical representation of an Ed25519 signature.
+    pub const CANONICAL_ENCODED_SIZE: usize = SIGNATURE_SIZE;
+
     #[must_use]
     pub fn from_bytes(bytes: &[u8; SIGNATURE_SIZE]) -> Self {
         Self(ed25519_dalek::Signature::from_bytes(bytes))

@@ -2,9 +2,12 @@ use core::fmt::Debug;
 use std::sync::LazyLock;
 
 use ark_ff::{AdditiveGroup as _, PrimeField as _};
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
-use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, fr_from_bytes, serde::serde_fr};
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_binary_codec::{
+    bincode::BoundedSerializeOp,
+    canonical::{BinaryDecode, BinaryEncode, DecodeError},
+};
+use lb_groth16::{COMPRESSED_PROOF_SIZE, FR_BYTES_SIZE, Fr, fr_from_bytes, serde::serde_fr};
+use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, ZkPublicKey};
 use lb_log_targets::proofs;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use lb_utxotree::MerklePath;
@@ -32,6 +35,15 @@ pub struct Groth16LeaderProof {
     voucher_cm: VoucherCm,
 }
 
+const GROTH16_LEADER_PROOF_BINCODE_SIZE: usize = COMPRESSED_PROOF_SIZE
+    + FR_BYTES_SIZE
+    + <Ed25519PublicKey as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + <VoucherCm as BoundedSerializeOp>::MAX_ENCODED_SIZE;
+
+impl BoundedSerializeOp for Groth16LeaderProof {
+    type Bytes = [u8; GROTH16_LEADER_PROOF_BINCODE_SIZE];
+}
+
 impl Debug for Groth16LeaderProof {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Groth16LeaderProof")
@@ -48,13 +60,7 @@ impl Debug for Groth16LeaderProof {
 
 impl BinaryEncode for Groth16LeaderProof {
     fn encoded_length(&self) -> usize {
-        COMPRESSED_PROOF_SIZE
-            .checked_add(self.entropy_contribution.encoded_length())
-            .unwrap()
-            .checked_add(self.leader_key.encoded_length())
-            .unwrap()
-            .checked_add(self.voucher_cm.encoded_length())
-            .unwrap()
+        Self::CANONICAL_ENCODED_SIZE
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -95,6 +101,12 @@ pub enum Error {
 }
 
 impl Groth16LeaderProof {
+    /// The fixed-size canonical representation of a proof of leadership.
+    pub const CANONICAL_ENCODED_SIZE: usize = COMPRESSED_PROOF_SIZE
+        + FR_BYTES_SIZE
+        + ED25519_PUBLIC_KEY_SIZE
+        + VoucherCm::CANONICAL_ENCODED_SIZE;
+
     pub fn prove(witness: LeaderPrivate, voucher_cm: VoucherCm) -> Result<Self, Error> {
         let start_t = std::time::Instant::now();
         let leader_key = witness.pk;
@@ -337,6 +349,7 @@ impl From<LeaderPrivate> for lb_pol::PolWitnessInputsData {
 }
 
 mod proof_serde {
+    use lb_groth16::COMPRESSED_PROOF_SIZE;
     use serde::{Deserializer, Serializer};
 
     // Hex string for human-readable formats; a fixed-size 128-byte array
@@ -352,7 +365,8 @@ mod proof_serde {
     where
         D: Deserializer<'de>,
     {
-        let proof_array = lb_utils::serde::deserialize_bytes_array::<128, D>(deserializer)?;
+        let proof_array =
+            lb_utils::serde::deserialize_bytes_array::<{ COMPRESSED_PROOF_SIZE }, D>(deserializer)?;
         Ok(lb_pol::PoLProof::from_bytes(&proof_array))
     }
 }

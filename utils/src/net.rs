@@ -4,8 +4,8 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-/// Shared wire-message safety ceiling for the Logos networking paths that use
-/// this policy, including Chain Sync and Gossipsub.
+/// Fallback Gossipsub wire-message safety ceiling for topics without an
+/// explicit per-topic envelope limit.
 pub const MAX_WIRE_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
 const TEST_PORT_BLOCK_SIZE: u16 = 256;

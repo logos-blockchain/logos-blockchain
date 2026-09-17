@@ -2,13 +2,13 @@ use std::io;
 
 use futures::{AsyncReadExt, AsyncWriteExt};
 use lb_binary_codec::bincode::{self, BoundedBytes, BoundedSerializeOp, DeserializeOp as _};
-use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 type Result<T> = std::result::Result<T, PackingError>;
 
 type LenType = u32;
+// Chain Sync framing uses this little-endian transport prefix, not bincode.
 const LENGTH_PREFIX_BYTES: usize = size_of::<LenType>();
 
 #[derive(Debug, Error)]
@@ -29,8 +29,7 @@ where
     Writer: AsyncWriteExt + Send + Unpin,
 {
     const {
-        assert!(MAX_WIRE_MESSAGE_SIZE <= LenType::MAX as usize);
-        assert!(<Message::Bytes as BoundedBytes>::MAX <= MAX_WIRE_MESSAGE_SIZE);
+        assert!(<Message::Bytes as BoundedBytes>::MAX <= LenType::MAX as usize);
     }
 
     let packed_message = message.to_bounded_bytes()?;
@@ -60,14 +59,9 @@ where
     R: AsyncReadExt + Unpin,
 {
     let data_length = read_data_length(reader).await?;
-    // Apply the hard transport ceiling before the type-specific bound. Both
-    // checks happen before allocating or reading the payload.
-    if data_length > MAX_WIRE_MESSAGE_SIZE {
-        return Err(PackingError::MessageTooLarge {
-            max: MAX_WIRE_MESSAGE_SIZE,
-            actual: data_length,
-        });
-    }
+    // The type-specific bound is the admission and allocation limit. The
+    // length prefix is read before this check, but no payload is allocated or
+    // read until the peer-controlled length has passed it.
     let message_max = <Message::Bytes as BoundedBytes>::MAX;
     if data_length > message_max {
         return Err(PackingError::MessageTooLarge {
@@ -88,7 +82,6 @@ mod tests {
     };
 
     use bytes::Bytes;
-    use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
 
     use super::*;
     use crate::libp2p::{
@@ -149,23 +142,6 @@ mod tests {
             PackingError::Serialization(bincode::Error::Serialize(_))
         ));
         assert!(writer.into_inner().is_empty());
-    }
-
-    #[tokio::test]
-    async fn receiver_rejects_global_oversize_before_reading_payload() {
-        let mut reader = PrefixOnlyReader::new(MAX_WIRE_MESSAGE_SIZE + 1);
-        let error = unpack_from_reader::<RequestMessage, _>(&mut reader)
-            .await
-            .unwrap_err();
-
-        assert!(matches!(
-            error,
-            PackingError::MessageTooLarge {
-                max: MAX_WIRE_MESSAGE_SIZE,
-                ..
-            }
-        ));
-        assert!(!reader.payload_requested);
     }
 
     #[tokio::test]

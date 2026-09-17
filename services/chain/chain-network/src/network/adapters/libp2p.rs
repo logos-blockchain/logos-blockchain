@@ -3,7 +3,7 @@ use std::{collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomDat
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
 use lb_binary_codec::canonical::BinaryDecodeExt as _;
 use lb_core::{
-    block::{Block, MAX_PROPOSAL_CANONICAL_SIZE, Proposal},
+    block::{Block, Proposal},
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
@@ -42,11 +42,6 @@ type FirstBlockResponse<Tx> = Result<Option<BlockStreamItem<Tx>>, DynError>;
 type BlockDownloadStream<Tx> = BoxedStream<BlockStreamItem<Tx>>;
 
 const LOG_TARGET: &str = chain::network::LIBP2P;
-
-#[must_use]
-const fn proposal_gossip_size_is_valid(size: usize) -> bool {
-    size <= MAX_PROPOSAL_CANONICAL_SIZE
-}
 
 #[derive(Clone)]
 pub struct LibP2pAdapter<Tx, RuntimeServiceId>
@@ -222,10 +217,6 @@ where
         }
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "The stream validates topic, size, and canonical decoding together."
-    )]
     async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
         let (sender, receiver) = oneshot::channel();
         if let Err((e, _)) = self
@@ -239,15 +230,6 @@ where
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
             Ok(message) if message.topic == topic_hash => {
-                if !proposal_gossip_size_is_valid(message.data.len()) {
-                    tracing::debug!(
-                        target: LOG_TARGET,
-                        size = message.data.len(),
-                        maximum = MAX_PROPOSAL_CANONICAL_SIZE,
-                        "discarding oversized block proposal"
-                    );
-                    return None;
-                }
                 match Proposal::decode_all(&message.data) {
                     Ok(proposal) => Some(proposal),
                     Err(e) => {
@@ -617,13 +599,5 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert!(result.contains(&[4; 32]));
         assert!(result.contains(&[5; 32]));
-    }
-
-    #[test]
-    fn proposal_gossip_guard_rejects_one_byte_over_the_bound() {
-        assert!(proposal_gossip_size_is_valid(MAX_PROPOSAL_CANONICAL_SIZE));
-        assert!(!proposal_gossip_size_is_valid(
-            MAX_PROPOSAL_CANONICAL_SIZE + 1
-        ));
     }
 }

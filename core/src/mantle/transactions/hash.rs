@@ -39,6 +39,11 @@ impl From<[u8; REFERENCE_PREFIX_BYTES]> for TxHashPrefix {
     }
 }
 
+impl TxHashPrefix {
+    /// The fixed-size canonical representation used in block proposals.
+    pub const CANONICAL_ENCODED_SIZE: usize = REFERENCE_PREFIX_BYTES;
+}
+
 /// A mempool key that a block proposal can refer to by a short prefix.
 pub trait PrefixedKey {
     /// The short form a proposal carries in place of the full key.
