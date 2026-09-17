@@ -43,7 +43,8 @@ impl Display for Round {
     }
 }
 
-/// A number of rounds, for the windows and deadlines the protocol defines.
+/// A non-zero number of rounds, for the windows and deadlines the protocol
+/// defines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RoundCount(NonZeroU128);
 

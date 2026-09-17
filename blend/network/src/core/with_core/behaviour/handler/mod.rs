@@ -18,17 +18,17 @@ use libp2p::{
 };
 
 use crate::{
-    OutgoingMessage,
+    OutgoingMessage, RecvMsgResult, SendMsgResult,
     core::{
         admission::RoundShare,
-        with_core::behaviour::handler::admission::{OutgoingItem, SendQueue},
+        with_core::behaviour::handler::send::{PollOutcome, SendQueue},
     },
     flush_and_close_stream,
     message::IncomingMessage,
     recv_msg, send_msg,
 };
 
-pub mod admission;
+pub mod send;
 
 const LOG_TARGET: &str = blend::network::core::core::conn::HANDLER;
 
@@ -59,8 +59,8 @@ pub struct ConnectionHandler {
     upgrade_timeout: Duration,
 }
 
-type MsgSendFuture = BoxFuture<'static, Result<Stream, io::Error>>;
-type MsgRecvFuture = BoxFuture<'static, io::Result<(Stream, IncomingMessage)>>;
+type MsgSendFuture = BoxFuture<'static, SendMsgResult>;
+type MsgRecvFuture = BoxFuture<'static, RecvMsgResult<Stream>>;
 type StreamCloseFuture = BoxFuture<'static, ()>;
 
 enum InboundSubstreamState {
@@ -153,11 +153,11 @@ impl ConnectionHandler {
     fn process_current_round(&mut self, cx: &mut Context<'_>) -> Round {
         let current_round = self.round_clock.poll_current(cx);
         self.read_share.refill_for(current_round);
-        let discarded = self.send_queue.enter_round(current_round);
-        if discarded > 0 {
+        let discarded_expired_message_count = self.send_queue.enter_new_round(current_round);
+        if discarded_expired_message_count > 0 {
             tracing::debug!(
                 target: LOG_TARGET,
-                "Gave up on {discarded} message(s) waiting to be sent on connection {:?}: they waited longer than a message may spend at one hop. Copies queued for other neighbours are unaffected.",
+                "Gave up on {discarded_expired_message_count} message(s) waiting to be sent on connection {:?}: they waited longer than a message may spend at one hop. Copies queued for other neighbours are unaffected.",
                 self.connection_details
             );
         }
@@ -373,7 +373,7 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                 // If the substream is idle, and if it's time to send a message, send it.
                 Some(OutboundSubstreamState::Idle(stream)) => {
                     match self.send_queue.pop_front() {
-                        Some(OutgoingItem::Message(msg)) => {
+                        Some(PollOutcome::Message(msg)) => {
                             tracing::trace!(target: LOG_TARGET, "Sending message to outbound stream {:?}", self.connection_details);
                             self.outbound_substream = Some(OutboundSubstreamState::PendingSend(
                                 send_msg(stream, msg).boxed(),
@@ -383,7 +383,7 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                             // The messages still queued keep their place and
                             // their deadline; the clock polled above wakes us
                             // when the share refreshes.
-                            if matches!(item, Some(OutgoingItem::ShareSpent)) {
+                            if matches!(item, Some(PollOutcome::ShareSpent)) {
                                 tracing::trace!(
                                     target: LOG_TARGET,
                                     "Send share for connection {:?} is spent; nothing more goes out until the next round.",
