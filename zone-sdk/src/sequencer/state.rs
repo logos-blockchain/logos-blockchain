@@ -502,6 +502,13 @@ impl TxState {
         // advanced between batches (pruning the parent). Starting with an
         // empty set is conservative: txs show as "pending" until seen in
         // a subsequent block with a known parent.
+        //
+        // Every channel-tip-touching tx of the block joins the set, tracked
+        // or not: a fork block's txs are not mirrored into pending when it
+        // arrives, yet they must read as mined on its branch once the store
+        // re-mirrors them after the branch turns canonical. Readers only ask
+        // `safe.contains(pending_hash)`, so untracked members are inert, and
+        // the LIB prune drops them with the rest.
         let mut safe_set = self
             .block_states
             .get(&parent_id)
@@ -509,9 +516,7 @@ impl TxState {
             .unwrap_or_default();
 
         for tx in our_txs {
-            if self.pending.contains_key(&tx) || self.pending_other.contains_key(&tx) {
-                safe_set = safe_set.insert(tx);
-            }
+            safe_set = safe_set.insert(tx);
         }
         self.block_states.insert(block_id, safe_set);
 

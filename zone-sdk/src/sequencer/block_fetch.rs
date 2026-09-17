@@ -2207,6 +2207,19 @@ mod tests {
         assert_eq!(msg_ids(&u.adopted), vec![y_id]);
         assert!(u.orphaned.is_empty());
         assert_eq!(u.new_channel_tip, y_id);
+        // The re-mirrored y is mined on the new branch: the shed must keep it,
+        // and it must not be offered for resubmission.
+        assert!(
+            r[2].shed.is_empty(),
+            "re-mirrored fork tx shed as off-branch: {:?}",
+            r[2].shed
+        );
+        let s = state.as_ref().unwrap();
+        assert_eq!(s.pending_publish_count(), 2, "a and y mirrored");
+        assert!(
+            s.pending_txs(be.header.id).is_empty(),
+            "nothing to resubmit: both are safe at the tip"
+        );
     }
 
     /// Pending suffix vs. forks: a bare un-mine keeps it, a fork competitor
