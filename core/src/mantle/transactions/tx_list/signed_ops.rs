@@ -618,7 +618,7 @@ mod tests {
 
         // Sign the transaction hash
         let tx_hash = mantle_tx.hash();
-        let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+        let signature = signing_key.sign_payload(tx_hash.as_signing_bytes());
 
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
         let result = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
@@ -637,7 +637,7 @@ mod tests {
 
         // Sign with wrong key
         let tx_hash = mantle_tx.hash();
-        let signature = wrong_signing_key.sign_payload(&tx_hash.as_signing_bytes());
+        let signature = wrong_signing_key.sign_payload(tx_hash.as_signing_bytes());
 
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
         let result = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
@@ -666,8 +666,8 @@ mod tests {
         ]);
 
         let tx_hash = mantle_tx.hash();
-        let sig1 = signing_key1.sign_payload(&tx_hash.as_signing_bytes());
-        let sig2 = signing_key2.sign_payload(&tx_hash.as_signing_bytes());
+        let sig1 = signing_key1.sign_payload(tx_hash.as_signing_bytes());
+        let sig2 = signing_key2.sign_payload(tx_hash.as_signing_bytes());
 
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)]);
         let result = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
@@ -692,8 +692,8 @@ mod tests {
         ]);
 
         let tx_hash = mantle_tx.hash();
-        let sig1 = signing_key1.sign_payload(&tx_hash.as_signing_bytes());
-        let sig2 = wrong_key.sign_payload(&tx_hash.as_signing_bytes()); // Wrong signature
+        let sig1 = signing_key1.sign_payload(tx_hash.as_signing_bytes());
+        let sig2 = wrong_key.sign_payload(tx_hash.as_signing_bytes()); // Wrong signature
 
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)]);
         let result = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
@@ -744,7 +744,7 @@ mod tests {
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
 
         let tx_hash = mantle_tx.hash();
-        let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+        let signature = signing_key.sign_payload(tx_hash.as_signing_bytes());
 
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
         let signed_ops = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
@@ -767,7 +767,7 @@ mod tests {
         let inscribe_op = create_test_inscribe_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
         let tx_hash = mantle_tx.hash();
-        let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+        let signature = signing_key.sign_payload(tx_hash.as_signing_bytes());
 
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
         let valid =
@@ -800,7 +800,7 @@ mod tests {
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
 
         let tx_hash = mantle_tx.hash();
-        let wrong_signature = wrong_key.sign_payload(&tx_hash.as_signing_bytes());
+        let wrong_signature = wrong_key.sign_payload(tx_hash.as_signing_bytes());
 
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(wrong_signature)]);
         let helper = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();

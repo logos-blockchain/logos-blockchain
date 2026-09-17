@@ -154,7 +154,7 @@ mod tests {
 
         let tx_hash = tx.hash();
         let inscribe_sig =
-            OpProof::Ed25519Sig(signing_key.sign_payload(&tx_hash.as_signing_bytes()));
+            OpProof::Ed25519Sig(signing_key.sign_payload(tx_hash.as_signing_bytes()));
         let op_proofs = OpProofs::from([inscribe_sig]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(tx, op_proofs).unwrap();
 
@@ -208,7 +208,7 @@ mod tests {
         ]);
 
         let tx_hash = tx.hash();
-        let sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+        let sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
 
         // ChannelConfig creates the channel just-in-time, so no signatures are
         // required for validation — empty proof is well-formed.
@@ -254,7 +254,7 @@ mod tests {
                 let tx = Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]);
 
                 let tx_hash = tx.hash();
-                let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+                let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
                 let op_proofs = OpProofs::from([OpProof::Ed25519Sig(op_sig)]);
                 let signed_ops = SignedOps::<_, StandardMode>::from_parts(tx, op_proofs).unwrap();
 
@@ -349,7 +349,7 @@ mod tests {
 
         // Create a signed tx and encode it to get actual size
         let tx_hash = mantle_tx.hash();
-        let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+        let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(op_sig)]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
         let encoded = signed_tx.encode();
@@ -556,7 +556,7 @@ mod tests {
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         let tx_hash = mantle_tx.hash();
-        let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+        let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
         // Create a signed tx and encode it to get the actual size.
         // ChannelConfig creates the channel here, so its proof has no signatures.
         let config_proof = ChannelMultiSigProof::try_new([].into()).unwrap();
@@ -661,7 +661,7 @@ mod tests {
         // Create a signed tx and encode it to get the actual size.
         // ChannelConfig creates the channel here, so its proof has no signatures.
         let tx_hash = mantle_tx.hash();
-        let op_ed25519_sig = signing_key1.sign_payload(&tx_hash.as_signing_bytes());
+        let op_ed25519_sig = signing_key1.sign_payload(tx_hash.as_signing_bytes());
         let config_proof = ChannelMultiSigProof::try_new([].into()).unwrap();
         let zk_and_ed25519_proof = ZkAndEd25519Proof {
             zk_sig: ZkKey::multi_sign(&[service_note_sk, zk_sk], &tx_hash.to_fr()).unwrap(),
@@ -735,7 +735,7 @@ mod tests {
         let proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
                 0,
-                signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+                signing_key.sign_payload(tx_hash.as_signing_bytes()),
             )]
             .into(),
         )

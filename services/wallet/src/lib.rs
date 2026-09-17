@@ -1108,7 +1108,7 @@ where
         // Use hex-encoded public key as key_id for now
         let key_id = hex::encode(pk.as_bytes());
 
-        let payload = PayloadEncoding::Ed25519(tx_hash.as_signing_bytes());
+        let payload = PayloadEncoding::Ed25519(Bytes::copy_from_slice(tx_hash.as_signing_bytes()));
         let signature = kms
             .sign(key_id, payload)
             .await

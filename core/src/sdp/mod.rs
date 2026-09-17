@@ -343,6 +343,12 @@ pub type Nonce = u64;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ProviderId(pub Ed25519PublicKey);
 
+impl AsRef<[u8; 32]> for ProviderId {
+    fn as_ref(&self) -> &[u8; 32] {
+        self.0.as_bytes()
+    }
+}
+
 #[derive(Debug)]
 pub struct InvalidKeyBytesError;
 
@@ -370,7 +376,7 @@ impl PartialOrd for ProviderId {
 
 impl Ord for ProviderId {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.as_bytes().cmp(other.0.as_bytes())
+        self.as_ref().cmp(other.as_ref())
     }
 }
 
@@ -378,6 +384,12 @@ impl Ord for ProviderId {
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
 display_hex_bytes_newtype!(DeclarationId);
+
+impl AsRef<[u8; 32]> for DeclarationId {
+    fn as_ref(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
 
 impl BoundedSerializeOp for DeclarationId {
     type Bytes = [u8; 32];
@@ -503,7 +515,7 @@ impl DeclarationMessage {
         // [spec](https://lip.logos.co/blockchain/raw/bedrock-service-declaration-protocol.html#declaration-storage):
         // declaration_id = Hash(service||provider_id||zk_id||locators)
         hasher.update(service.as_bytes());
-        hasher.update(self.provider_id.0);
+        hasher.update(self.provider_id.as_ref());
         hasher.update(fr_to_bytes(self.zk_id.as_fr()));
         // The locators go in through the wire encoding, which prefixes the list
         // with its count and every locator with its byte length.
@@ -613,7 +625,7 @@ mod tests {
     use multiaddr::Multiaddr;
 
     use crate::sdp::{
-        Declaration, DeclarationId, DeclarationMessage, Locator, Locators, ServiceType,
+        Declaration, DeclarationId, DeclarationMessage, Locator, Locators, ProviderId, ServiceType,
     };
 
     #[test]
@@ -744,5 +756,19 @@ mod tests {
 
         assert_eq!(ordinary.len(), 32);
         assert_eq!(bounded.as_ref(), ordinary.as_ref());
+    }
+
+    #[test]
+    fn sdp_byte_types_borrow_their_stored_bytes() {
+        let provider_id = ProviderId(Ed25519Key::from_bytes(&[0; 32]).public_key());
+        let declaration_id = DeclarationId([0x66; 32]);
+
+        assert_eq!(provider_id.as_ref(), provider_id.0.as_bytes());
+        assert_eq!(declaration_id.as_ref(), &declaration_id.0);
+        assert!(std::ptr::eq(provider_id.as_ref(), provider_id.0.as_bytes()));
+        assert!(std::ptr::eq(
+            declaration_id.as_ref(),
+            &raw const declaration_id.0
+        ));
     }
 }

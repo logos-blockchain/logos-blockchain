@@ -51,7 +51,7 @@ pub fn build_inscription_tx_builder(
 pub fn inscription_signature_proof(tx_hash: TxHash, signing_key: &Ed25519Key) -> OpProof {
     OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
         &signing_key
-            .sign_payload(tx_hash.as_signing_bytes().as_ref())
+            .sign_payload(tx_hash.as_signing_bytes())
             .to_bytes(),
     ))
 }
