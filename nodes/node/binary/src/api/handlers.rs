@@ -10,11 +10,11 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse as _, Response},
 };
+use futures::TryStreamExt as _;
 use lb_api_service::http::{
     DynError, blend,
     consensus::{self, Cryptarchia, leader::LeaderClaimResponseBody},
     libp2p, mantle, mempool, pow,
-    storage::StorageAdapter,
 };
 use lb_blend_service::message::ProxyServiceMessage;
 use lb_chain_broadcast_service::BlockBroadcastService;
@@ -24,8 +24,6 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::Block,
-    events::Events,
     header::HeaderId,
     mantle::{
         Op, OpProof, SignedOps, TxHash,
@@ -58,16 +56,14 @@ use lb_http_api_common::{
     paths,
     queries::BlocksStreamQuery,
 };
-use lb_libp2p::{Multiaddr, libp2p::bytes::Bytes};
+use lb_libp2p::Multiaddr;
 use lb_log_targets::node;
 use lb_network_service::{NetworkService, backends::libp2p::Libp2p as Libp2pNetworkBackend};
 use lb_pow_service::api::PoWServiceData;
 use lb_sdp_service::{
     mempool::SdpMempoolAdapter, state::SdpStateStorage, wallet::SdpWalletAdapter,
 };
-use lb_storage_service::{
-    StorageService, api::chain::StorageChainApi, backends::rocksdb::RocksBackend,
-};
+use lb_storage_service::{StorageService, api::StorageApi, backends::rocksdb::RocksBackend};
 use lb_time_service::TimeServiceMessage;
 use lb_tx_service::{
     MempoolMsg, TxMempoolService, backend::Mempool,
@@ -227,11 +223,6 @@ async fn fetch_blocks_stream_chunk<StorageBackend, RuntimeServiceId>(
 ) -> Result<Vec<ApiProcessedBlockEventOwned<Unverified, StandardMode>>, DynError>
 where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    StorageBackend::Block: Serialize,
-    <StorageBackend as StorageChainApi>::Block: TryFrom<Block<SignedOps<Unverified, StandardMode>>>
-        + TryInto<Block<SignedOps<Unverified, StandardMode>>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -285,11 +276,6 @@ fn build_blocks_stream<StorageBackend, RuntimeServiceId>(
 ) -> impl futures::Stream<Item = Result<ApiProcessedBlockEventOwned<Unverified, StandardMode>, DynError>>
 where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    StorageBackend::Block: Serialize,
-    <StorageBackend as StorageChainApi>::Block: TryFrom<Block<SignedOps<Unverified, StandardMode>>>
-        + TryInto<Block<SignedOps<Unverified, StandardMode>>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -1496,12 +1482,7 @@ pub async fn immutable_blocks<StorageBackend, RuntimeServiceId>(
     Query(query): Query<BlockRangeQuery>,
 ) -> Response
 where
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static, /* TODO: StorageChainApi */
-    StorageBackend::Block: Serialize,
-    <StorageBackend as StorageChainApi>::Block: TryFrom<Block<SignedOps<Unverified, StandardMode>>>
-        + TryInto<Block<SignedOps<Unverified, StandardMode>>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
+    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -1536,12 +1517,11 @@ where
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn block<HttpStorageAdapter, RuntimeServiceId>(
+pub async fn block<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Path(id): Path<HeaderId>,
 ) -> Response
 where
-    HttpStorageAdapter: StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
     RuntimeServiceId:
         AsServiceId<StorageService<RocksBackend, RuntimeServiceId>> + Debug + Sync + Display,
 {
@@ -1549,8 +1529,9 @@ where
         Ok(relay) => relay,
         Err(error) => return error.into_response(),
     };
-    let block =
-        HttpStorageAdapter::get_block::<SignedOps<Unverified, StandardMode>>(relay, id).await;
+    let block = StorageApi::<_, SignedOps<Unverified, StandardMode>>::new(relay)
+        .load_block(&id)
+        .await;
     match block {
         Ok(Some(block)) => {
             let api_block = ApiBlock::from(&block);
@@ -1652,11 +1633,6 @@ pub async fn blocks_stream<StorageBackend, ConsensusService, RuntimeServiceId>(
 ) -> Response
 where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    StorageBackend::Block: Serialize,
-    <StorageBackend as StorageChainApi>::Block: TryFrom<Block<SignedOps<Preverified, StandardMode>>>
-        + TryInto<Block<SignedOps<Preverified, StandardMode>>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     ConsensusService: CryptarchiaServiceData<Tx = SignedOps<Preverified, StandardMode>>,
     RuntimeServiceId: Debug
         + Sync
@@ -1692,11 +1668,6 @@ pub async fn blocks_range_stream<StorageBackend, RuntimeServiceId>(
 ) -> Result<Response, BlocksStreamHandlerError>
 where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    StorageBackend::Block: Serialize,
-    <StorageBackend as StorageChainApi>::Block: TryFrom<Block<SignedOps<Unverified, StandardMode>>>
-        + TryInto<Block<SignedOps<Unverified, StandardMode>>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -1773,12 +1744,11 @@ where
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn transaction<HttpStorageAdapter, RuntimeServiceId>(
+pub async fn transaction<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Path(id): Path<TxHash>,
 ) -> Response
 where
-    HttpStorageAdapter: StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
     RuntimeServiceId:
         AsServiceId<StorageService<RocksBackend, RuntimeServiceId>> + Debug + Sync + Display,
 {
@@ -1786,10 +1756,13 @@ where
         Ok(relay) => relay,
         Err(error) => return error.into_response(),
     };
-    let Ok(transactions) =
-        HttpStorageAdapter::get_transactions::<SignedOps<Unverified, StandardMode>>(relay, id)
-            .await
+    let Ok(transactions) = StorageApi::<_, SignedOps<Unverified, StandardMode>>::new(relay)
+        .try_get_transactions(vec![id])
+        .await
     else {
+        return ApiError::InternalServerError.into_response();
+    };
+    let Ok(transactions) = transactions.try_collect::<Vec<_>>().await else {
         return ApiError::InternalServerError.into_response();
     };
     match transactions.as_slice() {

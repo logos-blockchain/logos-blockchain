@@ -1,42 +1,40 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    fmt::Display,
     num::NonZeroUsize,
     ops::RangeInclusive,
     pin::Pin,
 };
 
+use bytes::Bytes;
 use futures::Stream;
 use lb_core::{header::HeaderId, mantle::TxHash};
 use lb_cryptarchia_engine::Slot;
 use tokio::sync::oneshot::Sender;
 
+use crate::{StorageMsg, backends::StorageBackend};
+#[cfg(feature = "rocksdb-backend")]
 use crate::{
-    StorageMsg, StorageServiceError,
-    api::{
-        StorageApiRequest, StorageBackendApi, StorageOperation,
-        backend::{streamed_immutable_block_ids_reverse_vec, streamed_immutable_block_ids_vec},
-        chain::StorageChainApi,
-    },
-    backends::StorageBackend,
+    StorageServiceError,
+    api::backend::{streamed_immutable_block_ids_reverse_vec, streamed_immutable_block_ids_vec},
+    backends::rocksdb::RocksBackend,
 };
 
-pub enum ChainApiRequest<Backend: StorageBackend> {
+pub enum ChainApiRequest {
     GetBlock {
         header_id: HeaderId,
-        response_tx: Sender<Option<<Backend as StorageChainApi>::Block>>,
+        response_tx: Sender<Option<Bytes>>,
     },
     StoreBlockData {
         header_id: HeaderId,
         parent_id: HeaderId,
-        block: <Backend as StorageChainApi>::Block,
-        events: <Backend as StorageChainApi>::Events,
+        block: Bytes,
+        events: Bytes,
         immutable_ids: BTreeMap<Slot, HeaderId>,
         response_tx: Sender<Result<(), String>>,
     },
     RemoveBlock {
         header_id: HeaderId,
-        response_tx: Sender<Option<Backend::Block>>,
+        response_tx: Sender<Option<Bytes>>,
     },
     GetBlockParent {
         header_id: HeaderId,
@@ -44,7 +42,7 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
     },
     GetBlockEvents {
         header_id: HeaderId,
-        response_tx: Sender<Option<Backend::Events>>,
+        response_tx: Sender<Option<Bytes>>,
     },
     StoreImmutableBlockIds {
         ids: BTreeMap<Slot, HeaderId>,
@@ -65,22 +63,23 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
         response_tx: Sender<Vec<HeaderId>>,
     },
     StoreTransactions {
-        transactions: HashMap<TxHash, <Backend as StorageChainApi>::Tx>,
+        transactions: HashMap<TxHash, Bytes>,
     },
     GetTransactions {
         tx_hashes: Vec<TxHash>,
-        response_tx: Sender<Pin<Box<dyn Stream<Item = <Backend as StorageChainApi>::Tx> + Send>>>,
+        response_tx: Sender<Pin<Box<dyn Stream<Item = Bytes> + Send>>>,
     },
     RemoveTransactions {
         tx_hashes: Vec<TxHash>,
     },
 }
 
-impl<Backend> StorageOperation<Backend> for ChainApiRequest<Backend>
-where
-    Backend: StorageBackend + StorageBackendApi,
-{
-    async fn execute(self, backend: &mut Backend) -> Result<(), StorageServiceError> {
+#[cfg(feature = "rocksdb-backend")]
+impl ChainApiRequest {
+    pub(crate) async fn execute(
+        self,
+        backend: &mut RocksBackend,
+    ) -> Result<(), StorageServiceError> {
         match self {
             Self::GetBlock {
                 header_id,
@@ -143,7 +142,7 @@ where
             Self::GetTransactions {
                 tx_hashes,
                 response_tx,
-            } => handle_get_transactions(backend, tx_hashes, response_tx).await,
+            } => handle_get_transactions(backend, tx_hashes, response_tx),
             Self::RemoveTransactions { tx_hashes } => {
                 handle_remove_transactions(backend, tx_hashes).await
             }
@@ -151,10 +150,11 @@ where
     }
 }
 
-async fn handle_get_block<Backend: StorageBackend>(
-    backend: &mut Backend,
+#[cfg(feature = "rocksdb-backend")]
+async fn handle_get_block(
+    backend: &mut RocksBackend,
     header_id: HeaderId,
-    response_tx: Sender<Option<Backend::Block>>,
+    response_tx: Sender<Option<Bytes>>,
 ) -> Result<(), StorageServiceError> {
     let result = backend
         .get_block(header_id)
@@ -172,12 +172,13 @@ async fn handle_get_block<Backend: StorageBackend>(
     Ok(())
 }
 
-async fn handle_store_block_data<Backend: StorageBackend>(
-    backend: &mut Backend,
+#[cfg(feature = "rocksdb-backend")]
+async fn handle_store_block_data(
+    backend: &mut RocksBackend,
     header_id: HeaderId,
     parent_id: HeaderId,
-    block: Backend::Block,
-    events: Backend::Events,
+    block: Bytes,
+    events: Bytes,
     immutable_ids: BTreeMap<Slot, HeaderId>,
     response_tx: Sender<Result<(), String>>,
 ) -> Result<(), StorageServiceError> {
@@ -199,8 +200,9 @@ async fn handle_store_block_data<Backend: StorageBackend>(
     result
 }
 
-async fn handle_get_block_parent<Backend: StorageBackend>(
-    backend: &mut Backend,
+#[cfg(feature = "rocksdb-backend")]
+async fn handle_get_block_parent(
+    backend: &mut RocksBackend,
     header_id: HeaderId,
     response_tx: Sender<Option<HeaderId>>,
 ) -> Result<(), StorageServiceError> {
@@ -220,10 +222,11 @@ async fn handle_get_block_parent<Backend: StorageBackend>(
     Ok(())
 }
 
-async fn handle_get_block_events<Backend: StorageBackend>(
-    backend: &mut Backend,
+#[cfg(feature = "rocksdb-backend")]
+async fn handle_get_block_events(
+    backend: &mut RocksBackend,
     header_id: HeaderId,
-    response_tx: Sender<Option<Backend::Events>>,
+    response_tx: Sender<Option<Bytes>>,
 ) -> Result<(), StorageServiceError> {
     let result = backend
         .get_block_events(header_id)
@@ -241,14 +244,12 @@ async fn handle_get_block_events<Backend: StorageBackend>(
     Ok(())
 }
 
-async fn handle_remove_block<B>(
-    backend: &mut B,
+#[cfg(feature = "rocksdb-backend")]
+async fn handle_remove_block(
+    backend: &mut RocksBackend,
     header_id: HeaderId,
-    response_tx: Sender<Option<B::Block>>,
-) -> Result<(), StorageServiceError>
-where
-    B: StorageBackend<Error: Display>,
-{
+    response_tx: Sender<Option<Bytes>>,
+) -> Result<(), StorageServiceError> {
     let result = backend
         .remove_block(header_id)
         .await
@@ -262,8 +263,9 @@ where
         })
 }
 
-async fn handle_store_immutable_block_ids<Backend: StorageBackend>(
-    backend: &mut Backend,
+#[cfg(feature = "rocksdb-backend")]
+async fn handle_store_immutable_block_ids(
+    backend: &mut RocksBackend,
     ids: BTreeMap<Slot, HeaderId>,
     response_tx: Sender<Result<(), String>>,
 ) -> Result<(), StorageServiceError> {
@@ -283,8 +285,9 @@ async fn handle_store_immutable_block_ids<Backend: StorageBackend>(
     result
 }
 
-async fn handle_get_immutable_block_id<Backend: StorageBackend>(
-    backend: &mut Backend,
+#[cfg(feature = "rocksdb-backend")]
+async fn handle_get_immutable_block_id(
+    backend: &mut RocksBackend,
     slot: Slot,
     response_tx: Sender<Option<HeaderId>>,
 ) -> Result<(), StorageServiceError> {
@@ -304,8 +307,9 @@ async fn handle_get_immutable_block_id<Backend: StorageBackend>(
     Ok(())
 }
 
-async fn handle_scan_immutable_block_ids<Backend: StorageBackend>(
-    backend: &mut Backend,
+#[cfg(feature = "rocksdb-backend")]
+async fn handle_scan_immutable_block_ids(
+    backend: &mut RocksBackend,
     slot_range: RangeInclusive<Slot>,
     limit: NonZeroUsize,
     response_tx: Sender<Vec<HeaderId>>,
@@ -320,8 +324,9 @@ async fn handle_scan_immutable_block_ids<Backend: StorageBackend>(
 
     Ok(())
 }
-async fn handle_scan_immutable_block_ids_reverse<Backend: StorageBackend>(
-    backend: &mut Backend,
+#[cfg(feature = "rocksdb-backend")]
+async fn handle_scan_immutable_block_ids_reverse(
+    backend: &mut RocksBackend,
     slot_range: RangeInclusive<Slot>,
     limit: NonZeroUsize,
     response_tx: Sender<Vec<HeaderId>>,
@@ -341,33 +346,33 @@ impl<Api: StorageBackend> StorageMsg<Api> {
     #[must_use]
     pub const fn get_block_request(
         header_id: HeaderId,
-        response_tx: Sender<Option<<Api as StorageChainApi>::Block>>,
+        response_tx: Sender<Option<Bytes>>,
     ) -> Self {
         Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::GetBlock {
+            request: ChainApiRequest::GetBlock {
                 header_id,
                 response_tx,
-            }),
+            },
         }
     }
 
     pub const fn store_block_data_request(
         header_id: HeaderId,
         parent_id: HeaderId,
-        block: <Api as StorageChainApi>::Block,
-        events: <Api as StorageChainApi>::Events,
+        block: Bytes,
+        events: Bytes,
         immutable_ids: BTreeMap<Slot, HeaderId>,
         response_tx: Sender<Result<(), String>>,
     ) -> Self {
         Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::StoreBlockData {
+            request: ChainApiRequest::StoreBlockData {
                 header_id,
                 parent_id,
                 block,
                 events,
                 immutable_ids,
                 response_tx,
-            }),
+            },
         }
     }
 
@@ -377,36 +382,36 @@ impl<Api: StorageBackend> StorageMsg<Api> {
         response_tx: Sender<Option<HeaderId>>,
     ) -> Self {
         Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::GetBlockParent {
+            request: ChainApiRequest::GetBlockParent {
                 header_id,
                 response_tx,
-            }),
+            },
         }
     }
 
     #[must_use]
     pub const fn get_block_events_request(
         header_id: HeaderId,
-        response_tx: Sender<Option<<Api as StorageChainApi>::Events>>,
+        response_tx: Sender<Option<Bytes>>,
     ) -> Self {
         Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::GetBlockEvents {
+            request: ChainApiRequest::GetBlockEvents {
                 header_id,
                 response_tx,
-            }),
+            },
         }
     }
 
     #[must_use]
     pub const fn remove_block_request(
         header_id: HeaderId,
-        response_tx: Sender<Option<Api::Block>>,
+        response_tx: Sender<Option<Bytes>>,
     ) -> Self {
         Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::RemoveBlock {
+            request: ChainApiRequest::RemoveBlock {
                 header_id,
                 response_tx,
-            }),
+            },
         }
     }
 
@@ -416,10 +421,7 @@ impl<Api: StorageBackend> StorageMsg<Api> {
         response_tx: Sender<Result<(), String>>,
     ) -> Self {
         Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::StoreImmutableBlockIds {
-                ids,
-                response_tx,
-            }),
+            request: ChainApiRequest::StoreImmutableBlockIds { ids, response_tx },
         }
     }
 
@@ -429,10 +431,7 @@ impl<Api: StorageBackend> StorageMsg<Api> {
         response_tx: Sender<Option<HeaderId>>,
     ) -> Self {
         Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::GetImmutableBlockId {
-                slot,
-                response_tx,
-            }),
+            request: ChainApiRequest::GetImmutableBlockId { slot, response_tx },
         }
     }
 
@@ -443,47 +442,46 @@ impl<Api: StorageBackend> StorageMsg<Api> {
         response_tx: Sender<Vec<HeaderId>>,
     ) -> Self {
         Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::ScanImmutableBlockIds {
+            request: ChainApiRequest::ScanImmutableBlockIds {
                 slot_range,
                 limit,
                 response_tx,
-            }),
+            },
         }
     }
 
     #[must_use]
-    pub const fn store_transactions_request(
-        transactions: HashMap<TxHash, <Api as StorageChainApi>::Tx>,
-    ) -> Self {
+    pub const fn store_transactions_request(transactions: HashMap<TxHash, Bytes>) -> Self {
         Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::StoreTransactions { transactions }),
+            request: ChainApiRequest::StoreTransactions { transactions },
         }
     }
 
     #[must_use]
     pub const fn get_transactions_request(
         tx_hashes: Vec<TxHash>,
-        response_tx: Sender<Pin<Box<dyn Stream<Item = <Api as StorageChainApi>::Tx> + Send>>>,
+        response_tx: Sender<Pin<Box<dyn Stream<Item = Bytes> + Send>>>,
     ) -> Self {
         Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::GetTransactions {
+            request: ChainApiRequest::GetTransactions {
                 tx_hashes,
                 response_tx,
-            }),
+            },
         }
     }
 
     #[must_use]
     pub const fn remove_transactions_request(tx_hashes: Vec<TxHash>) -> Self {
         Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::RemoveTransactions { tx_hashes }),
+            request: ChainApiRequest::RemoveTransactions { tx_hashes },
         }
     }
 }
 
-async fn handle_store_transactions<Backend: StorageBackend>(
-    backend: &mut Backend,
-    transactions: HashMap<TxHash, <Backend as StorageChainApi>::Tx>,
+#[cfg(feature = "rocksdb-backend")]
+async fn handle_store_transactions(
+    backend: &mut RocksBackend,
+    transactions: HashMap<TxHash, Bytes>,
 ) -> Result<(), StorageServiceError> {
     backend
         .store_transactions(transactions)
@@ -492,15 +490,13 @@ async fn handle_store_transactions<Backend: StorageBackend>(
     Ok(())
 }
 
-async fn handle_get_transactions<Backend: StorageBackend>(
-    backend: &mut Backend,
+#[cfg(feature = "rocksdb-backend")]
+fn handle_get_transactions(
+    backend: &RocksBackend,
     tx_hashes: Vec<TxHash>,
-    response_tx: Sender<Pin<Box<dyn Stream<Item = <Backend as StorageChainApi>::Tx> + Send>>>,
+    response_tx: Sender<Pin<Box<dyn Stream<Item = Bytes> + Send>>>,
 ) -> Result<(), StorageServiceError> {
-    let result = backend
-        .get_transactions(tx_hashes)
-        .await
-        .map_err(|e| StorageServiceError::BackendError(e.into()))?;
+    let result = backend.get_transactions(tx_hashes);
 
     if response_tx.send(result).is_err() {
         return Err(StorageServiceError::ReplyError {
@@ -511,8 +507,9 @@ async fn handle_get_transactions<Backend: StorageBackend>(
     Ok(())
 }
 
-async fn handle_remove_transactions<Backend: StorageBackend>(
-    backend: &mut Backend,
+#[cfg(feature = "rocksdb-backend")]
+async fn handle_remove_transactions(
+    backend: &mut RocksBackend,
     tx_hashes: Vec<TxHash>,
 ) -> Result<(), StorageServiceError> {
     backend

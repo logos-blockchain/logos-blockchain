@@ -46,6 +46,10 @@ pub struct RocksBackend {
     rocks: Arc<DB>,
 }
 
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "Chain operations live separately from basic database operations"
+)]
 impl RocksBackend {
     pub fn txn(
         &self,

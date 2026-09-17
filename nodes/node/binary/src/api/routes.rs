@@ -68,9 +68,9 @@ macro_rules! api_routes {
             get lb_http_api_common::paths::BLOCKS_STREAM => crate::api::handlers::blocks_stream, blocks_stream::<BlockStorageBackend, CryptarchiaConsensus<_, _, _, _>, RuntimeServiceId>;
             get lb_http_api_common::paths::BLOCKS_RANGE_STREAM => crate::api::handlers::blocks_range_stream, blocks_range_stream::<BlockStorageBackend, RuntimeServiceId>;
             get lb_http_api_common::paths::BLOCKS => crate::api::handlers::immutable_blocks, immutable_blocks::<BlockStorageBackend, RuntimeServiceId>;
-            get lb_http_api_common::paths::BLOCKS_DETAIL => crate::api::handlers::block, block::<StorageAdapter, RuntimeServiceId>;
+            get lb_http_api_common::paths::BLOCKS_DETAIL => crate::api::handlers::block, block::<RuntimeServiceId>;
             get lb_http_api_common::paths::BLOCK_EVENTS => crate::api::handlers::block_events, block_events::<RuntimeServiceId>;
-            get lb_http_api_common::paths::TRANSACTION => crate::api::handlers::transaction, transaction::<StorageAdapter, RuntimeServiceId>;
+            get lb_http_api_common::paths::TRANSACTION => crate::api::handlers::transaction, transaction::<RuntimeServiceId>;
         }
     };
 }

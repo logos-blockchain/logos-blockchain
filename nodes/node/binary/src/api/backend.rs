@@ -84,7 +84,6 @@ type BlockStorageService<RuntimeServiceId> = StorageService<BlockStorageBackend,
 
 pub struct AxumBackend<
     TimeBackend,
-    HttpStorageAdapter,
     MempoolStorageAdapter,
     SdpMempool,
     SdpWallet,
@@ -94,7 +93,6 @@ pub struct AxumBackend<
     settings: AxumBackendSettings,
     _phantom: PhantomData<(
         TimeBackend,
-        HttpStorageAdapter,
         MempoolStorageAdapter,
         SdpMempool,
         SdpWallet,
@@ -106,7 +104,6 @@ pub struct AxumBackend<
 #[async_trait::async_trait]
 impl<
     TimeBackend,
-    StorageAdapter,
     MempoolStorageAdapter,
     SdpMempool,
     SdpWallet,
@@ -116,7 +113,6 @@ impl<
 > Backend<RuntimeServiceId>
     for AxumBackend<
         TimeBackend,
-        StorageAdapter,
         MempoolStorageAdapter,
         SdpMempool,
         SdpWallet,
@@ -126,8 +122,6 @@ impl<
 where
     TimeBackend: lb_time_service::backends::TimeBackend + Send + 'static,
     TimeBackend::Settings: Clone + Send + Sync,
-    StorageAdapter:
-        lb_api_service::http::storage::StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
     MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,

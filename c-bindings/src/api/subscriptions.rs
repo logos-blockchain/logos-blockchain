@@ -1,7 +1,6 @@
 use std::ffi::{CString, c_char};
 
 use futures::StreamExt as _;
-use lb_api_service::http::storage::StorageAdapter as _;
 use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
     block::{Block as CoreBlock, BlockTransactions},
@@ -15,9 +14,10 @@ use lb_core::{
     },
 };
 use lb_node::{
-    ApiStorageAdapter, RocksBackend, RuntimeServiceId, SignedOps, StorageService,
+    RocksBackend, RuntimeServiceId, SignedOps, StorageService,
     api::serializers::blocks::ApiProcessedBlockEventOwned, generic_services::CryptarchiaService,
 };
+use lb_storage_service::api::StorageApi;
 use serde::Serialize;
 
 use crate::{
@@ -76,12 +76,11 @@ pub fn subscribe_to_new_blocks_sync(
             .await;
         match api.subscribe_new_blocks().await {
             Ok(mut block_stream) => {
+                let storage =
+                    StorageApi::<_, SignedOps<Unverified, StandardMode>>::new(storage_relay);
                 runtime_handler.spawn(async move {
                     while let Ok(event) = block_stream.recv().await {
-                        let relay = storage_relay.clone();
-                        let res: Result<Option<CoreBlock<SignedOps<Unverified, StandardMode>>>, _> =
-                            ApiStorageAdapter::<RuntimeServiceId>::get_block(relay, event.block_id)
-                                .await;
+                        let res = storage.load_block(&event.block_id).await;
                         if let Ok(Some(block)) = res {
                             let txs_with_id: Vec<TxWithId> = block
                                 .transactions_iter()
