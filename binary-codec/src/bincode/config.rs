@@ -81,3 +81,41 @@ pub fn deserialize<T: DeserializeOwned>(data: &[u8]) -> Result<T> {
         .deserialize(data)
         .map_err(|e| WireError::Deserialize(Box::new(e)))
 }
+
+#[cfg(test)]
+mod tests {
+    use serde::Serialize;
+
+    use super::*;
+
+    #[derive(Serialize)]
+    enum TestEnum {
+        Value,
+    }
+
+    #[test]
+    fn enum_discriminant_size_matches_configured_bincode() {
+        assert_eq!(
+            serialize(&TestEnum::Value).unwrap().len(),
+            BINCODE_ENUM_DISCRIMINANT_SIZE
+        );
+    }
+
+    #[test]
+    fn u8_size_matches_configured_bincode() {
+        assert_eq!(serialize(&u8::MAX).unwrap().len(), BINCODE_U8_SIZE);
+    }
+
+    #[test]
+    fn u64_size_matches_configured_bincode() {
+        assert_eq!(serialize(&u64::MAX).unwrap().len(), BINCODE_U64_SIZE);
+    }
+
+    #[test]
+    fn sequence_length_prefix_size_matches_configured_bincode() {
+        assert_eq!(
+            serialize(&Vec::<u8>::new()).unwrap().len(),
+            BINCODE_LENGTH_PREFIX_SIZE
+        );
+    }
+}
