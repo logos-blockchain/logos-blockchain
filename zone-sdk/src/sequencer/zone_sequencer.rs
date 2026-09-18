@@ -37,7 +37,7 @@ use super::{
     client::SequencerClient,
     handle::SequencerHandle,
     slot_clock::SlotClock,
-    state::{BlockChannelTx, TxState},
+    state::{BlockChannelTx, ParentTaken, TxState},
     tx_builder::{
         assemble_channel_config_tx, build_and_fund_config, build_atomic_bundle_ops_proofs,
         create_channel_config_tx, create_inscribe_tx, find_own_key_index, fund_ops,
@@ -273,8 +273,10 @@ where
             let mut tx_state = TxState::new(lib, finalized_msg);
             tx_state.set_finalized_config(finalized_config);
             tx_state.restore_channel_notes(channel_notes);
-            for (_hash, tx) in pending_txs {
-                track_pending_tx(&mut tx_state, tx, channel_id);
+            for (hash, tx) in pending_txs {
+                if let Err(taken) = track_pending_tx(&mut tx_state, tx, channel_id) {
+                    warn!(target: TARGET, "Dropping checkpointed tx {hash:?}: {taken}");
+                }
             }
             tx_state.prune_local_tx_tracking(config.max_local_tx_tracking);
             (Some(tx_state), lib_slot, last_msg_id, false)
@@ -754,7 +756,7 @@ where
 
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
-        state.submit_inscription(signed_tx.clone(), parent, new_msg_id, data);
+        state.submit_inscription(signed_tx.clone(), parent, new_msg_id, data)?;
         self.last_msg_id = new_msg_id;
         self.queue_tx_status(id, TxStatus::AcceptedLocally);
 
@@ -889,7 +891,7 @@ where
             inscribe.clone(),
             withdraw_infos.clone(),
             outputs.clone(),
-        );
+        )?;
         self.last_msg_id = msg_id;
         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
@@ -1063,7 +1065,7 @@ where
             msg_id,
             inscribe.clone(),
             consumed_inputs.clone(),
-        );
+        )?;
         self.last_msg_id = msg_id;
         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
@@ -1204,7 +1206,7 @@ where
 
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
-        state.submit_other(signed_tx.clone(), self.channel_id);
+        state.submit_other(signed_tx.clone(), self.channel_id)?;
         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
         info!(target: TARGET, "Submitted channel_config transaction {}", hex::encode(tx_hash.0));
@@ -1345,7 +1347,7 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         let id = tx.hash();
-        let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id);
+        let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id)?;
         let parent_msg = self.last_msg_id;
         // The tip the tx leaves behind is defined by its inscriptions (the
         // last one); a tx without any — e.g. a pure config — leaves the tip
@@ -1576,12 +1578,12 @@ pub(super) fn track_pending_tx(
     state: &mut TxState,
     tx: SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
-) -> Option<MsgId> {
+) -> Result<Option<MsgId>, ParentTaken> {
     match classify_channel_tx(&tx, channel_id, &mut None) {
         Some(BlockChannelTx::Inscription(i)) => {
             let this_msg = i.this_msg;
-            state.submit_inscription(tx, i.parent_msg, this_msg, i.payload);
-            Some(this_msg)
+            state.submit_inscription(tx, i.parent_msg, this_msg, i.payload)?;
+            Ok(Some(this_msg))
         }
         Some(BlockChannelTx::AtomicWithdraw(aw)) => {
             let this_msg = aw.inscription.this_msg;
@@ -1592,8 +1594,8 @@ pub(super) fn track_pending_tx(
                 aw.inscription.payload,
                 aw.withdraws,
                 aw.outputs,
-            );
-            Some(this_msg)
+            )?;
+            Ok(Some(this_msg))
         }
         Some(BlockChannelTx::PinDeposit(ad)) => {
             let this_msg = ad.inscription.this_msg;
@@ -1603,8 +1605,8 @@ pub(super) fn track_pending_tx(
                 this_msg,
                 ad.inscription.payload,
                 ad.consumed_notes,
-            );
-            Some(this_msg)
+            )?;
+            Ok(Some(this_msg))
         }
         _ => state.submit_other(tx, channel_id),
     }
