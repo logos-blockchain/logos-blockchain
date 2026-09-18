@@ -2124,6 +2124,7 @@ mod tests {
     struct Driven {
         result: BlockEventResult,
         shed: Vec<PendingTx>,
+        shed_other: Vec<SignedOps<Unverified, StandardMode>>,
     }
 
     /// Run `events` as the actor would: handle each, then the shed passes.
@@ -2159,8 +2160,12 @@ mod tests {
             let tip = current_tip.unwrap();
             let mut shed = s.shed_bundles_with_missing_inputs(tip, channel_id);
             shed.extend(s.shed_off_branch_pending(tip));
-            drop(s.shed_off_branch_pending_other(tip));
-            driven.push(Driven { result, shed });
+            let shed_other = s.shed_off_branch_pending_other(tip);
+            driven.push(Driven {
+                result,
+                shed,
+                shed_other,
+            });
         }
         driven
     }
@@ -2207,6 +2212,19 @@ mod tests {
         assert_eq!(msg_ids(&u.adopted), vec![y_id]);
         assert!(u.orphaned.is_empty());
         assert_eq!(u.new_channel_tip, y_id);
+        // The re-mirrored y is mined on the new branch: the shed must keep it,
+        // and it must not be offered for resubmission.
+        assert!(
+            r[2].shed.is_empty(),
+            "re-mirrored fork tx shed as off-branch: {:?}",
+            r[2].shed
+        );
+        let s = state.as_ref().unwrap();
+        assert_eq!(s.pending_publish_count(), 2, "a and y mirrored");
+        assert!(
+            s.pending_txs(be.header.id).is_empty(),
+            "nothing to resubmit: both are safe at the tip"
+        );
     }
 
     /// Pending suffix vs. forks: a bare un-mine keeps it, a fork competitor
@@ -2222,6 +2240,7 @@ mod tests {
         let (i4_id, i4_tx) = ins(ch, i3_id, b"i4");
         let (i3a_id, i3a_tx) = ins(ch, i2_id, b"i3'");
         let (i4a_id, i4a_tx) = ins(ch, i3a_id, b"i4'");
+        let (i3_hash, i4_hash) = (i3_tx.hash(), i4_tx.hash());
         let b1 = api_block(1, 0, 1, vec![i1_tx, i2_tx]);
         let b2 = api_block(2, 1, 2, vec![i3_tx, i4_tx]);
         let b3 = api_block(3, 1, 3, Vec::new());
@@ -2254,6 +2273,14 @@ mod tests {
         assert_eq!(msg_ids(&u.orphaned), vec![i3_id, i4_id]);
         assert_eq!(msg_ids(&u.adopted), vec![i3a_id, i4a_id]);
         assert_eq!(u.new_channel_tip, i4a_id);
+        // Only the displaced suffix is shed; the re-mirrored i3', i4' read as
+        // mined on the new branch.
+        assert!(r[2].shed.is_empty() && r[3].shed.is_empty());
+        let shed: Vec<TxHash> = r[4].shed.iter().map(PendingTx::tx_hash).collect();
+        assert_eq!(shed, vec![i3_hash, i4_hash]);
+        let s = state.as_ref().unwrap();
+        assert_eq!(s.pending_publish_count(), 4, "i1, i2, i3', i4' mirrored");
+        assert!(s.pending_txs(b5.header.id).is_empty());
     }
 
     /// Our opaque (custom-shaped) pending tx is part of the view like any
@@ -2268,6 +2295,7 @@ mod tests {
         let x2 = inscribe_op(ch, x1.id(), b"x2");
         let (x1_id, x2_id) = (x1.id(), x2.id());
         let custom = unverified_tx_with_ops(vec![Op::ChannelInscribe(x1), Op::ChannelInscribe(x2)]);
+        let custom_hash = custom.hash();
         let (y_id, y_tx) = ins(ch, MsgId::root(), b"y");
         let b0 = api_block(1, 0, 1, Vec::new());
         let b1 = api_block(2, 1, 2, vec![custom.clone()]);
@@ -2310,6 +2338,9 @@ mod tests {
             .collect();
         assert_eq!(orphaned, vec![x1_id, x2_id]);
         assert_eq!(msg_ids(&u.adopted), vec![y_id]);
+        assert!(r[1].shed_other.is_empty() && r[2].shed_other.is_empty());
+        let shed: Vec<TxHash> = r[3].shed_other.iter().map(SignedOps::hash).collect();
+        assert_eq!(shed, vec![custom_hash]);
     }
 
     /// A deposit re-created as `recreated`, our identity pin bundle spending it
@@ -2447,6 +2478,7 @@ mod tests {
         let (i1_id, i1_tx) = ins(ch, MsgId::root(), b"i1");
         let (i2_id, i2_tx) = ins(ch, i1_id, b"i2");
         let (i2a_id, i2a_tx) = ins(ch, i1_id, b"i2'");
+        let (i2_hash, i2a_hash) = (i2_tx.hash(), i2a_tx.hash());
         let ba = api_block(1, 0, 1, vec![i1_tx]);
         let bb = api_block(2, 1, 2, vec![i2_tx]);
         let bba = api_block(3, 1, 3, vec![i2a_tx]);
@@ -2484,6 +2516,24 @@ mod tests {
         assert!(
             r[8].result.channel_update.is_none(),
             "bare un-mine of B: i2 is pending again"
+        );
+        // Each switch sheds only the loser; the winner, re-mirrored from the
+        // store, reads as mined on its branch.
+        let shed: Vec<TxHash> = r[3].shed.iter().map(PendingTx::tx_hash).collect();
+        assert_eq!(shed, vec![i2_hash]);
+        let shed: Vec<TxHash> = r[5].shed.iter().map(PendingTx::tx_hash).collect();
+        assert_eq!(shed, vec![i2a_hash]);
+        assert!(r[8].shed.is_empty());
+        let s = state.as_ref().unwrap();
+        let resubmit: Vec<TxHash> = s
+            .pending_txs(bz.header.id)
+            .iter()
+            .map(|(hash, _)| *hash)
+            .collect();
+        assert_eq!(
+            resubmit,
+            vec![i2_hash],
+            "i2 is unmined at Z and goes back out"
         );
     }
 
