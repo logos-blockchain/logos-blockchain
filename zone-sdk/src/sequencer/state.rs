@@ -153,6 +153,18 @@ pub struct PendingInscription {
     pub posted: bool,
 }
 
+impl PendingInscription {
+    fn info(&self) -> InscriptionInfo {
+        InscriptionInfo {
+            tx_hash: self.tx_hash,
+            parent_msg: self.parent_msg,
+            this_msg: self.this_msg,
+            payload: self.payload.clone(),
+            signer: inscription_signer(&self.signed_tx),
+        }
+    }
+}
+
 /// Transaction state tracker.
 pub struct TxState {
     /// Local pending inscriptions indexed by tx hash.
@@ -509,13 +521,7 @@ impl TxState {
     /// The reportable form of a pending inscription or bundle.
     fn pending_tx_of(&self, tx_hash: &TxHash) -> Option<PendingTx> {
         let pending = self.pending.get(tx_hash)?;
-        let info = InscriptionInfo {
-            tx_hash: pending.tx_hash,
-            parent_msg: pending.parent_msg,
-            this_msg: pending.this_msg,
-            payload: pending.payload.clone(),
-            signer: inscription_signer(&pending.signed_tx),
-        };
+        let info = pending.info();
         Some(match &pending.bundle {
             PendingBundle::Withdraw { withdraws, outputs } => {
                 PendingTx::AtomicWithdraw(AtomicWithdrawInfo {
@@ -1533,13 +1539,7 @@ impl TxState {
                 break;
             };
             if let Some(pending) = self.pending.get(&tx_hash) {
-                suffix.push(InscriptionInfo {
-                    tx_hash: pending.tx_hash,
-                    parent_msg: pending.parent_msg,
-                    this_msg: pending.this_msg,
-                    payload: pending.payload.clone(),
-                    signer: inscription_signer(&pending.signed_tx),
-                });
+                suffix.push(pending.info());
                 current = pending.this_msg;
             } else if let Some(other) = self.pending_other.get(&tx_hash) {
                 suffix.extend(other.infos.iter().cloned());
