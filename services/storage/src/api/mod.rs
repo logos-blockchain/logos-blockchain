@@ -81,13 +81,14 @@ impl<Tx> StorageApi<Tx> {
         Ok(())
     }
 
-    pub async fn load<Value: Serialize + DeserializeOwned>(
+    pub async fn load<Value: DeserializeOwned>(
         &self,
         key: Bytes,
     ) -> Result<Option<Value>, DynError> {
-        let (message, receiver) = StorageMsg::new_load_message(key);
-        self.relay.send(message).await.map_err(|(error, _)| error)?;
-        Ok(receiver.recv().await?)
+        let bytes = self
+            .request(|reply_channel| StorageMsg::Load { key, reply_channel })
+            .await?;
+        Ok(bytes.map(|bytes| Value::from_bytes(&bytes).expect("Failed to decode stored value")))
     }
 
     async fn request<Reply>(

@@ -1,7 +1,4 @@
 //! `RocksDB` storage service and its typed API.
-//!
-//! Enable `rocksdb-backend` to use this crate.
-#![cfg(feature = "rocksdb-backend")]
 
 pub mod api;
 pub mod backend;
@@ -14,8 +11,6 @@ use std::{fmt::Display, time::Instant};
 pub use api::requests::StorageMsg;
 use async_trait::async_trait;
 use backend::StorageBackend as _;
-use bytes::Bytes;
-use lb_core::codec::DeserializeOp as _;
 use lb_log_targets::storage;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -24,49 +19,10 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
-use serde::{Serialize, de::DeserializeOwned};
 
 use crate::rocksdb::{RocksBackend, RocksBackendSettings, handle_request};
 
 const LOG_TARGET: &str = storage::ROOT;
-
-/// Reply channel for storage messages
-pub struct StorageReplyReceiver<T> {
-    channel: tokio::sync::oneshot::Receiver<T>,
-}
-
-impl<T> StorageReplyReceiver<T> {
-    #[must_use]
-    pub const fn new(channel: tokio::sync::oneshot::Receiver<T>) -> Self {
-        Self { channel }
-    }
-
-    #[must_use]
-    pub fn into_inner(self) -> tokio::sync::oneshot::Receiver<T> {
-        self.channel
-    }
-}
-
-impl StorageReplyReceiver<Option<Bytes>> {
-    /// Receive and transform the reply into the desired type
-    /// Target type must implement `From` from the original backend stored type.
-    pub async fn recv<Output>(
-        self,
-    ) -> Result<Option<Output>, tokio::sync::oneshot::error::RecvError>
-    where
-        Output: Serialize + DeserializeOwned,
-    {
-        self.channel
-            .await
-            // TODO: This should probably just return a result anyway. But for now we can consider
-            // in infallible.
-            .map(|maybe_bytes| {
-                maybe_bytes.map(|bytes| {
-                    Output::from_bytes(&bytes).expect("Recovery from storage should never fail")
-                })
-            })
-    }
-}
 
 /// Storage error
 /// Errors that may happen when performing storage operations
