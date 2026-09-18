@@ -628,15 +628,17 @@ where
     /// combines the on-chain delta with our own shed pending (lineage and
     /// opaque), deduped by `tx_hash`.
     fn build_channel_update(&mut self, u: ChannelUpdateInfo) -> ChannelUpdate {
+        let channel_id = self.channel_id;
         let (shed, shed_other) = match (self.state.as_mut(), self.current_tip) {
-            (Some(s), Some(tip)) => (
-                s.shed_off_branch_pending(tip),
-                s.shed_off_branch_pending_other(tip),
-            ),
+            (Some(s), Some(tip)) => {
+                // Inputs shed first: it drains a dead bundle's children too.
+                let mut shed = s.shed_bundles_with_missing_inputs(tip, channel_id);
+                shed.extend(s.shed_off_branch_pending(tip));
+                (shed, s.shed_off_branch_pending_other(tip))
+            }
             _ => (Vec::new(), Vec::new()),
         };
         let mut orphaned: Vec<ChannelUpdateTx> = shed.into_iter().map(orphan_from_shed).collect();
-        let channel_id = self.channel_id;
         orphaned.extend(
             shed_other
                 .into_iter()
@@ -789,6 +791,43 @@ mod tests {
                 }
             } => unreachable!(),
         }
+    }
+
+    /// A prepared tx pins the parent at prepare time; a publish in between
+    /// takes that position, so the stale tx is refused instead of competing.
+    #[tokio::test]
+    async fn submit_signed_tx_refuses_a_parent_with_a_pending_child() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let (node, _posted_txs) = MockNode::with_posted_channel();
+        let mut sequencer =
+            ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), None);
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+
+        let (tx, msg_id, inscription_sig) = sequencer
+            .handle()
+            .prepare_tx(Ops::new_unchecked(Vec::new()), b"prepared first".into())
+            .unwrap();
+        let signed_tx =
+            SignedOps::from_parts(tx, OpProofs::from([OpProof::Ed25519Sig(inscription_sig)]))
+                .expect("a valid inscription-only tx");
+
+        sequencer
+            .handle()
+            .publish(b"published in between".into())
+            .await
+            .unwrap();
+
+        let result = sequencer.handle().submit_signed_tx(signed_tx, msg_id);
+        assert!(
+            matches!(result, Err(Error::ChannelStateChanged(_))),
+            "stale parent must be refused, got {result:?}"
+        );
+        assert_eq!(sequencer.state.as_ref().unwrap().pending_publish_count(), 1);
     }
 
     #[tokio::test]
@@ -1270,7 +1309,7 @@ mod tests {
         let signed_tx = SignedOps::from_ops_with_placeholder_proofs(mantle_tx);
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
-        track_pending_tx(&mut state, signed_tx, channel_id);
+        track_pending_tx(&mut state, signed_tx, channel_id).unwrap();
 
         let pending = state
             .pending_inscription(&tx_hash)
@@ -1301,7 +1340,7 @@ mod tests {
         let signed_tx = SignedOps::from_ops_with_placeholder_proofs(mantle_tx);
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
-        track_pending_tx(&mut state, signed_tx, channel_id);
+        track_pending_tx(&mut state, signed_tx, channel_id).unwrap();
 
         let pending = state
             .pending_inscription(&tx_hash)
@@ -1326,7 +1365,7 @@ mod tests {
         let signed_tx = SignedOps::from_ops_with_placeholder_proofs(mantle_tx);
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
-        track_pending_tx(&mut state, signed_tx, our_channel);
+        track_pending_tx(&mut state, signed_tx, our_channel).unwrap();
 
         assert!(
             state.pending_inscription(&tx_hash).is_none(),

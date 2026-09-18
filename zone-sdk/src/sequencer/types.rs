@@ -376,6 +376,10 @@ pub enum Error {
     Unavailable { reason: &'static str },
     #[error("network error: {0}")]
     Network(String),
+    /// The submission chains on a channel position that already has a
+    /// pending continuation; re-prepare it on the channel's pending tail.
+    #[error("channel state changed: {0}")]
+    ChannelStateChanged(String),
 }
 
 /// Events emitted by the sequencer.
