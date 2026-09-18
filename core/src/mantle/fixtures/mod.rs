@@ -2,6 +2,6 @@ mod channel;
 mod genesis;
 mod hash;
 mod ledger;
-mod ops;
-mod proofs;
+pub mod ops;
+pub mod proofs;
 mod transactions;
