@@ -3,7 +3,7 @@ use std::{
     fmt,
 };
 
-use logos_sql::{LogosSql, TxId};
+use logos_sql::{LogosSql, TxId, WriteStatus};
 
 use crate::cucumber::error::{StepError, StepResult};
 
@@ -75,8 +75,16 @@ impl LogosSqlState {
     pub async fn displaced_writes(&self) -> Result<HashSet<TxId>, StepError> {
         let mut displaced = HashSet::new();
 
-        for instance in self.instances.values() {
-            displaced.extend(instance.displaced_writes().await?);
+        for tx_id in self.writes.values().copied() {
+            for instance in self.instances.values() {
+                match instance.write_status(tx_id).await? {
+                    Some(WriteStatus::Displaced) => {
+                        displaced.insert(tx_id);
+                        break;
+                    }
+                    Some(WriteStatus::Live | WriteStatus::Finalized) | None => {}
+                }
+            }
         }
 
         Ok(displaced)
