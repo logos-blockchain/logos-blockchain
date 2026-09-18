@@ -153,7 +153,9 @@ impl ConnectionHandler {
     fn process_current_round(&mut self, cx: &mut Context<'_>) -> Round {
         let current_round = self.round_clock.poll_current(cx);
         self.read_share.refresh(current_round);
-        let discarded_expired_message_count = self.send_queue.enter_new_round(current_round);
+        let discarded_expired_message_count = self
+            .send_queue
+            .enter_new_round_and_refresh_shares(current_round);
         if discarded_expired_message_count > 0 {
             tracing::debug!(
                 target: LOG_TARGET,
