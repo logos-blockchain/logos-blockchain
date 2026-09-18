@@ -18,6 +18,7 @@ pub trait BlendServiceData:
     + 'static
 {
 }
+
 impl<T> BlendServiceData for T where
     T: ServiceData<Message = ProxyServiceMessage<ServiceMessage<<T as ServiceComponents>::NodeId>>>
         + ServiceComponents
@@ -80,8 +81,6 @@ where
         self.relay
             .send(ServiceMessage::Blend(payload).into())
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending Blend"))
-            })
+            .map_err(|error| ApiError::CommsFailure(format!("{error} while sending Blend")))
     }
 }

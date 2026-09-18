@@ -26,8 +26,7 @@ where
         .send(NetworkMsg::Process(Command::Network(Info {
             reply: sender,
         })))
-        .await
-        .map_err(|(e, _)| e)?;
+        .await?;
 
     receiver
         .await
@@ -51,8 +50,7 @@ where
             retry_count: 0,
             result_sender: sender,
         }))))
-        .await
-        .map_err(|(e, _)| e)?;
+        .await?;
 
     let dial_result = receiver
         .await

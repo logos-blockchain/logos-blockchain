@@ -554,7 +554,7 @@ where
         }
     };
     let (sender, receiver) = oneshot::channel();
-    if let Err((error, _)) = relay.send(TimeServiceMessage::Info { sender }).await {
+    if let Err(error) = relay.send(TimeServiceMessage::Info { sender }).await {
         return ApiError::internal(error).into_response();
     }
     match receiver.await {
@@ -987,8 +987,7 @@ where
             ancestor_hint,
             reply_channel: sender,
         })
-        .await
-        .map_err(|(error, _)| error)?;
+        .await?;
 
     let txs = receiver.await?;
 

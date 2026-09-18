@@ -60,7 +60,7 @@ where
             reply_channel: reply_tx,
         })
         .await
-        .map_err(|(err, _)| err)?;
+        .map_err(|error| DynError::from(error.to_string()))?;
 
     reply_rx
         .await

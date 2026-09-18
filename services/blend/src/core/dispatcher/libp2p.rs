@@ -63,7 +63,7 @@ pub struct Libp2pBroadcastSettings {
 /// Broadcast an unencrypted block proposal to the network by publishing it
 /// under the configured gossipsub topic.
 async fn broadcast_block_proposal(network_relay: &NetworkRelay, topic: String, proposal: Vec<u8>) {
-    if let Err((e, _)) = network_relay
+    if let Err(error) = network_relay
         .send(NetworkMsg::Process(Command::PubSub(
             PubSubCommand::Broadcast {
                 topic,
@@ -72,7 +72,7 @@ async fn broadcast_block_proposal(network_relay: &NetworkRelay, topic: String, p
         )))
         .await
     {
-        tracing::error!(target: LOG_TARGET, "error broadcasting block proposal: {e}");
+        tracing::error!(target: LOG_TARGET, "error broadcasting block proposal: {error}");
     }
 }
 
@@ -125,11 +125,11 @@ where
     Tx: Send + 'static,
 {
     let (result_sender, receiver) = oneshot::channel();
-    if let Err((e, _)) = chain_network_relay
+    if let Err(error) = chain_network_relay
         .send(ChainNetworkMsg::SubscribeToProposals { result_sender })
         .await
     {
-        tracing::error!(target: LOG_TARGET, "Failed to ask the chain network for the proposals it receives: {e}");
+        tracing::error!(target: LOG_TARGET, "Failed to ask the chain network for the proposals it receives: {error}");
         return stream::empty().boxed();
     }
     let Ok(received) = receiver.await else {
@@ -167,7 +167,7 @@ async fn submit_transaction<Item, Key>(
     };
 
     let (reply_channel, receiver) = oneshot::channel();
-    if let Err((e, _)) = mempool_relay
+    if let Err(error) = mempool_relay
         .send(MempoolMsg::Add {
             key: transaction.hash(),
             payload: transaction,
@@ -175,7 +175,7 @@ async fn submit_transaction<Item, Key>(
         })
         .await
     {
-        tracing::error!(target: LOG_TARGET, "Error submitting a blended transaction to the mempool: {e}");
+        tracing::error!(target: LOG_TARGET, "Error submitting a blended transaction to the mempool: {error}");
         return;
     }
 
@@ -196,11 +196,11 @@ where
     Key: PrefixedKey<Prefix: Send> + Send + 'static,
 {
     let (reply_channel, receiver) = oneshot::channel();
-    if let Err((e, _)) = mempool_relay
+    if let Err(error) = mempool_relay
         .send(MempoolMsg::SubscribeToAccepted { reply_channel })
         .await
     {
-        tracing::error!(target: LOG_TARGET, "Failed to ask the mempool for the transactions it accepts: {e}");
+        tracing::error!(target: LOG_TARGET, "Failed to ask the mempool for the transactions it accepts: {error}");
         return stream::empty().boxed();
     }
     let Ok(accepted) = receiver.await else {
