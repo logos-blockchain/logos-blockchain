@@ -38,13 +38,10 @@ fn window() -> Duration {
 #[test(tokio::test)]
 async fn a_connection_that_delivers_nothing_is_closed() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
-    // Both peers run the same rule, as they would in a real network, so both
-    // sides of the connection let go of it.
+    // Only the node under observation runs a window short enough to run out
+    // here.
     let mut silent_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .with_liveness(ROUND, WINDOW_IN_ROUNDS)
-            .build()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
     let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
@@ -98,7 +95,7 @@ async fn a_connection_that_delivers_nothing_is_closed() {
 
     assert!(
         closed,
-        "the connection should have been closed once the observation window ran out"
+        "the observing node should have closed the connection once its window ran out"
     );
     assert!(
         !listening_swarm
