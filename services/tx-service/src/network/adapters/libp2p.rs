@@ -85,7 +85,7 @@ where
             .to_bytes()
             .expect("Item should be able to be serialized");
         {
-            if let Err((e, _)) = self
+            if let Err(error) = self
                 .network_relay
                 .send(NetworkMsg::Process(Command::PubSub(
                     PubSubCommand::Broadcast {
@@ -95,7 +95,7 @@ where
                 )))
                 .await
             {
-                tracing::error!(target: LOG_TARGET, "failed to send item to topic: {e}");
+                tracing::error!(target: LOG_TARGET, "failed to send item to topic: {error}");
             }
         }
     }

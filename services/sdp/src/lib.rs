@@ -98,6 +98,7 @@ struct RuntimeDeclarationContext {
     provider_id: ProviderId,
 }
 
+#[derive(Debug)]
 pub enum SdpMessage {
     PostDeclaration {
         declaration: Box<DeclarationMessage>,

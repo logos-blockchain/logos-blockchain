@@ -29,13 +29,12 @@ where
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
     )]
-    pub async fn new(overwatch_handle: OverwatchHandle<RuntimeServiceId>) -> Result<Self, Error> {
+    pub async fn new(
+        overwatch_handle: OverwatchHandle<RuntimeServiceId>,
+    ) -> Result<Self, Error<Service::Message>> {
         let service_id = <RuntimeServiceId as AsServiceId<Service>>::SERVICE_ID;
         info!(target: LOG_TARGET, "Starting service {service_id:}");
-        overwatch_handle
-            .start_service::<Service>()
-            .await
-            .map_err(|e| Error::Overwatch(Box::new(e)))?;
+        overwatch_handle.start_service::<Service>().await?;
 
         info!(
             target: LOG_TARGET,
@@ -64,8 +63,11 @@ where
         })
     }
 
-    pub async fn handle_inbound_message(&self, message: Service::Message) -> Result<(), Error> {
-        self.relay.send(message).await.map_err(|(e, _)| e.into())
+    pub async fn handle_inbound_message(
+        &self,
+        message: Service::Message,
+    ) -> Result<(), Error<Service::Message>> {
+        self.relay.send(message).await.map_err(Into::into)
     }
 
     /// Wait until the service is stopped itself within the given timeout.
@@ -80,12 +82,27 @@ where
         false
     }
 
-    async fn wait_until_stopped(&self, timeout: Duration) -> Result<(), ServiceStatus> {
-        let mut watcher = self.overwatch_handle.status_watcher().await;
-        watcher
+    /// Wait until the service stops by itself within the given timeout.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the service does not stop in time or if the status watcher
+    /// cannot be requested.
+    async fn wait_until_stopped(
+        &self,
+        timeout: Duration,
+    ) -> Result<(), overwatch::overwatch::Error> {
+        let mut status_watcher = self.overwatch_handle.status_watcher().await?;
+        status_watcher
             .wait_for(ServiceStatus::Stopped, Some(timeout))
             .await
             .map(|_| ())
+            .map_err(|current_service_status| {
+                overwatch::overwatch::Error::Any(
+                    format!("Service did not stop in time, last status: {current_service_status}")
+                        .into(),
+                )
+            })
     }
 }
 
@@ -214,6 +231,7 @@ mod tests {
         type Message = PongServiceMessage;
     }
 
+    #[derive(Debug)]
     enum PongServiceMessage {
         Ping(usize, oneshot::Sender<usize>),
     }

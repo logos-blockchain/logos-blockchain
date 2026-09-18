@@ -54,9 +54,7 @@ where
         self.relay
             .send(PoWServiceMessage::StartMining)
             .await
-            .map_err(|(relay_err, _)| {
-                ApiError::CommsFailure(format!("{relay_err} while sending StartMining"))
-            })
+            .map_err(|error| ApiError::CommsFailure(format!("{error} while sending StartMining")))
     }
 
     /// Disable mining. Fire-and-forget.
@@ -64,9 +62,7 @@ where
         self.relay
             .send(PoWServiceMessage::StopMining)
             .await
-            .map_err(|(relay_err, _)| {
-                ApiError::CommsFailure(format!("{relay_err} while sending StopMining"))
-            })
+            .map_err(|error| ApiError::CommsFailure(format!("{error} while sending StopMining")))
     }
 
     /// Enable unattended claiming. Fire-and-forget. Ignored when no claim
@@ -76,8 +72,8 @@ where
         self.relay
             .send(PoWServiceMessage::StartAutoClaim)
             .await
-            .map_err(|(relay_err, _)| {
-                ApiError::CommsFailure(format!("{relay_err} while sending StartAutoClaim"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending StartAutoClaim"))
             })
     }
 
@@ -87,9 +83,7 @@ where
         self.relay
             .send(PoWServiceMessage::StopAutoClaim)
             .await
-            .map_err(|(relay_err, _)| {
-                ApiError::CommsFailure(format!("{relay_err} while sending StopAutoClaim"))
-            })
+            .map_err(|error| ApiError::CommsFailure(format!("{error} while sending StopAutoClaim")))
     }
 
     /// Build and publish a reward-claim transaction for the currently
@@ -110,14 +104,12 @@ where
                 response: resp_tx,
             })
             .await
-            .map_err(|(relay_err, _)| {
-                ApiError::CommsFailure(format!("{relay_err} while sending Claim"))
-            })?;
+            .map_err(|error| ApiError::CommsFailure(format!("{error} while sending Claim")))?;
 
         resp_rx
             .await
-            .map_err(|relay_err| {
-                ApiError::CommsFailure(format!("{relay_err} while receiving Claim response"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while receiving Claim response"))
             })?
             .map_err(ApiError::ClaimFailed)
     }
@@ -128,13 +120,13 @@ where
         self.relay
             .send(PoWServiceMessage::ClaimableRewardsInfo { response: resp_tx })
             .await
-            .map_err(|(relay_err, _)| {
-                ApiError::CommsFailure(format!("{relay_err} while sending ClaimableRewardsInfo"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending ClaimableRewardsInfo"))
             })?;
 
-        resp_rx.await.map_err(|relay_err| {
+        resp_rx.await.map_err(|error| {
             ApiError::CommsFailure(format!(
-                "{relay_err} while receiving ClaimableRewardsInfo response"
+                "{error} while receiving ClaimableRewardsInfo response"
             ))
         })
     }

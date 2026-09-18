@@ -62,7 +62,7 @@ use overwatch::{
     overwatch::OverwatchHandle,
     services::{
         AsServiceId, ServiceCore, ServiceData,
-        relay::RelayError,
+        relay::OutboundRelayError,
         state::{ServiceState, StateUpdater},
     },
 };
@@ -115,8 +115,10 @@ pub enum PoWError {
     Wallet(#[from] WalletApiError),
     #[error("ledger state unavailable for tip {0:?}")]
     LedgerStateUnavailable(HeaderId),
+    #[error("Overwatch error: {0}")]
+    Overwatch(#[from] overwatch::overwatch::Error),
     #[error("failed to reach the time service: {0}")]
-    TimeRelay(RelayError),
+    TimeRelay(#[from] OutboundRelayError<TimeServiceMessage>),
     #[error("the time service dropped the slot-tick subscription response: {0}")]
     SlotTickSubscription(#[from] RecvError),
     #[error(
@@ -655,13 +657,11 @@ where
         AutoClaimTick::Slots(period) => {
             let time_relay = overwatch_handle
                 .relay::<TimeService<TimeBackendType, RuntimeServiceId>>()
-                .await
-                .map_err(PoWError::TimeRelay)?;
+                .await?;
             let (sender, receiver) = oneshot::channel();
             time_relay
                 .send(TimeServiceMessage::Subscribe { sender })
-                .await
-                .map_err(|(relay_error, _)| PoWError::TimeRelay(relay_error))?;
+                .await?;
             let slot_ticks = receiver.await?;
 
             // The stream emits every slot, so thin it down to one item per

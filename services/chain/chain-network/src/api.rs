@@ -31,9 +31,9 @@ where
                 resp: resp_tx,
             })
             .await
-            .map_err(|(relay_error, _)| {
+            .map_err(|error| {
                 ApiError::CommsFailure(format!(
-                    "{relay_error} while sending ApplyBlockAndReconcileMempool"
+                    "{error} while sending ApplyBlockAndReconcileMempool"
                 ))
             })?;
 

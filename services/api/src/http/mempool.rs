@@ -76,7 +76,7 @@ where
             reply_channel: sender,
         })
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|error| DynError::from(error.to_string()))?;
 
     receiver
         .await

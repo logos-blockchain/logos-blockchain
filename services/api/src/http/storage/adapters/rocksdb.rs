@@ -45,7 +45,7 @@ where
     {
         let key: [u8; 32] = id.into();
         let (msg, receiver) = StorageMsg::new_load_message(Bytes::copy_from_slice(&key));
-        storage_relay.send(msg).await.map_err(|(e, _)| e)?;
+        storage_relay.send(msg).await?;
 
         receiver
             .recv()
@@ -64,10 +64,7 @@ where
     {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let message = StorageMsg::get_transactions_request(vec![id], sender);
-        storage_relay
-            .send(message)
-            .await
-            .map_err(|(error, _)| error)?;
+        storage_relay.send(message).await?;
 
         let bytes_stream = receiver
             .await

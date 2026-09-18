@@ -129,7 +129,7 @@ where
         storage_relay
             .send(message)
             .await
-            .map_err(|(error, _message)| RecoveryError::Backend(error.to_string()))
+            .map_err(|error| RecoveryError::Backend(error.to_string()))
     }
 }
 

@@ -48,14 +48,14 @@ where
     <BlendService as ServiceData>::Message: Send,
 {
     pub async fn publish_proposal(&self, proposal: Proposal) {
-        if let Err((e, _)) = self
+        if let Err(error) = self
             .relay
             .send(
                 ServiceMessage::Blend(DataPayload::BlockProposal(proposal.encode_to_vec())).into(),
             )
             .await
         {
-            error!(target: LOG_TARGET, "Failed to relay proposal to blend service: {e:?}");
+            error!(target: LOG_TARGET, "Failed to relay proposal to blend service: {error}");
         }
     }
 }
