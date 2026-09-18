@@ -1,11 +1,11 @@
 use core::fmt::{self, Debug, Formatter};
 
 use blake2::Digest as _;
-use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_codec::BinaryCodec;
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 mod fixtures;
 
@@ -16,8 +16,6 @@ use crate::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
-
-pub const BEDROCK_VERSION: u8 = 1;
 
 #[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, BinaryCodec)]
 pub struct HeaderId([u8; 32]);
@@ -46,113 +44,17 @@ impl Debug for Nonce {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Copy)]
-#[repr(u8)]
-pub enum Version {
-    Bedrock = BEDROCK_VERSION,
-}
-
-impl Version {
-    #[must_use]
-    pub const fn as_byte(self) -> u8 {
-        self as u8
-    }
-}
-
-impl TryFrom<u8> for Version {
-    type Error = std::io::Error;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            BEDROCK_VERSION => Ok(Self::Bedrock),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Invalid version [{value}]"),
-            )),
-        }
-    }
-}
-
-impl TryFrom<&str> for Version {
-    type Error = std::io::Error;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value.to_lowercase().as_str() {
-            "bedrock" => Ok(Self::Bedrock),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Invalid version [{value}]"),
-            )),
-        }
-    }
-}
-
-impl Serialize for Version {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if serializer.is_human_readable() {
-            serializer.serialize_str(format!("{self:?}").as_str())
-        } else {
-            serializer.serialize_u8(self.as_byte())
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for Version {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        if deserializer.is_human_readable() {
-            let s = String::deserialize(deserializer)?;
-            Self::try_from(s.as_str()).map_err(serde::de::Error::custom)
-        } else {
-            Self::try_from(<u8>::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-        }
-    }
-}
-
-impl BinaryEncode for Version {
-    fn encoded_length(&self) -> usize {
-        self.as_byte().encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        out.push(self.as_byte());
-    }
-}
-
-impl BinaryDecode for Version {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        context: &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, version) = u8::decode(input, context)?;
-        let version = Self::try_from(version)
-            .map_err(|_| DecodeError::unknown_discriminant::<Self>(u64::from(version)))?;
-        Ok((input, version))
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
 pub struct Header {
-    version: Version,
-    parent_block: HeaderId,
+    /// The first field, which must never change across eras. A node reads the
+    /// slot to learn which era's rules parse the rest of the header.
     slot: Slot,
+    parent_block: HeaderId,
     body_root: ContentId,
     proof_of_leadership: Groth16LeaderProof,
 }
 
 impl Header {
-    #[must_use]
-    pub const fn version(&self) -> &Version {
-        &self.version
-    }
-
     #[must_use]
     pub const fn parent(&self) -> HeaderId {
         self.parent_block
@@ -160,7 +62,6 @@ impl Header {
 
     fn update_hasher(&self, h: &mut Hasher) {
         h.update(b"BLOCK_ID_V1");
-        h.update(self.version.as_byte().to_le_bytes());
         h.update(self.parent_block.0);
         h.update(self.slot.to_le_bytes());
         h.update(self.body_root.0);
@@ -210,9 +111,8 @@ impl Header {
         proof_of_leadership: Groth16LeaderProof,
     ) -> Self {
         Self {
-            version: Version::Bedrock,
-            parent_block,
             slot,
+            parent_block,
             body_root,
             proof_of_leadership,
         }
@@ -343,12 +243,13 @@ fn test_serde_json_rejects_oversized_hex() {
 ///
 /// `body_root = blake2b256( b"BODY_ROOT_V1" || uncle_headers ||
 /// transactions_root )`, where `uncle_headers` is the list encoding: a 1-byte
-/// little-endian element count followed by that many fixed 361-byte entries.
+/// little-endian element count followed by that many fixed 360-byte entries.
 ///
-/// `HeaderId (block_id) = blake2b256( b"BLOCK_ID_V1" || bedrock_version (1B)
-/// ||` `parent_block (32B) || slot_le (8B) || body_root (32B) ||
-/// leader_voucher` `(32B) || entropy_contribution (32B) || proof (128B) ||
-/// leader_key (32B) )`.
+/// `HeaderId (block_id) = blake2b256( b"BLOCK_ID_V1" || parent_block (32B) ||`
+/// `slot_le (8B) || body_root (32B) || leader_voucher (32B) ||`
+/// `entropy_contribution (32B) || proof (128B) || leader_key (32B) )`. The
+/// preimage keeps this field order, which is not the header's wire order
+/// (`slot` leads there).
 ///
 /// The test is `#[ignore]`d so it is skipped by `cargo test --all-features`.
 /// Run it on demand with:
@@ -555,9 +456,8 @@ mod body_root_test_vectors {
             "body_root  = blake2b256( b\"BODY_ROOT_V1\" || uncle_headers || transactions_root )"
         );
         println!(
-            "block_id   = blake2b256( b\"BLOCK_ID_V1\" || bedrock_version || parent_block || \
-             slot_le || body_root || leader_voucher || entropy_contribution || proof || \
-             leader_key )"
+            "block_id   = blake2b256( b\"BLOCK_ID_V1\" || parent_block || slot_le || body_root \
+             || leader_voucher || entropy_contribution || proof || leader_key )"
         );
 
         // 1. Empty block: no transactions.
@@ -636,7 +536,6 @@ mod body_root_test_vectors {
         let proof = header.leader_proof();
         let mut h = Hasher::new();
         h.update(b"BLOCK_ID_V1");
-        h.update(Version::Bedrock.as_byte().to_le_bytes());
         h.update(parent_block.0);
         h.update(slot.to_le_bytes());
         h.update(body_root.0);
@@ -653,11 +552,6 @@ mod body_root_test_vectors {
         println!("================================================================");
         // Field labels match the names in the `block_id`/`Header` specification.
         println!("vector 5  : HeaderId (block_id) reusing vector 3's body_root");
-        println!(
-            "{:20}: {:02x}",
-            "bedrock_version",
-            Version::Bedrock.as_byte()
-        );
         println!("{:20}: {}", "parent_block", hex::encode(parent_block.0));
         println!("{:20}: {}", "slot", u64::from(slot));
         println!("{:20}: {}", "body_root", hex::encode(body_root.0));

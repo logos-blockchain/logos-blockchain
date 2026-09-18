@@ -8,14 +8,14 @@ use crate::Error;
 /// Every dispersed payload body is padded to this size, so it must fit the
 /// largest thing the blend network carries: a block proposal.
 ///
-/// A block proposal is at most 18192 bytes:
-/// - A 297-byte header
-/// - At most `MAX_UNCLES` uncle headers of 361 bytes each, behind a 1-byte
+/// A block proposal is at most 18187 bytes:
+/// - A 296-byte header
+/// - At most `MAX_UNCLES` uncle headers of 360 bytes each, behind a 1-byte
 ///   count prefix.
 /// - At most `MAX_BLOCK_TXS` transaction references of 16 bytes, behind a
 ///   2-byte count prefix.
 /// - A 64-byte signature
-pub const MAX_PAYLOAD_BODY_SIZE: usize = 18_192;
+pub const MAX_PAYLOAD_BODY_SIZE: usize = 18_187;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(u8)]

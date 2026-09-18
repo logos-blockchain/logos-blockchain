@@ -3,39 +3,21 @@ use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_key_management_system_keys::keys::{
     ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
 };
-use serde::{Deserialize, Deserializer, Serialize, de};
+use serde::{Deserialize, Serialize};
 
 use crate::{Error, MessageIdentifier, encap::ProofsVerifier};
 
-const LATEST_BLEND_MESSAGE_VERSION: u8 = 1;
-
-/// The exact number of bytes a [`PublicHeader`] encodes to (a version byte plus
-/// fixed-size fields). Compile-time constant.
+/// The exact number of bytes a [`PublicHeader`] encodes to (fixed-size fields
+/// only). Compile-time constant.
 pub const PUBLIC_HEADER_ENCODED_SIZE: usize =
-    size_of::<u8>() + ED25519_PUBLIC_KEY_SIZE + PROOF_OF_QUOTA_SIZE + ED25519_SIGNATURE_SIZE;
+    ED25519_PUBLIC_KEY_SIZE + PROOF_OF_QUOTA_SIZE + ED25519_SIGNATURE_SIZE;
 
 // A public header that is revealed to all nodes.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PublicHeader {
-    #[serde(deserialize_with = "deserialize_version_number")]
-    version: u8,
     signing_pubkey: Ed25519PublicKey,
     proof_of_quota: ProofOfQuota,
     signature: Ed25519Signature,
-}
-
-fn deserialize_version_number<'de, D>(deserializer: D) -> Result<u8, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let version = u8::deserialize(deserializer)?;
-    if version == LATEST_BLEND_MESSAGE_VERSION {
-        Ok(version)
-    } else {
-        Err(de::Error::custom(format!(
-            "Unsupported message version: {version}",
-        )))
-    }
 }
 
 impl PublicHeader {
@@ -48,7 +30,6 @@ impl PublicHeader {
             proof_of_quota: *proof_of_quota,
             signature,
             signing_pubkey,
-            version: LATEST_BLEND_MESSAGE_VERSION,
         }
     }
 
@@ -58,7 +39,6 @@ impl PublicHeader {
     ) -> Result<PublicHeaderWithVerifiedSignature, Error> {
         if self.signing_pubkey.verify(body, &self.signature).is_ok() {
             Ok(PublicHeaderWithVerifiedSignature {
-                version: self.version,
                 signing_pubkey: self.signing_pubkey,
                 proof_of_quota: self.proof_of_quota,
                 signature: self.signature,
@@ -90,13 +70,8 @@ impl PublicHeader {
         &self.signature
     }
 
-    pub const fn into_components(self) -> (u8, Ed25519PublicKey, ProofOfQuota, Ed25519Signature) {
-        (
-            self.version,
-            self.signing_pubkey,
-            self.proof_of_quota,
-            self.signature,
-        )
+    pub const fn into_components(self) -> (Ed25519PublicKey, ProofOfQuota, Ed25519Signature) {
+        (self.signing_pubkey, self.proof_of_quota, self.signature)
     }
 
     #[cfg(any(test, feature = "unsafe-test-functions"))]
@@ -111,7 +86,6 @@ impl BinaryEncode for PublicHeader {
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.version.encode_into(out);
         self.signing_pubkey.encode_into(out);
         self.proof_of_quota.encode_into(out);
         self.signature.encode_into(out);
@@ -125,19 +99,12 @@ impl BinaryDecode for PublicHeader {
         input: &'input [u8],
         (): &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, version) = u8::decode(input, &())?;
-        if version != LATEST_BLEND_MESSAGE_VERSION {
-            return Err(DecodeError::invalid_value::<Self>(
-                "unsupported message version",
-            ));
-        }
         let (input, signing_pubkey) = Ed25519PublicKey::decode(input, &())?;
         let (input, proof_of_quota) = ProofOfQuota::decode(input, &())?;
         let (input, signature) = Ed25519Signature::decode(input, &())?;
         Ok((
             input,
             Self {
-                version,
                 signing_pubkey,
                 proof_of_quota,
                 signature,
@@ -148,7 +115,6 @@ impl BinaryDecode for PublicHeader {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PublicHeaderWithVerifiedSignature {
-    version: u8,
     signing_pubkey: Ed25519PublicKey,
     proof_of_quota: ProofOfQuota,
     signature: Ed25519Signature,
@@ -160,7 +126,6 @@ impl From<PublicHeaderWithVerifiedSignature> for PublicHeader {
             signing_pubkey,
             proof_of_quota,
             signature,
-            ..
         }: PublicHeaderWithVerifiedSignature,
     ) -> Self {
         Self::new(signing_pubkey, &proof_of_quota, signature)
@@ -173,10 +138,7 @@ impl PublicHeaderWithVerifiedSignature {
         signing_pubkey: Ed25519PublicKey,
         signature: Ed25519Signature,
     ) -> Self {
-        let (version, signing_pubkey, _, signature) =
-            PublicHeader::new(signing_pubkey, &proof_of_quota, signature).into_components();
         Self {
-            version,
             signing_pubkey,
             proof_of_quota,
             signature,
@@ -200,13 +162,8 @@ impl PublicHeaderWithVerifiedSignature {
         ))
     }
 
-    pub const fn into_components(self) -> (u8, Ed25519PublicKey, ProofOfQuota, Ed25519Signature) {
-        (
-            self.version,
-            self.signing_pubkey,
-            self.proof_of_quota,
-            self.signature,
-        )
+    pub const fn into_components(self) -> (Ed25519PublicKey, ProofOfQuota, Ed25519Signature) {
+        (self.signing_pubkey, self.proof_of_quota, self.signature)
     }
 
     pub const fn id(&self) -> MessageIdentifier {
@@ -235,7 +192,6 @@ impl BinaryEncode for PublicHeaderWithVerifiedSignature {
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.version.encode_into(out);
         self.signing_pubkey.encode_into(out);
         self.proof_of_quota.encode_into(out);
         self.signature.encode_into(out);
@@ -244,7 +200,6 @@ impl BinaryEncode for PublicHeaderWithVerifiedSignature {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct VerifiedPublicHeader {
-    version: u8,
     signing_pubkey: Ed25519PublicKey,
     proof_of_quota: VerifiedProofOfQuota,
     signature: Ed25519Signature,
@@ -256,7 +211,6 @@ impl From<VerifiedPublicHeader> for PublicHeaderWithVerifiedSignature {
             proof_of_quota,
             signature,
             signing_pubkey,
-            ..
         }: VerifiedPublicHeader,
     ) -> Self {
         Self::new(proof_of_quota.into_inner(), signing_pubkey, signature)
@@ -269,7 +223,6 @@ impl From<VerifiedPublicHeader> for PublicHeader {
             proof_of_quota,
             signature,
             signing_pubkey,
-            ..
         }: VerifiedPublicHeader,
     ) -> Self {
         Self::new(signing_pubkey, &proof_of_quota.into(), signature)
@@ -277,15 +230,12 @@ impl From<VerifiedPublicHeader> for PublicHeader {
 }
 
 impl VerifiedPublicHeader {
-    pub fn new(
+    pub const fn new(
         proof_of_quota: VerifiedProofOfQuota,
         signing_pubkey: Ed25519PublicKey,
         signature: Ed25519Signature,
     ) -> Self {
-        let (version, signing_pubkey, _, signature) =
-            PublicHeader::new(signing_pubkey, proof_of_quota.as_ref(), signature).into_components();
         Self {
-            version,
             signing_pubkey,
             proof_of_quota,
             signature,
@@ -297,11 +247,9 @@ impl VerifiedPublicHeader {
             proof_of_quota,
             signature,
             signing_pubkey,
-            version,
         }: &PublicHeader,
     ) -> Self {
         Self {
-            version: *version,
             signing_pubkey: *signing_pubkey,
             proof_of_quota: VerifiedProofOfQuota::from_proof_of_quota_unchecked(*proof_of_quota),
             signature: *signature,
@@ -330,13 +278,8 @@ impl VerifiedPublicHeader {
     #[must_use]
     pub const fn into_components(
         self,
-    ) -> (u8, Ed25519PublicKey, VerifiedProofOfQuota, Ed25519Signature) {
-        (
-            self.version,
-            self.signing_pubkey,
-            self.proof_of_quota,
-            self.signature,
-        )
+    ) -> (Ed25519PublicKey, VerifiedProofOfQuota, Ed25519Signature) {
+        (self.signing_pubkey, self.proof_of_quota, self.signature)
     }
 }
 
@@ -346,7 +289,6 @@ impl BinaryEncode for VerifiedPublicHeader {
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.version.encode_into(out);
         self.signing_pubkey.encode_into(out);
         self.proof_of_quota.as_ref().encode_into(out);
         self.signature.encode_into(out);
@@ -364,7 +306,6 @@ mod tests {
     #[test]
     fn serde_verified_and_unverified() {
         let verified_header = VerifiedPublicHeader {
-            version: 1,
             signing_pubkey: Ed25519PublicKey::from_bytes(&[200; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
             proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([201; _]),
             signature: [202; 64].into(),
@@ -373,18 +314,5 @@ mod tests {
 
         let deserialized_as_unverified = PublicHeader::from_bytes(&serialized_header).unwrap();
         assert_eq!(deserialized_as_unverified, verified_header.into());
-    }
-
-    #[test]
-    fn serde_invalid_version_number() {
-        let header_with_invalid_version = PublicHeader {
-            version: 2,
-            signing_pubkey: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-            proof_of_quota: [1; _].try_into().unwrap(),
-            signature: [2; _].into(),
-        };
-
-        let serialized_header = header_with_invalid_version.to_bytes().unwrap();
-        PublicHeader::from_bytes(&serialized_header).unwrap_err();
     }
 }

@@ -66,7 +66,7 @@ impl EncapsulatedMessageWithVerifiedSignature {
     where
         Verifier: ProofsVerifier,
     {
-        let (_, signing_key, proof_of_quota, signature) =
+        let (signing_key, proof_of_quota, signature) =
             self.public_header_with_verified_signature.into_components();
         let verified_proof_of_quota = verifier
             .verify_proof_of_quota(proof_of_quota, &signing_key)
@@ -253,8 +253,7 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
         Verifier: ProofsVerifier,
     {
         let (validated_public_header, encapsulated_part) = self.into_components();
-        let (_, signing_key, verified_proof_of_quota, _) =
-            validated_public_header.into_components();
+        let (signing_key, verified_proof_of_quota, _) = validated_public_header.into_components();
 
         // Derive the shared key.
         let Some(shared_key) = private_key.derive_shared_key(&signing_key.derive_x25519()) else {
