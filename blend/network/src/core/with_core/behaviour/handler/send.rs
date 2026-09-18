@@ -59,7 +59,7 @@ impl SendQueue {
 
     /// Refreshes the share and gives up on whatever has waited too long,
     /// reporting how many messages that was.
-    pub fn enter_new_round(&mut self, new_round: Round) -> usize {
+    pub fn enter_new_round_and_refresh_shares(&mut self, new_round: Round) -> usize {
         self.share.refresh(new_round);
 
         // The queue is FIFO and every message is given the same lifetime, so deadlines
@@ -181,7 +181,7 @@ mod tests {
             "the share is spent, which is not the same as having nothing to send"
         );
 
-        queue.enter_new_round(Round::from(1));
+        queue.enter_new_round_and_refresh_shares(Round::from(1));
         assert_eq!(
             queue
                 .pop_front()
@@ -198,12 +198,12 @@ mod tests {
         queue.enqueue(payload(0), Round::from(0));
 
         // Still within the lifetime: the message is kept.
-        assert_eq!(queue.enter_new_round(Round::from(1)), 0);
+        assert_eq!(queue.enter_new_round_and_refresh_shares(Round::from(1)), 0);
         queue.enqueue(payload(1), Round::from(1));
 
         // Past it: the first message is dropped, the second is not, since it
         // joined the queue later.
-        assert_eq!(queue.enter_new_round(Round::from(2)), 1);
+        assert_eq!(queue.enter_new_round_and_refresh_shares(Round::from(2)), 1);
         assert_eq!(
             queue
                 .pop_front()
