@@ -288,7 +288,10 @@ mod tests {
 
     use super::{SDPDeclareOp, SdpError, validate_service_scoped_uniqueness};
     use crate::{
-        mantle::ledger::Declarations,
+        mantle::{
+            gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
+            ledger::Declarations,
+        },
         sdp::{Declaration, ServiceType},
     };
 
@@ -336,5 +339,15 @@ mod tests {
             validate_service_scoped_uniqueness(&declare_b, &declarations),
             Err(SdpError::DuplicateZkId { .. })
         ));
+    }
+
+    #[test]
+    fn sdp_declare_op_execution_gas_does_not_scale_with_the_threshold() {
+        for threshold in [0, 1, 3] {
+            assert_eq!(
+                SDPDeclareOp::sample().execution_gas(&FixedThresholds(threshold)),
+                Ok(Gas::new(646))
+            );
+        }
     }
 }

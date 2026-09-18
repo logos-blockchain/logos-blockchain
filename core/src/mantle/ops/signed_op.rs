@@ -423,3 +423,24 @@ impl_try_from_op_and_proof! {
     Transfer => TransferOp,
     ClaimPowReward => ClaimPowRewardOp,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{SignedOp, StandardMode, TransferOp, Unverified};
+    use crate::mantle::{Op, OpProof, ops::NoOpProof};
+
+    type UnverifiedOp = SignedOp<Unverified, StandardMode>;
+
+    #[test]
+    fn try_from_mismatched_proof_returns_the_parts() {
+        let op = Op::Transfer(TransferOp::sample());
+        let proof = OpProof::None(NoOpProof);
+
+        let Err(error) = UnverifiedOp::try_from((op.clone(), proof.clone())) else {
+            panic!("{} accepted a {proof:?}", op.as_str());
+        };
+
+        assert_eq!(error.operation(), &op);
+        assert_eq!(error.actual_proof(), &proof);
+    }
+}

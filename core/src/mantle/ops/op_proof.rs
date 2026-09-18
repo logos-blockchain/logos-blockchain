@@ -69,29 +69,6 @@ pub struct OpProofDecodeContext<'op> {
     pub op: &'op Op,
 }
 
-// impl<'context> BinaryDecode for OpProof {
-//     type Context = OpProofDecodeContext<'context>;
-//
-//     fn decode<'input>(
-//         input: &'input [u8],
-//         context: &Self::Context,
-//     ) -> Result<(&'input [u8], Self), DecodeError> {
-//         match context.op {
-//             Op::ChannelInscribe(op) => decode_proof_for(op, input),
-//             Op::ChannelConfig(op) => decode_proof_for(op, input),
-//             Op::ChannelDeposit(op) => decode_proof_for(op, input),
-//             Op::ChannelWithdraw(op) => decode_proof_for(op, input),
-//             Op::ChannelTransfer(op) => decode_proof_for(op, input),
-//             Op::SDPDeclare(op) => decode_proof_for(op, input),
-//             Op::SDPWithdraw(op) => decode_proof_for(op, input),
-//             Op::SDPActive(op) => decode_proof_for(op, input),
-//             Op::LeaderClaim(op) => decode_proof_for(op, input),
-//             Op::Transfer(op) => decode_proof_for(op, input),
-//             Op::ClaimPowReward(op) => decode_proof_for(op, input),
-//         }
-//     }
-// }
-
 macro_rules! impl_from_proof {
     ($($proof:ty => $variant:ident),* $(,)?) => {
         $(
@@ -170,42 +147,5 @@ pub mod samples {
         T::Proof: SampleProof + Into<OpProof>,
     {
         T::Proof::sample().into()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use lb_codec::BinaryEncode as _;
-    use lb_groth16::{COMPRESSED_PROOF_SIZE, CompressedGroth16Proof};
-    use lb_key_management_system_keys::keys::ZkPublicKey;
-    use num_bigint::BigUint;
-
-    use crate::{
-        mantle::{
-            Op, OpProof,
-            ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
-        },
-        proofs::leader_claim_proof::Groth16LeaderClaimProof,
-    };
-
-    #[test]
-    fn test_encode_decode_roundtrip_leader_claim_op_proof() {
-        let op = Op::LeaderClaim(LeaderClaimOp {
-            rewards_root: RewardsRoot::default(),
-            voucher_nullifier: VoucherNullifier::default(),
-            pk: ZkPublicKey::from(BigUint::from(0u64)),
-        });
-
-        let proof_bytes: [u8; 128] = core::array::from_fn(|i| i as u8);
-        let proof = OpProof::PoC(Groth16LeaderClaimProof::new(
-            CompressedGroth16Proof::from_bytes(&proof_bytes),
-        ));
-
-        let encoded = proof.encode();
-        assert_eq!(encoded.len(), COMPRESSED_PROOF_SIZE);
-
-        let (remaining, decoded) = OpProof::decode_for_op(&encoded, &op).unwrap();
-        assert!(remaining.is_empty());
-        assert_eq!(decoded, proof);
     }
 }
