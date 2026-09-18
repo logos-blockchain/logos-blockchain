@@ -26,8 +26,9 @@ impl PollOutcome {
 /// A message waiting for its turn on a connection.
 struct MessageEntry {
     message: OutgoingMessage,
-    /// The round after which this connection gives up on the message.
-    last_round_before_expiry: Round,
+    /// The first round this connection gives up on the message in, by which
+    /// point it has waited the `η` rounds the specification allows it.
+    expires_at: Round,
 }
 
 /// What a connection still owes its neighbour, and the share it may send under.
@@ -52,7 +53,7 @@ impl SendQueue {
     pub fn enqueue(&mut self, message: OutgoingMessage, current_round: Round) {
         self.queue.push_back(MessageEntry {
             message,
-            last_round_before_expiry: current_round.saturating_add(self.lifetime),
+            expires_at: current_round.saturating_add(self.lifetime),
         });
     }
 
@@ -67,7 +68,7 @@ impl SendQueue {
         while self
             .queue
             .front()
-            .is_some_and(|queued| new_round.rounds_since(queued.last_round_before_expiry) > 0)
+            .is_some_and(|queued| new_round >= queued.expires_at)
         {
             self.queue.pop_front();
             discarded = discarded.checked_add(1).unwrap();
@@ -197,12 +198,12 @@ mod tests {
         queue.enqueue(payload(0), Round::from(0));
 
         // Still within the lifetime: the message is kept.
-        assert_eq!(queue.enter_new_round(Round::from(2)), 0);
-        queue.enqueue(payload(1), Round::from(2));
+        assert_eq!(queue.enter_new_round(Round::from(1)), 0);
+        queue.enqueue(payload(1), Round::from(1));
 
         // Past it: the first message is dropped, the second is not, since it
         // joined the queue later.
-        assert_eq!(queue.enter_new_round(Round::from(3)), 1);
+        assert_eq!(queue.enter_new_round(Round::from(2)), 1);
         assert_eq!(
             queue
                 .pop_front()
