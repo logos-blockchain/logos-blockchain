@@ -1,6 +1,6 @@
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError, take};
 use lb_blend_crypto::fill_random_bytes;
-use lb_core::block::MAX_PROPOSAL_CANONICAL_SIZE;
+use lb_core::block::Proposal;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
@@ -9,14 +9,8 @@ use crate::Error;
 /// Every dispersed payload body is padded to this size, so it must fit the
 /// largest thing the blend network carries: a block proposal.
 ///
-/// A block proposal is at most 18192 bytes:
-/// - A 297-byte header
-/// - At most `MAX_UNCLES` uncle headers of 361 bytes each, behind a 1-byte
-///   count prefix.
-/// - At most `MAX_BLOCK_TXS` transaction references of 16 bytes, behind a
-///   2-byte count prefix.
-/// - A 64-byte signature
-pub const MAX_PAYLOAD_BODY_SIZE: usize = MAX_PROPOSAL_CANONICAL_SIZE;
+/// A block proposal is bounded by `Proposal::MAX_ENCODED_SIZE`.
+pub const MAX_PAYLOAD_BODY_SIZE: usize = Proposal::MAX_ENCODED_SIZE;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(u8)]

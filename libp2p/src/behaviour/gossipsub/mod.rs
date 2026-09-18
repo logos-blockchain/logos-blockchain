@@ -1,117 +1,50 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::BuildHasher};
 
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
-use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
 use libp2p::{PeerId, gossipsub};
-use thiserror::Error;
 
 pub mod swarm_ext;
-
-/// An application payload maximum for one Gossipsub topic.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GossipsubTopicSizeLimit {
-    pub topic: String,
-    pub max_payload_size: usize,
-}
-
-impl GossipsubTopicSizeLimit {
-    #[must_use]
-    pub fn new(topic: impl Into<String>, max_payload_size: usize) -> Self {
-        Self {
-            topic: topic.into(),
-            max_payload_size,
-        }
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum GossipsubTopicSizeLimitError {
-    #[error(
-        "Gossipsub topic `{topic}` payload maximum {max_payload_size} cannot fit below the global wire-message maximum {global_maximum}"
-    )]
-    PayloadExceedsGlobal {
-        topic: String,
-        max_payload_size: usize,
-        global_maximum: usize,
-    },
-    #[error(
-        "Gossipsub topic `{topic}` transmit maximum {transmit_size} exceeds the global wire-message maximum {global_maximum}"
-    )]
-    TransmitSizeExceedsGlobal {
-        topic: String,
-        transmit_size: usize,
-        global_maximum: usize,
-    },
-    #[error("invalid Gossipsub configuration: {0}")]
-    InvalidConfig(#[from] gossipsub::ConfigBuilderError),
-}
 
 /// Adds application payload limits to a Gossipsub config.
 ///
 /// Gossipsub applies its per-topic limit differently on the send and receive
-/// paths: outbound `publish` compares transformed data directly with the
+/// paths: outbound publish compares transformed data directly with the
 /// configured limit, while inbound decoding compares the encoded protobuf
-/// `Message` size. The current behaviour publishes with
+/// Message size. The current behaviour publishes with
 /// `MessageAuthenticity::Author`, so the configured limit is derived from the
 /// actual unsigned `RawMessage` representation containing the author, sequence
-/// number, data, and raw topic. Application guards remain responsible for
-/// enforcing the exact payload maximum on both paths.
+/// number, data, and raw topic. The supplied maximum is the size of already
+/// serialized application data; this layer does not know which application
+/// serializer produced it.
 /// The node currently derives that author from its configured Ed25519 identity
 /// and publishes unsigned messages without signature or key fields. Changes to
 /// the authentication mode, signing, identity representation, public-key
 /// inclusion, or data transform require revisiting this envelope calculation.
-pub fn configure_topic_size_limits(
+pub fn configure_topic_size_limits<S>(
     config: gossipsub::Config,
     author: PeerId,
-    limits: impl IntoIterator<Item = GossipsubTopicSizeLimit>,
-) -> Result<gossipsub::Config, GossipsubTopicSizeLimitError> {
-    let mut topic_limits = HashMap::<gossipsub::TopicHash, usize>::new();
-
-    for GossipsubTopicSizeLimit {
-        topic,
-        max_payload_size,
-    } in limits
-    {
-        if max_payload_size >= MAX_WIRE_MESSAGE_SIZE {
-            return Err(GossipsubTopicSizeLimitError::PayloadExceedsGlobal {
-                topic,
-                max_payload_size,
-                global_maximum: MAX_WIRE_MESSAGE_SIZE,
-            });
-        }
-
-        let topic_hash = gossipsub::IdentTopic::new(&topic).hash();
-        let transmit_size = gossipsub_message_size(&topic_hash, &author, max_payload_size);
-        if transmit_size > MAX_WIRE_MESSAGE_SIZE {
-            return Err(GossipsubTopicSizeLimitError::TransmitSizeExceedsGlobal {
-                topic,
-                transmit_size,
-                global_maximum: MAX_WIRE_MESSAGE_SIZE,
-            });
-        }
-
-        topic_limits
-            .entry(topic_hash)
-            .and_modify(|maximum| *maximum = (*maximum).max(transmit_size))
-            .or_insert(transmit_size);
-    }
-
+    max_data_size_by_topic: HashMap<gossipsub::TopicHash, usize, S>,
+) -> Result<gossipsub::Config, gossipsub::ConfigBuilderError>
+where
+    S: BuildHasher,
+{
     let mut builder = gossipsub::ConfigBuilder::from(config);
-    for (topic, transmit_size) in topic_limits {
+    for (topic, max_data_size) in max_data_size_by_topic {
+        let transmit_size = gossipsub_message_size(&topic, &author, max_data_size);
         builder.max_transmit_size_for_topic(transmit_size, topic);
     }
 
-    Ok(builder.build()?)
+    builder.build()
 }
 
 fn gossipsub_message_size(
     topic: &gossipsub::TopicHash,
     author: &PeerId,
-    payload_size: usize,
+    max_data_size: usize,
 ) -> usize {
     gossipsub::RawMessage {
         source: Some(*author),
-        data: vec![0; payload_size],
+        data: vec![0; max_data_size],
         sequence_number: Some(u64::MAX),
         topic: topic.clone(),
         signature: None,
@@ -130,6 +63,7 @@ pub fn compute_message_id(message: &gossipsub::Message) -> gossipsub::MessageId 
 
 #[cfg(test)]
 mod tests {
+    use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
     use libp2p::gossipsub::{ConfigBuilder, MessageAuthenticity, PublishError, ValidationMode};
 
     use super::*;
@@ -139,37 +73,36 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_topics_get_the_largest_derived_limit_in_any_order() {
-        let author = author();
-        let small = GossipsubTopicSizeLimit::new("shared", 512);
-        let large = GossipsubTopicSizeLimit::new("shared", 1024);
-        let topic_hash = gossipsub::IdentTopic::new("shared").hash();
-        let expected = gossipsub_message_size(&topic_hash, &author, large.max_payload_size);
+    fn topic_limit_is_derived_from_serialized_application_data_size() {
+        let author = PeerId::random();
+        let topic = gossipsub::IdentTopic::new("shared").hash();
+        let max_data_size = 1024;
+        let config = configure_topic_size_limits(
+            gossipsub::Config::default(),
+            author,
+            HashMap::from([(topic.clone(), max_data_size)]),
+        )
+        .unwrap();
 
-        for limits in [[small.clone(), large.clone()], [large, small]] {
-            let config =
-                configure_topic_size_limits(gossipsub::Config::default(), author, limits).unwrap();
-
-            assert_eq!(config.max_transmit_size_for_topic(&topic_hash), expected);
-        }
+        assert_eq!(
+            config.max_transmit_size_for_topic(&topic),
+            gossipsub_message_size(&topic, &author, max_data_size)
+        );
     }
 
     #[test]
-    fn rejects_a_topic_limit_that_cannot_fit_under_the_global_ceiling() {
-        let error = configure_topic_size_limits(
+    fn topic_limit_is_not_restricted_by_the_default_maximum() {
+        let author = PeerId::random();
+        let topic = gossipsub::IdentTopic::new("shared").hash();
+        let max_data_size = MAX_WIRE_MESSAGE_SIZE;
+        let config = configure_topic_size_limits(
             gossipsub::Config::default(),
-            author(),
-            [GossipsubTopicSizeLimit::new(
-                "too-large",
-                MAX_WIRE_MESSAGE_SIZE,
-            )],
+            author,
+            HashMap::from([(topic.clone(), max_data_size)]),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(matches!(
-            error,
-            GossipsubTopicSizeLimitError::PayloadExceedsGlobal { .. }
-        ));
+        assert!(config.max_transmit_size_for_topic(&topic) > max_data_size);
     }
 
     #[test]
@@ -180,11 +113,10 @@ mod tests {
         let config = configure_topic_size_limits(
             gossipsub::Config::default(),
             author,
-            [GossipsubTopicSizeLimit::new(topic, 512)],
+            HashMap::from([(topic_hash.clone(), 512)]),
         )
         .unwrap();
         let topic_limit = config.max_transmit_size_for_topic(&topic_hash);
-        assert!(topic_limit < MAX_WIRE_MESSAGE_SIZE);
         let config = ConfigBuilder::from(config)
             .validation_mode(ValidationMode::None)
             .build()

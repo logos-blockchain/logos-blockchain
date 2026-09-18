@@ -3,7 +3,7 @@
     reason = "We split the `Behaviour` impls into different modules for better code modularity."
 )]
 
-use std::error::Error;
+use std::{collections::HashMap, error::Error};
 
 use lb_cryptarchia_sync::ChainSyncError;
 use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
@@ -30,6 +30,7 @@ pub(crate) struct BehaviourConfig {
     pub chain_sync_protocol_name: StreamProtocol,
     pub public_key: identity::PublicKey,
     pub chain_sync_config: lb_cryptarchia_sync::Config,
+    pub max_data_size_by_topic: HashMap<libp2p::gossipsub::TopicHash, usize>,
 }
 
 #[derive(Debug, Error)]
@@ -53,7 +54,10 @@ pub struct Behaviour<Rng: Clone + Send + RngCore + 'static> {
 }
 
 impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
-    pub(crate) fn new(config: BehaviourConfig, rng: Rng) -> Result<Self, Box<dyn Error>> {
+    pub(crate) fn new(
+        config: BehaviourConfig,
+        rng: Rng,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let BehaviourConfig {
             gossipsub_config,
             kademlia_config,
@@ -64,15 +68,23 @@ impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
             identify_protocol_name,
             chain_sync_protocol_name,
             public_key,
+            max_data_size_by_topic,
         } = config;
 
         let peer_id = PeerId::from(public_key.clone());
+        let gossipsub_config = gossipsub::configure_topic_size_limits(
+            gossipsub_config,
+            peer_id,
+            max_data_size_by_topic,
+        )?;
 
         let gossipsub = libp2p::gossipsub::Behaviour::new(
             libp2p::gossipsub::MessageAuthenticity::Author(peer_id),
             libp2p::gossipsub::ConfigBuilder::from(gossipsub_config)
                 .validation_mode(libp2p::gossipsub::ValidationMode::None)
                 .message_id_fn(compute_message_id)
+                // This is only the fallback for topics without an explicit
+                // application-data limit; known topics retain their overrides.
                 .max_transmit_size(MAX_WIRE_MESSAGE_SIZE)
                 .build()?,
         )?;
@@ -113,7 +125,7 @@ mod tests {
     use rand::rngs::OsRng;
 
     use super::*;
-    use crate::behaviour::gossipsub::{GossipsubTopicSizeLimit, configure_topic_size_limits};
+    use crate::behaviour::gossipsub::configure_topic_size_limits;
 
     #[tokio::test]
     async fn final_behaviour_construction_preserves_topic_size_limits() {
@@ -127,7 +139,7 @@ mod tests {
         let gossipsub_config = configure_topic_size_limits(
             libp2p_gossipsub::Config::default(),
             author,
-            [GossipsubTopicSizeLimit::new(topic, payload_size)],
+            HashMap::from([(topic_hash.clone(), payload_size)]),
         )
         .unwrap();
         let topic_limit = gossipsub_config.max_transmit_size_for_topic(&topic_hash);
@@ -146,6 +158,7 @@ mod tests {
                     peer_response_timeout: Duration::from_secs(1),
                     max_inbound_requests: NonZeroUsize::new(1).unwrap(),
                 },
+                max_data_size_by_topic: HashMap::new(),
             },
             OsRng,
         )

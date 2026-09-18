@@ -1,7 +1,10 @@
 use std::sync::LazyLock;
 
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
-use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
+use lb_binary_codec::{
+    bincode::BoundedSerializeOp,
+    canonical::{BinaryCodec, BinaryEncode as _},
+};
+use lb_groth16::{FR_BYTES_SIZE, fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poc::PoCVerifierInput;
 use lb_poseidon2::{Digest, Fr, ZkHash};
@@ -50,6 +53,10 @@ pub struct VoucherNullifier(#[serde(with = "serde_fr")] ZkHash);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize, BinaryCodec)]
 pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
+
+impl BoundedSerializeOp for VoucherCm {
+    type Bytes = [u8; FR_BYTES_SIZE];
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct LeaderClaimOp {
@@ -143,6 +150,9 @@ impl From<VoucherCm> for Fr {
 }
 
 impl VoucherCm {
+    /// The fixed-size canonical representation of a voucher commitment.
+    pub const CANONICAL_ENCODED_SIZE: usize = FR_BYTES_SIZE;
+
     #[must_use]
     pub fn to_bytes(&self) -> [u8; 32] {
         fr_to_bytes(&self.0)

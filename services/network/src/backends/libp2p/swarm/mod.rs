@@ -34,7 +34,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::StreamExt as _;
 
 use super::{
-    Libp2pConfig, Message,
+    Libp2pConfig, Message, TopicHash,
     command::{Command, Dial, NetworkCommand},
 };
 use crate::backends::libp2p::{Libp2pInfo, swarm::kademlia::PendingQueryData};
@@ -59,6 +59,7 @@ pub struct SwarmHandler<R: Clone + Send + RngCore + 'static> {
     pub commands_rx: mpsc::Receiver<Command>,
     pub pubsub_messages_tx: broadcast::Sender<Message>,
     pub chainsync_events_tx: broadcast::Sender<ChainSyncEvent>,
+    pub max_data_size_by_topic: HashMap<TopicHash, usize>,
 
     pending_queries: HashMap<QueryId, PendingQueryData>,
 }
@@ -77,7 +78,12 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         chainsync_events_tx: broadcast::Sender<ChainSyncEvent>,
         rng: R,
     ) -> Self {
-        let swarm = Swarm::build(config.inner, rng).unwrap();
+        let Libp2pConfig {
+            inner,
+            max_data_size_by_topic,
+            ..
+        } = config;
+        let swarm = Swarm::build(inner, max_data_size_by_topic.clone(), rng).unwrap();
 
         // Keep the dialing history since swarm.connect doesn't return the result
         // synchronously
@@ -90,6 +96,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             commands_rx,
             pubsub_messages_tx: pubsub_events_tx,
             chainsync_events_tx,
+            max_data_size_by_topic,
             pending_queries: HashMap::new(),
         }
     }
@@ -425,8 +432,249 @@ mod tests {
     fn create_libp2p_config(initial_peers: Vec<Multiaddr>, port: u16) -> Libp2pConfig {
         Libp2pConfig {
             inner: create_swarm_config(port, !initial_peers.is_empty()),
+            max_data_size_by_topic: HashMap::new(),
             initial_peers,
         }
+    }
+
+    fn create_gossipsub_handler(
+        topic: TopicHash,
+        max_data_size: usize,
+    ) -> (SwarmHandler<OsRng>, broadcast::Receiver<Message>) {
+        let (commands_tx, commands_rx) = mpsc::channel(1);
+        let (pubsub_events_tx, pubsub_events_rx) = broadcast::channel(1);
+        let (chainsync_events_tx, _) = broadcast::channel(1);
+        let mut config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
+        config.max_data_size_by_topic.insert(topic, max_data_size);
+
+        let handler = SwarmHandler::new(
+            config,
+            commands_tx,
+            commands_rx,
+            pubsub_events_tx,
+            chainsync_events_tx,
+            OsRng,
+        );
+
+        (handler, pubsub_events_rx)
+    }
+
+    fn gossipsub_message_event(topic: TopicHash, data_size: usize) -> lb_libp2p::gossipsub::Event {
+        lb_libp2p::gossipsub::Event::Message {
+            propagation_source: PeerId::random(),
+            message_id: lb_libp2p::gossipsub::MessageId::from("test"),
+            message: Message {
+                source: None,
+                data: vec![0; data_size],
+                sequence_number: None,
+                topic,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn forwards_inbound_application_data_at_the_topic_limit() {
+        let topic = lb_libp2p::gossipsub::IdentTopic::new("transactions").hash();
+        let max_data_size = 512;
+        let (handler, mut pubsub_events_rx) =
+            create_gossipsub_handler(topic.clone(), max_data_size);
+
+        handler.handle_gossipsub_event(gossipsub_message_event(topic, max_data_size));
+
+        assert_eq!(
+            pubsub_events_rx.try_recv().unwrap().data.len(),
+            max_data_size
+        );
+    }
+
+    #[tokio::test]
+    async fn drops_inbound_application_data_above_the_topic_limit() {
+        let topic = lb_libp2p::gossipsub::IdentTopic::new("transactions").hash();
+        let max_data_size = 512;
+        let (handler, mut pubsub_events_rx) =
+            create_gossipsub_handler(topic.clone(), max_data_size);
+
+        handler.handle_gossipsub_event(gossipsub_message_event(topic, max_data_size + 1));
+
+        assert!(matches!(
+            pubsub_events_rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn drops_inbound_application_data_for_an_unconfigured_topic() {
+        let configured_topic = lb_libp2p::gossipsub::IdentTopic::new("transactions").hash();
+        let unconfigured_topic = lb_libp2p::gossipsub::IdentTopic::new("proposals").hash();
+        let (handler, mut pubsub_events_rx) = create_gossipsub_handler(configured_topic, 512);
+
+        handler.handle_gossipsub_event(gossipsub_message_event(unconfigured_topic, 512));
+
+        assert!(matches!(
+            pubsub_events_rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_outbound_application_data_above_the_topic_limit() {
+        let topic = lb_libp2p::gossipsub::IdentTopic::new("transactions").hash();
+        let max_data_size = 512;
+        let (mut handler, mut pubsub_events_rx) = create_gossipsub_handler(topic, max_data_size);
+
+        handler.broadcast_and_retry(
+            "transactions".to_owned(),
+            vec![0; max_data_size + 1].into_boxed_slice(),
+            MAX_RETRY,
+        );
+
+        assert!(matches!(
+            pubsub_events_rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            handler.commands_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_outbound_application_data_for_an_unconfigured_topic() {
+        let configured_topic = lb_libp2p::gossipsub::IdentTopic::new("transactions").hash();
+        let (mut handler, mut pubsub_events_rx) = create_gossipsub_handler(configured_topic, 512);
+
+        handler.broadcast_and_retry(
+            "proposals".to_owned(),
+            vec![0; 512].into_boxed_slice(),
+            MAX_RETRY,
+        );
+
+        assert!(matches!(
+            pubsub_events_rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            handler.commands_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    async fn wait_for_network_info(
+        commands_tx: &mpsc::Sender<Command>,
+        ready: impl Fn(&Libp2pInfo) -> bool,
+    ) -> Libp2pInfo {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let (reply, info_rx) = oneshot::channel();
+            commands_tx
+                .send(Command::Network(NetworkCommand::Info { reply }))
+                .await
+                .expect("network handler should still be running");
+            let info = info_rx.await.expect("network info response");
+            if ready(&info) {
+                return info;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for network state: {info:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn forwards_exact_limit_outbound_data_after_successful_publish() {
+        let topic = "transactions";
+        let topic_hash = lb_libp2p::gossipsub::IdentTopic::new(topic).hash();
+        let max_data_size = 512;
+
+        let (bootstrap_commands_tx, bootstrap_commands_rx) = mpsc::channel(10);
+        let (bootstrap_pubsub_events_tx, _) = broadcast::channel(10);
+        let (bootstrap_chainsync_events_tx, _) = broadcast::channel(10);
+        let mut bootstrap_config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
+        bootstrap_config
+            .max_data_size_by_topic
+            .insert(topic_hash.clone(), max_data_size);
+        let mut bootstrap = SwarmHandler::new(
+            bootstrap_config,
+            bootstrap_commands_tx.clone(),
+            bootstrap_commands_rx,
+            bootstrap_pubsub_events_tx,
+            bootstrap_chainsync_events_tx,
+            OsRng,
+        );
+        bootstrap.handle_pubsub_command(PubSubCommand::Subscribe(topic.to_owned()));
+        let bootstrap_peer_id = *bootstrap.swarm.swarm().local_peer_id();
+        let bootstrap_task = tokio::spawn(async move {
+            bootstrap.run(vec![]).await;
+        });
+
+        let bootstrap_info = wait_for_network_info(&bootstrap_commands_tx, |info| {
+            !info.listen_addresses.is_empty()
+        })
+        .await;
+        let bootstrap_address = bootstrap_info.listen_addresses[0]
+            .clone()
+            .with(Protocol::P2p(bootstrap_peer_id));
+
+        let (peer_commands_tx, peer_commands_rx) = mpsc::channel(10);
+        let (peer_pubsub_events_tx, mut peer_pubsub_events_rx) = broadcast::channel(10);
+        let (peer_chainsync_events_tx, _) = broadcast::channel(10);
+        let mut peer_config = create_libp2p_config(
+            vec![bootstrap_address.clone()],
+            get_available_udp_port().unwrap(),
+        );
+        peer_config
+            .max_data_size_by_topic
+            .insert(topic_hash.clone(), max_data_size);
+        let mut peer = SwarmHandler::new(
+            peer_config,
+            peer_commands_tx.clone(),
+            peer_commands_rx,
+            peer_pubsub_events_tx,
+            peer_chainsync_events_tx,
+            OsRng,
+        );
+        peer.handle_pubsub_command(PubSubCommand::Subscribe(topic.to_owned()));
+        let peer_task = tokio::spawn(async move {
+            peer.run(vec![bootstrap_address]).await;
+        });
+
+        wait_for_network_info(&peer_commands_tx, |info| {
+            info.connected_peers.contains(&bootstrap_peer_id)
+        })
+        .await;
+
+        peer_commands_tx
+            .send(Command::PubSub(PubSubCommand::Broadcast {
+                topic: topic.to_owned(),
+                message: vec![0; max_data_size].into_boxed_slice(),
+            }))
+            .await
+            .expect("peer network handler should still be running");
+
+        let message = tokio::time::timeout(Duration::from_secs(10), peer_pubsub_events_rx.recv())
+            .await
+            .expect("timed out waiting for self-notification")
+            .expect("self-notification channel should remain open");
+
+        assert!(message.source.is_none());
+        assert!(message.sequence_number.is_none());
+        assert_eq!(message.topic, topic_hash);
+        assert_eq!(message.data.len(), max_data_size);
+
+        bootstrap_task.abort();
+        peer_task.abort();
+    }
+
+    #[tokio::test]
+    async fn refuses_subscription_to_an_unconfigured_topic() {
+        let configured_topic = lb_libp2p::gossipsub::IdentTopic::new("transactions").hash();
+        let (mut handler, _) = create_gossipsub_handler(configured_topic, 512);
+
+        handler.handle_pubsub_command(PubSubCommand::Subscribe("proposals".to_owned()));
+
+        assert!(!handler.swarm.is_subscribed("proposals"));
     }
 
     const NODE_COUNT: usize = 10;

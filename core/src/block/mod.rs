@@ -33,19 +33,6 @@ const MAX_BLOCK_TRANSACTIONS: usize = 1024;
 /// Note: This is not the total block size.
 pub const MAX_BLOCK_TRANSACTIONS_SIZE: usize = 1024 * 1024 * 2;
 
-/// Maximum canonical encoded size of [`Proposal`].
-///
-/// The actual canonical encoding is:
-/// - header: `297` bytes;
-/// - uncle headers: `1 + MAX_UNCLES * 361` bytes;
-/// - transaction references: `2 + 1024 * 16` bytes;
-/// - signature: `64` bytes;
-/// - total: `18_192` bytes.
-///
-/// These values describe the canonical encoding, not the configured-bincode
-/// representation.
-pub const MAX_PROPOSAL_CANONICAL_SIZE: usize = 18_192;
-
 pub type BlockNumber = u64;
 
 #[derive(Debug, thiserror::Error)]
@@ -95,6 +82,10 @@ pub struct References {
 }
 
 impl References {
+    /// Maximum canonical representation of the bounded transaction references.
+    pub const MAX_CANONICAL_ENCODED_SIZE: usize =
+        2 + BlockTransactionReferences::MAX * TxHashPrefix::CANONICAL_ENCODED_SIZE;
+
     /// Constructs a `References` instance from a list of transactions,
     /// extracting their hashes.
     #[must_use]
@@ -147,6 +138,16 @@ where
 }
 
 impl Proposal {
+    /// Maximum canonical encoded size of a block proposal.
+    ///
+    /// The bound is composed from the maxima owned by each component rather
+    /// than being an unexplained total. It describes the canonical encoding,
+    /// not the configured-bincode representation.
+    pub const MAX_ENCODED_SIZE: usize = Header::CANONICAL_ENCODED_SIZE
+        + UncleHeaders::MAX_CANONICAL_ENCODED_SIZE
+        + References::MAX_CANONICAL_ENCODED_SIZE
+        + Ed25519Signature::CANONICAL_ENCODED_SIZE;
+
     #[must_use]
     pub const fn header(&self) -> &Header {
         &self.header
@@ -874,8 +875,8 @@ mod tests {
         .expect("valid block")
         .to_proposal();
 
-        assert_eq!(proposal.encoded_length(), MAX_PROPOSAL_CANONICAL_SIZE);
-        assert_eq!(proposal.encode().len(), MAX_PROPOSAL_CANONICAL_SIZE);
+        assert_eq!(proposal.encoded_length(), Proposal::MAX_ENCODED_SIZE);
+        assert_eq!(proposal.encode().len(), Proposal::MAX_ENCODED_SIZE);
     }
 
     #[test]

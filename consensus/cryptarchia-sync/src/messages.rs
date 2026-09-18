@@ -1,13 +1,13 @@
 use bytes::Bytes;
-use lb_binary_codec::bincode::{BoundedSerializeOp, UpperBoundedVec};
+use lb_binary_codec::bincode::{self, BoundedSerializeOp, UpperBoundedVec};
 use lb_core::header::HeaderId;
 use lb_cryptarchia_engine::Slot;
 use serde::{Deserialize, Serialize};
 
-const BINCODE_ENUM_DISCRIMINANT_SIZE: usize = size_of::<u32>();
-
-const GET_TIP_BINCODE_SIZE: usize =
-    BINCODE_ENUM_DISCRIMINANT_SIZE + size_of::<[u8; 32]>() + size_of::<Slot>() + size_of::<u64>();
+const GET_TIP_BINCODE_SIZE: usize = bincode::BINCODE_ENUM_DISCRIMINANT_SIZE
+    + <HeaderId as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + <Slot as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + bincode::BINCODE_U64_SIZE;
 
 /// Maximum configured-bincode size of a tip response. The fixed tip variant is
 /// larger than the finite set of typed failure reasons.
@@ -53,7 +53,7 @@ mod tests {
         };
         let reasons = [(
             GetTipResponseReason::NodeNotOnline,
-            2 * BINCODE_ENUM_DISCRIMINANT_SIZE,
+            2 * bincode::BINCODE_ENUM_DISCRIMINANT_SIZE,
         )];
 
         let tip_bytes = tip.to_bytes().unwrap();
