@@ -1,17 +1,11 @@
-use core::fmt::{self, Debug, Display};
+use core::fmt::{self, Debug};
 
-use bytes::Bytes;
 use futures::StreamExt as _;
-use lb_core::{
-    block::Block,
-    events::Events,
-    mantle::{
-        ledger::verification_mode::StandardMode,
-        traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
-        transactions::states::Preverified,
-    },
+use lb_core::mantle::{
+    ledger::verification_mode::StandardMode,
+    traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
+    transactions::states::Preverified,
 };
-use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::info;
 
@@ -44,7 +38,7 @@ impl Debug for InitialBlockDownload {
     }
 }
 
-impl<Tx, Storage, RuntimeServiceId> Service<InitialBlockDownload, Tx, Storage, RuntimeServiceId>
+impl<Tx> Service<InitialBlockDownload, Tx>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
@@ -58,17 +52,10 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Display + 'static,
 {
     /// Runs the phase until IBD completes.
     /// A no-op if IBD has been already skipped during previous phases.
-    pub async fn process_initial_block_download(
-        mut self,
-    ) -> Service<ProlongedBootstrapPeriod, Tx, Storage, RuntimeServiceId> {
+    pub async fn process_initial_block_download(mut self) -> Service<ProlongedBootstrapPeriod, Tx> {
         info!(target: LOG_TARGET, "entering {:?} phase", self.phase);
 
         if self.phase.ibd_skipped {

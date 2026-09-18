@@ -65,12 +65,12 @@ macro_rules! api_routes {
             post lb_http_api_common::paths::wallet::SIGN_TX_ZK => crate::api::handlers::wallet::sign_tx_zk, wallet::sign_tx_zk::<WalletService, MempoolStorageAdapter, _>;
             post lb_http_api_common::paths::wallet::FUND => crate::api::handlers::wallet::fund, wallet::fund::<WalletService, MempoolStorageAdapter, _>;
             put lb_http_api_common::paths::admin::TRACING_FILTER => crate::api::tracing::reload_tracing_filter, reload_tracing_filter::<RuntimeServiceId>;
-            get lb_http_api_common::paths::BLOCKS_STREAM => crate::api::handlers::blocks_stream, blocks_stream::<BlockStorageBackend, CryptarchiaConsensus<_, _, _, _>, RuntimeServiceId>;
-            get lb_http_api_common::paths::BLOCKS_RANGE_STREAM => crate::api::handlers::blocks_range_stream, blocks_range_stream::<BlockStorageBackend, RuntimeServiceId>;
-            get lb_http_api_common::paths::BLOCKS => crate::api::handlers::immutable_blocks, immutable_blocks::<BlockStorageBackend, RuntimeServiceId>;
-            get lb_http_api_common::paths::BLOCKS_DETAIL => crate::api::handlers::block, block::<StorageAdapter, RuntimeServiceId>;
+            get lb_http_api_common::paths::BLOCKS_STREAM => crate::api::handlers::blocks_stream, blocks_stream::<CryptarchiaConsensus<_, _, _>, RuntimeServiceId>;
+            get lb_http_api_common::paths::BLOCKS_RANGE_STREAM => crate::api::handlers::blocks_range_stream, blocks_range_stream::<RuntimeServiceId>;
+            get lb_http_api_common::paths::BLOCKS => crate::api::handlers::immutable_blocks, immutable_blocks::<RuntimeServiceId>;
+            get lb_http_api_common::paths::BLOCKS_DETAIL => crate::api::handlers::block, block::<RuntimeServiceId>;
             get lb_http_api_common::paths::BLOCK_EVENTS => crate::api::handlers::block_events, block_events::<RuntimeServiceId>;
-            get lb_http_api_common::paths::TRANSACTION => crate::api::handlers::transaction, transaction::<StorageAdapter, RuntimeServiceId>;
+            get lb_http_api_common::paths::TRANSACTION => crate::api::handlers::transaction, transaction::<RuntimeServiceId>;
         }
     };
 }

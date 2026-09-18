@@ -31,7 +31,7 @@ use lb_sdp_service::{
     mempool::SdpMempoolAdapter, state::SdpStateStorage as SdpStateStorageTrait,
     wallet::SdpWalletAdapter,
 };
-use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
+use lb_storage_service::StorageService;
 use lb_tx_service::{TxMempoolService, backend::Mempool};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
@@ -79,12 +79,10 @@ macro_rules! build_router {
     };
 }
 
-pub(crate) type BlockStorageBackend = RocksBackend;
-type BlockStorageService<RuntimeServiceId> = StorageService<BlockStorageBackend, RuntimeServiceId>;
+type BlockStorageService<RuntimeServiceId> = StorageService<RuntimeServiceId>;
 
 pub struct AxumBackend<
     TimeBackend,
-    HttpStorageAdapter,
     MempoolStorageAdapter,
     SdpMempool,
     SdpWallet,
@@ -94,7 +92,6 @@ pub struct AxumBackend<
     settings: AxumBackendSettings,
     _phantom: PhantomData<(
         TimeBackend,
-        HttpStorageAdapter,
         MempoolStorageAdapter,
         SdpMempool,
         SdpWallet,
@@ -106,7 +103,6 @@ pub struct AxumBackend<
 #[async_trait::async_trait]
 impl<
     TimeBackend,
-    StorageAdapter,
     MempoolStorageAdapter,
     SdpMempool,
     SdpWallet,
@@ -116,7 +112,6 @@ impl<
 > Backend<RuntimeServiceId>
     for AxumBackend<
         TimeBackend,
-        StorageAdapter,
         MempoolStorageAdapter,
         SdpMempool,
         SdpWallet,
@@ -126,8 +121,6 @@ impl<
 where
     TimeBackend: lb_time_service::backends::TimeBackend + Send + 'static,
     TimeBackend::Settings: Clone + Send + Sync,
-    StorageAdapter:
-        lb_api_service::http::storage::StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
     MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
@@ -157,14 +150,7 @@ where
             >,
         >
         + AsServiceId<BlockStorageService<RuntimeServiceId>>
-        + AsServiceId<
-            StorageService<
-                <MempoolStorageAdapter as lb_tx_service::storage::MempoolStorageAdapter<
-                    RuntimeServiceId,
-                >>::Backend,
-                RuntimeServiceId,
-            >,
-        >
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 lb_tx_service::network::adapters::libp2p::Libp2pAdapter<

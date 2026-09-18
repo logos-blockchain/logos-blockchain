@@ -10,7 +10,7 @@ use lb_blend::{
 };
 use lb_blend_service::{RealProofsVerifier, core::kms::PreloadKMSBackendCorePoQGenerator};
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
-use lb_storage_service::{backends::rocksdb::RocksBackend, recovery::StorageRecoveryBackend};
+use lb_storage_service::recovery::StorageRecoveryBackend;
 use lb_time_service::backends::NtpTimeBackend;
 use libp2p::PeerId;
 
@@ -40,7 +40,6 @@ pub type BlendCoreRecoveryBackend<RuntimeServiceId> = StorageRecoveryBackend<
         lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
         BlendBroadcastSettings<RuntimeServiceId>,
     >,
-    RocksBackend,
     RuntimeServiceId,
 >;
 

@@ -922,7 +922,6 @@ mod pol_tests {
         type Kms = ();
         type Cryptarchia = ();
         type Tx = ();
-        type Storage = ();
     }
 
     impl DummyWallet {

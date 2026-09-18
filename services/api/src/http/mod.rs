@@ -7,4 +7,3 @@ pub mod mantle;
 pub mod mempool;
 pub mod pow;
 pub mod sdp;
-pub mod storage;

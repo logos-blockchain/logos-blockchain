@@ -3958,7 +3958,6 @@ name = "logos-blockchain-api-service"
 version = "0.0.0"
 dependencies = [
  "async-trait",
- "bytes",
  "futures",
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-broadcast-service",
@@ -3977,7 +3976,6 @@ dependencies = [
  "logos-blockchain-tx-service",
  "overwatch",
  "serde",
- "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -4225,6 +4223,7 @@ dependencies = [
  "logos-blockchain-network-service",
  "logos-blockchain-node",
  "logos-blockchain-pow-service",
+ "logos-blockchain-storage-service",
  "logos-blockchain-time-service",
  "logos-blockchain-utils",
  "logos-blockchain-version",
@@ -5369,7 +5368,6 @@ name = "logos-blockchain-wallet-service"
 version = "0.0.0"
 dependencies = [
  "async-trait",
- "bytes",
  "futures",
  "hex",
  "logos-blockchain-chain-service",

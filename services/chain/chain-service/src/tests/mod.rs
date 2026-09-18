@@ -38,10 +38,9 @@ use lb_ledger::{
 };
 use lb_storage_service::{
     StorageMsg, StorageService,
-    backends::{
-        StorageBackend as _,
-        rocksdb::{RocksBackend, RocksBackendSettings},
-    },
+    api::StorageApi,
+    backend::StorageBackend as _,
+    rocksdb::{RocksBackend, RocksBackendSettings},
 };
 use lb_time_service::backends::SystemTimeBackend;
 use lb_utils::math::NonNegativeRatio;
@@ -135,12 +134,11 @@ async fn get_block_ids_from_memory_and_storage() {
     let (storage_tx, storage_rx) = mpsc::channel(10);
     let _storage_svc = spawn_storage_service(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays = CryptarchiaConsensusRelays::<_, RocksBackend, TestRuntimeServiceId>::new(
+    let relays = CryptarchiaConsensusRelays::<_>::new(
         OutboundRelay::new(broadcast_tx),
-        OutboundRelay::new(storage_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
         OutboundRelay::new(time_tx),
-    )
-    .await;
+    );
     let (new_block_tx, _new_block_rx) = broadcast::channel(10);
     let (lib_tx, _lib_rx) = broadcast::channel(10);
 
@@ -192,7 +190,7 @@ async fn get_block_ids_from_memory_and_storage() {
         &cryptarchia,
         block_ids[2],
         block_ids[0],
-        relays.storage_adapter().clone(),
+        relays.storage().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[2]);
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
@@ -204,7 +202,7 @@ async fn get_block_ids_from_memory_and_storage() {
         &cryptarchia,
         block_ids[2],
         [99; 32].into(), // unknown block ID
-        relays.storage_adapter().clone(),
+        relays.storage().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[2]);
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
@@ -245,7 +243,7 @@ async fn get_block_ids_from_memory_and_storage() {
         &cryptarchia,
         block_ids[5],
         block_ids[0],
-        relays.storage_adapter().clone(),
+        relays.storage().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[5]);
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[4]);
@@ -260,7 +258,7 @@ async fn get_block_ids_from_memory_and_storage() {
         &cryptarchia,
         block_ids[1],
         [99; 32].into(), // unknown block ID
-        relays.storage_adapter().clone(),
+        relays.storage().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[0]);
@@ -276,27 +274,17 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     let (storage_tx, storage_rx) = mpsc::channel(10);
     let _storage_svc = spawn_storage_service(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays = CryptarchiaConsensusRelays::<
-        SignedOps<Preverified, StandardMode>,
-        RocksBackend,
-        TestRuntimeServiceId,
-    >::new(
+    let relays = CryptarchiaConsensusRelays::<SignedOps<Preverified, StandardMode>>::new(
         OutboundRelay::new(broadcast_tx),
-        OutboundRelay::new(storage_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
         OutboundRelay::new(time_tx),
-    )
-    .await;
+    );
 
     let lib = [0; 32].into();
     let missing_tip = [1; 32].into();
 
-    let recovery_blocks = CryptarchiaConsensus::<
-        _,
-        RocksBackend,
-        SystemTimeBackend,
-        TestRuntimeServiceId,
-    >::load_recovery_blocks_or_fall_back_to_lib(
-        missing_tip, lib, relays.storage_adapter().clone()
+    let recovery_blocks = CryptarchiaConsensus::<_, SystemTimeBackend, TestRuntimeServiceId>::load_recovery_blocks_or_fall_back_to_lib(
+        missing_tip, lib, relays.storage().clone()
     )
     .await;
 
@@ -312,16 +300,11 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     // request fails.
     drop(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays = CryptarchiaConsensusRelays::<
-        SignedOps<Preverified, StandardMode>,
-        RocksBackend,
-        TestRuntimeServiceId,
-    >::new(
+    let relays = CryptarchiaConsensusRelays::<SignedOps<Preverified, StandardMode>>::new(
         OutboundRelay::new(broadcast_tx),
-        OutboundRelay::new(storage_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
         OutboundRelay::new(time_tx),
-    )
-    .await;
+    );
     let (new_block_tx, mut new_block_rx) = broadcast::channel(10);
     let (lib_tx, mut lib_rx) = broadcast::channel(10);
 
@@ -605,9 +588,7 @@ pub fn utxo() -> (ZkKey, Utxo) {
     (zk_sk, utxo)
 }
 
-pub fn spawn_storage_service(
-    mut rx: mpsc::Receiver<StorageMsg<RocksBackend>>,
-) -> (JoinHandle<()>, TempDir) {
+pub fn spawn_storage_service(mut rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<()>, TempDir) {
     let db_dir = TempDir::new().unwrap();
     let mut backend = RocksBackend::new(RocksBackendSettings {
         db_path: db_dir.path().join("db"),
@@ -618,11 +599,7 @@ pub fn spawn_storage_service(
 
     let handle = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            StorageService::<RocksBackend, TestRuntimeServiceId>::handle_storage_message(
-                msg,
-                &mut backend,
-            )
-            .await;
+            StorageService::<TestRuntimeServiceId>::handle_storage_message(msg, &mut backend).await;
         }
     });
 
@@ -632,14 +609,8 @@ pub fn spawn_storage_service(
 pub struct TestRuntimeServiceId;
 
 impl
-    AsServiceId<
-        CryptarchiaConsensus<
-            SignedOps<Preverified, StandardMode>,
-            RocksBackend,
-            SystemTimeBackend,
-            Self,
-        >,
-    > for TestRuntimeServiceId
+    AsServiceId<CryptarchiaConsensus<SignedOps<Preverified, StandardMode>, SystemTimeBackend, Self>>
+    for TestRuntimeServiceId
 {
     const SERVICE_ID: Self = Self;
 }

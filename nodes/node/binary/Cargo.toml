@@ -45,7 +45,7 @@ lb-system-sig-service            = { workspace = true }
 lb-time-service                  = { features = ["ntp"], workspace = true }
 lb-tracing                       = { workspace = true }
 lb-tracing-service               = { workspace = true }
-lb-tx-service                    = { features = ["rocksdb-backend"], workspace = true }
+lb-tx-service                    = { workspace = true }
 lb-utils                         = { features = ["time"], workspace = true }
 lb-version                       = { workspace = true }
 lb-wallet-service                = { workspace = true }
