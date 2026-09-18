@@ -243,9 +243,10 @@ fn apply_prepared_block_event(
 
     let old_tip = *current_tip;
 
-    // Snapshot pending BEFORE this event mutates it: the extension-case
-    // `adopted` filter below keys on it, and mirroring adds this block's
-    // network entries to pending during the event.
+    // Snapshot which txs were tracked BEFORE this event mutates state: the
+    // extension-case `adopted` filter below distinguishes entries the
+    // sequencer already knew about (its own publishes and previously
+    // observed ones) from genuinely new network entries.
     let tracked_before = s.tracked_tx_hashes();
 
     // Install finalized history first. It is not mirrored into pending: the
@@ -334,11 +335,11 @@ fn apply_prepared_block_event(
         _ => None,
     };
 
-    // On an extension (incl. the first event) drop entries pending already
-    // held from `adopted`: the consumer applied them at publish, so they must
-    // not echo back. Keyed on pending membership, not `TxSource::Local`: a
-    // shed own tx was reported orphaned (the consumer reverted it) and its
-    // bytes can still land from the mempool, in which case it is news again.
+    // On a pure extension (nothing orphaned — including the first event,
+    // whose `orphaned` is empty by construction), report only entries the
+    // sequencer didn't already track: its own publishes land on the channel
+    // through its own action and must not echo back. On a branch change the
+    // full delta flows through unfiltered.
     let channel_update = channel_update.map(|mut update| {
         if update.orphaned.is_empty() {
             update
