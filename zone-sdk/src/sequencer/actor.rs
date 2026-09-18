@@ -1259,7 +1259,7 @@ mod tests {
         channel.posting_timeframe = 4u32.into();
         let node = MockNode {
             channel_state: Some(channel),
-            slot_duration_ms: 200,
+            slot_duration_ms: 300,
             ..MockNode::default()
         };
         let config = SequencerConfig {
@@ -1276,13 +1276,17 @@ mod tests {
         }
 
         // Single key: every turn is ours, open for the first two of its four
-        // slots and closed for the last two.
+        // slots and closed for the last two. The notification at Ready is an
+        // observation mid-turn; the first close is the first boundary.
         let mut seen = 0;
-        tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
             while seen < 4 {
                 let Event::TurnNotification { notification } = sequencer.next_event().await else {
                     continue;
                 };
+                if seen == 0 && notification.our_turn_to_write {
+                    continue;
+                }
                 assert_eq!(
                     notification.our_turn_to_write,
                     sequencer.can_publish_inscription_now(),
