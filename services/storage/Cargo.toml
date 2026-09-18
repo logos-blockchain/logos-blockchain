@@ -24,7 +24,7 @@ lb-services-utils     = { workspace = true }
 lb-tracing            = { workspace = true }
 lb-utils              = { features = ["tokio"], workspace = true }
 overwatch             = { workspace = true }
-rocksdb               = { features = ["bindgen-runtime"], optional = true, workspace = true }
+rocksdb               = { features = ["bindgen-runtime"], workspace = true }
 serde                 = { workspace = true }
 thiserror             = { workspace = true }
 tokio                 = { workspace = true }
@@ -35,10 +35,8 @@ tempfile = { workspace = true }
 
 [features]
 default          = []
-rocksdb-backend  = ["dep:rocksdb"]
 tokio-task-names = ["lb-utils/tokio-task-names"]
 
 [[bin]]
-name              = "logos-blockchain-rocksdb"
-path              = "src/bin/rocks.rs"
-required-features = ["rocksdb-backend"]
+name = "logos-blockchain-rocksdb"
+path = "src/bin/rocks.rs"

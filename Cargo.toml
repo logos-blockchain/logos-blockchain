@@ -154,7 +154,7 @@ lb-poseidon2                       = { default-features = false, package = "logo
 lb-pow-service                     = { default-features = false, package = "logos-blockchain-pow-service", path = "./services/pow" }
 lb-sdp-service                     = { default-features = false, package = "logos-blockchain-sdp-service", path = "./services/sdp" }
 lb-services-utils                  = { default-features = false, package = "logos-blockchain-services-utils", path = "./services/utils" }
-lb-storage-service                 = { default-features = false, features = ["rocksdb-backend"], package = "logos-blockchain-storage-service", path = "./services/storage" }
+lb-storage-service                 = { default-features = false, package = "logos-blockchain-storage-service", path = "./services/storage" }
 lb-system-sig-service              = { default-features = false, package = "logos-blockchain-system-sig-service", path = "./services/system-sig" }
 lb-testing-framework               = { default-features = false, package = "testing-framework", path = "./tests/testing_framework" }
 lb-time-service                    = { default-features = false, package = "logos-blockchain-time-service", path = "./services/time" }
