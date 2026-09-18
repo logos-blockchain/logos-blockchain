@@ -1929,22 +1929,26 @@ mod tests {
         // Pending chained from I1 — its position is taken by the mined I2.
         let pending_stale = dummy_pending_tx(1);
         let pending_stale_hash = pending_stale.hash();
-        state.submit_inscription(
-            pending_stale,
-            i1_id,
-            MsgId::from([99u8; 32]),
-            Inscription::new_unchecked(b"chained-from-i1".to_vec()),
-        );
+        state
+            .submit_inscription(
+                pending_stale,
+                i1_id,
+                MsgId::from([99u8; 32]),
+                Inscription::new_unchecked(b"chained-from-i1".to_vec()),
+            )
+            .unwrap();
 
         // Pending chained from the block tip — should remain on-branch.
         let pending_live = dummy_pending_tx(2);
         let pending_live_hash = pending_live.hash();
-        state.submit_inscription(
-            pending_live,
-            i2_id,
-            MsgId::from([88u8; 32]),
-            Inscription::new_unchecked(b"chained-from-i2".to_vec()),
-        );
+        state
+            .submit_inscription(
+                pending_live,
+                i2_id,
+                MsgId::from([88u8; 32]),
+                Inscription::new_unchecked(b"chained-from-i2".to_vec()),
+            )
+            .unwrap();
 
         let extracted = run_with_timeout(std::time::Duration::from_secs(2), move || {
             classify_channel_txs(std::slice::from_ref(&tx), channel_id)
@@ -2303,7 +2307,7 @@ mod tests {
         let b3 = api_block(4, 3, 4, vec![y_tx]);
 
         let mut tx_state = TxState::new(header_id(0), MsgId::root());
-        tx_state.submit_other(custom, ch);
+        tx_state.submit_other(custom, ch).unwrap();
         let mut state = Some(tx_state);
         let r = drive(
             &mut state,
@@ -2379,13 +2383,15 @@ mod tests {
             ..MockNode::default()
         };
         let mut state = TxState::new(header_id(0), MsgId::root());
-        state.submit_pin_deposit(
-            pin_tx.clone(),
-            MsgId::root(),
-            pin_id,
-            pin_op.inscription,
-            Inputs::new([recreated]),
-        );
+        state
+            .submit_pin_deposit(
+                pin_tx.clone(),
+                MsgId::root(),
+                pin_id,
+                pin_op.inscription,
+                Inputs::new([recreated]),
+            )
+            .unwrap();
         PinFixture {
             dep_tx,
             pin_tx,
@@ -2409,12 +2415,14 @@ mod tests {
         let b2 = api_block(2, 0, 2, Vec::new());
 
         let mut state = f.state;
-        state.submit_inscription(
-            x_tx,
-            f.pin_id,
-            x_id,
-            Inscription::new_unchecked(b"x".to_vec()),
-        );
+        state
+            .submit_inscription(
+                x_tx,
+                f.pin_id,
+                x_id,
+                Inscription::new_unchecked(b"x".to_vec()),
+            )
+            .unwrap();
         let mut state = Some(state);
         let r = drive_with(&f.node, &mut state, ch, &[live_event(&b1), live_event(&b2)]).await;
 
