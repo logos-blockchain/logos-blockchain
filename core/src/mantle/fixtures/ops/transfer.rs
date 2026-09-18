@@ -1,7 +1,11 @@
 use lb_codec::codec_fixtures;
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
 
-use crate::mantle::{Note, NoteId, ops::transfer::TransferOp};
+use crate::mantle::{
+    Note, NoteId,
+    fixtures::ops::op_values::{TRANSFER, TRANSFER_PAYLOAD_HEX},
+    ops::transfer::TransferOp,
+};
 
 codec_fixtures!(
     TransferOp,
@@ -9,4 +13,6 @@ codec_fixtures!(
     Self { inputs: [NoteId::from(Fr::ONE)].into(), outputs: [].into() } => "01010000000000000000000000000000000000000000000000000000000000000000",
     Self { inputs: [].into(), outputs: [Note { value: 0, pk: Fr::ZERO.into() }].into() } => "000100000000000000000000000000000000000000000000000000000000000000000000000000000000",
     Self { inputs: [NoteId::from(Fr::ZERO)].into(), outputs: [Note { value: 0, pk: Fr::ONE.into() }].into() } => "0100000000000000000000000000000000000000000000000000000000000000000100000000000000000100000000000000000000000000000000000000000000000000000000000000",
+    Self { inputs: [NoteId::from(Fr::ZERO)].into(), outputs: [Note { value: 0, pk: Fr::ZERO.into() }].into() } => "0100000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    TRANSFER.clone() => TRANSFER_PAYLOAD_HEX,
 );

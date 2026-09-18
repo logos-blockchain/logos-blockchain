@@ -1,25 +1,35 @@
-use std::sync::LazyLock;
-
-use ark_ff::AdditiveGroup as _;
 use lb_codec::codec_fixtures;
-use lb_groth16::Fr;
 
 use crate::mantle::{
-    NoteId, OpRef, ledger::Outputs, ops::transfer::TransferOp, transactions::OpRefs,
+    OpRef,
+    fixtures::ops::op_values::{
+        ALL_OPS_COLUMN_HEX, CHANNEL_CONFIG, CHANNEL_TRANSFER, CHANNEL_WITHDRAW, CLAIM_POW_REWARD,
+        DEPOSIT, EMPTY_COLUMN_HEX, INSCRIPTION, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE,
+        SDP_WITHDRAW, TRANSFER, TRANSFER_AND_INSCRIPTION_COLUMN_HEX, TRANSFER_COLUMN_HEX,
+    },
+    transactions::OpRefs,
 };
 
-static TRANSFER: LazyLock<TransferOp> = LazyLock::new(|| TransferOp {
-    inputs: [NoteId(Fr::ZERO)].into(),
-    outputs: Outputs::empty(),
-});
-
-// The one-op bytes must stay identical to [`Ops`]' one-op fixture:
-// `as_signing` hashes the borrowed column while the owned one is what
-// round-trips, so a tx hash depends on the two agreeing. Nothing enforces
-// it — edit one side only and both tests still pass.
 codec_fixtures!(
     OpRefs<'_>,
     encode_only,
-    Self::empty() => "00",
-    Self::from([OpRef::Transfer(&TRANSFER)]) => "010001000000000000000000000000000000000000000000000000000000000000000000"
+    Self::empty() => EMPTY_COLUMN_HEX,
+    Self::from([OpRef::Transfer(&TRANSFER)]) => TRANSFER_COLUMN_HEX,
+    Self::from([
+        OpRef::Transfer(&TRANSFER),
+        OpRef::ChannelInscribe(&INSCRIPTION),
+    ]) => TRANSFER_AND_INSCRIPTION_COLUMN_HEX,
+    Self::from([
+        OpRef::Transfer(&TRANSFER),
+        OpRef::ChannelConfig(&CHANNEL_CONFIG),
+        OpRef::ChannelInscribe(&INSCRIPTION),
+        OpRef::ChannelDeposit(&DEPOSIT),
+        OpRef::ChannelWithdraw(&CHANNEL_WITHDRAW),
+        OpRef::ChannelTransfer(&CHANNEL_TRANSFER),
+        OpRef::SDPDeclare(&SDP_DECLARE),
+        OpRef::SDPWithdraw(&SDP_WITHDRAW),
+        OpRef::SDPActive(&SDP_ACTIVE),
+        OpRef::LeaderClaim(&LEADER_CLAIM),
+        OpRef::ClaimPowReward(&CLAIM_POW_REWARD),
+    ]) => ALL_OPS_COLUMN_HEX
 );

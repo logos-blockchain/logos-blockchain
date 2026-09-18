@@ -2,9 +2,12 @@ use lb_codec::codec_fixtures;
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
-use crate::mantle::ops::{
-    NoOpProof,
-    pow::{ClaimPowRewardOp, PowNullifier},
+use crate::mantle::{
+    fixtures::ops::op_values::{CLAIM_POW_REWARD, CLAIM_POW_REWARD_PAYLOAD_HEX},
+    ops::{
+        NoOpProof,
+        pow::{ClaimPowRewardOp, PowNullifier},
+    },
 };
 
 codec_fixtures!(
@@ -30,4 +33,5 @@ codec_fixtures!(
         block_hash: [1u8; 32],
         public_key: ZkPublicKey::new(Fr::from(2u64)),
     } => "000000000000000000000000000000000000000000000000000000000000000001010101010101010101010101010101010101010101010101010101010101010200000000000000000000000000000000000000000000000000000000000000",
+    CLAIM_POW_REWARD.clone() => CLAIM_POW_REWARD_PAYLOAD_HEX,
 );
