@@ -503,12 +503,9 @@ impl TxState {
         // empty set is conservative: txs show as "pending" until seen in
         // a subsequent block with a known parent.
         //
-        // Every channel-tip-touching tx of the block joins the set, tracked
-        // or not: a fork block's txs are not mirrored into pending when it
-        // arrives, yet they must read as mined on its branch once the store
-        // re-mirrors them after the branch turns canonical. Readers only ask
-        // `safe.contains(pending_hash)`, so untracked members are inert, and
-        // the LIB prune drops them with the rest.
+        // Every channel-tip-touching tx joins the set, tracked or not: a fork
+        // block is not mirrored on arrival, and its txs must read as mined
+        // once the branch turns canonical and the store re-mirrors them.
         let mut safe_set = self
             .block_states
             .get(&parent_id)
