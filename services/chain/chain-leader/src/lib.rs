@@ -364,15 +364,12 @@ where
         .await;
 
         // Create the API wrapper for chain service communication
-        let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService, RuntimeServiceId>::new(
-            self.service_resources_handle
-                .overwatch_handle
-                .relay::<CryptarchiaService>()
-                .await
-                .expect("Failed to estabilish connection with Cryptarchia"),
-        );
+        let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService>::from_overwatch_handle(
+            &self.service_resources_handle.overwatch_handle,
+        )
+        .await;
 
-        let chain_network_api = ChainNetworkServiceApi::<ChainNetwork, RuntimeServiceId>::new(
+        let chain_network_api = ChainNetworkServiceApi::<ChainNetwork>::new(
             self.service_resources_handle
                 .overwatch_handle
                 .relay::<ChainNetwork>()
@@ -635,7 +632,7 @@ where
         slot: Slot,
         proof: Groth16LeaderProof,
         signing_key: &Ed25519Key,
-        cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+        cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
         relays: &CryptarchiaConsensusRelays<
             BlendService,
             Mempool,
@@ -710,7 +707,7 @@ where
     /// network.
     async fn apply_and_publish_block_proposal(
         block: Block<Mempool::Item>,
-        chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
+        chain_network_api: &ChainNetworkServiceApi<ChainNetwork>,
         blend_adapter: &BlendAdapter<BlendService>,
     ) {
         if let Err(e) = chain_network_api
@@ -738,7 +735,7 @@ where
     )]
     async fn handle_inbound_message(
         msg: LeaderMsg,
-        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         kms: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
         time_relay: &OutboundRelay<TimeServiceMessage>,
@@ -777,7 +774,7 @@ where
     }
 
     async fn handle_claim_message(
-        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         config: &LeaderWalletConfig,
         mempool: &MempoolAdapter<Mempool::Item>,
@@ -790,7 +787,7 @@ where
     }
 
     async fn build_and_submit_claim_tx(
-        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         mempool: &MempoolAdapter<Mempool::Item>,
         config: &LeaderWalletConfig,
@@ -815,7 +812,7 @@ where
     }
 
     async fn get_tip_ledger_state(
-        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
     ) -> Result<(HeaderId, LedgerState), Error> {
         let tip = cryptarchia.info().await?.cryptarchia_info.tip;
         let ledger_state = cryptarchia

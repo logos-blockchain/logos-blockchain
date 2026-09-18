@@ -26,14 +26,14 @@ use crate::{TipPollConfig, metrics, network::NetworkAdapter, sync::LOG_TARGET};
 /// failure.
 pub async fn poll_peer_tips_if_behind<NetAdapter, Cryptarchia, RuntimeServiceId>(
     network_adapter: &NetAdapter,
-    cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     tick: SlotTick,
     params: &TipPollParams,
 ) -> Option<PolledTip>
 where
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: Send + Sync,
+    Cryptarchia::Tx: Send,
     RuntimeServiceId: Send + Sync + 'static,
 {
     // Cadence gate: only act roughly once per expected block interval.
@@ -71,15 +71,14 @@ where
 /// Read the local chain info and return it only if the tip is lagging the
 /// current slot by more than `lag_threshold_slots`. Returns `None` (and
 /// logs) when the info can't be read or the node is keeping up.
-async fn lagging_local_info<Cryptarchia, RuntimeServiceId>(
-    cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+async fn lagging_local_info<Cryptarchia>(
+    cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     current_slot: u64,
     lag_threshold_slots: u64,
 ) -> Option<lb_chain_service::CryptarchiaInfo>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: Send + Sync,
-    RuntimeServiceId: Send + Sync,
+    Cryptarchia::Tx: Send,
 {
     let info = match cryptarchia.info().await {
         Ok(info) => info.cryptarchia_info,
@@ -144,13 +143,12 @@ impl TipPollParams {
     /// coefficient `f`. The expected number of slots between blocks is `1/f`,
     /// so the cadence is `ceil(1/f)` slots and the lag threshold is
     /// `lag_threshold_blocks` such intervals.
-    pub async fn derive<Cryptarchia, RuntimeServiceId>(
+    pub async fn derive<Cryptarchia>(
         config: &TipPollConfig,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     ) -> Result<Self, DynError>
     where
-        Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
-        RuntimeServiceId: Sync,
+        Cryptarchia: CryptarchiaServiceData<Tx: Send>,
     {
         let (_, consensus_config) = cryptarchia
             .get_epoch_config()

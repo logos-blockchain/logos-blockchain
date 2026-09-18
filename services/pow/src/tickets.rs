@@ -108,8 +108,8 @@ impl TicketGenerator {
     /// # Errors
     ///
     /// Returns an error if the subscription to the chain service fails.
-    pub async fn new<Tx, CryptarchiaServiceData, RuntimeServiceId>(
-        cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData, RuntimeServiceId>,
+    pub async fn new<Tx, CryptarchiaServiceData>(
+        cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData>,
         pool: Arc<ThreadPool>,
         max_tickets_per_block: NonZeroUsize,
         slot_window: NonZeroU64,
@@ -117,8 +117,7 @@ impl TicketGenerator {
     where
         CryptarchiaServiceData:
             Send + Sync + overwatch::services::ServiceData<Message = ConsensusMsg<Tx>> + 'static,
-        RuntimeServiceId: Send + Sync + 'static,
-        Tx: Send + Sync + 'static,
+        Tx: Send + 'static,
     {
         let stream = BroadcastStream::new(cryptarchia_api.subscribe_new_blocks().await?);
         let processed_block_stream: Pin<
@@ -144,15 +143,14 @@ impl TicketGenerator {
 /// Returns `None` (dropping the event) when the broadcast subscription lagged,
 /// or when the ledger state for the block cannot be fetched from the chain
 /// service.
-async fn process_block_event<Tx, CryptarchiaServiceData, RuntimeServiceId>(
+async fn process_block_event<Tx, CryptarchiaServiceData>(
     event: Result<ProcessedBlockEvent, BroadcastStreamRecvError>,
-    cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData, RuntimeServiceId>,
+    cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData>,
 ) -> Option<(EpochState, LedgerState, ProcessedBlockEvent)>
 where
     CryptarchiaServiceData:
         Send + Sync + overwatch::services::ServiceData<Message = ConsensusMsg<Tx>> + 'static,
-    RuntimeServiceId: Send + Sync + 'static,
-    Tx: Send + Sync + 'static,
+    Tx: Send + 'static,
 {
     match event {
         Ok(event @ ProcessedBlockEvent { block_id, .. }) => {

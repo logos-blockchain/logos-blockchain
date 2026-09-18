@@ -98,7 +98,7 @@ pub async fn subscribe<ChainService, NodeId, TimeRuntimeBackend, RuntimeServiceI
     component: &'static str,
 ) -> BlendEpochStateStream<NodeId>
 where
-    ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+    ChainService: CryptarchiaServiceData<Tx: Send>,
     NodeId: node_id::TryFrom + Clone + Debug + Hash + Eq + Send + Sync + 'static,
     TimeRuntimeBackend: TimeBackend + Send,
     RuntimeServiceId: AsServiceId<ChainService>
@@ -111,12 +111,8 @@ where
         + Unpin
         + 'static,
 {
-    let chain_service = CryptarchiaServiceApi::<ChainService, RuntimeServiceId>::new(
-        overwatch_handle
-            .relay::<ChainService>()
-            .await
-            .expect("Relay with chain service should be available."),
-    );
+    let chain_service =
+        CryptarchiaServiceApi::<ChainService>::from_overwatch_handle(overwatch_handle).await;
 
     let slot_ticks = {
         let time_relay = overwatch_handle

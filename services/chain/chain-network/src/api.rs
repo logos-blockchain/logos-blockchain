@@ -1,31 +1,23 @@
-use std::marker::PhantomData;
-
 use lb_core::block::Block;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use tokio::sync::oneshot;
 
 use crate::Message;
 
-pub struct ChainNetworkServiceApi<ChainNetworkService, RuntimeServiceId>
+pub struct ChainNetworkServiceApi<ChainNetworkService>
 where
     ChainNetworkService: ChainNetworkServiceData,
 {
     relay: OutboundRelay<ChainNetworkService::Message>,
-    _phantom: PhantomData<RuntimeServiceId>,
 }
 
-impl<ChainNetworkService, RuntimeServiceId>
-    ChainNetworkServiceApi<ChainNetworkService, RuntimeServiceId>
+impl<ChainNetworkService> ChainNetworkServiceApi<ChainNetworkService>
 where
-    ChainNetworkService: ChainNetworkServiceData<Tx: Send + Sync>,
-    RuntimeServiceId: Sync,
+    ChainNetworkService: ChainNetworkServiceData<Tx: Send>,
 {
     #[must_use]
     pub const fn new(relay: OutboundRelay<ChainNetworkService::Message>) -> Self {
-        Self {
-            relay,
-            _phantom: PhantomData,
-        }
+        Self { relay }
     }
 
     pub async fn apply_block_and_reconcile_mempool(

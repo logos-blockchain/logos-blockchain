@@ -322,7 +322,7 @@ where
         let network_adapter = NetAdapter::new(network_config, relays.network_relay().clone()).await;
 
         let initial_block_download = InitialBlockDownload::new(
-            ChainNetworkIbdBlockProcessor::<_, Mempool, _> {
+            ChainNetworkIbdBlockProcessor::<_, Mempool> {
                 cryptarchia: relays.cryptarchia().clone(),
                 mempool_adapter: relays.mempool_adapter().clone(),
             },
@@ -749,7 +749,7 @@ where
             FUTURE_BLOCK_MAX_RETRIES,
             FUTURE_BLOCK_RETRY_DELAY,
             || {
-                apply_block_and_reconcile_mempool::<_, Mempool, _>(
+                apply_block_and_reconcile_mempool::<_, Mempool>(
                     block.clone(),
                     relays.cryptarchia(),
                     relays.mempool_adapter(),
@@ -829,7 +829,7 @@ where
                 }
             }
             Message::ApplyBlockAndReconcileMempool { block, resp } => {
-                let result = apply_block_and_reconcile_mempool::<_, Mempool, _>(
+                let result = apply_block_and_reconcile_mempool::<_, Mempool>(
                     block,
                     relays.cryptarchia(),
                     relays.mempool_adapter(),
@@ -847,15 +847,14 @@ where
     }
 }
 
-async fn should_process_block<Cryptarchia, RuntimeServiceId>(
-    cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+async fn should_process_block<Cryptarchia>(
+    cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     block_id: HeaderId,
     block_slot: Slot,
 ) -> Result<(), DoNotProcessBlock>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
-    RuntimeServiceId: Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
 {
     if !is_after_lib(cryptarchia, block_id, block_slot).await {
         return Err(DoNotProcessBlock::OlderThanLib);
@@ -921,15 +920,14 @@ fn verify_proposal(proposal: &Proposal) -> Result<(), Error> {
     )?)
 }
 
-async fn is_after_lib<Cryptarchia, RuntimeServiceId>(
-    cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+async fn is_after_lib<Cryptarchia>(
+    cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     block_id: HeaderId,
     block_slot: Slot,
 ) -> bool
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
-    RuntimeServiceId: Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
 {
     match cryptarchia.info().await {
         Ok(info) => {
@@ -1045,17 +1043,16 @@ where
     skip(block, cryptarchia, mempool_adapter),
     fields(block_id = %block.header().id(), tx_count = block.transactions().len())
 )]
-async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool, RuntimeServiceId>(
+async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool>(
     block: Block<Cryptarchia::Tx>,
-    cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     mempool_adapter: &MempoolAdapter<Mempool::Item>,
 ) -> Result<(), Error>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
-    RuntimeServiceId: Send + Sync,
 {
     trace!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
 

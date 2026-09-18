@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 
 use futures::{StreamExt as _, TryStreamExt as _};
-use lb_chain_service::{ChainServiceInfo, CryptarchiaConsensus, Query};
+use lb_chain_service::{ChainServiceInfo, CryptarchiaConsensus, api::CryptarchiaServiceApi};
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -12,7 +12,6 @@ use lb_ledger::LedgerState;
 use lb_storage_service::backends::rocksdb::RocksBackend;
 use lb_time_service::backends::ntp::NtpTimeBackend;
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
-use tokio::sync::oneshot;
 
 use crate::http::DynError;
 
@@ -30,19 +29,9 @@ where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
-    let (sender, receiver) = oneshot::channel();
-    relay
-        .send(
-            Query::Info {
-                reply_channel: sender,
-            }
-            .into(),
-        )
-        .await
-        .map_err(|(e, _)| e)?;
-
-    Ok(receiver.await?)
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    Ok(chain_api.info().await?)
 }
 
 const HEADERS_LIMIT: usize = 512;
@@ -56,21 +45,9 @@ where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
-    let (sender, receiver) = oneshot::channel();
-    relay
-        .send(
-            Query::GetHeaders {
-                from_descendant,
-                to_ancestor,
-                reply_channel: sender,
-            }
-            .into(),
-        )
-        .await
-        .map_err(|(e, _)| e)?;
-
-    let stream = receiver.await?;
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    let stream = chain_api.get_headers(from_descendant, to_ancestor).await?;
     Ok(stream.take(HEADERS_LIMIT).try_collect().await?)
 }
 
@@ -81,24 +58,14 @@ where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
     let ChainServiceInfo {
         cryptarchia_info, ..
-    } = cryptarchia_info(handle).await?;
+    } = chain_api.info().await?;
 
-    let relay = handle.relay().await?;
-    let (sender, receiver) = oneshot::channel();
-    relay
-        .send(
-            Query::GetLedgerState {
-                block_id: cryptarchia_info.tip,
-                reply_channel: sender,
-            }
-            .into(),
-        )
-        .await
-        .map_err(|(e, _)| e)?;
-
-    receiver
+    chain_api
+        .get_ledger_state(cryptarchia_info.tip)
         .await?
         .ok_or_else(|| "ledger state for tip must exist".into())
 }

@@ -32,7 +32,7 @@ where
 {
     pub storage_relay:
         OutboundRelay<<StorageService<Storage, RuntimeServiceId> as ServiceData>::Message>,
-    _tx: PhantomData<Tx>,
+    _tx: PhantomData<fn() -> Tx>,
 }
 
 impl<Storage, Tx, RuntimeServiceId> Clone for StorageAdapter<Storage, Tx, RuntimeServiceId>
@@ -55,7 +55,7 @@ where
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    Tx: Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
+    Tx: Clone + Eq + Serialize + DeserializeOwned + Send + 'static + Hashable<Hash = TxHash>,
 {
     type Backend = Storage;
     type Block = Block<Tx>;

@@ -5,7 +5,8 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt as _};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::{
-    ConsensusMsg, CryptarchiaInfo, ProcessedBlockEvent, Query, Slot,
+    CryptarchiaInfo, ProcessedBlockEvent, Slot,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
     storage::{StorageAdapter as _, adapters::StorageAdapter},
 };
 use lb_core::{
@@ -35,7 +36,7 @@ use lb_tx_service::{
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
     tx::service::openapi::Status,
 };
-use overwatch::services::{AsServiceId, ServiceData};
+use overwatch::services::AsServiceId;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::BroadcastStream;
@@ -214,20 +215,13 @@ pub async fn get_processed_blocks_event_stream<Transaction, Service, RuntimeServ
 >
 where
     Transaction: Send + 'static,
-    Service: ServiceData<Message = ConsensusMsg<Transaction>>,
+    Service: CryptarchiaServiceData<Tx = Transaction>,
     RuntimeServiceId: Debug + Sync + Display + AsServiceId<Service>,
 {
-    let relay = handle.relay().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(Query::NewBlockSubscribe { sender }.into())
+    let new_blocks_receiver = CryptarchiaServiceApi::<Service>::from_overwatch_handle(handle)
         .await
-        .map_err(|(error, _)| error)?;
-
-    let new_blocks_receiver = receiver
-        .await
-        .map_err(|error| Box::new(error) as super::DynError)?;
+        .subscribe_new_blocks()
+        .await?;
 
     let processed_blocks_stream = BroadcastStream::new(new_blocks_receiver)
         .map(|item| item.map_err(|error| Box::new(error) as crate::http::DynError));
@@ -256,7 +250,7 @@ where
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    ConsensusService: ServiceData<Message = ConsensusMsg<Transaction>>,
+    ConsensusService: CryptarchiaServiceData<Tx = Transaction>,
     RuntimeServiceId: Debug
         + Sync
         + Display
@@ -853,20 +847,9 @@ where
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + 'static,
 {
-    let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(
-            Query::GetSdpDeclarations {
-                reply_channel: sender,
-            }
-            .into(),
-        )
-        .await
-        .map_err(|(e, _)| e)?;
-
-    Ok(receiver.await?)
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    Ok(chain_api.get_sdp_declarations().await?)
 }
 
 pub async fn get_sdp_snapshot<RuntimeServiceId>(
@@ -881,18 +864,7 @@ where
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + 'static,
 {
-    let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(
-            Query::GetSdpSnapshot {
-                reply_channel: sender,
-            }
-            .into(),
-        )
-        .await
-        .map_err(|(e, _)| e)?;
-
-    Ok(receiver.await?)
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    Ok(chain_api.get_sdp_snapshot().await?)
 }
