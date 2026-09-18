@@ -13,8 +13,9 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use super::{
     types::{
-        ChannelWalletView, Error, Event, PreparedChannelConfig, SequencerChannelView,
-        SequencerCheckpoint, TurnNotification, TxStatusUpdate, WithdrawArg, WithdrawInputs,
+        ChannelWalletView, Error, Event, PreparedAtomicBundle, PreparedChannelConfig,
+        SequencerChannelView, SequencerCheckpoint, TurnNotification, TxStatusUpdate, WithdrawArg,
+        WithdrawInputs,
     },
     zone_sequencer::ActorRequest,
 };
@@ -173,6 +174,54 @@ impl SequencerClient {
     ) -> Result<PublishReceipt, Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(ActorRequest::SubmitChannelConfig {
+            prepared: Box::new(prepared),
+            signatures,
+            response_tx,
+        })?;
+        Self::recv(response_rx).await?
+    }
+
+    /// Build and fund an atomic withdraw bundle for external multi-sig signing.
+    pub async fn prepare_atomic_withdraw(
+        &self,
+        inscribe: Inscription,
+        withdraws: Vec<WithdrawArg>,
+        inputs: WithdrawInputs,
+    ) -> Result<PreparedAtomicBundle, Error> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(ActorRequest::PrepareAtomicWithdraw {
+            inscribe,
+            withdraws,
+            inputs,
+            response_tx,
+        })?;
+        Self::recv(response_rx).await?
+    }
+
+    /// Build and fund a pin-deposit bundle for external multi-sig signing.
+    pub async fn prepare_pin_deposit(
+        &self,
+        inscribe: Inscription,
+        consumed_notes: Vec<NoteId>,
+    ) -> Result<PreparedAtomicBundle, Error> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(ActorRequest::PreparePinDeposit {
+            inscribe,
+            consumed_notes,
+            response_tx,
+        })?;
+        Self::recv(response_rx).await?
+    }
+
+    /// Submit a [`PreparedAtomicBundle`] with its externally-collected
+    /// signatures.
+    pub async fn submit_atomic_bundle(
+        &self,
+        prepared: PreparedAtomicBundle,
+        signatures: Vec<IndexedSignature>,
+    ) -> Result<PublishReceipt, Error> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(ActorRequest::SubmitAtomicBundle {
             prepared: Box::new(prepared),
             signatures,
             response_tx,

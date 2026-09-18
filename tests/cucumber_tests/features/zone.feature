@@ -279,9 +279,11 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
-  # Distinct participants sign a config prepared by SEQ_A: no step signs on
-  # another sequencer's behalf. Escalates single-signer -> 2-of-2 -> 2-of-3.
-  Scenario: Multi-sig channel config escalates across independent signers
+  # End-to-end multi-sig driven by the sequencers' own drive loops: three
+  # sequencers run the reactive lifecycle policy, escalate the config
+  # single-signer -> 2-of-2 -> 2-of-3, then a deposit fires and they pin and
+  # withdraw it under 2-of-3, exchanging signatures over the shared bus.
+  Scenario: Multi-sig deposit lifecycle reacts across independent sequencers
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 3           | 100000       |
@@ -292,8 +294,15 @@ Feature: Zone SDK
     When node "NODE_1" is at height 1 in 120 seconds
     And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
-    And I start zone sequencer "SEQ_A" with indexer
-    And I start zone sequencer "SEQ_B"
+    And I do a coin split for "WALLET_1A" of 3 UTXOs valued at 5 LGO tokens each
+    # Each sequencer runs its own drive loop + policy, sharing one bus.
+    And I start multi-sig lifecycle zone sequencers with withdraw outputs "3":
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+      | SEQ_C |
+    # Config: single-signer -> 2-of-2 -> 2-of-3. Timeframe 15 lets a full
+    # prepare -> sign -> submit round land within a turn while still rotating.
     And sequencer "SEQ_A" prepares zone config transaction "CHANNEL_CONFIG_1" with threshold 1 authorizing:
       | alias |
       | SEQ_A |
@@ -306,7 +315,7 @@ Feature: Zone SDK
     And sequencer "SEQ_A" signs prepared zone config transaction "CHANNEL_CONFIG_2"
     And sequencer "SEQ_A" submits prepared zone config transaction "CHANNEL_CONFIG_2"
     Then zone transaction "CHANNEL_CONFIG_2" is finalized in 180 seconds
-    When sequencer "SEQ_A" prepares zone config transaction "CHANNEL_CONFIG_3" with threshold 2 authorizing:
+    When sequencer "SEQ_A" prepares zone config transaction "CHANNEL_CONFIG_3" with threshold 2 and posting timeframe 15 authorizing:
       | alias |
       | SEQ_A |
       | SEQ_B |
@@ -315,6 +324,13 @@ Feature: Zone SDK
     And sequencer "SEQ_A" signs prepared zone config transaction "CHANNEL_CONFIG_3"
     And sequencer "SEQ_B" submits prepared zone config transaction "CHANNEL_CONFIG_3"
     Then zone transaction "CHANNEL_CONFIG_3" is finalized in 180 seconds
+    # Fire the deposit — the only external trigger; the sequencers react.
+    When I submit zone deposit transaction "DEPOSIT_1" into channel of "SEQ_A" of 5 with metadata "Mint 5 to channel"
+    # Exactly one pin + one withdraw finalized (no surviving double-publish), and
+    # the channel keeps only the value-2 change: proves 5 pinned, 3 withdrawn.
+    Then the zone indexer returns exactly one finalized pin and withdraw for deposit "DEPOSIT_1" in 300 seconds
+    And the channel wallet of "SEQ_A" has exactly 1 finalized and 0 unfinalized notes in 120 seconds
+    And the channel wallet of "SEQ_A" contains a finalized note of value 2 in 120 seconds
     And I stop all nodes
 
   @zone_ci
