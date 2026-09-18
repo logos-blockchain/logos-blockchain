@@ -868,10 +868,10 @@ mod tests {
         set_user_config_override(
             &mut world,
             "test-step",
-            "cryptarchia.leader.wallet.funding_pk",
-            "hex(0000000000000000000000000000000000000000000000000000000000000000)",
+            "cryptarchia.leader.wallet.funding_key_id",
+            "LeaderFunding",
         )
-        .expect("zkpk hex string override");
+        .expect("key id string override");
 
         set_user_config_override(
             &mut world,
@@ -909,8 +909,8 @@ mod tests {
                 .expect("multiaddr"),
         );
         assert_eq!(
-            config.user.cryptarchia.leader.wallet.funding_pk,
-            lb_key_management_system_service::keys::ZkPublicKey::zero(),
+            config.user.cryptarchia.leader.wallet.funding_key_id,
+            "LeaderFunding"
         );
     }
 
@@ -966,6 +966,8 @@ mod tests {
 mod auto_claim_override_tests {
     use std::num::NonZeroU64;
 
+    use lb_config::kms::key_id_for_preload_backend;
+    use lb_key_management_system_service::keys::Key;
     use lb_node::config::UserConfig;
     use lb_pow_service::{AutoClaimSettings, AutoClaimTick, ClaimTarget};
     use lb_testing_framework::configs::wallet::WalletAccount;
@@ -983,7 +985,7 @@ mod auto_claim_override_tests {
         let account = WalletAccount::deterministic(1, 0, true).expect("deterministic account");
         let settings = AutoClaimSettings {
             targets: vec![ClaimTarget {
-                public_key: account.public_key(),
+                key_id: key_id_for_preload_backend(&Key::Zk(account.secret_key)),
                 threshold: 1_000_000_000,
             }],
             tick: AutoClaimTick::Slots(NonZeroU64::new(1).expect("1 is non-zero")),

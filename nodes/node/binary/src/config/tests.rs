@@ -5,7 +5,6 @@ use std::{
 };
 
 use bytes::Bytes;
-use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_services_utils::overwatch::RecoveryData;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use tracing::Level;
@@ -136,10 +135,10 @@ fn minimal_user_config() -> UserConfig {
             secret_key_kms_id: "secret_key_kms_id".into(),
         }),
         cryptarchia: CryptarchiaConfig::with_required_values(CryptarchiaRequiredValues {
-            funding_pk: ZkPublicKey::zero(),
+            funding_key_id: "funding_key_id".into(),
         }),
         sdp: SdpConfig::with_required_values(SdpRequiredValues {
-            funding_pk: ZkPublicKey::zero(),
+            funding_key_id: "funding_key_id".into(),
         }),
         wallet: WalletConfig::with_required_values(WalletRequiredValues {
             voucher_master_key_id: "voucher_master_key_id".into(),
@@ -197,10 +196,10 @@ fn service_settings_receive_recovery_data() {
         secret_key_kms_id: "secret_key_kms_id".into(),
     });
     let cryptarchia_config = CryptarchiaConfig::with_required_values(CryptarchiaRequiredValues {
-        funding_pk: ZkPublicKey::zero(),
+        funding_key_id: "funding_key_id".into(),
     });
     let sdp_config = SdpConfig::with_required_values(SdpRequiredValues {
-        funding_pk: ZkPublicKey::zero(),
+        funding_key_id: "funding_key_id".into(),
     });
     let wallet_config = WalletConfig::with_required_values(WalletRequiredValues {
         voucher_master_key_id: "voucher_master_key_id".into(),

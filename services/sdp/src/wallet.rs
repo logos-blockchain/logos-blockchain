@@ -7,7 +7,6 @@ use lb_core::{
     },
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
@@ -17,6 +16,8 @@ use overwatch::{
 pub enum SdpWalletError {
     #[error(transparent)]
     WalletApi(DynError),
+    #[error("Funding key {0} is not a known key of the wallet")]
+    UnknownFundingKey(String),
     #[error("Transaction fee exceeded the configured max fee. tx_fee={tx_fee} > max_fee={max_fee}")]
     TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
     #[error(transparent)]
@@ -30,9 +31,9 @@ pub struct SdpWalletConfig {
     // Hard cap on the transaction fee initiated by SDP.
     pub max_tx_fee: GasCost,
 
-    // The key to use for paying SDP transaction fees.
-    // Change notes will be returned to this same funding pk.
-    pub funding_pk: ZkPublicKey,
+    // The KMS id of the key to use for paying SDP transaction fees.
+    // Change notes will be returned to this same key.
+    pub funding_key_id: String,
 }
 
 #[async_trait::async_trait]

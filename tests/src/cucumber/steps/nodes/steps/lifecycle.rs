@@ -213,7 +213,7 @@ fn step_configure_pow_auto_claim(
 
     let value = serde_yaml::to_value(AutoClaimSettings {
         targets: vec![ClaimTarget {
-            public_key: account.public_key(),
+            key_id: key_id_for_preload_backend(&Key::Zk(account.secret_key.clone())),
             threshold,
         }],
         tick: AutoClaimTick::Slots(

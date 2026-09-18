@@ -32,7 +32,9 @@ use lb_core::{
     sdp::blend::PolEpochState,
 };
 use lb_cryptarchia_engine::Slot;
-use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
+use lb_key_management_system_service::{
+    api::KmsServiceApi, backend::preload::KeyId, keys::Ed25519Key,
+};
 use lb_ledger::LedgerState;
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_services_utils::wait_until_services_are_ready;
@@ -152,6 +154,8 @@ pub enum Error {
     ChainService(#[from] lb_chain_service::api::ApiError),
     #[error("Ledger state not found for {0:?}")]
     LedgerStateNotFound(HeaderId),
+    #[error("Funding key {0} is not a known key of the wallet")]
+    UnknownFundingKey(KeyId),
 }
 
 impl From<WalletApiError> for Error {
@@ -796,6 +800,11 @@ where
         config: &LeaderWalletConfig,
     ) -> Result<TxHash, Error> {
         let (tip, ledger_state) = Self::get_tip_ledger_state(cryptarchia).await?;
+        let funding_pk = wallet
+            .get_known_keys()
+            .await?
+            .remove(&config.funding_key_id)
+            .ok_or_else(|| Error::UnknownFundingKey(config.funding_key_id.clone()))?;
 
         let reward_amount = ledger_state.mantle_ledger().leader_reward_amount();
         let signed_tx = wallet
@@ -803,7 +812,7 @@ where
                 tip,
                 *ledger_state.mantle_ledger().vouchers_snapshot_root(),
                 reward_amount,
-                config.funding_pk,
+                funding_pk,
                 config.max_tx_fee,
             )
             .await?

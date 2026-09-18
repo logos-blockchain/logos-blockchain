@@ -11,7 +11,7 @@ use lb_core::{
     mantle::{GenesisTime, TxHash},
     sdp::Locator,
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::keys::{Key, ZkPublicKey};
 use lb_libp2p::{PeerId, identity, identity::ed25519};
 use lb_node::UserConfig;
 use lb_testing_framework::{CoreBuilderExt as _, ScenarioBuilder};
@@ -198,15 +198,27 @@ pub(crate) fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, Step
 /// points to it.
 pub fn node_wallet_keys_from_node_yaml(path: &Path) -> Result<Vec<NodeWalletKey>, StepError> {
     let config = user_config_from_node_yaml(path)?;
-    let cryptarchia_funding_pk = config.cryptarchia.leader.wallet.funding_pk;
-    let sdp_funding_pk = config.sdp.wallet.funding_pk;
+    let cryptarchia_funding_key_id = &config.cryptarchia.leader.wallet.funding_key_id;
+    let sdp_funding_key_id = &config.sdp.wallet.funding_key_id;
     let voucher_master_key_id = config.wallet.voucher_master_key_id.clone();
     let blend_zk_key_id = config.blend.core.zk.secret_key_kms_id.clone();
     let mut keys_by_public_key = BTreeMap::<String, NodeWalletKey>::new();
 
-    for (key_id, public_key) in &config.wallet.known_keys {
-        let wallet_pk = public_key.to_bytes()?.encode_hex::<String>();
-        let role = if *public_key == cryptarchia_funding_pk || *public_key == sdp_funding_pk {
+    for key_id in &config.wallet.known_keys {
+        let key = config.kms.backend.resolve_key(key_id);
+        let key = key.map_err(|source| StepError::LogicalError {
+            message: format!("Failed to resolve known key '{key_id}': {source}"),
+        })?;
+        let Some(Key::Zk(secret_key)) = &key else {
+            return Err(StepError::LogicalError {
+                message: format!("Known key '{key_id}' is not a ZK key of the KMS"),
+            });
+        };
+        let wallet_pk = secret_key
+            .to_public_key()
+            .to_bytes()?
+            .encode_hex::<String>();
+        let role = if key_id == cryptarchia_funding_key_id || key_id == sdp_funding_key_id {
             NodeWalletKeyRole::Funding
         } else if key_id == &voucher_master_key_id {
             NodeWalletKeyRole::VoucherMaster

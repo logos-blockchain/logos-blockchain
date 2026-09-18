@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -27,7 +29,7 @@ use overwatch::{
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
-    ClaimableVouchersInfo, LeaderAgedNotesInfo, TipResponse, UtxoWithKeyId, WalletMsg,
+    ClaimableVouchersInfo, KeyId, LeaderAgedNotesInfo, TipResponse, UtxoWithKeyId, WalletMsg,
     WalletServiceError, WalletServiceSettings,
 };
 
@@ -113,6 +115,12 @@ where
         self.relay
             .send(WalletMsg::GetKnownAddresses { resp_tx })
             .await?;
+        Ok(rx.await??)
+    }
+
+    pub async fn get_known_keys(&self) -> Result<HashMap<KeyId, ZkPublicKey>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay.send(WalletMsg::GetKnownKeys { resp_tx }).await?;
         Ok(rx.await??)
     }
 
@@ -379,7 +387,7 @@ mod tests {
                     let context = OpsContext {
                         gas_context: OpsGasContext::new(
                             std::iter::once((expected_channel_id, expected_threshold)).collect(),
-                            std::collections::HashMap::new(),
+                            HashMap::new(),
                             expected_gas_prices,
                         ),
                         leader_reward_amount: 0,

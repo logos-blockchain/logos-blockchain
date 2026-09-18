@@ -279,14 +279,13 @@ pub struct BlendArgs {
     pub abstain_on_failure: bool,
 }
 
-#[derive(Parser, Debug, Default, Clone, Copy)]
+#[derive(Parser, Debug, Default, Clone)]
 pub struct CryptarchiaArgs {
     #[clap(
-        long = "cryptarchia-funding-pk",
-        env = "CRYPTARCHIA_FUNDING_PK",
-        value_parser = parse_hex_public_key
+        long = "cryptarchia-funding-key-id",
+        env = "CRYPTARCHIA_FUNDING_KEY_ID"
     )]
-    pub cryptarchia_funding_pk: Option<ZkPublicKey>,
+    pub cryptarchia_funding_key_id: Option<KeyId>,
 
     /// Disable Initial Block Download (IBD) by leaving the IBD peer list
     /// empty, regardless of any peers passed via `--net-initial-peers`/`-p`.
@@ -294,14 +293,10 @@ pub struct CryptarchiaArgs {
     pub skip_ibd: bool,
 }
 
-#[derive(Parser, Debug, Default, Clone, Copy)]
+#[derive(Parser, Debug, Default, Clone)]
 pub struct SdpArgs {
-    #[clap(
-        long = "sdp-funding-pk",
-        env = "SDP_FUNDING_PK",
-        value_parser = parse_hex_public_key
-    )]
-    pub sdp_funding_pk: Option<ZkPublicKey>,
+    #[clap(long = "sdp-funding-key-id", env = "SDP_FUNDING_KEY_ID")]
+    pub sdp_funding_key_id: Option<KeyId>,
 }
 
 #[derive(Parser, Debug, Default, Clone)]
@@ -502,27 +497,24 @@ pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
     }
 }
 
-pub const fn update_cryptarchia(
-    cryptarchia: &mut CryptarchiaConfig,
-    cryptarchia_args: CryptarchiaArgs,
-) {
+pub fn update_cryptarchia(cryptarchia: &mut CryptarchiaConfig, cryptarchia_args: CryptarchiaArgs) {
     let CryptarchiaArgs {
-        cryptarchia_funding_pk: funding_pk,
+        cryptarchia_funding_key_id: funding_key_id,
         ..
     } = cryptarchia_args;
 
-    if let Some(pk) = funding_pk {
-        cryptarchia.set_funding_pk(pk);
+    if let Some(key_id) = funding_key_id {
+        cryptarchia.set_funding_key_id(key_id);
     }
 }
 
-pub const fn update_sdp(sdp: &mut SdpConfig, sdp_args: SdpArgs) {
+pub fn update_sdp(sdp: &mut SdpConfig, sdp_args: SdpArgs) {
     let SdpArgs {
-        sdp_funding_pk: funding_pk,
+        sdp_funding_key_id: funding_key_id,
     } = sdp_args;
 
-    if let Some(pk) = funding_pk {
-        sdp.set_funding_pk(pk);
+    if let Some(key_id) = funding_key_id {
+        sdp.set_funding_key_id(key_id);
     }
 }
 

@@ -1,4 +1,4 @@
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::backend::preload::KeyId;
 use serde::{Deserialize, Serialize};
 
 pub mod leader;
@@ -15,16 +15,16 @@ pub struct Config {
 }
 
 pub struct RequiredValues {
-    pub funding_pk: ZkPublicKey,
+    pub funding_key_id: KeyId,
 }
 
 impl Config {
     #[must_use]
-    pub fn with_required_values(RequiredValues { funding_pk }: RequiredValues) -> Self {
+    pub fn with_required_values(RequiredValues { funding_key_id }: RequiredValues) -> Self {
         Self {
             leader: leader::Config {
                 wallet: leader::WalletConfig {
-                    funding_pk,
+                    funding_key_id,
                     max_tx_fee: leader::default_max_tx_fee(),
                 },
             },
@@ -33,7 +33,7 @@ impl Config {
         }
     }
 
-    pub const fn set_funding_pk(&mut self, pk: ZkPublicKey) {
-        self.leader.wallet.funding_pk = pk;
+    pub fn set_funding_key_id(&mut self, key_id: KeyId) {
+        self.leader.wallet.funding_key_id = key_id;
     }
 }

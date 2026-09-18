@@ -165,12 +165,12 @@ fn build_cryptarchia_config(
     initial_peers: Option<Vec<Multiaddr>>,
     cryptarchia_args: CryptarchiaArgs,
 ) -> CryptarchiaConfig {
-    let (_, cryptarchia_funding_key) = keystore
+    let (cryptarchia_funding_key_id, _) = keystore
         .get_zk(KeyTitle::LEADER_FUNDING)
         .expect("Cryptarchia funding key set by default");
     let mut cryptarchia_config =
         CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues {
-            funding_pk: cryptarchia_funding_key.to_public_key(),
+            funding_key_id: cryptarchia_funding_key_id,
         });
     if !cryptarchia_args.skip_ibd
         && let Some(initial_peers) = initial_peers
@@ -189,11 +189,11 @@ fn build_cryptarchia_config(
 }
 
 fn build_sdp_config(keystore: &Keystore, sdp_args: SdpArgs) -> SdpConfig {
-    let (_, sdp_funding_key) = keystore
+    let (sdp_funding_key_id, _) = keystore
         .get_zk(KeyTitle::SDP_FUNDING)
         .expect("Sdp funding key set by default");
     let mut sdp_config = SdpConfig::with_required_values(SdpConfigRequiredValues {
-        funding_pk: sdp_funding_key.to_public_key(),
+        funding_key_id: sdp_funding_key_id,
     });
     update_sdp(&mut sdp_config, sdp_args);
 
@@ -210,13 +210,13 @@ fn build_kms_config(keystore: &Keystore) -> KmsConfig {
 /// so a generated node claims its mined rewards unattended once mining is
 /// started.
 fn build_pow_config(keystore: &Keystore) -> PoWConfig {
-    let (_, pow_claim_key) = keystore
+    let (pow_claim_key_id, _) = keystore
         .get_zk(KeyTitle::POW_CLAIM)
         .expect("PoW claim key set by default");
 
     let mut pow_config = PoWConfig::default();
     pow_config.auto_claim.targets = vec![ClaimTarget {
-        public_key: pow_claim_key.to_public_key(),
+        key_id: pow_claim_key_id,
         threshold: Value::MAX,
     }];
 
@@ -231,10 +231,7 @@ fn build_wallet_config(keystore: &Keystore) -> WalletConfig {
     let mut wallet_config = WalletConfig::with_required_values(WalletConfigRequiredValues {
         voucher_master_key_id,
     });
-    wallet_config.known_keys = keystore
-        .get_all_zk()
-        .map(|(id, key)| (id, key.to_public_key()))
-        .collect();
+    wallet_config.known_keys = keystore.get_all_zk().map(|(id, _)| id).collect();
 
     wallet_config
 }

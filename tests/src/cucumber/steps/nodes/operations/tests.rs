@@ -73,14 +73,14 @@ mod wallet_name_tests {
 
 #[cfg(test)]
 mod scenario_wallet_key_tests {
-    use lb_key_management_system_service::keys::{Ed25519Key, secured_key::SecuredKey as _};
+    use lb_key_management_system_service::keys::Ed25519Key;
 
     use super::*;
 
     #[test]
     fn removes_only_external_scenario_wallet_keys() {
         let mut kms_keys = HashMap::new();
-        let mut known_keys = HashMap::new();
+        let mut known_keys = Vec::new();
         let scenario_accounts = [
             WalletAccount::deterministic(100, 0, true).expect("account"),
             WalletAccount::deterministic(101, 0, true).expect("account"),
@@ -102,29 +102,23 @@ mod scenario_wallet_key_tests {
             let key: Key = account.secret_key.clone().into();
             let key_id = key_id_for_preload_backend(&key);
             kms_keys.insert(key_id.clone(), key.into());
-            known_keys.insert(key_id, account.secret_key.as_public_key());
+            known_keys.push(key_id);
         }
 
         let unrelated = WalletAccount::deterministic(102, 0, true).expect("account");
-        let unrelated_key: Key = unrelated.secret_key.clone().into();
+        let unrelated_key: Key = unrelated.secret_key.into();
         let unrelated_key_id = key_id_for_preload_backend(&unrelated_key);
         kms_keys.insert(unrelated_key_id.clone(), unrelated_key.into());
-        known_keys.insert(
-            unrelated_key_id.clone(),
-            unrelated.secret_key.as_public_key(),
-        );
+        known_keys.push(unrelated_key_id.clone());
 
         let ed25519_key: Key = Ed25519Key::from_bytes(&[9; 32]).into();
         let ed25519_key_id = key_id_for_preload_backend(&ed25519_key);
         kms_keys.insert(ed25519_key_id.clone(), ed25519_key.into());
         let voucher_master = WalletAccount::deterministic(104, 0, true).expect("account");
-        let voucher_key: Key = voucher_master.secret_key.clone().into();
+        let voucher_key: Key = voucher_master.secret_key.into();
         let voucher_master_key_id = key_id_for_preload_backend(&voucher_key);
         kms_keys.insert(voucher_master_key_id.clone(), voucher_key.into());
-        known_keys.insert(
-            voucher_master_key_id.clone(),
-            voucher_master.secret_key.as_public_key(),
-        );
+        known_keys.push(voucher_master_key_id.clone());
 
         remove_external_scenario_wallet_keys_from_maps(
             &mut known_keys,
@@ -139,24 +133,24 @@ mod scenario_wallet_key_tests {
 
         for key_id in &scenario_key_ids {
             assert!(!kms_keys.contains_key(key_id));
-            assert!(!known_keys.contains_key(key_id));
+            assert!(!known_keys.contains(key_id));
         }
         assert!(kms_keys.contains_key(&unrelated_key_id));
-        assert!(known_keys.contains_key(&unrelated_key_id));
+        assert!(known_keys.contains(&unrelated_key_id));
         assert!(kms_keys.contains_key(&ed25519_key_id));
         assert!(kms_keys.contains_key(&voucher_master_key_id));
-        assert!(known_keys.contains_key(&voucher_master_key_id));
+        assert!(known_keys.contains(&voucher_master_key_id));
     }
 
     #[test]
     fn empty_scenario_wallet_set_changes_nothing() {
         let mut kms_keys = HashMap::new();
-        let mut known_keys = HashMap::new();
+        let mut known_keys = Vec::new();
         let account = WalletAccount::deterministic(105, 0, true).expect("account");
-        let key: Key = account.secret_key.clone().into();
+        let key: Key = account.secret_key.into();
         let key_id = key_id_for_preload_backend(&key);
         kms_keys.insert(key_id.clone(), key.into());
-        known_keys.insert(key_id, account.secret_key.as_public_key());
+        known_keys.push(key_id);
         let before_kms = kms_keys.clone();
         let before_known_keys = known_keys.clone();
 

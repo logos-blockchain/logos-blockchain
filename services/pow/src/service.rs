@@ -55,7 +55,10 @@ use lb_storage_service::{
 };
 use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend};
 use lb_utils::bounded::BoundedError;
-use lb_wallet_service::api::{WalletApi, WalletApiError, WalletServiceData};
+use lb_wallet_service::{
+    KeyId,
+    api::{WalletApi, WalletApiError, WalletServiceData},
+};
 use lb_zksign::{ZkSignError, ZkSignProof};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -123,7 +126,7 @@ pub enum PoWError {
         "PoW auto-claim targets are not tracked by the wallet (add them to `wallet.known_keys`): \
          {0:?}"
     )]
-    UntrackedClaimTargets(Vec<ZkPublicKey>),
+    UntrackedClaimTargets(Vec<KeyId>),
     #[error("no claim address given and no auto-claim target is below its threshold")]
     NoClaimTarget,
     #[error("failed to build signed transaction: {0}")]
@@ -186,15 +189,23 @@ pub struct PoWServiceSettings {
 }
 
 /// One auto-claim destination: a key and the balance we want it to reach.
-#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct ClaimTarget {
-    /// Key the rewards are paid to. It must be one of the wallet's
-    /// `known_keys`, or the node refuses to start (see
-    /// [`validate_claim_targets`]).
-    pub public_key: ZkPublicKey,
+    /// The KMS id of the key the rewards are paid to. It must be one of the
+    /// wallet's `known_keys`, or the node refuses to start (see
+    /// [`resolve_claim_targets`]).
+    pub key_id: KeyId,
     /// Balance, in tokens, this key should reach. Once its on-chain balance is
     /// at or above this, the target is satisfied and no longer paid.
     pub threshold: Value,
+}
+
+/// A [`ClaimTarget`] with its key resolved to the public key the wallet
+/// tracks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ResolvedClaimTarget {
+    public_key: ZkPublicKey,
+    threshold: Value,
 }
 
 /// How often the auto-claim ticker fires: on a wall-clock interval, or every
@@ -490,7 +501,7 @@ where
         // A target the wallet does not track reports no balance, so its
         // threshold could never be observed as reached and it would absorb
         // every claim forever. Refuse to start rather than mis-pay.
-        validate_claim_targets(&wallet_api, &settings.auto_claim.targets).await?;
+        let targets = resolve_claim_targets(&wallet_api, &settings.auto_claim.targets).await?;
 
         // Dedicated thread pool for the CPU-heavy ticket search, keeping it off
         // Tokio's runtime threads.
@@ -522,7 +533,7 @@ where
         // threshold. Like `mining` it is a runtime flag, so a restart re-arms
         // it and the thresholds are re-evaluated against fresh balances.
         let auto_claim = &settings.auto_claim;
-        let mut auto_claiming = settings.rewards_enabled && !auto_claim.targets.is_empty();
+        let mut auto_claiming = settings.rewards_enabled && !targets.is_empty();
 
         // One stream for either pacing, so the run loop has a single arm and
         // neither kind needs a guard. Slot pacing rides the time service's own
@@ -555,7 +566,7 @@ where
                         PoWServiceMessage::StartAutoClaim => {
                             if !settings.rewards_enabled {
                                 warn!(target: LOG_TARGET, "PoW auto-claim not started: rewards disabled");
-                            } else if auto_claim.targets.is_empty() {
+                            } else if targets.is_empty() {
                                 warn!(target: LOG_TARGET, "PoW auto-claim not started: no claim targets configured");
                             } else {
                                 if !auto_claiming {
@@ -576,7 +587,7 @@ where
                                 &blend_api,
                                 &wallet_api,
                                 claim_address,
-                                &auto_claim.targets,
+                                &targets,
                                 &mut state,
                                 settings.slot_window,
                             )
@@ -621,7 +632,7 @@ where
                         &cryptarchia_api,
                         &blend_api,
                         &wallet_api,
-                        &auto_claim.targets,
+                        &targets,
                         &mut state,
                         &state_updater,
                         settings.slot_window,
@@ -714,29 +725,31 @@ fn slot_period_elapsed(last_claim_slot: Slot, tip_slot: Slot, period: NonZeroU64
 /// permanently furthest below its threshold and swallow every claim. Failing
 /// here aborts node startup, which is the honest outcome for a
 /// misconfiguration that cannot be detected later.
-async fn validate_claim_targets<WalletService, RuntimeServiceId>(
+async fn resolve_claim_targets<WalletService, RuntimeServiceId>(
     wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
     targets: &[ClaimTarget],
-) -> Result<(), PoWError>
+) -> Result<Vec<ResolvedClaimTarget>, PoWError>
 where
     WalletService: WalletServiceData,
     RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
 {
     if targets.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
-    let known: HashSet<ZkPublicKey> = wallet_api
-        .get_known_addresses()
-        .await?
-        .into_iter()
-        .collect();
-    let unknown: Vec<ZkPublicKey> = targets
-        .iter()
-        .map(|target| target.public_key)
-        .filter(|pk| !known.contains(pk))
-        .collect();
+    let known_keys = wallet_api.get_known_keys().await?;
+    let mut resolved = Vec::with_capacity(targets.len());
+    let mut unknown = Vec::new();
+    for target in targets {
+        match known_keys.get(&target.key_id) {
+            Some(public_key) => resolved.push(ResolvedClaimTarget {
+                public_key: *public_key,
+                threshold: target.threshold,
+            }),
+            None => unknown.push(target.key_id.clone()),
+        }
+    }
     if unknown.is_empty() {
-        return Ok(());
+        return Ok(resolved);
     }
     Err(PoWError::UntrackedClaimTargets(unknown))
 }
@@ -751,7 +764,7 @@ where
 /// its threshold.
 async fn select_claim_target<WalletService, RuntimeServiceId>(
     wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
-    targets: &[ClaimTarget],
+    targets: &[ResolvedClaimTarget],
 ) -> Result<Option<ZkPublicKey>, WalletApiError>
 where
     WalletService: WalletServiceData,
@@ -777,7 +790,7 @@ where
 /// Ties keep the earliest configured target, so the choice is deterministic
 /// across ticks that observe the same balances.
 fn neediest_target(
-    balances: impl IntoIterator<Item = (ClaimTarget, Value)>,
+    balances: impl IntoIterator<Item = (ResolvedClaimTarget, Value)>,
 ) -> Option<ZkPublicKey> {
     balances
         .into_iter()
@@ -800,7 +813,7 @@ async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, Runtime
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
     wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
-    targets: &[ClaimTarget],
+    targets: &[ResolvedClaimTarget],
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     slot_window: NonZeroU64,
@@ -926,7 +939,7 @@ async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeSe
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
     wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
     claim_address: Option<ZkPublicKey>,
-    targets: &[ClaimTarget],
+    targets: &[ResolvedClaimTarget],
     state: &mut PoWServiceState,
     slot_window: NonZeroU64,
 ) -> Result<Option<TxHash>, PoWError>
@@ -1564,7 +1577,7 @@ mod tests {
 
     use super::{
         AutoClaimSettings, AutoClaimTick, ClaimTarget, MAX_CLAIMS_BY_PAYLOAD_SIZE,
-        MAX_PAYLOAD_BODY_SIZE, MAX_TRANSFER_INPUTS, PoWError, PoWServiceState,
+        MAX_PAYLOAD_BODY_SIZE, MAX_TRANSFER_INPUTS, PoWError, PoWServiceState, ResolvedClaimTarget,
         build_reward_claim_tx_inner, change_outputs, claim_tx_size, claimable_rewards_info,
         estimate_reward_claim_fee, max_claims_by_ops, neediest_target, prune_expired_tickets,
         push_reward_claim_ops, slot_period_elapsed, transfer_ops,
@@ -1632,10 +1645,10 @@ mod tests {
     }
 
     /// A distinct dummy claim target.
-    fn target(seed: u8, threshold: u64) -> ClaimTarget {
+    fn target(seed: u8, threshold: u64) -> ResolvedClaimTarget {
         let mut bytes = [0u8; 32];
         bytes[0] = seed;
-        ClaimTarget {
+        ResolvedClaimTarget {
             public_key: ZkPublicKey::new(lb_groth16::fr_from_bytes(&bytes).unwrap()),
             threshold,
         }
@@ -1721,15 +1734,20 @@ mod tests {
     #[test]
     fn auto_claim_settings_deserialize_from_a_partial_configuration() {
         // An omitted `tick` keeps the default, and both tick kinds parse.
-        let only_targets: AutoClaimSettings = serde_json::from_str(
-            r#"{"targets": [{"public_key": "0100000000000000000000000000000000000000000000000000000000000000", "threshold": 42}]}"#,
-        )
-        .unwrap();
+        let only_targets: AutoClaimSettings =
+            serde_json::from_str(r#"{"targets": [{"key_id": "PoWClaim", "threshold": 42}]}"#)
+                .unwrap();
         assert_eq!(
             only_targets.tick,
             AutoClaimTick::Seconds(NonZeroU64::new(300).unwrap())
         );
-        assert_eq!(only_targets.targets, vec![target(1, 42)]);
+        assert_eq!(
+            only_targets.targets,
+            vec![ClaimTarget {
+                key_id: "PoWClaim".into(),
+                threshold: 42
+            }]
+        );
 
         let slot_paced: AutoClaimSettings =
             serde_json::from_str(r#"{"tick": {"unit": "slots", "value": 20}}"#).unwrap();
