@@ -102,8 +102,12 @@ impl DialAttempt {
 
 /// The bytes a connection may hold for us before its sender feels backpressure.
 ///
-/// Sized as twice the rounds a message may wait at one hop, so a neighbour
-/// sending at the rate the protocol expects is never the one stalled.
+/// One round's share, which a neighbour sending at the rate the protocol
+/// expects may have in flight before this node has read it, plus the `η` rounds
+/// that neighbour waits for a stalled connection before giving up on a message.
+/// Sized this way, a pause in reading shorter than the sender's own patience
+/// costs nothing, and one longer than it is felt within a round or two instead
+/// of being swallowed by buffer.
 fn connection_receive_window(
     connection_share_per_round: NonZeroU64,
     network_absorption_in_rounds: NonZeroU64,
@@ -111,7 +115,7 @@ fn connection_receive_window(
 ) -> u32 {
     let frame_size = encapsulated_message_encoded_size(num_blend_layers).get();
 
-    let rounds_of_slack = network_absorption_in_rounds.get().saturating_mul(2);
+    let rounds_of_slack = network_absorption_in_rounds.get().saturating_add(1);
     u32::try_from(
         connection_share_per_round
             .get()
