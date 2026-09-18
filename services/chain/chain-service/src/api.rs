@@ -115,9 +115,7 @@ where
         self.relay
             .send(Query::Info { reply_channel }.into())
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending GetInfo"))
-            })?;
+            .map_err(|error| ApiError::CommsFailure(format!("{error} while sending GetInfo")))?;
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetInfo"))
@@ -133,8 +131,8 @@ where
         self.relay
             .send(Query::NewBlockSubscribe { sender }.into())
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending NewBlockSubscribe"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending NewBlockSubscribe"))
             })?;
 
         receiver.await.map_err(|relay_error| {
@@ -149,8 +147,8 @@ where
         self.relay
             .send(Query::LibSubscribe { sender }.into())
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending LibSubscribe"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending LibSubscribe"))
             })?;
 
         receiver.await.map_err(|relay_error| {
@@ -180,9 +178,7 @@ where
                 .into(),
             )
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending GetHeaders"))
-            })?;
+            .map_err(|error| ApiError::CommsFailure(format!("{error} while sending GetHeaders")))?;
 
         let stream = rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetHeaders"))
@@ -209,8 +205,8 @@ where
                 .into(),
             )
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending GetLedgerState"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetLedgerState"))
             })?;
 
         rx.await.map_err(|relay_error| {
@@ -228,8 +224,8 @@ where
         self.relay
             .send(Query::GetSdpDeclarations { reply_channel }.into())
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending GetSdpDeclarations"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetSdpDeclarations"))
             })?;
 
         rx.await.map_err(|relay_error| {
@@ -244,8 +240,8 @@ where
         self.relay
             .send(Query::GetSdpSnapshot { reply_channel }.into())
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending GetSdpSnapshot"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetSdpSnapshot"))
             })?;
 
         rx.await.map_err(|relay_error| {
@@ -269,8 +265,8 @@ where
                 .into(),
             )
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending GetEpochState"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetEpochState"))
             })?;
 
         rx.await.map_err(|relay_error| {
@@ -297,8 +293,8 @@ where
                 .into(),
             )
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending GetEpochState"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetEpochState"))
             })?;
 
         rx.await.map_err(|relay_error| {
@@ -321,8 +317,8 @@ where
         self.relay
             .send(Query::GetEpochConfig { reply_channel }.into())
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending GetEpochConfig"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetEpochConfig"))
             })?;
 
         rx.await.map_err(|relay_error| {
@@ -336,8 +332,8 @@ where
         self.relay
             .send(Query::GetBlockEvents { id, reply_channel }.into())
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending GetBlockEvents"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetBlockEvents"))
             })?;
 
         rx.await.map_err(|relay_error| {
@@ -363,8 +359,8 @@ where
                 .into(),
             )
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending SelectUncles"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending SelectUncles"))
             })?;
 
         rx.await.map_err(|relay_error| {
@@ -387,9 +383,7 @@ where
                 reply_channel,
             })
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending ApplyBlock"))
-            })?;
+            .map_err(|error| ApiError::CommsFailure(format!("{error} while sending ApplyBlock")))?;
 
         rx.await
             .map_err(|relay_error| {
@@ -418,9 +412,7 @@ where
         self.relay
             .send(ConsensusMsg::ChainSync(event))
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending ChainSync"))
-            })?;
+            .map_err(|error| ApiError::CommsFailure(format!("{error} while sending ChainSync")))?;
 
         Ok(())
     }
@@ -432,8 +424,8 @@ where
         self.relay
             .send(ConsensusMsg::IbdCompleted)
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending IbdCompleted"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending IbdCompleted"))
             })?;
 
         Ok(())
@@ -447,8 +439,8 @@ where
         self.relay
             .send(Query::SubscribeChainOnline { sender }.into())
             .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending SubscribeChainOnline"))
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending SubscribeChainOnline"))
             })?;
 
         let mut subscriber = receiver.await.map_err(|relay_error| {

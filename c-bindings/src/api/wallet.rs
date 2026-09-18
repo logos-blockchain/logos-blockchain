@@ -268,10 +268,18 @@ pub(crate) fn get_claimable_vouchers_sync(
 ) -> StatusResult<TipResponse<ClaimableVouchersInfo>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
-        if let Err(status) = node
+        let mut status_watcher = node
             .get_overwatch_handle()
             .status_watcher::<WalletService>()
             .await
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::ServiceError,
+                    format!("Failed to request wallet service status watcher: {error}"),
+                )
+            })?;
+
+        if let Err(status) = status_watcher
             .wait_for(ServiceStatus::Ready, Some(Duration::from_millis(100)))
             .await
         {

@@ -1232,7 +1232,7 @@ async fn broadcast_finalized_block(
     broadcast_relay
         .send(BlockBroadcastMsg::BroadcastFinalizedBlock(block_info))
         .await
-        .map_err(|(error, _)| Box::new(error) as DynError)
+        .map_err(|error| Box::new(error) as DynError)
 }
 
 /// Update and persist `CryptarchiaConsensusState`.

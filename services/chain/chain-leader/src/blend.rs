@@ -55,8 +55,8 @@ where
             return;
         };
 
-        if let Err((e, _)) = self.relay.send(ServiceMessage::Blend(payload).into()).await {
-            error!(target: LOG_TARGET, "Failed to relay proposal to blend service: {e:?}");
+        if let Err(error) = self.relay.send(ServiceMessage::Blend(payload).into()).await {
+            error!(target: LOG_TARGET, "Failed to relay proposal to blend service: {error}");
         }
     }
 }

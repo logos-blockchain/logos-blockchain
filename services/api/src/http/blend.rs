@@ -19,7 +19,7 @@ where
     relay
         .send(ServiceMessage::GetNetworkInfo { reply: sender }.into())
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|error| overwatch::DynError::from(error.to_string()))?;
 
     receiver
         .await
@@ -45,7 +45,7 @@ where
             reply: sender,
         })
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|error| overwatch::DynError::from(error.to_string()))?;
 
     let result = receiver
         .await
@@ -77,7 +77,7 @@ where
     relay
         .send(ServiceMessage::Blend(payload).into())
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|error| overwatch::DynError::from(error.to_string()))?;
 
     Ok(id(&transaction))
 }
@@ -104,7 +104,7 @@ where
     relay
         .send(ServiceMessage::GetPendingTransactions { reply: sender }.into())
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|error| overwatch::DynError::from(error.to_string()))?;
 
     receiver
         .await
