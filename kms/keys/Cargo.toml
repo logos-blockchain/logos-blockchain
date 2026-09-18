@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 arbitrary-int                   = { workspace = true }
 async-trait                     = { workspace = true }
+bip39                           = { features = ["rand", "std", "zeroize"], workspace = true }
 blake2                          = { workspace = true }
 bytes                           = { workspace = true }
 ed25519-dalek                   = { features = ["rand_core", "serde", "zeroize"], workspace = true }
