@@ -60,7 +60,7 @@ impl SendQueue {
     /// Refreshes the share and gives up on whatever has waited too long,
     /// reporting how many messages that was.
     pub fn enter_new_round(&mut self, new_round: Round) -> usize {
-        self.share.refill_for(new_round);
+        self.share.refresh(new_round);
 
         // The queue is FIFO and every message is given the same lifetime, so deadlines
         // are non-decreasing and the expired ones are exactly the prefix.
@@ -135,12 +135,12 @@ mod tests {
         assert!(share.try_spend());
 
         // Being told about the same round again must not refill it.
-        share.refill_for(Round::from(0));
+        share.refresh(Round::from(0));
         assert!(share.try_spend());
         assert!(share.try_spend());
         assert!(!share.try_spend());
 
-        share.refill_for(Round::from(1));
+        share.refresh(Round::from(1));
         assert!(share.try_spend());
     }
 
@@ -151,7 +151,7 @@ mod tests {
 
         // Ten rounds pass without the share being refreshed. It comes back to
         // one round's worth, not ten.
-        share.refill_for(Round::from(10));
+        share.refresh(Round::from(10));
 
         for _ in 0..SHARE.get() {
             assert!(share.try_spend());

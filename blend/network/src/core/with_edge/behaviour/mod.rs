@@ -363,8 +363,7 @@ where
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
-        self.accept_share
-            .refill_for(self.round_clock.poll_current(cx));
+        self.accept_share.refresh(self.round_clock.poll_current(cx));
 
         if let Some(event) = self.events.pop_front() {
             return Poll::Ready(event);
