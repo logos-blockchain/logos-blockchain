@@ -237,6 +237,11 @@ impl SequencerClient {
 
     /// Subscribe to the broadcast channel of events.
     ///
+    /// The broadcast carries exactly the events
+    /// [`super::ZoneSequencer::next_event`] returns, once each and in the
+    /// same order, sent at the moment the drive loop returns them. Nothing is
+    /// broadcast while the sequencer is not driven.
+    ///
     /// Late subscribers see events emitted from this point on (not the full
     /// history).
     #[must_use]

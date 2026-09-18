@@ -423,7 +423,8 @@ pub enum Event {
     /// Turn-to-write status update for this sequencer.
     ///
     /// Emitted on the same change boundary as the `turn_to_write` watch
-    /// channel (excluding `current_slot`-only updates).
+    /// channel (excluding `current_slot`-only updates), after the
+    /// `BlocksProcessed` of the block that changed the turn when one did.
     TurnNotification { notification: TurnNotification },
 }
 
