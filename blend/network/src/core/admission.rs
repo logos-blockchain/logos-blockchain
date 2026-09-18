@@ -28,9 +28,9 @@ impl RoundShare {
         }
     }
 
-    /// Refills the share if `round` is a later round than the one it was last
-    /// refilled for.
-    pub const fn refill_for(&mut self, round: Round) {
+    /// Refresh the share if `round` is a later round than the one it was last
+    /// refreshed for.
+    pub const fn refresh(&mut self, round: Round) {
         if round.rounds_since(self.current) > 0 {
             self.current = round;
             self.remaining_message_count = self.message_limit.get();
