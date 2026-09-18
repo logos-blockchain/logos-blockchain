@@ -179,7 +179,9 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            Note, NoteId, TxHash, gas::test_utils::FixedThresholds,
+            Note, NoteId, TxHash,
+            batch::{Error as BatchError, test_utils::batch_verify},
+            gas::test_utils::FixedThresholds,
             ops::op_proof::samples::SampleProof as _,
         },
         sdp::{Declaration, DeclarationMessage, MinStake, ServiceType},
@@ -347,6 +349,39 @@ mod tests {
                 .unwrap_err(),
             SdpError::InvalidServiceNote { note_id, expected }
         );
+    }
+
+    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
+        let operation = SDPWithdrawOp::sample();
+        let service_notes = locked_notes(&operation.service_note_id);
+        let declarations = declarations(&operation, declaration(operation.service_note_id));
+        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let proof =
+            ZkKey::multi_sign(signers, tx_hash_view.as_fr()).expect("signing should succeed");
+
+        SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+            .into_preverified(&())
+            .expect("preverify accepts every withdraw message")
+            .verify(&SDPWithdrawValidationContext {
+                declarations: &declarations,
+                epoch: Epoch::from(0),
+                service_notes: &service_notes,
+                tx_hash_view: &tx_hash_view,
+            })
+            .expect("verify leaves the proof to the batch")
+    }
+
+    #[test]
+    fn deferred_zkp_is_accepted() {
+        assert!(batch_verify(deferred_zkp_signed_by(&[note_key(), declaration_key()])).is_ok());
+    }
+
+    #[test]
+    fn wrong_deferred_zkp_is_rejected() {
+        assert!(matches!(
+            batch_verify(deferred_zkp_signed_by(&[declaration_key()])),
+            Err(BatchError::InvalidZkSignatures)
+        ));
     }
 
     #[test]

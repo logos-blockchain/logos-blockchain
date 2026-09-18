@@ -360,7 +360,12 @@ mod tests {
 
     mod standard_mode {
         use super::*;
-        use crate::sdp::service_notes::ServiceNotes;
+        use crate::{
+            mantle::batch::{
+                DeferredZkpVerification, Error as BatchError, test_utils::batch_verify,
+            },
+            sdp::service_notes::ServiceNotes,
+        };
 
         fn preverified(
             operation: SDPDeclareOp,
@@ -628,6 +633,55 @@ mod tests {
                     service_type: ServiceType::BlendNetwork,
                 }
             );
+        }
+
+        fn note_key() -> ZkKey {
+            ZkKey::from(BigUint::from(3u64))
+        }
+
+        fn declaration_key() -> ZkKey {
+            ZkKey::from(BigUint::from(1u64))
+        }
+
+        fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
+            let utxo = locked_utxo(&note_key());
+            let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
+            let operation = SDPDeclareOp {
+                service_note_id: utxo.id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+            let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
+            let zk_sig =
+                ZkKey::multi_sign(signers, tx_hash_view.as_fr()).expect("signing should succeed");
+
+            preverified(operation, zk_sig, &tx_hash_view)
+                .verify(&SDPDeclareVerificationContext {
+                    utxo_tree: &utxos,
+                    channels: &Channels::new(),
+                    service_notes: &ServiceNotes::new(),
+                    tx_hash_view: &tx_hash_view,
+                    declarations: &Declarations::new_sync(),
+                    min_stake: &MinStake {
+                        threshold: 0,
+                        timestamp: 0,
+                    },
+                })
+                .expect("verify leaves the proof to the batch")
+        }
+
+        #[test]
+        fn deferred_zkp_is_accepted() {
+            assert!(
+                batch_verify(deferred_zkp_signed_by(&[note_key(), declaration_key(),])).is_ok()
+            );
+        }
+
+        #[test]
+        fn wrong_deferred_zkp_is_rejected() {
+            assert!(matches!(
+                batch_verify(deferred_zkp_signed_by(&[declaration_key()])),
+                Err(BatchError::InvalidZkSignatures)
+            ));
         }
 
         #[test]
