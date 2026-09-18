@@ -57,7 +57,11 @@ impl SlotClock {
     /// Sleep until [`Self::current_slot`] has reached `slot`; `None` if the
     /// slot lies beyond what the clock can hold.
     pub(super) fn sleep_until(&self, slot: Slot) -> Option<tokio::time::Sleep> {
-        let at = self.instant_of(slot)? + BOUNDARY_GRACE;
+        let at = if self.current_slot() >= slot {
+            Instant::now()
+        } else {
+            self.instant_of(slot)? + BOUNDARY_GRACE
+        };
         Some(tokio::time::sleep_until(tokio::time::Instant::from_std(at)))
     }
 
@@ -134,5 +138,19 @@ mod tests {
         assert!(at < anchor + slot_duration * 4);
 
         assert!(clock.instant_of(Slot::from(5)).unwrap() <= Instant::now());
+    }
+
+    #[tokio::test]
+    async fn sleep_until_a_reached_slot_does_not_wait() {
+        let slot_duration = Duration::from_millis(100);
+        let mut clock = SlotClock::from_chain_start_time(SystemTime::now(), slot_duration);
+        clock.observe_slot(Slot::from(10));
+        let anchor = clock.last_observed_at;
+
+        let reached = clock.sleep_until(Slot::from(5)).unwrap();
+        assert!(reached.deadline() <= tokio::time::Instant::now());
+
+        let ahead = clock.sleep_until(Slot::from(13)).unwrap();
+        assert!(ahead.deadline() >= tokio::time::Instant::from_std(anchor + slot_duration * 3));
     }
 }
