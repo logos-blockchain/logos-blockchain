@@ -546,6 +546,16 @@ impl TxState {
         self.pending.contains_key(tx_hash) || self.pending_other.contains_key(tx_hash)
     }
 
+    /// Tx hashes currently tracked in either pending map.
+    #[must_use]
+    pub fn tracked_tx_hashes(&self) -> HashSet<TxHash> {
+        self.pending
+            .keys()
+            .chain(self.pending_other.keys())
+            .copied()
+            .collect()
+    }
+
     /// Returns the channel tip the tx leaves behind once mined (its last
     /// tip-advancing op), or `None` when it carries none for this channel.
     pub fn submit_other(

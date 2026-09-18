@@ -30,7 +30,7 @@ use super::{
     state::{BlockChannelTx, ChannelUpdateInfo, PendingBundle, TxState},
     types::{
         AtomicWithdrawInfo, ChannelTransferInfo, ChannelUpdateTx, DepositInfo, Error, FinalizedOp,
-        FinalizedTx, InscriptionInfo, PendingTx, PinDepositInfo, TxSource, WithdrawInfo,
+        FinalizedTx, InscriptionInfo, PendingTx, PinDepositInfo, WithdrawInfo,
     },
 };
 use crate::{
@@ -243,6 +243,11 @@ fn apply_prepared_block_event(
 
     let old_tip = *current_tip;
 
+    // Snapshot pending BEFORE this event mutates it: the extension-case
+    // `adopted` filter below keys on it, and mirroring adds this block's
+    // network entries to pending during the event.
+    let tracked_before = s.tracked_tx_hashes();
+
     // Install finalized history first. It is not mirrored into pending: the
     // matching local entries are removed below using the returned hashes.
     let finalized_batch = apply_finalized_blocks(s, finalized);
@@ -329,13 +334,16 @@ fn apply_prepared_block_event(
         _ => None,
     };
 
-    // On an extension (incl. the first event) drop our own publishes from
-    // `adopted`: they were applied at publish and must not echo back.
+    // On an extension (incl. the first event) drop entries pending already
+    // held from `adopted`: the consumer applied them at publish, so they must
+    // not echo back. Keyed on pending membership, not `TxSource::Local`: a
+    // shed own tx was reported orphaned (the consumer reverted it) and its
+    // bytes can still land from the mempool, in which case it is news again.
     let channel_update = channel_update.map(|mut update| {
         if update.orphaned.is_empty() {
             update
                 .adopted
-                .retain(|tx| s.tx_source(&tx.tx_hash()) != TxSource::Local);
+                .retain(|tx| !tracked_before.contains(&tx.tx_hash()));
         }
         update
     });
@@ -2432,6 +2440,50 @@ mod tests {
         assert!(matches!(r[1].shed[0], PendingTx::PinDeposit(_)));
         assert!(matches!(r[1].shed[1], PendingTx::Inscription(_)));
         assert_eq!(state.as_ref().unwrap().pending_publish_count(), 0);
+    }
+
+    /// A shed bundle the consumer was told to revert can still land: its bytes
+    /// stay in the L1 mempool. When it does, on a pure extension, it must be
+    /// reported adopted — the shed removed it from pending, so the consumer
+    /// no longer holds it. "Ours" is not "already applied".
+    #[tokio::test]
+    async fn shed_bundle_that_lands_anyway_is_reported_adopted() {
+        // G <- B1(deposit, pin) canonical; G <- B2 empty: B2 wins, pin shed;
+        // B2 <- B3(deposit, pin): both re-mined from the mempool.
+        let ch = ChannelId::from([0u8; 32]);
+        let mut f = pin_fixture(ch);
+        let pin_hash = f.pin_tx.hash();
+        let b1 = api_block(1, 0, 1, vec![f.dep_tx.clone(), f.pin_tx.clone()]);
+        let b2 = api_block(2, 0, 2, Vec::new());
+        let b3 = api_block(3, 2, 3, vec![f.dep_tx.clone(), f.pin_tx.clone()]);
+        let dep_event = f.node.events[&header_id(1)].clone();
+        f.node.events.insert(header_id(3), dep_event);
+
+        let mut state = Some(f.state);
+        let r = drive_with(
+            &f.node,
+            &mut state,
+            ch,
+            &[live_event(&b1), live_event(&b2), live_event(&b3)],
+        )
+        .await;
+
+        let shed: Vec<TxHash> = r[1].shed.iter().map(PendingTx::tx_hash).collect();
+        assert_eq!(shed, vec![pin_hash], "sanity: the pin is shed when B2 wins");
+        let u = r[2]
+            .result
+            .channel_update
+            .as_ref()
+            .expect("the pin landing moves the channel tip");
+        assert!(u.orphaned.is_empty());
+        let adopted: Vec<TxHash> = u.adopted.iter().map(ChannelUpdateTx::tx_hash).collect();
+        assert_eq!(
+            adopted,
+            vec![pin_hash],
+            "a shed own bundle that lands anyway must be reported adopted"
+        );
+        assert_eq!(u.new_channel_tip, f.pin_id);
+        assert!(r[2].shed.is_empty(), "it is mined on this branch");
     }
 
     /// The pin un-mined alone stays pending and silent; its note is back in
