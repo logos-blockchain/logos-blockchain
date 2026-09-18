@@ -6,6 +6,7 @@ use lb_core::{
     },
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_sdp_service::wallet::{
     SdpWalletAdapter as SdpWalletAdapterTrait, SdpWalletConfig, SdpWalletError,
 };
@@ -20,6 +21,21 @@ where
     Service: WalletServiceData,
 {
     api: WalletApi<Service, RuntimeServiceId>,
+}
+
+impl<S, R> SdpWalletAdapter<S, R>
+where
+    S: WalletServiceData,
+    R: AsServiceId<S> + std::fmt::Debug + std::fmt::Display + Sync,
+{
+    async fn funding_pk(&self, config: &SdpWalletConfig) -> Result<ZkPublicKey, SdpWalletError> {
+        self.api
+            .get_known_keys()
+            .await
+            .map_err(|e| SdpWalletError::WalletApi(e.into()))?
+            .remove(&config.funding_key_id)
+            .ok_or_else(|| SdpWalletError::UnknownFundingKey(config.funding_key_id.clone()))
+    }
 }
 
 #[async_trait::async_trait]
@@ -45,18 +61,13 @@ where
     ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPDeclare(declaration))?;
 
+        let funding_pk = self.funding_pk(config).await?;
         let TipResponse {
             tip,
             response: funded,
         } = self
             .api
-            .fund_tx(
-                None,
-                tx_builder,
-                config.funding_pk,
-                vec![config.funding_pk],
-                0,
-            )
+            .fund_tx(None, tx_builder, funding_pk, vec![funding_pk], 0)
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
 
@@ -86,18 +97,13 @@ where
     ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPWithdraw(withdraw))?;
 
+        let funding_pk = self.funding_pk(config).await?;
         let TipResponse {
             tip,
             response: funded,
         } = self
             .api
-            .fund_tx(
-                None,
-                tx_builder,
-                config.funding_pk,
-                vec![config.funding_pk],
-                0,
-            )
+            .fund_tx(None, tx_builder, funding_pk, vec![funding_pk], 0)
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
 
@@ -127,18 +133,13 @@ where
     ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPActive(active))?;
 
+        let funding_pk = self.funding_pk(config).await?;
         let TipResponse {
             tip,
             response: funded,
         } = self
             .api
-            .fund_tx(
-                None,
-                tx_builder,
-                config.funding_pk,
-                vec![config.funding_pk],
-                0,
-            )
+            .fund_tx(None, tx_builder, funding_pk, vec![funding_pk], 0)
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
 

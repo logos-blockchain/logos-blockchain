@@ -39,8 +39,8 @@ use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::{KMSBackend, preload::PreloadKMSBackend},
     keys::{
-        Ed25519Key, KeyOperators, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkPublicKeys,
-        ZkSignature, secured_key::SecuredKey,
+        Ed25519Key, KeyOperators, PayloadEncoding, PublicKeyEncoding, SignatureEncoding,
+        ZkPublicKey, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
     },
     operators::zk::voucher::UnsafeVoucherOperator,
 };
@@ -70,7 +70,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::states::{RecoveryState, ServiceState, Wallet};
 
 type KmsBackend = PreloadKMSBackend;
-type KeyId = <KmsBackend as KMSBackend>::KeyId;
+pub type KeyId = <KmsBackend as KMSBackend>::KeyId;
 
 const LOG_TARGET: &str = wallet::SERVICE;
 
@@ -93,6 +93,8 @@ pub enum WalletServiceError {
 
     #[error("KMS API error: {0}")]
     KmsApi(DynError),
+    #[error("Known key {0} is not a ZK key")]
+    KnownKeyNotZk(KeyId),
 
     #[error("Cryptarchia API error: {0}")]
     CryptarchiaApi(#[from] lb_chain_service::api::ApiError),
@@ -205,6 +207,9 @@ pub enum WalletMsg {
     },
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
+    },
+    GetKnownKeys {
+        resp_tx: Sender<Result<HashMap<KeyId, ZkPublicKey>, WalletServiceError>>,
     },
     GetTxContext {
         block_id: Option<HeaderId>,
@@ -350,14 +355,15 @@ impl WalletMsg {
             Self::SignTxWithEd25519 { .. }
             | Self::SignTxWithZk { .. }
             | Self::GenerateNewVoucherSecret { .. }
-            | Self::GetKnownAddresses { .. } => None,
+            | Self::GetKnownAddresses { .. }
+            | Self::GetKnownKeys { .. } => None,
         }
     }
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WalletServiceSettings {
-    pub known_keys: HashMap<KeyId, ZkPublicKey>,
+    pub known_keys: Vec<KeyId>,
     pub voucher_master_key_id: KeyId,
     #[serde(skip)]
     pub recovery_data: RecoveryData,
@@ -492,6 +498,8 @@ where
                 .await?,
         );
 
+        let known_keys = Self::fetch_known_keys(&kms, &settings.known_keys).await?;
+
         // Create StorageAdapter for cleaner block operations
         let storage_adapter =
             StorageAdapter::<Storage, Tx, RuntimeServiceId>::new(storage_relay).await;
@@ -534,6 +542,7 @@ where
         let mut state = ServiceState::new(
             self.initial_state,
             &settings,
+            known_keys,
             lib,
             &lib_ledger,
             &service_resources_handle.state_updater,
@@ -845,6 +854,9 @@ where
             }
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
+            }
+            WalletMsg::GetKnownKeys { resp_tx } => {
+                Self::get_known_keys(state.wallet(), resp_tx);
             }
             WalletMsg::GetTxContext { block_id, resp_tx } => {
                 Self::get_tx_context(block_id, resp_tx, cryptarchia).await;
@@ -1740,6 +1752,39 @@ where
         if let Err(e) = tx.send(Ok(response)) {
             debug!(target: LOG_TARGET, err = ?e, "Failed to send known addresses response");
         }
+    }
+
+    fn get_known_keys(
+        wallet: &Wallet,
+        tx: Sender<Result<HashMap<KeyId, ZkPublicKey>, WalletServiceError>>,
+    ) {
+        let response = wallet
+            .known_keys()
+            .iter()
+            .map(|(pk, key_id)| (key_id.clone(), *pk))
+            .collect();
+        if let Err(e) = tx.send(Ok(response)) {
+            debug!(target: LOG_TARGET, err = ?e, "Failed to send known keys response");
+        }
+    }
+
+    /// Fetches the public key of every known key from the KMS.
+    async fn fetch_known_keys(
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        key_ids: &[KeyId],
+    ) -> Result<HashMap<KeyId, ZkPublicKey>, WalletServiceError> {
+        let mut known_keys = HashMap::with_capacity(key_ids.len());
+        for key_id in key_ids {
+            let PublicKeyEncoding::Zk(pk) = kms
+                .public_key(key_id.clone())
+                .await
+                .map_err(WalletServiceError::KmsApi)?
+            else {
+                return Err(WalletServiceError::KnownKeyNotZk(key_id.clone()));
+            };
+            known_keys.insert(key_id.clone(), pk);
+        }
+        Ok(known_keys)
     }
 
     async fn get_tx_context(

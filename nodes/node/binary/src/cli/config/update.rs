@@ -135,10 +135,10 @@ fn update_cryptarchia_config(
     cryptarchia_config: &mut CryptarchiaConfig,
     cryptarchia_args: CryptarchiaArgs,
 ) {
-    let (_, cryptarchia_funding_key) = keystore
+    let (cryptarchia_funding_key_id, _) = keystore
         .get_zk(KeyTitle::LEADER_FUNDING)
         .expect("Cryptarchia funding key set by default");
-    cryptarchia_config.set_funding_pk(cryptarchia_funding_key.to_public_key());
+    cryptarchia_config.set_funding_key_id(cryptarchia_funding_key_id);
 
     if !cryptarchia_args.skip_ibd
         && let Some(initial_peers) = initial_peers
@@ -156,10 +156,10 @@ fn update_cryptarchia_config(
 }
 
 fn update_sdp_config(keystore: &Keystore, sdp_config: &mut SdpConfig, sdp_args: SdpArgs) {
-    let (_, sdp_funding_key) = keystore
+    let (sdp_funding_key_id, _) = keystore
         .get_zk(KeyTitle::SDP_FUNDING)
         .expect("Sdp funding key set by default");
-    sdp_config.set_funding_pk(sdp_funding_key.to_public_key());
+    sdp_config.set_funding_key_id(sdp_funding_key_id);
 
     update_sdp(sdp_config, sdp_args);
 }
@@ -174,8 +174,5 @@ fn update_wallet_config(keystore: &Keystore, wallet_config: &mut WalletConfig) {
         .expect("Voucher master key set by default");
 
     wallet_config.voucher_master_key_id = voucher_master_key_id;
-    wallet_config.known_keys = keystore
-        .get_all_zk()
-        .map(|(id, key)| (id, key.to_public_key()))
-        .collect();
+    wallet_config.known_keys = keystore.get_all_zk().map(|(id, _)| id).collect();
 }

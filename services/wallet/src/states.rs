@@ -239,6 +239,7 @@ impl<'u> ServiceState<'u> {
     pub fn new(
         state: RecoveryState,
         settings: &WalletServiceSettings,
+        known_keys: HashMap<KeyId, ZkPublicKey>,
         lib: HeaderId,
         lib_ledger: &LedgerState,
         updater: &'u StateUpdater<Option<RecoveryState>>,
@@ -250,10 +251,7 @@ impl<'u> ServiceState<'u> {
             lib_wallet_state,
             pending_claims,
         } = state;
-        let known_keys = settings
-            .known_keys
-            .iter()
-            .map(|(key_id, pk)| (*pk, key_id.clone()));
+        let known_keys = known_keys.into_iter().map(|(key_id, pk)| (pk, key_id));
 
         // Initialize [`Wallet`] either from the persisted [`WalletState`]
         // or from the current chain's LIB ledger state.
@@ -593,7 +591,7 @@ mod tests {
         use lb_services_utils::overwatch::RecoveryData;
 
         let settings = WalletServiceSettings {
-            known_keys: HashMap::new(),
+            known_keys: Vec::new(),
             voucher_master_key_id: "voucher-master".into(),
             recovery_data: RecoveryData::default(),
             pending_note_expiry_blocks: 10,
@@ -612,7 +610,15 @@ mod tests {
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
 
-        let mut state = ServiceState::new(recovery, &settings, genesis, &ledger, &updater, 5);
+        let mut state = ServiceState::new(
+            recovery,
+            &settings,
+            HashMap::new(),
+            genesis,
+            &ledger,
+            &updater,
+            5,
+        );
 
         // The first post-online LibUpdate delivers a new_lib the wallet never
         // applied (the silent bootstrap->online LIB jump outran the wallet).

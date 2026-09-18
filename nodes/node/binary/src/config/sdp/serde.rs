@@ -4,7 +4,7 @@ use lb_core::{
     mantle::{Value, gas::GasCost},
     sdp::DeclarationId,
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::backend::preload::KeyId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -22,7 +22,7 @@ pub struct Config {
 pub struct WalletConfig {
     #[serde(default = "default_max_tx_fee")]
     pub max_tx_fee: GasCost,
-    pub funding_pk: ZkPublicKey,
+    pub funding_key_id: KeyId,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -45,15 +45,15 @@ const fn default_max_tx_fee() -> GasCost {
 }
 
 pub struct RequiredValues {
-    pub funding_pk: ZkPublicKey,
+    pub funding_key_id: KeyId,
 }
 
 impl Config {
     #[must_use]
-    pub fn with_required_values(RequiredValues { funding_pk }: RequiredValues) -> Self {
+    pub fn with_required_values(RequiredValues { funding_key_id }: RequiredValues) -> Self {
         Self {
             wallet: WalletConfig {
-                funding_pk,
+                funding_key_id,
                 max_tx_fee: default_max_tx_fee(),
             },
             declaration_id: None,
@@ -61,7 +61,7 @@ impl Config {
         }
     }
 
-    pub const fn set_funding_pk(&mut self, pk: ZkPublicKey) {
-        self.wallet.funding_pk = pk;
+    pub fn set_funding_key_id(&mut self, key_id: KeyId) {
+        self.wallet.funding_key_id = key_id;
     }
 }

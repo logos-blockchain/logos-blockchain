@@ -3,12 +3,16 @@ use std::{collections::HashSet, num::NonZero, path::PathBuf, time::Duration};
 use futures::StreamExt as _;
 use lb_api_service::http::consensus::leader::LeaderClaimResponseBody;
 use lb_common_http_client::ProcessedBlockEvent;
+use lb_config::kms::key_id_for_preload_backend;
 use lb_core::mantle::transactions::hash::TxHash;
 use lb_groth16::fr_to_bytes;
 use lb_http_api_common::bodies::wallet::{
     balance::WalletBalanceResponseBody, claimable_vouchers::WalletClaimableVouchersResponseBody,
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::{
+    backend::preload::KeyId,
+    keys::{Key, ZkPublicKey},
+};
 use lb_node::{
     Hashable as _,
     config::{RunConfig, cryptarchia::deployment::EpochConfig},
@@ -56,7 +60,7 @@ async fn leader_claim() {
     wait_for_tx_inclusion(&mut block_stream, tx_hash).await;
 }
 
-fn test_config(mut config: RunConfig, leader_funding_pk: ZkPublicKey) -> RunConfig {
+fn test_config(mut config: RunConfig, leader_funding_key_id: KeyId) -> RunConfig {
     config.deployment.time.slot_duration = Duration::from_secs(1);
     config.deployment.cryptarchia.epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -66,7 +70,7 @@ fn test_config(mut config: RunConfig, leader_funding_pk: ZkPublicKey) -> RunConf
     config.deployment.cryptarchia.security_param = NonZero::new(2).unwrap();
     config.deployment.cryptarchia.slot_activation_coeff =
         NonNegativeRatio::new(1, 2.try_into().unwrap());
-    config.user.cryptarchia.leader.wallet.funding_pk = leader_funding_pk;
+    config.user.cryptarchia.leader.wallet.funding_key_id = leader_funding_key_id;
 
     config
 }
@@ -187,7 +191,10 @@ async fn setup_test_nodes(
     Vec<StartedNode<LbcEnv>>,
     ZkPublicKey,
 ) {
-    let (wallet_config, leader_funding_pk) = leader_funding_wallet_config();
+    let (wallet_config, leader_funding_account) = leader_funding_wallet_config();
+    let leader_funding_pk = leader_funding_account.public_key();
+    let leader_funding_key_id =
+        key_id_for_preload_backend(&Key::Zk(leader_funding_account.secret_key.clone()));
     let (base, nodes) = start_local_manual_cluster_with_layout(
         "leader-claim",
         "mantle-leader",
@@ -199,7 +206,7 @@ async fn setup_test_nodes(
         .with_wallet_config(wallet_config),
         NODE_COUNT,
         ManualNodeLayout::SelectNodeSeed(0),
-        move |config| Ok::<_, DynError>(test_config(config, leader_funding_pk)),
+        move |config| Ok::<_, DynError>(test_config(config, leader_funding_key_id.clone())),
         Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     )
     .await;
@@ -207,10 +214,9 @@ async fn setup_test_nodes(
     (base, nodes, leader_funding_pk)
 }
 
-fn leader_funding_wallet_config() -> (WalletConfig, ZkPublicKey) {
+fn leader_funding_wallet_config() -> (WalletConfig, WalletAccount) {
     let account = WalletAccount::deterministic(42, 100_000, false)
         .expect("leader funding account should be valid");
-    let funding_pk = account.public_key();
     let accounts = (0..3)
         .map(|idx| {
             WalletAccount::new(
@@ -223,7 +229,7 @@ fn leader_funding_wallet_config() -> (WalletConfig, ZkPublicKey) {
         })
         .collect();
 
-    (WalletConfig::new(accounts), funding_pk)
+    (WalletConfig::new(accounts), account)
 }
 
 async fn wait_for_tx_inclusion(

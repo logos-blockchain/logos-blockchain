@@ -1,14 +1,15 @@
-use std::net::SocketAddr;
+use std::{collections::BTreeSet, net::SocketAddr};
 
-use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
+use lb_key_management_system_service::{backend::preload::KeyId, keys::Key};
 use lb_node::{
     UserConfig,
     config::{
         ApiConfig, CryptarchiaConfig, PoWConfig, SdpConfig, StorageConfig, WalletConfig,
         api::serde::AxumBackendSettings,
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
-        kms::serde::PreloadKmsBackendSettings,
-        sdp::serde::RequiredValues as SdpConfigRequiredValues, state::Config as StateConfig,
+        kms::serde::{KeyEntry, PreloadKmsBackendSettings},
+        sdp::serde::RequiredValues as SdpConfigRequiredValues,
+        state::Config as StateConfig,
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };
@@ -23,18 +24,19 @@ use crate::{GeneralConfig, consensus::GeneralConsensusConfig, kms::key_id_for_pr
 #[must_use]
 pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
     let api_config = create_api_config(&config);
+    let funding_key_id =
+        key_id_for_preload_backend(&Key::Zk(config.consensus_config.funding_sk.clone()));
     let mut cryptarchia_config =
         CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues {
-            funding_pk: config.consensus_config.funding_pk,
+            funding_key_id: funding_key_id.clone(),
         });
     cryptarchia_config
         .service
         .bootstrap
         .prolonged_bootstrap_period = config.consensus_config.prolonged_bootstrap_period;
 
-    let mut sdp_config = SdpConfig::with_required_values(SdpConfigRequiredValues {
-        funding_pk: config.consensus_config.funding_sk.as_public_key(),
-    });
+    let mut sdp_config =
+        SdpConfig::with_required_values(SdpConfigRequiredValues { funding_key_id });
     sdp_config.declaration_id = config.sdp_config.declaration_id;
 
     UserConfig {
@@ -73,38 +75,17 @@ fn create_wallet_config(
     consensus: &GeneralConsensusConfig,
     kms: &PreloadKmsBackendSettings,
 ) -> WalletConfig {
-    let kms_keys = kms
-        .resolve_keys()
-        .expect("KMS keys of a generated config are resolvable");
-    let known_keys = [
-        (
-            key_id_for_preload_backend(&Key::Zk(consensus.known_key.clone())),
-            consensus.known_key.as_public_key(),
-        ),
-        (
-            key_id_for_preload_backend(&Key::Zk(consensus.funding_sk.clone())),
-            consensus.funding_sk.as_public_key(),
-        ),
-    ]
-    .into_iter()
-    .chain(consensus.other_keys.iter().map(|sk| {
-        (
-            key_id_for_preload_backend(&Key::Zk(sk.clone())),
-            sk.as_public_key(),
-        )
-    }))
-    .chain(kms_keys.values().filter_map(|key| match key {
-        Key::Zk(sk) => Some((
-            key_id_for_preload_backend(&Key::Zk(sk.clone())),
-            sk.as_public_key(),
-        )),
-        Key::Ed25519(_) => None,
-    }))
-    .collect();
+    // Every ZK key in the KMS, in a stable order.
+    let known_keys: BTreeSet<KeyId> = kms
+        .keys
+        .iter()
+        .filter(|(_, entry)| !matches!(entry, KeyEntry::Ed25519(_)))
+        .map(|(key_id, _)| key_id.clone())
+        .collect();
 
     let mut config = WalletConfig::with_required_values(WalletConfigRequiredValues {
         voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(consensus.known_key.clone())),
     });
-    config.known_keys = known_keys;
+    config.known_keys = known_keys.into_iter().collect();
     config
 }

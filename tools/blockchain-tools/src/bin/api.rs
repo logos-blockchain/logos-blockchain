@@ -7,7 +7,7 @@ use lb_core::{mantle::NoteId, sdp::Locator};
 use lb_http_api_common::bodies::{
     blend::JoinBlendRequestBody, wallet::balance::WalletBalanceResponseBody,
 };
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_key_management_system_keys::keys::{Key, ZkPublicKey};
 use lb_node::config::UserConfig;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use serde::{Deserialize, de::IntoDeserializer as _};
@@ -164,7 +164,16 @@ async fn validate_config_values(
     config: &UserConfig,
     service_note_id: NoteId,
 ) -> Result<()> {
-    let sdp_wallet_funding_pk = config.sdp.wallet.funding_pk;
+    let funding_key_id = &config.sdp.wallet.funding_key_id;
+    let funding_key = config
+        .kms
+        .backend
+        .resolve_key(funding_key_id)
+        .map_err(|e| anyhow!(e))?;
+    let Some(Key::Zk(funding_sk)) = &funding_key else {
+        bail!("SDP funding key '{funding_key_id}' is not a ZK key in the KMS config");
+    };
+    let sdp_wallet_funding_pk = funding_sk.to_public_key();
     verify_sdp_wallet_funding_pk_balance(client, node_address.clone(), sdp_wallet_funding_pk)
         .await
         .context("Failed to verify balance for SDP wallet funding key")?;
@@ -181,14 +190,9 @@ fn extract_blend_zk_key(config: &UserConfig) -> Result<ZkPublicKey> {
         .blend_zk_key()
         .map_err(|e| anyhow!(e))
         .with_context(|| "Failed to extract zk ID from provided config.")?;
-    let Some(wallet_key) = config.wallet.known_keys.get(&zk_public_key_id) else {
+    if !config.wallet.known_keys.contains(&zk_public_key_id) {
         bail!(
             "ZK ID '{zk_public_key_id}' extracted from config was not found in wallet known keys"
-        );
-    };
-    if wallet_key != &zk_public_key {
-        bail!(
-            "ZK ID '{zk_public_key_id}' extracted from config does not match the corresponding public key in wallet known keys"
         );
     }
     Ok(zk_public_key)
