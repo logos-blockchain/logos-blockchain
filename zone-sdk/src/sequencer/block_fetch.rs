@@ -315,25 +315,9 @@ fn apply_prepared_block_event(
             _ => None,
         })
         .collect();
-    let channel_update = match (old_tip, old_lineage) {
-        (Some(_), Some(old_lineage)) => s.detect_channel_update(&old_lineage, tip, &finalized_now),
-        (None, _) => {
-            // First event — no old canonical exists yet, so nothing can be
-            // orphaned. Report any inscriptions on the initial tip as adopted.
-            let channel_tip = s.channel_tip_at(tip);
-            if channel_tip == MsgId::root() {
-                None
-            } else {
-                let adopted = s.collect_update_txs_on_branch(tip);
-                (!adopted.is_empty()).then_some(ChannelUpdateInfo {
-                    orphaned: Vec::new(),
-                    adopted,
-                    new_channel_tip: channel_tip,
-                })
-            }
-        }
-        _ => None,
-    };
+
+    let channel_update =
+        s.detect_channel_update(&old_lineage.unwrap_or_default(), tip, &finalized_now);
 
     // On a pure extension (nothing orphaned — including the first event,
     // whose `orphaned` is empty by construction), report only entries the

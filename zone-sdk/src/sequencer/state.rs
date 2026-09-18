@@ -1597,11 +1597,6 @@ impl TxState {
             })
             .collect()
     }
-
-    #[must_use]
-    pub fn collect_update_txs_on_branch(&self, tip: HeaderId) -> Vec<ChannelUpdateTx> {
-        self.update_txs_from_infos(self.infos_on_branch(tip).iter())
-    }
 }
 
 #[cfg(test)]
