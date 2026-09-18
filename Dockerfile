@@ -3,7 +3,7 @@
 # Ignore warnings about sensitive information as this is test data.
 
 ARG LC_CORE_VERSION=0.2.0
-ARG LB_NODE_VERSION=0.2.0
+ARG LB_NODE_VERSION=0.3.0-rc.3
 
 # ===========================
 # BUILD IMAGE
@@ -33,7 +33,12 @@ RUN ./lgpd --appimage-extract && mv squashfs-root ext-lgpd && \
     ./lgpm --appimage-extract && mv squashfs-root ext-lgpm && \
     ./logoscore --appimage-extract && mv squashfs-root ext-logoscore
 
-RUN ./ext-lgpd/AppRun download blockchain_module --version "$LB_NODE_VERSION" --output ./ && \
+# Register the blockchain modules registry with lgpd and download the module from it
+RUN ./ext-lgpd/AppRun config init ./repositories.json && \
+    ./ext-lgpd/AppRun --config ./repositories.json repo add \
+        https://raw.githubusercontent.com/logos-blockchain/blockchain-modules-release/refs/heads/main/logos-repo.json && \
+    ./ext-lgpd/AppRun --config ./repositories.json repo refresh && \
+    ./ext-lgpd/AppRun --config ./repositories.json download blockchain_module --version "$LB_NODE_VERSION" --output ./ && \
     ./ext-lgpm/AppRun --modules-dir ./modules install --file "blockchain_module-${LB_NODE_VERSION}.lgx"
 
 # ===========================

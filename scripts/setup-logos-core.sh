@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="${1:-0.2.0}"
+VERSION="${1:-0.2.3}"
 PLATFORM="${2:-x86_64-linux}"
 
 curl -L -O "https://github.com/logos-co/logos-logoscore-cli/releases/download/${VERSION}/logoscore-${PLATFORM}.tar.gz"
