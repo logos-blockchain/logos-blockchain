@@ -4,6 +4,7 @@
 )]
 
 use std::{
+    collections::HashMap,
     error::Error,
     io,
     net::Ipv4Addr,
@@ -41,7 +42,11 @@ pub struct Swarm<R: Clone + Send + RngCore + 'static> {
 impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
     /// Builds a [`Swarm`] configured for use with Logos blockchain on top of a
     /// tokio executor.
-    pub fn build(config: SwarmConfig, rng: R) -> Result<Self, Box<dyn Error>> {
+    pub fn build(
+        config: SwarmConfig,
+        max_data_size_by_topic: HashMap<libp2p::gossipsub::TopicHash, usize>,
+        rng: R,
+    ) -> Result<Self, Box<dyn Error>> {
         let keypair =
             libp2p::identity::Keypair::from(ed25519::Keypair::from(config.node_key.clone()));
         let peer_id = PeerId::from(keypair.public());
@@ -77,10 +82,10 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
                         chain_sync_protocol_name: chain_sync_protocol_name.into(),
                         public_key: keypair.public(),
                         chain_sync_config,
+                        max_data_size_by_topic,
                     },
                     rng,
                 )
-                .expect("Behaviour should not fail to set up.")
             })?
             .with_swarm_config(|c| c.with_idle_connection_timeout(IDLE_CONN_TIMEOUT))
             .build();

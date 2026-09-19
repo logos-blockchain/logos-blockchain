@@ -4283,7 +4283,6 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "futures",
- "logos-blockchain-binary-codec",
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-network-service",
  "logos-blockchain-chain-service",
@@ -4575,7 +4574,9 @@ dependencies = [
  "logos-blockchain-binary-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
+ "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
+ "logos-blockchain-utils",
  "rand 0.8.6",
  "serde",
  "serde_with",

@@ -8,7 +8,6 @@
 
 use std::marker::PhantomData;
 
-use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_blend_service::message::{DataPayload, ProxyServiceMessage, ServiceMessage};
 use lb_core::block::Proposal;
 use lb_log_targets::chain;
@@ -48,13 +47,15 @@ where
     <BlendService as ServiceData>::Message: Send,
 {
     pub async fn publish_proposal(&self, proposal: Proposal) {
-        if let Err((e, _)) = self
-            .relay
-            .send(
-                ServiceMessage::Blend(DataPayload::BlockProposal(proposal.encode_to_vec())).into(),
-            )
-            .await
-        {
+        let Ok(payload) = DataPayload::try_from_proposal(&proposal) else {
+            error!(
+                target: LOG_TARGET,
+                "Refusing to publish an oversized block proposal"
+            );
+            return;
+        };
+
+        if let Err((e, _)) = self.relay.send(ServiceMessage::Blend(payload).into()).await {
             error!(target: LOG_TARGET, "Failed to relay proposal to blend service: {e:?}");
         }
     }

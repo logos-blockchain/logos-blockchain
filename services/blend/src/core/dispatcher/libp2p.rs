@@ -28,7 +28,7 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 
 use super::PayloadDispatcher;
-use crate::message::DataPayload;
+use crate::message::{DataPayload, MAX_PAYLOAD_BODY_SIZE};
 
 const LOG_TARGET: &str = blend::service::CORE;
 
@@ -63,6 +63,16 @@ pub struct Libp2pBroadcastSettings {
 /// Broadcast an unencrypted block proposal to the network by publishing it
 /// under the configured gossipsub topic.
 async fn broadcast_block_proposal(network_relay: &NetworkRelay, topic: String, proposal: Vec<u8>) {
+    if proposal.len() > MAX_PAYLOAD_BODY_SIZE {
+        tracing::error!(
+            target: LOG_TARGET,
+            size = proposal.len(),
+            maximum = MAX_PAYLOAD_BODY_SIZE,
+            "Refusing to broadcast an oversized block proposal"
+        );
+        return;
+    }
+
     if let Err((e, _)) = network_relay
         .send(NetworkMsg::Process(Command::PubSub(
             PubSubCommand::Broadcast {

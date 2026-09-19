@@ -6,11 +6,14 @@ pub mod panic;
 
 pub mod global_allocators;
 
-use std::panic::set_hook;
+use std::{collections::HashMap, panic::set_hook};
 
 use color_eyre::eyre::{Result, eyre};
 pub use lb_blend_service::core::backends::libp2p::Libp2pBlendBackend as BlendBackend;
-use lb_core::mantle::{ledger::verification_mode::StandardMode, transactions::states::Preverified};
+use lb_core::{
+    block::Proposal,
+    mantle::{ledger::verification_mode::StandardMode, transactions::states::Preverified},
+};
 pub use lb_core::{
     header::HeaderId,
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
@@ -24,7 +27,10 @@ use lb_storage_service::recovery::load_recovery_data;
 pub use lb_system_sig_service::SystemSig;
 use lb_time_service::backends::NtpTimeBackend;
 pub use lb_tracing_service::Tracing;
-use lb_tx_service::storage::adapters::RocksStorageAdapter;
+use lb_tx_service::{
+    network::adapters::libp2p::MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
+    storage::adapters::RocksStorageAdapter,
+};
 pub use lb_tx_service::{
     network::adapters::libp2p::{
         Libp2pAdapter as MempoolNetworkAdapter, Settings as MempoolAdapterSettings,
@@ -51,6 +57,27 @@ use crate::{
     generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
     panic::log_and_exit_hook,
 };
+
+fn max_data_size_by_topic(
+    transaction_topic: &str,
+    proposal_topic: &str,
+) -> HashMap<lb_libp2p::gossipsub::TopicHash, usize> {
+    let mut limits: HashMap<lb_libp2p::gossipsub::TopicHash, usize> = HashMap::new();
+    for (topic, required) in [
+        (
+            transaction_topic,
+            MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
+        ),
+        (proposal_topic, Proposal::MAX_ENCODED_SIZE),
+    ] {
+        let topic = lb_libp2p::gossipsub::IdentTopic::new(topic).hash();
+        limits
+            .entry(topic)
+            .and_modify(|existing| *existing = (*existing).max(required))
+            .or_insert(required);
+    }
+    limits
+}
 pub use crate::{
     cli::Command,
     config::{ApiArgs, LogArgs, NetworkArgs, UserConfig},
@@ -145,6 +172,9 @@ pub fn run_node_from_config(
     // front rather than querying a service for a value that cannot change.
     let chain_id = config.deployment.chain_id();
 
+    let transaction_topic = config.deployment.mempool.pubsub_topic.clone();
+    let proposal_topic = config.deployment.cryptarchia.gossipsub_protocol.clone();
+
     let blend_rewards_params = config.deployment.blend_reward_params();
 
     // The PoW mining service must use the same acceptance window as consensus;
@@ -191,7 +221,7 @@ pub fn run_node_from_config(
         user: config.user.network,
         deployment: config.deployment.network,
     }
-    .into();
+    .into_network_config(max_data_size_by_topic(&transaction_topic, &proposal_topic));
 
     let wallet_config = WalletConfig {
         user: config.user.wallet,
@@ -281,4 +311,21 @@ pub async fn get_services_to_start(
     }
 
     Ok(service_ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_application_topics_use_the_largest_data_limit() {
+        let topic = "/shared/application/topic";
+        let limits = max_data_size_by_topic(topic, topic);
+        let topic_hash = lb_libp2p::gossipsub::IdentTopic::new(topic).hash();
+
+        assert_eq!(
+            limits.get(&topic_hash),
+            Some(&MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE.max(Proposal::MAX_ENCODED_SIZE))
+        );
+    }
 }

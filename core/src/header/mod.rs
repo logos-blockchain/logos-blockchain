@@ -2,7 +2,7 @@ use core::fmt::{self, Debug, Formatter};
 
 use blake2::Digest as _;
 use lb_binary_codec::{
-    bincode::{BoundedSerializeOp, SerializeOp as _},
+    bincode::{self, BoundedSerializeOp, SerializeOp as _},
     canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
 };
 use lb_cryptarchia_engine::Slot;
@@ -21,18 +21,19 @@ use crate::{
 
 pub const BEDROCK_VERSION: u8 = 1;
 
-pub const HEADER_BINCODE_SIZE: usize = // = 297
-    1 + // version
-        32 +  // parent
-        8 +   // slot
-        32 +  // body root
-        128 + // PoL proof
-        32 +  // entropy
-        32 +  // leader key
-        32; // voucher commitment
+pub const HEADER_BINCODE_SIZE: usize = <Version as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + <HeaderId as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + <Slot as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + <ContentId as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + <Groth16LeaderProof as BoundedSerializeOp>::MAX_ENCODED_SIZE;
 
 #[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, BinaryCodec)]
 pub struct HeaderId([u8; 32]);
+
+impl HeaderId {
+    /// The fixed-size canonical representation of a header identifier.
+    pub const CANONICAL_ENCODED_SIZE: usize = 32;
+}
 
 impl Debug for HeaderId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -42,6 +43,11 @@ impl Debug for HeaderId {
 
 #[derive(Clone, Eq, PartialEq, Copy, Hash, BinaryCodec)]
 pub struct ContentId([u8; 32]);
+
+impl ContentId {
+    /// The fixed-size canonical representation of a content identifier.
+    pub const CANONICAL_ENCODED_SIZE: usize = 32;
+}
 
 impl Debug for ContentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -65,10 +71,17 @@ pub enum Version {
 }
 
 impl Version {
+    /// The fixed-size canonical representation of a header version.
+    pub const CANONICAL_ENCODED_SIZE: usize = 1;
+
     #[must_use]
     pub const fn as_byte(self) -> u8 {
         self as u8
     }
+}
+
+impl BoundedSerializeOp for Version {
+    type Bytes = [u8; bincode::BINCODE_U8_SIZE];
 }
 
 impl TryFrom<u8> for Version {
@@ -160,6 +173,13 @@ pub struct Header {
 }
 
 impl Header {
+    /// The fixed-size canonical representation of a header.
+    pub const CANONICAL_ENCODED_SIZE: usize = Version::CANONICAL_ENCODED_SIZE
+        + HeaderId::CANONICAL_ENCODED_SIZE
+        + Slot::CANONICAL_ENCODED_SIZE
+        + ContentId::CANONICAL_ENCODED_SIZE
+        + Groth16LeaderProof::CANONICAL_ENCODED_SIZE;
+
     #[must_use]
     pub const fn version(&self) -> &Version {
         &self.version

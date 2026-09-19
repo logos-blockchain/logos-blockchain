@@ -539,7 +539,7 @@ mod tests {
     use crate::{
         BlocksResponse, BlocksUnavailableReason, DynError,
         GetTipResponse::Tip,
-        ProviderResponse, TipResponse,
+        GetTipResponseReason, ProviderResponse, TipResponse,
         config::Config,
         libp2p::{
             behaviour::{Behaviour, BoxedStream, Event},
@@ -812,13 +812,13 @@ mod tests {
     impl ProviderBehavior for RejectingProvider {
         fn handle_tip_request(&self) -> TipResponse {
             ProviderResponse::Unavailable {
-                reason: "Node is not in online mode".to_owned(),
+                reason: GetTipResponseReason::NodeNotOnline,
             }
         }
 
         fn handle_blocks_request(&self, _requested: usize) -> BlocksResponse {
             ProviderResponse::Unavailable {
-                reason: BlocksUnavailableReason::Unknown("Node is not in online mode".to_owned()),
+                reason: BlocksUnavailableReason::Unknown,
             }
         }
     }

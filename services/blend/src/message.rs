@@ -165,6 +165,26 @@ impl DataPayload {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use lb_utils::bounded::UpperBoundedVec;
+
+    use super::*;
+
+    #[test]
+    fn proposal_payload_guard_rejects_one_byte_over_the_bound() {
+        let proposal: UpperBoundedVec<u8, { MAX_PAYLOAD_BODY_SIZE + 1 }> =
+            UpperBoundedVec::new_unchecked(vec![0; MAX_PAYLOAD_BODY_SIZE - 1]);
+        let result = DataPayload::try_from_proposal(&proposal);
+
+        assert!(matches!(
+            result,
+            Err(ProposalNotBlendable::TooLarge { size, maximum })
+                if size == MAX_PAYLOAD_BODY_SIZE + 1 && maximum == MAX_PAYLOAD_BODY_SIZE
+        ));
+    }
+}
+
 /// Why a transaction cannot be carried by the Blend network.
 #[derive(Debug, thiserror::Error)]
 pub enum TransactionNotBlendable {

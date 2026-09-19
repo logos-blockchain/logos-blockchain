@@ -4,7 +4,10 @@ use core::{
 };
 use std::{num::NonZero, time::Duration};
 
-use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::{
+    bincode::{self, BoundedSerializeOp},
+    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
+};
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use time::OffsetDateTime;
 #[cfg(feature = "tokio")]
@@ -25,6 +28,10 @@ use tokio::time::{Interval, MissedTickBehavior};
     BinaryCodec,
 )]
 pub struct Slot(u64);
+
+impl BoundedSerializeOp for Slot {
+    type Bytes = [u8; bincode::BINCODE_U64_SIZE];
+}
 
 #[derive(
     Clone, Debug, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
@@ -122,6 +129,9 @@ impl BinaryDecode for Epoch {
 }
 
 impl Slot {
+    /// The fixed-size canonical representation of a slot.
+    pub const CANONICAL_ENCODED_SIZE: usize = 8;
+
     #[must_use]
     pub const fn new(inner: u64) -> Self {
         Self(inner)

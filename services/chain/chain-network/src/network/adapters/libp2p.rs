@@ -229,14 +229,15 @@ where
         let topic_hash = TopicHash::from_raw(self.settings.topic.clone());
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
-            Ok(message) if message.topic == topic_hash => match Proposal::decode_all(&message.data)
-            {
-                Ok(proposal) => Some(proposal),
-                Err(e) => {
-                    tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
-                    None
+            Ok(message) if message.topic == topic_hash => {
+                match Proposal::decode_all(&message.data) {
+                    Ok(proposal) => Some(proposal),
+                    Err(e) => {
+                        tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
+                        None
+                    }
                 }
-            },
+            }
             Ok(_) => None,
             Err(BroadcastStreamRecvError::Lagged(n)) => {
                 tracing::error!(target: LOG_TARGET, "lagged messages: {n}");
@@ -502,9 +503,7 @@ mod tests {
     fn validate_first_block_response_rejects_other_provider_errors() {
         let unknown = ChainSyncError::new(
             PeerId::random(),
-            ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::Unknown(
-                "oops".to_owned(),
-            )),
+            ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::Unknown),
         );
         let first_item: Result<(HeaderId, Block<()>), DynError> = Err(Box::new(unknown));
 

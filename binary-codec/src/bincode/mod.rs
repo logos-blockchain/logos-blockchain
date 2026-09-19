@@ -7,6 +7,9 @@ mod config;
 pub mod errors;
 
 use bytes::Bytes;
+pub use config::{
+    BINCODE_ENUM_DISCRIMINANT_SIZE, BINCODE_LENGTH_PREFIX_SIZE, BINCODE_U8_SIZE, BINCODE_U64_SIZE,
+};
 pub use errors::Error;
 pub use lb_utils::bounded::UpperBoundedVec;
 use serde::{Serialize, de::DeserializeOwned};
@@ -70,6 +73,9 @@ impl<const N: usize> BoundedBytes for [u8; N] {
 
 pub trait BoundedSerializeOp: SerializeOp + Serialize + Sized {
     type Bytes: BoundedBytes;
+
+    /// Maximum number of bytes produced by the configured bincode serializer.
+    const MAX_ENCODED_SIZE: usize = <Self::Bytes as BoundedBytes>::MAX;
 
     fn to_bounded_bytes(&self) -> Result<Self::Bytes> {
         Self::Bytes::serialize(self)
@@ -146,6 +152,7 @@ mod tests {
         assert_eq!(bounded.as_slice(), tmp.to_bytes().unwrap().as_ref());
         assert_eq!(bounded.len(), 11);
         assert_eq!(<TestBounded as BoundedSerializeOp>::Bytes::MAX, 11);
+        assert_eq!(<TestBounded as BoundedSerializeOp>::MAX_ENCODED_SIZE, 11);
     }
 
     #[test]
@@ -173,6 +180,7 @@ mod tests {
 
         assert_eq!(bounded.as_ref(), tmp.to_bytes().unwrap().as_ref());
         assert_eq!(<TestFixed<11> as BoundedSerializeOp>::Bytes::MAX, 11);
+        assert_eq!(<TestFixed<11> as BoundedSerializeOp>::MAX_ENCODED_SIZE, 11);
     }
 
     #[test]

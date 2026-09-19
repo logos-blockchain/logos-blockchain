@@ -113,9 +113,7 @@ impl Provider {
             }
             Err(e) => {
                 error!(target: LOG_TARGET, "Failed to send blocks to peer {}: {}", peer_id, e);
-                let message = DownloadBlocksResponse::Failure(BlocksUnavailableReason::Unknown(
-                    e.to_string(),
-                ));
+                let message = DownloadBlocksResponse::Failure(BlocksUnavailableReason::Unknown);
                 drop(send_message(peer_id, &mut libp2p_stream, &message).await);
                 Err(e)
             }

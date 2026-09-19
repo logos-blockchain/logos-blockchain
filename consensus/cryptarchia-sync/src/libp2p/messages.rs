@@ -1,13 +1,45 @@
 use std::collections::HashSet;
 
-use lb_binary_codec::bincode::{BoundedSerializeOp, UpperBoundedVec};
-use lb_core::header::HeaderId;
+use lb_binary_codec::bincode::{self, BoundedSerializeOp, UpperBoundedVec};
+use lb_core::{
+    block::{BlockTransactions, MAX_BLOCK_TRANSACTIONS_SIZE},
+    header::HeaderId,
+};
+use lb_cryptarchia_engine::MAX_UNCLES;
+use lb_key_management_system_keys::keys::Ed25519Signature;
 use serde::{Deserialize, Deserializer, Serialize, de::Visitor};
 
 use crate::{
-    BlocksUnavailableReason, SerialisedBlock,
-    libp2p::{MAX_MSG_LEN, provider::MAX_ADDITIONAL_BLOCKS},
+    BlocksUnavailableReason, GetTipResponse, SerialisedBlock,
+    libp2p::provider::MAX_ADDITIONAL_BLOCKS,
 };
+
+/// Maximum configured-bincode size of a request, including five additional
+/// known block identifiers.
+pub const MAX_REQUEST_MESSAGE_BINCODE_SIZE: usize = bincode::BINCODE_ENUM_DISCRIMINANT_SIZE
+    + 3 * <HeaderId as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + bincode::BINCODE_LENGTH_PREFIX_SIZE
+    + MAX_ADDITIONAL_BLOCKS * <HeaderId as BoundedSerializeOp>::MAX_ENCODED_SIZE;
+
+/// Maximum configured-bincode size of one stored block. The block stores each
+/// transaction as its canonical bytes inside a bincode byte envelope, so the
+/// existing total transaction-content and transaction-count limits account for
+/// all variable-sized block data.
+pub const MAX_SERIALISED_BLOCK_BINCODE_SIZE: usize =
+    <lb_core::header::Header as BoundedSerializeOp>::MAX_ENCODED_SIZE
+        + <Ed25519Signature as BoundedSerializeOp>::MAX_ENCODED_SIZE
+        + bincode::BINCODE_LENGTH_PREFIX_SIZE
+        + MAX_UNCLES
+            * (<lb_core::header::Header as BoundedSerializeOp>::MAX_ENCODED_SIZE
+                + <Ed25519Signature as BoundedSerializeOp>::MAX_ENCODED_SIZE)
+        + bincode::BINCODE_LENGTH_PREFIX_SIZE
+        + MAX_BLOCK_TRANSACTIONS_SIZE
+        + BlockTransactions::<()>::MAX * bincode::BINCODE_LENGTH_PREFIX_SIZE;
+
+/// Maximum configured-bincode size of a `DownloadBlocksResponse` frame.
+pub const MAX_DOWNLOAD_BLOCKS_RESPONSE_BINCODE_SIZE: usize = bincode::BINCODE_ENUM_DISCRIMINANT_SIZE
+    + bincode::BINCODE_LENGTH_PREFIX_SIZE
+    + MAX_SERIALISED_BLOCK_BINCODE_SIZE;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum RequestMessage {
@@ -18,7 +50,7 @@ pub enum RequestMessage {
 }
 
 impl BoundedSerializeOp for RequestMessage {
-    type Bytes = UpperBoundedVec<u8, MAX_MSG_LEN>;
+    type Bytes = UpperBoundedVec<u8, MAX_REQUEST_MESSAGE_BINCODE_SIZE>;
 }
 
 /// A request to initiate block downloading from a peer.
@@ -137,17 +169,41 @@ pub enum DownloadBlocksResponse {
 }
 
 impl BoundedSerializeOp for DownloadBlocksResponse {
-    type Bytes = UpperBoundedVec<u8, MAX_MSG_LEN>;
+    type Bytes = UpperBoundedVec<u8, MAX_DOWNLOAD_BLOCKS_RESPONSE_BINCODE_SIZE>;
 }
+
+// These compile-time guards justify removing the former shared Chain Sync
+// admission ceiling without making it runtime policy again.
+const _: () = {
+    assert!(
+        <RequestMessage as BoundedSerializeOp>::MAX_ENCODED_SIZE
+            <= lb_utils::net::MAX_WIRE_MESSAGE_SIZE
+    );
+    assert!(
+        <GetTipResponse as BoundedSerializeOp>::MAX_ENCODED_SIZE
+            <= lb_utils::net::MAX_WIRE_MESSAGE_SIZE
+    );
+    assert!(
+        <DownloadBlocksResponse as BoundedSerializeOp>::MAX_ENCODED_SIZE
+            <= lb_utils::net::MAX_WIRE_MESSAGE_SIZE
+    );
+};
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
-    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
+    use lb_binary_codec::bincode::{
+        self, BoundedSerializeOp, DeserializeOp as _, SerializeOp as _,
+    };
     use lb_core::header::HeaderId;
 
-    use super::{DownloadBlocksRequest, KnownBlocks};
+    use super::{
+        DownloadBlocksRequest, DownloadBlocksResponse, KnownBlocks,
+        MAX_DOWNLOAD_BLOCKS_RESPONSE_BINCODE_SIZE, MAX_REQUEST_MESSAGE_BINCODE_SIZE,
+        MAX_SERIALISED_BLOCK_BINCODE_SIZE, RequestMessage,
+    };
+    use crate::BlocksUnavailableReason;
 
     #[test]
     fn known_blocks_rejects_more_than_maximum_encoded_entries() {
@@ -161,6 +217,30 @@ mod tests {
         );
 
         assert!(DownloadBlocksRequest::from_bytes(&request.to_bytes().unwrap()).is_err());
+    }
+
+    #[test]
+    fn request_bounded_serialization_rejects_more_than_maximum_entries() {
+        let request = RequestMessage::DownloadBlocksRequest(DownloadBlocksRequest::new(
+            HeaderId::from([0; 32]),
+            HeaderId::from([1; 32]),
+            HeaderId::from([2; 32]),
+            (3..9)
+                .map(|index| HeaderId::from([index; 32]))
+                .collect::<HashSet<_>>(),
+        ));
+
+        assert!(request.to_bounded_bytes().is_err());
+    }
+
+    #[test]
+    fn get_tip_bounded_serialization_preserves_its_bincode_bytes() {
+        let request = RequestMessage::GetTip;
+        let ordinary = request.to_bytes().unwrap();
+        let bounded = request.to_bounded_bytes().unwrap();
+
+        assert_eq!(ordinary.len(), bincode::BINCODE_ENUM_DISCRIMINANT_SIZE);
+        assert_eq!(bounded.as_slice(), ordinary.as_ref());
     }
 
     #[test]
@@ -180,5 +260,86 @@ mod tests {
         let bytes = raw.to_bytes().unwrap();
 
         assert!(KnownBlocks::from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn request_bound_covers_the_maximum_known_block_set() {
+        let request = RequestMessage::DownloadBlocksRequest(DownloadBlocksRequest::new(
+            HeaderId::from([0; 32]),
+            HeaderId::from([1; 32]),
+            HeaderId::from([2; 32]),
+            (3..8)
+                .map(|index| HeaderId::from([index; 32]))
+                .collect::<HashSet<_>>(),
+        ));
+        let ordinary = request.to_bytes().unwrap();
+        let bounded = request.to_bounded_bytes().unwrap();
+        let ordinary: &[u8] = ordinary.as_ref();
+
+        assert_eq!(ordinary.len(), MAX_REQUEST_MESSAGE_BINCODE_SIZE);
+        assert_eq!(bounded.as_slice(), ordinary);
+    }
+
+    #[test]
+    fn response_bound_includes_the_block_bincode_envelope() {
+        let response = DownloadBlocksResponse::Block(bytes::Bytes::from(vec![
+            0;
+            MAX_SERIALISED_BLOCK_BINCODE_SIZE
+        ]));
+        let ordinary = response.to_bytes().unwrap();
+        let ordinary: &[u8] = ordinary.as_ref();
+
+        assert_eq!(ordinary.len(), MAX_DOWNLOAD_BLOCKS_RESPONSE_BINCODE_SIZE);
+        let bounded = response.to_bounded_bytes().unwrap();
+        assert_eq!(bounded.as_slice(), ordinary);
+    }
+
+    #[test]
+    fn every_block_failure_reason_fits_the_response_bound() {
+        let reasons = [
+            (
+                BlocksUnavailableReason::BlockNotFound(HeaderId::from([0; 32])),
+                2 * bincode::BINCODE_ENUM_DISCRIMINANT_SIZE
+                    + <HeaderId as BoundedSerializeOp>::MAX_ENCODED_SIZE,
+            ),
+            (
+                BlocksUnavailableReason::StartBlockNotFound,
+                2 * bincode::BINCODE_ENUM_DISCRIMINANT_SIZE,
+            ),
+            (
+                BlocksUnavailableReason::Unknown,
+                2 * bincode::BINCODE_ENUM_DISCRIMINANT_SIZE,
+            ),
+        ];
+
+        for (reason, expected_size) in reasons {
+            let expected = reason.clone();
+            let response = DownloadBlocksResponse::Failure(reason);
+            let ordinary = response.to_bytes().unwrap();
+            let bounded = response.to_bounded_bytes().unwrap();
+
+            assert_eq!(ordinary.len(), expected_size);
+            assert!(ordinary.len() <= MAX_DOWNLOAD_BLOCKS_RESPONSE_BINCODE_SIZE);
+            assert_eq!(bounded.as_slice(), ordinary.as_ref());
+
+            match (
+                expected,
+                DownloadBlocksResponse::from_bytes(&ordinary).unwrap(),
+            ) {
+                (
+                    BlocksUnavailableReason::BlockNotFound(expected),
+                    DownloadBlocksResponse::Failure(BlocksUnavailableReason::BlockNotFound(actual)),
+                ) => assert_eq!(expected, actual),
+                (
+                    BlocksUnavailableReason::StartBlockNotFound,
+                    DownloadBlocksResponse::Failure(BlocksUnavailableReason::StartBlockNotFound),
+                )
+                | (
+                    BlocksUnavailableReason::Unknown,
+                    DownloadBlocksResponse::Failure(BlocksUnavailableReason::Unknown),
+                ) => {}
+                _ => panic!("block failure reason did not round-trip"),
+            }
+        }
     }
 }
