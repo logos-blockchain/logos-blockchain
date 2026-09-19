@@ -117,7 +117,7 @@ async fn sdp_ops_e2e() {
         |tx_hash| {
             let ed25519_sig = Ed25519Signature::from_bytes(
                 &provider_signing_key
-                    .sign_payload(tx_hash.as_signing_bytes().as_ref())
+                    .sign_payload(tx_hash.as_signing_bytes())
                     .to_bytes(),
             );
             let zk_sig = ZkKey::multi_sign(

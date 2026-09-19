@@ -313,16 +313,7 @@ pub unsafe extern "C" fn pow_claim(
     let node = unsafe { &*node };
     let tx_hash = unwrap_or_return_error!(pow_claim_sync(node, claim_address));
 
-    let Ok(tx_hash_array): Result<Hash, _> =
-        tx_hash.as_signing_bytes().iter().as_slice().try_into()
-    else {
-        return FfiPoWClaimResult::err(OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            "Failed to convert transaction hash to array.",
-        ));
-    };
-
-    FfiPoWClaimResult::ok(tx_hash_array)
+    FfiPoWClaimResult::ok(tx_hash.0)
 }
 
 /// The rewards this node can currently claim.

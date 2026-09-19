@@ -292,6 +292,18 @@ impl AsRef<[u8]> for HeaderId {
     }
 }
 
+impl AsRef<[u8; 32]> for ContentId {
+    fn as_ref(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8; 32]> for Nonce {
+    fn as_ref(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 impl From<[u8; 32]> for ContentId {
     fn from(id: [u8; 32]) -> Self {
         Self(id)
@@ -380,6 +392,17 @@ fn fixed_size_bincode_serialization_matches_for_header_types() {
     let bounded = header.to_bounded_bytes().unwrap();
     assert_eq!(ordinary.len(), HEADER_BINCODE_SIZE);
     assert_eq!(bounded.as_ref(), ordinary.as_ref());
+}
+
+#[test]
+fn fixed_header_byte_types_borrow_their_stored_bytes() {
+    let content_id = ContentId([0x22; 32]);
+    let nonce = Nonce([0x33; 32]);
+
+    assert_eq!(content_id.as_ref(), &content_id.0);
+    assert_eq!(nonce.as_ref(), &nonce.0);
+    assert!(std::ptr::eq(content_id.as_ref(), &raw const content_id.0));
+    assert!(std::ptr::eq(nonce.as_ref(), &raw const nonce.0));
 }
 
 #[test]

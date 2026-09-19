@@ -332,7 +332,7 @@ pub(super) fn prepare_tx(
 }
 
 pub(super) fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signature {
-    signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref())
+    signing_key.sign_payload(tx_hash.as_signing_bytes())
 }
 
 /// Produce an [`IndexedSignature`] for a prepared multi-sig artifact.

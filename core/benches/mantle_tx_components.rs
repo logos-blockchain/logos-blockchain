@@ -64,7 +64,7 @@ fn make_signed_tx(payload_size: usize) -> SignedOps<Unverified, StandardMode> {
     let signing_key = Ed25519Key::from_bytes(&[1; 32]);
     let tx = make_inscription_tx(payload_size);
     let tx_hash = tx.hash();
-    let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+    let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
     let op_proofs = OpProofs::from([OpProof::Ed25519Sig(op_sig)]);
     SignedOps::from_parts(tx, op_proofs).unwrap()
 }
@@ -123,7 +123,7 @@ fn bench_sign_a_ed25519_payload(bencher: Bencher) {
             tx.hash()
         })
         .bench_values(|txhash: TxHash| {
-            black_box(signing_key.sign_payload(&txhash.as_signing_bytes()))
+            black_box(signing_key.sign_payload(txhash.as_signing_bytes()))
         });
 }
 
@@ -146,7 +146,7 @@ fn bench_sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, s
         .with_inputs(|| {
             let tx = make_inscription_tx(size);
             let tx_hash = tx.hash();
-            let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+            let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
             (tx, op_sig)
         })
         .bench_values(|(tx, op_sig): (Ops, Ed25519Signature)| {
@@ -169,7 +169,7 @@ fn bench_sign_d_fully_empty(bencher: Bencher, size: usize) {
             (tx, tx_hash)
         })
         .bench_values(|(tx, tx_hash): (Ops, TxHash)| {
-            let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+            let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
             let op_proofs = OpProofs::from([OpProof::Ed25519Sig(op_sig)]);
             black_box(SignedOps::from_parts(tx, op_proofs).unwrap().preverify())
         });

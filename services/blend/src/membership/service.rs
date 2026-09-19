@@ -90,7 +90,7 @@ fn node_from_provider<NodeId>(
 where
     NodeId: node_id::TryFrom,
 {
-    let provider_id = provider_id.0.as_bytes();
+    let provider_id = provider_id.as_ref();
     // TODO: Once we provide a proper API for non-empty vectors, we can expose a
     // `first()` method that returns `&T` instead of `Option<&T>`, and remove this
     // `expect`.

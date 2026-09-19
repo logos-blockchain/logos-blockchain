@@ -495,7 +495,7 @@ pub fn create_genesis_block_with_declarations(
                 .unwrap();
         let ed25519_sig = provider
             .provider_sk
-            .sign_payload(mantle_tx_hash.as_signing_bytes().as_ref());
+            .sign_payload(mantle_tx_hash.as_signing_bytes());
         let proof = ZkAndEd25519Proof {
             zk_sig,
             ed25519_sig,
