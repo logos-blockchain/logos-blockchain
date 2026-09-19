@@ -1,6 +1,6 @@
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
-use lb_binary_codec::canonical::BinaryCodec;
+use lb_binary_codec::{bincode::BoundedSerializeOp, canonical::BinaryCodec};
 use lb_groth16::Fr;
 
 use crate::{
@@ -14,6 +14,10 @@ pub struct TxHash(pub Hash);
 serde_bytes_newtype!(TxHash, 32);
 display_hex_bytes_newtype!(TxHash);
 
+impl BoundedSerializeOp for TxHash {
+    type Bytes = [u8; 32];
+}
+
 /// Number of leading hash bytes a block proposal uses to refer to a
 /// transaction.
 pub const REFERENCE_PREFIX_BYTES: usize = 16;
@@ -24,6 +28,10 @@ pub const REFERENCE_PREFIX_BYTES: usize = 16;
 pub struct TxHashPrefix(pub [u8; REFERENCE_PREFIX_BYTES]);
 serde_bytes_newtype!(TxHashPrefix, REFERENCE_PREFIX_BYTES);
 display_hex_bytes_newtype!(TxHashPrefix);
+
+impl BoundedSerializeOp for TxHashPrefix {
+    type Bytes = [u8; REFERENCE_PREFIX_BYTES];
+}
 
 impl From<[u8; REFERENCE_PREFIX_BYTES]> for TxHashPrefix {
     fn from(prefix: [u8; REFERENCE_PREFIX_BYTES]) -> Self {
@@ -149,6 +157,8 @@ impl From<TxHash> for TxHashView {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp as _};
+
     use crate::mantle::{
         TxHash,
         transactions::hash::{PrefixedKey as _, REFERENCE_PREFIX_BYTES, TxHashPrefix},
@@ -183,5 +193,22 @@ mod tests {
     fn prefix_matches_the_prefixed_key_impl() {
         let hash = TxHash([0x5Au8; 32]);
         assert_eq!(hash.prefix(), hash.key_prefix());
+    }
+
+    #[test]
+    fn transaction_hashes_have_exact_bincode_size() {
+        let hash = TxHash([0x5A; 32]);
+        let prefix = hash.prefix();
+
+        assert_eq!(hash.to_bytes().unwrap().len(), 32);
+        assert_eq!(
+            hash.to_bounded_bytes().unwrap().as_ref(),
+            hash.to_bytes().unwrap().as_ref()
+        );
+        assert_eq!(prefix.to_bytes().unwrap().len(), REFERENCE_PREFIX_BYTES);
+        assert_eq!(
+            prefix.to_bounded_bytes().unwrap().as_ref(),
+            prefix.to_bytes().unwrap().as_ref()
+        );
     }
 }

@@ -36,6 +36,7 @@ mod sealed {
 }
 
 impl<const MAX: usize> sealed::Sealed for UpperBoundedVec<u8, MAX> {}
+impl<const N: usize> sealed::Sealed for [u8; N] {}
 
 pub trait BoundedBytes: sealed::Sealed + AsRef<[u8]> + Sized {
     const MAX: usize;
@@ -48,6 +49,22 @@ impl<const MAX: usize> BoundedBytes for UpperBoundedVec<u8, MAX> {
 
     fn serialize<T: Serialize>(value: &T) -> Result<Self> {
         config::serialize_bounded::<_, MAX>(value)
+    }
+}
+
+impl<const N: usize> BoundedBytes for [u8; N] {
+    const MAX: usize = N;
+
+    fn serialize<T: Serialize>(value: &T) -> Result<Self> {
+        let bytes = config::serialize_bounded::<_, N>(value)?;
+        let serialized_len = bytes.len();
+
+        bytes.into_inner().try_into().map_err(|_| {
+            Error::Serialize(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("serialized size {serialized_len} does not match required size {N}"),
+            )))
+        })
     }
 }
 
@@ -80,6 +97,20 @@ mod tests {
 
     impl BoundedSerializeOp for TestBounded {
         type Bytes = UpperBoundedVec<u8, 11>;
+    }
+
+    #[derive(Serialize)]
+    struct TestFixed<const N: usize>(Vec<u8>);
+
+    impl<const N: usize> BoundedSerializeOp for TestFixed<N> {
+        type Bytes = [u8; N];
+    }
+
+    #[derive(Serialize)]
+    struct TestEmpty;
+
+    impl BoundedSerializeOp for TestEmpty {
+        type Bytes = [u8; 0];
     }
 
     #[test]
@@ -133,6 +164,41 @@ mod tests {
 
         assert_eq!(bounded.as_slice(), tmp.to_bytes().unwrap().as_ref());
         assert_eq!(bounded.len(), 10);
+    }
+
+    #[test]
+    fn fixed_size_bounded_serialization_preserves_the_wire_format() {
+        let tmp = TestFixed::<11>(vec![1u8, 2, 3]);
+        let bounded = tmp.to_bounded_bytes().unwrap();
+
+        assert_eq!(bounded.as_ref(), tmp.to_bytes().unwrap().as_ref());
+        assert_eq!(<TestFixed<11> as BoundedSerializeOp>::Bytes::MAX, 11);
+    }
+
+    #[test]
+    fn fixed_size_bounded_serialization_rejects_values_under_the_size() {
+        let error = TestFixed::<11>(vec![1u8, 2])
+            .to_bounded_bytes()
+            .unwrap_err();
+
+        assert!(matches!(error, Error::Serialize(_)));
+    }
+
+    #[test]
+    fn fixed_size_bounded_serialization_rejects_values_over_the_size() {
+        let error = TestFixed::<11>(vec![1u8, 2, 3, 4])
+            .to_bounded_bytes()
+            .unwrap_err();
+
+        assert!(matches!(error, Error::Serialize(_)));
+    }
+
+    #[test]
+    fn fixed_size_bounded_serialization_supports_zero_length_arrays() {
+        let bounded = TestEmpty.to_bounded_bytes().unwrap();
+
+        assert_eq!(bounded.as_ref(), &[0u8; 0]);
+        assert_eq!(<[u8; 0] as BoundedBytes>::MAX, 0);
     }
 
     #[test]

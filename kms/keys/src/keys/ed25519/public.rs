@@ -1,6 +1,7 @@
 use core::fmt::{self, Debug, Formatter};
 
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SignatureError, Verifier as _, VerifyingKey};
+use lb_binary_codec::bincode::BoundedSerializeOp;
 use lb_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 
@@ -77,6 +78,10 @@ impl PublicKey {
     }
 }
 
+impl BoundedSerializeOp for PublicKey {
+    type Bytes = [u8; KEY_SIZE];
+}
+
 impl From<VerifyingKey> for PublicKey {
     fn from(value: VerifyingKey) -> Self {
         Self(value)
@@ -92,5 +97,22 @@ impl From<PublicKey> for VerifyingKey {
 impl AsRef<[u8]> for PublicKey {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp};
+
+    use super::PublicKey;
+
+    #[test]
+    fn public_key_has_exact_bincode_size() {
+        let key = PublicKey::from_bytes(&[0x11; 32]).unwrap();
+        let ordinary = <PublicKey as SerializeOp>::to_bytes(&key).unwrap();
+        let bounded = key.to_bounded_bytes().unwrap();
+
+        assert_eq!(ordinary.len(), 32);
+        assert_eq!(bounded.as_ref(), ordinary.as_ref());
     }
 }

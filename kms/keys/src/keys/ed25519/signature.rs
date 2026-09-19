@@ -1,7 +1,10 @@
 use core::hash::{Hash, Hasher};
 
 use ed25519_dalek::SIGNATURE_LENGTH;
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::{
+    bincode::BoundedSerializeOp,
+    canonical::{BinaryDecode, BinaryEncode, DecodeError},
+};
 use lb_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -91,5 +94,26 @@ impl BinaryDecode for Signature {
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (rest, inner) = <[u8; _]>::decode(input, &())?;
         Ok((rest, Self::from_bytes(&inner)))
+    }
+}
+
+impl BoundedSerializeOp for Signature {
+    type Bytes = [u8; SIGNATURE_SIZE];
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp};
+
+    use super::Signature;
+
+    #[test]
+    fn signature_has_exact_bincode_size() {
+        let signature = Signature::from_bytes(&[0x22; 64]);
+        let ordinary = <Signature as SerializeOp>::to_bytes(&signature).unwrap();
+        let bounded = signature.to_bounded_bytes().unwrap();
+
+        assert_eq!(ordinary.len(), 64);
+        assert_eq!(bounded.as_ref(), ordinary.as_ref());
     }
 }

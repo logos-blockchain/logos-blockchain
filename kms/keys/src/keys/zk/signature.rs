@@ -2,7 +2,10 @@ use generic_array::{
     GenericArray,
     typenum::{U32, U64},
 };
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::{
+    bincode::BoundedSerializeOp,
+    canonical::{BinaryDecode, BinaryEncode, DecodeError},
+};
 use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_zksign::ZkSignProof;
 use serde::{Deserialize, Serialize};
@@ -59,6 +62,10 @@ impl BinaryDecode for Signature {
     }
 }
 
+impl BoundedSerializeOp for Signature {
+    type Bytes = [u8; COMPRESSED_PROOF_SIZE];
+}
+
 macro_rules! declare_serde_generic_array {
     ($mod_name:ident, $size:ident) => {
         pub mod $mod_name {
@@ -103,9 +110,10 @@ declare_serde_generic_array!(serde_generic_array_u64, U64);
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::Fr;
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp};
+    use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr};
     use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
-    use lb_zksign::{ZkSignPrivateKeysData, ZkSignWitnessInputs, prove, verify};
+    use lb_zksign::{ZkSignPrivateKeysData, ZkSignProof, ZkSignWitnessInputs, prove, verify};
     use num_bigint::BigUint;
     use rand_core::RngCore as _;
 
@@ -178,6 +186,16 @@ mod tests {
         let decoded: Signature = serde_yaml::from_str(&encoded).unwrap();
 
         assert_eq!(sig, decoded);
+    }
+
+    #[test]
+    fn signature_has_exact_bincode_size() {
+        let signature = Signature::new(ZkSignProof::from_bytes(&[0x33; COMPRESSED_PROOF_SIZE]));
+        let ordinary = <Signature as SerializeOp>::to_bytes(&signature).unwrap();
+        let bounded = signature.to_bounded_bytes().unwrap();
+
+        assert_eq!(ordinary.len(), COMPRESSED_PROOF_SIZE);
+        assert_eq!(bounded.as_ref(), ordinary.as_ref());
     }
 
     fn sig_generator() -> Signature {
