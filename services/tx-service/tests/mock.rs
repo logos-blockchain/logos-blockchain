@@ -9,9 +9,9 @@ use std::{
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _, stream};
 use indexmap::IndexMap;
+use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
-    codec::{DeserializeOp as _, SerializeOp as _},
     header::HeaderId,
     mantle::{
         mock::{MockTransaction, MockTxId},

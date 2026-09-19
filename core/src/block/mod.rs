@@ -6,7 +6,10 @@ mod uncle;
 use core::fmt::Debug;
 
 use bytes::Bytes;
-use lb_codec::{BinaryCodec, BinaryEncode as _};
+use lb_binary_codec::{
+    bincode::{DeserializeOp as _, SerializeOp as _},
+    canonical::{BinaryCodec, BinaryEncode as _},
+};
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use lb_utils::bounded::{BoundedError, BoundedVec, UpperBoundedVec};
@@ -14,7 +17,6 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 pub use uncle::{SignedHeader, UncleHeaders};
 
 use crate::{
-    codec::{DeserializeOp as _, SerializeOp as _},
     crypto::{Digest as _, Hasher},
     header::{ContentId, Header, HeaderId, Version},
     mantle::{
@@ -36,7 +38,7 @@ pub type BlockNumber = u64;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Failed to serialize: {0}")]
-    Serialisation(#[from] crate::codec::Error),
+    Serialisation(#[from] lb_binary_codec::bincode::Error),
     #[error("Invalid block signature")]
     Signature,
     #[error("Failed to verify header alone: {0}")]
@@ -376,14 +378,14 @@ pub fn body_root<Tx: Hashable<Hash = TxHash>>(
 impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize>
     TryFrom<Bytes> for Block<Tx>
 {
-    type Error = crate::codec::Error;
+    type Error = lb_binary_codec::bincode::Error;
 
     fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
         let block = Self::from_bytes(&bytes)?;
 
         let block = block
             .into_verified()
-            .map_err(|e| crate::codec::Error::Deserialize(Box::new(e)))?;
+            .map_err(|e| lb_binary_codec::bincode::Error::Deserialize(Box::new(e)))?;
         Ok(block)
     }
 }
@@ -391,7 +393,7 @@ impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + S
 impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash>> TryFrom<Block<Tx>>
     for Bytes
 {
-    type Error = crate::codec::Error;
+    type Error = lb_binary_codec::bincode::Error;
 
     fn try_from(block: Block<Tx>) -> Result<Self, Self::Error> {
         block.to_bytes()
@@ -686,7 +688,7 @@ mod tests {
         };
         let bytes = bincode::serialize(&legacy).unwrap();
 
-        let error = <Proposal as crate::codec::DeserializeOp>::from_bytes(&bytes)
+        let error = <Proposal as lb_binary_codec::bincode::DeserializeOp>::from_bytes(&bytes)
             .expect_err("proposal with too many transaction references must be rejected");
 
         assert!(
@@ -845,7 +847,7 @@ mod tests {
     /// || references (2 + 16384) || signature (64)`.
     #[test]
     fn maximum_proposal_matches_the_specified_size() {
-        use lb_codec::BinaryEncode as _;
+        use lb_binary_codec::canonical::BinaryEncode as _;
         use lb_cryptarchia_engine::MAX_UNCLES;
 
         const SPECIFIED_MAX_PROPOSAL_SIZE: usize = 18_192;

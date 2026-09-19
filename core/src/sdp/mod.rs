@@ -9,7 +9,10 @@ use std::{collections::HashMap, hash::Hash};
 
 use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
-use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::{
+    bincode::{self, DeserializeOp as _, SerializeOp as _},
+    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
+};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
@@ -20,7 +23,6 @@ use strum::EnumIter;
 
 use crate::{
     block::BlockNumber,
-    codec::{self, DeserializeOp as _, SerializeOp as _},
     mantle::{
         NoteId,
         ops::{channel::Ed25519PublicKey, sdp::SdpError},
@@ -458,7 +460,7 @@ impl FromIterator<(ServiceType, HashMap<DeclarationId, Declaration>)> for Declar
 }
 
 impl TryFrom<Bytes> for Declarations {
-    type Error = codec::Error;
+    type Error = bincode::Error;
 
     fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
         Self::from_bytes(&bytes)
@@ -466,7 +468,7 @@ impl TryFrom<Bytes> for Declarations {
 }
 
 impl TryFrom<Declarations> for Bytes {
-    type Error = codec::Error;
+    type Error = bincode::Error;
 
     fn try_from(this: Declarations) -> Result<Self, Self::Error> {
         this.to_bytes()

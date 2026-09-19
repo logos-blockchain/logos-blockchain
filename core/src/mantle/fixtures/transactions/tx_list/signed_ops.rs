@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use ark_ff::AdditiveGroup as _;
-use lb_codec::{CodecFixtures, decode_fixture_hex};
+use lb_binary_codec::canonical::{CodecFixtures, decode_fixture_hex};
 use lb_groth16::{CompressedGroth16Proof, Fr};
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, ZkSignature};
 
@@ -22,7 +22,7 @@ use crate::mantle::{
     },
 };
 
-impl<State: VerificationState, Mode: VerificationMode> lb_codec::sealed::Sealed
+impl<State: VerificationState, Mode: VerificationMode> lb_binary_codec::canonical::sealed::Sealed
     for SignedOps<State, Mode>
 {
 }
@@ -75,16 +75,16 @@ fn two_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
     ])
 }
 
-impl<State: VerificationState, Mode: VerificationMode> lb_codec::CodecExamples
+impl<State: VerificationState, Mode: VerificationMode> lb_binary_codec::canonical::CodecExamples
     for SignedOps<State, Mode>
 {
     fn fixtures() -> CodecFixtures<Self> {
         [
-            lb_codec::CodecFixture {
+            lb_binary_codec::canonical::CodecFixture {
                 value: Self::empty(),
                 bytes: Cow::Borrowed(&[0x00]),
             },
-            lb_codec::CodecFixture {
+            lb_binary_codec::canonical::CodecFixture {
                 value: two_ops(),
                 bytes: Cow::Owned(decode_fixture_hex(TWO_OPS_HEX)),
             },
@@ -102,6 +102,6 @@ mod tests {
 
     #[test]
     fn codec_fixtures_round_trip() {
-        lb_codec::assert_codec_fixtures::<SignedOps<Unverified, StandardMode>>();
+        lb_binary_codec::canonical::assert_codec_fixtures::<SignedOps<Unverified, StandardMode>>();
     }
 }

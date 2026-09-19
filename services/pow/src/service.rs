@@ -10,6 +10,7 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
+use lb_binary_codec::bincode::{Error as CodecError, SerializeOp};
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
     message::{DataPayload, MAX_PAYLOAD_BODY_SIZE, TransactionNotBlendable},
@@ -19,7 +20,6 @@ use lb_chain_service::{
     api::{ApiError as ChainApiError, CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    codec::{Error as CodecError, SerializeOp},
     events::{Event, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
@@ -1537,9 +1537,9 @@ fn estimate_reward_claim_fee(
 mod tests {
     use std::{collections::HashMap, num::NonZeroU64};
 
+    use lb_binary_codec::bincode::SerializeOp as _;
     use lb_chain_service::Slot;
     use lb_core::{
-        codec::SerializeOp as _,
         header::HeaderId,
         mantle::{
             Note, NoteId, OpProofRef, OpRef, SignedOps, Utxo,

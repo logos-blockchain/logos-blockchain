@@ -1,5 +1,6 @@
+use lb_binary_codec::bincode::SerializeOp as _;
 use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
-use lb_core::{codec::SerializeOp as _, header::HeaderId};
+use lb_core::header::HeaderId;
 use lb_http_api_common::{
     bodies::{
         NoopBody,
@@ -75,7 +76,7 @@ impl WalletHttpClient {
 
 #[cfg(test)]
 mod tests {
-    use lb_core::codec::DeserializeOp as _;
+    use lb_binary_codec::bincode::DeserializeOp as _;
 
     use super::*;
 

@@ -1,7 +1,7 @@
 use std::{fmt::Display, marker::PhantomData};
 
 use bytes::Bytes;
-use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
+use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 #[cfg(feature = "rocksdb-backend")]
 use lb_services_utils::overwatch::recovery::RecoveryData;
 pub use lb_services_utils::overwatch::recovery::StorageRecoverySettings;

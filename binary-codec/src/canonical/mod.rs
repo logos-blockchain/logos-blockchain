@@ -1,4 +1,4 @@
-//! The unified binary codec for Logos blockchain components.
+//! Canonical binary encoding for Logos blockchain components.
 //!
 //! One encode trait ([`BinaryEncode`]) and one decode trait ([`BinaryDecode`])
 //! that every type with a custom encoding scheme implements.
@@ -8,11 +8,6 @@
 //! traits require [`CodecExamples`], whose only sanctioned implementation
 //! path is [`codec_fixtures!`] / `#[derive(BinaryCodec)]`, so a codec
 //! without a fixture is a compilation error.
-
-// The derive and `codec_fixtures!` expansions refer to this crate as
-// `::lb_codec`, so the crate must be able to name itself that way when it
-// uses them for its own primitives.
-extern crate self as lb_codec;
 
 mod array;
 mod boolean;
@@ -30,7 +25,7 @@ pub use fixtures::{
     assert_codec_fixtures_decode_only, assert_codec_fixtures_decode_only_with,
     assert_codec_fixtures_encode_only, assert_codec_fixtures_with, decode_fixture_hex,
 };
-pub use lb_codec_macros::{BinaryCodec, codec_fixtures};
+pub use lb_binary_codec_macros::{BinaryCodec, codec_fixtures};
 
 /// Sealed marker that gates [`CodecExamples`] to the blessed macro path.
 ///

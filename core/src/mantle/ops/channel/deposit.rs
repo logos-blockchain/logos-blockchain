@@ -1,4 +1,4 @@
-use lb_codec::{BinaryCodec, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
 use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};

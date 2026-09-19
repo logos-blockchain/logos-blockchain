@@ -11,8 +11,8 @@ use std::{
 
 use cucumber::World;
 use educe::Educe;
+use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_core::{
-    codec::DeserializeOp as _,
     header::HeaderId,
     mantle::{
         GenesisTime, SignedOps, Utxo, Value,

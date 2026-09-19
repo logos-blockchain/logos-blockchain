@@ -1,8 +1,6 @@
 use bytes::Bytes;
-use lb_core::{
-    codec::{BoundedSerializeOp, UpperBoundedVec},
-    header::HeaderId,
-};
+use lb_binary_codec::bincode::{BoundedSerializeOp, UpperBoundedVec};
+use lb_core::header::HeaderId;
 use lb_cryptarchia_engine::Slot;
 use serde::{Deserialize, Serialize};
 

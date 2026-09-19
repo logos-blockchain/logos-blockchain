@@ -2,10 +2,8 @@ use std::{collections::HashMap, marker::PhantomData, pin::Pin};
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _};
-use lb_core::{
-    codec::{DeserializeOp as _, SerializeOp as _},
-    mantle::transactions::hash::TxHash,
-};
+use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
+use lb_core::mantle::transactions::hash::TxHash;
 use lb_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};

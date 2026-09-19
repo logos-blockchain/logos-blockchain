@@ -591,9 +591,9 @@ where
 mod tests {
     use std::{collections::BTreeMap, num::NonZero};
 
+    use lb_binary_codec::bincode::DeserializeOp as _;
     use lb_core::{
         block::{BlockTransactions, UncleHeaders},
-        codec::DeserializeOp as _,
         crypto::ZkHasher,
         events::Events,
         mantle::{

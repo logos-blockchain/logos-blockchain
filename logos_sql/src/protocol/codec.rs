@@ -1,6 +1,6 @@
 //! Binary encoding for protocol leaves backed by external types.
 
-use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::bounded::UpperBoundedVec;
 use rusqlite::types::Value;
 

@@ -1,7 +1,7 @@
 use std::io;
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-use lb_core::codec::{self, BoundedBytes, BoundedSerializeOp, DeserializeOp as _};
+use lb_binary_codec::bincode::{self, BoundedBytes, BoundedSerializeOp, DeserializeOp as _};
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
@@ -21,7 +21,7 @@ pub enum PackingError {
     Io(#[from] io::Error),
 
     #[error("Serialization error")]
-    Serialization(#[from] codec::Error),
+    Serialization(#[from] bincode::Error),
 }
 
 pub async fn pack_to_writer<Message, Writer>(message: &Message, writer: &mut Writer) -> Result<()>
@@ -91,7 +91,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            PackingError::Serialization(codec::Error::Serialize(_))
+            PackingError::Serialization(bincode::Error::Serialize(_))
         ));
         assert!(writer.into_inner().is_empty());
     }

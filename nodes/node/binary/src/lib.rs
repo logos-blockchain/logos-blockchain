@@ -12,7 +12,6 @@ use color_eyre::eyre::{Result, eyre};
 pub use lb_blend_service::core::backends::libp2p::Libp2pBlendBackend as BlendBackend;
 use lb_core::mantle::{ledger::verification_mode::StandardMode, transactions::states::Preverified};
 pub use lb_core::{
-    codec,
     header::HeaderId,
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };

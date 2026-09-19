@@ -1,6 +1,5 @@
 pub mod blend;
 pub mod block;
-pub mod codec;
 pub mod crypto;
 pub mod events;
 pub mod header;

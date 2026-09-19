@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lb_codec::BinaryEncode as _;
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     Note, SignedOps, Utxo,

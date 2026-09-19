@@ -6,9 +6,9 @@ use std::{
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _};
+use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::{
     block::Block,
-    codec::{DeserializeOp as _, SerializeOp as _},
     events::Events,
     header::HeaderId,
     mantle::{traits::Hashable, transactions::hash::TxHash},

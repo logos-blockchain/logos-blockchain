@@ -1,6 +1,6 @@
 use core::time::Duration;
 
-use lb_codec::BinaryEncode as _;
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{

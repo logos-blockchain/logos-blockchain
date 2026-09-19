@@ -5,9 +5,9 @@ use core::{
 };
 
 use futures::{Stream, StreamExt as _, stream, stream::BoxStream};
+use lb_binary_codec::bincode::DeserializeOp;
 use lb_chain_network_service::Message as ChainNetworkMsg;
 use lb_core::{
-    codec::DeserializeOp,
     header::HeaderId,
     mantle::{traits::Hashable, transactions::hash::PrefixedKey},
 };

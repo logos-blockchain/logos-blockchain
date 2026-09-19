@@ -1,10 +1,9 @@
 use core::fmt::{self, Debug, Formatter};
 
+use lb_binary_codec::{bincode::SerializeOp, canonical::BinaryEncode};
 pub use lb_blend::message::MAX_PAYLOAD_BODY_SIZE;
 use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
-use lb_codec::BinaryEncode;
 use lb_core::{
-    codec::SerializeOp,
     mantle::NoteId,
     sdp::{DeclarationId, Locator},
 };
@@ -172,7 +171,7 @@ pub enum TransactionNotBlendable {
     #[error("Transaction of {size} bytes exceeds the {maximum} a Blend payload can carry.")]
     TooLarge { size: usize, maximum: usize },
     #[error("Transaction cannot be encoded: {0}")]
-    Encoding(#[from] lb_core::codec::Error),
+    Encoding(#[from] lb_binary_codec::bincode::Error),
 }
 
 /// Why a proposal cannot be carried by the Blend network.

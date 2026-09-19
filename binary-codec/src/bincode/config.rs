@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use bincode::{
+use ::bincode::{
     Options as _,
     config::{
         FixintEncoding, LittleEndian, RejectTrailing, WithOtherEndian, WithOtherIntEncoding,
@@ -12,8 +12,8 @@ use bincode::{
 pub type BincodeOptions = WithOtherTrailing<
     WithOtherIntEncoding<
         WithOtherLimit<
-            WithOtherEndian<bincode::DefaultOptions, LittleEndian>,
-            bincode::config::Infinite,
+            WithOtherEndian<::bincode::DefaultOptions, LittleEndian>,
+            ::bincode::config::Infinite,
         >,
         FixintEncoding,
     >,
@@ -21,7 +21,7 @@ pub type BincodeOptions = WithOtherTrailing<
 >;
 
 pub static OPTIONS: LazyLock<BincodeOptions> = LazyLock::new(|| {
-    bincode::DefaultOptions::new()
+    ::bincode::DefaultOptions::new()
         .with_little_endian()
         .with_no_limit()
         .with_fixint_encoding()
@@ -33,7 +33,7 @@ use bytes::Bytes;
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::codec::{Error as WireError, Result};
+use super::{Error as WireError, Result};
 
 /// Serialize an object directly into bytes
 pub fn serialize<T: Serialize>(item: &T) -> Result<Bytes> {

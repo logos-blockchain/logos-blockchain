@@ -1,6 +1,6 @@
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
-use lb_codec::BinaryCodec;
+use lb_binary_codec::canonical::BinaryCodec;
 use lb_groth16::Fr;
 
 use crate::{

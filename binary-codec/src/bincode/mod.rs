@@ -1,7 +1,9 @@
-//! Serializer for wire formats.
-// TODO: we're using bincode for now, but might need strong guarantees about
-// the underlying format in the future for standardization.
-pub(crate) mod bincode;
+//! Configured Serde/bincode serialization for Logos services and wire paths.
+//!
+//! This is deliberately separate from [`crate::canonical`], which defines the
+//! standardized Logos binary representation. These formats may happen to
+//! produce the same bytes for some types, but they are distinct contracts.
+mod config;
 pub mod errors;
 
 use bytes::Bytes;
@@ -21,11 +23,11 @@ pub trait DeserializeOp: Sized {
 
 impl<T: Serialize> SerializeOp for T {
     fn to_bytes(&self) -> Result<Bytes> {
-        bincode::serialize(self)
+        config::serialize(self)
     }
 
     fn bytes_size(&self) -> Result<u64> {
-        bincode::serialized_size(self)
+        config::serialized_size(self)
     }
 }
 
@@ -45,7 +47,7 @@ impl<const MAX: usize> BoundedBytes for UpperBoundedVec<u8, MAX> {
     const MAX: usize = MAX;
 
     fn serialize<T: Serialize>(value: &T) -> Result<Self> {
-        bincode::serialize_bounded::<_, MAX>(value)
+        config::serialize_bounded::<_, MAX>(value)
     }
 }
 
@@ -59,7 +61,7 @@ pub trait BoundedSerializeOp: SerializeOp + Serialize + Sized {
 
 impl<T: DeserializeOwned> DeserializeOp for T {
     fn from_bytes(data: &[u8]) -> Result<Self> {
-        bincode::deserialize(data)
+        config::deserialize(data)
     }
 }
 
@@ -122,6 +124,15 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, Error::Serialize(_)));
+    }
+
+    #[test]
+    fn bounded_serialization_allows_values_under_the_upper_bound() {
+        let tmp = TestBounded(vec![1u8, 2]);
+        let bounded = tmp.to_bounded_bytes().unwrap();
+
+        assert_eq!(bounded.as_slice(), tmp.to_bytes().unwrap().as_ref());
+        assert_eq!(bounded.len(), 10);
     }
 
     #[test]

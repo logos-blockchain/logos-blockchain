@@ -1,4 +1,4 @@
-use lb_codec::BinaryEncode as _;
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_config::consensus::{EMPTY_CHANNEL_ID, EMPTY_ED25519_PUBLIC_KEY};
 use lb_core::{
     crypto::ZkDigest,

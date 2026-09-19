@@ -1,7 +1,7 @@
 use std::{collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, time::Instant};
 
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
-use lb_codec::BinaryDecodeExt as _;
+use lb_binary_codec::canonical::BinaryDecodeExt as _;
 use lb_core::{
     block::{Block, Proposal},
     header::HeaderId,
