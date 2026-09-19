@@ -264,6 +264,14 @@ pub fn generate_key(args: GenerateKeyArgs) -> Result<KeyId> {
         .as_ref()
         .map_or_else(|| next_user_key_title(&keystore), Clone::clone);
 
+    if keystore.contains(user_key_title.clone()) {
+        color_eyre::eyre::bail!(
+            "A key with the title '{}' already exists in the keystore.              Use a different title or remove the existing key first with `remove-key --title {}`.",
+            user_key_title,
+            user_key_title
+        );
+    }
+
     let (key_id, _) = generate_key_into_keystore(&mut keystore, user_key_title, &key_type);
 
     persist_user_config_and_keystore(
@@ -316,6 +324,14 @@ pub fn run_add_key(args: AddKeyArgs) -> Result<()> {
     let user_key_title = key_title
         .as_ref()
         .map_or_else(|| next_user_key_title(&keystore), Clone::clone);
+
+    if keystore.contains(user_key_title.clone()) {
+        color_eyre::eyre::bail!(
+            "A key with the title '{}' already exists in the keystore.              Use a different title or remove the existing key first with `remove-key --title {}`.",
+            user_key_title,
+            user_key_title
+        );
+    }
 
     keystore.set(user_key_title.clone(), key);
 
