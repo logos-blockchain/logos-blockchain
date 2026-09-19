@@ -16,7 +16,7 @@ pub use uncle::{SignedHeader, UncleHeaders};
 use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},
     crypto::{Digest as _, Hasher},
-    header::{ContentId, Header, HeaderId, Version},
+    header::{ContentId, Header, HeaderId},
     mantle::{
         traits::{Hashable, StorageSize},
         transactions::hash::{TxHash, TxHashPrefix},
@@ -54,8 +54,6 @@ pub enum Error {
 /// Why a header fails the checks that need the header alone.
 #[derive(Debug, thiserror::Error)]
 pub enum HeaderError {
-    #[error("Unsupported header version: {0:?}")]
-    UnsupportedVersion(Version),
     #[error("Expected a non-genesis slot")]
     GenesisSlot,
 }
@@ -341,9 +339,6 @@ impl<Tx> Block<Tx> {
 /// This does not check `proof_of_leadership` and the parent header
 /// since they require a ledger state.
 pub fn verify_header_alone(header: &Header) -> Result<(), HeaderError> {
-    if *header.version() != Version::Bedrock {
-        return Err(HeaderError::UnsupportedVersion(*header.version()));
-    }
     if header.slot() == Slot::genesis() {
         return Err(HeaderError::GenesisSlot);
     }
@@ -840,15 +835,15 @@ mod tests {
         assert!(matches!(err, Error::Header(HeaderError::GenesisSlot)));
     }
 
-    /// The specification fixes the maximum proposal at 18,192 bytes:
-    /// `header (297) || uncle_headers (1 + MAX_UNCLES * 361)
+    /// The specification fixes the maximum proposal at 18,187 bytes:
+    /// `header (296) || uncle_headers (1 + MAX_UNCLES * 360)
     /// || references (2 + 16384) || signature (64)`.
     #[test]
     fn maximum_proposal_matches_the_specified_size() {
         use lb_codec::BinaryEncode as _;
         use lb_cryptarchia_engine::MAX_UNCLES;
 
-        const SPECIFIED_MAX_PROPOSAL_SIZE: usize = 18_192;
+        const SPECIFIED_MAX_PROPOSAL_SIZE: usize = 18_187;
 
         let proof = create_proof();
         let uncle = signed_uncle(1, &proof);
