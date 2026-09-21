@@ -2067,6 +2067,72 @@ mod tests {
         );
     }
 
+    /// A bundle carries its preparer's inscription signature, and the ledger
+    /// only accepts an inscription from the turn holder. Submitting another
+    /// sequencer's bundle through this runtime would post it in *our* turn
+    /// under *their* signature — unlandable. Reject at submit instead.
+    #[tokio::test]
+    async fn submit_atomic_bundle_rejects_a_bundle_prepared_by_another_sequencer() {
+        use lb_core::mantle::ledger::NoteId;
+        use lb_groth16::Fr;
+
+        use super::super::types::{PreparedAtomicBundle, PreparedBundleKind};
+
+        let own_key = Ed25519Key::from_bytes(&[7; 32]);
+        let peer_key = Ed25519Key::from_bytes(&[8; 32]);
+        let channel = ChannelState {
+            accredited_keys: Keys::new_unchecked(vec![own_key.public_key(), peer_key.public_key()])
+                .into(),
+            transfer_threshold: 2,
+            ..single_key_channel_state()
+        };
+        let mut sequencer = ready_sequencer_with_channel(Some(channel), own_key.clone()).await;
+
+        let sign_payload = vec![0xab; 32];
+        let bundle_by = |preparer: &Ed25519Key| PreparedAtomicBundle {
+            tx: Ops::new_unchecked(Vec::new()),
+            transfer_proof: None,
+            inscribe_sig: preparer.sign_payload(&sign_payload),
+            parent: MsgId::root(),
+            msg_id: MsgId::root(),
+            inscribe: Inscription::new_unchecked(b"pin".to_vec()),
+            signer: preparer.public_key(),
+            kind: PreparedBundleKind::PinDeposit {
+                consumed_notes: Inputs::new([NoteId::from(Fr::from(1u64))]),
+            },
+            sign_payload: sign_payload.clone(),
+            accredited_keys: vec![own_key.public_key(), peer_key.public_key()],
+            signing_threshold: 2,
+        };
+
+        // Prepared by the peer: refused before anything is tracked.
+        let error = sequencer
+            .handle()
+            .submit_atomic_bundle(bundle_by(&peer_key), Vec::new())
+            .expect_err("another sequencer's bundle must be refused");
+        assert!(
+            matches!(&error, Error::InvalidMultiSig(msg) if msg.contains("another sequencer")),
+            "unexpected error: {error}"
+        );
+        assert!(
+            sequencer
+                .checkpoint()
+                .is_none_or(|checkpoint| checkpoint.pending_txs.is_empty()),
+            "refused bundle must not be tracked"
+        );
+
+        // Prepared by us: passes the ownership check and fails later, on the
+        // (empty) multi-sig set — proving the check above is what fired.
+        let error = sequencer
+            .handle()
+            .submit_atomic_bundle(bundle_by(&own_key), Vec::new())
+            .expect_err("empty signature set under 2-of-2 must be refused");
+        assert!(
+            matches!(&error, Error::InvalidMultiSig(msg) if !msg.contains("another sequencer")),
+            "unexpected error: {error}"
+        );
+    }
+
     fn config_op_of(tx: &SignedOps<Unverified, StandardMode>) -> ChannelConfigOp {
         tx.op_refs()
             .iter()
