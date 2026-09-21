@@ -2,7 +2,7 @@ use super::{
     Arc, BTreeSet, ChannelUpdate, ChannelUpdateTx, DiscardedPayloads, Event, FinalizedTx, HashMap,
     HashSet, Inscription, InscriptionInfo, LazyLock, MsgId, PolicyRuntime, SequencerChannelView,
     VecDeque, ZoneAccountBalances, ZoneNodeHttpClient, ZoneSequencer, finalized_inscriptions,
-    parse_balance_payload, runner, to_policy_runtime, warn,
+    parse_balance_payload, runner, to_policy_runtime, view_inscriptions, warn,
 };
 
 /// Spawn a sequencer drive task with a no-op policy. Step bodies drive
@@ -93,9 +93,8 @@ where
         };
         self.finalized
             .extend(finalized_inscriptions(finalized).map(|info| info.payload.clone()));
-        let on_chain: HashSet<&Inscription> = channel_update
-            .canonical_chain()
-            .filter_map(|tx| tx.inscription().map(|info| &info.payload))
+        let on_chain: HashSet<&Inscription> = view_inscriptions(channel_update)
+            .map(|info| &info.payload)
             .collect();
         for entry in &channel_update.orphaned {
             let ChannelUpdateTx::Inscription(info) = entry else {
@@ -153,10 +152,7 @@ impl LineageTracker {
     /// in the prefix as pending, so nothing carries over.
     fn rebuild(&mut self, channel_update: &ChannelUpdate) {
         self.pending.clear();
-        for info in channel_update
-            .canonical_chain()
-            .filter_map(ChannelUpdateTx::inscription)
-        {
+        for info in view_inscriptions(channel_update) {
             if let Some(&root) = self.intent_root.get(&info.this_msg) {
                 self.pending.entry(root).or_default().insert(info.this_msg);
             }
@@ -431,10 +427,7 @@ impl BalanceAwareState {
         for updates in self.applied.values_mut() {
             updates.retain(|uuid, _| finalized.contains(uuid));
         }
-        for info in channel_update
-            .canonical_chain()
-            .filter_map(ChannelUpdateTx::inscription)
-        {
+        for info in view_inscriptions(channel_update) {
             self.record_applied_payload(&info.payload);
         }
     }
@@ -498,11 +491,8 @@ impl SortedConflictState {
 
     fn rebuild_view(&mut self, channel_update: &ChannelUpdate) {
         self.channel_view = self.finalized.iter().cloned().collect();
-        self.channel_view.extend(
-            channel_update
-                .canonical_chain()
-                .filter_map(|tx| tx.inscription().map(|info| info.payload.clone())),
-        );
+        self.channel_view
+            .extend(view_inscriptions(channel_update).map(|info| info.payload.clone()));
     }
 
     /// A discarded payload that landed anyway is no longer ours to re-home.

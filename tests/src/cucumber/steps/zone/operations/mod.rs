@@ -78,6 +78,14 @@ fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &In
             | FinalizedOp::ChannelTransfer(_) => None,
         })
 }
+
+/// Inscriptions in the non-finalized view an update describes, in lineage
+/// order — the counterpart of [`finalized_inscriptions`].
+fn view_inscriptions(update: &ChannelUpdate) -> impl Iterator<Item = &InscriptionInfo> {
+    update
+        .canonical_chain()
+        .filter_map(ChannelUpdateTx::inscription)
+}
 use crate::{
     common::{
         chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,

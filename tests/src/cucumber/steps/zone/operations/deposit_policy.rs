@@ -2,16 +2,8 @@ use super::{
     ChannelUpdate, ChannelUpdateTx, Event, FinalizedTx, Hash, HashMap, HashSet, Inscription,
     InscriptionId, Note, NoteId, Outputs, PolicyRuntime, WithdrawArg, WithdrawInputs, ZkPublicKey,
     ZoneNodeHttpClient, ZoneSequencer, finalized_inscriptions, make_inscription, runner,
-    to_policy_runtime, warn,
+    to_policy_runtime, view_inscriptions, warn,
 };
-
-/// Payloads in the non-finalized view of `channel_update`.
-fn view_payloads(channel_update: &ChannelUpdate) -> HashSet<&Inscription> {
-    channel_update
-        .canonical_chain()
-        .filter_map(|tx| tx.inscription().map(|info| &info.payload))
-        .collect()
-}
 
 /// Reactively drive the full deposit lifecycle (pin, then withdraw the
 /// re-created note), no wait for finalization. See [`DepositLifecyclePolicy`].
@@ -137,7 +129,9 @@ where
                 });
         }
         finalized.extend(finalized_inscriptions(finalized_txs).map(|info| info.payload.clone()));
-        let view = view_payloads(channel_update);
+        let view: HashSet<&Inscription> = view_inscriptions(channel_update)
+            .map(|info| &info.payload)
+            .collect();
         for (op_id, state) in deposits.iter_mut() {
             let present =
                 |payload: &Inscription| finalized.contains(payload) || view.contains(payload);

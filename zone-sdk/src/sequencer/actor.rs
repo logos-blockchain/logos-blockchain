@@ -531,8 +531,8 @@ where
                 adopted_deposits: Vec::new(),
             },
         };
-        // Observed deposits ride every processed block, independent of
-        // whether the lineage moved.
+        // Observed deposits ride every processed block, independent of whether
+        // the lineage moved.
         channel_update.adopted_deposits = result.adopted_deposits;
 
         // Shed pending configs superseded on the config lineage; the lineage
