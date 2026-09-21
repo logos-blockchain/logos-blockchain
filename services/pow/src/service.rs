@@ -168,6 +168,7 @@ pub struct AutoClaimStatus {
 pub struct ClaimTargetStatus {
     pub public_key: ZkPublicKey,
     pub threshold: Value,
+    /// `None` means wallet couldn't be read.
     pub balance: Option<Value>,
 }
 
@@ -821,7 +822,7 @@ where
 /// can tell which targets are still below their threshold.
 ///
 /// A failed balance read leaves that target's balance unknown rather than
-/// failing the report: `armed` does not depend on the wallet.
+/// failing the report: `is_armed` does not depend on the wallet.
 async fn auto_claim_status<WalletService, RuntimeServiceId>(
     wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
     settings: &AutoClaimSettings,
