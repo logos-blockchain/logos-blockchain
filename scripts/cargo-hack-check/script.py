@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 # Runs a cache-aware Cargo Hack check for all crates in the workspace.
+#
+# Each crate's cache key is a Merkle hash over:
+# - Global inputs: root manifest, toolchain, cargo config, tool versions, check command, warnings policy.
+# - The crate's own files (tracked and untracked-but-not-ignored).
+# - The external packages it (transitively) depends on, as resolved in `cargo metadata`.
+# - The cache keys of the workspace crates it depends on.
+# A crate is skipped when its current key matches the key saved after its last successful check.
+#
+# Improvement: Dev-dependencies are not part of the key yet, although the check runs with `--all-targets`.
 
 
 import json
 import dataclasses
 import argparse
+import graphlib
+import hashlib
 import os
-from collections import namedtuple
 from pathlib import Path
-from sys import stderr
 from typing import List, Dict, Set, Iterable, TypedDict, Any, Optional
-import heapq
 import subprocess
-import re
 import time
 from ui import CargoHackDashboard
 
@@ -23,17 +30,19 @@ from ui import CargoHackDashboard
 
 # TODO: Parametrize
 
-# Improvement: These constants are fragile. They rely on:
-# - WORKSPACE_ROOT pointing to the root of the workspace.
-# - HASH_SCRIPT being in the same directory as this script.
-# If these prerequisites are not met, the script will not behave as expected.
+# Improvement: These constants are fragile. They rely on WORKSPACE_ROOT pointing to the root of the workspace.
+# If this prerequisite is not met, the script will not behave as expected.
 # Moving these to parameters would be safer.
 
 CURRENT_FILE_DIRECTORY = Path(__file__).parent.resolve()
 WORKSPACE_ROOT = CURRENT_FILE_DIRECTORY.parent.parent
-WORKSPACE_CARGO_LOCK = WORKSPACE_ROOT / "Cargo.lock"
 CACHE_DIRECTORY = WORKSPACE_ROOT / ".cache/cargo-hack-check"
-COMPUTE_CREATE_HASH_SCRIPT = CURRENT_FILE_DIRECTORY / "compute_crate_hash.sh"
+GLOBAL_INPUT_FILES = [
+    WORKSPACE_ROOT / "Cargo.toml",
+    WORKSPACE_ROOT / "rust-toolchain.toml",
+    WORKSPACE_ROOT / ".cargo/config.toml",
+]
+FEATURE_POWERSET_COMMAND = ["cargo", "hack", "check", "--feature-powerset", "--all-targets"]
 TAG = "[Cargo Hack Powerset]"
 STRICT_WARNING_FLAG = "deny"
 
@@ -41,15 +50,6 @@ STRICT_WARNING_FLAG = "deny"
 ###############
 ### Helpers ###
 ###############
-
-
-def with_tag(message: str) -> str:
-    return f"{TAG} {message}"
-
-
-def with_indent(message: str, indent_level: int = 1, bullet: str = "-") -> str:
-    indent = " " * indent_level
-    return f"{indent}{bullet} {message}"
 
 
 def ensure_cache_directory_exists():
@@ -71,18 +71,43 @@ def build_cargo_environment() -> Dict[str, str]:
     return env
 
 
+def run_in_workspace(command: List[str]) -> str:
+    result = subprocess.run(
+        command,
+        cwd=WORKSPACE_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+def hash_parts(parts: Iterable[str]) -> str:
+    hasher = hashlib.sha256()
+    for part in parts:
+        hasher.update(part.encode())
+        hasher.update(b"\0")
+    return hasher.hexdigest()
+
+
+def hash_file(path: Path) -> str:
+    if not path.is_file():
+        return "MISSING"
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 ###################################################### Workspace #######################################################
 
 #############
 ### Types ###
 #############
 
-WorkspaceMemberHeapItem = namedtuple("WorkspaceMemberHeapItem", ["key", "member"])
 
 @dataclasses.dataclass
 class WorkspaceMember:
     id: str
-    name: str  # Improvement: Ensure these are unique among WorkspaceMember instances
+    name: str
     manifest_path: Path
     dependency_ids: Set[str] = dataclasses.field(default_factory=set)
 
@@ -94,24 +119,18 @@ class WorkspaceMember:
             raise TypeError("Comparison is only supported between WorkspaceMember instances.")
         return self.id == other.id
 
-    def get_heap_key(self) -> str:
-        return self.name
-
-    def as_heap_item(self) -> WorkspaceMemberHeapItem:
-        return WorkspaceMemberHeapItem(self.get_heap_key(), self)
-
     @property
     def manifest_path_posix(self) -> str:
         return self.manifest_path.as_posix()
+
+    @property
+    def directory(self) -> Path:
+        return self.manifest_path.parent
 
     ### Caching ###
 
     def get_cache_path(self) -> Path:
         return CACHE_DIRECTORY / f"{self.name}.key"
-
-    def compute_cache_key(self) -> str:
-        manifest = Path(self.manifest_path)
-        return compute_crate_hash(manifest.parent)
 
     def save_cache_key(self, cache_key: str):
         with self.get_cache_path().open("w") as file:
@@ -131,11 +150,11 @@ class WorkspaceMember:
 @dataclasses.dataclass
 class Workspace:
     members: List[WorkspaceMember]
-    dependencies_dispatcher: Dict[str, Set[WorkspaceMember]]
-    dependents_dispatcher: Dict[str, Set[WorkspaceMember]]
+    resolve_dispatcher: Dict[str, dict]
 
-    def __post_init__(self):
-        assert len(self.members) == len(self.dependencies_dispatcher) == len(self.dependents_dispatcher), "Inconsistent workspace data."
+    @property
+    def member_ids(self) -> Set[str]:
+        return {member.id for member in self.members}
 
 
 class DepsKindEntry(TypedDict, total=False):
@@ -155,38 +174,13 @@ class DepsEntry(TypedDict):
 
 
 def run_cargo_metadata() -> dict:
-    result = subprocess.run(
-        ["cargo", "metadata", "--format-version", "1"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=True,
-    )
-    return json.loads(result.stdout)
+    return json.loads(run_in_workspace(["cargo", "metadata", "--format-version", "1"]))
 
 
 #################
 ### Workspace ###
 #################
 
-
-def build_workspace_members(workspace_nodes: Iterable[dict], workspace_package_dispatcher: Dict[str, dict]) -> Iterable[WorkspaceMember]:
-    return (
-        WorkspaceMember(
-            id=node["id"],
-            name=workspace_package_dispatcher[node["id"]]["name"],
-            manifest_path=normalize_path_to_workspace_root(workspace_package_dispatcher[node["id"]]["manifest_path"]),
-            dependency_ids={dependency["pkg"] for dependency in filter_workspace_dependencies(node, workspace_package_dispatcher)},
-        )
-        for node in workspace_nodes
-    )
-
-def filter_workspace_nodes(metadata_nodes: List[dict], workspace_member_ids: Set[str]) -> Iterable[dict]:
-    return (
-        node
-        for node in metadata_nodes
-        if node["id"] in workspace_member_ids
-    )
 
 def is_dev_only_dependency(dependency_entry: DepsEntry) -> bool:
     """
@@ -198,166 +192,164 @@ def is_dev_only_dependency(dependency_entry: DepsEntry) -> bool:
     return all(kind.get("kind") == "dev" for kind in kinds)
 
 
-def filter_workspace_dependencies(node: dict, workspace_package_dispatcher: Dict[str, dict]) -> Iterable[DepsEntry]:
-    """
-    Filter dependencies to include only those that are workspace members and not dev-only dependencies.
-    """
-    workspace_member_ids = workspace_package_dispatcher.keys()
+def filter_non_dev_dependencies(node: dict) -> Iterable[DepsEntry]:
     dependencies: Iterable[DepsEntry] = node.get("deps", [])
     return (
         dependency
         for dependency in dependencies
-        if dependency["pkg"] in workspace_member_ids and not is_dev_only_dependency(dependency)
+        if not is_dev_only_dependency(dependency)
     )
-
-
-def filter_workspace_members(metadata: dict) -> List[WorkspaceMember]:
-    workspace_member_ids = set(metadata["workspace_members"])
-    metadata_nodes = metadata["resolve"]["nodes"]
-    workspace_nodes = filter_workspace_nodes(metadata_nodes, workspace_member_ids)
-    workspace_package_dispatcher = {
-        package["id"]: package
-        for package in metadata["packages"]
-        if package["id"] in workspace_member_ids
-    }
-    return list(build_workspace_members(workspace_nodes, workspace_package_dispatcher))
-
-
-def build_dependencies_dispatcher(members_dispatcher: Dict[str, WorkspaceMember]) -> Dict[str, Set[WorkspaceMember]]:
-    return {
-        member.id: { members_dispatcher[dependency_id] for dependency_id in member.dependency_ids }
-        for member in members_dispatcher.values()
-    }
-
-def build_dependents_dispatcher(members_dispatcher: Dict[str, WorkspaceMember]) -> Dict[str, Set[WorkspaceMember]]:
-    dependents_dispatcher = {member_id: set() for member_id in members_dispatcher} # Preseed so there's one entry per member
-    for member in members_dispatcher.values():
-        for dependency_id in member.dependency_ids:
-            dependents_dispatcher[dependency_id].add(member)
-    return dependents_dispatcher
 
 
 def build_workspace(metadata: dict) -> Workspace:
-    members: List[WorkspaceMember] = filter_workspace_members(metadata)
+    workspace_member_ids = set(metadata["workspace_members"])
+    resolve_dispatcher = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+    members = [
+        WorkspaceMember(
+            id=package["id"],
+            name=package["name"],
+            manifest_path=normalize_path_to_workspace_root(package["manifest_path"]),
+            dependency_ids={
+                dependency["pkg"]
+                for dependency in filter_non_dev_dependencies(resolve_dispatcher[package["id"]])
+                if dependency["pkg"] in workspace_member_ids
+            },
+        )
+        for package in metadata["packages"]
+        if package["id"] in workspace_member_ids
+    ]
+    return Workspace(members=sort_members_topologically(members), resolve_dispatcher=resolve_dispatcher)
+
+
+def sort_members_topologically(members: List[WorkspaceMember]) -> List[WorkspaceMember]:
+    """
+    Sort members so dependencies come before their dependents, breaking ties by name.
+    Checking dependencies first surfaces a broken crate before its dependents fail on the same error.
+    """
     members_dispatcher = {member.id: member for member in members}
+    sorter = graphlib.TopologicalSorter({member.id: member.dependency_ids for member in members})
+    sorter.prepare()
+    sorted_members: List[WorkspaceMember] = []
+    while sorter.is_active():
+        ready = sorted((members_dispatcher[member_id] for member_id in sorter.get_ready()), key=lambda member: member.name)
+        sorted_members.extend(ready)
+        sorter.done(*(member.id for member in ready))
+    return sorted_members
 
-    # Improvement: Assert both dispatchers' keys are equal to the workspace member IDs.
-    dependencies_dispatcher = build_dependencies_dispatcher(members_dispatcher)
-    dependents_dispatcher = build_dependents_dispatcher(members_dispatcher)
 
-    return Workspace(
-        members=members,
-        dependencies_dispatcher=dependencies_dispatcher,
-        dependents_dispatcher=dependents_dispatcher,
+def get_workspace() -> Workspace:
+    return build_workspace(run_cargo_metadata())
+
+
+##################################################### Cache Keys #######################################################
+
+
+def compute_global_hash() -> str:
+    """
+    Hash the inputs that affect every crate's check.
+    """
+    rustc_version = run_in_workspace(["rustc", "-vV"])
+    cargo_hack_version = run_in_workspace(["cargo", "hack", "--version"])
+    warnings = build_cargo_environment()["CARGO_BUILD_WARNINGS"]
+    return hash_parts([
+        *(f"{path.relative_to(WORKSPACE_ROOT)}={hash_file(path)}" for path in GLOBAL_INPUT_FILES),
+        rustc_version,
+        cargo_hack_version,
+        " ".join(FEATURE_POWERSET_COMMAND),
+        warnings,
+    ])
+
+
+def compute_source_hash(directory: Path) -> str:
+    """
+    Hash the tracked and untracked-but-not-ignored files under the directory.
+    """
+    output = run_in_workspace(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", directory.as_posix()])
+    relative_paths = sorted(set(output.split("\0")) - {""})
+    return hash_parts(
+        f"{relative_path}={hash_file(WORKSPACE_ROOT / relative_path)}"
+        for relative_path in relative_paths
     )
 
-def sort_workspace_topologically(workspace: Workspace) -> Workspace:
+
+def collect_external_package_ids(member: WorkspaceMember, workspace: Workspace) -> Set[str]:
     """
-    :param workspace: Mutable, sorted in place by topological order.
+    Collect the external packages reachable from the member without going through another workspace member.
+    Those reached through another workspace member are covered by that member's cache key.
     """
-
-    # Clone the dependencies to avoid mutating the original data
-    member_id: str
-    member_dependencies: Set[WorkspaceMember]
-    remaining_dependencies: Dict[str, Set[WorkspaceMember]] = {
-        member_id: set(member_dependencies)
-        for member_id, member_dependencies in workspace.dependencies_dispatcher.items()
-    }
-    def degree(member: WorkspaceMember) -> int:
-        return len(remaining_dependencies[member.id])
-
-    zero_degree_member_heap = [
-        member.as_heap_item() for member in workspace.members if degree(member) == 0
-    ]
-    heapq.heapify(zero_degree_member_heap)
-
-    sorted_members: List[WorkspaceMember] = []
-    while zero_degree_member_heap:
-        item: WorkspaceMemberHeapItem = heapq.heappop(zero_degree_member_heap)
-        member: WorkspaceMember = item.member
-        member_dependents = workspace.dependents_dispatcher[member.id]
-        for dependent in member_dependents:
-            remaining_dependencies[dependent.id].remove(member)
-            if degree(dependent) == 0:
-                heapq.heappush(zero_degree_member_heap, dependent.as_heap_item())
-
-        sorted_members.append(item.member)
-
-    if len(sorted_members) != len(workspace.members):
-        print(with_tag("Warning: cycle detected in workspace dependencies"), file=stderr)
-
-    workspace.members = sorted_members
-    return workspace
+    member_ids = workspace.member_ids
+    external_ids: Set[str] = set()
+    pending = [member.id]
+    while pending:
+        node = workspace.resolve_dispatcher[pending.pop()]
+        for dependency in filter_non_dev_dependencies(node):
+            dependency_id = dependency["pkg"]
+            if dependency_id in member_ids or dependency_id in external_ids:
+                continue
+            external_ids.add(dependency_id)
+            pending.append(dependency_id)
+    return external_ids
 
 
-def get_workspace_sorted_topologically() -> Workspace:
-    metadata = run_cargo_metadata()
-    workspace = build_workspace(metadata)
-    return sort_workspace_topologically(workspace)
+class CacheKeyCalculator:
+    def __init__(self, workspace: Workspace):
+        self.workspace = workspace
+        self.members_dispatcher = {member.id: member for member in workspace.members}
+        self.global_hash = compute_global_hash()
+        self._cache_keys: Dict[str, str] = {}
+        self._in_progress: Set[str] = set()
+
+    def compute(self, member: WorkspaceMember) -> str:
+        if member.id in self._cache_keys:
+            return self._cache_keys[member.id]
+        if member.id in self._in_progress:
+            raise RuntimeError(f"Cycle detected in workspace dependencies at {member.name}.")
+
+        self._in_progress.add(member.id)
+        dependency_keys = sorted(
+            self.compute(self.members_dispatcher[dependency_id])
+            for dependency_id in member.dependency_ids
+        )
+        self._in_progress.remove(member.id)
+
+        cache_key = hash_parts([
+            self.global_hash,
+            compute_source_hash(member.directory),
+            *sorted(collect_external_package_ids(member, self.workspace)),
+            *dependency_keys,
+        ])
+        self._cache_keys[member.id] = cache_key
+        return cache_key
 
 
 ##################################################### Cargo Hack #######################################################
 
-#############
-### Types ###
-#############
-
-class CargoHackCheckEntry:
-    _MANIFEST_RE = re.compile(r"--manifest-path\s+(\S+)")
-
-    def __init__(self, cmd_line: str, manifest_path: str):
-        self.cmd_line = cmd_line
-        self.manifest_path: Path = normalize_path_to_workspace_root(manifest_path)
-
-    @property
-    def manifest_path_posix(self) -> str:
-        return self.manifest_path.as_posix()
-
-    @classmethod
-    def from_command_line(cls, cmd_line: str) -> "CargoHackCheckEntry":
-        manifest_path = cls._MANIFEST_RE.search(cmd_line)
-        if manifest_path:
-            return cls(cmd_line, manifest_path.group(1))
-        raise ValueError(f"No manifest path was found in command: {cmd_line}.")
-
-    def __str__(self):
-        return f"CargoHackCommand({self.manifest_path})"
-
-    def __repr__(self):
-        return f"CargoHackCommand(cmd_line={self.cmd_line}, manifest_path={self.manifest_path})"
-
-    def __hash__(self):
-        return hash(self.manifest_path_posix)
-
-    def as_feature_powerset_command(self) -> List[str]:
-        # Changing this doesn't void the cache.
-        # TODO: Consider adding the command line options to the cache key.
-        return [
-            "cargo", "hack", "check", "--feature-powerset", "--all-targets", "--manifest-path", self.manifest_path_posix
-        ]
-
 
 class CargoHackCheckCommand:
-    def __init__(self, entry, member, dependents):
-        self.entry = entry
+    def __init__(self, member: WorkspaceMember, cache_key: str):
         self.member = member
-        self.dependents = dependents
+        self.cache_key = cache_key
 
     @property
     def crate_name(self):
         return self.member.name
 
-    def run(self, dashboard) -> int:
-        current_cache_key = self.member.compute_cache_key()
+    @property
+    def is_cached(self) -> bool:
+        return self.member.is_cache_valid(self.cache_key)
 
-        if self.member.is_cache_valid(current_cache_key):
+    def as_feature_powerset_command(self) -> List[str]:
+        return [*FEATURE_POWERSET_COMMAND, "--manifest-path", self.member.manifest_path_posix]
+
+    def run(self, dashboard) -> int:
+        if self.is_cached:
             dashboard.log_crate_detail(self.crate_name, "Cache is valid, skipping.")
             return 0
 
         dashboard.log_crate_detail(self.crate_name, "Running...")
 
         result = subprocess.run(
-            self.entry.as_feature_powerset_command(),
+            self.as_feature_powerset_command(),
             capture_output=True,
             text=True,
             check=False,
@@ -365,7 +357,7 @@ class CargoHackCheckCommand:
         )
 
         if result.returncode == 0:
-            self.handle_success(dashboard, current_cache_key)
+            self.handle_success(dashboard)
         else:
             self.handle_failure(dashboard, result)
 
@@ -373,17 +365,9 @@ class CargoHackCheckCommand:
 
     # ----------------------------------------------------------
 
-    def handle_success(self, dashboard, current_cache_key: str):
+    def handle_success(self, dashboard):
         dashboard.log_crate_detail(self.crate_name, "Succeeded.")
-        dashboard.log_crate_detail(self.crate_name, "Updating cache...")
-
-        self.member.save_cache_key(current_cache_key)
-
-        dashboard.log_crate_detail(self.crate_name, "Invalidating dependents...")
-
-        self.invalidate_dependents(dashboard)
-
-        dashboard.log_crate_detail(self.crate_name, "Done.")
+        self.member.save_cache_key(self.cache_key)
 
     # ----------------------------------------------------------
 
@@ -392,95 +376,17 @@ class CargoHackCheckCommand:
         dashboard.log(result.stdout)
         dashboard.log(result.stderr)
 
-    # ----------------------------------------------------------
 
-    def invalidate_dependents(self, dashboard):
-        if not self.dependents:
-            dashboard.log_crate_detail(self.crate_name, "No dependents to invalidate.")
-            return
-
-        removed = 0
-        missing = 0
-        for dependent in self.dependents:
-            try:
-                dependent.get_cache_path().unlink(missing_ok=False)
-                removed += 1
-                if dashboard.verbose:
-                    dashboard.log(
-                        with_indent(
-                            f"invalidated dependent cache for {dependent.name}.",
-                            4,
-                        )
-                    )
-            except FileNotFoundError:
-                missing += 1
-                if dashboard.verbose:
-                    dashboard.log(
-                        with_indent(
-                            f"no dependent cache entry existed for {dependent.name}.",
-                            4,
-                        )
-                    )
-
-        dashboard.log_cache_invalidation_summary(removed, missing)
-
-
-
-#################
-### Functions ###
-#################
-
-
-def compute_crate_hash(crate_directory: Path) -> str:
-    result = subprocess.run(
-        [COMPUTE_CREATE_HASH_SCRIPT, crate_directory, WORKSPACE_CARGO_LOCK],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout.strip()
-
-
-def list_cargo_hack_check_commands() -> Set[CargoHackCheckEntry]:
-    result = subprocess.run(
-        ["cargo", "hack", "check", "--no-dev-deps", "--print-command-list"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=True,
-        env=build_cargo_environment(),
-    )
-    return {CargoHackCheckEntry.from_command_line(line) for line in result.stdout.splitlines()}
-
-
-def build_cargo_hack_commands_sorted_topologically() -> List[CargoHackCheckCommand]:
-    commands = list_cargo_hack_check_commands()
-    command_dispatcher = {command.manifest_path_posix: command for command in commands}
-    workspace = get_workspace_sorted_topologically()
-    sorted_commands = [
-        CargoHackCheckCommand(
-            command_dispatcher[member.manifest_path.as_posix()],
-            member,
-            workspace.dependents_dispatcher[member.id]
-        )
+def build_cargo_hack_commands() -> List[CargoHackCheckCommand]:
+    workspace = get_workspace()
+    calculator = CacheKeyCalculator(workspace)
+    return [
+        CargoHackCheckCommand(member, calculator.compute(member))
         for member in workspace.members
     ]
-    assert len(sorted_commands) == len(commands), "Some commands are missing in the sorted list. Either the workspace members or commands are inconsistent."
-    return sorted_commands
 
 
 ######################################################## Main ##########################################################
-
-
-# def main():
-    # sorted_commands = build_cargo_hack_commands_sorted_topologically()
-    # ensure_cache_directory_exists()
-    # for command in sorted_commands:
-    #     return_code = command.run()
-    #     if return_code != 0:
-    #         # Save time by exiting early since dependent crates cannot be trusted.
-    #         return return_code
-    # return 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -505,34 +411,27 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Continue checking remaining crates after a failure; exit non-zero if any crate fails.",
     )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Show detailed cache invalidation output for each dependent crate.",
-    )
     return parser.parse_args()
 
 
 def main(args: argparse.Namespace):
-    sorted_commands = build_cargo_hack_commands_sorted_topologically()
+    commands = build_cargo_hack_commands()
     ensure_cache_directory_exists()
 
     rich_enabled = True if args.interactive else False if args.plain else None
-    max_crate_name_width = max((len(command.crate_name) for command in sorted_commands), default=0)
+    max_crate_name_width = max((len(command.crate_name) for command in commands), default=0)
     dashboard = CargoHackDashboard(
-        len(sorted_commands),
+        len(commands),
         TAG,
         max_crate_name_width=max_crate_name_width,
         rich_enabled=rich_enabled,
-        verbose=args.verbose,
     )
     failed_crates: List[str] = []
 
     try:
-        for i, command in enumerate(sorted_commands, start=1):
+        for i, command in enumerate(commands, start=1):
 
-            cache_key = command.member.compute_cache_key()
-            was_cached = command.member.is_cache_valid(cache_key)
+            was_cached = command.is_cached
 
             dashboard.start_crate(command.crate_name, i)
 
