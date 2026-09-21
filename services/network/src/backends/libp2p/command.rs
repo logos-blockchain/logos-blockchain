@@ -32,6 +32,13 @@ pub struct Dial {
     pub addr: Multiaddr,
     pub retry_count: usize,
     pub result_sender: oneshot::Sender<Result<PeerId, lb_libp2p::DialError>>,
+    pub purpose: DialPurpose,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialPurpose {
+    Normal,
+    IdentityProbe,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

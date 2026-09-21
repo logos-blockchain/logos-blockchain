@@ -56,6 +56,12 @@ impl From<ServiceConfig> for NetworkConfig<Libp2pConfig> {
                         query_timeout_secs: value.user.backend.swarm.kademlia.query_timeout_secs,
                     },
                     identify_config: IdentifySettings {
+                        allow_non_public_identify_addresses: value
+                            .user
+                            .backend
+                            .swarm
+                            .identify
+                            .allow_non_public_identify_addresses,
                         agent_version: value.user.backend.swarm.identify.agent_version,
                         cache_size: value.user.backend.swarm.identify.cache_size,
                         hide_listen_addrs: value.user.backend.swarm.identify.hide_listen_addrs,

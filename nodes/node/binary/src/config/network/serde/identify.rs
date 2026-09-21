@@ -3,6 +3,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// Whether non-public Identify addresses may be added to Kademlia.
+    ///
+    /// This is intended for host-local test topologies. Production defaults
+    /// to filtering these addresses.
+    pub allow_non_public_identify_addresses: bool,
+
     /// Agent version string to advertise
     pub agent_version: Option<String>,
 
@@ -25,6 +31,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            allow_non_public_identify_addresses: false,
             agent_version: None,
             interval_secs: None,
             push_listen_addr_updates: None,

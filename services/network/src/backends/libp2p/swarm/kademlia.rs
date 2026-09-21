@@ -107,7 +107,12 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 is_new_peer,
                 ..
             } => {
-                log_routing_update(peer, &addresses.into_vec(), old_peer, is_new_peer);
+                let addresses = addresses.into_vec();
+                log_routing_update(peer, &addresses, old_peer, is_new_peer);
+                self.handle_routing_updated(peer, addresses);
+                if let Some(old_peer) = old_peer {
+                    self.handle_kademlia_peer_evicted(old_peer);
+                }
             }
             kad::Event::ModeChanged { new_mode } => {
                 tracing::info!(target: LOG_TARGET, "Kademlia mode changed to {new_mode:?}");

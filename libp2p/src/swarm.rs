@@ -111,6 +111,23 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
         Ok(connection_id)
     }
 
+    /// Initiates a connection attempt to a peer at a specific address.
+    pub fn connect_peer(
+        &mut self,
+        peer_id: PeerId,
+        peer_addrs: Vec<Multiaddr>,
+    ) -> Result<ConnectionId, DialError> {
+        let opt = DialOpts::peer_id(peer_id).addresses(peer_addrs).build();
+        let connection_id = opt.connection_id();
+
+        tracing::debug!(
+            target: LOG_TARGET,
+            "attempting to dial peer {peer_id}. connection_id:{connection_id:?}",
+        );
+        self.swarm.dial(opt)?;
+        Ok(connection_id)
+    }
+
     pub fn start_listening_on(&mut self, addr: Multiaddr) -> Result<(), TransportError<io::Error>> {
         self.swarm.listen_on(addr)?;
         Ok(())

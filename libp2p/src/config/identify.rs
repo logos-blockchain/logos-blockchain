@@ -7,6 +7,13 @@ use serde::{Deserialize, Serialize};
 /// When a value is None, the libp2p defaults are used.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
+    /// Whether non-public Identify addresses may be added to Kademlia.
+    ///
+    /// This is useful for host-local test topologies where loopback and
+    /// private addresses are valid peer addresses. It is disabled by default.
+    #[serde(default)]
+    pub allow_non_public_identify_addresses: bool,
+
     /// Agent version string to advertise
     /// Default from libp2p: 'rust-libp2p/{version}'
     #[serde(default, skip_serializing_if = "Option::is_none")]

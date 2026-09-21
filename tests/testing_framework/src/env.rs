@@ -83,6 +83,13 @@ pub fn lb_time_service_backend() -> Option<String> {
     std::env::var("LOGOS_BLOCKCHAIN_TIME_BACKEND").ok()
 }
 
+pub const LOGOS_ALLOW_NON_PUBLIC_IDENTIFY_ADDRS: &str = "LOGOS_ALLOW_NON_PUBLIC_IDENTIFY_ADDRS";
+
+#[must_use]
+pub fn allow_non_public_identify_addresses() -> bool {
+    env_flag(LOGOS_ALLOW_NON_PUBLIC_IDENTIFY_ADDRS)
+}
+
 #[must_use]
 pub fn logos_blockchain_system_monitor_enabled() -> bool {
     std::env::var("LOGOS_BLOCKCHAIN_SYSTEM_MONITOR").map_or(true, |raw| {

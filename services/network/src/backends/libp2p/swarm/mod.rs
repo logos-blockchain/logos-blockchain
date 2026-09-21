@@ -17,7 +17,10 @@ macro_rules! log_error {
     };
 }
 
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use lb_libp2p::{
     Multiaddr, PeerId, Protocol, Swarm, SwarmEvent,
@@ -35,7 +38,7 @@ use tokio_stream::StreamExt as _;
 
 use super::{
     Libp2pConfig, Message,
-    command::{Command, Dial, NetworkCommand},
+    command::{Command, Dial, DialPurpose, NetworkCommand},
 };
 use crate::backends::libp2p::{Libp2pInfo, swarm::kademlia::PendingQueryData};
 
@@ -52,6 +55,37 @@ use crate::message::ChainSyncEvent;
 
 const LOG_TARGET: &str = network_service::backends::libp2p::ROOT;
 
+const MAX_CONCURRENT_IDENTITY_PROBES: usize = 16;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PeerProtocolState {
+    Supported,
+    Unsupported,
+}
+
+#[derive(Debug)]
+pub(super) struct ProtocolContract {
+    pub(super) identify_protocol_version: String,
+    pub(super) kademlia_protocol: String,
+    pub(super) chain_sync_protocol: String,
+}
+
+impl ProtocolContract {
+    fn from_config(config: &lb_libp2p::SwarmConfig) -> Self {
+        Self {
+            identify_protocol_version: config.identify_protocol_name.to_string(),
+            kademlia_protocol: config.kad_protocol_name.to_string(),
+            chain_sync_protocol: config.chain_sync_protocol_name.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct IdentityProbe {
+    peer_id: PeerId,
+    addresses: Vec<Multiaddr>,
+}
+
 pub struct SwarmHandler<R: Clone + Send + RngCore + 'static> {
     pub swarm: Swarm<R>,
     pub pending_dials: HashMap<ConnectionId, Dial>,
@@ -61,6 +95,12 @@ pub struct SwarmHandler<R: Clone + Send + RngCore + 'static> {
     pub chainsync_events_tx: broadcast::Sender<ChainSyncEvent>,
 
     pending_queries: HashMap<QueryId, PendingQueryData>,
+    protocol_contract: ProtocolContract,
+    allow_non_public_identify_addresses: bool,
+    peer_protocol_states: HashMap<PeerId, PeerProtocolState>,
+    identity_probe_queue: HashMap<PeerId, Vec<Multiaddr>>,
+    identity_probe_peers: HashSet<PeerId>,
+    identity_probe_connections: HashMap<ConnectionId, IdentityProbe>,
 }
 
 // TODO: make this configurable
@@ -77,6 +117,11 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         chainsync_events_tx: broadcast::Sender<ChainSyncEvent>,
         rng: R,
     ) -> Self {
+        let protocol_contract = ProtocolContract::from_config(&config.inner);
+        let allow_non_public_identify_addresses = config
+            .inner
+            .identify_config
+            .allow_non_public_identify_addresses;
         let swarm = Swarm::build(config.inner, rng).unwrap();
 
         // Keep the dialing history since swarm.connect doesn't return the result
@@ -91,6 +136,12 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             pubsub_messages_tx: pubsub_events_tx,
             chainsync_events_tx,
             pending_queries: HashMap::new(),
+            protocol_contract,
+            allow_non_public_identify_addresses,
+            peer_protocol_states: HashMap::new(),
+            identity_probe_queue: HashMap::new(),
+            identity_probe_peers: HashSet::new(),
+            identity_probe_connections: HashMap::new(),
         }
     }
 
@@ -98,11 +149,17 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         self.bootstrap_kad_from_peers(&initial_peers);
 
         for initial_peer in &initial_peers {
+            if let Some(peer_id) = peer_id_from_address(initial_peer) {
+                // The existing startup dial will also trigger Identify. Mark it
+                // as pending so RoutingUpdated cannot schedule a second dial.
+                self.identity_probe_peers.insert(peer_id);
+            }
             let (tx, _) = oneshot::channel();
             let dial = Dial {
                 addr: initial_peer.clone(),
                 retry_count: 0,
                 result_sender: tx,
+                purpose: DialPurpose::IdentityProbe,
             };
             Self::schedule_connect(dial, self.commands_tx.clone()).await;
         }
@@ -174,6 +231,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             SwarmEvent::ConnectionClosed {
                 peer_id,
                 connection_id,
+                num_established,
                 cause,
                 ..
             } => {
@@ -181,6 +239,13 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                     target: LOG_TARGET,
                     "connection closed from peer: {peer_id} {connection_id:?} due to {cause:?}"
                 );
+
+                if let Some(probe) = self.identity_probe_connections.remove(&connection_id) {
+                    self.clear_identity_probe(probe.peer_id);
+                }
+                if num_established == 0 {
+                    self.prune_peer_protocol_state(peer_id);
+                }
 
                 let swarm = self.swarm.swarm();
                 crate::metrics::consensus_report_connectivity(swarm);
@@ -193,13 +258,13 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             } => {
                 crate::metrics::network_dial_failures();
 
+                let identity_probe = self.identity_probe_connections.remove(&connection_id);
+                let identity_probe_peer = identity_probe.as_ref().map(|probe| probe.peer_id);
+
                 match error {
                     // A `WrongPeerId` failure is permanent for that exact
                     // `/p2p/<id>@addr`: the node at that address rotated its
-                    // identity key, so retrying can never succeed. Such dials are
-                    // issued by Kademlia periodic bootstrap / Identify / chain sync
-                    // (not our own `connect()`), so they have no `pending_dials`
-                    // entry and would otherwise be re-dialed forever. Evict the
+                    // identity key, so retrying can never succeed. Evict the
                     // stale address from Kademlia immediately instead of retrying.
                     DialError::WrongPeerId { obtained, address } => {
                         let dial_addr = &address;
@@ -207,16 +272,32 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                             target: LOG_TARGET,
                             "Evicting stale address after WrongPeerId (expected {peer_id:?}, obtained {obtained}): {dial_addr}"
                         );
-                        self.remove_kademlia_address_for_dial(peer_id, dial_addr);
+                        self.remove_kademlia_address_for_dial(
+                            peer_id.or(identity_probe_peer),
+                            dial_addr,
+                        );
                         // Drop any matching pending dial so it is not also retried.
                         self.pending_dials.remove(&connection_id);
+                        if let Some(peer_id) = identity_probe_peer
+                            && identity_probe.is_some()
+                        {
+                            self.clear_identity_probe(peer_id);
+                            self.prune_peer_protocol_state(peer_id);
+                        }
                     }
                     error => {
                         tracing::debug!(
                             target: LOG_TARGET,
                             "Failed to connect to peer: {peer_id:?} {connection_id:?} due to: {error}"
                         );
-                        self.retry_connect(connection_id, peer_id);
+                        let retry_scheduled = self.retry_connect(connection_id, peer_id);
+                        if !retry_scheduled
+                            && identity_probe.is_some()
+                            && let Some(peer_id) = identity_probe_peer
+                        {
+                            self.clear_identity_probe(peer_id);
+                            self.prune_peer_protocol_state(peer_id);
+                        }
                     }
                 }
             }
@@ -250,6 +331,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         };
 
         self.swarm.kademlia_remove_address(peer_id, dial_addr);
+        self.prune_peer_protocol_state(peer_id);
     }
 
     fn handle_command(&mut self, command: Command) {
@@ -296,6 +378,144 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         }
     }
 
+    pub(super) fn handle_routing_updated(
+        &mut self,
+        peer_id: PeerId,
+        addresses: impl IntoIterator<Item = Multiaddr>,
+    ) {
+        // An unsupported result is not a permanent blacklist. A fresh
+        // routing update is an opportunity to revalidate the peer, which
+        // permits an upgraded node with the same PeerId to become supported
+        // again. Do not remove the peer from Kademlia: Kademlia membership
+        // and chainsync eligibility are independent capabilities.
+        match self.peer_protocol_states.get(&peer_id) {
+            Some(PeerProtocolState::Supported) => return,
+            Some(PeerProtocolState::Unsupported) | None => {}
+        }
+
+        if self
+            .swarm
+            .swarm()
+            .connected_peers()
+            .any(|connected_peer| *connected_peer == peer_id)
+            || self.identity_probe_peers.contains(&peer_id)
+        {
+            return;
+        }
+
+        let addresses = addresses.into_iter().collect::<Vec<_>>();
+        if addresses.is_empty() {
+            self.prune_peer_protocol_state(peer_id);
+            return;
+        }
+
+        let queued_addresses = self.identity_probe_queue.entry(peer_id).or_default();
+        for address in addresses {
+            if !queued_addresses.contains(&address) {
+                queued_addresses.push(address);
+            }
+        }
+        self.drain_identity_probe_queue();
+    }
+
+    pub(super) fn chainsync_eligible_peers(&self) -> HashSet<PeerId> {
+        self.peer_protocol_states
+            .iter()
+            .filter_map(|(peer_id, state)| {
+                (*state == PeerProtocolState::Supported).then_some(*peer_id)
+            })
+            .collect()
+    }
+
+    fn drain_identity_probe_queue(&mut self) {
+        while self.identity_probe_peers.len() < MAX_CONCURRENT_IDENTITY_PROBES {
+            let Some((peer_id, addresses)) = self
+                .identity_probe_queue
+                .iter()
+                .next()
+                .map(|(peer_id, addresses)| (*peer_id, addresses.clone()))
+            else {
+                break;
+            };
+            self.identity_probe_queue.remove(&peer_id);
+
+            if self.peer_protocol_states.get(&peer_id) == Some(&PeerProtocolState::Supported)
+                || self
+                    .swarm
+                    .swarm()
+                    .connected_peers()
+                    .any(|connected_peer| *connected_peer == peer_id)
+            {
+                continue;
+            }
+
+            self.identity_probe_peers.insert(peer_id);
+            let probe = IdentityProbe { peer_id, addresses };
+            match self.swarm.connect_peer(peer_id, probe.addresses.clone()) {
+                Ok(connection_id) => {
+                    self.identity_probe_connections.insert(connection_id, probe);
+                }
+                Err(error) => {
+                    self.identity_probe_peers.remove(&peer_id);
+                    tracing::debug!(
+                        target: LOG_TARGET,
+                        "Failed to schedule identity probe for peer {peer_id}: {error}"
+                    );
+                    self.prune_peer_protocol_state(peer_id);
+                }
+            }
+        }
+    }
+
+    fn clear_identity_probe(&mut self, peer_id: PeerId) -> Vec<Multiaddr> {
+        self.identity_probe_peers.remove(&peer_id);
+        let mut addresses = self
+            .identity_probe_queue
+            .remove(&peer_id)
+            .unwrap_or_default();
+        for probe in self.identity_probe_connections.values() {
+            if probe.peer_id == peer_id {
+                for address in &probe.addresses {
+                    if !addresses.contains(address) {
+                        addresses.push(address.clone());
+                    }
+                }
+            }
+        }
+        self.identity_probe_connections
+            .retain(|_, probe| probe.peer_id != peer_id);
+        self.drain_identity_probe_queue();
+        addresses
+    }
+
+    fn prune_peer_protocol_state(&mut self, peer_id: PeerId) {
+        if !self.peer_protocol_states.contains_key(&peer_id) {
+            return;
+        }
+
+        let is_connected = self
+            .swarm
+            .swarm()
+            .connected_peers()
+            .any(|connected_peer| *connected_peer == peer_id);
+        let is_in_kademlia = self
+            .swarm
+            .kademlia_discovered_peers()
+            .iter()
+            .any(|peer| peer.peer_id == peer_id);
+        let is_being_probed = self.identity_probe_peers.contains(&peer_id)
+            || self.identity_probe_queue.contains_key(&peer_id);
+
+        if !is_connected && !is_in_kademlia && !is_being_probed {
+            self.peer_protocol_states.remove(&peer_id);
+        }
+    }
+
+    fn handle_kademlia_peer_evicted(&mut self, peer_id: PeerId) {
+        self.identity_probe_queue.remove(&peer_id);
+        self.prune_peer_protocol_state(peer_id);
+    }
+
     async fn schedule_connect(dial: Dial, commands_tx: mpsc::Sender<Command>) {
         commands_tx
             .send(Command::Network(NetworkCommand::Connect(dial)))
@@ -306,10 +526,23 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     fn connect(&mut self, dial: Dial) {
         tracing::debug!(target: LOG_TARGET, "Connecting to {}", dial.addr);
 
+        let peer_id = peer_id_from_address(&dial.addr);
+        let is_identity_probe = dial.purpose == DialPurpose::IdentityProbe;
+        let dial_addr = dial.addr.clone();
+
         match self.swarm.connect(&dial.addr) {
             Ok(connection_id) => {
                 // Dialing has been scheduled. The result will be notified as a SwarmEvent.
                 self.pending_dials.insert(connection_id, dial);
+                if is_identity_probe && let Some(peer_id) = peer_id {
+                    self.identity_probe_connections.insert(
+                        connection_id,
+                        IdentityProbe {
+                            peer_id,
+                            addresses: vec![dial_addr],
+                        },
+                    );
+                }
             }
             Err(e) => {
                 if let Err(err) = dial.result_sender.send(Err(e)) {
@@ -317,6 +550,10 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                         target: LOG_TARGET,
                         "failed to send the Err result of dialing: {err:?}"
                     );
+                }
+                if is_identity_probe && let Some(peer_id) = peer_id {
+                    self.clear_identity_probe(peer_id);
+                    self.prune_peer_protocol_state(peer_id);
                 }
             }
         }
@@ -334,13 +571,13 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     }
 
     // TODO: Consider a common retry module for all use cases
-    fn retry_connect(&mut self, connection_id: ConnectionId, peer_id: Option<PeerId>) {
+    fn retry_connect(&mut self, connection_id: ConnectionId, peer_id: Option<PeerId>) -> bool {
         let Some(mut dial) = self.pending_dials.remove(&connection_id) else {
-            return;
+            return false;
         };
         let Some(new_retry_count) = dial.retry_count.checked_add(1) else {
             tracing::debug!(target: LOG_TARGET, "Retry count overflow.");
-            return;
+            return false;
         };
         if new_retry_count > MAX_RETRY {
             tracing::debug!(
@@ -348,7 +585,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 "Max retry({MAX_RETRY}) has been reached: {dial:?}"
             );
             self.remove_kademlia_address_for_dial(peer_id, &dial.addr);
-            return;
+            return false;
         }
         dial.retry_count = new_retry_count;
 
@@ -360,6 +597,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             tokio::time::sleep(wait).await;
             Self::schedule_connect(dial, commands_tx).await;
         });
+        true
     }
 }
 
@@ -367,9 +605,16 @@ const fn exp_backoff(retry: usize) -> Duration {
     Duration::from_secs(BACKOFF.pow(retry as u32))
 }
 
+fn peer_id_from_address(addr: &Multiaddr) -> Option<PeerId> {
+    addr.iter().find_map(|protocol| match protocol {
+        Protocol::P2p(multihash) => PeerId::from_multihash(multihash.into()).ok(),
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, net::Ipv4Addr, sync::Once, time::Instant};
+    use std::{net::Ipv4Addr, sync::Once, time::Instant};
 
     use lb_libp2p::protocol_name::StreamProtocol;
     use lb_utils::net::get_available_udp_port;
@@ -429,7 +674,254 @@ mod tests {
         }
     }
 
+    fn create_handler() -> SwarmHandler<OsRng> {
+        let (tx, rx) = mpsc::channel(10);
+        let (pubsub_events_tx, _) = broadcast::channel(10);
+        let (chainsync_events_tx, _) = broadcast::channel(10);
+        let config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
+
+        SwarmHandler::new(config, tx, rx, pubsub_events_tx, chainsync_events_tx, OsRng)
+    }
+
+    fn create_probe_address() -> Multiaddr {
+        format!(
+            "/ip4/127.0.0.1/udp/{}/quic-v1",
+            get_available_udp_port().unwrap()
+        )
+        .parse()
+        .unwrap()
+    }
+
+    fn identify_event(
+        peer_id: PeerId,
+        advertised_protocols: &[&'static str],
+    ) -> lb_libp2p::libp2p::identify::Event {
+        let keypair = lb_libp2p::libp2p::identity::Keypair::generate_ed25519();
+        let address = create_probe_address();
+        let protocols = advertised_protocols
+            .iter()
+            .map(|protocol| lb_libp2p::libp2p::StreamProtocol::new(protocol))
+            .collect();
+
+        lb_libp2p::libp2p::identify::Event::Received {
+            connection_id: ConnectionId::new_unchecked(1),
+            peer_id,
+            info: lb_libp2p::libp2p::identify::Info {
+                public_key: keypair.public(),
+                protocol_version: "/identify/test".into(),
+                agent_version: "test".into(),
+                listen_addrs: vec![address],
+                protocols,
+                observed_addr: "/ip4/127.0.0.1/udp/1".parse().unwrap(),
+                signed_peer_record: None,
+            },
+        }
+    }
+
     const NODE_COUNT: usize = 10;
+
+    #[tokio::test]
+    async fn repeated_routing_updates_schedule_one_probe_per_peer() {
+        let mut handler = create_handler();
+        let peer_id = PeerId::random();
+        let address = create_probe_address();
+
+        handler.handle_routing_updated(peer_id, [address.clone()]);
+        handler.handle_routing_updated(peer_id, [address]);
+
+        assert_eq!(handler.identity_probe_peers.len(), 1);
+        assert_eq!(handler.identity_probe_connections.len(), 1);
+        assert!(handler.identity_probe_queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unrelated_dial_error_does_not_clear_identity_probe() {
+        let mut handler = create_handler();
+        let peer_id = PeerId::random();
+        handler.handle_routing_updated(peer_id, [create_probe_address()]);
+        let probe_connection = *handler
+            .identity_probe_connections
+            .keys()
+            .next()
+            .expect("expected an active identity probe");
+
+        handler.handle_swarm_event(SwarmEvent::OutgoingConnectionError {
+            peer_id: Some(peer_id),
+            connection_id: ConnectionId::new_unchecked(999),
+            error: DialError::NoAddresses,
+        });
+
+        assert!(handler.identity_probe_peers.contains(&peer_id));
+        assert!(
+            handler
+                .identity_probe_connections
+                .contains_key(&probe_connection)
+        );
+    }
+
+    #[tokio::test]
+    async fn identity_probe_concurrency_is_bounded() {
+        let mut handler = create_handler();
+
+        for _ in 0..MAX_CONCURRENT_IDENTITY_PROBES {
+            handler.handle_routing_updated(PeerId::random(), [create_probe_address()]);
+        }
+
+        let queued_peer = PeerId::random();
+        let queued_addresses = vec![create_probe_address(), create_probe_address()];
+        handler.handle_routing_updated(queued_peer, queued_addresses.clone());
+
+        assert_eq!(
+            handler.identity_probe_peers.len(),
+            MAX_CONCURRENT_IDENTITY_PROBES
+        );
+        assert_eq!(handler.identity_probe_queue.len(), 1);
+        assert_eq!(
+            handler.identity_probe_queue.get(&queued_peer),
+            Some(&queued_addresses)
+        );
+
+        handler.handle_kademlia_peer_evicted(queued_peer);
+
+        assert!(!handler.identity_probe_queue.contains_key(&queued_peer));
+    }
+
+    #[tokio::test]
+    async fn whole_peer_kademlia_eviction_removes_all_addresses() {
+        let mut handler = create_handler();
+        let peer_id = PeerId::random();
+        let first_address = create_probe_address();
+        let second_address = create_probe_address();
+
+        handler.swarm.kademlia_add_address(peer_id, &first_address);
+        handler.swarm.kademlia_add_address(peer_id, &second_address);
+        assert_eq!(handler.swarm.kademlia_discovered_peers().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn only_supported_peers_are_chainsync_eligible() {
+        let mut handler = create_handler();
+        let supported = PeerId::random();
+        let unsupported = PeerId::random();
+        handler
+            .peer_protocol_states
+            .insert(supported, PeerProtocolState::Supported);
+        handler
+            .peer_protocol_states
+            .insert(unsupported, PeerProtocolState::Unsupported);
+
+        assert_eq!(
+            handler.chainsync_eligible_peers(),
+            HashSet::from([supported])
+        );
+    }
+
+    #[tokio::test]
+    async fn identify_updates_peer_state_without_kademlia_eviction() {
+        let mut handler = create_handler();
+        let peer_id = PeerId::random();
+        let address = create_probe_address().with(Protocol::P2p(peer_id));
+        handler.swarm.kademlia_add_address(peer_id, &address);
+
+        handler.handle_identify_event(identify_event(
+            peer_id,
+            &["/kademlia/test", "/chainsync/test"],
+        ));
+        assert_eq!(
+            handler.peer_protocol_states.get(&peer_id),
+            Some(&PeerProtocolState::Supported)
+        );
+        assert!(handler.chainsync_eligible_peers().contains(&peer_id));
+
+        handler.handle_identify_event(identify_event(peer_id, &["/kademlia/test"]));
+        assert_eq!(
+            handler.peer_protocol_states.get(&peer_id),
+            Some(&PeerProtocolState::Unsupported)
+        );
+        assert!(!handler.chainsync_eligible_peers().contains(&peer_id));
+        assert!(
+            handler
+                .swarm
+                .kademlia_discovered_peers()
+                .iter()
+                .any(|peer| peer.peer_id == peer_id)
+        );
+
+        handler.handle_routing_updated(peer_id, [address.clone()]);
+        assert!(handler.identity_probe_peers.contains(&peer_id));
+
+        handler.handle_identify_event(identify_event(
+            peer_id,
+            &["/kademlia/test", "/chainsync/test"],
+        ));
+        assert_eq!(
+            handler.peer_protocol_states.get(&peer_id),
+            Some(&PeerProtocolState::Supported)
+        );
+        assert!(handler.chainsync_eligible_peers().contains(&peer_id));
+        assert!(
+            handler
+                .swarm
+                .kademlia_discovered_peers()
+                .iter()
+                .any(|peer| peer.peer_id == peer_id && peer.addrs.contains(&address))
+        );
+    }
+
+    #[tokio::test]
+    async fn chainsync_support_does_not_require_kademlia_advertisement() {
+        let mut handler = create_handler();
+        let peer_id = PeerId::random();
+
+        handler.handle_identify_event(identify_event(peer_id, &["/chainsync/test"]));
+
+        assert_eq!(
+            handler.peer_protocol_states.get(&peer_id),
+            Some(&PeerProtocolState::Supported)
+        );
+        assert!(handler.chainsync_eligible_peers().contains(&peer_id));
+        assert!(handler.swarm.kademlia_discovered_peers().is_empty());
+    }
+
+    #[tokio::test]
+    async fn protocol_state_is_pruned_only_when_peer_is_no_longer_known() {
+        let mut handler = create_handler();
+        let peer_id = PeerId::random();
+        let address = create_probe_address();
+
+        handler
+            .peer_protocol_states
+            .insert(peer_id, PeerProtocolState::Supported);
+        handler.prune_peer_protocol_state(peer_id);
+        assert!(!handler.peer_protocol_states.contains_key(&peer_id));
+
+        handler.swarm.kademlia_add_address(peer_id, &address);
+        handler
+            .peer_protocol_states
+            .insert(peer_id, PeerProtocolState::Supported);
+        handler.prune_peer_protocol_state(peer_id);
+        assert_eq!(
+            handler.peer_protocol_states.get(&peer_id),
+            Some(&PeerProtocolState::Supported)
+        );
+    }
+
+    #[tokio::test]
+    async fn removing_last_kademlia_address_prunes_disconnected_peer_state() {
+        let mut handler = create_handler();
+        let peer_id = PeerId::random();
+        let address = create_probe_address().with(Protocol::P2p(peer_id));
+
+        handler.swarm.kademlia_add_address(peer_id, &address);
+        handler
+            .peer_protocol_states
+            .insert(peer_id, PeerProtocolState::Supported);
+
+        handler.remove_kademlia_address_for_dial(Some(peer_id), &address);
+
+        assert!(handler.swarm.kademlia_discovered_peers().is_empty());
+        assert!(!handler.peer_protocol_states.contains_key(&peer_id));
+    }
 
     #[tokio::test]
     #[expect(clippy::too_many_lines, reason = "Should be fixed in a separate PR")]
@@ -634,6 +1126,7 @@ mod tests {
             addr: remote_addr.clone(),
             retry_count: 0,
             result_sender,
+            purpose: DialPurpose::Normal,
         });
 
         let connection_id = *handler

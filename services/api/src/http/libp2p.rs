@@ -4,7 +4,7 @@ use lb_libp2p::{Multiaddr, PeerId};
 use lb_network_service::{
     NetworkService,
     backends::libp2p::{
-        Command, Dial, Libp2p, Libp2pInfo,
+        Command, Dial, DialPurpose, Libp2p, Libp2pInfo,
         NetworkCommand::{Connect, Info},
     },
     message::NetworkMsg,
@@ -50,6 +50,7 @@ where
             addr,
             retry_count: 0,
             result_sender: sender,
+            purpose: DialPurpose::Normal,
         }))))
         .await
         .map_err(|(e, _)| e)?;

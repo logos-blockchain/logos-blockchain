@@ -17,7 +17,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use self::swarm::SwarmHandler;
 pub use self::{
     command::{
-        ChainSyncCommand, Command, Dial, DiscoveryCommand, Libp2pInfo, NetworkCommand,
+        ChainSyncCommand, Command, Dial, DialPurpose, DiscoveryCommand, Libp2pInfo, NetworkCommand,
         PubSubCommand,
     },
     config::Libp2pConfig,

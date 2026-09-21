@@ -44,7 +44,10 @@ use crate::{
         unregister_system_monitor_output_file,
     },
     env as tf_env,
-    env::{remove_default_env, replace_default_env},
+    env::{
+        LOGOS_ALLOW_NON_PUBLIC_IDENTIFY_ADDRS, remove_default_env, replace_default_env,
+        set_default_env,
+    },
     framework::LbcEnv,
     node::{
         DeploymentPlan, NodeHttpClient, NodePlan,
@@ -86,6 +89,10 @@ enum PortStrategy {
 #[async_trait]
 impl LocalDeployerEnv for LbcEnv {
     fn prepare_local_cluster(topology: &Self::Deployment) {
+        // Host-local nodes use loopback/private addresses to reach each other.
+        // Keep production address filtering enabled for all other deployers.
+        set_default_env(LOGOS_ALLOW_NON_PUBLIC_IDENTIFY_ADDRS, "true");
+
         register_system_monitor_output_file(
             &topology
                 .config()
@@ -709,7 +716,16 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
     tracing.level = Level::INFO;
 
     let user_config = UserConfig {
-        network: config.network_config,
+        network: {
+            let mut network = config.network_config;
+            network
+                .backend
+                .swarm
+                .identify
+                .allow_non_public_identify_addresses =
+                tf_env::allow_non_public_identify_addresses();
+            network
+        },
         blend: config.blend_config.0,
         time: config.time_config,
         cryptarchia: build_cryptarchia_user_config(&config.consensus_config),
