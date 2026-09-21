@@ -11,32 +11,20 @@ inputs:
     default: ./.cache/cargo-hack-check
 
 
+# Cache keys are content-addressed, so restoring keys saved by any other ref can only cause cache misses, never false
+# passes. Runs on any ref restore their own latest keys first and fall back to master's.
 runs:
   using: composite
   steps:
-    - name: Restore Cargo Hack Keys (main)
-      if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    - name: Restore Cargo Hack Keys
       uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
       continue-on-error: true
       with:
         path: ${{ inputs.cache-directory }}
-        key: cargo-hack-check/${{ runner.os }}/main/${{ github.sha }}
+        key: cargo-hack-check/${{ runner.os }}/${{ github.ref_name }}/${{ github.sha }}
         restore-keys: |
-          cargo-hack-check/${{ runner.os }}/main
-          cargo-hack-check/${{ runner.os }}
-
-    # TODO: Improvement: Restore keys should not be `main` but the branch we're merging into.
-    - name: Restore Cargo Hack Keys (PR)
-      if: github.event_name == 'pull_request'
-      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
-      continue-on-error: true
-      with:
-        path: ${{ inputs.cache-directory }}
-        key: cargo-hack-check/${{ runner.os }}/pr#${{ github.event.pull_request.number }}/${{ github.sha }}
-        restore-keys: |
-          cargo-hack-check/${{ runner.os }}/pr#${{ github.event.pull_request.number }}
-          cargo-hack-check/${{ runner.os }}/main
-          cargo-hack-check/${{ runner.os }}
+          cargo-hack-check/${{ runner.os }}/${{ github.ref_name }}/
+          cargo-hack-check/${{ runner.os }}/master/
 
     - name: Run Cache-Aware Cargo Hack Check
       shell: bash
@@ -44,16 +32,10 @@ runs:
         CARGO_BUILD_WARNINGS: deny
       run: python3 ./scripts/cargo-hack-check/script.py --continue-on-failure
 
-    - name: Save Cargo Hack Keys (main)
-      if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    # Saved even on failure, so crates that passed keep their keys.
+    - name: Save Cargo Hack Keys
+      if: always()
       uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
       with:
         path: ${{ inputs.cache-directory }}
-        key: cargo-hack-check/${{ runner.os }}/main/${{ github.sha }}
-
-    - name: Save Cargo Hack Keys (PR)
-      if: github.event_name == 'pull_request'
-      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
-      with:
-        path: ${{ inputs.cache-directory }}
-        key: cargo-hack-check/${{ runner.os }}/pr#${{ github.event.pull_request.number }}/${{ github.sha }}
+        key: cargo-hack-check/${{ runner.os }}/${{ github.ref_name }}/${{ github.sha }}
