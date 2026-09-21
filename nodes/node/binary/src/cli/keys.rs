@@ -264,14 +264,6 @@ pub fn generate_key(args: GenerateKeyArgs) -> Result<KeyId> {
         .as_ref()
         .map_or_else(|| next_user_key_title(&keystore), Clone::clone);
 
-    if keystore.contains(user_key_title.clone()) {
-        color_eyre::eyre::bail!(
-            "A key with the title '{}' already exists in the keystore.              Use a different title or remove the existing key first with `remove-key --title {}`.",
-            user_key_title,
-            user_key_title
-        );
-    }
-
     let (key_id, _) = generate_key_into_keystore(&mut keystore, user_key_title, &key_type);
 
     persist_user_config_and_keystore(
@@ -285,6 +277,23 @@ pub fn generate_key(args: GenerateKeyArgs) -> Result<KeyId> {
 }
 
 pub fn run_generate_key(args: GenerateKeyArgs) -> Result<()> {
+    let (_, keystore) = load_user_config_and_keystore(&args.user_config, &args.keystore)?;
+    let user_key_title = args
+        .key_title
+        .as_ref()
+        .map_or_else(|| next_user_key_title(&keystore), Clone::clone);
+
+    if keystore.contains(user_key_title.clone())
+        && !(args.yes
+            || confirm_overwrite(&format!(
+                "A key with the title '{}' already exists. Overwrite?",
+                user_key_title
+            ))?)
+    {
+        println!("Action discarded.");
+        return Ok(());
+    }
+
     if args.yes || confirm_overwrite("Write key to keystore?")? {
         let key_id = generate_key(args)?;
         println!("KeyID: {key_id}");
@@ -325,12 +334,15 @@ pub fn run_add_key(args: AddKeyArgs) -> Result<()> {
         .as_ref()
         .map_or_else(|| next_user_key_title(&keystore), Clone::clone);
 
-    if keystore.contains(user_key_title.clone()) {
-        color_eyre::eyre::bail!(
-            "A key with the title '{}' already exists in the keystore.              Use a different title or remove the existing key first with `remove-key --title {}`.",
-            user_key_title,
-            user_key_title
-        );
+    if keystore.contains(user_key_title.clone())
+        && !(auto_approve
+            || confirm_overwrite(&format!(
+                "A key with the title '{}' already exists. Overwrite?",
+                user_key_title
+            ))?)
+    {
+        println!("Action discarded.");
+        return Ok(());
     }
 
     keystore.set(user_key_title.clone(), key);

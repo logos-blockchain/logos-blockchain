@@ -78,7 +78,7 @@ impl Keystore {
     /// keystore.
     #[must_use]
     pub fn contains(&self, name: impl Into<KeyTitle>) -> bool {
-        self.secret_keys.contains_key(&name.into())
+        self.get(name).is_some()
     }
 
     #[must_use]
