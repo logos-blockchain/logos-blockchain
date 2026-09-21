@@ -174,7 +174,7 @@ class DepsEntry(TypedDict):
 
 
 def run_cargo_metadata() -> dict:
-    return json.loads(run_in_workspace(["cargo", "metadata", "--format-version", "1"]))
+    return json.loads(run_in_workspace(["cargo", "metadata", "--format-version", "1", "--locked"]))
 
 
 #################
