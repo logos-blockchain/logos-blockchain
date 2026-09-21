@@ -6,7 +6,10 @@
 use std::collections::HashSet;
 
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
-use lb_core::mantle::{channel::ChannelState, ops::channel::ChannelId, traits::Hashable as _};
+use lb_core::mantle::{
+    channel::ChannelState, ops::channel::ChannelId, traits::Hashable as _,
+    transactions::hash::TxHash,
+};
 use tracing::{debug, error, warn};
 
 use super::{
@@ -522,13 +525,14 @@ where
                 built
             }
             None => ChannelUpdate {
+                common_prefix: Vec::new(),
                 orphaned: Vec::new(),
                 adopted: Vec::new(),
                 adopted_deposits: Vec::new(),
             },
         };
-        // Observed deposits ride every processed block, independent of whether
-        // the lineage moved.
+        // Observed deposits ride every processed block, independent of
+        // whether the lineage moved.
         channel_update.adopted_deposits = result.adopted_deposits;
 
         // Shed pending configs superseded on the config lineage; the lineage
@@ -574,6 +578,18 @@ where
         if config_shed_any && let (Some(s), Some(tip)) = (self.state.as_ref(), self.current_tip) {
             self.last_msg_id = s.channel_tip_at(tip);
         }
+
+        // The view was captured before the shed passes; whatever they
+        // orphaned has left it.
+        let orphaned: HashSet<TxHash> = channel_update
+            .orphaned
+            .iter()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect();
+        channel_update.common_prefix = result.common_prefix;
+        channel_update
+            .common_prefix
+            .retain(|tx| !orphaned.contains(&tx.tx_hash()));
 
         (
             channel_update,
@@ -676,9 +692,10 @@ where
         }
 
         ChannelUpdate {
+            // Set by `apply_block_result`, along with the observed deposits.
+            common_prefix: Vec::new(),
             orphaned,
             adopted: u.adopted,
-            // Set by `apply_block_result` from the block's observed deposits.
             adopted_deposits: Vec::new(),
         }
     }
@@ -1522,6 +1539,7 @@ mod tests {
             checkpoint.pending_txs.iter().all(|(h, _)| *h != p_hash),
             "the pending inscription must be shed from the pending set"
         );
+        assert!(update.common_prefix.iter().all(|tx| tx.tx_hash() != p_hash));
         // The chaining pointer resets to the (unchanged) message tip so the
         // resubmit re-posts there. Nothing was mined, so the tip is root.
         assert_eq!(

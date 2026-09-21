@@ -47,6 +47,8 @@ pub(super) struct BlockEventResult {
     /// inscription+withdraw bundle).
     pub(super) finalized_items: Vec<FinalizedTx>,
     pub(super) channel_update: Option<ChannelUpdateInfo>,
+    /// The view above LIB shared by the old and new tip, in lineage order.
+    pub(super) common_prefix: Vec<ChannelUpdateTx>,
     /// Inscriptions that appeared in this block. Surfaced so a consumer learns
     /// its tx reached the chain (`OnChain` status) even when the tx didn't move
     /// the canonical channel chain.
@@ -316,8 +318,8 @@ fn apply_prepared_block_event(
         })
         .collect();
 
-    let channel_update =
-        s.detect_channel_update(&old_lineage.unwrap_or_default(), tip, &finalized_now);
+    let old_lineage = old_lineage.unwrap_or_default();
+    let channel_update = s.detect_channel_update(&old_lineage, tip, &finalized_now);
 
     // On a pure extension (nothing orphaned — including the first event,
     // whose `orphaned` is empty by construction), report only entries the
@@ -333,9 +335,17 @@ fn apply_prepared_block_event(
         update
     });
 
+    let old_txs: HashSet<TxHash> = old_lineage.iter().map(|info| info.tx_hash).collect();
+    let common_prefix = s
+        .channel_view_txs(tip, &finalized_now)
+        .into_iter()
+        .filter(|tx| old_txs.contains(&tx.tx_hash()))
+        .collect();
+
     BlockEventResult {
         finalized_items: finalized_batch.items,
         channel_update,
+        common_prefix,
         mined_inscriptions,
         adopted_deposits,
     }
@@ -2731,6 +2741,11 @@ mod tests {
             r[8].result.channel_update.is_none(),
             "bare un-mine of B: i2 is pending again"
         );
+        // `common_prefix ++ adopted` is the view above LIB on every event.
+        assert!(r[0].result.common_prefix.is_empty());
+        assert_eq!(msg_ids(&r[1].result.common_prefix), vec![i1_id]);
+        assert_eq!(msg_ids(&r[3].result.common_prefix), vec![i1_id]);
+        assert_eq!(msg_ids(&r[8].result.common_prefix), vec![i1_id, i2_id]);
         // Each switch sheds only the loser; the winner, re-mirrored from the
         // store, reads as mined on its branch.
         let shed: Vec<TxHash> = r[3].shed.iter().map(PendingTx::tx_hash).collect();

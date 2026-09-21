@@ -13,6 +13,9 @@
 //! there is no window where an event was observed but the policy's reaction
 //! hasn't been applied to the SDK's state.
 
+use std::collections::HashSet;
+
+use lb_core::mantle::transactions::hash::TxHash;
 pub use lb_zone_sdk::sequencer::{
     AtomicWithdrawInfo, ChannelUpdate, ChannelUpdateTx, DepositInfo, Error, Event, FinalizedOp,
     FinalizedTx, FundingConfig, IndexedSignature, InscriptionId, InscriptionInfo, PendingTx,
@@ -25,6 +28,7 @@ use tokio::{
     sync::{broadcast, watch},
     task::JoinHandle,
 };
+use tracing::error;
 
 /// Inline policy executed on the drive task for each SDK event before the
 /// event is forwarded to test observers.
@@ -85,12 +89,72 @@ where
     Node: adapter::Node + Clone + Send + Sync + 'static,
     P: Policy<Node>,
 {
+    let mut view = ViewChecker::default();
     loop {
         let ev = sequencer.next_event().await;
+        view.observe(&ev);
         policy.on_event(&mut sequencer, &ev).await;
         // Event already broadcast via the SDK's `emit_now`; nothing for the
         // runner to forward.
     }
+}
+
+/// Asserts the [`ChannelUpdate`] contract on every block event: what a
+/// consumer holds from the stream (adopted, not orphaned since, not
+/// finalized) must equal `common_prefix ++ adopted`, up to the sequencer's own
+/// in-flight publishes, which the prefix carries and the stream never echoes.
+#[derive(Default)]
+struct ViewChecker {
+    held: HashSet<TxHash>,
+}
+
+impl ViewChecker {
+    fn observe(&mut self, event: &Event) {
+        let Event::BlocksProcessed {
+            checkpoint,
+            channel_update,
+            finalized,
+        } = event
+        else {
+            return;
+        };
+        for tx in &channel_update.orphaned {
+            self.held.remove(&tx.tx_hash());
+        }
+        for tx in &channel_update.adopted {
+            self.held.insert(tx.tx_hash());
+        }
+        for tx in finalized {
+            self.held.remove(&tx.tx_hash);
+        }
+
+        let view: HashSet<TxHash> = channel_update
+            .canonical_chain()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect();
+        let pending: HashSet<TxHash> = checkpoint.pending_txs.iter().map(|(h, _)| *h).collect();
+        for tx in &view {
+            if !self.held.contains(tx) && !pending.contains(tx) {
+                fail(&format!(
+                    "common_prefix carries {tx:?}, which was never adopted and is not pending"
+                ));
+            }
+        }
+        for tx in &self.held {
+            if !view.contains(tx) {
+                fail(&format!(
+                    "{tx:?} was adopted and never orphaned or finalized, but left common_prefix"
+                ));
+            }
+        }
+    }
+}
+
+/// Log, then panic: the drive task's panic is swallowed by cucumber's panic
+/// hook, so the log line is what the scenario output shows.
+fn fail(message: &str) -> ! {
+    error!("channel view contract violated: {message}");
+    panic!("channel view contract violated: {message}");
 }
 
 /// Spawn the drive loop on the current tokio runtime.

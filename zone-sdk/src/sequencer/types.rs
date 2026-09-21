@@ -398,6 +398,10 @@ pub enum Error {
 /// methods return the resulting [`SequencerCheckpoint`] inline. There is no
 /// separate `Published` event.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one event per block; boxing would change the public shape of `BlocksProcessed`"
+)]
 pub enum Event {
     /// Fires per ingested block. Carries finalized txs and the non-finalized
     /// channel-tip delta (`channel_update`); either may be empty. Backfill
@@ -496,18 +500,33 @@ pub enum TxSource {
 /// - `orphaned`: entries that were on the channel (or that you published and
 ///   were still waiting to land) and no longer are — revert them and treat them
 ///   as republish candidates.
+/// - `common_prefix`: what the previous and the new view share above the
+///   finalized boundary, so `common_prefix ++ adopted` is the whole
+///   non-finalized view at the new tip — rebuild head state from finalized
+///   state without replaying past updates.
 ///
-/// Both empty means nothing changed.
+/// `adopted` and `orphaned` both empty means nothing changed.
 ///
-/// Consumer pattern:
-/// 1. On each event, mirror the channel: revert every `orphaned` entry and
-///    apply every `adopted` entry.
-/// 2. Process the orphans so no useful work is lost — e.g. if your inscriptions
-///    carry Zone transactions, return them to your mempool. Reprocessing is
-///    idempotent: anything still valid is already pending and no-ops, so only
-///    genuinely-dead work is re-sent.
+/// Two ways to consume it:
+/// - Diff: revert every `orphaned` entry, apply every `adopted` entry. For
+///   consumers that can undo an entry's effects.
+/// - Rebuild from LIB: recompute non-finalized state from
+///   [`Self::canonical_chain`] on top of finalized state; `orphaned` is then
+///   only input to republish decisions. For consumers that cannot undo.
+///
+/// Either way, process the orphans so no useful work is lost — e.g. if your
+/// inscriptions carry Zone transactions, return them to your mempool.
+/// Reprocessing is idempotent: anything still valid is already pending and
+/// no-ops, so only genuinely-dead work is re-sent.
 #[derive(Debug, Clone)]
 pub struct ChannelUpdate {
+    /// What the previous and the new view share above the finalized boundary,
+    /// in lineage order: the mined entries from LIB to the fork point, plus
+    /// entries not mined on this branch that still chain on its tip (they
+    /// were reported adopted and never orphaned). Filled on every event;
+    /// empty on the first. Sized by the finality depth: the whole
+    /// non-finalized view is carried per event.
+    pub common_prefix: Vec<ChannelUpdateTx>,
     /// Txs removed from the channel: ones that were on chain, plus our
     /// own pending that can no longer finalize because a conflicting
     /// inscription took their place in the chain (a parent double-spend).
@@ -538,6 +557,14 @@ pub struct ChannelUpdate {
     /// `orphaned`. The bundle's transfer consumes the deposited note, so it
     /// can only land where the deposit is.
     pub adopted_deposits: Vec<DepositInfo>,
+}
+
+impl ChannelUpdate {
+    /// The whole non-finalized view at the new tip, in lineage order:
+    /// `common_prefix` followed by `adopted`.
+    pub fn canonical_chain(&self) -> impl Iterator<Item = &ChannelUpdateTx> {
+        self.common_prefix.iter().chain(&self.adopted)
+    }
 }
 
 /// Information about whose turn it is to post and the current posting

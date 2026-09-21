@@ -543,6 +543,7 @@ mod tests {
                 finalized_config: MsgId::root(),
             },
             channel_update: ChannelUpdate {
+                common_prefix: Vec::new(),
                 adopted: Vec::new(),
                 orphaned: Vec::new(),
                 adopted_deposits: Vec::new(),

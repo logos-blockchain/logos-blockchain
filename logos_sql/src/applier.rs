@@ -481,6 +481,7 @@ mod tests {
         Event::BlocksProcessed {
             checkpoint,
             channel_update: ChannelUpdate {
+                common_prefix: Vec::new(),
                 orphaned,
                 adopted,
                 adopted_deposits: Vec::new(),
