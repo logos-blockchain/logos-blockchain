@@ -147,6 +147,30 @@ pub struct ClaimableRewardsInfo {
     pub slots_until_expiry: Vec<Slot>,
 }
 
+/// The runtime state of the `PoW` service, as the running service holds it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PoWStatus {
+    pub is_mining: bool,
+    pub are_rewards_enabled: bool,
+    pub auto_claim: AutoClaimStatus,
+}
+
+/// The runtime state of unattended claiming.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AutoClaimStatus {
+    pub is_armed: bool,
+    pub tick: AutoClaimTick,
+    pub targets: Vec<ClaimTargetStatus>,
+}
+
+/// One auto-claim target alongside its current balance.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClaimTargetStatus {
+    pub public_key: ZkPublicKey,
+    pub threshold: Value,
+    pub balance: Option<Value>,
+}
+
 pub enum PoWServiceMessage {
     StartMining,
     StopMining,
@@ -162,6 +186,9 @@ pub enum PoWServiceMessage {
     },
     ClaimableRewardsInfo {
         response: oneshot::Sender<ClaimableRewardsInfo>,
+    },
+    Status {
+        response: oneshot::Sender<PoWStatus>,
     },
 }
 
@@ -514,7 +541,7 @@ where
         let state_updater = service_resources_handle.state_updater;
         // Mining is off until explicitly started and is not persisted: a
         // restarted node does not resume mining automatically.
-        let mut mining = false;
+        let mut is_mining = false;
 
         // Auto-claim arms itself when the network pays rewards and targets are
         // configured, and disarms once every target has reached its
@@ -540,16 +567,16 @@ where
                 Some(message) = inbound_relay.recv() => {
                     match message {
                         PoWServiceMessage::StartMining => {
-                            if !mining {
+                            if !is_mining {
                                 info!(target: LOG_TARGET, "PoW mining started");
                             }
-                            mining = true;
+                            is_mining = true;
                         }
                         PoWServiceMessage::StopMining => {
-                            if mining {
+                            if is_mining {
                                 info!(target: LOG_TARGET, "PoW mining stopped");
                             }
-                            mining = false;
+                            is_mining = false;
                         }
                         PoWServiceMessage::StartAutoClaim => {
                             if !settings.rewards_enabled {
@@ -591,11 +618,21 @@ where
                         PoWServiceMessage::ClaimableRewardsInfo { response } => {
                             respond_claimable_rewards(&cryptarchia_api, &mut state, &state_updater, response, settings.slot_window).await;
                         }
+                        PoWServiceMessage::Status { response } => {
+                            let status = PoWStatus {
+                                is_mining,
+                                are_rewards_enabled: settings.rewards_enabled,
+                                auto_claim: auto_claim_status(&wallet_api, auto_claim, auto_claiming).await,
+                            };
+                            if response.send(status).is_err() {
+                                error!(target: LOG_TARGET, "Status response receiver was dropped");
+                            }
+                        }
                     }
                 }
                 // A puzzle was solved: accumulate the winning ticket to be
                 // claimed on demand (only while mining is enabled).
-                Some(winning_ticket) = winning_tickets.next(), if mining => {
+                Some(winning_ticket) = winning_tickets.next(), if is_mining => {
                     // The new ticket's slot tracks the tip, so use it to drop any
                     // previously stored tickets whose window has since closed.
                     let current_slot = winning_ticket.block_slot;
@@ -756,16 +793,63 @@ where
 {
     let mut balances = Vec::with_capacity(targets.len());
     for target in targets {
-        // `None` means the wallet tracks the key but it holds nothing yet;
-        // untracked keys are rejected at startup by `validate_claim_targets`.
-        let balance = wallet_api
-            .get_balance(None, target.public_key)
-            .await?
-            .response
-            .map_or(0, |balance| balance.balance);
+        let balance = target_balance(wallet_api, target.public_key).await?;
         balances.push((*target, balance));
     }
     Ok(neediest_target(balances))
+}
+
+/// Reads the balance an auto-claim target holds right now.
+async fn target_balance<WalletService, RuntimeServiceId>(
+    wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
+    public_key: ZkPublicKey,
+) -> Result<Value, WalletApiError>
+where
+    WalletService: WalletServiceData,
+    RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
+{
+    // `None` means the wallet tracks the key but it holds nothing yet;
+    // untracked keys are rejected at startup by `validate_claim_targets`.
+    Ok(wallet_api
+        .get_balance(None, public_key)
+        .await?
+        .response
+        .map_or(0, |balance| balance.balance))
+}
+
+/// Reports the auto-claim state, reading each target's balance so a client
+/// can tell which targets are still below their threshold.
+///
+/// A failed balance read leaves that target's balance unknown rather than
+/// failing the report: `armed` does not depend on the wallet.
+async fn auto_claim_status<WalletService, RuntimeServiceId>(
+    wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
+    settings: &AutoClaimSettings,
+    is_armed: bool,
+) -> AutoClaimStatus
+where
+    WalletService: WalletServiceData,
+    RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
+{
+    let mut targets = Vec::with_capacity(settings.targets.len());
+    for target in &settings.targets {
+        let balance = target_balance(wallet_api, target.public_key)
+            .await
+            .inspect_err(|e| {
+                warn!(target: LOG_TARGET, "Failed to read PoW auto-claim target balance: {e}");
+            })
+            .ok();
+        targets.push(ClaimTargetStatus {
+            public_key: target.public_key,
+            threshold: target.threshold,
+            balance,
+        });
+    }
+    AutoClaimStatus {
+        is_armed,
+        tick: settings.tick,
+        targets,
+    }
 }
 
 /// The choice behind [`select_claim_target`], over already-read balances: of

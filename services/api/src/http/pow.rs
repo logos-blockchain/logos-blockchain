@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 use lb_core::mantle::transactions::hash::TxHash;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_pow_service::{
-    ClaimableRewardsInfo,
+    ClaimableRewardsInfo, PoWStatus,
     api::{PoWServiceApi, PoWServiceData},
 };
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
@@ -93,6 +93,20 @@ where
     Ok(
         PoWServiceApi::<PoW, RuntimeServiceId>::new(handle.relay().await?)
             .claimable_rewards()
+            .await?,
+    )
+}
+
+pub async fn status<PoW, RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+) -> Result<PoWStatus, DynError>
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    Ok(
+        PoWServiceApi::<PoW, RuntimeServiceId>::new(handle.relay().await?)
+            .status()
             .await?,
     )
 }
