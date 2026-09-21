@@ -531,9 +531,8 @@ where
         // the lineage moved.
         channel_update.adopted_deposits = result.adopted_deposits;
 
-        // Shed pending configs superseded on the config lineage on every
-        // block: a foreign config landing alone moves no message lineage and
-        // reports no update, but still invalidates a pending config of ours.
+        // Shed pending configs superseded on the config lineage; the lineage
+        // diff already reports them orphaned.
         let stale_configs = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => s.shed_stale_pending_configs(tip),
             _ => Vec::new(),

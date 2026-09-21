@@ -487,15 +487,15 @@ pub enum TxSource {
 
 /// How the channel changed across one [`Event::BlocksProcessed`].
 ///
-/// The channel is an ordered chain of inscriptions. It can momentarily fork —
-/// competing inscriptions chain off the same parent — and this reports how the
-/// canonical chain moved since the last event:
+/// The channel is an ordered chain of inscriptions, with configs on their own
+/// lineage beside it. Either can momentarily fork — competing entries chain
+/// off the same parent — and this reports how the canonical chain moved since
+/// the last event:
 ///
-/// - `adopted`: inscriptions now on the channel that weren't before — apply
-///   them.
-/// - `orphaned`: inscriptions that were on the channel (or that you published
-///   and were still waiting to land) and no longer are — revert them and treat
-///   them as republish candidates.
+/// - `adopted`: entries now on the channel that weren't before — apply them.
+/// - `orphaned`: entries that were on the channel (or that you published and
+///   were still waiting to land) and no longer are — revert them and treat them
+///   as republish candidates.
 ///
 /// Both empty means nothing changed.
 ///
@@ -517,7 +517,8 @@ pub struct ChannelUpdate {
     /// variant.
     pub orphaned: Vec<ChannelUpdateTx>,
     /// Txs added to the channel — every tx that advanced the canonical
-    /// channel tip: messages, atomic withdraw bundles or custom txs.
+    /// message or config tip: messages, atomic withdraw bundles, configs or
+    /// custom txs.
     ///
     /// On a pure extension (`orphaned` empty) this carries only entries the
     /// sequencer wasn't already tracking — its own publishes apply to
