@@ -39,8 +39,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    ChainServiceInfo, ConsensusMsg, Cryptarchia, CryptarchiaConsensusState, EpochStateQueryResult,
-    Error, LOG_TARGET, LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, Query, metrics,
+    BlockOrigin, ChainServiceInfo, ConsensusMsg, Cryptarchia, CryptarchiaConsensusState,
+    EpochStateQueryResult, Error, LOG_TARGET, LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo,
+    Query, metrics,
     notifier::ChainOnlineNotifier,
     relays::{BroadcastRelay, CryptarchiaConsensusRelays},
     storage::{StorageAdapter as _, adapters::StorageAdapter},
@@ -217,6 +218,7 @@ where
             &mut self.cryptarchia,
             block,
             self.current_slot,
+            BlockOrigin::Network,
             &self.relays,
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,
@@ -774,6 +776,7 @@ pub async fn process_block<Tx, Storage, RuntimeServiceId>(
     cryptarchia: &mut Cryptarchia,
     block: Block<Tx>,
     current_slot: Slot,
+    origin: BlockOrigin,
     relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
     new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
     lib_broadcaster: &broadcast::Sender<LibUpdate>,
@@ -802,7 +805,8 @@ where
     let prev_lib = cryptarchia.lib();
 
     let mut candidate = cryptarchia.clone();
-    let applied = candidate.try_apply_block_with_state_retention(block.clone(), current_slot)?;
+    let applied =
+        candidate.try_apply_block_with_state_retention(block.clone(), current_slot, origin)?;
     let new_lib = candidate.lib();
 
     let tx_count = block.transactions_iter().count();

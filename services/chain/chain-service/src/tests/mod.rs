@@ -7,7 +7,7 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_core::{
-    block::{Block, BlockTransactions, UncleHeaders},
+    block::{Block, BlockTransactions, SignedHeader, UncleHeaders},
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
@@ -54,7 +54,8 @@ use tokio::{
 };
 
 use crate::{
-    Cryptarchia, CryptarchiaConsensus, Error,
+    BlockOrigin, BootstrapConfig, Cryptarchia, CryptarchiaConsensus, CryptarchiaConsensusState,
+    Error, OfflineGracePeriodConfig,
     relays::CryptarchiaConsensusRelays,
     service::{get_block_ids, process_block},
 };
@@ -177,6 +178,7 @@ async fn get_block_ids_from_memory_and_storage() {
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
+            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -230,6 +232,7 @@ async fn get_block_ids_from_memory_and_storage() {
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
+            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -304,6 +307,97 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     assert!(recovery_blocks.blocks.is_empty());
 }
 
+/// The chain must be recovered successfully from storage by skipping the uncle
+/// validation.
+///
+/// Build a chain:
+/// G -- B1 -- B2(uncles=[U1])
+///    \
+///      U1
+/// and recover the chain from the state persisted with `LIB = B1` and
+/// `tip = B2`, where `U1`'s parent `G` is older than LIB.
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
+    type Tx = SignedOps<Preverified, StandardMode>;
+
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    let _storage_svc = spawn_storage_service(storage_rx);
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays = CryptarchiaConsensusRelays::<Tx, RocksBackend, TestRuntimeServiceId>::new(
+        OutboundRelay::new(broadcast_tx),
+        OutboundRelay::new(storage_tx),
+        OutboundRelay::new(time_tx),
+    )
+    .await;
+    let (new_block_tx, _new_block_rx) = broadcast::channel(10);
+    let (lib_tx, _lib_rx) = broadcast::channel(10);
+
+    let (cryptarchia, b1, u1, _, zk_key, utxo) = chain_with_fork();
+    let (b2, _) = try_build_block(
+        &cryptarchia,
+        cryptarchia.tip(),
+        utxo,
+        &zk_key,
+        u1.header().slot().strict_add(1.into()),
+        UncleHeaders::new([signed_header(&u1)]),
+    )
+    .unwrap();
+    let (b1_id, b2_id, b2_slot) = (b1.header().id(), b2.header().id(), b2.header().slot());
+
+    // Before the restart: `B1` and `B2` are verified and stored.
+    let mut stored = genesis_cryptarchia(utxo);
+    for block in [b1.clone(), b2] {
+        process_block(
+            &mut stored,
+            block,
+            b2_slot,
+            BlockOrigin::Network,
+            &relays,
+            &new_block_tx,
+            &lib_tx,
+        )
+        .await
+        .expect("the block should be valid before the restart");
+    }
+
+    let recovery_state = CryptarchiaConsensusState {
+        tip: b2_id,
+        lib: b1_id,
+        lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
+        lib_block_length: 1,
+        lib_block_slot: b1.header().slot(),
+        lib_block_uncle_slots: UncleSlots::default(),
+        genesis_id: GENESIS_ID.into(),
+        storage_blocks_to_remove: HashSet::new(),
+        last_engine_state: None,
+    };
+    let bootstrap_config = BootstrapConfig {
+        prolonged_bootstrap_period: std::time::Duration::ZERO,
+        force_bootstrap: true,
+        offline_grace_period: OfflineGracePeriodConfig::default(),
+    };
+    let initialized = CryptarchiaConsensus::<
+        Tx,
+        RocksBackend,
+        SystemTimeBackend,
+        TestRuntimeServiceId,
+    >::initialize_cryptarchia(
+        &recovery_state,
+        &bootstrap_config,
+        stored.ledger.config().clone(),
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+        b2_slot,
+    )
+    .await;
+    let initialized = initialized.expect("the chain should be recovered");
+    assert!(!initialized.fell_back_to_lib);
+    assert_eq!(initialized.cryptarchia.lib(), b1_id);
+    assert_eq!(initialized.cryptarchia.tip(), b2_id);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
@@ -333,6 +427,7 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
         &mut cryptarchia,
         block,
         block_slot,
+        BlockOrigin::Network,
         &relays,
         &new_block_tx,
         &lib_tx,
@@ -591,6 +686,70 @@ pub fn try_build_block_with_transactions(
     }
 
     None
+}
+
+/// A chain `G --- B1` with a fork block `U1` also extending `G`, at the
+/// same slot as `B1`.
+#[expect(clippy::type_complexity, reason = "a test helper")]
+pub fn chain_with_fork() -> (
+    Cryptarchia,
+    Block<SignedOps<Preverified, StandardMode>>,
+    Block<SignedOps<Preverified, StandardMode>>,
+    Ed25519Key,
+    ZkKey,
+    Utxo,
+) {
+    let genesis_id = GENESIS_ID.into();
+    let (zk_key, utxo) = utxo();
+    let mut cryptarchia = genesis_cryptarchia(utxo);
+
+    // Both extend the genesis, and the same key wins the same slot, so the
+    // two blocks differ only in their (randomly generated) block leaders.
+    let (u1, u1_key) = try_build_block(
+        &cryptarchia,
+        genesis_id,
+        utxo,
+        &zk_key,
+        Slot::new(1),
+        UncleHeaders::empty(),
+    )
+    .unwrap();
+    let (b1, _) = try_build_block(
+        &cryptarchia,
+        genesis_id,
+        utxo,
+        &zk_key,
+        Slot::new(1),
+        UncleHeaders::empty(),
+    )
+    .unwrap();
+    let b1_header_slot = b1.header().slot();
+    cryptarchia
+        .try_apply_block(b1.clone(), b1_header_slot)
+        .unwrap();
+
+    (cryptarchia, b1, u1, u1_key, zk_key, utxo)
+}
+
+pub const GENESIS_ID: [u8; 32] = [0; 32];
+
+/// A chain with only the genesis block, holding `utxo`.
+pub fn genesis_cryptarchia(utxo: Utxo) -> Cryptarchia {
+    let config = ledger_config(3.try_into().unwrap());
+    Cryptarchia::from_lib(
+        GENESIS_ID.into(),
+        LedgerState::from_utxos([utxo], &config),
+        GENESIS_ID.into(),
+        config,
+        lb_cryptarchia_engine::State::Bootstrapping,
+        Slot::genesis(),
+        0,
+        UncleSlots::default(),
+    )
+}
+
+pub fn signed_header(block: &Block<SignedOps<Preverified, StandardMode>>) -> SignedHeader {
+    SignedHeader::new(block.header().clone(), *block.signature())
 }
 
 pub fn utxo() -> (ZkKey, Utxo) {

@@ -178,18 +178,16 @@ mod tests {
         block::BlockTransactions,
         header::{ContentId, Header},
         mantle::{
-            SignedOps, Utxo, ledger::verification_mode::StandardMode,
-            transactions::states::Preverified,
+            SignedOps, ledger::verification_mode::StandardMode, transactions::states::Preverified,
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
-    use lb_cryptarchia_engine::{Slot, UncleSlots};
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
-    use lb_ledger::LedgerState;
+    use lb_cryptarchia_engine::Slot;
+    use lb_key_management_system_keys::keys::Ed25519Key;
     use rand::thread_rng;
 
     use super::*;
-    use crate::tests::{ledger_config, try_build_block, utxo};
+    use crate::tests::{chain_with_fork, signed_header, try_build_block};
 
     #[test]
     fn test_accept_valid_uncle() {
@@ -405,63 +403,6 @@ mod tests {
                 ..
             }
         ));
-    }
-
-    /// A chain `G --- B1` with a fork block `U1` also extending `G`, at the
-    /// same slot as `B1`.
-    #[expect(clippy::type_complexity, reason = "a test helper")]
-    fn chain_with_fork() -> (
-        Cryptarchia,
-        Block<SignedOps<Preverified, StandardMode>>,
-        Block<SignedOps<Preverified, StandardMode>>,
-        Ed25519Key,
-        ZkKey,
-        Utxo,
-    ) {
-        let config = ledger_config(3.try_into().unwrap());
-        let genesis_id = [0; 32].into();
-        let (zk_key, utxo) = utxo();
-        let mut cryptarchia = Cryptarchia::from_lib(
-            genesis_id,
-            LedgerState::from_utxos([utxo], &config),
-            genesis_id,
-            config,
-            lb_cryptarchia_engine::State::Bootstrapping,
-            Slot::genesis(),
-            0,
-            UncleSlots::default(),
-        );
-
-        // Both extend the genesis, and the same key wins the same slot, so the
-        // two blocks differ only in their (randomly generated) block leaders.
-        let (u1, u1_key) = try_build_block(
-            &cryptarchia,
-            genesis_id,
-            utxo,
-            &zk_key,
-            Slot::new(1),
-            UncleHeaders::empty(),
-        )
-        .unwrap();
-        let (b1, _) = try_build_block(
-            &cryptarchia,
-            genesis_id,
-            utxo,
-            &zk_key,
-            Slot::new(1),
-            UncleHeaders::empty(),
-        )
-        .unwrap();
-        let b1_header_slot = b1.header().slot();
-        cryptarchia
-            .try_apply_block(b1.clone(), b1_header_slot)
-            .unwrap();
-
-        (cryptarchia, b1, u1, u1_key, zk_key, utxo)
-    }
-
-    fn signed_header(block: &Block<SignedOps<Preverified, StandardMode>>) -> SignedHeader {
-        SignedHeader::new(block.header().clone(), *block.signature())
     }
 
     /// Crafts a block carrying the uncles, without a winning `PoL` for `slot`,

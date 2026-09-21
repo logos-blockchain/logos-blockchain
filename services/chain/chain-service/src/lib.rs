@@ -411,7 +411,8 @@ impl Cryptarchia {
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
-        let outcome = self.try_apply_block_with_state_retention(block, current_slot)?;
+        let outcome =
+            self.try_apply_block_with_state_retention(block, current_slot, BlockOrigin::Network)?;
         self.prune_ledger_states(outcome.pruned_blocks.all());
         Ok((
             outcome.pruned_blocks,
@@ -426,6 +427,7 @@ impl Cryptarchia {
         &mut self,
         block: Block<Tx>,
         current_slot: Slot,
+        origin: BlockOrigin,
     ) -> Result<TryApplyBlockOutcome, Error>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
@@ -448,7 +450,9 @@ impl Cryptarchia {
         }
 
         // A block is valid only if every uncle it carries is valid.
-        self.verify_uncles(&block)?;
+        if origin == BlockOrigin::Network {
+            self.verify_uncles(&block)?;
+        }
 
         let block_uncle_headers_slots = block.uncle_headers().slots();
         let leader_proof = header.leader_proof().clone();
@@ -693,6 +697,10 @@ where
         })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn run(self) -> Result<(), DynError> {
         let relays: CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId> =
             CryptarchiaConsensusRelays::from_service_resources_handle::<TimeBackend>(
@@ -736,7 +744,8 @@ where
             &self.lib_subscription_sender,
             current_slot,
         )
-        .await;
+        .await
+        .expect("The chain can't be recovered from storage. Remove the chain data, and sync from genesis");
 
         // These are blocks that have been pruned by the cryptarchia engine but have not
         // yet been deleted from the storage layer.
@@ -928,6 +937,8 @@ where
                 blocks,
                 fell_back_to_lib: false,
             },
+            // TODO: Check if it's safe to remove this. We shouldn't fall back to LIB
+            // since uncle validations would fail without enough ancestor blocks.
             Err(error @ (Error::ParentIdNotFound(_) | Error::HeaderIdNotFound(_))) => {
                 warn!(
                     target: LOG_TARGET, ?tip, ?lib, ?error,
@@ -958,6 +969,13 @@ where
     /// * `ledger_config` - The ledger configuration.
     /// * `relays` - The relays object containing all the necessary relays for
     ///   the consensus.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any stored block fails to be replayed, without
+    /// continuing with a partially recovered chain. Otherwise, the remaining
+    /// blocks are downloaded from peers, and their uncles can't be verified if
+    /// the parent of an uncle is older than LIB.
     #[expect(
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
@@ -970,7 +988,7 @@ where
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,
         current_slot: Slot,
-    ) -> InitializedCryptarchia {
+    ) -> Result<InitializedCryptarchia, Error> {
         info!(
             target: LOG_TARGET, tip = ?recovery_state.tip, lib = ?recovery_state.lib, lib_height = recovery_state.lib_block_length, genesis = ?recovery_state.genesis_id,
             "recovering Cryptarchia",
@@ -1036,24 +1054,22 @@ where
         let mut pruned_blocks = PrunedBlocks::new();
         let n_blocks = blocks.len();
         for (i, block) in blocks.into_iter().enumerate() {
-            match process_block(
+            let block_id = block.header().id();
+            let outcome = process_block(
                 &mut cryptarchia,
                 block,
                 current_slot,
+                BlockOrigin::Storage,
                 relays,
                 new_block_subscription_sender,
                 lib_subscription_sender,
             )
             .await
-            {
-                Ok(outcome) => {
-                    debug!(target: LOG_TARGET, "{}/{} blocks applied during initialization", i + 1, n_blocks);
-                    pruned_blocks.extend(&outcome.pruned_blocks);
-                }
-                Err(e) => {
-                    error!(target: LOG_TARGET, "Error processing block: {:?}", e);
-                }
-            }
+            .inspect_err(|error| {
+                error!(target: LOG_TARGET, ?block_id, ?error, "failed to replay the stored block ({}/{n_blocks})", i + 1);
+            })?;
+            debug!(target: LOG_TARGET, "{}/{} blocks applied during initialization", i + 1, n_blocks);
+            pruned_blocks.extend(&outcome.pruned_blocks);
         }
 
         info!(
@@ -1061,10 +1077,24 @@ where
             "{n_blocks} blocks replayed. Chain recovery finished",
         );
 
-        InitializedCryptarchia {
+        Ok(InitializedCryptarchia {
             cryptarchia,
             pruned_blocks,
             fell_back_to_lib,
-        }
+        })
     }
+}
+
+/// Where a block being applied comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockOrigin {
+    /// A block received from the network, or proposed by this node.
+    Network,
+    /// A block that was already verified and stored by this node, which is
+    /// being replayed during the chain recovery.
+    ///
+    /// The uncle validity rules are skipped for it, since the parent of an
+    /// uncle may be older than LIB, and blocks older than LIB are not
+    /// recovered.
+    Storage,
 }
