@@ -1484,6 +1484,24 @@ where
 
 #[utoipa::path(
     get,
+    path = paths::POW_STATUS,
+    responses(
+        (status = 200, description = "PoW mining and auto-claim state as the running node holds it"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn pow_status<PoW, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    make_request_and_return_response!(pow::status::<PoW, RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    get,
     path = paths::BLOCKS,
     params(BlockRangeQuery),
     responses(

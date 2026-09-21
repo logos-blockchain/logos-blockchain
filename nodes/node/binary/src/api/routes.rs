@@ -56,6 +56,7 @@ macro_rules! api_routes {
             put lb_http_api_common::paths::POW_STOP_AUTO_CLAIM => crate::api::handlers::pow_stop_auto_claim, pow_stop_auto_claim::<PoWService, RuntimeServiceId>;
             post lb_http_api_common::paths::POW_CLAIM => crate::api::handlers::pow_claim, pow_claim::<PoWService, RuntimeServiceId>;
             get lb_http_api_common::paths::POW_CLAIMABLE_REWARDS => crate::api::handlers::pow_claimable_rewards, pow_claimable_rewards::<PoWService, RuntimeServiceId>;
+            get lb_http_api_common::paths::POW_STATUS => crate::api::handlers::pow_status, pow_status::<PoWService, RuntimeServiceId>;
             get lb_http_api_common::paths::LEADER_CLAIM_VOUCHERS => crate::api::handlers::wallet::get_claimable_vouchers, wallet::get_claimable_vouchers::<WalletService, _>;
             get lb_http_api_common::paths::LEADER_AGED_NOTES => crate::api::handlers::wallet::get_leader_aged_notes, wallet::get_leader_aged_notes::<WalletService, _>;
             get lb_http_api_common::paths::wallet::BALANCE => crate::api::handlers::wallet::get_balance, wallet::get_balance::<WalletService, _>;
