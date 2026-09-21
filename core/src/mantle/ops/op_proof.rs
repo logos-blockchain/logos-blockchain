@@ -139,7 +139,7 @@ impl_try_from_op_proof_for_proof! {
     None => NoOpProof,
 }
 
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod samples {
     use lb_groth16::{COMPRESSED_PROOF_SIZE, CompressedGroth16Proof};
     use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};

@@ -2,7 +2,7 @@ use lb_binary_codec::{
     bincode::BoundedSerializeOp,
     canonical::{BinaryDecode, BinaryEncode, DecodeError},
 };
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 use lb_groth16::CompressedGroth16Proof;
 use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, serde::serde_fr};
 use lb_log_targets::proofs;
@@ -190,7 +190,7 @@ mod proof_serde {
     }
 }
 
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 impl crate::mantle::ops::op_proof::samples::SampleProof for Groth16LeaderClaimProof {
     fn sample() -> Self {
         Self::new(CompressedGroth16Proof::from_bytes(

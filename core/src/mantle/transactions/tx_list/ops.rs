@@ -4,7 +4,7 @@ use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::mantle::ops::{
     channel::{
         channel_transfer::ChannelTransferOp, config::ChannelConfigOp, deposit::DepositOp,
@@ -102,7 +102,7 @@ impl Ops {
         TxList(self.0.map_ref(OpRef::from))
     }
 
-    #[cfg(any(test, feature = "samples"))]
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
         Self::from([

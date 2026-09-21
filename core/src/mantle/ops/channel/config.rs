@@ -1,6 +1,6 @@
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 use lb_key_management_system_keys::keys::Ed25519Key;
 use lb_utils::bounded::NonEmptyBoundedVec;
 use serde::{Deserialize, Serialize};
@@ -51,7 +51,7 @@ impl ChannelConfigOp {
         MsgId(hasher.finalize().into())
     }
 
-    #[cfg(any(test, feature = "samples"))]
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
         Self {

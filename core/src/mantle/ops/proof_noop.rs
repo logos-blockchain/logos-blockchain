@@ -23,7 +23,7 @@ impl BinaryDecode for NoOpProof {
     }
 }
 
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod samples {
     use crate::mantle::ops::{NoOpProof, op_proof::samples::SampleProof};
 

@@ -1,9 +1,9 @@
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 use lb_groth16::Fr;
 use serde::{Deserialize, Serialize};
 
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::mantle::NoteId;
 use crate::{
     events::TxEvent,
@@ -180,7 +180,7 @@ impl<Mode: VerificationMode> ExecutableOperation
     }
 }
 
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 impl ChannelWithdrawOp {
     #[must_use]
     pub fn sample() -> Self {

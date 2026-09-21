@@ -102,7 +102,7 @@ impl ClaimPowRewardOp {
         ]))
     }
 
-    #[cfg(any(test, feature = "samples"))]
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
         Self {

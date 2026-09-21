@@ -1,13 +1,13 @@
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
-#[cfg(feature = "samples")]
+#[cfg(feature = "test-utils")]
 use lb_groth16::Fr;
-#[cfg(feature = "samples")]
+#[cfg(feature = "test-utils")]
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::mantle::{Note, NoteId};
 use crate::{
     events::TxEvent,
@@ -68,7 +68,7 @@ impl TransferOp {
         Ok(balance)
     }
 
-    #[cfg(any(test, feature = "samples"))]
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
         Self::new(

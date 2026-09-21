@@ -1,11 +1,11 @@
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
-#[cfg(feature = "samples")]
+#[cfg(feature = "test-utils")]
 use lb_groth16::Fr;
-#[cfg(feature = "samples")]
+#[cfg(feature = "test-utils")]
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "samples")]
+#[cfg(feature = "test-utils")]
 use crate::mantle::{Note, NoteId};
 use crate::{
     events::TxEvent,
@@ -48,7 +48,7 @@ impl ChannelTransferOp {
         self.outputs.utxos(self)
     }
 
-    #[cfg(any(test, feature = "samples"))]
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
         Self {

@@ -108,7 +108,7 @@ impl ChannelMultiSigProof {
         self.signatures.as_slice()
     }
 
-    #[cfg(any(test, feature = "samples"))]
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample_with_signatures(signature_count: u16) -> Self {
         let signatures = IndexedSignatures::try_from_iter((0..signature_count).map(|index| {
@@ -182,7 +182,7 @@ pub mod codec {
     }
 }
 
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod sample {
     use crate::{
         mantle::ops::op_proof::samples::SampleProof,

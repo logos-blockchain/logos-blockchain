@@ -1,7 +1,7 @@
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::bounded::BoundedError;
 
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::mantle::Op;
 use crate::mantle::{
     OpProofRef, OpRef, TxHash, VerificationError,
@@ -69,7 +69,7 @@ impl<Mode: VerificationMode> SignedOps<Unverified, Mode> {
     /// The proofs are structurally valid but cryptographically meaningless, so
     /// the result is only useful to tests that exercise op extraction rather
     /// than verification — `preverify` will reject it.
-    #[cfg(any(test, feature = "samples"))]
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn from_ops_with_sample_proofs(ops: Ops) -> Self {
         let proofs = ops.iter().map(Op::sample_proof).collect::<Vec<_>>();
@@ -78,7 +78,7 @@ impl<Mode: VerificationMode> SignedOps<Unverified, Mode> {
             .expect("Sample proofs pair with their ops by construction.")
     }
 
-    #[cfg(any(test, feature = "samples"))]
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
         Self::from_ops_with_sample_proofs(Ops::sample())

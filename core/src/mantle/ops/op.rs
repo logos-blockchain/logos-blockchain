@@ -1,9 +1,9 @@
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::mantle::OpProof;
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::mantle::ops::op_proof::samples::sample_proof_for;
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
@@ -177,7 +177,7 @@ impl Op {
         self.by_ref().gas_cost::<Profile>()
     }
 
-    #[cfg(any(test, feature = "samples"))]
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample_proof(&self) -> OpProof {
         match self {

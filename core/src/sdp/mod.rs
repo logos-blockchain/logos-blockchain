@@ -13,16 +13,16 @@ use lb_binary_codec::{
     bincode::{self, BoundedSerializeOp, DeserializeOp as _, SerializeOp as _},
     canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
 };
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 use lb_blend_proofs::{
     quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
     selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
 };
 use lb_cryptarchia_engine::Epoch;
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 use lb_groth16::Fr;
 use lb_groth16::fr_to_bytes;
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 use lb_key_management_system_keys::keys::Ed25519Key;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec};
@@ -548,7 +548,7 @@ impl DeclarationMessage {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "samples"))]
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
         Self {
@@ -798,7 +798,7 @@ mod tests {
     }
 }
 
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 impl WithdrawMessage {
     #[must_use]
     pub fn sample() -> Self {
@@ -810,7 +810,7 @@ impl WithdrawMessage {
     }
 }
 
-#[cfg(any(test, feature = "samples"))]
+#[cfg(any(test, feature = "test-utils"))]
 impl ActiveMessage {
     #[must_use]
     pub fn sample() -> Self {

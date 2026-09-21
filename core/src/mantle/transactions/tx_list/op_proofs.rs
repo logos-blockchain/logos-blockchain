@@ -35,7 +35,7 @@ impl OpProofs {
     ///
     /// Exhaustive over the enum, so it carries no alignment with any [`Ops`] —
     /// pairing proofs to their ops is `SignedOps`' job, not this column's.
-    #[cfg(any(test, feature = "samples"))]
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
         use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
