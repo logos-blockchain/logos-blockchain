@@ -160,12 +160,16 @@ Feature: PoW mining
       | NODE_3    | 1             | WALLET_MINER | true             | NODE_1       |
       | NODE_3    | 2             | OTHER_WALLET | false            | NODE_1       |
     And node "NODE_3" is at height 6 in 180 seconds
-    And I start mining on node "NODE_3"
+    Then node "NODE_3" reports PoW mining off
+    And node "NODE_3" reports PoW auto-claim armed
+    When I start mining on node "NODE_3"
+    Then node "NODE_3" reports PoW mining on
     # Stop mining once tickets exist, as in the manual scenario: at the eased
     # difficulty the miner floods the service loop, and the auto-claim tick has
     # to get a turn on that same loop.
-    And node "NODE_3" has at least 1 claimable PoW rewards within 120 seconds
+    When node "NODE_3" has at least 1 claimable PoW rewards within 120 seconds
     And I stop mining on node "NODE_3"
+    Then node "NODE_3" reports PoW mining off
     # No claim step anywhere: the wallet started empty, so a non-zero balance
     # can only have come from a claim the node issued by itself.
     Then wallet "WALLET_MINER" has 1 or more LGO in 180 seconds

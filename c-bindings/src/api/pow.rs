@@ -498,8 +498,11 @@ impl Default for PoWStatus {
 ///
 /// # Returns
 ///
-/// A [`Result`] containing the service status on success, or an [`OperationStatus`] error on failure.
-pub(crate) fn pow_status_sync(node: &LogosBlockchainNode) -> StatusResult<lb_pow_service::PoWStatus> {
+/// A [`Result`] containing the service status on success, or an
+/// [`OperationStatus`] error on failure.
+pub(crate) fn pow_status_sync(
+    node: &LogosBlockchainNode,
+) -> StatusResult<lb_pow_service::PoWStatus> {
     node.get_runtime_handle().block_on(async {
         lb_api_service::http::pow::status::<PoWService, RuntimeServiceId>(
             node.get_overwatch_handle(),
@@ -524,19 +527,20 @@ pub type FfiPoWStatusResult = FfiStatusResult<PoWStatus>;
 ///
 /// # Returns
 ///
-/// A [`FfiPoWStatusResult`] containing the service status on success, or an [`OperationStatus`]
-/// error on failure.
+/// A [`FfiPoWStatusResult`] containing the service status on success, or an
+/// [`OperationStatus`] error on failure.
 ///
 /// # Safety
 ///
 /// This function is unsafe because it dereferences a raw pointer.
-/// The caller must ensure that `node` is non-null and points to a valid [`LogosBlockchainNode`]
-/// instance.
+/// The caller must ensure that `node` is non-null and points to a valid
+/// [`LogosBlockchainNode`] instance.
 ///
 /// # Memory Management
 ///
 /// This function allocates memory for the `targets` list.
-/// The caller must free the returned value using the [`free_pow_status`] function.
+/// The caller must free the returned value using the [`free_pow_status`]
+/// function.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pow_status(node: *const LogosBlockchainNode) -> FfiPoWStatusResult {
     return_error_if_null_pointer!(node);
@@ -582,14 +586,18 @@ pub unsafe extern "C" fn pow_status(node: *const LogosBlockchainNode) -> FfiPoWS
 ///
 /// # Safety
 ///
-/// This function is unsafe because it reconstructs a boxed slice from a raw pointer.
-/// The caller must only pass values returned by [`pow_status`] and must call this exactly once per
-/// result.
+/// This function is unsafe because it reconstructs a boxed slice from a raw
+/// pointer. The caller must only pass values returned by [`pow_status`] and
+/// must call this exactly once per result.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_pow_status(status: PoWStatus) -> OperationStatus {
     return_error_if_null_pointer!(status.targets);
-    let targets =
-        unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(status.targets, status.targets_len)) };
+    let targets = unsafe {
+        Box::from_raw(ptr::slice_from_raw_parts_mut(
+            status.targets,
+            status.targets_len,
+        ))
+    };
 
     drop(targets);
     OperationStatus::OK

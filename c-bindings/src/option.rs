@@ -1,7 +1,7 @@
 /// Simple wrapper around an optional value.
 ///
-/// Value is not guaranteed. You should check `is_some` before accessing the
-/// value.
+/// Value is not guaranteed.
+/// You should check `is_some` before accessing the value.
 #[repr(C)]
 pub struct FfiOption<Value> {
     pub is_some: bool,
@@ -13,15 +13,15 @@ where
     Value: Default,
 {
     fn from(option: Option<Value>) -> Self {
-        match option {
-            Some(value) => Self {
-                is_some: true,
-                value,
-            },
-            None => Self {
+        option.map_or_else(
+            || Self {
                 is_some: false,
                 value: Value::default(),
             },
-        }
+            |value| Self {
+                is_some: true,
+                value,
+            },
+        )
     }
 }

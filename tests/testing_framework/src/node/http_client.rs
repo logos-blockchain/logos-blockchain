@@ -29,7 +29,8 @@ use lb_http_api_common::{
     },
     paths::{
         BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, MEMPOOL_VIEW,
-        NETWORK_INFO, POW_CLAIM, POW_CLAIMABLE_REWARDS, POW_START_MINING, POW_STOP_MINING,
+        NETWORK_INFO, POW_CLAIM, POW_CLAIMABLE_REWARDS, POW_START_MINING, POW_STATUS,
+        POW_STOP_MINING,
     },
     queries::BlocksStreamQuery,
 };
@@ -348,6 +349,17 @@ impl NodeHttpClient {
         Ok(response.claimable_tickets)
     }
 
+    /// Returns the runtime state of the node's `PoW` service.
+    pub async fn pow_status(&self) -> Result<PowStatusBody, Error> {
+        let request_url = Self::join_path(&self.base_url, POW_STATUS)?;
+
+        self.with_timeout(
+            "PoW status request",
+            self.http_client.get::<(), PowStatusBody>(request_url, None),
+        )
+        .await
+    }
+
     #[must_use]
     pub const fn base_url(&self) -> &Url {
         &self.base_url
@@ -434,6 +446,19 @@ struct PowClaimRequestBody {
 #[derive(Clone, Debug, Deserialize)]
 struct PowClaimResponseBody {
     tx_hash: Option<TxHash>,
+}
+
+/// Subset of the node's `PoWStatus` we assert on.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PowStatusBody {
+    pub is_mining: bool,
+    pub auto_claim: PowAutoClaimStatusBody,
+}
+
+/// Subset of the node's `AutoClaimStatus` we assert on.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PowAutoClaimStatusBody {
+    pub is_armed: bool,
 }
 
 /// Subset of the node's `ClaimableRewardsInfo` we assert on.
