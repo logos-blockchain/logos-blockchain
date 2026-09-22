@@ -32,6 +32,7 @@ impl GeneralTracingConfig {
                     gelf: None,
                     loki: None,
                     stderr: false,
+                    format: tracing::logger::LogFormat::default(),
                 },
                 tracing: tracing::tracing::Layer::Otlp(tracing::tracing::OtlpConfig {
                     endpoint: OTLP_TRACING_ENDPOINT.try_into().unwrap(),
