@@ -2,7 +2,12 @@
 //!
 //! Spec: [Wallet Technical Standard](https://lip.logos.co/blockchain/raw/wallet-technical-standard.html)
 
-use std::{fmt, str::FromStr, sync::LazyLock};
+use core::fmt::Debug;
+use std::{
+    fmt::{self},
+    str::FromStr,
+    sync::LazyLock,
+};
 
 pub use arbitrary_int::u31;
 use bip39::Language;
@@ -15,6 +20,8 @@ use blake2::{
 };
 use lb_groth16::{Fr, fr_from_bytes_unchecked};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
+#[cfg(feature = "unsafe")]
+use serde::Serializer;
 use serde::{Deserialize, Serialize};
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
@@ -34,8 +41,8 @@ const HASH_SIZE: usize = 64;
 const HALF_HASH_SIZE: usize = div_exact(HASH_SIZE, 2);
 
 /// An English BIP-39 mnemonic, written as its words separated by spaces.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ZeroizeOnDrop)]
-#[serde(try_from = "String", into = "String")]
+#[derive(Clone, PartialEq, Eq, Deserialize, ZeroizeOnDrop)]
+#[serde(try_from = "String")]
 pub struct Mnemonic(bip39::Mnemonic);
 
 impl Mnemonic {
@@ -70,15 +77,16 @@ impl TryFrom<String> for Mnemonic {
     }
 }
 
-impl From<Mnemonic> for String {
-    fn from(mnemonic: Mnemonic) -> Self {
-        mnemonic.to_string()
+#[cfg(feature = "unsafe")]
+impl Serialize for Mnemonic {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0.to_string())
     }
 }
 
-impl fmt::Display for Mnemonic {
+impl Debug for Mnemonic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
+        write!(f, "Mnemonic(<redacted>)")
     }
 }
 

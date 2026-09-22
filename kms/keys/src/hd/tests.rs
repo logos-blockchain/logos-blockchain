@@ -71,7 +71,7 @@ fn mnemonic_with_24_words_is_accepted() {
 #[test]
 fn generated_mnemonic_has_12_words() {
     let mnemonic = Mnemonic::generate();
-    assert_eq!(mnemonic.to_string().split(' ').count(), 12);
+    assert_eq!(mnemonic.0.word_count(), 12);
     assert_ne!(mnemonic, Mnemonic::generate());
 }
 
