@@ -34,7 +34,7 @@ const HASH_SIZE: usize = 64;
 const HALF_HASH_SIZE: usize = div_exact(HASH_SIZE, 2);
 
 /// An English BIP-39 mnemonic, written as its words separated by spaces.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ZeroizeOnDrop)]
 #[serde(try_from = "String", into = "String")]
 pub struct Mnemonic(bip39::Mnemonic);
 
