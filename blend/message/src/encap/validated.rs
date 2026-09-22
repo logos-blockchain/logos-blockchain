@@ -1,10 +1,10 @@
 use educe::Educe;
+use lb_binary_codec::canonical::BinaryEncode;
 use lb_blend_crypto::random_sized_bytes;
 use lb_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
     selection::inputs::VerifyInputs,
 };
-use lb_codec::BinaryEncode;
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, UnsecuredEd25519Key, X25519PrivateKey,
 };

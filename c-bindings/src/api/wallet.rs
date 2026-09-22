@@ -911,14 +911,7 @@ pub unsafe extern "C" fn transfer_funds(
         recipient_public_key,
         amount,
     ));
-    let transaction_hash = transaction.hash().as_signing_bytes();
-    let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
-        return FfiTransferFundsResult::err(OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            "Failed to convert transaction hash to array.",
-        ));
-    };
-    FfiTransferFundsResult::ok(transaction_hash_array)
+    FfiTransferFundsResult::ok(transaction.hash().0)
 }
 
 /// Parses a 32-byte little-endian buffer into a [`ZkPublicKey`].
@@ -1246,14 +1239,7 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
         funding_public_keys,
         max_tx_fee,
     ));
-    let transaction_hash = transaction.hash().as_signing_bytes();
-    let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
-        return FfiChannelDepositResult::err(OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            "Failed to convert transaction hash to array.",
-        ));
-    };
-    FfiChannelDepositResult::ok(transaction_hash_array)
+    FfiChannelDepositResult::ok(transaction.hash().0)
 }
 
 /// Selects notes (largest-first) whose combined value covers `amount`.
@@ -1560,14 +1546,7 @@ pub unsafe extern "C" fn channel_deposit(
         amount,
         metadata,
     ));
-    let transaction_hash = transaction.hash().as_signing_bytes();
-    let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
-        return FfiChannelDepositResult::err(OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            "Failed to convert transaction hash to array.",
-        ));
-    };
-    FfiChannelDepositResult::ok(transaction_hash_array)
+    FfiChannelDepositResult::ok(transaction.hash().0)
 }
 
 /// Funds a transaction from the node's wallet.
@@ -1813,7 +1792,7 @@ pub unsafe extern "C" fn submit_signed_transaction(
         }
     };
 
-    let transaction_hash = preverified_tx.hash().as_signing_bytes();
+    let transaction_hash = preverified_tx.hash().0;
     let runtime_handle = node.get_runtime_handle();
     let submit_result = runtime_handle.block_on(async {
         mempool::add_tx(node.get_overwatch_handle(), preverified_tx, Hashable::hash).await
@@ -1825,11 +1804,5 @@ pub unsafe extern "C" fn submit_signed_transaction(
         ));
     }
 
-    let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
-        return FfiSubmitTransactionResult::err(OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            "Failed to convert transaction hash to array.",
-        ));
-    };
-    FfiSubmitTransactionResult::ok(transaction_hash_array)
+    FfiSubmitTransactionResult::ok(transaction_hash)
 }

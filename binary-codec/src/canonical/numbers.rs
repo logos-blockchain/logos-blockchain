@@ -1,6 +1,6 @@
 use lb_groth16::{Fr, fr_from_bytes, fr_to_bytes};
 
-use crate::{BinaryDecode, BinaryEncode, DecodeError, codec_fixtures, take};
+use super::{BinaryDecode, BinaryEncode, DecodeError, codec_fixtures, take};
 /// `BinaryEncode`/`BinaryDecode` for a little-endian fixed-width integer.
 macro_rules! impl_le_integer {
     ($ty:ty) => {

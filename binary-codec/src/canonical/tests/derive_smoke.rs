@@ -1,8 +1,8 @@
 //! Smoke test for `#[derive(BinaryCodec)]`, kept in-crate so the
-//! `::lb_codec::` paths the derive emits resolve via `extern crate self as
-//! lb_codec`.
+//! `::lb_binary_codec::canonical::` paths emitted by the derive resolve via
+//! the umbrella serialization crate.
 
-use crate::{BinaryCodec, BinaryDecodeExt as _, BinaryEncode as _, codec_fixtures};
+use crate::canonical::{BinaryCodec, BinaryDecodeExt as _, BinaryEncode as _, codec_fixtures};
 
 #[derive(Debug, PartialEq, Eq, BinaryCodec)]
 struct Named {

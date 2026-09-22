@@ -16,7 +16,7 @@ workspace = true
 [dependencies]
 bincode                          = { workspace = true }
 blake2                           = { workspace = true }
-lb-codec                         = { workspace = true }
+lb-binary-codec                  = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-log-targets                   = { workspace = true }
 lb-utils                         = { workspace = true }

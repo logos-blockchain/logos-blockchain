@@ -1,6 +1,6 @@
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
-use lb_codec::BinaryCodec;
+use lb_binary_codec::{bincode::BoundedSerializeOp, canonical::BinaryCodec};
 use lb_groth16::Fr;
 
 use crate::{
@@ -14,6 +14,10 @@ pub struct TxHash(pub Hash);
 serde_bytes_newtype!(TxHash, 32);
 display_hex_bytes_newtype!(TxHash);
 
+impl BoundedSerializeOp for TxHash {
+    type Bytes = [u8; 32];
+}
+
 /// Number of leading hash bytes a block proposal uses to refer to a
 /// transaction.
 pub const REFERENCE_PREFIX_BYTES: usize = 16;
@@ -25,10 +29,25 @@ pub struct TxHashPrefix(pub [u8; REFERENCE_PREFIX_BYTES]);
 serde_bytes_newtype!(TxHashPrefix, REFERENCE_PREFIX_BYTES);
 display_hex_bytes_newtype!(TxHashPrefix);
 
+impl AsRef<[u8; REFERENCE_PREFIX_BYTES]> for TxHashPrefix {
+    fn as_ref(&self) -> &[u8; REFERENCE_PREFIX_BYTES] {
+        &self.0
+    }
+}
+
+impl BoundedSerializeOp for TxHashPrefix {
+    type Bytes = [u8; REFERENCE_PREFIX_BYTES];
+}
+
 impl From<[u8; REFERENCE_PREFIX_BYTES]> for TxHashPrefix {
     fn from(prefix: [u8; REFERENCE_PREFIX_BYTES]) -> Self {
         Self(prefix)
     }
+}
+
+impl TxHashPrefix {
+    /// The fixed-size canonical representation used in block proposals.
+    pub const CANONICAL_ENCODED_SIZE: usize = REFERENCE_PREFIX_BYTES;
 }
 
 /// A mempool key that a block proposal can refer to by a short prefix.
@@ -95,8 +114,8 @@ impl TxHash {
     }
 
     #[must_use]
-    pub fn as_signing_bytes(&self) -> Bytes {
-        Bytes::from(self.0.to_vec())
+    pub const fn as_signing_bytes(&self) -> &Hash {
+        &self.0
     }
 
     #[must_use]
@@ -105,22 +124,19 @@ impl TxHash {
     }
 }
 
-/// Holds a reference to a [`TxHash`] and its corresponding [`Bytes`] and [`Fr`]
-/// representations, to avoid repeated conversions.
+/// Holds a [`TxHash`] and its corresponding [`Fr`] representation, to avoid
+/// repeated conversions.
 pub struct TxHashView {
     tx_hash: TxHash,
-    tx_hash_bytes: Bytes,
     tx_hash_fr: Fr,
 }
 
 impl TxHashView {
     #[must_use]
     pub fn new(tx_hash: TxHash) -> Self {
-        let tx_hash_bytes = tx_hash.as_signing_bytes();
         let tx_hash_fr = tx_hash.to_fr();
         Self {
             tx_hash,
-            tx_hash_bytes,
             tx_hash_fr,
         }
     }
@@ -131,8 +147,8 @@ impl TxHashView {
     }
 
     #[must_use]
-    pub const fn as_bytes(&self) -> &Bytes {
-        &self.tx_hash_bytes
+    pub const fn as_bytes(&self) -> &Hash {
+        self.tx_hash.as_signing_bytes()
     }
 
     #[must_use]
@@ -149,6 +165,8 @@ impl From<TxHash> for TxHashView {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp as _};
+
     use crate::mantle::{
         TxHash,
         transactions::hash::{PrefixedKey as _, REFERENCE_PREFIX_BYTES, TxHashPrefix},
@@ -182,6 +200,38 @@ mod tests {
     #[test]
     fn prefix_matches_the_prefixed_key_impl() {
         let hash = TxHash([0x5Au8; 32]);
-        assert_eq!(hash.prefix(), hash.key_prefix());
+        let prefix = hash.prefix();
+
+        assert_eq!(prefix, hash.key_prefix());
+        assert_eq!(prefix.as_ref(), &prefix.0);
+        assert!(std::ptr::eq(prefix.as_ref(), &raw const prefix.0));
+    }
+
+    #[test]
+    fn transaction_hashes_have_exact_bincode_size() {
+        let hash = TxHash([0x5A; 32]);
+        let prefix = hash.prefix();
+
+        assert_eq!(hash.to_bytes().unwrap().len(), 32);
+        assert_eq!(
+            hash.to_bounded_bytes().unwrap().as_ref(),
+            hash.to_bytes().unwrap().as_ref()
+        );
+        assert_eq!(prefix.to_bytes().unwrap().len(), REFERENCE_PREFIX_BYTES);
+        assert_eq!(
+            prefix.to_bounded_bytes().unwrap().as_ref(),
+            prefix.to_bytes().unwrap().as_ref()
+        );
+    }
+
+    #[test]
+    fn signing_bytes_borrow_the_stored_hash() {
+        let hash = TxHash([0x5A; 32]);
+
+        assert_eq!(hash.as_signing_bytes(), &hash.0);
+        assert!(std::ptr::eq(hash.as_signing_bytes(), &raw const hash.0));
+
+        let view = super::TxHashView::new(hash);
+        assert_eq!(view.as_bytes(), hash.as_signing_bytes());
     }
 }

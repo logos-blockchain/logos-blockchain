@@ -1,5 +1,5 @@
 use futures::AsyncWriteExt as _;
-use lb_core::codec::BoundedSerializeOp;
+use lb_binary_codec::bincode::BoundedSerializeOp;
 use libp2p::{PeerId, Stream, StreamProtocol};
 use libp2p_stream::Control;
 use serde::de::DeserializeOwned;

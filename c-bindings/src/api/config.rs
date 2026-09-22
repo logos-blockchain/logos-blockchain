@@ -1,16 +1,21 @@
 use std::{
-    ffi::{CStr, c_char},
+    ffi::{CStr, CString, c_char},
     net::Ipv4Addr,
     path::PathBuf,
-    slice,
+    ptr, slice,
     str::FromStr as _,
 };
 
-use lb_node::cli::{EmbeddedInitArgs, InitArgs, MigrateArgs, ParticipateArgs, UpdateArgs};
+use lb_node::cli::{
+    EmbeddedInitArgs, InitArgs, MigrateArgs, ParticipateArgs, UpdateArgs, config::merge::MergeFlags,
+};
 use multiaddr::Multiaddr;
 use tokio::runtime::Runtime;
 
-use crate::{OperationStatus, errors::OperationStatusCode, return_error_if_null_pointer};
+use crate::{
+    OperationStatus, errors::OperationStatusCode, result::FfiStatusResult,
+    return_error_if_null_pointer,
+};
 
 /// Converts a non-null C string pointer into a [`PathBuf`].
 ///
@@ -298,6 +303,140 @@ pub unsafe extern "C" fn migrate_user_config_0_1_2(
     }
 }
 
+/// Merge behaviour flags. Mirror of [`MergeFlags`] for the C API.
+#[repr(C)]
+pub struct MergeConfigFlags {
+    /// Insert source keys missing from the destination instead of reporting
+    /// them.
+    pub source_insert_missing: bool,
+    /// Insert extra keys missing from the destination instead of reporting
+    /// them.
+    pub extra_insert_missing: bool,
+}
+
+impl From<MergeConfigFlags> for MergeFlags {
+    fn from(value: MergeConfigFlags) -> Self {
+        Self {
+            source_insert_missing: value.source_insert_missing,
+            extra_insert_missing: value.extra_insert_missing,
+        }
+    }
+}
+
+/// Result type for [`merge_user_config`].
+///
+/// On success, `value` is either null (no merge conflicts) or a pointer to a
+/// NUL-terminated C string with one merge conflict per line.
+pub type FfiMergeUserConfigResult = FfiStatusResult<*mut c_char>;
+
+/// Merges the values of a source config file, and optionally extra YAML values,
+/// onto a destination config file.
+///
+/// Extra values take precedence over source values.
+///
+/// Merges `source`, then `extra`, onto `destination`.
+///
+/// - Maps are merged key by key.
+/// - Lists and tagged values are replaced whole: changes nested inside them are
+///   neither merged nor reported as conflicts.
+///
+/// The destination file is overwritten with the result.
+///
+/// # Requirements
+///
+/// Running [`migrate_user_config`] before merging (calling this function) is
+/// recommended, it will cleanly handle the keystore migration.
+///
+/// # Arguments
+///
+/// - `source_path`: Path to the config YAML file whose values are merged.
+/// - `destination_path`: Path to the config YAML file merged onto and
+///   overwritten.
+/// - `extra_yaml`: Optional (nullable) YAML string with extra values.
+/// - `flags`: A [`MergeConfigFlags`] struct with the merge behavior flags.
+///
+/// # Returns
+///
+/// A [`FfiMergeUserConfigResult`] containing the merge conflicts report (null
+/// if there are none) on success, or an [`OperationStatus`] error if the merge
+/// could not run.
+///
+/// Conflicts do not mean the merge failed: the destination file is still
+/// written. Each conflict is a value that could not be merged, and the
+/// destination keeps its own value for that key.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. The caller
+/// must ensure that all non-null pointers are valid NUL-terminated C strings.
+///
+/// # Memory Management
+///
+/// When non-null, the returned report is allocated by this function. The
+/// caller must free it using the [`free_cstring`](super::free_cstring)
+/// function.
+#[must_use]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn merge_user_config(
+    source_path: *const c_char,
+    destination_path: *const c_char,
+    extra_yaml: *const c_char,
+    flags: MergeConfigFlags,
+) -> FfiMergeUserConfigResult {
+    return_error_if_null_pointer!(source_path);
+    return_error_if_null_pointer!(destination_path);
+
+    let extra_yaml = if extra_yaml.is_null() {
+        None
+    } else {
+        let extra_yaml = unsafe { CStr::from_ptr(extra_yaml) }.to_string_lossy();
+        match serde_yaml::from_str(&extra_yaml) {
+            Ok(extra) => Some(extra),
+            Err(error) => {
+                return FfiMergeUserConfigResult::err(OperationStatus::error(
+                    OperationStatusCode::ValidationError,
+                    format!("Invalid extra YAML: {error}"),
+                ));
+            }
+        }
+    };
+
+    let flags = MergeFlags::from(flags);
+
+    let conflicts = match lb_node::cli::config::merge::run(
+        &unsafe { cstr_to_path(source_path) },
+        &unsafe { cstr_to_path(destination_path) },
+        extra_yaml,
+        &flags,
+    ) {
+        Ok(conflicts) => conflicts,
+        Err(error) => {
+            return FfiMergeUserConfigResult::err(OperationStatus::error(
+                OperationStatusCode::ConfigurationError,
+                format!("Error merging config: {error:?}"),
+            ));
+        }
+    };
+
+    if conflicts.is_empty() {
+        return FfiMergeUserConfigResult::ok(ptr::null_mut());
+    }
+
+    let report = conflicts
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    match CString::new(report) {
+        Ok(report) => FfiMergeUserConfigResult::ok(report.into_raw()),
+        Err(error) => FfiMergeUserConfigResult::err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            format!("Failed to create conflicts report: {error}"),
+        )),
+    }
+}
+
 /// Generates `participation_data.yaml` from a user config and keystore,
 /// equivalent to the `participate` CLI command.
 ///
@@ -362,7 +501,7 @@ pub unsafe extern "C" fn participate(
 
 #[cfg(test)]
 mod test {
-    use std::{ffi::CString, path::Path};
+    use std::path::Path;
 
     use tempfile::TempDir;
 
@@ -371,6 +510,11 @@ mod test {
         free_cstring,
         keys::{KeyType, add_key, generate_key, remove_key},
         peer::get_peer_id,
+    };
+
+    const NO_INSERT: MergeConfigFlags = MergeConfigFlags {
+        source_insert_missing: false,
+        extra_insert_missing: false,
     };
 
     fn cstring(path: &Path) -> CString {
@@ -471,5 +615,94 @@ mod test {
         let status = unsafe { migrate_user_config(migrated_c.as_ptr(), keystore_c.as_ptr()) };
         assert!(status.is_ok(), "Failed to migrate config: {status:?}");
         assert!(migrated_path.exists());
+    }
+
+    #[test]
+    fn test_merge_user_config_writes_destination_and_returns_report() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let source_path = temp_dir.path().join("source.yaml");
+        let destination_path = temp_dir.path().join("destination.yaml");
+        std::fs::write(&source_path, "{ a: 2, b: 2 }").expect("Failed to write source");
+        std::fs::write(&destination_path, "{ a: 1, c: 1 }").expect("Failed to write destination");
+
+        let source_c = cstring(&source_path);
+        let destination_c = cstring(&destination_path);
+        let extra_c = CString::new("c: 3").expect("Valid CString");
+
+        let result = unsafe {
+            merge_user_config(
+                source_c.as_ptr(),
+                destination_c.as_ptr(),
+                extra_c.as_ptr(),
+                NO_INSERT,
+            )
+        };
+        assert!(result.is_ok(), "Failed to merge config: {:?}", result.error);
+        let report = unsafe { CStr::from_ptr(result.value) }
+            .to_str()
+            .expect("Report should be valid UTF-8")
+            .to_owned();
+        assert_eq!(
+            report,
+            "Key 'b' not found in new config. Value in old config: 2"
+        );
+        assert!(unsafe { free_cstring(result.value) }.is_ok());
+
+        let destination: serde_yaml::Value = serde_yaml::from_str(
+            &std::fs::read_to_string(&destination_path).expect("Failed to read destination"),
+        )
+        .expect("Destination should be valid YAML");
+        let expected: serde_yaml::Value =
+            serde_yaml::from_str("{ a: 2, c: 3 }").expect("Valid YAML");
+        assert_eq!(destination, expected);
+    }
+
+    #[test]
+    fn test_merge_user_config_returns_null_report_without_conflicts() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let source_path = temp_dir.path().join("source.yaml");
+        let destination_path = temp_dir.path().join("destination.yaml");
+        std::fs::write(&source_path, "a: 2").expect("Failed to write source");
+        std::fs::write(&destination_path, "a: 1").expect("Failed to write destination");
+
+        let source_c = cstring(&source_path);
+        let destination_c = cstring(&destination_path);
+
+        let result = unsafe {
+            merge_user_config(
+                source_c.as_ptr(),
+                destination_c.as_ptr(),
+                ptr::null(),
+                NO_INSERT,
+            )
+        };
+        assert!(result.is_ok(), "Failed to merge config: {:?}", result.error);
+        assert!(result.value.is_null());
+    }
+
+    #[test]
+    fn test_merge_user_config_rejects_invalid_extra_yaml() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let source_path = temp_dir.path().join("source.yaml");
+        let destination_path = temp_dir.path().join("destination.yaml");
+        std::fs::write(&source_path, "a: 2").expect("Failed to write source");
+        std::fs::write(&destination_path, "a: 1").expect("Failed to write destination");
+
+        let source_c = cstring(&source_path);
+        let destination_c = cstring(&destination_path);
+        let extra_c = CString::new("a: [").expect("Valid CString");
+
+        let result = unsafe {
+            merge_user_config(
+                source_c.as_ptr(),
+                destination_c.as_ptr(),
+                extra_c.as_ptr(),
+                NO_INSERT,
+            )
+        };
+        assert_eq!(result.error.code, OperationStatusCode::ValidationError);
+        let destination =
+            std::fs::read_to_string(&destination_path).expect("Failed to read destination");
+        assert_eq!(destination, "a: 1");
     }
 }

@@ -104,6 +104,9 @@ pub struct MockNode {
     pub events: HashMap<HeaderId, Events>,
     /// Receives the priority-fee percentages from funding requests.
     pub funding_priority_fees: Option<mpsc::Sender<u64>>,
+    /// Served by `time_info()`.
+    pub slot_duration_ms: u64,
+    pub genesis_time_unix_ms: i64,
 }
 
 impl Default for MockNode {
@@ -128,6 +131,8 @@ impl Default for MockNode {
             posted: None,
             events: HashMap::new(),
             funding_priority_fees: None,
+            slot_duration_ms: 1_000,
+            genesis_time_unix_ms: 0,
         }
     }
 }
@@ -176,8 +181,8 @@ impl adapter::Node for MockNode {
 
     async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
         Ok(TimeInfo {
-            slot_duration_ms: 1_000,
-            genesis_time_unix_ms: 0,
+            slot_duration_ms: self.slot_duration_ms,
+            genesis_time_unix_ms: self.genesis_time_unix_ms,
             current_slot: 0,
             current_epoch: 0,
         })

@@ -179,6 +179,8 @@ impl TipPollParams {
 
 #[cfg(test)]
 mod tests {
+    use lb_cryptarchia_sync::GetTipResponseReason;
+
     use super::*;
 
     fn tip(height: u64, slot: u64, id: u8) -> GetTipResponse {
@@ -213,9 +215,9 @@ mod tests {
     #[test]
     fn select_catchup_tip_skips_failures() {
         let tips = vec![
-            GetTipResponse::Failure("busy".to_owned()),
+            GetTipResponse::Failure(GetTipResponseReason::NodeNotOnline),
             tip(20, 500, 7),
-            GetTipResponse::Failure("nope".to_owned()),
+            GetTipResponse::Failure(GetTipResponseReason::NodeNotOnline),
         ];
         let (height, _, id) = select_catchup_tip(tips, 5).expect("a tip ahead exists");
         assert_eq!(height, 20);

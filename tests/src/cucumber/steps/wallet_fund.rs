@@ -477,7 +477,7 @@ async fn step_fund_inscription_transaction(
     }
 
     let tx_hash = ops.hash();
-    let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
+    let signature = signing_key.sign_payload(tx_hash.as_signing_bytes());
     let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature), transfer_proof]);
     let signed_tx = SignedOps::from_parts(ops, op_proofs).expect("funded tx should be valid");
 

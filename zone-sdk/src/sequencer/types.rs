@@ -167,7 +167,8 @@ impl PreparedChannelConfig {
     /// a different transaction. Also returns [`Error`] if `signing_key` is not
     /// among the accredited keys.
     pub fn sign_with(&self, signing_key: &Ed25519Key) -> Result<IndexedSignature, Error> {
-        let payload = self.tx.hash().as_signing_bytes();
+        let tx_hash = self.tx.hash();
+        let payload = tx_hash.as_signing_bytes();
         if payload.as_ref() != self.sign_payload.as_slice() {
             return Err(Error::Network(
                 "sign_payload does not match the hash of tx; refusing to sign a payload the \
@@ -175,7 +176,7 @@ impl PreparedChannelConfig {
                     .into(),
             ));
         }
-        sign_prepared(signing_key, &self.accredited_keys, payload.as_ref())
+        sign_prepared(signing_key, &self.accredited_keys, payload)
     }
 }
 
@@ -376,6 +377,10 @@ pub enum Error {
     Unavailable { reason: &'static str },
     #[error("network error: {0}")]
     Network(String),
+    /// The submission chains on a channel position that already has a
+    /// pending continuation; re-prepare it on the channel's pending tail.
+    #[error("channel state changed: {0}")]
+    ChannelStateChanged(String),
 }
 
 /// Events emitted by the sequencer.
@@ -423,7 +428,8 @@ pub enum Event {
     /// Turn-to-write status update for this sequencer.
     ///
     /// Emitted on the same change boundary as the `turn_to_write` watch
-    /// channel (excluding `current_slot`-only updates).
+    /// channel (excluding `current_slot`-only updates), after the
+    /// `BlocksProcessed` of the block that changed the turn when one did.
     TurnNotification { notification: TurnNotification },
 }
 
@@ -790,7 +796,7 @@ mod tests {
 
     /// The signing payload the SDK derives for `ops`.
     fn payload_of(ops: &Ops) -> Vec<u8> {
-        ops.hash().as_signing_bytes().as_ref().to_vec()
+        ops.hash().as_signing_bytes().to_vec()
     }
 
     fn config_op(keys: Vec<Ed25519PublicKey>) -> ChannelConfigOp {

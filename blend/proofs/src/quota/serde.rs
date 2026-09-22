@@ -14,7 +14,7 @@ pub(super) mod proof {
 
 #[cfg(test)]
 mod tests {
-    use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
+    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 
     use crate::quota::{ProofOfQuota, VerifiedProofOfQuota};
 

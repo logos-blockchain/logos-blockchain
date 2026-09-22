@@ -163,7 +163,7 @@ pub async fn submit_zone_channel_split(
     // funding appends its own fee transfer proof as the last op.
     let funded_tx = response.funded_tx;
     let tx_hash = funded_tx.hash();
-    let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
+    let signature = signing_key.sign_payload(tx_hash.as_signing_bytes());
     let proof = ChannelMultiSigProof::try_new([IndexedSignature::new(0, signature)].into())
         .map_err(|error| ZoneTestError::SplitTransfer {
             message: format!("multi-sig proof assembly failed: {error:?}"),
@@ -290,7 +290,7 @@ pub(super) async fn build_funded_custom_tx(
     // Funding appends the fee transfer as the last op; every inscription is
     // proven by the sequencer key over the funded tx hash.
     let funded_tx = response.funded_tx;
-    let signature = signing_key.sign_payload(funded_tx.hash().as_signing_bytes().as_ref());
+    let signature = signing_key.sign_payload(funded_tx.hash().as_signing_bytes());
     let mut op_proofs = OpProofs::try_from(vec![OpProof::Ed25519Sig(signature); payloads.len()])
         .map_err(|error| ZoneTestError::BuildCustomTx {
             message: format!("too many operation proofs: {error:?}"),

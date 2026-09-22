@@ -1,13 +1,11 @@
 use std::{collections::BTreeSet, time::Duration};
 
-use lb_core::{
-    codec::DeserializeOp as _,
-    mantle::{
-        SignedOps, TxHash,
-        ledger::verification_mode::StandardMode,
-        traits::Hashable as _,
-        transactions::{OpProofs, states::Preverified},
-    },
+use lb_binary_codec::bincode::DeserializeOp as _;
+use lb_core::mantle::{
+    SignedOps, TxHash,
+    ledger::verification_mode::StandardMode,
+    traits::Hashable as _,
+    transactions::{OpProofs, states::Preverified},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_storage_service::{

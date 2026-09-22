@@ -1,4 +1,4 @@
-use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[cfg(feature = "test-utils")]

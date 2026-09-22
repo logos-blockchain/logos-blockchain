@@ -37,7 +37,7 @@ use super::{
     client::SequencerClient,
     handle::SequencerHandle,
     slot_clock::SlotClock,
-    state::{BlockChannelTx, TxState},
+    state::{BlockChannelTx, ParentTaken, TxState},
     tx_builder::{
         assemble_channel_config_tx, build_and_fund_config, build_atomic_bundle_ops_proofs,
         create_channel_config_tx, create_inscribe_tx, find_own_key_index, fund_ops,
@@ -121,6 +121,8 @@ pub struct ZoneSequencer<Node> {
 
     // Buffered events — when one drive step produces multiple events.
     pub(super) buffered_events: VecDeque<Event>,
+    /// Next slot boundary at which the turn is re-evaluated.
+    pub(super) turn_boundary: Option<Slot>,
 
     // Incremental backfill state — processes one batch per next_event() call
     pub(super) backfill_from: Option<Slot>,
@@ -273,8 +275,10 @@ where
             let mut tx_state = TxState::new(lib, finalized_msg);
             tx_state.set_finalized_config(finalized_config);
             tx_state.restore_channel_notes(channel_notes);
-            for (_hash, tx) in pending_txs {
-                track_pending_tx(&mut tx_state, tx, channel_id);
+            for (hash, tx) in pending_txs {
+                if let Err(taken) = track_pending_tx(&mut tx_state, tx, channel_id) {
+                    warn!(target: TARGET, "Dropping checkpointed tx {hash:?}: {taken}");
+                }
             }
             tx_state.prune_local_tx_tracking(config.max_local_tx_tracking);
             (Some(tx_state), lib_slot, last_msg_id, false)
@@ -321,6 +325,7 @@ where
             resubmit_active: Arc::new(AtomicBool::new(false)),
             posting: HashSet::new(),
             buffered_events: VecDeque::new(),
+            turn_boundary: None,
             backfill_from: None,
             backfill_to: None,
             backfill_from_genesis,
@@ -402,6 +407,15 @@ where
             .unwrap_or_default()
     }
 
+    /// The notes a new bundle may spend: [`Self::channel_wallet`] minus what
+    /// un-mined pending bundles already consume.
+    fn spendable_channel_wallet(&self) -> ChannelWalletView {
+        self.state
+            .as_ref()
+            .map(|s| s.spendable_wallet_view(self.current_tip, self.channel_id))
+            .unwrap_or_default()
+    }
+
     /// Subscribe to readiness. Returns a [`watch::Receiver<bool>`] that
     /// transitions `false → true` exactly once on cold-start completion and
     /// stays `true`. The first `.changed().await` returns immediately with
@@ -458,6 +472,10 @@ where
     }
 
     /// Subscribe to the broadcast channel of events.
+    ///
+    /// The broadcast carries exactly the events [`Self::next_event`] returns,
+    /// once each and in the same order, sent at the moment the drive loop
+    /// returns them. Nothing is broadcast while the sequencer is not driven.
     ///
     /// Late subscribers see events emitted from this point on (not the
     /// full history). The primary way to consume events is
@@ -522,6 +540,12 @@ where
             return None;
         }
 
+        let turn_wakeup = self
+            .slot_clock
+            .as_ref()
+            .zip(self.turn_boundary)
+            .and_then(|(clock, slot)| clock.sleep_until(slot));
+        let turn_armed = turn_wakeup.is_some();
         let stream = self.blocks_stream.as_mut()?;
 
         tokio::select! {
@@ -537,6 +561,10 @@ where
             _ = self.resubmit_interval.tick(), if self.current_tip.is_some() => {
                 self.resubmit_pending();
                 None
+            }
+            () = turn_wakeup.unwrap_or_else(|| tokio::time::sleep_until(tokio::time::Instant::now())), if turn_armed => {
+                self.publish_channel_view();
+                self.buffered_events.pop_front().map(|event| self.emit_now(event))
             }
             Some(results) = self.in_flight.next() => {
                 for (tx_hash, success) in results {
@@ -745,7 +773,7 @@ where
 
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
-        state.submit_inscription(signed_tx.clone(), parent, new_msg_id, data);
+        state.submit_inscription(signed_tx.clone(), parent, new_msg_id, data)?;
         self.last_msg_id = new_msg_id;
         self.queue_tx_status(id, TxStatus::AcceptedLocally);
 
@@ -880,7 +908,7 @@ where
             inscribe.clone(),
             withdraw_infos.clone(),
             outputs.clone(),
-        );
+        )?;
         self.last_msg_id = msg_id;
         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
@@ -924,7 +952,7 @@ where
         inputs: &WithdrawInputs,
     ) -> Result<(ChannelTransferOp, ChannelWithdrawOp), Error> {
         let funding_pk = self.config.funding.funding_pk;
-        let view = self.channel_wallet();
+        let view = self.spendable_channel_wallet();
         let selected = select_channel_notes(&view, funding_pk, amount, inputs)?;
         let by_id: HashMap<_, _> = view
             .finalized
@@ -1054,7 +1082,7 @@ where
             msg_id,
             inscribe.clone(),
             consumed_inputs.clone(),
-        );
+        )?;
         self.last_msg_id = msg_id;
         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
@@ -1093,7 +1121,7 @@ where
         &self,
         consumed_notes: &[NoteId],
     ) -> Result<ChannelTransferOp, Error> {
-        let view = self.channel_wallet();
+        let view = self.spendable_channel_wallet();
         let by_id: HashMap<NoteId, (Value, _)> = view
             .finalized
             .iter()
@@ -1195,7 +1223,7 @@ where
 
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
-        state.submit_other(signed_tx.clone(), self.channel_id);
+        state.submit_other(signed_tx.clone(), self.channel_id)?;
         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
         info!(target: TARGET, "Submitted channel_config transaction {}", hex::encode(tx_hash.0));
@@ -1290,7 +1318,7 @@ where
             },
         );
 
-        let sign_payload = tx.hash().as_signing_bytes().as_ref().to_vec();
+        let sign_payload = tx.hash().as_signing_bytes().to_vec();
 
         Ok(PreparedChannelConfig {
             tx,
@@ -1336,7 +1364,7 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         let id = tx.hash();
-        let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id);
+        let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id)?;
         let parent_msg = self.last_msg_id;
         // The tip the tx leaves behind is defined by its inscriptions (the
         // last one); a tx without any — e.g. a pure config — leaves the tip
@@ -1567,12 +1595,12 @@ pub(super) fn track_pending_tx(
     state: &mut TxState,
     tx: SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
-) -> Option<MsgId> {
+) -> Result<Option<MsgId>, ParentTaken> {
     match classify_channel_tx(&tx, channel_id, &mut None) {
         Some(BlockChannelTx::Inscription(i)) => {
             let this_msg = i.this_msg;
-            state.submit_inscription(tx, i.parent_msg, this_msg, i.payload);
-            Some(this_msg)
+            state.submit_inscription(tx, i.parent_msg, this_msg, i.payload)?;
+            Ok(Some(this_msg))
         }
         Some(BlockChannelTx::AtomicWithdraw(aw)) => {
             let this_msg = aw.inscription.this_msg;
@@ -1583,8 +1611,8 @@ pub(super) fn track_pending_tx(
                 aw.inscription.payload,
                 aw.withdraws,
                 aw.outputs,
-            );
-            Some(this_msg)
+            )?;
+            Ok(Some(this_msg))
         }
         Some(BlockChannelTx::PinDeposit(ad)) => {
             let this_msg = ad.inscription.this_msg;
@@ -1594,8 +1622,8 @@ pub(super) fn track_pending_tx(
                 this_msg,
                 ad.inscription.payload,
                 ad.consumed_notes,
-            );
-            Some(this_msg)
+            )?;
+            Ok(Some(this_msg))
         }
         _ => state.submit_other(tx, channel_id),
     }

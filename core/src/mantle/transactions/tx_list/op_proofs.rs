@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use lb_codec::DecodeError;
+use lb_binary_codec::canonical::DecodeError;
 use serde::{Deserialize, Deserializer};
 
 use crate::mantle::{
@@ -44,7 +44,7 @@ impl OpProofs {
 /// round-trips fine.
 ///
 /// Refusing binary also neuters the blanket `DeserializeOp` impl in
-/// [`crate::codec`]: `OpProofs::from_bytes` still exists, but fails instead of
+/// [`lb_binary_codec::bincode`]: `OpProofs::from_bytes` still exists, but fails instead of
 /// decoding a column that carries no way to type itself.
 impl<'de> Deserialize<'de> for OpProofs {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>

@@ -2,8 +2,8 @@ use blake2::{
     Blake2bVar,
     digest::{Update as _, VariableOutput as _},
 };
+use lb_binary_codec::bincode::SerializeOp as _;
 use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
-use lb_core::codec::SerializeOp as _;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use serde::{Deserialize, Serialize};
 

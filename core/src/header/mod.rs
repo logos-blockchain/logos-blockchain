@@ -1,7 +1,10 @@
 use core::fmt::{self, Debug, Formatter};
 
 use blake2::Digest as _;
-use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::{
+    bincode::{self, BoundedSerializeOp, SerializeOp as _},
+    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
+};
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
@@ -10,7 +13,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 mod fixtures;
 
 use crate::{
-    codec::SerializeOp as _,
     crypto::Hasher,
     mantle::transactions::GenesisTx,
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
@@ -19,8 +21,19 @@ use crate::{
 
 pub const BEDROCK_VERSION: u8 = 1;
 
+pub const HEADER_BINCODE_SIZE: usize = <Version as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + <HeaderId as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + <Slot as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + <ContentId as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + <Groth16LeaderProof as BoundedSerializeOp>::MAX_ENCODED_SIZE;
+
 #[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, BinaryCodec)]
 pub struct HeaderId([u8; 32]);
+
+impl HeaderId {
+    /// The fixed-size canonical representation of a header identifier.
+    pub const CANONICAL_ENCODED_SIZE: usize = 32;
+}
 
 impl Debug for HeaderId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -30,6 +43,11 @@ impl Debug for HeaderId {
 
 #[derive(Clone, Eq, PartialEq, Copy, Hash, BinaryCodec)]
 pub struct ContentId([u8; 32]);
+
+impl ContentId {
+    /// The fixed-size canonical representation of a content identifier.
+    pub const CANONICAL_ENCODED_SIZE: usize = 32;
+}
 
 impl Debug for ContentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -53,10 +71,17 @@ pub enum Version {
 }
 
 impl Version {
+    /// The fixed-size canonical representation of a header version.
+    pub const CANONICAL_ENCODED_SIZE: usize = 1;
+
     #[must_use]
     pub const fn as_byte(self) -> u8 {
         self as u8
     }
+}
+
+impl BoundedSerializeOp for Version {
+    type Bytes = [u8; bincode::BINCODE_U8_SIZE];
 }
 
 impl TryFrom<u8> for Version {
@@ -148,6 +173,13 @@ pub struct Header {
 }
 
 impl Header {
+    /// The fixed-size canonical representation of a header.
+    pub const CANONICAL_ENCODED_SIZE: usize = Version::CANONICAL_ENCODED_SIZE
+        + HeaderId::CANONICAL_ENCODED_SIZE
+        + Slot::CANONICAL_ENCODED_SIZE
+        + ContentId::CANONICAL_ENCODED_SIZE
+        + Groth16LeaderProof::CANONICAL_ENCODED_SIZE;
+
     #[must_use]
     pub const fn version(&self) -> &Version {
         &self.version
@@ -260,6 +292,18 @@ impl AsRef<[u8]> for HeaderId {
     }
 }
 
+impl AsRef<[u8; 32]> for ContentId {
+    fn as_ref(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8; 32]> for Nonce {
+    fn as_ref(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 impl From<[u8; 32]> for ContentId {
     fn from(id: [u8; 32]) -> Self {
         Self(id)
@@ -280,6 +324,22 @@ serde_bytes_newtype!(HeaderId, 32);
 serde_bytes_newtype!(ContentId, 32);
 serde_bytes_newtype!(Nonce, 32);
 
+impl BoundedSerializeOp for HeaderId {
+    type Bytes = [u8; 32];
+}
+
+impl BoundedSerializeOp for ContentId {
+    type Bytes = [u8; 32];
+}
+
+impl BoundedSerializeOp for Nonce {
+    type Bytes = [u8; 32];
+}
+
+impl BoundedSerializeOp for Header {
+    type Bytes = [u8; HEADER_BINCODE_SIZE];
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Invalid header id size: {0}")]
@@ -288,7 +348,7 @@ pub enum Error {
 
 #[test]
 fn test_serde() {
-    use crate::codec::{DeserializeOp as _, SerializeOp as _};
+    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
     let header = HeaderId([0; 32]);
     assert_eq!(
         HeaderId::from_bytes(
@@ -299,6 +359,50 @@ fn test_serde() {
         .unwrap(),
         HeaderId([0; 32])
     );
+}
+
+#[test]
+fn fixed_size_bincode_serialization_matches_for_header_types() {
+    use lb_binary_codec::canonical::CodecExamples as _;
+
+    let header_id = HeaderId([0x11; 32]);
+    let content_id = ContentId([0x22; 32]);
+    let nonce = Nonce([0x33; 32]);
+
+    for (ordinary, bounded) in [
+        (
+            header_id.to_bytes().unwrap(),
+            header_id.to_bounded_bytes().unwrap().to_vec(),
+        ),
+        (
+            content_id.to_bytes().unwrap(),
+            content_id.to_bounded_bytes().unwrap().to_vec(),
+        ),
+        (
+            nonce.to_bytes().unwrap(),
+            nonce.to_bounded_bytes().unwrap().to_vec(),
+        ),
+    ] {
+        assert_eq!(ordinary.len(), 32);
+        assert_eq!(ordinary.as_ref(), bounded.as_slice());
+    }
+
+    let header = Header::fixtures().into_iter().next().unwrap().value;
+    let ordinary = header.to_bytes().unwrap();
+    let bounded = header.to_bounded_bytes().unwrap();
+    assert_eq!(ordinary.len(), HEADER_BINCODE_SIZE);
+    assert_eq!(bounded.as_ref(), ordinary.as_ref());
+}
+
+#[test]
+fn fixed_header_byte_types_borrow_their_stored_bytes() {
+    let content_id = ContentId([0x22; 32]);
+    let nonce = Nonce([0x33; 32]);
+
+    assert_eq!(content_id.as_ref(), &content_id.0);
+    assert_eq!(nonce.as_ref(), &nonce.0);
+    assert!(std::ptr::eq(content_id.as_ref(), &raw const content_id.0));
+    assert!(std::ptr::eq(nonce.as_ref(), &raw const nonce.0));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use bincode::{
+use ::bincode::{
     Options as _,
     config::{
         FixintEncoding, LittleEndian, RejectTrailing, WithOtherEndian, WithOtherIntEncoding,
@@ -8,12 +8,25 @@ use bincode::{
     },
 };
 
+/// The width of an enum discriminant in the configured bincode format.
+pub const BINCODE_ENUM_DISCRIMINANT_SIZE: usize = size_of::<u32>();
+
+/// The width of a u8 in the configured bincode format.
+pub const BINCODE_U8_SIZE: usize = size_of::<u8>();
+
+/// The width of a u64 in the configured bincode format.
+pub const BINCODE_U64_SIZE: usize = size_of::<u64>();
+
+/// The width of sequence and byte-sequence length prefixes in the configured
+/// bincode format.
+pub const BINCODE_LENGTH_PREFIX_SIZE: usize = BINCODE_U64_SIZE;
+
 // Type composition is cool but also makes naming types a bit awkward
 pub type BincodeOptions = WithOtherTrailing<
     WithOtherIntEncoding<
         WithOtherLimit<
-            WithOtherEndian<bincode::DefaultOptions, LittleEndian>,
-            bincode::config::Infinite,
+            WithOtherEndian<::bincode::DefaultOptions, LittleEndian>,
+            ::bincode::config::Infinite,
         >,
         FixintEncoding,
     >,
@@ -21,7 +34,7 @@ pub type BincodeOptions = WithOtherTrailing<
 >;
 
 pub static OPTIONS: LazyLock<BincodeOptions> = LazyLock::new(|| {
-    bincode::DefaultOptions::new()
+    ::bincode::DefaultOptions::new()
         .with_little_endian()
         .with_no_limit()
         .with_fixint_encoding()
@@ -33,7 +46,7 @@ use bytes::Bytes;
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::codec::{Error as WireError, Result};
+use super::{Error as WireError, Result};
 
 /// Serialize an object directly into bytes
 pub fn serialize<T: Serialize>(item: &T) -> Result<Bytes> {
@@ -67,4 +80,42 @@ pub fn deserialize<T: DeserializeOwned>(data: &[u8]) -> Result<T> {
     OPTIONS
         .deserialize(data)
         .map_err(|e| WireError::Deserialize(Box::new(e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Serialize;
+
+    use super::*;
+
+    #[derive(Serialize)]
+    enum TestEnum {
+        Value,
+    }
+
+    #[test]
+    fn enum_discriminant_size_matches_configured_bincode() {
+        assert_eq!(
+            serialize(&TestEnum::Value).unwrap().len(),
+            BINCODE_ENUM_DISCRIMINANT_SIZE
+        );
+    }
+
+    #[test]
+    fn u8_size_matches_configured_bincode() {
+        assert_eq!(serialize(&u8::MAX).unwrap().len(), BINCODE_U8_SIZE);
+    }
+
+    #[test]
+    fn u64_size_matches_configured_bincode() {
+        assert_eq!(serialize(&u64::MAX).unwrap().len(), BINCODE_U64_SIZE);
+    }
+
+    #[test]
+    fn sequence_length_prefix_size_matches_configured_bincode() {
+        assert_eq!(
+            serialize(&Vec::<u8>::new()).unwrap().len(),
+            BINCODE_LENGTH_PREFIX_SIZE
+        );
+    }
 }

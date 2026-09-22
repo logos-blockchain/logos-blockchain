@@ -1,6 +1,6 @@
 use core::fmt::{self, Display, Formatter};
 
-use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::Fr;
 use lb_utils::bounded::{BoundedString, BoundedVec, UpperBoundedVec};
 use serde::{Deserialize, Serialize};

@@ -2,12 +2,12 @@ use core::num::NonZeroU64;
 
 use educe::Educe;
 use itertools::Itertools as _;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError, take};
 use lb_blend_crypto::{ZkHash, cipher::Cipher, pseudo_random_sized_bytes, random_sized_bytes};
 use lb_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
     selection::{self, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
-use lb_codec::{BinaryDecode, BinaryEncode, DecodeError, take};
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, SharedKey, UnsecuredEd25519Key,
 };

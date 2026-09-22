@@ -111,6 +111,7 @@ pub fn subscribe_to_new_blocks_sync(
                         "subscribe_to_new_blocks_sync",
                         "Block stream closed, subscription to new blocks ended."
                     );
+                    callback_per_block(std::ptr::null());
                 });
                 OperationStatus::OK
             }
@@ -137,8 +138,9 @@ pub fn subscribe_to_new_blocks_sync(
 /// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
 /// - `callback_per_block`: A callback function that will be called with a
 ///   pointer to a C string containing the JSON representation of each new
-///   block. The callback is declared as unsafe extern "C" and must be
-///   thread-safe.
+///   block. When the stream ends (e.g. the consumer falls behind or the node
+///   shuts down) the callback is called exactly once with NULL, after which no
+///   further blocks are delivered.
 ///
 /// # Returns
 ///
