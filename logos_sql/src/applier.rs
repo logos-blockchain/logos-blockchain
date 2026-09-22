@@ -88,6 +88,7 @@ pub fn on_event(db: &mut Databases, event: &Event, channel_id: ChannelId) -> Res
             checkpoint,
             channel_update,
             finalized,
+            ..
         } => process_blocks(db, checkpoint, channel_update, finalized, channel_id),
         Event::Ready => {
             tracing::info!(target: TARGET, "sequencer ready");
@@ -149,8 +150,8 @@ impl SqlChanges {
             .collect();
 
         Self {
-            adopted: Self::collect_channel_inscriptions(&channel_update.adopted, channel_id),
-            orphaned: Self::collect_channel_inscriptions(&channel_update.orphaned, channel_id),
+            adopted: Self::collect_channel_inscriptions(channel_update.adopted(), channel_id),
+            orphaned: Self::collect_channel_inscriptions(channel_update.orphaned(), channel_id),
             finalized,
         }
     }
@@ -481,14 +482,19 @@ mod tests {
         orphaned: Vec<ChannelUpdateTx>,
         finalized: Vec<FinalizedTx>,
     ) -> Event {
+        let channel_update = if orphaned.is_empty() {
+            ChannelUpdate::Extension { adopted }
+        } else {
+            ChannelUpdate::Conflict {
+                common_prefix: Vec::new(),
+                adopted,
+                orphaned,
+            }
+        };
         Event::BlocksProcessed {
             checkpoint,
-            channel_update: ChannelUpdate {
-                common_prefix: Vec::new(),
-                orphaned,
-                adopted,
-                adopted_deposits: Vec::new(),
-            },
+            channel_update,
+            deposits: Vec::new(),
             finalized,
         }
     }

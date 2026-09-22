@@ -54,9 +54,9 @@ pub(super) struct BlockEventResult {
     /// the canonical channel chain.
     pub(super) mined_inscriptions: Vec<InscriptionInfo>,
     /// Channel deposits observed in this block, in op order. Surfaced
-    /// non-finalized as `ChannelUpdate::adopted_deposits` so a consumer can
-    /// pin a deposit without waiting for finalization.
-    pub(super) adopted_deposits: Vec<DepositInfo>,
+    /// non-finalized on `Event::BlocksProcessed` so a consumer can pin a
+    /// deposit without waiting for finalization.
+    pub(super) deposits: Vec<DepositInfo>,
 }
 
 struct PreparedBlockEvent<'a> {
@@ -74,7 +74,7 @@ struct PreparedBlockEvent<'a> {
     /// Channel-note ops of the live block, computed in the prepare phase.
     note_ops: Vec<NoteOp>,
     mined_inscriptions: Vec<InscriptionInfo>,
-    adopted_deposits: Vec<DepositInfo>,
+    deposits: Vec<DepositInfo>,
 }
 
 /// Process a block event. Returns finalized tx hashes and optional channel
@@ -174,7 +174,7 @@ where
         &deposit_events,
         event.block.header.slot,
     );
-    let adopted_deposits = block_channel_deposits(
+    let deposits = block_channel_deposits(
         &event.block.transactions,
         channel_id,
         event.block.header.slot,
@@ -193,7 +193,7 @@ where
         channel_txs,
         note_ops,
         mined_inscriptions,
-        adopted_deposits,
+        deposits,
     })
 }
 
@@ -235,7 +235,7 @@ fn apply_prepared_block_event(
         mut channel_txs,
         note_ops,
         mined_inscriptions,
-        adopted_deposits,
+        deposits,
     } = prepared;
 
     if state.is_none() {
@@ -351,7 +351,7 @@ fn apply_prepared_block_event(
         channel_update,
         common_prefix,
         mined_inscriptions,
-        adopted_deposits,
+        deposits,
     }
 }
 

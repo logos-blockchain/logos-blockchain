@@ -1049,12 +1049,10 @@ mod tests {
                 channel_notes: Vec::new(),
                 finalized_config: MsgId::root(),
             },
-            channel_update: ChannelUpdate {
-                common_prefix: Vec::new(),
+            channel_update: ChannelUpdate::Extension {
                 adopted: Vec::new(),
-                orphaned: Vec::new(),
-                adopted_deposits: Vec::new(),
             },
+            deposits: Vec::new(),
             finalized: Vec::new(),
         }
     }
