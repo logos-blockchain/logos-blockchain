@@ -2,7 +2,11 @@ use core::time::Duration;
 
 use futures::StreamExt as _;
 use lb_libp2p::SwarmEvent;
-use libp2p::swarm::{ConnectionId, dummy};
+use libp2p::swarm::{
+    ConnectionId,
+    dial_opts::{DialOpts, PeerCondition},
+    dummy,
+};
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
 use tokio::{select, time::sleep};
@@ -10,7 +14,7 @@ use tokio::{select, time::sleep};
 use crate::core::{
     tests::utils::TestSwarm,
     with_core::behaviour::{
-        ConnectionDirection, Event,
+        ConnectionDirection, ConnectionUpgradeFailureReason, Event,
         tests::utils::{
             BehaviourBuilder, PEERING_DEGREE, SwarmExt as _, maximum_accepted_peers, maximum_peers,
             new_nodes_with_empty_address,
@@ -211,8 +215,11 @@ async fn concurrent_incoming_connections() {
     loop {
         select! {
             // We make sure that after 11 seconds one of the two connections is dropped (the swarm used in the tests uses a default timeout of 10s).
-            // We cannot prevent both connections from being upgraded, but we can test that one of the two is dropped once the listener realized it is above the maximum peering degree.
-            // We do not know which one beforehand because they are started in parallel.
+            // Only one of the two can be taken: a handshake in progress holds a
+            // slot, so once the first is pending the listener is at the share
+            // of connections it lets other nodes fill and refuses the second
+            // outright. We do not know which one beforehand because they are
+            // started in parallel.
             () = sleep(Duration::from_secs(11)) => {
                 break;
             }
@@ -230,7 +237,10 @@ async fn concurrent_incoming_connections() {
                         assert!(endpoint.is_dialer());
                         dialer_1_dropped = true;
                     }
-                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id)) if peer_id == *listening_swarm.local_peer_id() => {
+                    SwarmEvent::Behaviour(
+                        Event::PeerDisconnected(peer_id)
+                        | Event::OutboundConnectionUpgradeFailed { peer: peer_id, .. },
+                    ) if peer_id == *listening_swarm.local_peer_id() => {
                         dialer_1_notified = true;
                     }
                     _ => {}
@@ -244,7 +254,10 @@ async fn concurrent_incoming_connections() {
                         assert!(endpoint.is_dialer());
                         dialer_2_dropped = true;
                     }
-                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id)) if peer_id == *listening_swarm.local_peer_id() => {
+                    SwarmEvent::Behaviour(
+                        Event::PeerDisconnected(peer_id)
+                        | Event::OutboundConnectionUpgradeFailed { peer: peer_id, .. },
+                    ) if peer_id == *listening_swarm.local_peer_id() => {
                         dialer_2_notified = true;
                     }
                     _ => {}
@@ -253,8 +266,8 @@ async fn concurrent_incoming_connections() {
         }
     }
 
-    // We check whether the dialer whose connection was dropped was also notified by
-    // its behaviour that the dialed peer got disconnected.
+    // We check whether the dialer whose connection was dropped was also notified
+    // by its behaviour that the connection did not work out.
     assert!((dialer_1_dropped && dialer_1_notified) ^ (dialer_2_dropped && dialer_2_notified));
 }
 
@@ -330,17 +343,41 @@ async fn outgoing_attempt_with_max_negotiated_peering_degree() {
         .connect_and_wait_for_upgrade(&mut listening_swarm_1)
         .await;
 
-    // We can call `connect` since a new connection will be established, but
-    // will fail to upgrade (which we test below).
-    dialing_swarm.connect(&mut listening_swarm_2).await;
+    dialing_swarm
+        .dial(
+            DialOpts::peer_id(*listening_swarm_2.local_peer_id())
+                .addresses(listening_swarm_2.external_addresses().cloned().collect())
+                .condition(PeerCondition::Always)
+                .build(),
+        )
+        .unwrap();
 
-    loop {
+    // The refusal has to be reported, not just acted on. A connection this node
+    // opened and then refused never becomes one waiting for its upgrade and
+    // never becomes negotiated, so closing it produces no event of its own: if
+    // the refusal itself said nothing, whoever asked for the dial would still be
+    // counting it as in flight, and would pass the peer over in every later
+    // draw for the rest of the epoch.
+    let mut refusal_reported = false;
+    let mut connection_closed = false;
+    while !(refusal_reported && connection_closed) {
         select! {
             dialer_swarm_event = dialing_swarm.select_next_some() => {
-                if let SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } = dialer_swarm_event {
-                    assert_eq!(peer_id, *listening_swarm_2.local_peer_id());
-                    assert!(endpoint.is_dialer());
-                    break;
+                match dialer_swarm_event {
+                    SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {
+                        assert_eq!(peer_id, *listening_swarm_2.local_peer_id());
+                        assert!(endpoint.is_dialer());
+                        connection_closed = true;
+                    }
+                    SwarmEvent::Behaviour(Event::OutboundConnectionUpgradeFailed { peer, reason }) => {
+                        assert_eq!(peer, *listening_swarm_2.local_peer_id());
+                        assert!(matches!(
+                            reason,
+                            ConnectionUpgradeFailureReason::MaximumPeeringDegreeReached
+                        ));
+                        refusal_reported = true;
+                    }
+                    _ => {}
                 }
             }
             _ = listening_swarm_1.select_next_some() => {}
