@@ -250,22 +250,36 @@ The multi-admin flow is not currently exercised by integration tests (see `tests
 
 In a decentralized channel, two sequencers can race on the same parent slot — for instance, when rotation is mid-transition or when sequencers are temporarily disconnected and resync at different rates. The on-chain rule is *first valid inscription wins*; the loser's tx becomes invalid because its parent slot is now claimed.
 
-The SDK detects this via the `channel_update` field of `Event::BlocksProcessed`: the losing tx surfaces in `channel_update.orphaned` as a `ChannelUpdateTx::Inscription(InscriptionInfo)`. The consumer decides whether to republish — re-call `publish` with the same payload and the SDK fills in the new (current) parent.
+The SDK detects this via the `channel_update` field of `Event::BlocksProcessed`: the update is a `ChannelUpdate::Conflict` and the losing tx surfaces in its `orphaned` list, reachable through `channel_update.orphaned()`, as a `ChannelUpdateTx::Inscription(InscriptionInfo)`. An update with nothing orphaned is a `ChannelUpdate::Extension`, and `orphaned()` is empty. The consumer decides whether to republish — re-call `publish` with the same payload and the SDK fills in the new (current) parent.
 
 ```rust
 use lb_zone_sdk::sequencer::{ChannelUpdateTx, Event};
 
 if let Event::BlocksProcessed { channel_update, .. } = event {
-    for entry in channel_update.orphaned {
+    for entry in channel_update.orphaned() {
         if let ChannelUpdateTx::Inscription(info) = entry {
-            let (result, checkpoint) = sequencer.handle().publish(info.payload)?;
+            let (result, checkpoint) = sequencer.handle().publish(info.payload.clone())?;
             // Persist `result` + `checkpoint` exactly as on the original publish.
         }
     }
 }
 ```
 
-The integration tests provide reference policies that run this re-publish loop automatically, in `tests/src/cucumber/steps/manual_zone/support.rs`: `OrphanRepublishPolicy` (simple republish), `RepublishLineagePolicy` (for repeating payloads, tracks msg-id lineage so each intent lands once), `SortedConflictPolicy` (republish only when it preserves the channel's sorted order, otherwise discard), and `BalanceAwarePolicy` (republish only when the account balance still allows it). Wiring one into the drive loop is the recommended pattern for any sequencer running in a competing-write environment.
+### Keeping state from channel updates
+
+`ChannelUpdate` has two variants, cut along the channel view rather than the L1 branch:
+
+- `Extension { adopted }` — nothing you hold became invalid. Append `adopted` to your non-finalized state. A block that changes the L1 branch without touching the channel view is still an extension.
+- `Conflict { common_prefix, adopted, orphaned }` — entries left the view: a competing entry took their parent, a competing spend took a bundle's inputs, or a config change invalidated the pending tail. `orphaned` is never empty. `common_prefix` is what the previous and the new view share above the finalized boundary, so `common_prefix ++ adopted`, available as `channel_update.canonical_chain()`, is the whole non-finalized view at the new tip. It includes your own unmined publishes, which chain on the mined tip.
+
+Two ways to consume a conflict, depending on whether your state can undo an entry's effects:
+
+- **Diff**: revert every `orphaned` entry, apply every `adopted` entry.
+- **Rebuild from LIB**: reset to finalized state and replay `canonical_chain()`; use `orphaned` only to decide what to republish and to clean derived indexes.
+
+Either way, your own publishes are applied at publish time from the returned receipt and never echo back in `adopted`; they appear in `adopted` only after they were reported orphaned first.
+
+The integration tests provide reference policies that run this re-publish loop automatically, in `tests/src/cucumber/steps/zone/operations/policies.rs`: `OrphanRepublishPolicy` (simple republish), `RepublishLineagePolicy` (for repeating payloads, tracks msg-id lineage so each intent lands once), `SortedConflictPolicy` (republish only when it preserves the channel's sorted order, otherwise discard), and `BalanceAwarePolicy` (republish only when the account balance still allows it). Wiring one into the drive loop is the recommended pattern for any sequencer running in a competing-write environment.
 
 If the orphan policy is too aggressive — e.g., the orphan was caused by genuine application-level conflict, not a race — the consumer can choose to drop the payload, deduplicate against a higher-level transaction stream, or apply any other custom rule. The SDK only surfaces the event; the resolution policy is yours.
 

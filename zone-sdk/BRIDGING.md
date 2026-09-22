@@ -250,21 +250,21 @@ The finalization pattern is the same as in the single-sig case: `Event::BlocksPr
 
 ### Reorgs and republish
 
-If a withdraw submitted via `publish_atomic_withdraw` has its parent inscription orphaned by a chain reorg, the SDK reports it via the `channel_update` field of `Event::BlocksProcessed`, with the abandoned tx in `channel_update.orphaned`. The original signed transaction is no longer valid. The consumer decides whether to republish — re-call `publish_atomic_withdraw` with the same inscription payload and `WithdrawArg`s reconstructed from the bundle; the SDK refills the inscription parent and the `withdraw_nonce` from current on-chain state.
+If a withdraw submitted via `publish_atomic_withdraw` has its parent inscription orphaned by a chain reorg, the SDK reports it via the `channel_update` field of `Event::BlocksProcessed`: the update is a `ChannelUpdate::Conflict` and the abandoned tx is in its `orphaned` list, reachable through `channel_update.orphaned()`. The original signed transaction is no longer valid. The consumer decides whether to republish — re-call `publish_atomic_withdraw` with the same inscription payload and `WithdrawArg`s reconstructed from the bundle; the SDK refills the inscription parent and the `withdraw_nonce` from current on-chain state.
 
 ```rust
 use lb_zone_sdk::sequencer::{ChannelUpdateTx, Event, WithdrawArg};
 
 if let Event::BlocksProcessed { channel_update, .. } = event {
-    for tx in channel_update.orphaned {
+    for tx in channel_update.orphaned() {
         if let ChannelUpdateTx::AtomicWithdraw(info) = tx {
             let withdraws = info
                 .withdraws
-                .into_iter()
-                .map(|w| WithdrawArg { outputs: w.op.outputs })
+                .iter()
+                .map(|w| WithdrawArg { outputs: w.op.outputs.clone() })
                 .collect();
             let (result, checkpoint) = sequencer.handle().publish_atomic_withdraw(
-                info.inscription.payload,
+                info.inscription.payload.clone(),
                 withdraws,
             )?;
             // Persist `result` + `checkpoint` exactly as on the original publish.
