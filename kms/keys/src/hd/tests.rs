@@ -71,17 +71,23 @@ fn mnemonic_with_24_words_is_accepted() {
 #[test]
 fn generated_mnemonic_has_12_words() {
     let mnemonic = Mnemonic::generate();
-    assert_eq!(mnemonic.to_string().split(' ').count(), 12);
+    assert_eq!(mnemonic.0.word_count(), 12);
     assert_ne!(mnemonic, Mnemonic::generate());
 }
 
 #[test]
-fn mnemonic_serde() {
-    let json = serde_json::to_string(&mnemonic()).unwrap();
-    assert_eq!(json, format!("\"{MNEMONIC}\""));
+fn mnemonic_deserialize() {
+    let json = format!("\"{MNEMONIC}\"");
     assert_eq!(serde_json::from_str::<Mnemonic>(&json).unwrap(), mnemonic());
 
     assert!(serde_json::from_str::<Mnemonic>("\"abandon abandon about\"").is_err());
+}
+
+#[cfg(feature = "unsafe")]
+#[test]
+fn mnemonic_serialize() {
+    let json = serde_json::to_string(&mnemonic()).unwrap();
+    assert_eq!(json, format!("\"{MNEMONIC}\""));
 }
 
 #[test]
