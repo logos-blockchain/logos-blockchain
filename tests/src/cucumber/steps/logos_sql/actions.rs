@@ -3,7 +3,7 @@
 use futures::future::join_all;
 use lb_core::mantle::gas::GasCost;
 use lb_zone_sdk::sequencer::FundingConfig;
-use logos_sql::{LogosSql, LogosSqlConfig, TransactionBuilder};
+use logos_sql::{LogosSql, LogosSqlConfig, TransactionBuilder, WriterConfig};
 use tracing::info;
 
 use super::tables::{InstanceRow, WriteRow};
@@ -31,14 +31,16 @@ pub(super) async fn start_instances(
         let funding_pk = world.funding_wallet(&node_name)?.public_key()?;
         let config = LogosSqlConfig {
             channel_id: world.zone.sequencer_channel_id(&row.sequencer)?,
-            signing_key: world.zone.sequencer_signing_key(&row.sequencer)?.clone(),
             node_url: world.zone_node_url_for_sequencer(&row.sequencer)?,
-            funding: FundingConfig {
-                funding_pk,
-                change_pk: None,
-                max_tx_fee: GasCost::new(u64::MAX),
-                priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
-            },
+            writer: Some(WriterConfig {
+                signing_key: world.zone.sequencer_signing_key(&row.sequencer)?.clone(),
+                funding: FundingConfig {
+                    funding_pk,
+                    change_pk: None,
+                    max_tx_fee: GasCost::new(u64::MAX),
+                    priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
+                },
+            }),
             state_dir: world
                 .lifecycle
                 .scenario_base_dir

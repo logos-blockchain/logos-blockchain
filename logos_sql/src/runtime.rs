@@ -62,6 +62,7 @@ pub fn spawn(
     db: Databases,
     channel_id: ChannelId,
     restored_checkpoint: Option<SequencerCheckpoint>,
+    read_only: bool,
 ) -> RuntimeHandle {
     let (command_tx, command_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
     let (ready_tx, ready_rx) = oneshot::channel();
@@ -70,6 +71,7 @@ pub fn spawn(
         sequencer,
         db,
         channel_id,
+        read_only,
         command_rx,
         sequencer_ready: false,
         ready_checkpoint_pending: false,
@@ -200,6 +202,7 @@ struct Runtime {
     sequencer: ZoneSequencer<NodeHttpClient>,
     db: Databases,
     channel_id: ChannelId,
+    read_only: bool,
     command_rx: mpsc::Receiver<Command>,
     sequencer_ready: bool,
     ready_checkpoint_pending: bool,
@@ -346,6 +349,10 @@ impl Runtime {
     }
 
     const fn ensure_ready_to_write(&self) -> Result<(), Error> {
+        if self.read_only {
+            return Err(Error::ReadOnly);
+        }
+
         if self.event_pending_retry.is_some() {
             return Err(Error::RuntimeHalted);
         }
@@ -466,7 +473,7 @@ impl Runtime {
     }
 
     const fn can_publish(&self) -> bool {
-        self.sequencer_ready && !self.ready_checkpoint_pending
+        !self.read_only && self.sequencer_ready && !self.ready_checkpoint_pending
     }
 
     async fn advance_publish(&mut self) -> Result<(), Error> {
@@ -591,6 +598,57 @@ mod tests {
 
     use super::{COMMAND_CHANNEL_CAPACITY, Command, PendingEvent, PublishState, Runtime};
     use crate::{db::Databases, error::Error, sql::TransactionBuilder, status::WriteStatus};
+
+    #[tokio::test]
+    async fn read_only_accepts_channel_writes_only() {
+        let (_writer_dir, mut writer, _) = runtime();
+        let inscription = published_local_write(&mut writer, 2);
+        let (_reader_dir, mut reader, _) = runtime();
+        reader.read_only = true;
+        reader.sequencer_ready = true;
+
+        let mut event = blocks_processed();
+        let Event::BlocksProcessed { channel_update, .. } = &mut event else {
+            unreachable!()
+        };
+
+        channel_update
+            .adopted
+            .push(ChannelUpdateTx::Inscription(inscription.clone()));
+        reader.handle_event(event).await;
+
+        let connection = Databases::open_reader(reader.db.live_path()).unwrap();
+        let count: i64 = connection
+            .query_row("SELECT count(*) FROM local_2", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+        assert!(reader.event_pending_retry.is_none());
+        assert!(!reader.can_publish());
+
+        let (tx_id, transaction) = prepare_transaction("CREATE TABLE forbidden(value INTEGER)")
+            .finish()
+            .unwrap();
+
+        assert!(matches!(
+            reader.execute(tx_id, transaction).await,
+            Err(Error::ReadOnly)
+        ));
+        assert!(
+            connection
+                .query_row("SELECT count(*) FROM forbidden", [], |row| row
+                    .get::<_, i64>(0))
+                .is_err()
+        );
+
+        writer.handle_event(orphan_event(inscription)).await;
+        let displacement = writer.db.unhandled_displacements().unwrap().remove(0);
+
+        assert!(matches!(
+            reader.retry_displacement(&displacement).await,
+            Err(Error::ReadOnly)
+        ));
+        assert!(reader.db.pending_publish().unwrap().is_none());
+    }
 
     #[tokio::test]
     async fn retry_handles_only_the_selected_displacement() {
@@ -969,6 +1027,7 @@ mod tests {
             sequencer,
             db,
             channel_id,
+            read_only: false,
             command_rx,
             sequencer_ready: false,
             ready_checkpoint_pending: false,
