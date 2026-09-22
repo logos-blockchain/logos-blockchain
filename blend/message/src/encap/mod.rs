@@ -47,18 +47,17 @@ pub trait ProofsVerifier {
 /// The number of bytes an encapsulated message can encode to at most on the
 /// wire, given the maximum number of per-message encapsulations.
 #[must_use]
-pub fn encapsulated_message_encoded_size(num_blend_layers: NonZeroU64) -> NonZeroUsize {
-    PUBLIC_HEADER_ENCODED_SIZE
-        .checked_add(
-            BLENDING_HEADER_ENCODED_SIZE
-                .checked_mul(num_blend_layers.get() as usize)
-                .expect("The encoded size of the blending headers must not overflow."),
-        )
+pub const fn encapsulated_message_encoded_size(num_blend_layers: NonZeroU64) -> NonZeroUsize {
+    let blending_headers = BLENDING_HEADER_ENCODED_SIZE
+        .checked_mul(num_blend_layers.get() as usize)
+        .expect("The encoded size of the blending headers must not overflow.");
+    let total = PUBLIC_HEADER_ENCODED_SIZE
+        .checked_add(blending_headers)
         .expect("The encoded size of a message must not overflow.")
         .checked_add(PAYLOAD_ENCODED_SIZE)
-        .expect("The encoded size of a message must not overflow.")
-        .try_into()
-        .expect("The encoded size of a message is greater than `0`.")
+        .expect("The encoded size of a message must not overflow.");
+
+    NonZeroUsize::new(total).expect("The encoded size of a message is greater than `0`.")
 }
 
 #[cfg(test)]
