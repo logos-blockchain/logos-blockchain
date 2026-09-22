@@ -58,16 +58,16 @@ const LOG_TARGET: &str = network_service::backends::libp2p::ROOT;
 const MAX_CONCURRENT_IDENTITY_PROBES: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PeerProtocolState {
+enum PeerProtocolState {
     Supported,
     Unsupported,
 }
 
 #[derive(Debug)]
-pub(super) struct ProtocolContract {
-    pub(super) identify_protocol_version: String,
-    pub(super) kademlia_protocol: String,
-    pub(super) chain_sync_protocol: String,
+struct ProtocolContract {
+    identify_protocol_version: String,
+    kademlia_protocol: String,
+    chain_sync_protocol: String,
 }
 
 impl ProtocolContract {
@@ -378,7 +378,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         }
     }
 
-    pub(super) fn handle_routing_updated(
+    fn handle_routing_updated(
         &mut self,
         peer_id: PeerId,
         addresses: impl IntoIterator<Item = Multiaddr>,
@@ -418,7 +418,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         self.drain_identity_probe_queue();
     }
 
-    pub(super) fn chainsync_eligible_peers(&self) -> HashSet<PeerId> {
+    fn chainsync_eligible_peers(&self) -> HashSet<PeerId> {
         self.peer_protocol_states
             .iter()
             .filter_map(|(peer_id, state)| {
