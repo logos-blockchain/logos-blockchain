@@ -1,5 +1,6 @@
-use std::{io, num::NonZeroUsize};
+use std::io;
 
+use ::core::num::NonZeroUsize;
 use futures::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
 use libp2p::Stream;
 
@@ -8,8 +9,9 @@ use crate::message::{IncomingMessage, OutgoingMessage};
 pub mod core;
 pub mod message;
 
+pub type SendMsgResult = io::Result<Stream>;
 /// Write a message to the stream.
-pub async fn send_msg(mut stream: Stream, msg: OutgoingMessage) -> io::Result<Stream> {
+pub async fn send_msg(mut stream: Stream, msg: OutgoingMessage) -> SendMsgResult {
     stream.write_all(msg.as_ref()).await?;
     stream.flush().await?;
     Ok(stream)
@@ -20,6 +22,8 @@ pub(crate) async fn flush_and_close_stream(mut stream: Stream) {
     drop(stream.flush().await);
     drop(stream.close().await);
 }
+
+pub type RecvMsgResult<Reader> = io::Result<(Reader, IncomingMessage)>;
 
 /// Read one message of `message_size` bytes from the stream.
 ///
@@ -35,7 +39,7 @@ pub(crate) async fn flush_and_close_stream(mut stream: Stream) {
 pub(crate) async fn recv_msg<Reader>(
     mut stream: Reader,
     message_size: NonZeroUsize,
-) -> io::Result<(Reader, IncomingMessage)>
+) -> RecvMsgResult<Reader>
 where
     Reader: AsyncRead + Unpin,
 {

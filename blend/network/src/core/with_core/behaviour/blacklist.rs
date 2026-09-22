@@ -6,9 +6,12 @@ use core::{
 use std::collections::VecDeque;
 
 use lb_blend_primitives::time::{Round, RoundCount};
+use lb_log_targets::blend;
 use libp2p::PeerId;
 
 use crate::core::with_core::error::ReceiveError;
+
+const MAINTENANCE_TARGET: &str = blend::network::core::core::behaviour::MAINTENANCE;
 
 /// Why a peer was blacklisted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,11 +53,29 @@ impl error::Error for BlacklistReason {}
 
 /// What blacklisting a peer did, beyond the entry itself.
 #[derive(Debug, Clone, Copy)]
-pub struct InsertionOutcome {
-    /// Whether the peer was not already blacklisted.
-    pub is_first_offence: bool,
-    /// The entry dropped to make room, if the blacklist was full.
-    pub evicted: Option<Entry>,
+pub enum InsertionOutcome {
+    /// The peer was not already blacklisted.
+    FirstOffence {
+        /// The entry dropped to make room, if the blacklist was full.
+        evicted: Option<Entry>,
+    },
+    /// The peer was already blacklisted.
+    NotFirstOffence,
+}
+
+impl InsertionOutcome {
+    #[must_use]
+    pub const fn is_first_offence(&self) -> bool {
+        matches!(self, Self::FirstOffence { .. })
+    }
+
+    #[must_use]
+    pub const fn evicted(&self) -> &Option<Entry> {
+        match self {
+            Self::FirstOffence { evicted } => evicted,
+            Self::NotFirstOffence => &None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -113,16 +134,30 @@ impl PeerBlacklist {
         reason: BlacklistReason,
         now: Round,
     ) -> InsertionOutcome {
-        let mut outcome = InsertionOutcome {
-            is_first_offence: true,
-            evicted: None,
-        };
-        if let Some(position) = self.entries.iter().position(|entry| entry.peer == peer) {
+        let outcome = if let Some(position) =
+            self.entries.iter().position(|entry| entry.peer == peer)
+        {
             self.entries.remove(position);
-            outcome.is_first_offence = false;
+            tracing::trace!(target: MAINTENANCE_TARGET, "Blacklisted peer {peer:?} offended again ({reason:?}); its window starts over.");
+            InsertionOutcome::NotFirstOffence
         } else if self.entries.len() >= self.capacity.get() {
-            outcome.evicted = self.entries.pop_front();
-        }
+            let swapped_entry = self
+                .entries
+                .pop_front()
+                .expect("Capacity is non-zero, so there must be at least one entry in the list.");
+            tracing::trace!(
+                target: MAINTENANCE_TARGET,
+                "Peer {:?} is no longer blacklisted: it was the oldest entry when the blacklist filled up, and made room before the window it was excluded for, after {}, had passed.",
+                swapped_entry.peer,
+                swapped_entry.reason
+            );
+            InsertionOutcome::FirstOffence {
+                evicted: Some(swapped_entry),
+            }
+        } else {
+            InsertionOutcome::FirstOffence { evicted: None }
+        };
+        tracing::debug!(target: MAINTENANCE_TARGET, "Blacklisting peer {peer:?}: {reason:?}.");
         self.entries.push_back(Entry {
             peer,
             reason,
@@ -160,7 +195,14 @@ impl PeerBlacklist {
             .front()
             .is_some_and(|entry| !is_unexpired(entry, now))
         {
-            expired.extend(self.entries.pop_front());
+            let expired_entry = self.entries.pop_front().unwrap();
+            tracing::debug!(
+                target: MAINTENANCE_TARGET,
+                "Peer {:?} is no longer blacklisted: the window it was excluded for, after {}, has passed.",
+                expired_entry.peer,
+                expired_entry.reason
+            );
+            expired.push(expired_entry);
         }
         expired.into_iter()
     }
@@ -229,9 +271,9 @@ mod tests {
             Round::from(20),
         );
 
-        assert!(first.is_first_offence);
+        assert!(first.is_first_offence());
         assert!(
-            !second.is_first_offence,
+            !second.is_first_offence(),
             "a peer offending twice must not read as two peers shut out"
         );
         assert_eq!(
@@ -275,7 +317,7 @@ mod tests {
         // having passed, and pruning never sees it, so this is the one chance
         // to say so.
         assert_eq!(
-            insertion.evicted.map(|entry| entry.peer),
+            insertion.evicted().map(|entry| entry.peer),
             Some(peers[0]),
             "the entry that made room left without anyone being told"
         );
