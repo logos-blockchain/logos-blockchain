@@ -5259,7 +5259,6 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
- "tracing-appender",
  "tracing-subscriber",
 ]
 
