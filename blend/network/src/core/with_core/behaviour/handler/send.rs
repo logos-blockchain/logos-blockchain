@@ -1,56 +1,34 @@
-use core::num::NonZeroU64;
 use std::collections::VecDeque;
 
 use lb_blend_primitives::time::{Round, RoundCount};
 
-use crate::OutgoingMessage;
+use crate::{OutgoingMessage, core::admission::RoundShare};
 
-/// `r₁`: the messages a connection may carry in one round, in one direction.
-///
-/// The share is refreshed by the round rather than counted down from a total,
-/// and the round it was refreshed for is kept alongside it, so that a tick the
-/// handler never saw — the task driving it can go unpolled while the behaviour
-/// is busy — neither grants extra share nor withholds it.
-pub struct RoundShare {
-    message_limit: NonZeroU64,
-    remaining_message_count: u64,
-    current: Round,
+/// What a connection may put on the wire right now.
+pub enum PollOutcome {
+    /// The message to send.
+    Message(OutgoingMessage),
+    /// Messages are waiting, but this connection has already carried its share
+    /// for the round.
+    ShareSpent,
 }
 
-impl RoundShare {
-    #[must_use]
-    pub const fn new(message_limit: NonZeroU64, current: Round) -> Self {
-        Self {
-            message_limit,
-            remaining_message_count: message_limit.get(),
-            current,
+impl PollOutcome {
+    #[cfg(test)]
+    fn take_message(self) -> Option<OutgoingMessage> {
+        match self {
+            Self::Message(message) => Some(message),
+            Self::ShareSpent => None,
         }
-    }
-
-    /// Refills the share if `round` is a later round than the one it was last
-    /// refilled for.
-    pub const fn refill_for(&mut self, round: Round) {
-        if round.rounds_since(self.current) > 0 {
-            self.current = round;
-            self.remaining_message_count = self.message_limit.get();
-        }
-    }
-
-    /// Spends one message of the share, reporting whether there was any left.
-    pub const fn try_spend(&mut self) -> bool {
-        if self.remaining_message_count == 0 {
-            return false;
-        }
-        self.remaining_message_count -= 1;
-        true
     }
 }
 
 /// A message waiting for its turn on a connection.
 struct MessageEntry {
     message: OutgoingMessage,
-    /// The round after which this connection gives up on the message.
-    last_round_before_expiry: Round,
+    /// The first round this connection gives up on the message in, by which
+    /// point it has waited the `η` rounds the specification allows it.
+    expires_at: Round,
 }
 
 /// What a connection still owes its neighbour, and the share it may send under.
@@ -72,21 +50,17 @@ impl SendQueue {
     }
 
     /// Adds a message to what this connection owes its neighbour.
-    ///
-    /// Infallible: whether the wire format can carry the message was settled
-    /// when the [`OutgoingMessage`] was built, so a queue cannot be the place
-    /// that discovers it cannot.
     pub fn enqueue(&mut self, message: OutgoingMessage, current_round: Round) {
         self.queue.push_back(MessageEntry {
             message,
-            last_round_before_expiry: current_round.saturating_add(self.lifetime),
+            expires_at: current_round.saturating_add(self.lifetime),
         });
     }
 
     /// Refreshes the share and gives up on whatever has waited too long,
     /// reporting how many messages that was.
-    pub fn enter_round(&mut self, new_round: Round) -> usize {
-        self.share.refill_for(new_round);
+    pub fn enter_new_round_and_refresh_shares(&mut self, new_round: Round) -> usize {
+        self.share.refresh(new_round);
 
         // The queue is FIFO and every message is given the same lifetime, so deadlines
         // are non-decreasing and the expired ones are exactly the prefix.
@@ -94,7 +68,7 @@ impl SendQueue {
         while self
             .queue
             .front()
-            .is_some_and(|queued| new_round.rounds_since(queued.last_round_before_expiry) > 0)
+            .is_some_and(|queued| new_round >= queued.expires_at)
         {
             self.queue.pop_front();
             discarded = discarded.checked_add(1).unwrap();
@@ -104,11 +78,21 @@ impl SendQueue {
 
     /// The next message to put on the wire, if there is one and the share
     /// allows it.
-    pub fn pop_front(&mut self) -> Option<OutgoingMessage> {
-        if self.queue.is_empty() || !self.share.try_spend() {
+    ///
+    /// An empty queue and a spent share are both "nothing to send now", but
+    /// only one of them is the protocol throttling a connection that has more
+    /// to say, and that one is worth reporting. Telling them apart is the
+    /// caller's only way to know which it is.
+    pub fn pop_front(&mut self) -> Option<PollOutcome> {
+        if self.queue.is_empty() {
             return None;
         }
-        self.queue.pop_front().map(|queued| queued.message)
+        if !self.share.try_spend() {
+            return Some(PollOutcome::ShareSpent);
+        }
+        self.queue
+            .pop_front()
+            .map(|queued| PollOutcome::Message(queued.message))
     }
 
     pub fn clear(&mut self) {
@@ -124,15 +108,11 @@ mod tests {
 
     use crate::{
         OutgoingMessage,
-        core::with_core::behaviour::handler::admission::{RoundShare, SendQueue},
+        core::with_core::behaviour::handler::send::{PollOutcome, RoundShare, SendQueue},
     };
 
     const SHARE: NonZeroU64 = NonZeroU64::new(3).unwrap();
     const LIFETIME: RoundCount = RoundCount::new(NonZeroU128::new(2).unwrap());
-
-    fn round(round: u128) -> Round {
-        Round::from(round)
-    }
 
     fn payload(byte: u8) -> OutgoingMessage {
         OutgoingMessage::from_bytes([byte])
@@ -140,7 +120,7 @@ mod tests {
 
     #[test]
     fn a_share_is_spent_at_most_once_per_message() {
-        let mut share = RoundShare::new(SHARE, round(0));
+        let mut share = RoundShare::new(SHARE, Round::from(0));
 
         for _ in 0..SHARE.get() {
             assert!(share.try_spend());
@@ -151,27 +131,27 @@ mod tests {
 
     #[test]
     fn a_share_refreshes_once_per_round_however_often_it_is_asked() {
-        let mut share = RoundShare::new(SHARE, round(0));
+        let mut share = RoundShare::new(SHARE, Round::from(0));
         assert!(share.try_spend());
 
         // Being told about the same round again must not refill it.
-        share.refill_for(round(0));
+        share.refresh(Round::from(0));
         assert!(share.try_spend());
         assert!(share.try_spend());
         assert!(!share.try_spend());
 
-        share.refill_for(round(1));
+        share.refresh(Round::from(1));
         assert!(share.try_spend());
     }
 
     #[test]
     fn a_skipped_round_refreshes_the_share_exactly_once() {
-        let mut share = RoundShare::new(SHARE, round(0));
+        let mut share = RoundShare::new(SHARE, Round::from(0));
         while share.try_spend() {}
 
         // Ten rounds pass without the share being refreshed. It comes back to
         // one round's worth, not ten.
-        share.refill_for(round(10));
+        share.refresh(Round::from(10));
 
         for _ in 0..SHARE.get() {
             assert!(share.try_spend());
@@ -181,40 +161,55 @@ mod tests {
 
     #[test]
     fn the_queue_sends_at_most_a_round_s_share() {
-        let mut queue = SendQueue::new(RoundShare::new(SHARE, round(0)), LIFETIME);
+        let mut queue = SendQueue::new(RoundShare::new(SHARE, Round::from(0)), LIFETIME);
         for byte in 0..5 {
-            queue.enqueue(payload(byte), round(0));
+            queue.enqueue(payload(byte), Round::from(0));
         }
 
         for byte in 0..u8::try_from(SHARE.get()).unwrap() {
             assert_eq!(
-                queue.pop_front().map(|msg| msg.as_ref().to_vec()),
+                queue
+                    .pop_front()
+                    .unwrap()
+                    .take_message()
+                    .map(|msg| msg.as_ref().to_vec()),
                 Some(vec![byte])
             );
         }
-        assert!(queue.pop_front().is_none(), "the share is spent");
+        assert!(
+            matches!(queue.pop_front(), Some(PollOutcome::ShareSpent)),
+            "the share is spent, which is not the same as having nothing to send"
+        );
 
-        queue.enter_round(round(1));
+        queue.enter_new_round_and_refresh_shares(Round::from(1));
         assert_eq!(
-            queue.pop_front().map(|msg| msg.as_ref().to_vec()),
+            queue
+                .pop_front()
+                .unwrap()
+                .take_message()
+                .map(|msg| msg.as_ref().to_vec()),
             Some(vec![3])
         );
     }
 
     #[test]
     fn a_message_that_waits_longer_than_its_lifetime_is_given_up_on() {
-        let mut queue = SendQueue::new(RoundShare::new(SHARE, round(0)), LIFETIME);
-        queue.enqueue(payload(0), round(0));
+        let mut queue = SendQueue::new(RoundShare::new(SHARE, Round::from(0)), LIFETIME);
+        queue.enqueue(payload(0), Round::from(0));
 
         // Still within the lifetime: the message is kept.
-        assert_eq!(queue.enter_round(round(2)), 0);
-        queue.enqueue(payload(1), round(2));
+        assert_eq!(queue.enter_new_round_and_refresh_shares(Round::from(1)), 0);
+        queue.enqueue(payload(1), Round::from(1));
 
         // Past it: the first message is dropped, the second is not, since it
         // joined the queue later.
-        assert_eq!(queue.enter_round(round(3)), 1);
+        assert_eq!(queue.enter_new_round_and_refresh_shares(Round::from(2)), 1);
         assert_eq!(
-            queue.pop_front().map(|msg| msg.as_ref().to_vec()),
+            queue
+                .pop_front()
+                .unwrap()
+                .take_message()
+                .map(|msg| msg.as_ref().to_vec()),
             Some(vec![1])
         );
     }

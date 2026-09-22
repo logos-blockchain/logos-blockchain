@@ -2280,7 +2280,7 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
         let mut deliveries = FailureDetector::new(
             settings.max_data_message_delay_in_rounds(),
-            Duration::from_secs(settings.time.round_duration_in_seconds.get()),
+            settings.time.round_duration_in_seconds,
             PayloadDispatcher::<RuntimeServiceId>::observe_broadcasts(&payload_dispatcher).await,
         );
         run_event_loop(

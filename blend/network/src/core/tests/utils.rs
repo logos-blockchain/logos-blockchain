@@ -155,6 +155,29 @@ where
     }
 }
 
+/// Drives two swarms for `duration`, so that connections settle, rounds pass
+/// and deadlines fire while nothing in particular is being waited for.
+pub async fn drive_for<One, Other>(
+    one: &mut TestSwarm<One>,
+    other: &mut TestSwarm<Other>,
+    duration: Duration,
+) where
+    One: NetworkBehaviour + Send,
+    One::ToSwarm: Debug,
+    Other: NetworkBehaviour + Send,
+    Other::ToSwarm: Debug,
+{
+    let _: Result<(), _> = tokio::time::timeout(duration, async {
+        loop {
+            tokio::select! {
+                _ = futures::StreamExt::select_next_some(&mut **one) => {}
+                _ = futures::StreamExt::select_next_some(&mut **other) => {}
+            }
+        }
+    })
+    .await;
+}
+
 /// A buffer exactly the size of a Blend message, holding nothing that decodes
 /// into one.
 ///

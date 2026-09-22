@@ -70,6 +70,40 @@ impl Settings {
         )
     }
 
+    /// `r_E = 2V/3 − Φ_CC · r₁`: the edge connections a node accepts in a
+    /// round.
+    #[must_use]
+    pub fn accepted_edge_connections_per_round(&self) -> NonZeroU64 {
+        let readable_per_round = 2 * u64::from(self.core.verification_rate_per_second.get()) / 3;
+        let taken_by_core_connections = u64::from(self.core.target_peering_degree.get())
+            * self.connection_share_per_round().get();
+        NonZeroU64::new(readable_per_round.saturating_sub(taken_by_core_connections)).expect(
+            "The verification rate must leave room for at least one edge connection per round.",
+        )
+    }
+
+    /// `Φ_CE^Max`: the value the spec puts on how many edge connections a
+    /// node holds at once, `2·r_E`.
+    #[must_use]
+    pub fn maximum_concurrent_edge_connections(&self) -> NonZeroU64 {
+        self.accepted_edge_connections_per_round()
+            .checked_mul(NonZeroU64::new(2).unwrap())
+            .expect("The maximum number of concurrent edge connections overflowed `u64`.")
+    }
+
+    #[must_use]
+    pub fn edge_node_connection_timeout(&self, slot_duration: &Duration) -> Duration {
+        self.round_duration(slot_duration)
+            .checked_mul(
+                self.core
+                    .edge_node_send_deadline_in_rounds
+                    .get()
+                    .try_into()
+                    .expect("`T_E` must fit in a `u32` number of rounds."),
+            )
+            .expect("The edge connection timeout overflowed a `Duration`.")
+    }
+
     #[must_use]
     pub fn timing_settings(
         &self,
@@ -86,6 +120,7 @@ impl Settings {
                 .expect("Round duration must be greater than `0` seconds."),
             rounds_per_observation_window: self.rounds_per_observation_window(),
             network_absorption_in_rounds: self.common.network_absorption_in_rounds,
+            core_handshake_deadline_in_rounds: self.core.core_handshake_deadline_in_rounds,
             rounds_per_epoch: self.rounds_per_epoch(slots_per_epoch, slot_duration),
         }
     }
@@ -160,6 +195,13 @@ pub struct CoreSettings {
     /// verify the public header of. Every admission share is sized so that what
     /// a node reads in a round stays within it.
     pub verification_rate_per_second: NonZeroU32,
+    /// `T_E`: the rounds an edge node is given to send its message, counted
+    /// from the moment its connection is accepted.
+    pub edge_node_send_deadline_in_rounds: NonZeroU64,
+    /// `T_H`: the rounds a handshake with a core node is given to complete,
+    /// covering the round trips of the transport handshake and of the
+    /// neighbour distinction process.
+    pub core_handshake_deadline_in_rounds: NonZeroU128,
     pub activity_threshold_sensitivity: u64,
 }
 

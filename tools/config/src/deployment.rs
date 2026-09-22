@@ -1,5 +1,5 @@
 use core::{
-    num::{NonZero, NonZeroU32, NonZeroU64},
+    num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128},
     time::Duration,
 };
 
@@ -31,6 +31,10 @@ use crate::{
     time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS},
 };
 
+/// `T_E`: the rounds an edge node is given to send its message.
+const BLEND_EDGE_NODE_SEND_DEADLINE_IN_ROUNDS: u64 = 1;
+/// `T_H`: the rounds a core handshake is given to complete.
+const BLEND_CORE_HANDSHAKE_DEADLINE_IN_ROUNDS: u128 = 2;
 /// `V`: the messages per second the slowest targeted node can verify.
 const BLEND_VERIFICATION_RATE_PER_SECOND: u32 = 156;
 /// `η`: the rounds a message spends crossing the network at one hop.
@@ -120,6 +124,14 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     BLEND_VERIFICATION_RATE_PER_SECOND,
                 )
                 .expect("Verification rate cannot be zero."),
+                edge_node_send_deadline_in_rounds: NonZeroU64::try_from(
+                    BLEND_EDGE_NODE_SEND_DEADLINE_IN_ROUNDS,
+                )
+                .expect("`T_E` cannot be zero."),
+                core_handshake_deadline_in_rounds: NonZeroU128::try_from(
+                    BLEND_CORE_HANDSHAKE_DEADLINE_IN_ROUNDS,
+                )
+                .expect("`T_H` cannot be zero."),
                 scheduler: SchedulerSettings {
                     cover: CoverTrafficSettings {
                         message_frequency_per_round: PositiveF64::try_from(

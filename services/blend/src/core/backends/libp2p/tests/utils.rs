@@ -13,7 +13,7 @@ use lb_blend::{
         encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
     },
     network::core::{
-        Config, NetworkBehaviour, with_core::behaviour::Config as CoreToCoreConfig,
+        CommonConfig, Config, NetworkBehaviour, with_core::behaviour::Config as CoreToCoreConfig,
         with_edge::behaviour::Config as CoreToEdgeConfig,
     },
     primitives::time::RoundCount,
@@ -226,13 +226,16 @@ impl BlendBehaviourBuilder {
         BlendBehaviour {
             blend: NetworkBehaviour::new(
                 &Config {
-                    with_core: CoreToCoreConfig {
-                        connection_share_per_round: NonZeroU64::new(1_000).unwrap(),
-                        send_deadline_in_rounds: RoundCount::new(NonZeroU128::new(2).unwrap()),
-                        target_peering_degree: peering_degree,
+                    common: CommonConfig {
                         minimum_network_size: 1.try_into().unwrap(),
                         num_blend_layers: 3.try_into().unwrap(),
                         round_duration_in_seconds: 1.try_into().unwrap(),
+                    },
+                    with_core: CoreToCoreConfig {
+                        connection_share_per_round: NonZeroU64::new(1_000).unwrap(),
+                        send_deadline_in_rounds: RoundCount::new(NonZeroU128::new(2).unwrap()),
+                        handshake_deadline_in_rounds: RoundCount::new(NonZeroU128::new(2).unwrap()),
+                        target_peering_degree: peering_degree,
                         // Long enough that no connection in a test goes stale
                         // by accident.
                         liveness_window_in_rounds: u128::from(u32::MAX).try_into().unwrap(),
@@ -240,8 +243,7 @@ impl BlendBehaviourBuilder {
                     with_edge: CoreToEdgeConfig {
                         connection_timeout: Duration::from_secs(1),
                         max_incoming_connections: 300,
-                        minimum_network_size: 1.try_into().unwrap(),
-                        num_blend_layers: 3.try_into().unwrap(),
+                        accepted_connections_per_round: NonZeroU64::new(1_000).unwrap(),
                     },
                 },
                 (self.membership, 1.into()),
