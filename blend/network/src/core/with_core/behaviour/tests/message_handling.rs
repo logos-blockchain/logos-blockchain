@@ -12,8 +12,7 @@ use tokio::{
 
 use crate::core::{
     tests::utils::{
-        TestEncapsulatedMessage, TestEncapsulatedMessageWithEpoch, TestProofsVerifier, TestSwarm,
-        undecodable_message_bytes,
+        TestEncapsulatedMessage, TestProofsVerifier, TestSwarm, undecodable_message_bytes,
     },
     with_core::{
         behaviour::{
@@ -714,8 +713,10 @@ async fn undeserializable_message_in_old_epoch_closes_connection_without_swarm_n
     );
 }
 
+/// A peer excluded over one connection is excluded as a peer, so it loses the
+/// others too — including the one it holds for the current epoch.
 #[test(tokio::test)]
-async fn malicious_old_epoch_peer_does_not_affect_current_epoch() {
+async fn a_peer_that_offends_on_an_old_epoch_connection_loses_its_current_epoch_one() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut sender = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id).with_membership(&nodes).build()
@@ -741,10 +742,14 @@ async fn malicious_old_epoch_peer_does_not_affect_current_epoch() {
         TestProofsVerifier::accepting(),
     );
     sender.connect_and_wait_for_upgrade(&mut receiver).await;
+    assert!(
+        receiver
+            .behaviour()
+            .negotiated_peers()
+            .contains_key(sender.local_peer_id())
+    );
 
-    // Sender sends garbage over the old-epoch connection. This should
-    // the old-epoch connection but NOT mark the peer as malicious in
-    // the current epoch.
+    // Sender sends garbage over the old-epoch connection.
     sender
         .behaviour_mut()
         .force_send_serialized_message_to_peer_at_epoch(
@@ -754,43 +759,39 @@ async fn malicious_old_epoch_peer_does_not_affect_current_epoch() {
         )
         .unwrap();
 
-    // Wait for the old-epoch connection to close.
-    loop {
-        select! {
-            () = sleep(Duration::from_secs(15)) => {
-                panic!("Timed out waiting for old-epoch connection to close");
-            }
-            _ = sender.select_next_some() => {}
-            event = receiver.select_next_some() => {
-                if let SwarmEvent::ConnectionClosed { .. } = event {
-                    break;
+    // The current-epoch connection goes with it, and the swarm is told, so
+    // that it can dial a replacement.
+    let disconnected = timeout(Duration::from_secs(15), async {
+        loop {
+            select! {
+                _ = sender.select_next_some() => {}
+                event = receiver.select_next_some() => {
+                    if let SwarmEvent::Behaviour(Event::PeerDisconnected(peer)) = event
+                        && peer == *sender.local_peer_id()
+                    {
+                        return;
+                    }
                 }
             }
         }
-    }
-
-    // Now verify the current epoch connection is healthy by sending a
-    // valid message through it.
-    let test_message = TestEncapsulatedMessageWithEpoch::new(1.into(), b"after-malicious-peer");
-    sender
-        .behaviour_mut()
-        .publish_message_with_validated_header(&test_message, 1.into())
-        .unwrap();
-
-    loop {
-        select! {
-            () = sleep(Duration::from_secs(15)) => {
-                panic!("Timed out waiting for message on current epoch - current epoch connection was incorrectly affected by old epoch malicious peer");
-            }
-            _ = sender.select_next_some() => {}
-            event = receiver.select_next_some() => {
-                if let SwarmEvent::Behaviour(Event::Message { message, .. }) = event {
-                    assert_eq!(message.id(), test_message.id());
-                    break;
-                }
-            }
-        }
-    }
+    })
+    .await;
+    assert!(
+        disconnected.is_ok(),
+        "the peer kept its current-epoch connection after being blacklisted"
+    );
+    assert!(
+        !receiver
+            .behaviour()
+            .negotiated_peers()
+            .contains_key(sender.local_peer_id())
+    );
+    assert!(
+        receiver
+            .behaviour()
+            .blacklisted_peers()
+            .any(|peer| peer == sender.local_peer_id())
+    );
 }
 
 #[test(tokio::test)]
