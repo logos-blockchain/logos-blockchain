@@ -215,7 +215,7 @@ impl Keystore {
 impl Default for Keystore {
     /// Creates a keystore from a newly generated mnemonic.
     fn default() -> Self {
-        Self::new(Mnemonic::generate(), None)
+        Self::new(Mnemonic::generate(&mut OsRng), None)
     }
 }
 

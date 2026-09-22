@@ -64,7 +64,7 @@ mod tests {
     #[test]
     fn serde_keys_from_yaml() {
         let settings = PreloadKmsBackendSettings {
-            mnemonic: Some(Mnemonic::generate()),
+            mnemonic: Some(Mnemonic::generate(&mut OsRng)),
             passphrase: Some("passphrase".to_owned()),
             keys: [
                 (

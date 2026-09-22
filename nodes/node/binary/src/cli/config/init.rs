@@ -5,6 +5,7 @@ use lb_core::mantle::Value;
 use lb_key_management_system_service::hd::Mnemonic;
 use lb_pow_service::ClaimTarget;
 use libp2p::{Multiaddr, PeerId};
+use rand::rngs::OsRng;
 use thiserror::Error;
 
 use crate::{
@@ -54,7 +55,7 @@ pub fn run(args: InitArgs) -> Result<()> {
 
     let mnemonic = match &args.mnemonic {
         Some(mnemonic) => mnemonic.parse()?,
-        None => Mnemonic::generate(),
+        None => Mnemonic::generate(&mut OsRng),
     };
     let keystore = Keystore::new(mnemonic, args.mnemonic_passphrase.clone());
     let user_config = build_user_config(&keystore, args);
