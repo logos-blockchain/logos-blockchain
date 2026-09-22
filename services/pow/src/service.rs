@@ -832,20 +832,21 @@ where
     WalletService: WalletServiceData,
     RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
 {
-    let mut targets = Vec::with_capacity(settings.targets.len());
-    for target in &settings.targets {
-        let balance = target_balance(wallet_api, target.public_key)
-            .await
-            .inspect_err(|e| {
-                warn!(target: LOG_TARGET, "Failed to read PoW auto-claim target balance: {e}");
-            })
-            .ok();
-        targets.push(ClaimTargetStatus {
-            public_key: target.public_key,
-            threshold: target.threshold,
-            balance,
+    let targets =
+        settings.targets.iter().map(async |target| {
+            let balance = target_balance(wallet_api, target.public_key).await.inspect_err(|error| {
+                warn!(target: LOG_TARGET, "Failed to read PoW auto-claim target balance: {error}");
+            }).ok();
+
+            ClaimTargetStatus {
+                public_key: target.public_key,
+                threshold: target.threshold,
+                balance,
+            }
         });
-    }
+
+    let targets = futures::future::join_all(targets).await;
+
     AutoClaimStatus {
         is_armed,
         tick: settings.tick,
