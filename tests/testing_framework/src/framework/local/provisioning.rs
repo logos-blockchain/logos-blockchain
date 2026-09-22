@@ -756,6 +756,7 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
                 config
                     .kms_config
                     .backend
+                    .clone()
                     .resolve_keys()
                     .expect("KMS keys of a provisioned config are resolvable")
                     .into_values()

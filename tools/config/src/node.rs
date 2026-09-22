@@ -46,7 +46,7 @@ pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
         api: api_config,
         storage: StorageConfig::default(),
         sdp: sdp_config,
-        wallet: create_wallet_config(&config.consensus_config, &config.kms_config.backend),
+        wallet: create_wallet_config(&config.consensus_config, config.kms_config.backend.clone()),
         // Mining defaults, auto-claim off: generated nodes mine and claim on
         // demand, naming the destination key on each claim request.
         pow: PoWConfig::default(),
@@ -71,7 +71,7 @@ fn create_axum_backend_settings(listen_address: SocketAddr) -> AxumBackendSettin
 
 fn create_wallet_config(
     consensus: &GeneralConsensusConfig,
-    kms: &PreloadKmsBackendSettings,
+    kms: PreloadKmsBackendSettings,
 ) -> WalletConfig {
     let kms_keys = kms
         .resolve_keys()
