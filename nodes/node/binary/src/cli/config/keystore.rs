@@ -28,7 +28,7 @@ impl KeyTitle {
     pub const NETWORK_SWARM: &str = "NetworkSwarm";
     pub const POW_CLAIM: &str = "PoWClaim";
     pub const SDP_FUNDING: &str = "SdpFunding";
-    pub const VAUCHER_MASTER: &str = "VaucherMaster";
+    pub const VOUCHER_MASTER: &str = "VoucherMaster";
     pub const STAKE: &str = "Stake";
 
     pub const PREDEFINED_ED25519: [&'static str; 2] = [Self::BLEND_SIGNING, Self::NETWORK_SWARM];
@@ -39,7 +39,7 @@ impl KeyTitle {
         (Self::SDP_FUNDING, "m/154'/0'/0'/1'"),
         (Self::STAKE, "m/154'/0'/0'/2'"),
         (Self::POW_CLAIM, "m/154'/0'/0'/3'"),
-        (Self::VAUCHER_MASTER, "m/154'/0'/2'"),
+        (Self::VOUCHER_MASTER, "m/154'/0'/2'"),
     ];
 }
 

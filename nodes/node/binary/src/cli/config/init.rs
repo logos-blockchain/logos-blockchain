@@ -227,8 +227,8 @@ fn build_pow_config(keystore: &Keystore) -> Result<PoWConfig, KeystoreError> {
 
 fn build_wallet_config(keystore: &Keystore) -> Result<WalletConfig, KeystoreError> {
     let (voucher_master_key_id, _) = keystore
-        .get(KeyTitle::VAUCHER_MASTER)
-        .ok_or_else(|| KeystoreError::NotFound(KeyTitle::VAUCHER_MASTER.into()))?;
+        .get(KeyTitle::VOUCHER_MASTER)
+        .ok_or_else(|| KeystoreError::NotFound(KeyTitle::VOUCHER_MASTER.into()))?;
 
     let mut wallet_config = WalletConfig::with_required_values(WalletConfigRequiredValues {
         voucher_master_key_id,
