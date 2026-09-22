@@ -3,7 +3,7 @@
 # Ignore warnings about sensitive information as this is test data.
 
 ARG LC_CORE_VERSION=0.2.0
-ARG LB_NODE_VERSION=0.3.0-rc.3
+ARG LB_NODE_VERSION=0.2.0
 
 # ===========================
 # BUILD IMAGE
