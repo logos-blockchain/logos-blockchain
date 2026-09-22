@@ -283,13 +283,14 @@ pub fn run_generate_key(args: GenerateKeyArgs) -> Result<()> {
         .as_ref()
         .map_or_else(|| next_user_key_title(&keystore), Clone::clone);
 
-    if keystore.contains(user_key_title.clone())
-        && !(args.yes
-            || confirm_overwrite(&format!(
-                "A key with the title '{}' already exists. Overwrite?",
-                user_key_title
-            ))?)
-    {
+    let title_exists = keystore.contains(user_key_title.clone());
+    let overwrite_approved = args.yes
+        || confirm_overwrite(&format!(
+            "A key with the title '{}' already exists. Overwrite?",
+            user_key_title
+        ))?;
+
+    if title_exists && !overwrite_approved {
         println!("Action discarded.");
         return Ok(());
     }
@@ -334,13 +335,14 @@ pub fn run_add_key(args: AddKeyArgs) -> Result<()> {
         .as_ref()
         .map_or_else(|| next_user_key_title(&keystore), Clone::clone);
 
-    if keystore.contains(user_key_title.clone())
-        && !(auto_approve
-            || confirm_overwrite(&format!(
-                "A key with the title '{}' already exists. Overwrite?",
-                user_key_title
-            ))?)
-    {
+    let title_exists = keystore.contains(user_key_title.clone());
+    let overwrite_approved = auto_approve
+        || confirm_overwrite(&format!(
+            "A key with the title '{}' already exists. Overwrite?",
+            user_key_title
+        ))?;
+
+    if title_exists && !overwrite_approved {
         println!("Action discarded.");
         return Ok(());
     }
