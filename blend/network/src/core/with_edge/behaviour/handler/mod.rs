@@ -32,8 +32,7 @@ mod tests;
 const LOG_TARGET: &str = blend::network::core::handler::CORE_EDGE;
 
 type TimerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
-type MessageReceiveFuture =
-    Pin<Box<dyn Future<Output = Result<IncomingMessage, io::Error>> + Send>>;
+type MessageReceiveFuture = Pin<Box<dyn Future<Output = io::Result<IncomingMessage>> + Send>>;
 type PollResult<T> = (
     Poll<
         ConnectionHandlerEvent<

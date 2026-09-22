@@ -3,7 +3,7 @@ use core::{
     task::{Context, Poll, Waker},
     time::Duration,
 };
-use std::{collections::VecDeque, io};
+use std::io;
 
 use futures::{FutureExt as _, future::BoxFuture};
 use lb_blend_primitives::time::{Round, RoundClock, RoundCount};
@@ -18,13 +18,17 @@ use libp2p::{
 };
 
 use crate::{
-    OutgoingMessage,
-    core::{admission::RoundShare, with_core::behaviour::handler::admission::SendQueue},
+    OutgoingMessage, RecvMsgResult, SendMsgResult,
+    core::{
+        admission::RoundShare,
+        with_core::behaviour::handler::send::{PollOutcome, SendQueue},
+    },
+    flush_and_close_stream,
     message::IncomingMessage,
     recv_msg, send_msg,
 };
 
-pub mod admission;
+pub mod send;
 
 const LOG_TARGET: &str = blend::network::core::core::conn::HANDLER;
 
@@ -35,17 +39,11 @@ pub struct ConnectionHandler {
     /// `r₁`: what this connection may still be read for this round.
     read_share: RoundShare,
     round_clock: RoundClock,
-    pending_events_to_behaviour: VecDeque<ToBehaviour>,
+    /// What the behaviour has been told about this connection coming up.
+    upgrade_notice: Option<UpgradeNotice>,
     protocol_name: StreamProtocol,
     waker: Option<Waker>,
     connection_details: (PeerId, ConnectionId),
-    /// Whether the behaviour has already been notified of a successful upgrade
-    /// for this connection. Both inbound and outbound substreams must be
-    /// negotiated, but the behaviour only needs to hear about it once. Once
-    /// set, it stays set for the lifetime of the handler so that after
-    /// [`Self::close_substreams`], a late-arriving upgrade event does not
-    /// cause a second notification.
-    upgrade_notified: bool,
     /// How many bytes one message occupies on this connection, which is fixed
     /// by the number of encapsulation layers and so the same for every message.
     message_size: NonZeroUsize,
@@ -61,8 +59,9 @@ pub struct ConnectionHandler {
     upgrade_timeout: Duration,
 }
 
-type MsgSendFuture = BoxFuture<'static, Result<Stream, io::Error>>;
-type MsgRecvFuture = BoxFuture<'static, Result<(Stream, IncomingMessage), io::Error>>;
+type MsgSendFuture = BoxFuture<'static, SendMsgResult>;
+type MsgRecvFuture = BoxFuture<'static, RecvMsgResult<Stream>>;
+type StreamCloseFuture = BoxFuture<'static, ()>;
 
 enum InboundSubstreamState {
     /// The substream is open with no frame in flight.
@@ -76,6 +75,33 @@ enum InboundSubstreamState {
     Dropped,
 }
 
+/// What the behaviour has been told about a connection coming up.
+#[derive(Debug)]
+enum UpgradeNotice {
+    /// The connection came up and the behaviour has yet to hear it.
+    Due,
+    /// The behaviour has heard, or never will. Either way it is not told
+    /// again, so a substream negotiated late cannot announce a connection
+    /// twice, nor announce one that is already closing.
+    Settled,
+}
+
+impl UpgradeNotice {
+    const fn new() -> Self {
+        Self::Due
+    }
+
+    const fn new_settled() -> Self {
+        Self::Settled
+    }
+
+    const fn consume(&mut self) -> bool {
+        let due = matches!(self, Self::Due);
+        *self = Self::Settled;
+        due
+    }
+}
+
 enum OutboundSubstreamState {
     /// A request to open a new outbound substream is being processed.
     PendingOpenSubstream,
@@ -83,6 +109,11 @@ enum OutboundSubstreamState {
     Idle(Stream),
     /// A message is being sent on the outbound substream.
     PendingSend(MsgSendFuture),
+    /// The connection is being closed, but a message is already part way onto
+    /// the wire.
+    ClosingAfterSend(MsgSendFuture),
+    /// The stream is being ended cleanly.
+    Closing(StreamCloseFuture),
     /// A substream has been dropped proactively.
     Dropped,
 }
@@ -108,11 +139,10 @@ impl ConnectionHandler {
             ),
             read_share: RoundShare::new(share_per_round, current_round),
             round_clock,
-            pending_events_to_behaviour: VecDeque::new(),
+            upgrade_notice: None,
             protocol_name,
             waker: None,
             connection_details,
-            upgrade_notified: false,
             message_size,
             upgrade_timeout,
         }
@@ -122,28 +152,18 @@ impl ConnectionHandler {
     /// whatever has waited too long to be sent.
     fn process_current_round(&mut self, cx: &mut Context<'_>) -> Round {
         let current_round = self.round_clock.poll_current(cx);
-        self.read_share.refill_for(current_round);
-        let discarded = self.send_queue.enter_round(current_round);
-        if discarded > 0 {
+        self.read_share.refresh(current_round);
+        let discarded_expired_message_count = self
+            .send_queue
+            .enter_new_round_and_refresh_shares(current_round);
+        if discarded_expired_message_count > 0 {
             tracing::debug!(
                 target: LOG_TARGET,
-                "Gave up on {discarded} message(s) waiting to be sent on connection {:?}: they waited longer than a message may spend at one hop. Copies queued for other neighbours are unaffected.",
+                "Gave up on {discarded_expired_message_count} message(s) waiting to be sent on connection {:?}: they waited longer than a message may spend at one hop. Copies queued for other neighbours are unaffected.",
                 self.connection_details
             );
         }
         current_round
-    }
-
-    /// Emit a [`ToBehaviour::FullyNegotiated`] event if one has not already
-    /// been emitted for this connection. Both inbound and outbound substreams
-    /// need to be negotiated before the connection is usable, but the
-    /// behaviour only needs to hear about the upgrade once, so we dedupe here.
-    fn check_and_notify_about_upgrade(&mut self) {
-        if !self.upgrade_notified {
-            self.pending_events_to_behaviour
-                .push_back(ToBehaviour::FullyNegotiated);
-            self.upgrade_notified = true;
-        }
     }
 
     /// Mark the inbound/outbound substream state as Dropped.
@@ -153,11 +173,48 @@ impl ConnectionHandler {
     ///
     /// Also, this clears all pending messages and events
     /// to avoid confusions for event recipients.
+    /// Closes both substreams, letting a message already part way onto the wire
+    /// finish first.
     fn close_substreams(&mut self) {
         self.inbound_substream = Some(InboundSubstreamState::Dropped);
-        self.outbound_substream = Some(OutboundSubstreamState::Dropped);
+        self.outbound_substream = Some(match self.outbound_substream.take() {
+            Some(OutboundSubstreamState::PendingSend(sending)) => {
+                OutboundSubstreamState::ClosingAfterSend(sending)
+            }
+            Some(OutboundSubstreamState::Idle(stream)) => {
+                OutboundSubstreamState::Closing(flush_and_close_stream(stream).boxed())
+            }
+            Some(
+                state @ (OutboundSubstreamState::ClosingAfterSend(_)
+                | OutboundSubstreamState::Closing(_)),
+            ) => state,
+            _ => OutboundSubstreamState::Dropped,
+        });
+        // Messages that never reached the wire are simply dropped: nothing is
+        // owed to a neighbour for a message it has seen no byte of.
         self.send_queue.clear();
-        self.pending_events_to_behaviour.clear();
+        // A connection that is closing never came up as far as the behaviour
+        // is concerned.
+        self.drop_notice();
+    }
+
+    const fn raise_notice(&mut self) {
+        if self.upgrade_notice.is_some() {
+            return;
+        }
+        self.upgrade_notice = Some(UpgradeNotice::new());
+    }
+
+    fn consume_notice(&mut self) -> bool {
+        self.upgrade_notice
+            .as_mut()
+            .is_some_and(UpgradeNotice::consume)
+    }
+
+    const fn drop_notice(&mut self) {
+        // Set as `Some` instead of `consume()` if not `None` to avoid re-entrancy
+        // attacks.
+        self.upgrade_notice = Some(UpgradeNotice::new_settled());
     }
 
     fn try_wake(&mut self) {
@@ -187,7 +244,8 @@ pub enum ToBehaviour {
     FullyNegotiated,
     /// A message has been received from the connection.
     Message(IncomingMessage),
-    /// An IO error from the connection.
+    /// An IO error from the connection, which is nobody's fault: this node's
+    /// own send failed.
     /// The inbound/outbound streams to the peer are closed proactively.
     IOError(io::Error),
 }
@@ -216,10 +274,13 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
     ) -> Poll<
         ConnectionHandlerEvent<Self::OutboundProtocol, Self::OutboundOpenInfo, Self::ToBehaviour>,
     > {
-        // Short-circuit so that we do no further work once either of the two
-        // substreams has been dropped.
+        // Nothing left to do once both substreams are gone. The outbound one
+        // may still be finishing a message and ending the stream cleanly even
+        // though the inbound one is already gone, and that work is exactly what
+        // keeps a neighbour from reading this node's close as a fault, so it
+        // has to keep being polled.
         if matches!(self.inbound_substream, Some(InboundSubstreamState::Dropped))
-            || matches!(
+            && matches!(
                 self.outbound_substream,
                 Some(OutboundSubstreamState::Dropped)
             )
@@ -229,9 +290,10 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
 
         self.process_current_round(cx);
 
-        // Process pending events to be sent to the behaviour
-        if let Some(event) = self.pending_events_to_behaviour.pop_front() {
-            return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(event));
+        if self.consume_notice() {
+            return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
+                ToBehaviour::FullyNegotiated,
+            ));
         }
 
         // Process inbound stream
@@ -274,20 +336,20 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                                 ToBehaviour::Message(msg),
                             ));
                         }
-                        // A stream that ends early — between messages or part
-                        // way through one — is reported, not judged. The spec
-                        // makes a framing violation a blacklisting, but this
-                        // node's own close drops its substreams outright, so a
-                        // neighbour closed while a send was in flight produces
-                        // the same signal through no fault of its own.
-                        // TODO: We will start blacklisting once we introduce flushing of in-flight
-                        // sends before connection shut-down, to be done in a follow-up PR.
-                        Poll::Ready(Err(e)) => {
-                            tracing::error!(target: LOG_TARGET, "Failed to receive message from inbound stream {:?}: {e}. Dropping both inbound/outbound substreams", self.connection_details);
+                        // The inbound stream is over: the neighbour closed it
+                        // between messages, which is how a connection ends when
+                        // the protocol asks for it; or it stopped part way
+                        // through one; or the connection went away under the
+                        // read. They arrive here as one event and need one
+                        // response, since none of them delivered a message and
+                        // it is deliveries that keep a neighbour its place.
+                        Poll::Ready(Err(error)) => {
+                            tracing::trace!(
+                                target: LOG_TARGET,
+                                "Inbound stream {:?} ended: {error}. Dropping both inbound/outbound substreams",
+                                self.connection_details
+                            );
                             self.close_substreams();
-                            return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
-                                ToBehaviour::IOError(e),
-                            ));
                         }
                         Poll::Pending => {
                             self.inbound_substream =
@@ -312,15 +374,28 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                 }
                 // If the substream is idle, and if it's time to send a message, send it.
                 Some(OutboundSubstreamState::Idle(stream)) => {
-                    if let Some(msg) = self.send_queue.pop_front() {
-                        tracing::trace!(target: LOG_TARGET, "Sending message to outbound stream {:?}", self.connection_details);
-                        self.outbound_substream = Some(OutboundSubstreamState::PendingSend(
-                            send_msg(stream, msg).boxed(),
-                        ));
-                    } else {
-                        self.outbound_substream = Some(OutboundSubstreamState::Idle(stream));
-                        self.waker = Some(cx.waker().clone());
-                        return Poll::Pending;
+                    match self.send_queue.pop_front() {
+                        Some(PollOutcome::Message(msg)) => {
+                            tracing::trace!(target: LOG_TARGET, "Sending message to outbound stream {:?}", self.connection_details);
+                            self.outbound_substream = Some(OutboundSubstreamState::PendingSend(
+                                send_msg(stream, msg).boxed(),
+                            ));
+                        }
+                        item => {
+                            // The messages still queued keep their place and
+                            // their deadline; the clock polled above wakes us
+                            // when the share refreshes.
+                            if matches!(item, Some(PollOutcome::ShareSpent)) {
+                                tracing::trace!(
+                                    target: LOG_TARGET,
+                                    "Send share for connection {:?} is spent; nothing more goes out until the next round.",
+                                    self.connection_details
+                                );
+                            }
+                            self.outbound_substream = Some(OutboundSubstreamState::Idle(stream));
+                            self.waker = Some(cx.waker().clone());
+                            return Poll::Pending;
+                        }
                     }
                 }
                 // If a message is being sent, check if it's done.
@@ -340,6 +415,47 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                         Poll::Pending => {
                             self.outbound_substream =
                                 Some(OutboundSubstreamState::PendingSend(msg_send_fut));
+                            self.waker = Some(cx.waker().clone());
+                            return Poll::Pending;
+                        }
+                    }
+                }
+                // Finishing the message already on the wire, and then letting
+                // the substream go. Whether the send succeeds no longer
+                // matters — the connection is closing either way — only that
+                // the neighbour is not left holding part of a message.
+                Some(OutboundSubstreamState::ClosingAfterSend(mut sending)) => {
+                    match sending.poll_unpin(cx) {
+                        Poll::Ready(Ok(stream)) => {
+                            tracing::trace!(target: LOG_TARGET, "Finished the message in flight on outbound stream {:?}; ending the stream", self.connection_details);
+                            self.outbound_substream = Some(OutboundSubstreamState::Closing(
+                                flush_and_close_stream(stream).boxed(),
+                            ));
+                        }
+                        // The send failed, so there is no stream left to end
+                        // cleanly and nothing further this node can do for the
+                        // neighbour on the other side of it.
+                        Poll::Ready(Err(e)) => {
+                            tracing::debug!(target: LOG_TARGET, "The message in flight on outbound stream {:?} could not be finished: {e}", self.connection_details);
+                            self.outbound_substream = Some(OutboundSubstreamState::Dropped);
+                        }
+                        Poll::Pending => {
+                            self.outbound_substream =
+                                Some(OutboundSubstreamState::ClosingAfterSend(sending));
+                            self.waker = Some(cx.waker().clone());
+                            return Poll::Pending;
+                        }
+                    }
+                }
+                Some(OutboundSubstreamState::Closing(mut closing)) => {
+                    match closing.poll_unpin(cx) {
+                        Poll::Ready(()) => {
+                            tracing::trace!(target: LOG_TARGET, "Ended outbound stream {:?} cleanly", self.connection_details);
+                            self.outbound_substream = Some(OutboundSubstreamState::Dropped);
+                        }
+                        Poll::Pending => {
+                            self.outbound_substream =
+                                Some(OutboundSubstreamState::Closing(closing));
                             self.waker = Some(cx.waker().clone());
                             return Poll::Pending;
                         }
@@ -413,7 +529,7 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                 } else {
                     tracing::trace!(target: LOG_TARGET, "Fully negotiated inbound for connection {:?}; creating inbound substream", self.connection_details);
                     self.inbound_substream = Some(InboundSubstreamState::Idle(stream));
-                    self.check_and_notify_about_upgrade();
+                    self.raise_notice();
                 }
             }
             ConnectionEvent::FullyNegotiatedOutbound(FullyNegotiatedOutbound {
@@ -429,7 +545,7 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                 } else {
                     tracing::trace!(target: LOG_TARGET, "Fully negotiated outbound for connection {:?}; creating outbound substream", self.connection_details);
                     self.outbound_substream = Some(OutboundSubstreamState::Idle(stream));
-                    self.check_and_notify_about_upgrade();
+                    self.raise_notice();
                 }
             }
             ConnectionEvent::DialUpgradeError(e) => {

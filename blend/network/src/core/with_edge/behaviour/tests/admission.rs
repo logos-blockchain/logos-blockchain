@@ -9,10 +9,10 @@ use libp2p::{
 use libp2p_stream::Behaviour as StreamBehaviour;
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
-use tokio::{select, time::timeout};
+use tokio::select;
 
 use crate::core::{
-    tests::utils::TestSwarm,
+    tests::utils::{TestSwarm, drive_for},
     with_edge::behaviour::tests::utils::{
         BehaviourBuilder, StreamBehaviourExt as _, TestBehaviour,
     },
@@ -36,26 +36,6 @@ fn core_node(round_duration_in_seconds: NonZeroU64) -> TestSwarm<TestBehaviour> 
             .with_timeout(Duration::from_secs(600))
             .build()
     })
-}
-
-/// Drives both swarms for `duration`, as a running node's swarm is driven
-/// continuously. The accept share is refilled from the behaviour's `poll`, so a
-/// test that only slept would be leaning on `poll` happening to run before the
-/// next connection is offered.
-async fn drive_for(
-    edge: &mut TestSwarm<StreamBehaviour>,
-    core: &mut TestSwarm<TestBehaviour>,
-    duration: Duration,
-) {
-    let _: Result<(), _> = timeout(duration, async {
-        loop {
-            select! {
-                _ = edge.select_next_some() => {}
-                _ = core.select_next_some() => {}
-            }
-        }
-    })
-    .await;
 }
 
 /// Drives both swarms until the core node closes the edge node's connection.

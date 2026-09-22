@@ -31,11 +31,11 @@ use crate::{
     time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS},
 };
 
-/// `V`: the messages per second the slowest targeted node can verify.
 /// `T_E`: the rounds an edge node is given to send its message.
 const BLEND_EDGE_NODE_SEND_DEADLINE_IN_ROUNDS: u64 = 1;
 /// `T_H`: the rounds a core handshake is given to complete.
 const BLEND_CORE_HANDSHAKE_DEADLINE_IN_ROUNDS: u128 = 2;
+/// `V`: the messages per second the slowest targeted node can verify.
 const BLEND_VERIFICATION_RATE_PER_SECOND: u32 = 156;
 /// `η`: the rounds a message spends crossing the network at one hop.
 const BLEND_NETWORK_ABSORPTION_IN_ROUNDS: u64 = 2;
