@@ -5464,6 +5464,7 @@ dependencies = [
  "bincode",
  "blake2",
  "clap",
+ "flate2",
  "hex",
  "logos-blockchain-binary-codec",
  "logos-blockchain-groth16",
