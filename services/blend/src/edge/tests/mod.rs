@@ -20,8 +20,8 @@ use crate::{
         handlers::Error,
         tests::utils::{
             MockLeaderProofsGenerator, NodeId, RunningEdgeService, TEST_DELIVERY_DEADLINE,
-            TEST_ROUND, TestBackend, overwatch_handle, settings, spawn_run, spawn_run_with_pol,
-            spawn_run_without_direct_broadcast,
+            TEST_ROUND_IN_SECONDS, TestBackend, overwatch_handle, settings, spawn_run,
+            spawn_run_with_pol, spawn_run_without_direct_broadcast,
         },
     },
     epoch_info::{PolEpochInfo, PolEpochState, PolEpochStateSource},
@@ -119,7 +119,7 @@ async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
     );
 
     let broadcast = timeout(
-        Duration::from_secs(TEST_ROUND.get())
+        Duration::from_secs(TEST_ROUND_IN_SECONDS.get())
             * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
         broadcasting_channel.dispatched.recv(),
     )
@@ -160,7 +160,7 @@ async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
 
     assert!(
         timeout(
-            Duration::from_secs(TEST_ROUND.get())
+            Duration::from_secs(TEST_ROUND_IN_SECONDS.get())
                 * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
             broadcasting_channel.dispatched.recv(),
         )
@@ -199,7 +199,7 @@ async fn a_node_that_does_not_bypass_never_broadcasts_in_the_clear() {
 
     assert!(
         timeout(
-            Duration::from_secs(TEST_ROUND.get())
+            Duration::from_secs(TEST_ROUND_IN_SECONDS.get())
                 * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
             broadcasting_channel.dispatched.recv(),
         )
@@ -233,7 +233,7 @@ async fn a_transaction_the_network_never_delivers_is_broadcast_in_the_clear() {
     );
 
     let broadcast = timeout(
-        Duration::from_secs(TEST_ROUND.get())
+        Duration::from_secs(TEST_ROUND_IN_SECONDS.get())
             * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
         broadcasting_channel.dispatched.recv(),
     )
@@ -321,14 +321,18 @@ async fn run_processes_new_epoch_after_transition_expiry_while_idle() {
         .expect("channel opened");
     // The fixture uses a zero-length transition period. Let it expire while
     // the message channel stays open and idle.
-    sleep(TEST_ROUND).await;
+    sleep(Duration::from_secs(TEST_ROUND_IN_SECONDS.get())).await;
 
     service
         .epochs
         .send(membership(&[], local_node))
         .await
         .expect("channel opened");
-    let result = timeout(TEST_ROUND, &mut service.handle).await;
+    let result = timeout(
+        Duration::from_secs(TEST_ROUND_IN_SECONDS.get()),
+        &mut service.handle,
+    )
+    .await;
     service.handle.abort();
     assert!(
         matches!(result, Ok(Ok(Ok(())))),
@@ -357,14 +361,18 @@ async fn run_processes_new_epoch_after_transition_expiry_with_closed_messages() 
         .send(membership(&[core_node], local_node))
         .await
         .expect("channel opened");
-    sleep(TEST_ROUND).await;
+    sleep(Duration::from_secs(TEST_ROUND_IN_SECONDS.get())).await;
     assert!(!join_handle.is_finished());
 
     epoch_sender
         .send(membership(&[], local_node))
         .await
         .expect("channel opened");
-    let result = timeout(TEST_ROUND, &mut join_handle).await;
+    let result = timeout(
+        Duration::from_secs(TEST_ROUND_IN_SECONDS.get()),
+        &mut join_handle,
+    )
+    .await;
     join_handle.abort();
     assert!(
         matches!(result, Ok(Ok(Ok(())))),

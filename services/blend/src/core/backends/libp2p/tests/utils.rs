@@ -1,5 +1,5 @@
 use core::{
-    num::{NonZeroU64, NonZeroUsize},
+    num::{NonZeroU64, NonZeroU128, NonZeroUsize},
     pin::Pin,
     time::Duration,
 };
@@ -13,9 +13,10 @@ use lb_blend::{
         encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
     },
     network::core::{
-        Config, NetworkBehaviour, with_core::behaviour::Config as CoreToCoreConfig,
+        CommonConfig, Config, NetworkBehaviour, with_core::behaviour::Config as CoreToCoreConfig,
         with_edge::behaviour::Config as CoreToEdgeConfig,
     },
+    primitives::time::RoundCount,
     proofs::{
         quota::{ProofOfQuota, VerifiedProofOfQuota},
         selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
@@ -25,9 +26,7 @@ use lb_blend::{
 use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_libp2p::{Protocol, SwarmEvent};
-use libp2p::{
-    Multiaddr, PeerId, Swarm, allow_block_list, core::transport::ListenerId, identity::Keypair,
-};
+use libp2p::{Multiaddr, PeerId, Swarm, core::transport::ListenerId, identity::Keypair};
 use libp2p_swarm_test::SwarmExt as _;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
@@ -227,11 +226,16 @@ impl BlendBehaviourBuilder {
         BlendBehaviour {
             blend: NetworkBehaviour::new(
                 &Config {
-                    with_core: CoreToCoreConfig {
-                        target_peering_degree: peering_degree,
+                    common: CommonConfig {
                         minimum_network_size: 1.try_into().unwrap(),
                         num_blend_layers: 3.try_into().unwrap(),
                         round_duration_in_seconds: 1.try_into().unwrap(),
+                    },
+                    with_core: CoreToCoreConfig {
+                        connection_share_per_round: NonZeroU64::new(1_000).unwrap(),
+                        send_deadline_in_rounds: RoundCount::new(NonZeroU128::new(2).unwrap()),
+                        handshake_deadline_in_rounds: RoundCount::new(NonZeroU128::new(2).unwrap()),
+                        target_peering_degree: peering_degree,
                         // Long enough that no connection in a test goes stale
                         // by accident.
                         liveness_window_in_rounds: u128::from(u32::MAX).try_into().unwrap(),
@@ -239,8 +243,7 @@ impl BlendBehaviourBuilder {
                     with_edge: CoreToEdgeConfig {
                         connection_timeout: Duration::from_secs(1),
                         max_incoming_connections: 300,
-                        minimum_network_size: 1.try_into().unwrap(),
-                        num_blend_layers: 3.try_into().unwrap(),
+                        accepted_connections_per_round: NonZeroU64::new(1_000).unwrap(),
                     },
                 },
                 (self.membership, 1.into()),
@@ -248,7 +251,6 @@ impl BlendBehaviourBuilder {
                 self.peer_id,
                 PROTOCOL_NAME,
             ),
-            blocked_peers: allow_block_list::Behaviour::default(),
         }
     }
 }

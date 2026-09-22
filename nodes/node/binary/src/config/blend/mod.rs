@@ -11,9 +11,7 @@ use lb_blend_service::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pEdgeBlendBackendSettings,
         settings::StartingBlendConfig as BlendEdgeSettings,
     },
-    settings::{
-        CommonSettings, CoreSettings, EdgeSettings, Settings as BlendSettings, TimingSettings,
-    },
+    settings::{CommonSettings, CoreSettings, EdgeSettings, Settings as BlendSettings},
 };
 use lb_services_utils::overwatch::RecoveryData;
 
@@ -74,38 +72,28 @@ impl ServiceConfig {
                 },
                 abstain_on_failure: self.user.abstain_on_failure,
                 recovery_data,
-                time: TimingSettings {
-                    epoch_transition_period: self
-                        .deployment
-                        .epoch_transition(slots_per_block, &slot_duration),
-                    round_duration_in_seconds: self
-                        .deployment
-                        .round_duration(&slot_duration)
-                        .as_secs()
-                        .try_into()
-                        .expect("Round duration must be greater than `0` seconds."),
-                    rounds_per_observation_window: self.deployment.rounds_per_observation_window(),
-                    rounds_per_epoch: self
-                        .deployment
-                        .rounds_per_epoch(slots_per_epoch, &slot_duration),
-                },
+                time: self.deployment.timing_settings(
+                    slots_per_epoch,
+                    slots_per_block,
+                    &slot_duration,
+                ),
                 data_replication_factor: self.deployment.common.data_replication_factor,
             },
             core: CoreSettings {
                 backend: Libp2pCoreBlendBackendSettings {
                     target_peering_degree: self.deployment.core.target_peering_degree,
+                    connection_share_per_round: self.deployment.connection_share_per_round(),
                     listening_address: self.user.core.backend.listening_address,
                     edge_node_connection_timeout: self
-                        .user
-                        .core
-                        .backend
-                        .edge_node_connection_timeout,
+                        .deployment
+                        .edge_node_connection_timeout(&slot_duration),
                     max_dial_attempts_per_peer: self.user.core.backend.max_dial_attempts_per_peer,
                     max_edge_node_incoming_connections: self
-                        .user
-                        .core
-                        .backend
-                        .max_edge_node_incoming_connections,
+                        .deployment
+                        .maximum_concurrent_edge_connections(),
+                    accepted_edge_connections_per_round: self
+                        .deployment
+                        .accepted_edge_connections_per_round(),
                     protocol_name: self.deployment.common.protocol_name.clone(),
                     peering_degree_check_interval: self
                         .user

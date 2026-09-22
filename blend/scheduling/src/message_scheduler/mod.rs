@@ -193,8 +193,8 @@ where
         // so each epoch's scheduler owns that epoch's traffic. They were encapsulated
         // with the old epoch's `PoQ`, which only verifies against that epoch's public
         // inputs: carrying them into the new epoch would publish them under the new
-        // epoch's number, and the receiver would reject the proof and close us as a
-        // spammer. They go out to the old epoch's peers instead, and whatever is
+        // epoch's number, and the receiver would reject the proof and close us as
+        // malicious. They go out to the old epoch's peers instead, and whatever is
         // still queued when the transition period expires is dropped with them.
         let new_scheduler = Self::new(new_epoch_info, self.release_delayer.rng().clone(), settings);
         (new_scheduler, self.consume())

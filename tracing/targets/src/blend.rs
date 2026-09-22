@@ -7,6 +7,7 @@ log_targets! {
     message::{REWARD},
     network::core::{
         core::BEHAVIOUR,
+        core::behaviour::MAINTENANCE,
         core::behaviour::OLD,
         core::conn::HANDLER,
         edge::BEHAVIOUR,

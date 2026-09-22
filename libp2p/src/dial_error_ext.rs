@@ -27,6 +27,8 @@ impl DialErrorExt for DialError {
             }
 
             // Local, transient conditions.
+            // `Denied` is generated when trying to dial a blacklisted peer.
+            // The reason why this is considered recoverable is that unrecoverable peers are only cleared across epochs, while a blacklist entry expires much earlier, so we would rather treat that as a transient failure instead.
             Self::Denied { .. }
             | Self::Aborted
             | Self::DialPeerConditionFalse(_) => true,
