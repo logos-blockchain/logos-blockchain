@@ -1481,7 +1481,7 @@ mod tests {
     /// unchanged is a sound `PinDeposit`.
     #[test]
     fn inscribe_plus_identity_transfer_is_pin_deposit() {
-        use super::super::types::ChannelNote;
+        use crate::sequencer::types::ChannelNote;
 
         let channel_id = ChannelId::from([0; 32]);
         let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
@@ -1548,7 +1548,7 @@ mod tests {
     /// via `adopted`, and it is not mirrored for retry.
     #[test]
     fn inscribe_plus_non_identity_transfer_is_custom() {
-        use super::super::types::ChannelNote;
+        use crate::sequencer::types::ChannelNote;
 
         let channel_id = ChannelId::from([0; 32]);
         let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));

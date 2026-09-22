@@ -1,11 +1,13 @@
 use core::convert::Infallible;
 
+use lb_binary_codec::{
+    bincode::{DeserializeOp as _, SerializeOp as _},
+    canonical::{BinaryDecode as _, BinaryEncode as _},
+};
 use lb_blend_proofs::{
     quota::{ProofOfQuota, VerifiedProofOfQuota},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
-use lb_codec::{BinaryDecode as _, BinaryEncode as _};
-use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key, X25519PrivateKey,
 };

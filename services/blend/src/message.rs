@@ -1,10 +1,9 @@
 use core::fmt::{self, Debug, Formatter};
 
+use lb_binary_codec::{bincode::SerializeOp, canonical::BinaryEncode};
 pub use lb_blend::message::MAX_PAYLOAD_BODY_SIZE;
 use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
-use lb_codec::BinaryEncode;
 use lb_core::{
-    codec::SerializeOp,
     mantle::NoteId,
     sdp::{DeclarationId, Locator},
 };
@@ -166,13 +165,33 @@ impl DataPayload {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use lb_utils::bounded::UpperBoundedVec;
+
+    use super::*;
+
+    #[test]
+    fn proposal_payload_guard_rejects_one_byte_over_the_bound() {
+        let proposal: UpperBoundedVec<u8, { MAX_PAYLOAD_BODY_SIZE + 1 }> =
+            UpperBoundedVec::new_unchecked(vec![0; MAX_PAYLOAD_BODY_SIZE - 1]);
+        let result = DataPayload::try_from_proposal(&proposal);
+
+        assert!(matches!(
+            result,
+            Err(ProposalNotBlendable::TooLarge { size, maximum })
+                if size == MAX_PAYLOAD_BODY_SIZE + 1 && maximum == MAX_PAYLOAD_BODY_SIZE
+        ));
+    }
+}
+
 /// Why a transaction cannot be carried by the Blend network.
 #[derive(Debug, thiserror::Error)]
 pub enum TransactionNotBlendable {
     #[error("Transaction of {size} bytes exceeds the {maximum} a Blend payload can carry.")]
     TooLarge { size: usize, maximum: usize },
     #[error("Transaction cannot be encoded: {0}")]
-    Encoding(#[from] lb_core::codec::Error),
+    Encoding(#[from] lb_binary_codec::bincode::Error),
 }
 
 /// Why a proposal cannot be carried by the Blend network.

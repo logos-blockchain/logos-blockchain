@@ -2008,7 +2008,7 @@ mod tests {
         own_key
             .public_key()
             .verify(
-                signed_ops.hash().as_signing_bytes().as_ref(),
+                signed_ops.hash().as_signing_bytes(),
                 &signatures[0].signature,
             )
             .expect("signature must verify against the claimed key over the funded tx hash");

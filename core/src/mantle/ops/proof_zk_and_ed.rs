@@ -1,4 +1,4 @@
-use lb_codec::BinaryCodec;
+use lb_binary_codec::canonical::BinaryCodec;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use serde::{Deserialize, Serialize};
 

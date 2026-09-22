@@ -4,14 +4,12 @@ use blake2::{
     Blake2bVar,
     digest::{Update as _, VariableOutput as _},
 };
+use lb_binary_codec::bincode::SerializeOp as _;
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::{
-    codec::SerializeOp as _,
-    mantle::{
-        traits::{Hashable, Hasher, StorageSize},
-        transactions::hash::{PrefixedKey, TxHash, TxHashPrefix},
-    },
+use crate::mantle::{
+    traits::{Hashable, Hasher, StorageSize},
+    transactions::hash::{PrefixedKey, TxHash, TxHashPrefix},
 };
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]

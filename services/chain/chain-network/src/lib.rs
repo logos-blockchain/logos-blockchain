@@ -84,7 +84,7 @@ pub enum Error {
     #[error(transparent)]
     Cryptarchia(#[from] lb_chain_service::api::ApiError),
     #[error("Serialization error: {0}")]
-    Serialisation(#[from] lb_core::codec::Error),
+    Serialisation(#[from] lb_binary_codec::bincode::Error),
     #[error("Invalid block: {0}")]
     InvalidBlock(String),
     #[error("Header is not valid on its own: {0}")]
@@ -1188,7 +1188,7 @@ mod tests {
     };
 
     use futures::stream;
-    use lb_codec::BinaryDecodeExt as _;
+    use lb_binary_codec::canonical::BinaryDecodeExt as _;
     use lb_core::{
         block::UncleHeaders,
         mantle::{

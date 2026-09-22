@@ -59,11 +59,11 @@ pub(crate) static OPERATION_ID_V1: LazyLock<Vec<u8>> =
 /// --nocapture`
 #[cfg(test)]
 mod mantle_test_vectors {
+    use lb_binary_codec::canonical::BinaryEncode as _;
     use lb_blend_proofs::{
         quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
         selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
     };
-    use lb_codec::BinaryEncode as _;
     use lb_cryptarchia_engine::Epoch;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
     use lb_poseidon2::{Fr, ZkHash};

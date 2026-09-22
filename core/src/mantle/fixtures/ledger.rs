@@ -1,4 +1,4 @@
-use lb_codec::codec_fixtures;
+use lb_binary_codec::canonical::codec_fixtures;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use num_bigint::BigUint;
 

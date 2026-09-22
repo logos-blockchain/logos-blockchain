@@ -106,9 +106,11 @@ where
             Err(e) => {
                 let reason = e.downcast_ref::<GetBlocksError>().map_or_else(
                     || {
-                        BlocksUnavailableReason::Unknown(format!(
+                        error!(
+                            target: LOG_TARGET,
                             "Failed to create a block stream: {e:?}"
-                        ))
+                        );
+                        BlocksUnavailableReason::Unknown
                     },
                     |err| match err {
                         GetBlocksError::BlockNotFound(id) => {
@@ -117,7 +119,10 @@ where
                         GetBlocksError::StartBlockNotFound => {
                             BlocksUnavailableReason::StartBlockNotFound
                         }
-                        other => BlocksUnavailableReason::Unknown(other.to_string()),
+                        other => {
+                            error!(target: LOG_TARGET, "Failed to create a block stream: {other}");
+                            BlocksUnavailableReason::Unknown
+                        }
                     },
                 );
                 Self::send_error(reason, reply_sender).await;
@@ -591,9 +596,9 @@ where
 mod tests {
     use std::{collections::BTreeMap, num::NonZero};
 
+    use lb_binary_codec::bincode::DeserializeOp as _;
     use lb_core::{
         block::{BlockTransactions, UncleHeaders},
-        codec::DeserializeOp as _,
         crypto::ZkHasher,
         events::Events,
         mantle::{

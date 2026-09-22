@@ -1136,7 +1136,7 @@ mod tests {
             .zip(ops.iter())
             .map(|(key, _)| match key {
                 Key::Ed25519(key) => {
-                    OpProof::Ed25519Sig(key.sign_payload(tx_hash.as_signing_bytes().as_ref()))
+                    OpProof::Ed25519Sig(key.sign_payload(tx_hash.as_signing_bytes()))
                 }
                 Key::Zk(key) => OpProof::ZkSig(
                     ZkKey::multi_sign(std::slice::from_ref(key), &tx_hash.to_fr()).unwrap(),
@@ -1194,7 +1194,7 @@ mod tests {
         let config_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
                 0,
-                signing_key.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
+                signing_key.sign_payload(config_tx_hash.as_signing_bytes()),
             )]
             .into(),
         )
@@ -1794,7 +1794,7 @@ mod tests {
         let withdraw_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
                 0,
-                signing_key.sign_payload(withdraw_tx_hash.as_signing_bytes().as_ref()),
+                signing_key.sign_payload(withdraw_tx_hash.as_signing_bytes()),
             )]
             .into(),
         )
@@ -1869,7 +1869,7 @@ mod tests {
             ChannelMultiSigProof::try_new(
                 [IndexedSignature::new(
                     0,
-                    signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+                    signing_key.sign_payload(tx_hash.as_signing_bytes()),
                 )]
                 .into(),
             )
@@ -1938,7 +1938,7 @@ mod tests {
             ChannelMultiSigProof::try_new(
                 [IndexedSignature::new(
                     0,
-                    signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+                    signing_key.sign_payload(tx_hash.as_signing_bytes()),
                 )]
                 .into(),
             )
@@ -2010,7 +2010,7 @@ mod tests {
             ChannelMultiSigProof::try_new(
                 [IndexedSignature::new(
                     0,
-                    signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+                    signing_key.sign_payload(tx_hash.as_signing_bytes()),
                 )]
                 .into(),
             )
@@ -2080,7 +2080,7 @@ mod tests {
             ChannelMultiSigProof::try_new(
                 [IndexedSignature::new(
                     0,
-                    signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+                    signing_key.sign_payload(tx_hash.as_signing_bytes()),
                 )]
                 .into(),
             )
@@ -2152,7 +2152,7 @@ mod tests {
         let withdraw_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
                 0,
-                signing_key.sign_payload(withdraw_tx.hash().as_signing_bytes().as_ref()),
+                signing_key.sign_payload(withdraw_tx.hash().as_signing_bytes()),
             )]
             .into(),
         )
@@ -2225,7 +2225,7 @@ mod tests {
         let invalid_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
                 0,
-                wrong_key.sign_payload(withdraw_tx_hash.as_signing_bytes().as_ref()),
+                wrong_key.sign_payload(withdraw_tx_hash.as_signing_bytes()),
             )]
             .into(),
         )
@@ -2439,7 +2439,7 @@ mod tests {
         let config_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
                 0,
-                sk1.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
+                sk1.sign_payload(config_tx_hash.as_signing_bytes()),
             )]
             .into(),
         )

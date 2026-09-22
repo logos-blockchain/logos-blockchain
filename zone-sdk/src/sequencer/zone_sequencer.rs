@@ -1318,7 +1318,7 @@ where
             },
         );
 
-        let sign_payload = tx.hash().as_signing_bytes().as_ref().to_vec();
+        let sign_payload = tx.hash().as_signing_bytes().to_vec();
 
         Ok(PreparedChannelConfig {
             tx,

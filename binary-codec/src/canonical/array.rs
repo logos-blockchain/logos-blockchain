@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::{BinaryDecode, BinaryEncode, CodecExamples, CodecFixture, CodecFixtures, sealed};
+use super::{BinaryDecode, BinaryEncode, CodecExamples, CodecFixture, CodecFixtures, sealed};
 
 // Fixed-size array: `N` elements concatenated with NO length prefix — `N` lives
 // in the type, not in its encoding.
@@ -28,7 +28,7 @@ where
     fn decode<'input>(
         input: &'input [u8],
         context: &Self::Context,
-    ) -> Result<(&'input [u8], Self), crate::DecodeError> {
+    ) -> Result<(&'input [u8], Self), super::DecodeError> {
         let mut rest = input;
         let mut items = Vec::with_capacity(N);
         for _ in 0..N {

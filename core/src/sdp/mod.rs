@@ -9,7 +9,10 @@ use std::{collections::HashMap, hash::Hash};
 
 use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
-use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::{
+    bincode::{self, BoundedSerializeOp, DeserializeOp as _, SerializeOp as _},
+    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
+};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
@@ -20,7 +23,6 @@ use strum::EnumIter;
 
 use crate::{
     block::BlockNumber,
-    codec::{self, DeserializeOp as _, SerializeOp as _},
     mantle::{
         NoteId,
         ops::{channel::Ed25519PublicKey, sdp::SdpError},
@@ -341,6 +343,12 @@ pub type Nonce = u64;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ProviderId(pub Ed25519PublicKey);
 
+impl AsRef<[u8; 32]> for ProviderId {
+    fn as_ref(&self) -> &[u8; 32] {
+        self.0.as_bytes()
+    }
+}
+
 #[derive(Debug)]
 pub struct InvalidKeyBytesError;
 
@@ -368,7 +376,7 @@ impl PartialOrd for ProviderId {
 
 impl Ord for ProviderId {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.as_bytes().cmp(other.0.as_bytes())
+        self.as_ref().cmp(other.as_ref())
     }
 }
 
@@ -376,6 +384,16 @@ impl Ord for ProviderId {
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
 display_hex_bytes_newtype!(DeclarationId);
+
+impl AsRef<[u8; 32]> for DeclarationId {
+    fn as_ref(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl BoundedSerializeOp for DeclarationId {
+    type Bytes = [u8; 32];
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Declaration {
@@ -458,7 +476,7 @@ impl FromIterator<(ServiceType, HashMap<DeclarationId, Declaration>)> for Declar
 }
 
 impl TryFrom<Bytes> for Declarations {
-    type Error = codec::Error;
+    type Error = bincode::Error;
 
     fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
         Self::from_bytes(&bytes)
@@ -466,7 +484,7 @@ impl TryFrom<Bytes> for Declarations {
 }
 
 impl TryFrom<Declarations> for Bytes {
-    type Error = codec::Error;
+    type Error = bincode::Error;
 
     fn try_from(this: Declarations) -> Result<Self, Self::Error> {
         this.to_bytes()
@@ -497,7 +515,7 @@ impl DeclarationMessage {
         // [spec](https://lip.logos.co/blockchain/raw/bedrock-service-declaration-protocol.html#declaration-storage):
         // declaration_id = Hash(service||provider_id||zk_id||locators)
         hasher.update(service.as_bytes());
-        hasher.update(self.provider_id.0);
+        hasher.update(self.provider_id.as_ref());
         hasher.update(fr_to_bytes(self.zk_id.as_fr()));
         // The locators go in through the wire encoding, which prefixes the list
         // with its count and every locator with its byte length.
@@ -600,12 +618,15 @@ impl BinaryDecode for ActivityMetadata {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp as _};
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
     use multiaddr::Multiaddr;
 
-    use crate::sdp::{Declaration, DeclarationMessage, Locator, Locators, ServiceType};
+    use crate::sdp::{
+        Declaration, DeclarationId, DeclarationMessage, Locator, Locators, ProviderId, ServiceType,
+    };
 
     #[test]
     fn locator_rejects_multiaddr_with_peer_id() {
@@ -725,5 +746,29 @@ mod tests {
 
         assert_eq!(concatenated(&joined), concatenated(&split));
         assert_ne!(joined.id(), split.id());
+    }
+
+    #[test]
+    fn declaration_id_has_exact_bincode_size() {
+        let id = DeclarationId([0x66; 32]);
+        let ordinary = id.to_bytes().unwrap();
+        let bounded = id.to_bounded_bytes().unwrap();
+
+        assert_eq!(ordinary.len(), 32);
+        assert_eq!(bounded.as_ref(), ordinary.as_ref());
+    }
+
+    #[test]
+    fn sdp_byte_types_borrow_their_stored_bytes() {
+        let provider_id = ProviderId(Ed25519Key::from_bytes(&[0; 32]).public_key());
+        let declaration_id = DeclarationId([0x66; 32]);
+
+        assert_eq!(provider_id.as_ref(), provider_id.0.as_bytes());
+        assert_eq!(declaration_id.as_ref(), &declaration_id.0);
+        assert!(std::ptr::eq(provider_id.as_ref(), provider_id.0.as_bytes()));
+        assert!(std::ptr::eq(
+            declaration_id.as_ref(),
+            &raw const declaration_id.0
+        ));
     }
 }

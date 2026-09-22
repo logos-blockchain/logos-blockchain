@@ -1,4 +1,4 @@
-use crate::{BinaryDecode, BinaryEncode, DecodeError, codec_fixtures};
+use super::{BinaryDecode, BinaryEncode, DecodeError, codec_fixtures};
 
 // A single byte: `0` for `false`, `1` for `true`; any other value is rejected.
 impl BinaryEncode for bool {

@@ -1,4 +1,4 @@
-use lb_codec::BinaryCodec;
+use lb_binary_codec::canonical::BinaryCodec;
 use lb_cryptarchia_engine::{MAX_UNCLES, Slot, UncleSlots};
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded::UpperBoundedVec;
@@ -14,6 +14,10 @@ use crate::{
 pub struct UncleHeaders(UpperBoundedVec<SignedHeader, MAX_UNCLES>);
 
 impl UncleHeaders {
+    /// The maximum canonical representation of the bounded uncle list.
+    pub const MAX_CANONICAL_ENCODED_SIZE: usize =
+        1 + MAX_UNCLES * SignedHeader::CANONICAL_ENCODED_SIZE;
+
     #[must_use]
     pub fn new(headers: impl Into<UpperBoundedVec<SignedHeader, MAX_UNCLES>>) -> Self {
         Self(headers.into())
@@ -64,6 +68,10 @@ pub struct SignedHeader {
 }
 
 impl SignedHeader {
+    /// The fixed-size canonical representation of a signed header.
+    pub const CANONICAL_ENCODED_SIZE: usize =
+        Header::CANONICAL_ENCODED_SIZE + Ed25519Signature::CANONICAL_ENCODED_SIZE;
+
     #[must_use]
     pub const fn new(header: Header, signature: Ed25519Signature) -> Self {
         Self { header, signature }

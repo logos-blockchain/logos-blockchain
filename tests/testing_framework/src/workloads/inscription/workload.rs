@@ -390,9 +390,7 @@ fn build_inscription_transaction(
     let mantle_tx = Ops::from([Op::ChannelInscribe(op)]);
     let tx_hash = mantle_tx.hash();
 
-    let ed25519_signature = channel
-        .signing_key
-        .sign_payload(tx_hash.as_signing_bytes().as_ref());
+    let ed25519_signature = channel.signing_key.sign_payload(tx_hash.as_signing_bytes());
 
     let op_proofs_wrapper = OpProofs::from([OpProof::Ed25519Sig(ed25519_signature)]);
     let signed_tx = SignedOps::from_parts(mantle_tx, op_proofs_wrapper)

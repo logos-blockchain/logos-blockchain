@@ -1,4 +1,4 @@
-use lb_codec::codec_fixtures;
+use lb_binary_codec::canonical::codec_fixtures;
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
 
 use crate::mantle::{Note, NoteId, ops::transfer::TransferOp};

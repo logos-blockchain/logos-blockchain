@@ -2,16 +2,16 @@ use std::borrow::Cow;
 
 use lb_utils::bounded::LowerBoundedVec;
 
-use crate::{BinaryDecode, BinaryEncode};
+use super::{BinaryDecode, BinaryEncode};
 
 /// Carries the mandatory [`CodecFixtures`] for a codec. The non-empty return
 /// type means a codec cannot exist without at least one fixture.
 ///
-/// Sealed via [`crate::sealed::Sealed`], so the only ways to satisfy it are
+/// Sealed via [`super::sealed::Sealed`], so the only ways to satisfy it are
 /// `#[derive(BinaryCodec)]` and `codec_fixtures!`, both of which demand a
 /// fixture. It is a supertrait of both codec traits, so `impl BinaryEncode for
 /// Foo` without a fixture is a compilation error.
-pub trait CodecExamples: crate::sealed::Sealed + Sized {
+pub trait CodecExamples: super::sealed::Sealed + Sized {
     #[must_use]
     fn fixtures() -> CodecFixtures<Self>;
 }
@@ -47,7 +47,7 @@ pub fn decode_fixture_hex(hex_str: &str) -> Vec<u8> {
 /// invariants. Called by the round-trip test the macros generate.
 ///
 /// `#[doc(hidden)] pub` (not `#[cfg(test)]`) because the generated test lives
-/// in *downstream* crates and calls this against `lb-codec`'s non-test
+/// in *downstream* crates and calls this against `lb-binary-codec`'s non-test
 /// build.
 #[doc(hidden)]
 pub fn assert_codec_fixtures<T>()

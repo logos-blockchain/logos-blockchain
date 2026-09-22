@@ -25,7 +25,7 @@ use lb_core::{
     sdp::ServiceType,
 };
 use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
-use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse};
+use lb_cryptarchia_sync::{BlocksUnavailableReason, GetTipResponseReason, ProviderResponse};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
@@ -1256,7 +1256,7 @@ async fn reject_chain_sync_event(event: ChainSyncEvent) {
     match event {
         ChainSyncEvent::ProvideBlocksRequest { reply_sender, .. } => {
             let response = ProviderResponse::Unavailable {
-                reason: BlocksUnavailableReason::Unknown("Node is not in online mode".to_owned()),
+                reason: BlocksUnavailableReason::Unknown,
             };
             if let Err(err) = reply_sender.send(response).await {
                 error!(target: LOG_TARGET, %err, "failed to send chain sync response");
@@ -1269,10 +1269,10 @@ async fn reject_chain_sync_event(event: ChainSyncEvent) {
 }
 
 async fn send_chain_sync_rejection<ResponseType>(
-    sender: mpsc::Sender<ProviderResponse<ResponseType>>,
+    sender: mpsc::Sender<ProviderResponse<ResponseType, GetTipResponseReason>>,
 ) {
     let response = ProviderResponse::Unavailable {
-        reason: "Node is not in online mode".to_owned(),
+        reason: GetTipResponseReason::NodeNotOnline,
     };
     if let Err(err) = sender.send(response).await {
         error!(target: LOG_TARGET, %err, "failed to send chain sync response");

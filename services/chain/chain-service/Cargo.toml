@@ -17,6 +17,7 @@ async-trait                = { workspace = true }
 bytes                      = { workspace = true }
 educe                      = { features = ["Debug"], workspace = true }
 futures                    = { workspace = true }
+lb-binary-codec            = { workspace = true }
 lb-chain-broadcast-service = { workspace = true }
 lb-core                    = { workspace = true }
 lb-cryptarchia-engine      = { workspace = true }

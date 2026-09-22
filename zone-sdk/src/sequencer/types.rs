@@ -167,7 +167,8 @@ impl PreparedChannelConfig {
     /// a different transaction. Also returns [`Error`] if `signing_key` is not
     /// among the accredited keys.
     pub fn sign_with(&self, signing_key: &Ed25519Key) -> Result<IndexedSignature, Error> {
-        let payload = self.tx.hash().as_signing_bytes();
+        let tx_hash = self.tx.hash();
+        let payload = tx_hash.as_signing_bytes();
         if payload.as_ref() != self.sign_payload.as_slice() {
             return Err(Error::Network(
                 "sign_payload does not match the hash of tx; refusing to sign a payload the \
@@ -175,7 +176,7 @@ impl PreparedChannelConfig {
                     .into(),
             ));
         }
-        sign_prepared(signing_key, &self.accredited_keys, payload.as_ref())
+        sign_prepared(signing_key, &self.accredited_keys, payload)
     }
 }
 
@@ -795,7 +796,7 @@ mod tests {
 
     /// The signing payload the SDK derives for `ops`.
     fn payload_of(ops: &Ops) -> Vec<u8> {
-        ops.hash().as_signing_bytes().as_ref().to_vec()
+        ops.hash().as_signing_bytes().to_vec()
     }
 
     fn config_op(keys: Vec<Ed25519PublicKey>) -> ChannelConfigOp {

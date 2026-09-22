@@ -20,6 +20,7 @@ common-http-client               = { workspace = true }
 flate2                           = { features = ["rust_backend"], workspace = true }
 futures                          = { workspace = true }
 hex                              = { workspace = true }
+lb-binary-codec                  = { workspace = true }
 lb-blend-service                 = { workspace = true }
 lb-chain-leader-service          = { workspace = true }
 lb-chain-network-service         = { workspace = true }

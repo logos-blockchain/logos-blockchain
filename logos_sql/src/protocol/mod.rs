@@ -3,7 +3,7 @@
 use std::fmt::{self, Display, Formatter};
 
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
-use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode as _};
 use lb_utils::bounded::{NonEmptyBoundedVec, UpperBoundedVec};
 use lb_zone_sdk::node_types::Inscription;
 use rand::RngCore as _;

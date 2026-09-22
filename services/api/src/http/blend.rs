@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 
+use lb_binary_codec::bincode::{DeserializeOp, SerializeOp};
 use lb_blend_service::message::{DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage};
-use lb_core::codec::{DeserializeOp, SerializeOp};
 use lb_network_service::backends::libp2p::PeerId;
 use overwatch::services::{AsServiceId, ServiceData};
 use tokio::sync::oneshot;

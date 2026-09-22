@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use lb_codec::BinaryCodec;
+use lb_binary_codec::canonical::BinaryCodec;
 use lb_cryptarchia_engine::Slot;
 use serde::{Deserialize, Serialize};
 

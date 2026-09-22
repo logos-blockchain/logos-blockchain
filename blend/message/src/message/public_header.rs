@@ -1,5 +1,5 @@
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_blend_proofs::quota::{self, PROOF_OF_QUOTA_SIZE, ProofOfQuota, VerifiedProofOfQuota};
-use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_key_management_system_keys::keys::{
     ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
 };
@@ -355,8 +355,8 @@ impl BinaryEncode for VerifiedPublicHeader {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
     use lb_blend_proofs::quota::VerifiedProofOfQuota;
-    use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
     use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
 
     use crate::message::{PublicHeader, public_header::VerifiedPublicHeader};

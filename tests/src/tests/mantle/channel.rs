@@ -286,11 +286,7 @@ async fn channel_withdraw_updates_wallet_balance() {
         &funding_account,
         HashMap::new(),
         Op::ChannelInscribe(inscription_op),
-        |tx_hash| {
-            OpProof::Ed25519Sig(
-                channel_signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
-            )
-        },
+        |tx_hash| OpProof::Ed25519Sig(channel_signing_key.sign_payload(tx_hash.as_signing_bytes())),
     )
     .await;
 
@@ -353,7 +349,7 @@ async fn channel_withdraw_updates_wallet_balance() {
                 ChannelMultiSigProof::try_new(
                     [IndexedSignature::new(
                         0,
-                        channel_signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+                        channel_signing_key.sign_payload(tx_hash.as_signing_bytes()),
                     )]
                     .into(),
                 )

@@ -6,8 +6,8 @@ use std::{
 };
 
 use hex::ToHex as _;
+use lb_binary_codec::bincode::SerializeOp as _;
 use lb_core::{
-    codec::SerializeOp as _,
     mantle::{GenesisTime, TxHash},
     sdp::Locator,
 };
