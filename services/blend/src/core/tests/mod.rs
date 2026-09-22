@@ -2280,7 +2280,7 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
         let mut deliveries = FailureDetector::new(
             settings.max_data_message_delay_in_rounds(),
-            Duration::from_secs(settings.time.round_duration_in_seconds.get()),
+            settings.time.round_duration_in_seconds,
             PayloadDispatcher::<RuntimeServiceId>::observe_broadcasts(&payload_dispatcher).await,
         );
         run_event_loop(
@@ -2503,8 +2503,8 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
 /// The previous epoch keeps releasing through its own scheduler for the length
 /// of its transition period, and each message it releases is published under
 /// that epoch so it reaches the peers still negotiated for it. Publishing it
-/// under the new epoch would fail their `PoQ` check and earn this node a
-/// `SpamReason::InvalidProofOfQuota`.
+/// under the new epoch would fail their `PoQ` check and get this node
+/// blacklisted for `BlacklistReason::InvalidProofOfQuota`.
 ///
 /// What is pinned here is that the message survives the rotation and is
 /// published under the epoch it was minted for. *Which* scheduler releases it

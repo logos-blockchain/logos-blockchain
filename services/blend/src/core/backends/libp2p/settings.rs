@@ -1,5 +1,5 @@
-use core::{pin::Pin, time::Duration};
-use std::{num::NonZeroU64, ops::RangeInclusive};
+use core::{num::NonZeroU32, pin::Pin, time::Duration};
+use std::num::NonZeroU64;
 
 use futures::{Stream, StreamExt as _, stream::pending};
 use lb_libp2p::protocol_name::StreamProtocol;
@@ -14,12 +14,19 @@ use crate::core::settings::RunningBlendConfig as BlendConfig;
 #[serde_with::serde_as]
 pub struct Libp2pBlendBackendSettings {
     pub listening_address: Multiaddr,
-    pub core_peering_degree: RangeInclusive<u64>,
+    /// `Φ_CC`: the peering degree this node maintains with other core nodes.
+    pub target_peering_degree: NonZeroU32,
+    /// `r₁`: the messages a core connection may carry in one round, in each
+    /// direction.
+    pub connection_share_per_round: NonZeroU64,
     #[serde_as(
         as = "lb_utils::bounded_duration::MinimalBoundedDuration<1, lb_utils::bounded_duration::SECOND>"
     )]
     pub edge_node_connection_timeout: Duration,
-    pub max_edge_node_incoming_connections: u64,
+    /// `Φ_CE^Max`: the edge connections this node holds at once.
+    pub max_edge_node_incoming_connections: NonZeroU64,
+    /// `r_E`: the edge connections this node accepts in one round.
+    pub accepted_edge_connections_per_round: NonZeroU64,
     pub max_dial_attempts_per_peer: NonZeroU64,
     pub protocol_name: StreamProtocol,
     pub peering_degree_check_interval: Option<Duration>,

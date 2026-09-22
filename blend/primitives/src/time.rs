@@ -9,7 +9,7 @@ use futures::Stream;
 use tokio::time::{Instant, Interval, MissedTickBehavior, interval_at};
 
 /// A round of the Blend clock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Round(u128);
 
 impl Round {
@@ -23,17 +23,17 @@ impl Round {
     pub const fn rounds_since(self, earlier: Self) -> u128 {
         self.0.saturating_sub(earlier.0)
     }
+
+    /// The round `rounds` later than this one.
+    #[must_use]
+    pub const fn saturating_add(self, rounds: RoundCount) -> Self {
+        Self(self.0.saturating_add(rounds.get()))
+    }
 }
 
 impl From<u128> for Round {
     fn from(value: u128) -> Self {
         Self(value)
-    }
-}
-
-impl From<Round> for u128 {
-    fn from(round: Round) -> Self {
-        round.0
     }
 }
 
@@ -43,8 +43,9 @@ impl Display for Round {
     }
 }
 
-/// A number of rounds, for the windows and deadlines the protocol defines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// A non-zero number of rounds, for the windows and deadlines the protocol
+/// defines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RoundCount(NonZeroU128);
 
 impl RoundCount {
@@ -59,12 +60,6 @@ impl RoundCount {
     }
 }
 
-impl From<NonZeroU128> for RoundCount {
-    fn from(rounds: NonZeroU128) -> Self {
-        Self::new(rounds)
-    }
-}
-
 pub type RoundStream = Box<dyn Stream<Item = Round> + Send + Unpin>;
 
 /// A round clock driven by a [`tokio::time::Interval`].
@@ -76,6 +71,13 @@ pub struct RoundClock {
     interval: Interval,
 }
 
+// Manual impl because `Interval` does not implement `Clone`.
+impl Clone for RoundClock {
+    fn clone(&self) -> Self {
+        Self::starting_at(self.start_time, self.round_duration_in_seconds)
+    }
+}
+
 impl RoundClock {
     /// Starts a clock whose round `0` begins now.
     #[must_use]
@@ -84,8 +86,7 @@ impl RoundClock {
     }
 
     /// Starts a clock whose round `0` begins at `origin`.
-    #[must_use]
-    pub fn starting_at(start_time: Instant, round_duration_in_seconds: NonZeroU64) -> Self {
+    fn starting_at(start_time: Instant, round_duration_in_seconds: NonZeroU64) -> Self {
         let round_duration = Duration::from_secs(round_duration_in_seconds.get());
         let mut interval = interval_at(
             start_time

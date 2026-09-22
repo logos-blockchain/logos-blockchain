@@ -2,7 +2,6 @@ use core::{
     num::NonZeroU64,
     pin::Pin,
     task::{Context, Poll},
-    time::Duration,
 };
 use std::collections::HashMap;
 
@@ -28,13 +27,13 @@ impl FailureDetector {
     #[must_use]
     pub fn new(
         maximum_blending_delay: NonZeroU64,
-        round_duration: Duration,
+        round_duration_in_seconds: NonZeroU64,
         payload_broadcasts: BoxStream<'static, DataPayload>,
     ) -> Self {
         Self {
             inner: InnerFailureDetector::new(
                 maximum_blending_delay,
-                round_duration,
+                round_duration_in_seconds,
                 payload_broadcasts,
             ),
             encapsulated: HashMap::new(),
@@ -126,7 +125,7 @@ mod tests {
 
     use crate::{
         core::delivery::FailureDetector,
-        delivery::test_utils::{DEADLINE, ROUND, proposal, transaction, until},
+        delivery::test_utils::{DEADLINE, ROUND_IN_SECONDS, proposal, transaction, until},
         message::DataPayload,
     };
 
@@ -140,7 +139,7 @@ mod tests {
         let (channel, broadcasts) = mpsc::unbounded_channel();
         let detection = FailureDetector::new(
             DEADLINE,
-            ROUND,
+            ROUND_IN_SECONDS,
             UnboundedReceiverStream::new(broadcasts).boxed(),
         );
         (detection, Instant::now(), channel)

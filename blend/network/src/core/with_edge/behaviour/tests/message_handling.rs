@@ -2,7 +2,6 @@ use core::time::Duration;
 
 use futures::{FutureExt as _, StreamExt as _, select};
 use futures_timer::Delay;
-use lb_blend_message::serialize_encapsulated_message_with_verified_public_header;
 use lb_libp2p::SwarmEvent;
 use libp2p::PeerId;
 use libp2p_stream::Behaviour as StreamBehaviour;
@@ -10,6 +9,7 @@ use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
 
 use crate::{
+    OutgoingMessage,
     core::{
         tests::utils::{TestEncapsulatedMessage, TestSwarm},
         with_edge::behaviour::{
@@ -31,12 +31,9 @@ async fn receive_valid_message() {
         .connect_and_upgrade_to_blend(&mut core_swarm)
         .await;
     let message = TestEncapsulatedMessage::new(b"test");
-    send_msg(
-        stream,
-        serialize_encapsulated_message_with_verified_public_header(message.as_ref()),
-    )
-    .await
-    .unwrap();
+    send_msg(stream, OutgoingMessage::from(&message.clone().into_inner()))
+        .await
+        .unwrap();
 
     loop {
         select! {
@@ -69,12 +66,9 @@ async fn reject_message_with_invalid_proof_of_quota() {
         .await;
     // The message is well-formed and correctly signed: only its `PoQ` fails.
     let message = TestEncapsulatedMessage::new(b"invalid-poq");
-    send_msg(
-        stream,
-        serialize_encapsulated_message_with_verified_public_header(message.as_ref()),
-    )
-    .await
-    .unwrap();
+    send_msg(stream, OutgoingMessage::from(&message.clone().into_inner()))
+        .await
+        .unwrap();
 
     let mut deadline = Delay::new(Duration::from_secs(2)).fuse();
     loop {
@@ -109,12 +103,9 @@ async fn reject_message_with_unexpected_layer_count() {
         .connect_and_upgrade_to_blend(&mut core_swarm)
         .await;
     let message = TestEncapsulatedMessage::new(b"unexpected_layer_count");
-    send_msg(
-        stream,
-        serialize_encapsulated_message_with_verified_public_header(message.as_ref()),
-    )
-    .await
-    .unwrap();
+    send_msg(stream, OutgoingMessage::from(&message.clone().into_inner()))
+        .await
+        .unwrap();
 
     loop {
         select! {
@@ -179,7 +170,7 @@ async fn receive_malformed_message() {
     let malformed_message = TestEncapsulatedMessage::new_with_invalid_signature(b"invalid_message");
     send_msg(
         stream,
-        serialize_encapsulated_message_with_verified_public_header(malformed_message.as_ref()),
+        OutgoingMessage::from(&malformed_message.clone().into_inner()),
     )
     .await
     .unwrap();

@@ -1,8 +1,9 @@
 use core::{
-    num::{NonZeroU64, NonZeroU128},
+    num::{NonZeroU32, NonZeroU64, NonZeroU128},
     time::Duration,
 };
 
+use lb_blend_service::settings::TimingSettings;
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_utils::math::PositiveF64;
@@ -54,6 +55,76 @@ impl Settings {
         .unwrap()
     }
 
+    /// `r₁ = ⌊(2V/3) / (Φ_CC + 1)⌋`: the messages a core connection may carry
+    /// in one round, in each direction.
+    ///
+    /// Two thirds of the verification rate is what a node at its peering degree
+    /// reads, divided evenly between the connections it may hold and the edge
+    /// nodes it serves.
+    #[must_use]
+    pub fn connection_share_per_round(&self) -> NonZeroU64 {
+        let readable_per_round = 2 * u64::from(self.core.verification_rate_per_second.get()) / 3;
+        let shares = u64::from(self.core.target_peering_degree.get()) + 1;
+        NonZeroU64::new(readable_per_round / shares).expect(
+            "The verification rate must allow at least one message per connection per round.",
+        )
+    }
+
+    /// `r_E = 2V/3 − Φ_CC · r₁`: the edge connections a node accepts in a
+    /// round.
+    #[must_use]
+    pub fn accepted_edge_connections_per_round(&self) -> NonZeroU64 {
+        let readable_per_round = 2 * u64::from(self.core.verification_rate_per_second.get()) / 3;
+        let taken_by_core_connections = u64::from(self.core.target_peering_degree.get())
+            * self.connection_share_per_round().get();
+        NonZeroU64::new(readable_per_round.saturating_sub(taken_by_core_connections)).expect(
+            "The verification rate must leave room for at least one edge connection per round.",
+        )
+    }
+
+    /// `Φ_CE^Max`: the value the spec puts on how many edge connections a
+    /// node holds at once, `2·r_E`.
+    #[must_use]
+    pub fn maximum_concurrent_edge_connections(&self) -> NonZeroU64 {
+        self.accepted_edge_connections_per_round()
+            .checked_mul(NonZeroU64::new(2).unwrap())
+            .expect("The maximum number of concurrent edge connections overflowed `u64`.")
+    }
+
+    #[must_use]
+    pub fn edge_node_connection_timeout(&self, slot_duration: &Duration) -> Duration {
+        self.round_duration(slot_duration)
+            .checked_mul(
+                self.core
+                    .edge_node_send_deadline_in_rounds
+                    .get()
+                    .try_into()
+                    .expect("`T_E` must fit in a `u32` number of rounds."),
+            )
+            .expect("The edge connection timeout overflowed a `Duration`.")
+    }
+
+    #[must_use]
+    pub fn timing_settings(
+        &self,
+        slots_per_epoch: u64,
+        slots_per_block: u64,
+        slot_duration: &Duration,
+    ) -> TimingSettings {
+        TimingSettings {
+            epoch_transition_period: self.epoch_transition(slots_per_block, slot_duration),
+            round_duration_in_seconds: self
+                .round_duration(slot_duration)
+                .as_secs()
+                .try_into()
+                .expect("Round duration must be greater than `0` seconds."),
+            rounds_per_observation_window: self.rounds_per_observation_window(),
+            network_absorption_in_rounds: self.common.network_absorption_in_rounds,
+            core_handshake_deadline_in_rounds: self.core.core_handshake_deadline_in_rounds,
+            rounds_per_epoch: self.rounds_per_epoch(slots_per_epoch, slot_duration),
+        }
+    }
+
     /// Duration of the epoch transition period.
     ///
     /// The Blend spec defines this as roughly the same time it takes to propose
@@ -94,6 +165,9 @@ pub struct CommonSettings {
     pub num_blend_layers: NonZeroU64,
     pub minimum_network_size: MinimumNetworkSize,
     pub protocol_name: StreamProtocol,
+    /// `η`: the network absorption of one hop, the rounds a message spends
+    /// crossing the network between two blend nodes.
+    pub network_absorption_in_rounds: NonZeroU64,
     pub data_replication_factor: u64,
 }
 
@@ -115,6 +189,19 @@ impl From<MinimumNetworkSize> for NonZeroU64 {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CoreSettings {
     pub scheduler: SchedulerSettings,
+    /// `Φ_CC`: the peering degree a core node maintains with other core nodes.
+    pub target_peering_degree: NonZeroU32,
+    /// `V`: the messages per second the slowest node the protocol targets can
+    /// verify the public header of. Every admission share is sized so that what
+    /// a node reads in a round stays within it.
+    pub verification_rate_per_second: NonZeroU32,
+    /// `T_E`: the rounds an edge node is given to send its message, counted
+    /// from the moment its connection is accepted.
+    pub edge_node_send_deadline_in_rounds: NonZeroU64,
+    /// `T_H`: the rounds a handshake with a core node is given to complete,
+    /// covering the round trips of the transport handshake and of the
+    /// neighbour distinction process.
+    pub core_handshake_deadline_in_rounds: NonZeroU128,
     pub activity_threshold_sensitivity: u64,
 }
 

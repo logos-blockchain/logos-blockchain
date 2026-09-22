@@ -1,4 +1,6 @@
 mod imp {
+    use lb_blend::network::core::with_core::behaviour::blacklist::BlacklistReason;
+
     use crate::message::DataPayloadType;
 
     const ACTION_PUBLISH: &str = "publish";
@@ -65,10 +67,25 @@ mod imp {
         lb_tracing::increase_counter_u64!(blend_inbound_messages_dropped_total, count);
     }
 
-    /// Reports core peers blocked for spamming, labelled with what they were
-    /// caught doing — an invalid `PoQ` among the reasons.
-    pub fn core_peer_blocked(reason: &'static str) {
-        lb_tracing::increase_counter_u64!(blend_core_peers_blocked_total, 1, reason = reason);
+    /// Reports core peers blacklisted, labelled with the reason: a frame that
+    /// did not decode, a header signature that did not verify, or an invalid
+    /// `PoQ`. Volume is never a reason, and neither is a duplicate.
+    pub fn core_peer_blacklisted(reason: BlacklistReason) {
+        lb_tracing::increase_counter_u64!(
+            blend_core_peers_blocked_total,
+            1,
+            reason = reason.as_ref()
+        );
+    }
+
+    /// Reports how many peers are blacklisted right now.
+    ///
+    /// A gauge rather than a counter: entries expire silently after `W`, so the
+    /// value goes down as well as up and no event marks the moment it does. It
+    /// is re-read whenever a connection is established or closed, which is
+    /// often enough to follow the window.
+    pub fn core_blacklist_size(count: usize) {
+        lb_tracing::metric_observable_gauge_u64_set!(blend_core_blacklist_size, count as u64);
     }
 
     /// Reports a data payload the Blend network failed to deliver within the
