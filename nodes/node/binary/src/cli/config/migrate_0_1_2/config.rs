@@ -109,7 +109,7 @@ impl OldConfig {
         }
 
         if let Some(voucher_master) = old_kms.remove(&self.wallet.voucher_master_key_id) {
-            keystore.set(KeyTitle::VAUCHER_MASTER, voucher_master);
+            keystore.set(KeyTitle::VOUCHER_MASTER, voucher_master);
         }
 
         keystore
