@@ -652,7 +652,10 @@ mod tests {
             kad_protocol_name: StreamProtocol::new("/kademlia/test"),
             identify_protocol_name: StreamProtocol::new("/identify/test"),
             chain_sync_protocol_name: StreamProtocol::new("/chainsync/test"),
-            identify_config: lb_libp2p::IdentifySettings::default(),
+            identify_config: lb_libp2p::IdentifySettings {
+                allow_non_public_identify_addresses: true,
+                ..Default::default()
+            },
             chain_sync_config: lb_cryptarchia_sync::Config {
                 peer_response_timeout: Duration::from_secs(5),
                 max_inbound_requests: 10.try_into().unwrap(),
