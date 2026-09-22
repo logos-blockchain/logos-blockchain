@@ -227,8 +227,8 @@ fn build_pow_config(keystore: &Keystore) -> PoWConfig {
 
 fn build_wallet_config(keystore: &Keystore) -> WalletConfig {
     let (voucher_master_key_id, _) = keystore
-        .get(KeyTitle::VAUCHER_MASTER)
-        .expect("Vaucher master key set by default");
+        .get(KeyTitle::VOUCHER_MASTER)
+        .expect("Voucher master key set by default");
 
     let mut wallet_config = WalletConfig::with_required_values(WalletConfigRequiredValues {
         voucher_master_key_id,
