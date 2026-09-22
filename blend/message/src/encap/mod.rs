@@ -64,11 +64,11 @@ pub const fn encapsulated_message_encoded_size(num_blend_layers: NonZeroU64) -> 
 mod encoded_size_tests {
     use core::num::NonZeroU64;
 
+    use lb_binary_codec::canonical::BinaryEncode as _;
     use lb_blend_proofs::{
         quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
         selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
     };
-    use lb_codec::BinaryEncode as _;
     use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 
     use crate::{
