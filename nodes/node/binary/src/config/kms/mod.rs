@@ -26,7 +26,7 @@ impl TryFrom<ServiceConfig> for PreloadKMSBackendSettings {
 
 impl PreloadKmsBackendSettings {
     /// Resolves every [`KeyEntry`] into [`Key`] to load into the KMS.
-    pub fn resolve_keys(&self) -> Result<HashMap<KeyId, Key>, MissingMnemonicError> {
+    pub fn resolve_keys(self) -> Result<HashMap<KeyId, Key>, MissingMnemonicError> {
         let master = self.master_key();
         self.keys
             .iter()
