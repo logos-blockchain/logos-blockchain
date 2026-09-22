@@ -1,4 +1,5 @@
 use core::{
+    num::NonZeroUsize,
     pin::Pin,
     task::{Context, Poll, Waker},
     time::Duration,
@@ -31,8 +32,7 @@ mod tests;
 const LOG_TARGET: &str = blend::network::core::handler::CORE_EDGE;
 
 type TimerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
-type MessageReceiveFuture =
-    Pin<Box<dyn Future<Output = Result<IncomingMessage, io::Error>> + Send>>;
+type MessageReceiveFuture = Pin<Box<dyn Future<Output = io::Result<IncomingMessage>> + Send>>;
 type PollResult<T> = (
     Poll<
         ConnectionHandlerEvent<
@@ -111,10 +111,14 @@ pub struct ConnectionHandler {
 }
 
 impl ConnectionHandler {
-    pub fn new(connection_timeout: Duration, protocol_name: StreamProtocol) -> Self {
+    pub fn new(
+        connection_timeout: Duration,
+        protocol_name: StreamProtocol,
+        message_size: NonZeroUsize,
+    ) -> Self {
         tracing::trace!(target: LOG_TARGET, "Initializing core->edge connection handler with timeout duration {connection_timeout:?}.");
         Self {
-            state: Some(StartingState::new(connection_timeout).into()),
+            state: Some(StartingState::new(connection_timeout, message_size).into()),
             protocol_name,
         }
     }

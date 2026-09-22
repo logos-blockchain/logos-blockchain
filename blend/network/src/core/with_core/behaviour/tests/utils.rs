@@ -1,6 +1,7 @@
 use core::{
     iter::repeat_n,
     num::{NonZeroU64, NonZeroU128, NonZeroUsize},
+    time::Duration,
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -26,8 +27,8 @@ use crate::core::{
     poq_verification::PendingPoQVerifications,
     tests::utils::{PROTOCOL_NAME, TestProofsVerifier, TestSwarm},
     with_core::behaviour::{
-        Behaviour, ConnectionDirection, Event, NegotiatedPeerState, RemotePeerConnectionDetails,
-        liveness::PeerLivenessMap, message_cache::MessageCache,
+        Behaviour, ConnectionDirection, Event, PendingUpgrade, RemotePeerConnectionDetails,
+        blacklist::PeerBlacklist, liveness::PeerLivenessMap, message_cache::MessageCache,
     },
 };
 
@@ -76,6 +77,8 @@ pub struct BehaviourBuilder {
     membership: Option<Membership<PeerId>>,
     round_duration_in_seconds: Option<NonZeroU64>,
     liveness_window_in_rounds: Option<NonZeroU128>,
+    handshake_deadline_in_rounds: Option<RoundCount>,
+    handshakes_in_progress: Option<usize>,
     peering_degree: Option<NonZeroUsize>,
     connection_share_per_round: Option<NonZeroU64>,
     existing_connections: Option<(usize, usize)>,
@@ -91,6 +94,8 @@ impl BehaviourBuilder {
             membership: None,
             round_duration_in_seconds: None,
             liveness_window_in_rounds: None,
+            handshake_deadline_in_rounds: None,
+            handshakes_in_progress: None,
             peering_degree: None,
             connection_share_per_round: None,
             existing_connections: None,
@@ -115,6 +120,11 @@ impl BehaviourBuilder {
         self
     }
 
+    pub fn with_handshake_deadline_in_rounds(mut self, rounds: RoundCount) -> Self {
+        self.handshake_deadline_in_rounds = Some(rounds);
+        self
+    }
+
     pub fn with_liveness(
         mut self,
         round_duration_in_seconds: NonZeroU64,
@@ -127,6 +137,11 @@ impl BehaviourBuilder {
 
     pub fn with_existing_connections(mut self, accepted: usize, dialed: usize) -> Self {
         self.existing_connections = Some((accepted, dialed));
+        self
+    }
+
+    pub fn with_handshakes_in_progress(mut self, count: usize) -> Self {
+        self.handshakes_in_progress = Some(count);
         self
     }
 
@@ -186,16 +201,39 @@ impl BehaviourBuilder {
                 .connection_share_per_round
                 .unwrap_or(NonZeroU64::new(1_000).unwrap()),
             send_deadline: RoundCount::new(NonZeroU128::new(2).unwrap()),
+            handshake_deadline: self
+                .handshake_deadline_in_rounds
+                .unwrap_or_else(|| RoundCount::new(NonZeroU128::new(2).unwrap())),
+            handshake_upgrade_timeout: Duration::from_mins(1),
             round_clock: RoundClock::new(round_duration),
             liveness: PeerLivenessMap::new(RoundCount::new(liveness_window)),
-            last_liveness_check: Round::from(0),
+            current_round: Round::from(0),
             message_cache: MessageCache::new(),
             proofs_verifier: Arc::new(self.proofs_verifier),
             pending_poq_verifications: PendingPoQVerifications::new(),
+            below_target_degree_since: None,
+            blacklist: PeerBlacklist::new(
+                self.peering_degree
+                    .unwrap_or(PEERING_DEGREE)
+                    .checked_mul(NonZeroUsize::new(2).unwrap())
+                    .unwrap(),
+                RoundCount::new(liveness_window),
+            ),
         };
+
+        for index in 0..self.handshakes_in_progress.unwrap_or(0) {
+            behaviour.connections_waiting_upgrade.insert(
+                (PeerId::random(), ConnectionId::new_unchecked(2_000 + index)),
+                PendingUpgrade {
+                    direction: ConnectionDirection::Incoming,
+                    started_at: behaviour.current_round,
+                },
+            );
+        }
 
         if let Some((accepted, dialed)) = existing_connections {
             let now = behaviour.round_clock.current_round();
+            behaviour.current_round = now;
             let roles = repeat_n(ConnectionDirection::Incoming, accepted)
                 .chain(repeat_n(ConnectionDirection::Outgoing, dialed));
             for (index, role) in roles.enumerate() {
@@ -204,11 +242,10 @@ impl BehaviourBuilder {
                     peer_id,
                     RemotePeerConnectionDetails {
                         direction: role,
-                        negotiated_state: NegotiatedPeerState::Healthy,
                         connection_id: ConnectionId::new_unchecked(1_000 + index),
                     },
                 );
-                behaviour.liveness.start_or_resume_observing(peer_id, now);
+                behaviour.liveness.start_or_resume_observing(peer_id);
             }
         }
 

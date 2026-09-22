@@ -8,7 +8,10 @@ use std::time::Duration;
 use lb_blend_message::{
     MessageIdentifier, PayloadType,
     crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
-    encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
+    encap::{
+        ProofsVerifier, encapsulated_message_encoded_size,
+        validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    },
     input::EncapsulationInput,
 };
 use lb_blend_proofs::{
@@ -150,6 +153,40 @@ where
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
+}
+
+/// Drives two swarms for `duration`, so that connections settle, rounds pass
+/// and deadlines fire while nothing in particular is being waited for.
+pub async fn drive_for<One, Other>(
+    one: &mut TestSwarm<One>,
+    other: &mut TestSwarm<Other>,
+    duration: Duration,
+) where
+    One: NetworkBehaviour + Send,
+    One::ToSwarm: Debug,
+    Other: NetworkBehaviour + Send,
+    Other::ToSwarm: Debug,
+{
+    let _: Result<(), _> = tokio::time::timeout(duration, async {
+        loop {
+            tokio::select! {
+                _ = futures::StreamExt::select_next_some(&mut **one) => {}
+                _ = futures::StreamExt::select_next_some(&mut **other) => {}
+            }
+        }
+    })
+    .await;
+}
+
+/// A buffer exactly the size of a Blend message, holding nothing that decodes
+/// into one.
+///
+/// The wire carries no length, so a short buffer is not a malformed message —
+/// it is the first part of one the receiver is still waiting for. Exercising
+/// the malformed-message path means sending the right number of wrong bytes.
+#[must_use]
+pub fn undecodable_message_bytes() -> Vec<u8> {
+    vec![0xAB; encapsulated_message_encoded_size(NUM_BLEND_LAYERS.try_into().unwrap()).get()]
 }
 
 #[derive(Clone)]

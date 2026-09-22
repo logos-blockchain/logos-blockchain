@@ -1,5 +1,3 @@
-use libp2p::PeerId;
-
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SendError {
     /// There were no peers to send a message to.
@@ -8,8 +6,6 @@ pub enum SendError {
     DuplicateMessage,
     /// The epoch associated with the message being sent is invalid.
     InvalidEpoch,
-    /// The message is too large for the wire format to frame.
-    MessageTooLarge,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -19,7 +15,4 @@ pub(crate) enum ReceiveError {
     UndeserializableMessage,
     /// The message being received has an invalid header signature.
     InvalidHeaderSignature,
-    /// The message being received is a duplicate of a previous received
-    /// message.
-    DuplicateMessageFromPeer(PeerId),
 }

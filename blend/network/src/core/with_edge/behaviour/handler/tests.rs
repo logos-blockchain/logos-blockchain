@@ -1,4 +1,5 @@
 use core::{
+    num::NonZeroUsize,
     task::{Context, Poll},
     time::Duration,
 };
@@ -31,8 +32,11 @@ async fn starting_state_without_inbound_substream_times_out() {
     // Short timeout so the test is fast. The state machine uses
     // `futures_timer::Delay` (real wall-clock), not tokio's mock clock.
     let connection_timeout = Duration::from_millis(50);
-    let mut handler =
-        ConnectionHandler::new(connection_timeout, StreamProtocol::new("/blend/edge/test"));
+    let mut handler = ConnectionHandler::new(
+        connection_timeout,
+        StreamProtocol::new("/blend/edge/test"),
+        NonZeroUsize::new(19_319).unwrap(),
+    );
 
     let mut cx = Context::from_waker(noop_waker_ref());
 
