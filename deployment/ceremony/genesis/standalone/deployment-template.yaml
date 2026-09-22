@@ -2,6 +2,7 @@ blend:
   common:
     num_blend_layers: 1
     minimum_network_size: 2
+    network_absorption_in_rounds: 2
     protocol_name: /logos-blockchain-standalone-local/blend/1.0.0
     data_replication_factor: 0
   core:
@@ -10,6 +11,10 @@ blend:
         message_frequency_per_round: 1.0
       delayer:
         maximum_release_delay_in_rounds: 1
+    target_peering_degree: 4
+    verification_rate_per_second: 156
+    edge_node_send_deadline_in_rounds: 1
+    core_handshake_deadline_in_rounds: 2
     activity_threshold_sensitivity: 1
 network:
   kademlia_protocol_name: /logos-blockchain-standalone-local/kad/1.0.0

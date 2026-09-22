@@ -8,7 +8,10 @@ use std::time::Duration;
 use lb_blend_message::{
     MessageIdentifier, PayloadType,
     crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
-    encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
+    encap::{
+        ProofsVerifier, encapsulated_message_encoded_size,
+        validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    },
     input::EncapsulationInput,
 };
 use lb_blend_proofs::{
@@ -123,7 +126,11 @@ where
             transport,
             behaviour_fn(identity),
             peer_id,
-            swarm::Config::with_tokio_executor(),
+            // As in production: the connection is meant to go away as soon as
+            // the behaviour lets go of its substreams, so that a test observes
+            // a close the behaviour asked for without waiting out an idle
+            // timeout.
+            swarm::Config::with_tokio_executor().with_idle_connection_timeout(Duration::ZERO),
         ))
     }
 }
@@ -148,14 +155,55 @@ where
     }
 }
 
+/// Drives two swarms for `duration`, so that connections settle, rounds pass
+/// and deadlines fire while nothing in particular is being waited for.
+pub async fn drive_for<One, Other>(
+    one: &mut TestSwarm<One>,
+    other: &mut TestSwarm<Other>,
+    duration: Duration,
+) where
+    One: NetworkBehaviour + Send,
+    One::ToSwarm: Debug,
+    Other: NetworkBehaviour + Send,
+    Other::ToSwarm: Debug,
+{
+    let _: Result<(), _> = tokio::time::timeout(duration, async {
+        loop {
+            tokio::select! {
+                _ = futures::StreamExt::select_next_some(&mut **one) => {}
+                _ = futures::StreamExt::select_next_some(&mut **other) => {}
+            }
+        }
+    })
+    .await;
+}
+
+/// A buffer exactly the size of a Blend message, holding nothing that decodes
+/// into one.
+///
+/// The wire carries no length, so a short buffer is not a malformed message —
+/// it is the first part of one the receiver is still waiting for. Exercising
+/// the malformed-message path means sending the right number of wrong bytes.
+#[must_use]
+pub fn undecodable_message_bytes() -> Vec<u8> {
+    vec![0xAB; encapsulated_message_encoded_size(NUM_BLEND_LAYERS.try_into().unwrap()).get()]
+}
+
 #[derive(Clone)]
 pub struct TestEncapsulatedMessage(EncapsulatedMessageWithVerifiedPublicHeader);
 
 impl TestEncapsulatedMessage {
     pub fn new(payload: &[u8]) -> Self {
+        Self::new_distinct(0, payload)
+    }
+
+    /// A message whose nullifier is distinct per `nonce`, so that several can
+    /// be sent to the same neighbour without the later ones arriving as
+    /// duplicates of the first.
+    pub fn new_distinct(nonce: u64, payload: &[u8]) -> Self {
         Self(
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
-                &generate_valid_inputs(0.into()),
+                &generate_distinct_inputs(0.into(), nonce),
                 PayloadType::BlockProposal,
                 payload.try_into().unwrap(),
                 NUM_BLEND_LAYERS.try_into().unwrap(),
@@ -210,10 +258,14 @@ impl Deref for TestEncapsulatedMessageWithEpoch {
 }
 
 fn generate_valid_inputs(epoch: Epoch) -> Vec<EncapsulationInput> {
+    generate_distinct_inputs(epoch, 0)
+}
+
+fn generate_distinct_inputs(epoch: Epoch, nonce: u64) -> Vec<EncapsulationInput> {
     repeat_with(UnsecuredEd25519Key::generate_with_chacha_rng)
         .take(NUM_BLEND_LAYERS as usize)
         .map(|recipient_signing_key| {
-            let proofs = epoch_based_mock_blend_proof(epoch);
+            let proofs = mock_blend_proof(epoch, nonce);
             EncapsulationInput::try_new(
                 UnsecuredEd25519Key::generate_with_chacha_rng(),
                 &recipient_signing_key.public_key(),
@@ -225,17 +277,30 @@ fn generate_valid_inputs(epoch: Epoch) -> Vec<EncapsulationInput> {
         .collect::<Vec<_>>()
 }
 
-fn epoch_based_mock_blend_proof(epoch: Epoch) -> BlendLayerProof {
+/// A mock proof whose nullifier is distinct per `nonce`.
+///
+/// The nullifier is the leading bytes of the encoded proof of quota, of which
+/// the fixture only uses the first eight for the epoch. The nonce goes in the
+/// bytes after it, so messages of the same epoch can be told apart — which is
+/// what lets a test send a neighbour more than one message without the second
+/// arriving as a duplicate of the first.
+fn mock_blend_proof(epoch: Epoch, nonce: u64) -> BlendLayerProof {
     let epoch_bytes = epoch.into_inner().to_le_bytes();
+    let nonce_bytes = nonce.to_le_bytes();
+    let fill = |bytes: &mut [u8]| {
+        bytes[..epoch_bytes.len()].copy_from_slice(&epoch_bytes);
+        bytes[epoch_bytes.len()..epoch_bytes.len() + nonce_bytes.len()]
+            .copy_from_slice(&nonce_bytes);
+    };
     BlendLayerProof {
         proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked({
             let mut bytes = [0u8; _];
-            bytes[..epoch_bytes.len()].copy_from_slice(&epoch_bytes);
+            fill(&mut bytes);
             bytes
         }),
         proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked({
             let mut bytes = [0u8; _];
-            bytes[..epoch_bytes.len()].copy_from_slice(&epoch_bytes);
+            fill(&mut bytes);
             bytes
         }),
         ephemeral_signing_key: UnsecuredEd25519Key::generate_with_chacha_rng(),

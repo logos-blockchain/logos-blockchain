@@ -10,11 +10,8 @@ use std::{
 use futures::{AsyncWriteExt as _, StreamExt as _, stream::FuturesUnordered};
 use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
-    network::send_msg,
-    scheduling::{
-        membership::{Membership, Node},
-        serialize_encapsulated_message_with_verified_public_header,
-    },
+    network::{message::OutgoingMessage, send_msg},
+    scheduling::membership::{Membership, Node},
 };
 use lb_libp2p::{DialError, DialErrorExt as _, DialOpts, SwarmEvent};
 use libp2p::{
@@ -598,12 +595,7 @@ async fn send_message_over_new_stream(
         }
     };
 
-    let stream = match send_msg(
-        stream,
-        serialize_encapsulated_message_with_verified_public_header(&message),
-    )
-    .await
-    {
+    let stream = match send_msg(stream, OutgoingMessage::from(&message)).await {
         Ok(stream) => stream,
         Err(e) => {
             error!(target: LOG_TARGET, "Failed to send message: {e} to peer {peer_id:?} on connection {connection_id:?}.");

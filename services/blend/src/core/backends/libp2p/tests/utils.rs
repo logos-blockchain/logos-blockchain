@@ -1,4 +1,8 @@
-use core::{num::NonZeroU64, ops::RangeInclusive, pin::Pin, time::Duration};
+use core::{
+    num::{NonZeroU64, NonZeroU128, NonZeroUsize},
+    pin::Pin,
+    time::Duration,
+};
 use std::iter::repeat_with;
 
 use async_trait::async_trait;
@@ -9,9 +13,10 @@ use lb_blend::{
         encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
     },
     network::core::{
-        Config, NetworkBehaviour, with_core::behaviour::Config as CoreToCoreConfig,
+        CommonConfig, Config, NetworkBehaviour, with_core::behaviour::Config as CoreToCoreConfig,
         with_edge::behaviour::Config as CoreToEdgeConfig,
     },
+    primitives::time::RoundCount,
     proofs::{
         quota::{ProofOfQuota, VerifiedProofOfQuota},
         selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
@@ -21,9 +26,7 @@ use lb_blend::{
 use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_libp2p::{Protocol, SwarmEvent};
-use libp2p::{
-    Multiaddr, PeerId, Swarm, allow_block_list, core::transport::ListenerId, identity::Keypair,
-};
+use libp2p::{Multiaddr, PeerId, Swarm, core::transport::ListenerId, identity::Keypair};
 use libp2p_swarm_test::SwarmExt as _;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
@@ -190,10 +193,14 @@ impl SwarmBuilder {
     }
 }
 
+pub fn test_peering_degree() -> NonZeroUsize {
+    NonZeroUsize::new(4).unwrap()
+}
+
 pub struct BlendBehaviourBuilder {
     peer_id: PeerId,
     membership: Membership<PeerId>,
-    peering_degree: Option<RangeInclusive<usize>>,
+    peering_degree: Option<NonZeroUsize>,
     proofs_verifier: TestProofsVerifier,
 }
 
@@ -207,27 +214,36 @@ impl BlendBehaviourBuilder {
         }
     }
 
-    pub fn with_peering_degree(mut self, peering_degree: RangeInclusive<usize>) -> Self {
+    /// Sets `Φ_CC`, which must be within the range the specification allows.
+    pub fn with_peering_degree(mut self, peering_degree: NonZeroUsize) -> Self {
         self.peering_degree = Some(peering_degree);
         self
     }
 
     pub fn build(self) -> BlendBehaviour<TestProofsVerifier> {
-        let peering_degree = self.peering_degree.unwrap_or(1..=100);
+        let peering_degree = self.peering_degree.unwrap_or_else(test_peering_degree);
 
         BlendBehaviour {
             blend: NetworkBehaviour::new(
                 &Config {
-                    with_core: CoreToCoreConfig {
-                        peering_degree,
+                    common: CommonConfig {
                         minimum_network_size: 1.try_into().unwrap(),
                         num_blend_layers: 3.try_into().unwrap(),
+                        round_duration_in_seconds: 1.try_into().unwrap(),
+                    },
+                    with_core: CoreToCoreConfig {
+                        connection_share_per_round: NonZeroU64::new(1_000).unwrap(),
+                        send_deadline_in_rounds: RoundCount::new(NonZeroU128::new(2).unwrap()),
+                        handshake_deadline_in_rounds: RoundCount::new(NonZeroU128::new(2).unwrap()),
+                        target_peering_degree: peering_degree,
+                        // Long enough that no connection in a test goes stale
+                        // by accident.
+                        liveness_window_in_rounds: u128::from(u32::MAX).try_into().unwrap(),
                     },
                     with_edge: CoreToEdgeConfig {
                         connection_timeout: Duration::from_secs(1),
                         max_incoming_connections: 300,
-                        minimum_network_size: 1.try_into().unwrap(),
-                        num_blend_layers: 3.try_into().unwrap(),
+                        accepted_connections_per_round: NonZeroU64::new(1_000).unwrap(),
                     },
                 },
                 (self.membership, 1.into()),
@@ -235,7 +251,6 @@ impl BlendBehaviourBuilder {
                 self.peer_id,
                 PROTOCOL_NAME,
             ),
-            blocked_peers: allow_block_list::Behaviour::default(),
         }
     }
 }
