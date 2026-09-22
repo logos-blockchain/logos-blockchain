@@ -38,13 +38,10 @@ fn window() -> Duration {
 #[test(tokio::test)]
 async fn a_connection_that_delivers_nothing_is_closed() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
-    // Both peers run the same rule, as they would in a real network, so both
-    // sides of the connection let go of it.
+    // Only the node under observation runs a window short enough to run out
+    // here.
     let mut silent_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .with_liveness(ROUND, WINDOW_IN_ROUNDS)
-            .build()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
     let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
@@ -98,7 +95,7 @@ async fn a_connection_that_delivers_nothing_is_closed() {
 
     assert!(
         closed,
-        "the connection should have been closed once the observation window ran out"
+        "the observing node should have closed the connection once its window ran out"
     );
     assert!(
         !listening_swarm
@@ -109,6 +106,21 @@ async fn a_connection_that_delivers_nothing_is_closed() {
     );
 }
 
+/// A neighbour that delivers keeps its place: the window is measured from its
+/// last delivery, not from when the connection came up.
+///
+/// What the test arranges, in the observing node's rounds of `LONG_ROUND`
+/// seconds against a window of `LONG_WINDOW_IN_ROUNDS`. The window is counted
+/// in rounds spent connected, which here is every round, since the connection
+/// is held throughout:
+///
+/// ```text
+/// time     round   what happens
+/// 0s       0       connection negotiated; on the grace alone it falls silent at round 4
+/// 6s       3       a message is delivered, so the window now runs to round 7
+/// 6s-10s   3-5     no close may be observed, and this spans round 4, where the grace ran out
+/// 10s      5       still negotiated, three rounds short of the window it earned
+/// ```
 #[test(tokio::test)]
 async fn a_delivered_message_extends_the_window() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
@@ -127,9 +139,8 @@ async fn a_delivered_message_extends_the_window() {
         .connect_and_wait_for_upgrade(&mut listening_swarm)
         .await;
 
-    // Deliver a message late in the window of grace the connection starts with,
-    // so that the window it earns reaches well past the point the grace alone
-    // would have run out.
+    // Round 3: far enough into the grace that the window this delivery earns
+    // reaches well past where the grace alone would have run out.
     let deadline = sleep(Duration::from_secs(LONG_ROUND.get()) * 3);
     tokio::pin!(deadline);
     loop {
@@ -146,8 +157,8 @@ async fn a_delivered_message_extends_the_window() {
         )
         .unwrap();
 
-    // Hold past the round the grace would have expired in, and well short of
-    // the one the delivered message extends the window to.
+    // Rounds 3 to 5: past round 4, where the grace would have run out, and well
+    // short of round 7, where the window the delivery earned runs out.
     let deadline = sleep(Duration::from_secs(LONG_ROUND.get()) * 2);
     tokio::pin!(deadline);
     loop {
