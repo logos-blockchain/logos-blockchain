@@ -914,14 +914,14 @@ mod tests {
             let (sender, receiver) = oneshot::channel();
 
             self.storage_relay
-                .send(StorageMsg::store_block_data_request(
+                .send(StorageMsg::StoreBlockData {
                     header_id,
                     parent_id,
-                    store_result.unwrap(),
-                    Events::new().try_into().unwrap(),
-                    BTreeMap::new(),
-                    sender,
-                ))
+                    block: store_result.unwrap(),
+                    events: Events::new().try_into().unwrap(),
+                    immutable_ids: BTreeMap::new(),
+                    response_tx: sender,
+                })
                 .await
                 .expect("Failed to store block");
 
@@ -943,10 +943,10 @@ mod tests {
 
             // Mark as immutable
             self.storage_relay
-                .send(StorageMsg::store_immutable_block_ids_request(
-                    BTreeMap::from([(slot, header_id)]),
-                    sender,
-                ))
+                .send(StorageMsg::StoreImmutableBlockIds {
+                    ids: BTreeMap::from([(slot, header_id)]),
+                    response_tx: sender,
+                })
                 .await
                 .expect("Failed to store immutable block id");
 

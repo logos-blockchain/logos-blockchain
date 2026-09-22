@@ -96,18 +96,27 @@ impl<Tx> StorageApi<Tx> {
 
     /// Return the stored block bytes.
     pub async fn get_block_bytes(&self, id: &HeaderId) -> Result<Option<Bytes>, DynError> {
-        self.request(|sender| StorageMsg::get_block_request(*id, sender))
-            .await
+        self.request(|response_tx| StorageMsg::GetBlock {
+            header_id: *id,
+            response_tx,
+        })
+        .await
     }
 
     pub async fn get_block_parent(&self, id: &HeaderId) -> Option<HeaderId> {
-        self.optional_request(|sender| StorageMsg::get_block_parent_request(*id, sender))
-            .await
+        self.optional_request(|response_tx| StorageMsg::GetBlockParent {
+            header_id: *id,
+            response_tx,
+        })
+        .await
     }
 
     pub async fn get_block_events(&self, id: &HeaderId) -> Option<Events> {
         let bytes = self
-            .optional_request(|sender| StorageMsg::get_block_events_request(*id, sender))
+            .optional_request(|response_tx| StorageMsg::GetBlockEvents {
+                header_id: *id,
+                response_tx,
+            })
             .await?;
         Events::try_from(bytes)
             .inspect_err(|error| {
@@ -129,7 +138,7 @@ impl<Tx> StorageApi<Tx> {
     }
 
     pub async fn get_immutable_block_id(&self, slot: Slot) -> Result<Option<HeaderId>, DynError> {
-        self.request(|sender| StorageMsg::get_immutable_block_id_request(slot, sender))
+        self.request(|response_tx| StorageMsg::GetImmutableBlockId { slot, response_tx })
             .await
     }
 
@@ -137,7 +146,7 @@ impl<Tx> StorageApi<Tx> {
         &self,
         ids: BTreeMap<Slot, HeaderId>,
     ) -> Result<(), DynError> {
-        self.request(|sender| StorageMsg::store_immutable_block_ids_request(ids, sender))
+        self.request(|response_tx| StorageMsg::StoreImmutableBlockIds { ids, response_tx })
             .await?
             .map_err(Into::into)
     }
@@ -166,20 +175,25 @@ impl<Tx> StorageApi<Tx> {
         .await
     }
 
-    pub async fn remove_transactions(&self, hashes: &[TxHash]) -> Result<(), DynError> {
+    pub async fn remove_transactions(&self, hashes: &[TxHash]) -> Result<(), DynError>
+    where
+        Tx: Hashable<Hash: Into<TxHash>>,
+    {
         self.relay
-            .send(StorageMsg::remove_transactions_request(hashes.to_vec()))
+            .send(StorageMsg::RemoveTransactions {
+                tx_hashes: hashes.to_vec(),
+            })
             .await?;
         Ok(())
     }
 }
 
-impl<Tx: Serialize> StorageApi<Tx> {
+impl<Tx: Serialize + Hashable<Hash: Into<TxHash>>> StorageApi<Tx> {
     /// Store an item under its externally supplied transaction hash.
     pub async fn store_transaction(&self, hash: TxHash, transaction: Tx) -> Result<(), DynError> {
         let transactions = [(hash, transaction.to_bytes()?)].into();
         self.relay
-            .send(StorageMsg::store_transactions_request(transactions))
+            .send(StorageMsg::StoreTransactions { transactions })
             .await?;
         Ok(())
     }
@@ -199,15 +213,13 @@ where
     ) -> Result<(), DynError> {
         let block = Bytes::try_from(block)?;
         let events = Bytes::try_from(events)?;
-        self.request(|sender| {
-            StorageMsg::store_block_data_request(
-                id,
-                parent_id,
-                block,
-                events,
-                immutable_ids,
-                sender,
-            )
+        self.request(|response_tx| StorageMsg::StoreBlockData {
+            header_id: id,
+            parent_id,
+            block,
+            events,
+            immutable_ids,
+            response_tx,
         })
         .await?
         .map_err(Into::into)
@@ -220,7 +232,10 @@ where
 {
     pub async fn get_block(&self, id: &HeaderId) -> Option<Block<Tx>> {
         let bytes = self
-            .optional_request(|sender| StorageMsg::get_block_request(*id, sender))
+            .optional_request(|response_tx| StorageMsg::GetBlock {
+                header_id: *id,
+                response_tx,
+            })
             .await?;
         Block::try_from(bytes).ok()
     }
@@ -242,7 +257,10 @@ where
 
     pub async fn remove_block(&self, id: HeaderId) -> Result<Option<Block<Tx>>, DynError> {
         let bytes = self
-            .request(|sender| StorageMsg::remove_block_request(id, sender))
+            .request(|response_tx| StorageMsg::RemoveBlock {
+                header_id: id,
+                response_tx,
+            })
             .await?;
         bytes.map(Block::try_from).transpose().map_err(Into::into)
     }
@@ -264,13 +282,13 @@ impl<Tx: Serialize + Hashable<Hash = TxHash>> StorageApi<Tx> {
             .map(|tx| tx.to_bytes().map(|bytes| (tx.hash(), bytes)))
             .collect::<Result<_, _>>()?;
         self.relay
-            .send(StorageMsg::store_transactions_request(transactions))
+            .send(StorageMsg::StoreTransactions { transactions })
             .await?;
         Ok(())
     }
 }
 
-impl<Tx: DeserializeOwned + Send + 'static> StorageApi<Tx> {
+impl<Tx: DeserializeOwned + Hashable<Hash: Into<TxHash>> + Send + 'static> StorageApi<Tx> {
     pub async fn get_transactions(
         &self,
         hashes: Vec<TxHash>,
@@ -289,7 +307,10 @@ impl<Tx: DeserializeOwned + Send + 'static> StorageApi<Tx> {
         hashes: Vec<TxHash>,
     ) -> Result<BoxStream<'static, Result<Tx, DynError>>, DynError> {
         let stream = self
-            .request(|sender| StorageMsg::get_transactions_request(hashes, sender))
+            .request(|response_tx| StorageMsg::GetTransactions {
+                tx_hashes: hashes,
+                response_tx,
+            })
             .await?;
         Ok(stream
             .map(|bytes| Tx::from_bytes(&bytes).map_err(Into::into))

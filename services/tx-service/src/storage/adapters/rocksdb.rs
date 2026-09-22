@@ -2,7 +2,7 @@ use std::{marker::PhantomData, pin::Pin};
 
 use async_trait::async_trait;
 use futures::Stream;
-use lb_core::mantle::transactions::hash::TxHash;
+use lb_core::mantle::{traits::Hashable, transactions::hash::TxHash};
 use lb_storage_service::{StorageService, api::StorageApi};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,13 @@ pub struct RocksStorageAdapter<Item, Key> {
 impl<Item, Key, RuntimeServiceId> MempoolStorageAdapter<RuntimeServiceId>
     for RocksStorageAdapter<Item, Key>
 where
-    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+    Item: Clone
+        + Send
+        + Sync
+        + 'static
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + Hashable<Hash = Key>,
     Key: Clone + Send + Sync + 'static + Into<TxHash>,
 {
     type Item = Item;

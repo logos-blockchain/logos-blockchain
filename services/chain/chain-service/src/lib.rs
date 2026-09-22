@@ -684,10 +684,6 @@ where
         })
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
     async fn run(self) -> Result<(), DynError> {
         let relays: CryptarchiaConsensusRelays<Tx> =
             CryptarchiaConsensusRelays::from_service_resources_handle::<

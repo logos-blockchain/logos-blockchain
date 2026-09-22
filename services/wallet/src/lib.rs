@@ -4,6 +4,7 @@ mod states;
 use std::{collections::HashMap, num::NonZeroU64, time::Duration};
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _};
 use lb_chain_service::{
     ChainServiceInfo, Epoch, LibUpdate, Slot,

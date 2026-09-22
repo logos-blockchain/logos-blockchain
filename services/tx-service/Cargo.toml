@@ -53,6 +53,5 @@ openapi          = ["dep:serde_json", "dep:utoipa"]
 tokio-task-names = ["lb-utils/tokio-task-names"]
 
 [[test]]
-name              = "mock"
-path              = "tests/mock.rs"
-required-features = ["rocksdb-backend"]
+name = "mock"
+path = "tests/mock.rs"
