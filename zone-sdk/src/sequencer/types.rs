@@ -22,7 +22,7 @@ use lb_core::{
     },
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
-use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, ZkPublicKey};
+use lb_key_management_system_service::keys::{Ed25519Key, UnverifiedEd25519PublicKey, ZkPublicKey};
 
 use super::tx_builder::sign_prepared;
 
@@ -106,7 +106,7 @@ pub struct PreparedChannelConfig {
     /// The channel's current accredited keys, in index order. Each collected
     /// signature must be indexed by this key's position here. Empty for an
     /// unclaimed channel, which needs no signatures.
-    pub accredited_keys: Vec<Ed25519PublicKey>,
+    pub accredited_keys: Vec<UnverifiedEd25519PublicKey>,
     /// The channel's current `configuration_threshold` — how many of the
     /// `accredited_keys` must sign for the config to be valid. `0` for an
     /// unclaimed channel.
@@ -579,7 +579,7 @@ pub struct InscriptionInfo {
     /// The accredited key that signed this inscription (the message author).
     /// `None` for a channel-config entry, which is authorized by a threshold of
     /// keys rather than a single signer and carries no author.
-    pub signer: Option<Ed25519PublicKey>,
+    pub signer: Option<UnverifiedEd25519PublicKey>,
 }
 
 /// A channel withdraw observed on chain or bundled in a pending atomic tx.
@@ -782,15 +782,16 @@ mod tests {
         channel::{SlotTimeframe, SlotTimeout},
         ledger::{Inputs, NoteId},
         ops::channel::{
-            ChannelId, MsgId,
-            config::{ChannelConfigOp, Keys},
+            ChannelId, MsgId, VerifiedChannelKeys, config::ChannelConfigOp,
             withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
         transactions::Ops,
     };
     use lb_groth16::Fr;
-    use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
+    use lb_key_management_system_service::keys::{
+        Ed25519Key, Ed25519PublicKey, UnverifiedEd25519PublicKey,
+    };
 
     use super::{Error, PreparedChannelConfig, sign_prepared};
 
@@ -799,11 +800,15 @@ mod tests {
         ops.hash().as_signing_bytes().to_vec()
     }
 
-    fn config_op(keys: Vec<Ed25519PublicKey>) -> ChannelConfigOp {
+    fn config_op(keys: Vec<UnverifiedEd25519PublicKey>) -> ChannelConfigOp {
+        let keys = keys
+            .into_iter()
+            .map(|key| Ed25519PublicKey::try_from(key).expect("test key is not small order"))
+            .collect();
         ChannelConfigOp {
             channel: ChannelId::from([7; 32]),
             parent: MsgId::root(),
-            keys: Keys::new_unchecked(keys),
+            keys: VerifiedChannelKeys::new_unchecked(keys),
             posting_timeframe: SlotTimeframe::from(15),
             posting_timeout: SlotTimeout::from(3),
             configuration_threshold: 2,
@@ -813,9 +818,13 @@ mod tests {
 
     #[test]
     fn proposed_config_exposes_the_built_config() {
-        let new_keys: Vec<Ed25519PublicKey> = [1u8, 2, 3]
+        let new_keys: Vec<UnverifiedEd25519PublicKey> = [1u8, 2, 3]
             .into_iter()
-            .map(|b| Ed25519Key::from_bytes(&[b; 32]).public_key())
+            .map(|b| {
+                Ed25519Key::from_bytes(&[b; 32])
+                    .public_key()
+                    .into_unverified()
+            })
             .collect();
         let op = config_op(new_keys);
         let prepared = PreparedChannelConfig {
@@ -834,8 +843,10 @@ mod tests {
     fn sign_with_delegates_to_sign_prepared() {
         let signer = Ed25519Key::from_bytes(&[5; 32]);
         let accredited = vec![
-            Ed25519Key::from_bytes(&[4; 32]).public_key(),
-            signer.public_key(),
+            Ed25519Key::from_bytes(&[4; 32])
+                .public_key()
+                .into_unverified(),
+            signer.public_key().into_unverified(),
         ];
         let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited.clone()))]);
         let prepared = PreparedChannelConfig {
@@ -855,7 +866,11 @@ mod tests {
 
     #[test]
     fn tx_exposes_every_op_in_order_so_a_bundled_op_is_visible() {
-        let accredited = vec![Ed25519Key::from_bytes(&[4; 32]).public_key()];
+        let accredited = vec![
+            Ed25519Key::from_bytes(&[4; 32])
+                .public_key()
+                .into_unverified(),
+        ];
         let config = Op::ChannelConfig(config_op(accredited.clone()));
         // A preparer smuggling a withdraw in alongside the config: one
         // signature over the tx hash would authorize both.
@@ -883,7 +898,7 @@ mod tests {
     #[test]
     fn sign_with_refuses_a_payload_that_does_not_match_tx() {
         let signer = Ed25519Key::from_bytes(&[5; 32]);
-        let accredited = vec![signer.public_key()];
+        let accredited = vec![signer.public_key().into_unverified()];
         let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited.clone()))]);
         // Honest-looking ops, but the payload belongs to some other tx.
         let prepared = PreparedChannelConfig {

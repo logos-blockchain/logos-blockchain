@@ -51,6 +51,7 @@ impl Ed25519Key {
 
     #[must_use]
     pub fn public_key(&self) -> PublicKey {
+        // A public key derived from a secret key is never weak.
         PublicKey::from_verifying_key_unchecked(*self.0.public_key().as_inner())
     }
 

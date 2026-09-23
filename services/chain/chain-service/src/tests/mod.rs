@@ -646,7 +646,7 @@ pub fn try_build_block_with_transactions(
             &epoch_state.utxo_merkle_path(&utxo).unwrap(),
             &tip_state.latest_utxos().path(&utxo.id()).unwrap(),
             *key.as_fr(),
-            &signing_key.public_key(),
+            &signing_key.public_key().into_unverified(),
         );
         let proof = Groth16LeaderProof::prove(
             private_inputs,

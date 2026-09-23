@@ -3,7 +3,9 @@ use std::borrow::Cow;
 use ark_ff::AdditiveGroup as _;
 use lb_binary_codec::canonical::{CodecFixtures, decode_fixture_hex};
 use lb_groth16::{CompressedGroth16Proof, Fr};
-use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, ZkSignature};
+use lb_key_management_system_keys::keys::{
+    Ed25519Signature, UnverifiedEd25519PublicKey, ZkSignature,
+};
 
 use crate::mantle::{
     NoteId,
@@ -75,7 +77,7 @@ fn two_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
             channel_id: ChannelId::from([0u8; 32]),
             inscription: Inscription::default(),
             parent: MsgId::root(),
-            signer: Ed25519PublicKey::from_bytes(&[1u8; 32]).unwrap(),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[1u8; 32]).unwrap(),
         },
         Ed25519Signature::from_bytes(&[0xBBu8; 64]),
     );

@@ -124,7 +124,7 @@ impl SecureKeyOperator for BuildPrivateInputsWithLeaderKey {
                 &aged_path,
                 &latest_path,
                 *key.as_fr(),
-                &leader_pk,
+                leader_pk.as_unverified(),
             ))
             .is_err()
         {

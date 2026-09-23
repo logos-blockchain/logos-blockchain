@@ -362,7 +362,9 @@ mod tests {
                 channel_id: [0; 32].into(),
                 inscription: b"hello".into(),
                 parent: [1; 32].into(),
-                signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+                signer: Ed25519Key::from_bytes(&[0; 32])
+                    .public_key()
+                    .into_unverified(),
             }))
             .unwrap()
             .add_ledger_input(Utxo::new([0u8; 32], 0, Note::new(50, ZkPublicKey::zero())))
@@ -386,7 +388,9 @@ mod tests {
             channel_id: [0; 32].into(),
             inscription: b"hello".into(),
             parent: [1; 32].into(),
-            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+            signer: Ed25519Key::from_bytes(&[0; 32])
+                .public_key()
+                .into_unverified(),
         };
 
         // Init a tx builder
@@ -576,7 +580,9 @@ mod tests {
                 channel_id,
                 inscription: b"hello".into(),
                 parent: [1; 32].into(),
-                signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+                signer: Ed25519Key::from_bytes(&[0; 32])
+                    .public_key()
+                    .into_unverified(),
             }))
             .unwrap()
             .push_op(Op::ChannelDeposit(DepositOp {

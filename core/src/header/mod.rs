@@ -478,7 +478,7 @@ mod body_root_test_vectors {
             Groth16LeaderProof::from_parts(
                 lb_pol::PoLProof::from_bytes(&[byte; 128]),
                 Fr::from(u64::from(byte)),
-                signing_key.public_key(),
+                signing_key.public_key().into_unverified(),
                 VoucherCm::from(Fr::from(u64::from(byte))),
             ),
         );
@@ -575,7 +575,9 @@ mod body_root_test_vectors {
         let proof = Groth16LeaderProof::from_parts(
             lb_pol::PoLProof::from_bytes(&[0x22u8; 128]),
             Fr::from(0x5555u64), // entropy_contribution
-            Ed25519Key::from_bytes(&[0x33u8; 32]).public_key(), // leader_key
+            Ed25519Key::from_bytes(&[0x33u8; 32])
+                .public_key()
+                .into_unverified(), // leader_key
             VoucherCm::from(Fr::from(0x4444u64)), // leader_voucher
         );
         let header = Header::new(parent_block, body_root, slot, proof);

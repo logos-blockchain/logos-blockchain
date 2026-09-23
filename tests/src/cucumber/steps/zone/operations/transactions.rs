@@ -256,7 +256,7 @@ pub(super) async fn build_funded_custom_tx(
     payloads: &[Inscription],
     mut parent: MsgId,
 ) -> Result<(SignedOps<Unverified, StandardMode>, MsgId), ZoneTestError> {
-    let signer = signing_key.public_key();
+    let signer = signing_key.public_key().into_unverified();
     let mut tx_builder = MantleTxBuilder::new();
     for payload in payloads {
         let op = InscriptionOp {

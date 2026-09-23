@@ -1,5 +1,7 @@
 use lb_binary_codec::canonical::codec_fixtures;
-use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
+use lb_key_management_system_keys::keys::{
+    Ed25519PublicKey, Ed25519Signature, UnverifiedEd25519PublicKey,
+};
 
 use crate::{
     mantle::{
@@ -52,7 +54,7 @@ codec_fixtures!(
         channel_id: ChannelId::from([0u8; 32]),
         inscription: b"genesis".into(),
         parent: MsgId::from([0u8; 32]),
-        signer: Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap(),
+        signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; _]).unwrap(),
     } => "00000000000000000000000000000000000000000000000000000000000000000700000067656e6573697300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
     INSCRIPTION.clone() => INSCRIPTION_PAYLOAD_HEX,
 );

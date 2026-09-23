@@ -1225,7 +1225,8 @@ mod tests {
             ops::{
                 OpProof,
                 channel::{
-                    config::{ChannelConfigOp, Keys},
+                    VerifiedChannelKeys,
+                    config::ChannelConfigOp,
                     deposit::{DepositOp, Metadata},
                     inscribe::InscriptionOp,
                     withdraw::ChannelWithdrawOp,
@@ -1383,7 +1384,9 @@ mod tests {
             channel_id,
             parent: MsgId::root(),
             inscription: Inscription::new_unchecked(Vec::new()),
-            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+            signer: Ed25519Key::from_bytes(&[0; 32])
+                .public_key()
+                .into_unverified(),
         };
 
         let tx =
@@ -1859,7 +1862,7 @@ mod tests {
         ChannelConfigOp {
             channel: channel_id,
             parent,
-            keys: Keys::try_from(vec![signer]).unwrap(),
+            keys: VerifiedChannelKeys::try_from(vec![signer]).unwrap(),
             posting_timeframe: SlotTimeframe::from(0u32),
             posting_timeout: SlotTimeout::from(0u32),
             configuration_threshold: 1,
@@ -1872,7 +1875,9 @@ mod tests {
             channel_id: [0u8; 32].into(),
             inscription: Inscription::new_unchecked(vec![seed]),
             parent: MsgId::root(),
-            signer: Ed25519Key::from_bytes(&[seed; 32]).public_key(),
+            signer: Ed25519Key::from_bytes(&[seed; 32])
+                .public_key()
+                .into_unverified(),
         })]);
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(Ed25519Signature::zero())]);
         SignedOps::from_parts(mantle_tx, op_proofs)

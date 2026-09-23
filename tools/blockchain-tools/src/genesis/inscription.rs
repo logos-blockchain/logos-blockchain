@@ -9,7 +9,7 @@ use lb_core::{
     },
 };
 use lb_groth16::{FrBytes, fr_from_bytes};
-use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
 use serde_with::{hex::Hex, serde_as};
 use time::OffsetDateTime;
 
@@ -57,7 +57,7 @@ pub fn inscribe<D: ZkDigest>(
             .try_into()
             .expect("CryptarchiaParameter encoding exceeded MAX_BYTES"),
         parent: MsgId::root(),
-        signer: Ed25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY)
+        signer: UnverifiedEd25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY)
             .expect("Constant EMPTY_ED25519_PUBLIC_KEY should be valid"),
     }
 }

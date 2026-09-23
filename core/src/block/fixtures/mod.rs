@@ -1,7 +1,7 @@
 use lb_binary_codec::canonical::codec_fixtures;
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::Fr;
-use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
+use lb_key_management_system_keys::keys::{Ed25519Signature, UnverifiedEd25519PublicKey};
 
 use crate::{
     block::{BlockTransactionReferences, Proposal, References, SignedHeader, UncleHeaders},
@@ -36,7 +36,7 @@ fn header(id: u8) -> Header {
         Groth16LeaderProof::from_parts(
             lb_pol::PoLProof::from_bytes(&[0x22u8; _]),
             Fr::from(0x5555u64),
-            Ed25519PublicKey::from_bytes(&[0x33u8; _]).expect("valid key bytes"),
+            UnverifiedEd25519PublicKey::from_bytes(&[0x33u8; _]).expect("valid key bytes"),
             VoucherCm::from(Fr::from(0x4444u64)),
         ),
     )

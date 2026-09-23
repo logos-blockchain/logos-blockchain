@@ -6,7 +6,7 @@ use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{
     TxHash, Utxo,
     gas::GasCost,
-    ops::channel::{config::Keys, deposit::Metadata, inscribe::Inscription},
+    ops::channel::{VerifiedChannelKeys, deposit::Metadata, inscribe::Inscription},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_testing_framework::NodeHttpClient;

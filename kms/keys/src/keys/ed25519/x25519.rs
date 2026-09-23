@@ -9,13 +9,16 @@ pub struct X25519PrivateKey(StaticSecret);
 
 impl X25519PrivateKey {
     #[must_use]
-    pub fn derive_shared_key(&self, public_key: &UnverifiedX25519PublicKey) -> Option<SharedKey> {
+    pub fn derive_unverified_shared_key(
+        &self,
+        public_key: &UnverifiedX25519PublicKey,
+    ) -> Option<SharedKey> {
         let shared_key = self.0.diffie_hellman(&public_key.0);
         shared_key.was_contributory().then(|| SharedKey(shared_key))
     }
 
     #[must_use]
-    pub fn derive_secured_shared_key(&self, public_key: &X25519PublicKey) -> SharedKey {
+    pub fn derive_shared_key(&self, public_key: &X25519PublicKey) -> SharedKey {
         let shared_key = self.0.diffie_hellman(&public_key.0.0);
         assert!(
             shared_key.was_contributory(),

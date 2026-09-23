@@ -872,7 +872,7 @@ pub mod tests {
     use lb_cryptarchia_engine::EpochConfig;
     use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, ModulusShift};
     use lb_key_management_system_keys::keys::{
-        Ed25519Key, Ed25519PublicKey, Ed25519Signature, ZkKey, ZkSignature,
+        Ed25519Key, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey, ZkSignature,
     };
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use num_bigint::BigUint;
@@ -914,7 +914,7 @@ pub mod tests {
 
     pub struct DummyProof {
         pub public: LeaderPublic,
-        pub leader_key: Ed25519PublicKey,
+        pub leader_key: UnverifiedEd25519PublicKey,
         pub voucher_cm: VoucherCm,
     }
 
@@ -932,7 +932,7 @@ pub mod tests {
             Fr::from(0u8)
         }
 
-        fn leader_key(&self) -> &Ed25519PublicKey {
+        fn leader_key(&self) -> &UnverifiedEd25519PublicKey {
             &self.leader_key
         }
 
@@ -1053,7 +1053,7 @@ pub mod tests {
                 ledger_state.epoch_state.lottery_0,
                 ledger_state.epoch_state.lottery_1,
             ),
-            leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            leader_key: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
         }
     }
@@ -1938,7 +1938,7 @@ pub mod tests {
                 lottery_0: ledger_state.epoch_state.lottery_0,
                 lottery_1: ledger_state.epoch_state.lottery_1,
             },
-            leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            leader_key: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
         };
         let update_err = ledger_state
@@ -1963,7 +1963,7 @@ pub mod tests {
                 lottery_0: ledger_state.epoch_state.lottery_0,
                 lottery_1: ledger_state.epoch_state.lottery_1,
             },
-            leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            leader_key: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
         };
         let update_err = ledger_state

@@ -29,7 +29,7 @@ impl EncapsulationInput {
     ) -> Self {
         let ephemeral_encryption_key = ephemeral_signing_key
             .derive_x25519()
-            .derive_secured_shared_key(&blend_node_signing_key.derive_x25519());
+            .derive_shared_key(&blend_node_signing_key.derive_x25519());
         Self {
             ephemeral_signing_key,
             shared_key: ephemeral_encryption_key,

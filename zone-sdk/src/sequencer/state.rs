@@ -13,13 +13,15 @@ use lb_core::{
         transactions::{hash::TxHash, states::Unverified},
     },
 };
-use lb_key_management_system_service::keys::Ed25519PublicKey;
+use lb_key_management_system_service::keys::UnverifiedEd25519PublicKey;
 use rpds::HashTrieSetSync;
 
 /// The Ed25519 author of a tx's channel inscription op, if it carries one — the
 /// signer stored on the pending entry's `signed_tx`, recovered for lineage
 /// reconstruction.
-fn inscription_signer(tx: &SignedOps<Unverified, StandardMode>) -> Option<Ed25519PublicKey> {
+fn inscription_signer(
+    tx: &SignedOps<Unverified, StandardMode>,
+) -> Option<UnverifiedEd25519PublicKey> {
     tx.op_refs_iter().find_map(|op| match op {
         OpRef::ChannelInscribe(inscribe) => Some(inscribe.signer),
         _ => None,
@@ -1602,6 +1604,7 @@ impl TxState {
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{Op, ops::channel::inscribe::InscriptionOp, transactions::Ops};
+    use lb_key_management_system_service::keys::Ed25519PublicKey;
 
     use super::*;
     use crate::test_support::header_id;
@@ -1615,7 +1618,7 @@ mod tests {
             channel_id: [0u8; 32].into(),
             inscription: [data].into(),
             parent,
-            signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         })]);
         SignedOps::from_ops_with_sample_proofs(mantle_tx)
     }
@@ -1815,18 +1818,21 @@ mod tests {
     fn bundle_tx(parent: MsgId, data: u8) -> (SignedOps<Unverified, StandardMode>, MsgId, MsgId) {
         use lb_core::mantle::{
             channel::{SlotTimeframe, SlotTimeout},
-            ops::channel::config::{ChannelConfigOp, Keys},
+            ops::channel::{VerifiedChannelKeys, config::ChannelConfigOp},
         };
         let inscribe = InscriptionOp {
             channel_id: [0u8; 32].into(),
             inscription: [data].into(),
             parent,
-            signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         };
         let config = ChannelConfigOp {
             channel: [0u8; 32].into(),
             parent: MsgId::root(),
-            keys: Keys::try_from(vec![Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()]).unwrap(),
+            keys: VerifiedChannelKeys::try_from(vec![
+                Ed25519PublicKey::from_bytes(&[1u8; 32]).unwrap(),
+            ])
+            .unwrap(),
             posting_timeframe: SlotTimeframe::from(0u32),
             posting_timeout: SlotTimeout::from(0u32),
             configuration_threshold: 1,
@@ -1992,7 +1998,7 @@ mod tests {
     fn publish_parent_ignores_pending_pure_config_cut() {
         use lb_core::mantle::{
             channel::{SlotTimeframe, SlotTimeout},
-            ops::channel::config::{ChannelConfigOp, Keys},
+            ops::channel::{VerifiedChannelKeys, config::ChannelConfigOp},
         };
         let genesis = header_id(0);
         let tip = header_id(1);
@@ -2007,7 +2013,10 @@ mod tests {
         let config = ChannelConfigOp {
             channel: [0u8; 32].into(),
             parent: MsgId::root(),
-            keys: Keys::try_from(vec![Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()]).unwrap(),
+            keys: VerifiedChannelKeys::try_from(vec![
+                Ed25519PublicKey::from_bytes(&[1u8; 32]).unwrap(),
+            ])
+            .unwrap(),
             posting_timeframe: SlotTimeframe::from(0u32),
             posting_timeout: SlotTimeout::from(0u32),
             configuration_threshold: 1,
@@ -2099,8 +2108,8 @@ mod tests {
     }
 
     /// A throwaway inscription author for test fixtures (never asserted on).
-    fn test_signer() -> Ed25519PublicKey {
-        Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()
+    fn test_signer() -> UnverifiedEd25519PublicKey {
+        UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap()
     }
 
     /// Submit a fake pending inscription with lineage metadata.
@@ -2123,12 +2132,15 @@ mod tests {
     fn config_tx(parent: MsgId, data: u32) -> (SignedOps<Unverified, StandardMode>, MsgId) {
         use lb_core::mantle::{
             channel::{SlotTimeframe, SlotTimeout},
-            ops::channel::config::{ChannelConfigOp, Keys},
+            ops::channel::{VerifiedChannelKeys, config::ChannelConfigOp},
         };
         let config = ChannelConfigOp {
             channel: [0u8; 32].into(),
             parent,
-            keys: Keys::try_from(vec![Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()]).unwrap(),
+            keys: VerifiedChannelKeys::try_from(vec![
+                Ed25519PublicKey::from_bytes(&[1u8; 32]).unwrap(),
+            ])
+            .unwrap(),
             posting_timeframe: SlotTimeframe::from(data),
             posting_timeout: SlotTimeout::from(0u32),
             configuration_threshold: 1,

@@ -4,11 +4,11 @@ use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
 #[cfg(any(test, feature = "test-utils"))]
 use lb_key_management_system_keys::keys::Ed25519Key;
-use lb_key_management_system_keys::keys::Ed25519Signature;
+use lb_key_management_system_keys::keys::{Ed25519Signature, UnverifiedEd25519PublicKey};
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
-use super::{ChannelId, Ed25519PublicKey, MsgId};
+use super::{ChannelId, MsgId};
 use crate::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
     crypto::{Digest as _, Hasher},
@@ -21,7 +21,7 @@ use crate::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        ops::{SignedOperation, channel::config::Keys},
+        ops::{SignedOperation, channel::UnverifiedChannelKeys},
         transactions::{
             hash::TxHashView,
             states::{Preverified, Unverified, Verified},
@@ -65,7 +65,12 @@ pub struct InscriptionOp {
     pub inscription: Inscription,
     /// Enforce that this inscription comes after this tx
     pub parent: MsgId,
-    pub signer: Ed25519PublicKey,
+    // We can't use a verified Ed25519 public key here because genesis block uses a key of all
+    // `0`s, which would fail validation at deserialization time. So we allow all inscription ops
+    // to have such a key.
+    // This is mitigated by the `verify_strict` we use during verification, but it just would not
+    // give us compile-time guarantees about the validity of such a key.
+    pub signer: UnverifiedEd25519PublicKey,
 }
 
 impl InscriptionOp {
@@ -83,7 +88,9 @@ impl InscriptionOp {
             channel_id: ChannelId::from([14u8; 32]),
             inscription: b"hello logos".into(),
             parent: MsgId::root(),
-            signer: Ed25519Key::from_bytes(&[15; 32]).public_key(),
+            signer: Ed25519Key::from_bytes(&[15; 32])
+                .public_key()
+                .into_unverified(),
         }
     }
 }
@@ -201,7 +208,7 @@ impl<Mode: VerificationMode> ExecutableOperation
             .get(&operation.channel_id)
             .cloned()
             .unwrap_or_else(|| ChannelState {
-                accredited_keys: Keys::from(operation.signer).into(),
+                accredited_keys: UnverifiedChannelKeys::from(operation.signer).into(),
                 configuration_threshold: 1,
                 tip_message: MsgId::root(),
                 config_tip_hash: MsgId::root(),
@@ -270,7 +277,7 @@ mod tests {
             channel_id: ChannelId([0u8; 32]),
             inscription: b"genesis".into(),
             parent: MsgId([0u8; 32]),
-            signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         }
     }
 
@@ -433,8 +440,12 @@ mod tests {
                 ..make_channel_state(
                     1,
                     Some(
-                        Keys::try_from(vec![Ed25519Key::from_bytes(&[15; 32]).public_key()])
-                            .expect("one key is within bounds"),
+                        UnverifiedChannelKeys::try_from(vec![
+                            Ed25519Key::from_bytes(&[15; 32])
+                                .public_key()
+                                .into_unverified(),
+                        ])
+                        .expect("one key is within bounds"),
                     ),
                 )
             },
@@ -467,8 +478,12 @@ mod tests {
             make_channel_state(
                 1,
                 Some(
-                    Keys::try_from(vec![Ed25519Key::from_bytes(&[16; 32]).public_key()])
-                        .expect("one key is within bounds"),
+                    UnverifiedChannelKeys::try_from(vec![
+                        Ed25519Key::from_bytes(&[16; 32])
+                            .public_key()
+                            .into_unverified(),
+                    ])
+                    .expect("one key is within bounds"),
                 ),
             ),
         );
@@ -501,8 +516,10 @@ mod tests {
                 ..make_channel_state(
                     1,
                     Some(
-                        Keys::try_from(vec![
-                            Ed25519Key::from_bytes(&[16; 32]).public_key(),
+                        UnverifiedChannelKeys::try_from(vec![
+                            Ed25519Key::from_bytes(&[16; 32])
+                                .public_key()
+                                .into_unverified(),
                             signer,
                         ])
                         .expect("two keys are within bounds"),
@@ -545,7 +562,7 @@ mod tests {
         assert_eq!(
             context.channels.channel_state(&channel_id),
             Some(&ChannelState {
-                accredited_keys: Arc::new(Keys::from(signer)),
+                accredited_keys: Arc::new(UnverifiedChannelKeys::from(signer)),
                 configuration_threshold: 1,
                 tip_message: message_id,
                 config_tip_hash: MsgId::root(),
@@ -565,8 +582,10 @@ mod tests {
         let operation = InscriptionOp::sample();
         let channel_id = operation.channel_id;
         let message_id = operation.id();
-        let keys = Keys::try_from(vec![
-            Ed25519Key::from_bytes(&[16; 32]).public_key(),
+        let keys = UnverifiedChannelKeys::try_from(vec![
+            Ed25519Key::from_bytes(&[16; 32])
+                .public_key()
+                .into_unverified(),
             operation.signer,
         ])
         .expect("two keys are within bounds");

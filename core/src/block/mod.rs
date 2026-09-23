@@ -201,7 +201,7 @@ impl<Tx> Block<Tx> {
 
         // 2. Expected leader public key
         let expected_leader_public_key = proof_of_leadership.leader_key();
-        if expected_leader_public_key != &signing_key.public_key() {
+        if expected_leader_public_key != signing_key.public_key().as_unverified() {
             return Err(Error::KeyMismatch);
         }
 
@@ -481,7 +481,7 @@ mod tests {
         };
 
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
-        let verifying_key = signing_key.public_key();
+        let verifying_key = signing_key.public_key().into_unverified();
 
         let private_inputs = LeaderPrivate::new(
             public_inputs,
