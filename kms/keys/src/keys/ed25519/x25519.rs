@@ -1,18 +1,27 @@
-use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq as _;
 use x25519_dalek::{SharedSecret, StaticSecret};
 use zeroize::ZeroizeOnDrop;
 
 pub const X25519_SECRET_KEY_LENGTH: usize = 32;
 
-#[derive(Clone, ZeroizeOnDrop, Deserialize, Serialize)]
+#[derive(Clone, ZeroizeOnDrop)]
 pub struct X25519PrivateKey(StaticSecret);
 
 impl X25519PrivateKey {
     #[must_use]
-    pub fn derive_shared_key(&self, public_key: &X25519PublicKey) -> Option<SharedKey> {
+    pub fn derive_shared_key(&self, public_key: &UnverifiedX25519PublicKey) -> Option<SharedKey> {
         let shared_key = self.0.diffie_hellman(&public_key.0);
         shared_key.was_contributory().then(|| SharedKey(shared_key))
+    }
+
+    #[must_use]
+    pub fn derive_secured_shared_key(&self, public_key: &X25519PublicKey) -> SharedKey {
+        let shared_key = self.0.diffie_hellman(&public_key.0.0);
+        assert!(
+            shared_key.was_contributory(),
+            "Shared key derivation failed: non-contributory key exchange. This should not happen with hardened public keys."
+        );
+        SharedKey(shared_key)
     }
 }
 
@@ -38,18 +47,29 @@ impl Eq for X25519PrivateKey {}
 
 pub const X25519_PUBLIC_KEY_LENGTH: usize = 32;
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
-pub struct X25519PublicKey(x25519_dalek::PublicKey);
+#[derive(Clone, Copy)]
+pub struct UnverifiedX25519PublicKey(x25519_dalek::PublicKey);
 
-impl From<[u8; X25519_PUBLIC_KEY_LENGTH]> for X25519PublicKey {
+impl From<[u8; X25519_PUBLIC_KEY_LENGTH]> for UnverifiedX25519PublicKey {
     fn from(bytes: [u8; X25519_PUBLIC_KEY_LENGTH]) -> Self {
         Self(x25519_dalek::PublicKey::from(bytes))
     }
 }
 
-impl From<X25519PublicKey> for [u8; X25519_PUBLIC_KEY_LENGTH] {
-    fn from(key: X25519PublicKey) -> Self {
+impl From<UnverifiedX25519PublicKey> for [u8; X25519_PUBLIC_KEY_LENGTH] {
+    fn from(key: UnverifiedX25519PublicKey) -> Self {
         key.0.to_bytes()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct X25519PublicKey(UnverifiedX25519PublicKey);
+
+impl X25519PublicKey {
+    pub(super) const fn from_x25519_public_key_unchecked(
+        public_key: UnverifiedX25519PublicKey,
+    ) -> Self {
+        Self(public_key)
     }
 }
 

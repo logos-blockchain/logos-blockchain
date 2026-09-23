@@ -24,7 +24,7 @@ impl UnsecuredEd25519Key {
 
     #[must_use]
     pub fn public_key(&self) -> Ed25519PublicKey {
-        self.0.verifying_key().into()
+        Ed25519PublicKey::from_verifying_key_unchecked(self.0.verifying_key())
     }
 
     pub fn generate<Rng>(rng: &mut Rng) -> Self

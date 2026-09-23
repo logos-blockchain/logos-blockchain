@@ -17,7 +17,7 @@ arbitrary-int                   = { workspace = true }
 async-trait                     = { workspace = true }
 blake2                          = { workspace = true }
 bytes                           = { workspace = true }
-ed25519-dalek                   = { features = ["rand_core", "serde", "zeroize"], workspace = true }
+ed25519-dalek                   = { features = ["rand_core", "serde", "std", "zeroize"], workspace = true }
 generic-array                   = { workspace = true }
 hex                             = { workspace = true }
 lb-binary-codec                 = { workspace = true }
