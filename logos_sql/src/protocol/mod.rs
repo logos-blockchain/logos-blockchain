@@ -1,6 +1,9 @@
 //! SQL transactions exchanged by `λSQL` instances.
 
-use std::fmt::{self, Display, Formatter};
+use std::{
+    collections::HashSet,
+    fmt::{self, Display, Formatter},
+};
 
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
 use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode as _};
@@ -25,7 +28,12 @@ const MAX_PAYLOAD_BYTES: usize = Inscription::MAX;
 
 // Allow up to 64 MiB before compression. This caps decompression allocations;
 // the compressed payload must still fit the chain's smaller inscription limit.
-const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+
+// At most 256 SQL transactions can share one inscription.
+// The local queue also accepts at most this many writes waiting to be
+// published.
+pub const MAX_BATCH_WRITES: usize = 256;
 
 /// Stable identity of one application write.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, BinaryCodec)]
@@ -250,16 +258,73 @@ impl CapturedFunctionCalls {
     }
 }
 
-/// Transaction payload carried by a `λSQL` channel inscription.
+/// One independently applied transaction within a channel inscription.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
-pub struct ChannelInscription {
+pub struct ChannelWrite {
     pub tx_id: TxId,
     pub transaction: Transaction,
     pub captured_function_calls: CapturedFunctionCalls,
 }
 
-impl ChannelInscription {
+impl ChannelWrite {
     pub fn encode(&self) -> Result<Vec<u8>, Error> {
+        ChannelBatch::new(vec![self.clone()])?.encode()
+    }
+
+    pub fn decode(payload: &[u8]) -> Result<Self, Error> {
+        let mut writes = ChannelBatch::decode_body(payload)?.into_writes();
+
+        if writes.len() != 1 {
+            return Err(Error::InvalidPayload("expected one stored transaction"));
+        }
+
+        Ok(writes.remove(0))
+    }
+
+    /// Retained batch members are local records, not separate inscriptions.
+    /// They need not individually meet the compressed chain-size limit.
+    pub fn encode_stored(&self) -> Result<Vec<u8>, Error> {
+        ChannelBatch::new(vec![self.clone()])?.encode_body()
+    }
+
+    pub fn content_digest(&self) -> [u8; 32] {
+        Blake2b::<U32>::digest(self.encode_to_vec()).into()
+    }
+}
+
+/// Ordered transactions sharing one publication, not one SQL transaction.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+pub struct ChannelBatch {
+    writes: NonEmptyBoundedVec<ChannelWrite, MAX_BATCH_WRITES>,
+}
+
+impl ChannelBatch {
+    pub fn new(writes: Vec<ChannelWrite>) -> Result<Self, Error> {
+        if !unique_write_ids(&writes) {
+            return Err(Error::InvalidTransaction("batch repeats a transaction id"));
+        }
+
+        let writes = NonEmptyBoundedVec::try_from(writes)
+            .map_err(|_| Error::InvalidTransaction("invalid publication batch size"))?;
+
+        Ok(Self { writes })
+    }
+
+    pub fn into_writes(self) -> Vec<ChannelWrite> {
+        self.writes.into_inner()
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, Error> {
+        let payload = self.encode_body()?;
+
+        if payload.len() > MAX_PAYLOAD_BYTES {
+            return Err(Error::InscriptionTooLarge);
+        }
+
+        Ok(payload)
+    }
+
+    fn encode_body(&self) -> Result<Vec<u8>, Error> {
         if self.encoded_length() > MAX_BODY_BYTES {
             return Err(Error::InvalidTransaction(
                 "transaction exceeds the uncompressed size limit",
@@ -267,7 +332,7 @@ impl ChannelInscription {
         }
 
         let (encoding, body) = compression::encode(self.encode_to_vec())?;
-        let mut payload = Vec::with_capacity(payload_len(body.len())?);
+        let mut payload = Vec::with_capacity(PAYLOAD_HEADER_LEN + body.len());
 
         payload.extend_from_slice(&PAYLOAD_MARKER);
         payload.extend_from_slice(&PAYLOAD_VERSION.to_le_bytes());
@@ -280,6 +345,16 @@ impl ChannelInscription {
     pub fn decode(payload: &[u8]) -> Result<Self, Error> {
         if payload.len() > MAX_PAYLOAD_BYTES {
             return Err(Error::InvalidPayload("payload exceeds the protocol limit"));
+        }
+
+        Self::decode_body(payload)
+    }
+
+    fn decode_body(payload: &[u8]) -> Result<Self, Error> {
+        if payload.len() > MAX_BODY_BYTES + PAYLOAD_HEADER_LEN {
+            return Err(Error::InvalidPayload(
+                "stored payload exceeds the size limit",
+            ));
         }
 
         let (header, body) = payload
@@ -299,13 +374,21 @@ impl ChannelInscription {
 
         let body = compression::decode(header[PAYLOAD_HEADER_LEN - 1], body)?;
 
-        <Self as BinaryDecode>::decode_all(&body, &())
-            .map_err(|_| Error::InvalidPayload("body cannot be decoded"))
-    }
+        let batch = <Self as BinaryDecode>::decode_all(&body, &())
+            .map_err(|_| Error::InvalidPayload("body cannot be decoded"))?;
 
-    pub fn content_digest(&self) -> [u8; 32] {
-        Blake2b::<U32>::digest(self.encode_to_vec()).into()
+        if !unique_write_ids(batch.writes.as_slice()) {
+            return Err(Error::InvalidPayload("batch repeats a transaction id"));
+        }
+
+        Ok(batch)
     }
+}
+
+fn unique_write_ids(writes: &[ChannelWrite]) -> bool {
+    let mut ids = HashSet::with_capacity(writes.len());
+
+    writes.iter().all(|write| ids.insert(write.tx_id))
 }
 
 /// A local write after its identity and channel payload have been encoded.
@@ -321,14 +404,14 @@ impl EncodedWrite {
         transaction: &Transaction,
         captured_function_calls: CapturedFunctionCalls,
     ) -> Result<Self, Error> {
-        let channel_inscription = ChannelInscription {
+        let write = ChannelWrite {
             tx_id,
             transaction: transaction.clone(),
             captured_function_calls,
         };
 
-        let content_digest = channel_inscription.content_digest();
-        let payload = channel_inscription.encode()?;
+        let content_digest = write.content_digest();
+        let payload = write.encode()?;
 
         Ok(Self {
             tx_id,
@@ -336,18 +419,6 @@ impl EncodedWrite {
             payload,
         })
     }
-}
-
-fn payload_len(body_len: usize) -> Result<usize, Error> {
-    let payload_len = PAYLOAD_HEADER_LEN
-        .checked_add(body_len)
-        .ok_or(Error::InscriptionTooLarge)?;
-
-    if payload_len > MAX_PAYLOAD_BYTES {
-        return Err(Error::InscriptionTooLarge);
-    }
-
-    Ok(payload_len)
 }
 
 /// Returns whether an inscription belongs to `λSQL`.
@@ -358,13 +429,39 @@ pub fn is_logos_sql_payload(payload: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::canonical::BinaryEncode as _;
     use rand::{RngCore as _, SeedableRng as _, rngs::StdRng};
     use rusqlite::types::Value;
 
     use super::{
-        CapturedFunctionCalls, ChannelInscription, EncodedWrite, MAX_BODY_BYTES, MAX_PAYLOAD_BYTES,
+        CapturedFunctionCalls, ChannelWrite, EncodedWrite, MAX_BODY_BYTES, MAX_PAYLOAD_BYTES,
         Statement, Transaction, TxId,
     };
+
+    #[test]
+    fn a_batch_cannot_repeat_a_transaction_id() {
+        let write = ChannelWrite {
+            tx_id: TxId::generate(),
+            transaction: Transaction::new(vec![
+                Statement::new("SELECT 1".to_owned(), Vec::new()).unwrap(),
+            ])
+            .unwrap(),
+            captured_function_calls: CapturedFunctionCalls::empty(),
+        };
+        assert!(super::ChannelBatch::new(vec![write.clone(), write.clone()]).is_err());
+
+        let mut payload = super::PAYLOAD_MARKER.to_vec();
+        payload.extend_from_slice(&super::PAYLOAD_VERSION.to_le_bytes());
+        payload.push(0);
+        payload.extend_from_slice(&2u16.to_le_bytes());
+        payload.extend_from_slice(&write.encode_to_vec());
+        payload.extend_from_slice(&write.encode_to_vec());
+
+        assert!(matches!(
+            super::ChannelBatch::decode(&payload),
+            Err(crate::Error::InvalidPayload(_))
+        ));
+    }
 
     #[test]
     fn transaction_id_is_displayed_as_hex() {
@@ -390,8 +487,8 @@ mod tests {
             CapturedFunctionCalls::empty(),
         )
         .expect("payload should encode");
-        let decoded = ChannelInscription::decode(&encoded.payload)
-            .expect("channel inscription should decode");
+        let decoded =
+            ChannelWrite::decode(&encoded.payload).expect("channel inscription should decode");
 
         assert_eq!(decoded.tx_id, encoded.tx_id);
         assert_eq!(decoded.transaction, transaction);
@@ -404,7 +501,7 @@ mod tests {
             Statement::new("SELECT 1".to_owned(), Vec::new()).expect("statement should be valid"),
         ])
         .expect("transaction should be valid");
-        let write = ChannelInscription {
+        let write = ChannelWrite {
             tx_id: TxId::from([3; 32]),
             transaction,
             captured_function_calls: CapturedFunctionCalls::empty(),
@@ -412,7 +509,7 @@ mod tests {
         let mut payload = write.encode().expect("payload should encode");
         payload.push(0);
 
-        assert!(ChannelInscription::decode(&payload).is_err());
+        assert!(ChannelWrite::decode(&payload).is_err());
     }
 
     #[test]
@@ -421,7 +518,7 @@ mod tests {
             Statement::new("SELECT 1".to_owned(), Vec::new()).expect("statement should be valid"),
         ])
         .expect("transaction should be valid");
-        let write = ChannelInscription {
+        let write = ChannelWrite {
             tx_id: TxId::from([3; 32]),
             transaction,
             captured_function_calls: CapturedFunctionCalls::empty(),
@@ -429,30 +526,31 @@ mod tests {
 
         let plain = hex::decode(concat!(
             "4c4f474f535f53514c020000",
+            "0100",
             "0303030303030303030303030303030303030303030303030303030303030303",
             "010000000800000053454c45435420310000000000000000"
         ))
         .expect("fixture should be valid hex");
 
         let expected = hex::decode(concat!(
-            "4c4f474f535f53514c02000138000000",
-            "78018586c10d000004c44e7c8c610533889f1ffbcf422ca06993f2030190ad22c35b6df71c2abd027b"
+            "4c4f474f535f53514c0200013a000000",
+            "7801636460260018191818388038d8d5c7d53944c110c80403002af9027c"
         ))
         .expect("fixture should be valid hex");
 
         assert_eq!(
-            ChannelInscription::decode(&expected).expect("compressed fixture should decode"),
+            ChannelWrite::decode(&expected).expect("compressed fixture should decode"),
             write
         );
         assert_eq!(
-            ChannelInscription::decode(&plain).expect("plain fixture should decode"),
+            ChannelWrite::decode(&plain).expect("plain fixture should decode"),
             write
         );
 
         let mut trailing_plain = plain;
         trailing_plain.push(0);
 
-        assert!(ChannelInscription::decode(&trailing_plain).is_err());
+        assert!(ChannelWrite::decode(&trailing_plain).is_err());
     }
 
     #[test]
@@ -461,7 +559,7 @@ mod tests {
             Statement::new("SELECT 1".to_owned(), Vec::new()).expect("statement should be valid"),
         ])
         .expect("transaction should be valid");
-        let write = ChannelInscription {
+        let write = ChannelWrite {
             tx_id: TxId::from([3; 32]),
             transaction,
             captured_function_calls: CapturedFunctionCalls::empty(),
@@ -491,7 +589,7 @@ mod tests {
         .expect("compressed transaction should fit");
 
         assert!(encoded.payload.len() <= MAX_PAYLOAD_BYTES);
-        let decoded = ChannelInscription::decode(&encoded.payload).expect("payload should decode");
+        let decoded = ChannelWrite::decode(&encoded.payload).expect("payload should decode");
 
         assert_eq!(decoded.transaction, transaction);
     }
@@ -506,7 +604,7 @@ mod tests {
                 .expect("statement should be valid"),
         ])
         .expect("transaction should be valid");
-        let write = ChannelInscription {
+        let write = ChannelWrite {
             tx_id: TxId::from([3; 32]),
             transaction,
             captured_function_calls: CapturedFunctionCalls::empty(),
@@ -528,7 +626,7 @@ mod tests {
             .expect("statement should be valid"),
         ])
         .expect("transaction should be valid");
-        let write = ChannelInscription {
+        let write = ChannelWrite {
             tx_id: TxId::from([3; 32]),
             transaction,
             captured_function_calls: CapturedFunctionCalls::empty(),

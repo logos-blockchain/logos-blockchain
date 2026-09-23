@@ -48,8 +48,8 @@ pub enum Error {
     #[error("invalid local state: {0}")]
     InvalidLocalState(&'static str),
 
-    /// A local write is committed but has not yet been accepted by `ZoneSDK`.
-    #[error("a committed write is still waiting for ZoneSDK to accept it")]
+    /// The local publication queue is full or its SDK checkpoint needs saving.
+    #[error("publication is pending; retry once the local queue can accept writes")]
     PublishPending,
 
     /// The encoded transaction does not conform to the `λSQL` protocol.

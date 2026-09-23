@@ -11,6 +11,7 @@ mod error;
 mod functions;
 mod logos_sql;
 mod protocol;
+mod publication;
 mod runtime;
 mod sql;
 mod status;
