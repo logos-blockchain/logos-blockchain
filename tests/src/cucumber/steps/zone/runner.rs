@@ -13,7 +13,10 @@
 //! there is no window where an event was observed but the policy's reaction
 //! hasn't been applied to the SDK's state.
 
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+};
 
 use lb_core::mantle::transactions::hash::TxHash;
 pub use lb_zone_sdk::sequencer::{
@@ -66,6 +69,9 @@ where
 /// `RecvError::Lagged` they can recover from.
 pub struct Runtime {
     pub task: JoinHandle<()>,
+    /// The first channel-view contract violation the drive loop's checker
+    /// recorded; asserted by the `channel view contract holds` step.
+    pub view_violation: ViewViolation,
     pub client: SequencerClient,
     pub event_rx: broadcast::Receiver<Event>,
     pub checkpoint_rx: watch::Receiver<Option<SequencerCheckpoint>>,
@@ -84,12 +90,15 @@ pub struct Runtime {
 /// are processed inside `next_event`; no separate command path is needed.
 ///
 /// Pulled out as a free async function so callers can spawn it themselves.
-pub(super) async fn run<Node, P>(mut sequencer: ZoneSequencer<Node>, mut policy: P)
-where
+pub(super) async fn run<Node, P>(
+    mut sequencer: ZoneSequencer<Node>,
+    mut policy: P,
+    violation: ViewViolation,
+) where
     Node: adapter::Node + Clone + Send + Sync + 'static,
     P: Policy<Node>,
 {
-    let mut view = ViewChecker::default();
+    let mut view = ViewChecker::new(violation);
     loop {
         let ev = sequencer.next_event().await;
         view.observe(&ev);
@@ -103,12 +112,31 @@ where
 /// consumer holds from the stream (adopted, not orphaned since, not
 /// finalized) must equal `common_prefix ++ adopted`, up to the sequencer's own
 /// in-flight publishes, which the prefix carries and the stream never echoes.
-#[derive(Default)]
 struct ViewChecker {
     held: HashSet<TxHash>,
+    violation: ViewViolation,
 }
 
+/// The first contract violation a [`ViewChecker`] recorded.
+pub type ViewViolation = Arc<Mutex<Option<String>>>;
+
 impl ViewChecker {
+    fn new(violation: ViewViolation) -> Self {
+        Self {
+            held: HashSet::new(),
+            violation,
+        }
+    }
+
+    /// Keep the first violation; a broken invariant makes later checks noise.
+    fn record(&self, message: String) {
+        let mut violation = self.violation.lock().expect("checker mutex");
+        if violation.is_none() {
+            error!("channel view contract violated: {message}");
+            *violation = Some(message);
+        }
+    }
+
     fn observe(&mut self, event: &Event) {
         let Event::BlocksProcessed {
             checkpoint,
@@ -152,26 +180,19 @@ impl ViewChecker {
         let pending: HashSet<TxHash> = checkpoint.pending_txs.iter().map(|(h, _)| *h).collect();
         for tx in &view {
             if !self.held.contains(tx) && !pending.contains(tx) {
-                fail(&format!(
+                self.record(format!(
                     "common_prefix carries {tx:?}, which was never adopted and is not pending"
                 ));
             }
         }
         for tx in &self.held {
             if !view.contains(tx) {
-                fail(&format!(
+                self.record(format!(
                     "{tx:?} was adopted and never orphaned or finalized, but left common_prefix"
                 ));
             }
         }
     }
-}
-
-/// Log, then panic: the drive task's panic is swallowed by cucumber's panic
-/// hook, so the log line is what the scenario output shows.
-fn fail(message: &str) -> ! {
-    error!("channel view contract violated: {message}");
-    panic!("channel view contract violated: {message}");
 }
 
 /// Spawn the drive loop on the current tokio runtime.
@@ -192,10 +213,12 @@ where
     let event_rx = sequencer.subscribe_events();
     let client = sequencer.client();
 
-    let task = tokio::spawn(run(sequencer, policy));
+    let view_violation = ViewViolation::default();
+    let task = tokio::spawn(run(sequencer, policy, Arc::clone(&view_violation)));
 
     Runtime {
         task,
+        view_violation,
         client,
         event_rx,
         checkpoint_rx,

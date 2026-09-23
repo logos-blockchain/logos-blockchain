@@ -178,6 +178,9 @@ pub struct ZonePublishedMessage {
 }
 
 pub type ZoneDiscardedPayloads = Arc<tokio::sync::Mutex<HashSet<Inscription>>>;
+/// The first channel-view contract violation a sequencer's drive loop
+/// recorded, shared with the checker that writes it.
+pub type ZoneViewViolation = Arc<Mutex<Option<String>>>;
 
 pub struct ZoneSequencerIdentity {
     signing_key: Ed25519Key,
@@ -228,6 +231,8 @@ pub struct ZoneState {
     indexer: Option<ZoneReaderConfig>,
     sequencers: HashMap<String, ZoneSequencerIdentity>,
     runtimes: HashMap<String, ZoneSequencerRuntime>,
+    /// One per run of the sequencer alias, so a violation survives a restart.
+    view_violations: HashMap<String, Vec<ZoneViewViolation>>,
     default_sequencer_alias: Option<String>,
     published_messages: HashMap<String, ZonePublishedMessage>,
     submitted_deposits: HashMap<String, (DepositOp, Value)>,
@@ -693,10 +698,15 @@ impl ZoneState {
         turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
         tx_status_rx: tokio::sync::broadcast::Receiver<TxStatusUpdate>,
         discarded_payloads: Option<ZoneDiscardedPayloads>,
+        view_violation: ZoneViewViolation,
     ) {
         if let Some(runtime) = self.runtimes.remove(&alias) {
             runtime.abort_tasks();
         }
+        self.view_violations
+            .entry(alias.clone())
+            .or_default()
+            .push(view_violation);
 
         self.runtimes.insert(
             alias,
@@ -737,6 +747,26 @@ impl ZoneState {
             .ok_or(StepError::LogicalError {
                 message: format!("Zone sequencer '{alias}' is not running"),
             })
+    }
+
+    /// Channel-view contract violations recorded by any run of any sequencer,
+    /// as `(alias, message)`.
+    #[must_use]
+    pub fn view_violations(&self) -> Vec<(String, String)> {
+        let mut violations: Vec<(String, String)> = self
+            .view_violations
+            .iter()
+            .flat_map(|(alias, runs)| {
+                runs.iter().filter_map(|run| {
+                    run.lock()
+                        .ok()
+                        .and_then(|violation| violation.clone())
+                        .map(|message| (alias.clone(), message))
+                })
+            })
+            .collect();
+        violations.sort();
+        violations
     }
 
     pub fn stop_sequencer(&mut self, alias: &str) -> Result<(), StepError> {
@@ -858,6 +888,7 @@ impl ZoneState {
         self.prepared_configs.clear();
         self.prepared_config_signatures.clear();
         self.expected_custom_payloads.clear();
+        self.view_violations.clear();
     }
 
     pub fn remember_expected_custom_payloads(&mut self, payloads: Vec<Inscription>) {

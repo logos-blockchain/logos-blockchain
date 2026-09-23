@@ -229,6 +229,7 @@ impl PublishDeadline {
 /// drive task; the event mpsc is purely for test observation.
 pub struct PolicyRuntime {
     pub task: JoinHandle<()>,
+    pub view_violation: runner::ViewViolation,
     pub client: SequencerClient,
     pub events: tokio::sync::broadcast::Receiver<Event>,
     pub checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
@@ -241,6 +242,7 @@ pub struct PolicyRuntime {
 fn to_policy_runtime(rt: runner::Runtime) -> PolicyRuntime {
     PolicyRuntime {
         task: rt.task,
+        view_violation: rt.view_violation,
         client: rt.client,
         events: rt.event_rx,
         checkpoint_rx: rt.checkpoint_rx,
