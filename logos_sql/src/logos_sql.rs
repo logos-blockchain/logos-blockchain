@@ -12,7 +12,14 @@ use lb_zone_sdk::{
 use reqwest::Url;
 use rusqlite::Connection;
 
-use crate::{db::Databases, error::Error, protocol::TxId, runtime, sql::TransactionBuilder};
+use crate::{
+    db::Databases,
+    error::Error,
+    protocol::TxId,
+    runtime,
+    sql::TransactionBuilder,
+    status::{Displacement, WriteStatus},
+};
 
 /// Configuration for one `λSQL` database.
 pub struct LogosSqlConfig {
@@ -88,7 +95,7 @@ impl LogosSql {
     /// publication.
     ///
     /// ```no_run
-    /// # use logos_sql::{Error, LogosSql, TransactionBuilder, TxId};
+    /// # use logos_sql::{Error, LogosSql, TxId, TransactionBuilder};
     /// # async fn create_task(logos_sql: &LogosSql) -> Result<TxId, Error> {
     /// let transaction = TransactionBuilder::new(
     ///     "INSERT INTO tasks (id, title) VALUES (?1, ?2)",
@@ -112,7 +119,13 @@ impl LogosSql {
     ///
     /// Returns an error when a parameter cannot be represented by the `λSQL`
     /// protocol, validation or the local commit fails, the sequencer is not
-    /// ready, or the runtime has halted.
+    /// ready, or the runtime has halted. Returns
+    /// [`Error::UnhandledDisplacements`] without executing SQL while local
+    /// displacements await application handling.
+    ///
+    /// Coordinate conflict handling with all application writers: after
+    /// handling displacements, reconsider work prepared from the old state.
+    /// This is a participant-wide gate, not a per-transaction freshness check.
     pub async fn execute(&self, transaction: TransactionBuilder) -> Result<TxId, Error> {
         let (tx_id, transaction) = transaction.finish()?;
 
@@ -123,27 +136,85 @@ impl LogosSql {
             .await
     }
 
-    /// Returns local writes whose channel position was removed by a conflict
-    /// or reorganization.
+    /// Resubmits a displaced write's original SQL and parameters.
     ///
-    /// Logos SQL does not execute these writes again. The returned set is
-    /// durable across restarts but provisional: a later reorganization that
-    /// restores the original channel position removes its `TxId` from the
-    /// set. This API does not yet report when a displacement becomes final.
-    /// Repeated calls return the same IDs until such a restoration because
-    /// the current API has no application acknowledgement operation.
-    /// An application that retries before finality must therefore make the
-    /// replacement safe if the original write returns.
+    /// Unlike [`Self::execute`], this deliberately allows execution while
+    /// displacements await handling. It creates a fresh `TxId` and evaluates
+    /// time and random functions again. All other execution checks still apply.
+    ///
+    /// On success, the displacement is marked handled.
+    /// If the call fails or is interrupted, the retry may already have
+    /// committed.
+    ///
+    /// The original write can still return after a reorganization. Only retry
+    /// SQL designed to tolerate that; this does not deduplicate the two writes.
     ///
     /// # Errors
-    ///
-    /// Returns an error when the runtime is no longer available or its local
-    /// outcome state cannot be read.
-    pub async fn displaced_writes(&self) -> Result<Vec<TxId>, Error> {
+    /// Returns execution errors as [`Self::execute`] does, except that
+    /// unhandled displacements do not block this call. Also returns an error
+    /// if marking the displacement handled fails.
+    /// Returns [`Error::StaleDisplacement`] without executing SQL if this
+    /// displacement is no longer awaiting handling.
+    pub async fn retry_displacement(&self, displacement: &Displacement) -> Result<TxId, Error> {
         self.runtime
             .as_ref()
             .ok_or(Error::RuntimeStopped)?
-            .displaced_writes()
+            .retry_displacement(displacement.clone())
+            .await
+    }
+
+    /// Returns the current status of a local write.
+    ///
+    /// `None` means this participant has no record of `tx_id`. A displaced
+    /// write can become live again if a channel reorganization restores it.
+    /// Once a write is [`WriteStatus::Finalized`], its status cannot change.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime has stopped or local status cannot be
+    /// read.
+    pub async fn write_status(&self, tx_id: TxId) -> Result<Option<WriteStatus>, Error> {
+        self.runtime
+            .as_ref()
+            .ok_or(Error::RuntimeStopped)?
+            .write_status(tx_id)
+            .await
+    }
+
+    /// Lists local displacements that still need an application decision.
+    ///
+    /// Reading does not mark them handled. A displacement is cleared when its
+    /// write returns to live history or finalizes. If it is displaced again,
+    /// it appears as a new displacement.
+    /// Each displacement retains its original SQL and parameters for
+    /// [`Self::retry_displacement`].
+    ///
+    /// # Errors
+    /// Returns an error if the runtime is stopped, halted, or local state
+    /// cannot be read.
+    pub async fn unhandled_displacements(&self) -> Result<Vec<Displacement>, Error> {
+        self.runtime
+            .as_ref()
+            .ok_or(Error::RuntimeStopped)?
+            .unhandled_displacements()
+            .await
+    }
+
+    /// Records that the application has considered this displacement.
+    ///
+    /// This does not discard, republish, or change the chain status of the
+    /// write. Handling an older displacement cannot clear a newer one.
+    /// Repeated calls are harmless. Execution stays blocked while any
+    /// displacement is unhandled.
+    ///
+    /// # Errors
+    /// Returns an error if the runtime is stopped, halted, or local state
+    /// cannot be saved.
+    pub async fn mark_displacement_handled(&self, displacement: Displacement) -> Result<(), Error> {
+        self.runtime
+            .as_ref()
+            .ok_or(Error::RuntimeStopped)?
+            .mark_displacement_handled(displacement)
             .await
     }
 
