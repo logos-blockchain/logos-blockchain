@@ -1,7 +1,9 @@
 use std::ffi::c_char;
 
 use lb_node::{
-    UserConfig, cli::build_run_config_from_env, config::deployment::DeploymentSettings,
+    UserConfig,
+    cli::build_run_config_from_env,
+    config::{RunConfig, deployment::DeploymentSettings},
     get_services_to_start, run_node_from_config,
 };
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
@@ -75,22 +77,7 @@ fn initialize_lb_node(
     config_path: *const c_char,
     custom_deployment_path: *const c_char,
 ) -> StatusResult<LogosBlockchainNode> {
-    let user_config = get_user_config(config_path)?;
-
-    // Apply environment-variable overrides on top of the YAML config, matching
-    // the binary's behaviour. This also honours the `DEPLOYMENT` env var.
-    let mut run_config = build_run_config_from_env(user_config).map_err(|e| {
-        OperationStatus::error(
-            OperationStatusCode::InitializationError,
-            format!("Could not apply environment overrides: {e}"),
-        )
-    })?;
-
-    // An explicitly provided deployment path takes precedence over the
-    // `DEPLOYMENT` env var applied above.
-    if !custom_deployment_path.is_null() {
-        run_config.deployment = get_deployment_config(custom_deployment_path)?;
-    }
+    let run_config = resolve_run_config(config_path, custom_deployment_path)?;
 
     // Captured before the run config is consumed, so the node handle can answer
     // for its chain without querying a service for a value that cannot change.
@@ -126,6 +113,35 @@ fn initialize_lb_node(
     })?;
 
     Ok(LogosBlockchainNode::new(app, runtime, &chain_id))
+}
+
+/// Builds the run configuration a node started with these paths would use.
+///
+/// Reads the YAML config, applies the env var overrides, then replaces the
+/// deployment section if `custom_deployment_path` is not null.
+///
+/// # Safety
+///
+/// `config_path` must be a valid NUL-terminated C string, and
+/// `custom_deployment_path` either null or one as well.
+pub(crate) fn resolve_run_config(
+    config_path: *const c_char,
+    custom_deployment_path: *const c_char,
+) -> StatusResult<RunConfig> {
+    let user_config = get_user_config(config_path)?;
+
+    let mut run_config = build_run_config_from_env(user_config).map_err(|e| {
+        OperationStatus::error(
+            OperationStatusCode::InitializationError,
+            format!("Could not apply environment overrides: {e}"),
+        )
+    })?;
+
+    if !custom_deployment_path.is_null() {
+        run_config.deployment = get_deployment_config(custom_deployment_path)?;
+    }
+
+    Ok(run_config)
 }
 
 fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {

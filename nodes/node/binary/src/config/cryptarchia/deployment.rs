@@ -4,7 +4,10 @@ use std::collections::HashMap;
 use lb_chain_service::Epoch;
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::{traits::GenesisTx as _, transactions::genesis_tx::ChainId},
+    mantle::{
+        traits::GenesisTx as _,
+        transactions::genesis_tx::{ChainId, GenesisTime},
+    },
     sdp::{InactivityPeriod, MinStake, ServiceType},
 };
 use lb_cryptarchia_engine::{
@@ -40,6 +43,15 @@ impl Settings {
             .genesis_tx()
             .cryptarchia_parameter()
             .chain_id
+    }
+
+    /// When this deployment's chain starts, read off the genesis inscription.
+    #[must_use]
+    pub fn genesis_time(&self) -> GenesisTime {
+        self.genesis_block
+            .genesis_tx()
+            .cryptarchia_parameter()
+            .genesis_time
     }
 
     #[must_use]

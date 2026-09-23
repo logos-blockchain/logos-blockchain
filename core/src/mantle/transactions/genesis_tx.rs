@@ -358,6 +358,12 @@ impl GenesisTime {
     pub const fn new(seconds_since_epoch: u32) -> Self {
         Self(seconds_since_epoch)
     }
+
+    /// Seconds since the Unix epoch, the unit a Unix timestamp is defined in.
+    #[must_use]
+    pub const fn unix_timestamp(self) -> u32 {
+        self.0
+    }
 }
 
 impl From<GenesisTime> for OffsetDateTime {
