@@ -118,17 +118,34 @@ impl ViewChecker {
         else {
             return;
         };
-        for tx in &channel_update.orphaned {
+        self.remove_orphaned(channel_update);
+        self.add_adopted(channel_update);
+        self.remove_finalized(finalized);
+        self.check_view(channel_update, checkpoint);
+    }
+
+    fn remove_orphaned(&mut self, update: &ChannelUpdate) {
+        for tx in &update.orphaned {
             self.held.remove(&tx.tx_hash());
         }
-        for tx in &channel_update.adopted {
+    }
+
+    fn add_adopted(&mut self, update: &ChannelUpdate) {
+        for tx in &update.adopted {
             self.held.insert(tx.tx_hash());
         }
+    }
+
+    fn remove_finalized(&mut self, finalized: &[FinalizedTx]) {
         for tx in finalized {
             self.held.remove(&tx.tx_hash);
         }
+    }
 
-        let view: HashSet<TxHash> = channel_update
+    /// `common_prefix ++ adopted` carries only what is held or in flight, and
+    /// everything held.
+    fn check_view(&self, update: &ChannelUpdate, checkpoint: &SequencerCheckpoint) {
+        let view: HashSet<TxHash> = update
             .canonical_chain()
             .map(ChannelUpdateTx::tx_hash)
             .collect();
