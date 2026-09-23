@@ -75,12 +75,12 @@ codec_fixtures!(
     EncapsulatedPrivateHeader,
     context = core::num::NonZeroU64::new(1).unwrap(),
     Self::try_initialize(
-        &[EncapsulationInput::try_new(
+        &[EncapsulationInput::new(
             UnsecuredEd25519Key::from_bytes(&[1u8; 32]),
             &UnsecuredEd25519Key::from_bytes(&[2u8; 32]).public_key(),
             VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE]),
             VerifiedProofOfSelection::from_bytes_unchecked([0u8; PROOF_OF_SELECTION_SIZE]),
-        ).unwrap()], 1
+        )], 1
     ).unwrap() => "aac741e4d4aa7dda96f8f12343513612b5b4aaef97b76eeabccd84305ea75366cfa700c71fc60e212e0a81aeadecf66902674a92cf5b9bb8737cc4cda97dd7c4c8a32ce737a704492afbfa0e5e9988d1e746708b59e5aa250a9093712d7fd084bbef87879e7e241cbdd5a2bdafbbc0afaf745d730d655ca70225c2bb0f6f76bdc95d3ed0bac9ea1d54e7cd6f599100bd6ad82be4897abfe33832f8889f748ab5c6081edb3d77a672fe46bb4ef878e1a76fefb190282d97f890ea6c8707dec0747adfc07dbe99e730c392b53fef3a54f5b72f615f7a73c31cc6909d178b9a64da4dc79cc33e0a6bec5ff869584cb048967efc8705946115785193df89ae0b8059c4648560259f84b6096e1758d8c5f165cc70c4eeecab307ceb559b8c49fdaf1098"
 );
 
@@ -146,13 +146,12 @@ codec_fixtures!(
 
 fn wire_fixture_message() -> EncapsulatedMessageWithVerifiedPublicHeader {
     let recipient_signing_key = UnsecuredEd25519Key::from_bytes(&[1u8; 32]);
-    let inputs = [EncapsulationInput::try_new(
+    let inputs = [EncapsulationInput::new(
         UnsecuredEd25519Key::from_bytes(&[2u8; 32]),
         &recipient_signing_key.public_key(),
         VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE]),
         VerifiedProofOfSelection::from_bytes_unchecked([0u8; PROOF_OF_SELECTION_SIZE]),
-    )
-    .expect("well-known encapsulation input is valid")];
+    )];
 
     let payload_body = full_length_body(b"well-known blend message payload");
 
