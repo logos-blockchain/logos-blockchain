@@ -84,7 +84,8 @@ const CONTROL_SCHEMA: &str = "
     ) STRICT;
 
     CREATE TABLE IF NOT EXISTS __logos_sql_write_statuses (
-        tx_id BLOB PRIMARY KEY CHECK (length(tx_id) = 32),
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        tx_id BLOB NOT NULL UNIQUE CHECK (length(tx_id) = 32),
         status TEXT NOT NULL CHECK (status IN ('live', 'displaced', 'finalized')),
         displacement_id BLOB,
         displacement_reason TEXT,
@@ -116,7 +117,7 @@ const SELECT_UNHANDLED_DISPLACEMENTS: &str = "
     SELECT tx_id, displacement_id, displacement_reason, displacement_payload
     FROM __logos_sql_write_statuses
     WHERE displacement_handled = 0
-    ORDER BY tx_id
+    ORDER BY sequence
 ";
 const HAS_UNHANDLED_DISPLACEMENTS: &str = "
     SELECT EXISTS (
@@ -445,6 +446,9 @@ impl Databases {
                 true
             ],
         )?;
+
+        // Record the order now, not when a later event displaces the write.
+        set_write_status(&transaction, pending.tx_id, WriteStatus::Live)?;
         transaction.commit()?;
 
         self.clear_pending_publish(pending.tx_id)
@@ -1270,7 +1274,7 @@ mod tests {
     use rusqlite::{Connection, types::Value};
     use tempfile::TempDir;
 
-    use super::Databases;
+    use super::{Databases, PendingPublish};
     use crate::{
         error::Error,
         protocol::{
@@ -1307,6 +1311,26 @@ mod tests {
             Statement::new(sql.to_owned(), Vec::new()).expect("statement should be valid"),
         ])
         .expect("transaction should be valid")
+    }
+
+    fn publish_write(
+        db: &mut Databases,
+        tx_id: TxId,
+        transaction: &Transaction,
+        this_msg: MsgId,
+    ) -> PendingPublish {
+        db.commit_local_write(tx_id, transaction)
+            .expect("local write should commit");
+
+        let pending = db
+            .pending_publish()
+            .expect("pending write should load")
+            .expect("pending write should exist");
+
+        db.complete_publish(&checkpoint(1, 1), this_msg, &pending)
+            .expect("publish should be complete");
+
+        pending
     }
 
     fn row_values(connection: &Connection, table: &str) -> Vec<Value> {
@@ -1397,6 +1421,62 @@ mod tests {
     }
 
     #[test]
+    fn displacements_keep_the_original_write_order() {
+        let dir = TempDir::new().unwrap();
+        let mut db = Databases::open(dir.path()).unwrap();
+        let first_id = TxId::from([3; 32]);
+        let second_id = TxId::from([2; 32]);
+        let pending_id = TxId::from([1; 32]);
+        let first_position = MsgId::from([7; 32]);
+        let second_position = MsgId::from([8; 32]);
+
+        let first = publish_write(
+            &mut db,
+            first_id,
+            &transaction("CREATE TABLE items(value TEXT)"),
+            first_position,
+        );
+        publish_write(&mut db, second_id, &insert("second"), second_position);
+
+        db.commit_local_write(pending_id, &insert("pending"))
+            .unwrap();
+        let pending = db.pending_publish().unwrap().unwrap();
+
+        // Rebuilds record the pending displacement before the older orphans.
+        db.record_pending_write_displacement(&pending).unwrap();
+        db.apply_history_delta(&[], &[first_position, second_position], &[])
+            .unwrap();
+
+        let expected = vec![first_id, second_id, pending_id];
+        let displaced_ids = |db: &Databases| {
+            db.unhandled_displacements()
+                .unwrap()
+                .into_iter()
+                .map(|displacement| displacement.tx_id)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(displaced_ids(&db), expected);
+
+        db.apply_history_delta(
+            &[],
+            &[],
+            &[super::SuffixWrite {
+                this_msg: first_position,
+                tx_id: first_id,
+                payload: first.payload,
+                local: true,
+            }],
+        )
+        .unwrap();
+        db.apply_history_delta(&[], &[first_position], &[]).unwrap();
+        drop(db);
+
+        let db = Databases::open(dir.path()).unwrap();
+        assert_eq!(displaced_ids(&db), expected);
+    }
+
+    #[test]
     fn displaced_sql_can_be_resubmitted_after_rebuild_and_restart() {
         for published in [false, true] {
             let dir = TempDir::new().unwrap();
@@ -1482,20 +1562,15 @@ mod tests {
     fn republished_write_returns_to_live_status_at_its_new_position() {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = Databases::open(dir.path()).expect("databases should open");
-        let tx_id = db
-            .commit_local_write(
-                TxId::generate(),
-                &transaction("CREATE TABLE local_write(value INTEGER)"),
-            )
-            .expect("local write should commit");
-        let pending = db
-            .pending_publish()
-            .expect("pending write should load")
-            .expect("pending write should exist");
+        let tx_id = TxId::generate();
         let original_position = MsgId::from([7; 32]);
+        let pending = publish_write(
+            &mut db,
+            tx_id,
+            &transaction("CREATE TABLE local_write(value INTEGER)"),
+            original_position,
+        );
 
-        db.complete_publish(&checkpoint(1, 1), original_position, &pending)
-            .expect("publish should be complete");
         db.apply_history_delta(&[], &[original_position], &[])
             .expect("local write should be orphaned");
 
@@ -1577,20 +1652,15 @@ mod tests {
     fn finalized_write_no_longer_needs_displacement_review_after_restart() {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = Databases::open(dir.path()).expect("databases should open");
-        let tx_id = db
-            .commit_local_write(
-                TxId::generate(),
-                &transaction("CREATE TABLE local_write(value INTEGER)"),
-            )
-            .expect("local write should commit");
-        let pending = db
-            .pending_publish()
-            .expect("pending write should load")
-            .expect("pending write should exist");
+        let tx_id = TxId::generate();
         let this_msg = MsgId::from([7; 32]);
 
-        db.complete_publish(&checkpoint(1, 1), this_msg, &pending)
-            .expect("publish should be complete");
+        publish_write(
+            &mut db,
+            tx_id,
+            &transaction("CREATE TABLE local_write(value INTEGER)"),
+            this_msg,
+        );
 
         db.apply_history_delta(&[], &[this_msg], &[])
             .expect("local write should be displaced");
