@@ -38,12 +38,6 @@ impl From<[u8; X25519_SECRET_KEY_LENGTH]> for X25519PrivateKey {
     }
 }
 
-impl From<X25519PrivateKey> for [u8; X25519_SECRET_KEY_LENGTH] {
-    fn from(key: X25519PrivateKey) -> Self {
-        key.0.to_bytes()
-    }
-}
-
 impl PartialEq for X25519PrivateKey {
     fn eq(&self, other: &Self) -> bool {
         self.0.as_bytes().ct_eq(other.0.as_bytes()).into()
