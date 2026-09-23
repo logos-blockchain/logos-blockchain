@@ -110,6 +110,7 @@ pub struct MockNode {
     pub funding_priority_fees: Option<mpsc::Sender<u64>>,
     /// Served by `time_info()`.
     pub slot_duration_ms: u64,
+    pub slots_per_epoch: u64,
     pub genesis_time_unix_ms: i64,
 }
 
@@ -137,6 +138,7 @@ impl Default for MockNode {
             events: HashMap::new(),
             funding_priority_fees: None,
             slot_duration_ms: 1_000,
+            slots_per_epoch: 1_000,
             genesis_time_unix_ms: 0,
         }
     }
@@ -190,6 +192,7 @@ impl adapter::Node for MockNode {
             genesis_time_unix_ms: self.genesis_time_unix_ms,
             current_slot: 0,
             current_epoch: 0,
+            slots_per_epoch: self.slots_per_epoch,
         })
     }
 
