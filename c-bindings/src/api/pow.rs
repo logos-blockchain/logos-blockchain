@@ -461,30 +461,42 @@ pub struct PoWClaimTargetStatus {
     pub balance: FfiOption<Value>,
 }
 
-/// The runtime state of the `PoW` service, as the running service holds it.
+/// The runtime state of unattended claiming.
+///
+/// Mirrors [`lb_pow_service::AutoClaimStatus`], except for the tick:
+/// [`AutoClaimTick`] keeps its period inside the variant, which C cannot
+/// express, so it arrives here as a `tick` plus the `tick_unit` that reads it.
 #[repr(C)]
-pub struct PoWStatus {
-    pub is_mining: bool,
-    pub are_rewards_enabled: bool,
-    pub is_auto_claim_armed: bool,
-    pub auto_claim_tick: u64,
-    pub auto_claim_tick_unit: PoWAutoClaimTickUnit,
+pub struct PoWAutoClaimStatus {
+    pub is_armed: bool,
+    pub tick: u64,
+    pub tick_unit: PoWAutoClaimTickUnit,
+    /// The configured claim targets. Points to `targets_len` contiguous
+    /// [`PoWClaimTargetStatus`] values.
     pub targets: *mut PoWClaimTargetStatus,
+    /// Number of entries in `targets`.
     pub targets_len: usize,
 }
 
-impl Default for PoWStatus {
+impl Default for PoWAutoClaimStatus {
     fn default() -> Self {
         Self {
-            is_mining: false,
-            are_rewards_enabled: false,
-            is_auto_claim_armed: false,
-            auto_claim_tick: 0,
-            auto_claim_tick_unit: PoWAutoClaimTickUnit::Seconds,
+            is_armed: false,
+            tick: 0,
+            tick_unit: PoWAutoClaimTickUnit::Seconds,
             targets: ptr::null_mut(),
             targets_len: 0,
         }
     }
+}
+
+/// The runtime state of the `PoW` service, as the running service holds it.
+#[repr(C)]
+#[derive(Default)]
+pub struct PoWStatus {
+    pub is_mining: bool,
+    pub are_rewards_enabled: bool,
+    pub auto_claim: PoWAutoClaimStatus,
 }
 
 /// Reports the runtime state of the `PoW` service.
@@ -538,7 +550,7 @@ pub type FfiPoWStatusResult = FfiStatusResult<PoWStatus>;
 ///
 /// # Memory Management
 ///
-/// This function allocates memory for the `targets` list.
+/// This function allocates memory for the `auto_claim.targets` list.
 /// The caller must free the returned value using the [`free_pow_status`]
 /// function.
 #[unsafe(no_mangle)]
@@ -548,7 +560,7 @@ pub unsafe extern "C" fn pow_status(node: *const LogosBlockchainNode) -> FfiPoWS
     let node = unsafe { &*node };
     let status = unwrap_or_return_error!(pow_status_sync(node));
 
-    let (auto_claim_tick, auto_claim_tick_unit) = match status.auto_claim.tick {
+    let (tick, tick_unit) = match status.auto_claim.tick {
         AutoClaimTick::Seconds(seconds) => (seconds.get(), PoWAutoClaimTickUnit::Seconds),
         AutoClaimTick::Slots(slots) => (slots.get(), PoWAutoClaimTickUnit::Slots),
     };
@@ -570,11 +582,13 @@ pub unsafe extern "C" fn pow_status(node: *const LogosBlockchainNode) -> FfiPoWS
     FfiPoWStatusResult::ok(PoWStatus {
         is_mining: status.is_mining,
         are_rewards_enabled: status.are_rewards_enabled,
-        is_auto_claim_armed: status.auto_claim.is_armed,
-        auto_claim_tick,
-        auto_claim_tick_unit,
-        targets: targets_ptr,
-        targets_len: len,
+        auto_claim: PoWAutoClaimStatus {
+            is_armed: status.auto_claim.is_armed,
+            tick,
+            tick_unit,
+            targets: targets_ptr,
+            targets_len: len,
+        },
     })
 }
 
@@ -591,11 +605,11 @@ pub unsafe extern "C" fn pow_status(node: *const LogosBlockchainNode) -> FfiPoWS
 /// must call this exactly once per result.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_pow_status(status: PoWStatus) -> OperationStatus {
-    return_error_if_null_pointer!(status.targets);
+    return_error_if_null_pointer!(status.auto_claim.targets);
     let targets = unsafe {
         Box::from_raw(ptr::slice_from_raw_parts_mut(
-            status.targets,
-            status.targets_len,
+            status.auto_claim.targets,
+            status.auto_claim.targets_len,
         ))
     };
 
