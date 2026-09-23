@@ -330,7 +330,7 @@ mod test {
                 Membership::new_without_local(&[Node {
                     address: Multiaddr::empty(),
                     id: PeerId::random(),
-                    public_key: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE])
+                    public_key: Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE])
                         .unwrap(),
                 }]),
                 PoQVerificationInputsMinusSigningKey {

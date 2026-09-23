@@ -587,7 +587,7 @@ mod tests {
                 UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             )
         };
-        let verifying_key = Ed25519PublicKey::from_bytes(&[0; 32]).unwrap();
+        let verifying_key = Ed25519PublicKey::from_bytes(&[1; 32]).unwrap();
         let utxo1 = Utxo::new([0u8; 32], 0, create_test_note(1000));
         let utxo2 = Utxo::new([1u8; 32], 1, create_test_note(2000));
         let sdp_declare_op_helper = |utxo_to_use: Utxo, zk_id_value: u8| {
@@ -754,7 +754,7 @@ mod tests {
             ChannelId::from([0; 32]),
             &cryptarchia_param(),
             MsgId::root(),
-            verifying_key.into_unverified(),
+            UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         );
         let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
         let tx = create_trusted_tx_with_transfer(
