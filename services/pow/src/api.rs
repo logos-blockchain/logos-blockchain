@@ -138,9 +138,7 @@ where
         self.relay
             .send(PoWServiceMessage::Status { response: resp_tx })
             .await
-            .map_err(|(relay_err, _)| {
-                ApiError::CommsFailure(format!("{relay_err} while sending Status"))
-            })?;
+            .map_err(|error| ApiError::CommsFailure(format!("{error} while sending Status")))?;
 
         resp_rx.await.map_err(|relay_err| {
             ApiError::CommsFailure(format!("{relay_err} while receiving Status response"))
