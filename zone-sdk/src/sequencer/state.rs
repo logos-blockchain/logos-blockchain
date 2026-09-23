@@ -1392,7 +1392,6 @@ impl TxState {
         let mut finalized = self.finalized_prefix_ids(old_lineage);
         finalized.extend(self.finalized_prefix_ids(&new_lineage));
         finalized.extend(finalized_now.iter().copied());
-        finalized.insert(self.finalized_config);
 
         let adopted_infos: Vec<&InscriptionInfo> = new_lineage
             .iter()
@@ -1421,27 +1420,28 @@ impl TxState {
         })
     }
 
-    /// Msg-ids of `lineage`'s prefix up to and including the finalized entry;
-    /// empty when the finalized boundary lies below the lineage's start.
-    /// The entry is matched as a `(this_msg, parent_msg)` pair, last
-    /// occurrence taken.
+    /// Msg-ids of `lineage`'s prefix up to and including the finalized
+    /// message or config entry, whichever comes later; empty when both lie
+    /// below the lineage's start. The message is matched as a
+    /// `(this_msg, parent_msg)` pair, last occurrence taken.
     ///
     /// An unknown parent (fresh state or checkpoint restore) matches
     /// nothing: every boundary move records the parent, so until one happens
     /// the boundary entry sits at-or-below the LIB and cannot appear in a
     /// lineage.
     fn finalized_prefix_ids(&self, lineage: &[InscriptionInfo]) -> HashSet<MsgId> {
-        lineage
+        let message = lineage.iter().rposition(|i| {
+            i.this_msg == self.finalized_msg
+                && self
+                    .finalized_parent_msg
+                    .is_some_and(|parent| i.parent_msg == parent)
+        });
+        let config = lineage
             .iter()
-            .rposition(|i| {
-                i.this_msg == self.finalized_msg
-                    && self
-                        .finalized_parent_msg
-                        .is_some_and(|parent| i.parent_msg == parent)
-            })
-            .map_or_else(HashSet::new, |pos| {
-                lineage[..=pos].iter().map(|i| i.this_msg).collect()
-            })
+            .rposition(|i| i.this_msg == self.finalized_config);
+        message.max(config).map_or_else(HashSet::new, |pos| {
+            lineage[..=pos].iter().map(|i| i.this_msg).collect()
+        })
     }
 
     /// One update entry per tx: a multi-op custom tx contributes several
@@ -2289,6 +2289,35 @@ mod tests {
         assert_eq!(shed.len(), 1);
         assert_eq!(shed[0].hash(), stale_hash);
         assert!(!state.pending_other_contains(&stale_hash));
+    }
+
+    #[test]
+    fn finalized_prefix_masks_every_config_in_the_lib_block() {
+        let genesis = header_id(0);
+        let b1 = header_id(1);
+        let b2 = header_id(2);
+        let mut state = TxState::new(genesis, MsgId::root());
+        let (c1_tx, c1) = config_tx(MsgId::root(), 1);
+        let (c2_tx, c2) = config_tx(c1, 2);
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![],
+            vec![
+                config_block_tx(&c1_tx, c1, MsgId::root()),
+                config_block_tx(&c2_tx, c2, c1),
+            ],
+            Vec::new(),
+        );
+        state.process_block(b2, b1, b1, vec![], vec![], Vec::new());
+        assert_eq!(state.finalized_config(), c2);
+        assert!(
+            state
+                .detect_channel_update(&[], b2, &HashSet::new())
+                .is_none(),
+            "finalized configs are not reported"
+        );
     }
 
     /// The finalized config tip must survive a warm restart. It lives only in
