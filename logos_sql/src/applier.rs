@@ -11,7 +11,7 @@ use lb_zone_sdk::{
 use crate::{
     db::{Databases, PendingPublish, SuffixWrite},
     error::Error,
-    protocol::{self, ChannelInscription, TxId},
+    protocol::{self, ChannelBatch, ChannelWrite, TxId},
 };
 
 const TARGET: &str = lb_log_targets::logos_sql::APPLIER;
@@ -35,7 +35,7 @@ enum RebuildCause {
     /// transaction automatically, so the rebuild removes its effect and
     /// reports it as displaced. This also resumes a rebuild interrupted after
     /// the displacement was recorded.
-    PendingWriteInvalidated(PendingPublish),
+    PendingWriteInvalidated(Vec<PendingPublish>),
     /// Canonical channel history changed and `LIVE.db` must drop orphaned SQL.
     ChannelFork,
 }
@@ -50,7 +50,7 @@ enum ApplicationPlan {
 }
 
 impl ApplyTarget {
-    fn apply(self, db: &mut Databases, write: &ChannelInscription) -> Result<(), Error> {
+    fn apply(self, db: &mut Databases, write: &ChannelWrite) -> Result<(), Error> {
         match self {
             Self::Live => db.apply_adopted_write(write),
             Self::Lib => db.apply_finalized_write_to_lib(write),
@@ -187,12 +187,14 @@ impl SqlChanges {
     /// optimistic local effect must move or disappear, or canonical history
     /// removes an effect that is already present in `LIVE.db`.
     fn application_plan(&self, db: &Databases) -> Result<ApplicationPlan, Error> {
-        if let Some(pending) = db.pending_publish()? {
+        let pending = db.pending_writes()?;
+
+        if let Some(first) = pending.first() {
             // The rebuild records the displacement first, then replaces
             // `LIVE.db`, which removes its pending-write record. If both records
             // still exist, the process stopped between those two steps and the
             // rebuild must resume.
-            if db.pending_write_rebuild_was_interrupted(pending.tx_id)? {
+            if db.pending_write_rebuild_was_interrupted(first.tx_id)? {
                 return Ok(ApplicationPlan::Rebuild(
                     RebuildCause::PendingWriteInvalidated(pending),
                 ));
@@ -215,16 +217,14 @@ impl SqlChanges {
     /// Reports whether this event changed the history below a pending local
     /// write.
     ///
-    /// Adoptions and orphans always change that base. Finalizing a write
-    /// already retained in the live suffix only moves the finalized
-    /// boundary and does not invalidate the pending write's execution
-    /// order.
+    /// Orphans change the base. Adopting or finalizing a write already in the
+    /// live suffix does not: its effects preceded the queued local writes.
     fn changes_history_before_pending_write(&self, db: &Databases) -> Result<bool, Error> {
-        if !self.adopted.is_empty() || !self.orphaned.is_empty() {
+        if !self.orphaned.is_empty() {
             return Ok(true);
         }
 
-        for inscription in &self.finalized {
+        for inscription in self.adopted.iter().chain(&self.finalized) {
             if !db.live_suffix_contains(inscription.this_msg)? {
                 return Ok(true);
             }
@@ -249,7 +249,9 @@ impl SqlChanges {
     fn rebuild(&self, db: &mut Databases, cause: &RebuildCause) -> Result<(), Error> {
         match cause {
             RebuildCause::PendingWriteInvalidated(pending) => {
-                db.record_pending_write_displacement(pending)?;
+                for write in pending {
+                    db.record_pending_write_displacement(write)?;
+                }
             }
             RebuildCause::ChannelFork => {}
         }
@@ -296,20 +298,22 @@ impl SqlChanges {
 
         for inscription in &self.adopted {
             let payload = inscription.payload.as_ref();
-            let write = match ChannelInscription::decode(payload) {
-                Ok(write) => write,
+            let batch = match ChannelBatch::decode(payload) {
+                Ok(batch) => batch,
                 Err(error) => {
                     handle_write_error(db, inscription, None, error)?;
                     continue;
                 }
             };
 
-            writes.push(SuffixWrite {
-                this_msg: inscription.this_msg,
-                tx_id: write.tx_id,
-                payload: payload.to_vec(),
-                local: false,
-            });
+            for write in batch.into_writes() {
+                writes.push(SuffixWrite {
+                    this_msg: inscription.this_msg,
+                    tx_id: write.tx_id,
+                    payload: write.encode_stored()?,
+                    local: false,
+                });
+            }
         }
 
         Ok(writes)
@@ -326,7 +330,7 @@ fn rebuild_live_from_suffix(db: &mut Databases) -> Result<(), Error> {
     let mut rebuild = db.begin_live_rebuild()?;
 
     for retained in suffix {
-        let write = ChannelInscription::decode(&retained.payload)
+        let write = ChannelWrite::decode(&retained.payload)
             .map_err(|_| Error::InvalidLocalState("stored live suffix payload is malformed"))?;
 
         if write.tx_id != retained.tx_id {
@@ -362,22 +366,25 @@ fn apply_inscription(
 ) -> Result<(), Error> {
     let payload = inscription.payload.as_ref();
 
-    let write = match ChannelInscription::decode(payload) {
-        Ok(write) => write,
+    let batch = match ChannelBatch::decode(payload) {
+        Ok(batch) => batch,
         Err(error) => return handle_write_error(db, inscription, None, error),
     };
 
-    if let Err(error) = target.apply(db, &write) {
-        return handle_write_error(db, inscription, Some(write.tx_id), error);
-    }
+    for write in batch.into_writes() {
+        if let Err(error) = target.apply(db, &write) {
+            handle_write_error(db, inscription, Some(write.tx_id), error)?;
+            continue;
+        }
 
-    tracing::debug!(
-        target: TARGET,
-        tx_id = ?write.tx_id,
-        statements = write.transaction.statements().len(),
-        ?target,
-        "channel write processed"
-    );
+        tracing::debug!(
+            target: TARGET,
+            tx_id = ?write.tx_id,
+            statements = write.transaction.statements().len(),
+            ?target,
+            "channel write processed"
+        );
+    }
 
     Ok(())
 }
@@ -443,13 +450,205 @@ mod tests {
     use crate::{
         db::{Databases, SuffixWrite},
         protocol::{
-            CapturedFunctionCalls, ChannelInscription, EncodedWrite, PAYLOAD_MARKER, Statement,
-            Transaction, TxId,
+            CapturedFunctionCalls, ChannelBatch, ChannelWrite, EncodedWrite, PAYLOAD_MARKER,
+            Statement, Transaction, TxId,
         },
+        publication::Publication,
         status::WriteStatus,
     };
 
     const CHANNEL_ID: [u8; 32] = [9; 32];
+
+    #[test]
+    fn a_failed_transaction_does_not_rollback_other_batch_members() {
+        let dir = TempDir::new().unwrap();
+        let mut db = Databases::open(dir.path()).unwrap();
+        let sql = [
+            "CREATE TABLE items(value INTEGER PRIMARY KEY)",
+            "INSERT INTO items VALUES (1)",
+            "INSERT INTO items VALUES (2); INSERT INTO missing VALUES (1)",
+            "INSERT INTO items VALUES (1)",
+            "INSERT INTO items VALUES (3)",
+        ];
+        let writes = sql
+            .into_iter()
+            .map(|sql| ChannelWrite {
+                tx_id: TxId::generate(),
+                transaction: Transaction::new(
+                    sql.split(';')
+                        .map(|sql| Statement::new(sql.to_owned(), Vec::new()).unwrap())
+                        .collect(),
+                )
+                .unwrap(),
+                captured_function_calls: CapturedFunctionCalls::empty(),
+            })
+            .collect();
+        let payload = ChannelBatch::new(writes).unwrap().encode().unwrap();
+        let event = blocks_processed(
+            checkpoint(1, 1),
+            vec![ChannelUpdateTx::Inscription(inscription(&payload, 1))],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        on_event(&mut db, &event, ChannelId::from(CHANNEL_ID)).unwrap();
+        on_event(&mut db, &event, ChannelId::from(CHANNEL_ID)).unwrap();
+
+        let connection = Databases::open_reader(db.live_path()).unwrap();
+        let values: Vec<i64> = connection
+            .prepare("SELECT value FROM items ORDER BY value")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        assert_eq!(values, vec![1, 3]);
+        assert_eq!(db.rejected_write_count().unwrap(), 2);
+
+        let event = blocks_processed(
+            checkpoint(2, 2),
+            Vec::new(),
+            Vec::new(),
+            vec![finalized(&payload, 1)],
+        );
+        on_event(&mut db, &event, ChannelId::from(CHANNEL_ID)).unwrap();
+        assert_eq!(item_count(db.lib_path()), 2);
+    }
+
+    #[test]
+    fn batched_writes_are_displaced_restored_and_finalized_together() {
+        let dir = TempDir::new().unwrap();
+        let mut db = Databases::open(dir.path()).unwrap();
+        let first = TxId::from([2; 32]);
+        let second = TxId::from([1; 32]);
+
+        db.commit_local_write(
+            first,
+            &transaction("CREATE TABLE items(value INTEGER)", Vec::new()),
+        )
+        .unwrap();
+        db.commit_local_write(
+            second,
+            &transaction("INSERT INTO items VALUES (random())", Vec::new()),
+        )
+        .unwrap();
+        let original: i64 = Databases::open_reader(db.live_path())
+            .unwrap()
+            .query_row("SELECT value FROM items", [], |row| row.get(0))
+            .unwrap();
+        let publication = Publication::prepare(db.pending_writes().unwrap())
+            .unwrap()
+            .unwrap();
+        db.complete_batch(&checkpoint(1, 1), MsgId::from([1; 32]), &publication.writes)
+            .unwrap();
+
+        let orphan = blocks_processed(
+            checkpoint(2, 2),
+            Vec::new(),
+            vec![ChannelUpdateTx::Inscription(inscription(
+                &publication.payload,
+                1,
+            ))],
+            Vec::new(),
+        );
+        on_event(&mut db, &orphan, ChannelId::from(CHANNEL_ID)).unwrap();
+
+        assert!(!table_exists(db.live_path(), "items"));
+        let displaced: Vec<_> = db
+            .unhandled_displacements()
+            .unwrap()
+            .into_iter()
+            .map(|write| write.tx_id)
+            .collect();
+        assert_eq!(displaced, vec![first, second]);
+        drop(db);
+
+        let mut db = Databases::open(dir.path()).unwrap();
+        let restore = blocks_processed(
+            checkpoint(3, 3),
+            vec![ChannelUpdateTx::Inscription(inscription(
+                &publication.payload,
+                1,
+            ))],
+            Vec::new(),
+            Vec::new(),
+        );
+        on_event(&mut db, &restore, ChannelId::from(CHANNEL_ID)).unwrap();
+
+        assert_eq!(item_count(db.live_path()), 1);
+        let restored: i64 = Databases::open_reader(db.live_path())
+            .unwrap()
+            .query_row("SELECT value FROM items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(restored, original);
+        assert!(db.unhandled_displacements().unwrap().is_empty());
+        assert_eq!(db.write_status(first).unwrap(), Some(WriteStatus::Live));
+        assert_eq!(db.write_status(second).unwrap(), Some(WriteStatus::Live));
+
+        let finish = blocks_processed(
+            checkpoint(4, 4),
+            Vec::new(),
+            Vec::new(),
+            vec![finalized(&publication.payload, 1)],
+        );
+        on_event(&mut db, &finish, ChannelId::from(CHANNEL_ID)).unwrap();
+
+        assert_eq!(item_count(db.lib_path()), 1);
+        assert_eq!(
+            db.write_status(first).unwrap(),
+            Some(WriteStatus::Finalized)
+        );
+        assert_eq!(
+            db.write_status(second).unwrap(),
+            Some(WriteStatus::Finalized)
+        );
+        assert!(db.live_suffix().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_changed_base_displaces_every_queued_write() {
+        let dir = TempDir::new().unwrap();
+        let mut db = Databases::open(dir.path()).unwrap();
+        let first = TxId::generate();
+        let second = TxId::generate();
+        db.commit_local_write(
+            first,
+            &transaction("CREATE TABLE items(value INTEGER)", Vec::new()),
+        )
+        .unwrap();
+        db.commit_local_write(
+            second,
+            &transaction("INSERT INTO items VALUES (1)", Vec::new()),
+        )
+        .unwrap();
+
+        let foreign = encoded_write(&transaction(
+            "CREATE TABLE foreign_data(value INTEGER)",
+            Vec::new(),
+        ));
+        let event = blocks_processed(
+            checkpoint(1, 1),
+            vec![ChannelUpdateTx::Inscription(inscription(
+                &foreign.payload,
+                1,
+            ))],
+            Vec::new(),
+            Vec::new(),
+        );
+        on_event(&mut db, &event, ChannelId::from(CHANNEL_ID)).unwrap();
+
+        assert!(db.pending_writes().unwrap().is_empty());
+        assert!(!table_exists(db.live_path(), "items"));
+        assert!(table_exists(db.live_path(), "foreign_data"));
+        let displaced: Vec<_> = db
+            .unhandled_displacements()
+            .unwrap()
+            .into_iter()
+            .map(|write| write.tx_id)
+            .collect();
+        assert_eq!(displaced, vec![first, second]);
+    }
 
     fn checkpoint(byte: u8, slot: u64) -> SequencerCheckpoint {
         SequencerCheckpoint {
@@ -653,7 +852,7 @@ mod tests {
         ])
         .expect("transaction should be valid");
         let encoded = encoded_write(&transaction);
-        let write = ChannelInscription::decode(&encoded.payload).expect("payload should decode");
+        let write = ChannelWrite::decode(&encoded.payload).expect("payload should decode");
 
         // Simulate a crash after SQL and its applied marker commit but before
         // the ZoneSDK checkpoint is persisted.
@@ -889,7 +1088,7 @@ mod tests {
             "CREATE TABLE first_write(value INTEGER)",
             Vec::new(),
         ));
-        let conflicting = ChannelInscription {
+        let conflicting = ChannelWrite {
             tx_id: first.tx_id,
             transaction: transaction("CREATE TABLE conflicting_write(value INTEGER)", Vec::new()),
             captured_function_calls: CapturedFunctionCalls::empty(),
@@ -1295,7 +1494,7 @@ mod tests {
             &[],
             &[SuffixWrite {
                 this_msg: foreign_inscription.this_msg,
-                tx_id: ChannelInscription::decode(&foreign.payload)
+                tx_id: ChannelWrite::decode(&foreign.payload)
                     .expect("payload should decode")
                     .tx_id,
                 payload: foreign.payload.clone(),
@@ -1356,7 +1555,7 @@ mod tests {
             &[],
             &[SuffixWrite {
                 this_msg: foreign_inscription.this_msg,
-                tx_id: ChannelInscription::decode(&foreign.payload)
+                tx_id: ChannelWrite::decode(&foreign.payload)
                     .expect("payload should decode")
                     .tx_id,
                 payload: foreign.payload.clone(),

@@ -20,7 +20,7 @@ use rusqlite::{
 use crate::{
     error::Error,
     functions::FunctionOverrides,
-    protocol::{ChannelInscription, EncodedWrite, Transaction, TxId},
+    protocol::{ChannelWrite, EncodedWrite, MAX_BATCH_WRITES, Transaction, TxId},
     status::{Displacement, DisplacementReason, WriteStatus},
 };
 
@@ -37,10 +37,10 @@ const DISPLACED_STATUS: &str = "displaced";
 const FINALIZED_STATUS: &str = "finalized";
 
 // Present in both state databases so replicated SQL observes the same schema.
-// Only LIVE.db stores a row, committed atomically with the local write.
+// Only LIVE.db stores queued writes, committed atomically with their effects.
 const PENDING_PUBLISH_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS __logos_sql_pending_publish (
-        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        sequence INTEGER PRIMARY KEY,
         tx_id BLOB NOT NULL UNIQUE CHECK (length(tx_id) = 32),
         payload BLOB NOT NULL
     ) STRICT;
@@ -65,22 +65,27 @@ const CONTROL_SCHEMA: &str = "
     ) STRICT;
 
     CREATE TABLE IF NOT EXISTS __logos_sql_rejected_writes (
-        this_msg BLOB PRIMARY KEY CHECK (length(this_msg) = 32),
+        this_msg BLOB NOT NULL CHECK (length(this_msg) = 32),
         tx_id BLOB CHECK (tx_id IS NULL OR length(tx_id) = 32),
-        reason TEXT NOT NULL
+        reason TEXT NOT NULL,
+        UNIQUE (this_msg, tx_id)
     ) STRICT;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS __logos_sql_rejected_payloads
+    ON __logos_sql_rejected_writes(this_msg) WHERE tx_id IS NULL;
 
     CREATE TABLE IF NOT EXISTS __logos_sql_live_suffix (
         position INTEGER PRIMARY KEY AUTOINCREMENT,
-        this_msg BLOB NOT NULL UNIQUE CHECK (length(this_msg) = 32),
+        this_msg BLOB NOT NULL CHECK (length(this_msg) = 32),
         tx_id BLOB NOT NULL CHECK (length(tx_id) = 32),
         payload BLOB NOT NULL,
-        local INTEGER NOT NULL CHECK (local IN (0, 1))
+        local INTEGER NOT NULL CHECK (local IN (0, 1)),
+        UNIQUE (this_msg, tx_id)
     ) STRICT;
 
     CREATE TABLE IF NOT EXISTS __logos_sql_displaced_writes (
         tx_id BLOB PRIMARY KEY CHECK (length(tx_id) = 32),
-        this_msg BLOB NOT NULL UNIQUE CHECK (length(this_msg) = 32)
+        this_msg BLOB NOT NULL CHECK (length(this_msg) = 32)
     ) STRICT;
 
     CREATE TABLE IF NOT EXISTS __logos_sql_write_statuses (
@@ -153,29 +158,29 @@ const UPDATE_CHECKPOINT: &str = "
 const INSERT_REJECTED_WRITE: &str = "
     INSERT INTO __logos_sql_rejected_writes (this_msg, tx_id, reason)
     VALUES (?1, ?2, ?3)
-    ON CONFLICT (this_msg) DO NOTHING
+    ON CONFLICT DO NOTHING
 ";
 
 const INSERT_PENDING_PUBLISH: &str = "
-    INSERT INTO __logos_sql_pending_publish (singleton, tx_id, payload)
-    VALUES (1, ?1, ?2)
+    INSERT INTO __logos_sql_pending_publish (tx_id, payload)
+    VALUES (?1, ?2)
 ";
 
 const SELECT_PENDING_PUBLISH: &str = "
     SELECT tx_id, payload
     FROM __logos_sql_pending_publish
-    WHERE singleton = 1
+    ORDER BY sequence
 ";
 
 const CLEAR_PENDING_PUBLISH: &str = "
     DELETE FROM __logos_sql_pending_publish
-    WHERE singleton = 1 AND tx_id = ?1
+    WHERE tx_id = ?1
 ";
 
 const INSERT_SUFFIX_WRITE: &str = "
     INSERT INTO __logos_sql_live_suffix (this_msg, tx_id, payload, local)
     VALUES (?1, ?2, ?3, ?4)
-    ON CONFLICT (this_msg) DO NOTHING
+    ON CONFLICT (this_msg, tx_id) DO NOTHING
 ";
 
 const DELETE_SUFFIX_WRITE: &str = "
@@ -242,6 +247,21 @@ const SELECT_DISPLACED_WRITE_AT_POSITION: &str = "
     FROM __logos_sql_displaced_writes
     WHERE this_msg = ?1
 ";
+
+const SELECT_PENDING_QUEUE_SIZE: &str = "
+    SELECT count(*), coalesce(sum(length(payload)), 0)
+    FROM __logos_sql_pending_publish
+";
+
+const HAS_PENDING_WRITES: &str = "
+    SELECT EXISTS(SELECT 1 FROM __logos_sql_pending_publish)
+";
+
+const HAS_PENDING_WRITE: &str = "
+    SELECT EXISTS(SELECT 1 FROM __logos_sql_pending_publish WHERE tx_id = ?1)
+";
+
+const MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
 
 const SELECT_DISPLACED_WRITE_BY_TX: &str = "
     SELECT EXISTS(
@@ -313,7 +333,7 @@ impl StoredPendingPublish {
     }
 }
 
-/// One Logos SQL inscription retained above the finalized boundary.
+/// One transaction retained above finality; batch members share `this_msg`.
 pub struct SuffixWrite {
     pub this_msg: MsgId,
     pub tx_id: TxId,
@@ -334,7 +354,7 @@ pub struct LiveRebuild {
 }
 
 impl LiveRebuild {
-    pub(crate) fn apply_write(&mut self, write: &ChannelInscription) -> Result<(), Error> {
+    pub(crate) fn apply_write(&mut self, write: &ChannelWrite) -> Result<(), Error> {
         apply_channel_write(&mut self.database, write)
     }
 }
@@ -427,31 +447,55 @@ impl Databases {
 
     /// Persists `ZoneSDK` ownership of a local write and adds it to the live
     /// suffix before removing the pending publication from `LIVE.db`.
+    #[cfg(test)]
     pub(crate) fn complete_publish(
         &mut self,
         checkpoint: &SequencerCheckpoint,
         this_msg: MsgId,
         pending: &PendingPublish,
     ) -> Result<(), Error> {
+        self.complete_batch(checkpoint, this_msg, std::slice::from_ref(pending))
+    }
+
+    /// Saves the SDK checkpoint and every batch member before clearing the
+    /// local queue. Queue removal is atomic, so recovery sees the whole batch.
+    pub(crate) fn complete_batch(
+        &mut self,
+        checkpoint: &SequencerCheckpoint,
+        this_msg: MsgId,
+        pending: &[PendingPublish],
+    ) -> Result<(), Error> {
         let encoded_checkpoint = checkpoint_options().serialize(checkpoint)?;
         let transaction = self.control.transaction()?;
 
         transaction.execute(UPDATE_CHECKPOINT, [encoded_checkpoint])?;
-        transaction.execute(
-            INSERT_SUFFIX_WRITE,
-            params![
-                this_msg.as_ref(),
-                pending.tx_id.as_ref(),
-                pending.payload,
-                true
-            ],
-        )?;
 
-        // Record the order now, not when a later event displaces the write.
-        set_write_status(&transaction, pending.tx_id, WriteStatus::Live)?;
+        for pending in pending {
+            transaction.execute(
+                INSERT_SUFFIX_WRITE,
+                params![
+                    this_msg.as_ref(),
+                    pending.tx_id.as_ref(),
+                    pending.payload,
+                    true
+                ],
+            )?;
+
+            // Record the order now, not when a later event displaces the write.
+            set_write_status(&transaction, pending.tx_id, WriteStatus::Live)?;
+        }
+
         transaction.commit()?;
 
-        self.clear_pending_publish(pending.tx_id)
+        let transaction = self.live.connection.transaction()?;
+
+        for pending in pending {
+            transaction.execute(CLEAR_PENDING_PUBLISH, [pending.tx_id.as_ref()])?;
+        }
+
+        transaction.commit()?;
+
+        Ok(())
     }
 
     /// Applies one channel event to retained unfinalized history and local
@@ -540,7 +584,7 @@ impl Databases {
                 tx_id: decode_tx_id(tx_id)?,
                 id: decode_tx_id(id)?,
                 reason,
-                transaction: ChannelInscription::decode(&payload)?.transaction,
+                transaction: ChannelWrite::decode(&payload)?.transaction,
             })
         })
         .collect()
@@ -594,10 +638,12 @@ impl Databases {
             return Ok(Some(status));
         }
 
-        if self
-            .pending_publish()?
-            .is_some_and(|pending| pending.tx_id == tx_id)
-        {
+        let pending: bool =
+            self.live
+                .connection
+                .query_row(HAS_PENDING_WRITE, [tx_id.as_ref()], |row| row.get(0))?;
+
+        if pending {
             return Ok(Some(WriteStatus::Live));
         }
 
@@ -698,7 +744,14 @@ impl Databases {
         tx_id: TxId,
         transaction: &Transaction,
     ) -> Result<TxId, Error> {
-        if self.pending_publish()?.is_some() {
+        let (queued, bytes): (usize, usize) =
+            self.live
+                .connection
+                .query_row(SELECT_PENDING_QUEUE_SIZE, [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })?;
+
+        if queued >= MAX_BATCH_WRITES {
             return Err(Error::PublishPending);
         }
 
@@ -708,6 +761,10 @@ impl Databases {
         apply_statements(&db_transaction, transaction)?;
         let captured_function_calls = capture.finish()?;
         let encoded = EncodedWrite::new(tx_id, transaction, captured_function_calls)?;
+
+        if bytes + encoded.payload.len() > MAX_PENDING_BYTES {
+            return Err(Error::PublishPending);
+        }
 
         db_transaction.execute(
             INSERT_APPLIED_WRITE,
@@ -724,7 +781,7 @@ impl Databases {
     }
 
     /// Applies a newly adopted channel write to the live database.
-    pub(crate) fn apply_adopted_write(&mut self, write: &ChannelInscription) -> Result<(), Error> {
+    pub(crate) fn apply_adopted_write(&mut self, write: &ChannelWrite) -> Result<(), Error> {
         apply_channel_write(&mut self.live, write)
     }
 
@@ -732,7 +789,7 @@ impl Databases {
     /// is being built from that state.
     pub(crate) fn apply_finalized_write_to_lib(
         &mut self,
-        write: &ChannelInscription,
+        write: &ChannelWrite,
     ) -> Result<(), Error> {
         apply_channel_write(&mut self.lib, write)
     }
@@ -742,10 +799,7 @@ impl Databases {
     /// Applying to `LIVE.db` as well covers writes first discovered through
     /// finalized backfill. Writes already applied locally or while adopted
     /// are skipped using their `TxId`.
-    pub(crate) fn apply_finalized_write(
-        &mut self,
-        write: &ChannelInscription,
-    ) -> Result<(), Error> {
+    pub(crate) fn apply_finalized_write(&mut self, write: &ChannelWrite) -> Result<(), Error> {
         let content_digest = write.content_digest();
 
         is_write_applied(&self.lib.connection, write.tx_id, &content_digest)?;
@@ -769,6 +823,7 @@ impl Databases {
             .map_err(Error::from)
     }
 
+    #[cfg(test)]
     pub(crate) fn pending_publish(&self) -> Result<Option<PendingPublish>, Error> {
         let record = self
             .live
@@ -788,6 +843,29 @@ impl Databases {
         }))
     }
 
+    pub(crate) fn has_pending_writes(&self) -> Result<bool, Error> {
+        self.live
+            .connection
+            .query_row(HAS_PENDING_WRITES, [], |row| row.get(0))
+            .map_err(Error::from)
+    }
+
+    pub(crate) fn pending_writes(&self) -> Result<Vec<PendingPublish>, Error> {
+        let mut statement = self.live.connection.prepare(SELECT_PENDING_PUBLISH)?;
+        let rows = statement.query_map([], StoredPendingPublish::from_row)?;
+
+        rows.map(|row| {
+            let record = row?;
+
+            Ok(PendingPublish {
+                tx_id: decode_tx_id(record.tx_id)?,
+                payload: record.payload,
+            })
+        })
+        .collect()
+    }
+
+    #[cfg(test)]
     pub(crate) fn clear_pending_publish(&self, tx_id: TxId) -> Result<(), Error> {
         let changed = self
             .live
@@ -815,23 +893,13 @@ impl Databases {
 /// Removes a write's suffix and displacement records; marks it finalized if
 /// local.
 fn finalize_write(transaction: &rusqlite::Transaction<'_>, this_msg: &MsgId) -> Result<(), Error> {
-    let mut local_tx_id = transaction
-        .query_row(SELECT_LOCAL_SUFFIX_WRITE, [this_msg.as_ref()], |row| {
-            row.get::<_, Vec<u8>>(0)
-        })
-        .optional()?;
+    let mut local = transaction.prepare(SELECT_LOCAL_SUFFIX_WRITE)?;
+    let mut displaced = transaction.prepare(SELECT_DISPLACED_WRITE_AT_POSITION)?;
+    let local_ids = local.query_map([this_msg.as_ref()], |row| row.get::<_, Vec<u8>>(0))?;
+    let displaced_ids = displaced.query_map([this_msg.as_ref()], |row| row.get::<_, Vec<u8>>(0))?;
 
-    if local_tx_id.is_none() {
-        local_tx_id = transaction
-            .query_row(
-                SELECT_DISPLACED_WRITE_AT_POSITION,
-                [this_msg.as_ref()],
-                |row| row.get::<_, Vec<u8>>(0),
-            )
-            .optional()?;
-    }
-
-    if let Some(tx_id) = local_tx_id {
+    for tx_id in local_ids.chain(displaced_ids) {
+        let tx_id = tx_id?;
         let tx_id = decode_tx_id(tx_id)?;
 
         set_write_status(transaction, tx_id, WriteStatus::Finalized)?;
@@ -846,13 +914,14 @@ fn finalize_write(transaction: &rusqlite::Transaction<'_>, this_msg: &MsgId) -> 
 
 /// Removes a write from the live suffix and marks it displaced if local.
 fn orphan_write(transaction: &rusqlite::Transaction<'_>, this_msg: &MsgId) -> Result<(), Error> {
-    let local_write = transaction
-        .query_row(SELECT_LOCAL_SUFFIX_WRITE, [this_msg.as_ref()], |row| {
+    let mut statement = transaction.prepare(SELECT_LOCAL_SUFFIX_WRITE)?;
+    let local_writes = statement
+        .query_map([this_msg.as_ref()], |row| {
             Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
-        })
-        .optional()?;
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
 
-    if let Some((tx_id, payload)) = local_write {
+    for (tx_id, payload) in local_writes {
         let tx_id = decode_tx_id(tx_id)?;
 
         transaction.execute(
@@ -870,22 +939,6 @@ fn orphan_write(transaction: &rusqlite::Transaction<'_>, this_msg: &MsgId) -> Re
 
 /// Adds a write to the live suffix; marks a displaced local write live again.
 fn adopt_write(transaction: &rusqlite::Transaction<'_>, write: &SuffixWrite) -> Result<(), Error> {
-    let restored_tx_id = transaction
-        .query_row(
-            SELECT_DISPLACED_WRITE_AT_POSITION,
-            [write.this_msg.as_ref()],
-            |row| row.get::<_, Vec<u8>>(0),
-        )
-        .optional()?;
-
-    if let Some(tx_id) = restored_tx_id
-        && decode_tx_id(tx_id)? != write.tx_id
-    {
-        return Err(Error::InvalidLocalState(
-            "stored displaced write does not match its channel payload",
-        ));
-    }
-
     let restored_local = transaction.query_row(
         SELECT_DISPLACED_WRITE_BY_TX,
         [write.tx_id.as_ref()],
@@ -1041,7 +1094,7 @@ fn configure_connection(conn: &Connection) -> Result<(), Error> {
 
 fn apply_channel_write(
     database: &mut ReplicatedDatabase,
-    write: &ChannelInscription,
+    write: &ChannelWrite,
 ) -> Result<(), Error> {
     let content_digest = write.content_digest();
     let replay = database.functions.replay(&write.captured_function_calls);
@@ -1278,8 +1331,8 @@ mod tests {
     use crate::{
         error::Error,
         protocol::{
-            CapturedFunction, CapturedFunctionCall, CapturedFunctionCalls, ChannelInscription,
-            Statement, Transaction, TxId,
+            CapturedFunction, CapturedFunctionCall, CapturedFunctionCalls, ChannelWrite, Statement,
+            Transaction, TxId,
         },
         status::WriteStatus,
     };
@@ -1421,6 +1474,91 @@ mod tests {
     }
 
     #[test]
+    fn a_full_publication_queue_does_not_apply_the_next_write() {
+        let dir = TempDir::new().unwrap();
+        let mut db = Databases::open(dir.path()).unwrap();
+        db.commit_local_write(
+            TxId::generate(),
+            &transaction("CREATE TABLE items(value TEXT)"),
+        )
+        .unwrap();
+
+        for _ in 1..crate::protocol::MAX_BATCH_WRITES {
+            db.commit_local_write(TxId::generate(), &insert("queued"))
+                .unwrap();
+        }
+
+        assert!(matches!(
+            db.commit_local_write(TxId::generate(), &insert("overflow")),
+            Err(Error::PublishPending)
+        ));
+        let overflow: i64 = db
+            .live
+            .query_row(
+                "SELECT count(*) FROM items WHERE value = 'overflow'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(overflow, 0);
+        assert_eq!(
+            db.pending_writes().unwrap().len(),
+            crate::protocol::MAX_BATCH_WRITES
+        );
+    }
+
+    #[test]
+    fn batch_publication_recovers_before_removing_queued_writes() {
+        let dir = TempDir::new().unwrap();
+        let mut db = Databases::open(dir.path()).unwrap();
+        let first = TxId::generate();
+        let second = TxId::generate();
+        db.commit_local_write(first, &transaction("CREATE TABLE items(value TEXT)"))
+            .unwrap();
+        db.commit_local_write(second, &insert("second")).unwrap();
+        let publication = crate::publication::Publication::prepare(db.pending_writes().unwrap())
+            .unwrap()
+            .unwrap();
+
+        // Stop after control.db commits, before any queue record is removed.
+        db.live.connection.execute_batch(
+            "CREATE TRIGGER interrupt_queue_removal BEFORE DELETE ON __logos_sql_pending_publish
+             BEGIN SELECT RAISE(FAIL, 'interrupted'); END;"
+        ).unwrap();
+
+        assert!(
+            db.complete_batch(&checkpoint(1, 1), MsgId::from([1; 32]), &publication.writes)
+                .is_err()
+        );
+        drop(db);
+
+        let mut db = Databases::open(dir.path()).unwrap();
+        let pending = db.pending_writes().unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(
+            crate::publication::Publication::matches_pending(&publication.payload, &pending)
+                .unwrap(),
+            Some(2)
+        );
+
+        db.live
+            .connection
+            .execute_batch("DROP TRIGGER interrupt_queue_removal")
+            .unwrap();
+        db.complete_batch(&checkpoint(1, 1), MsgId::from([1; 32]), &pending)
+            .unwrap();
+
+        assert!(db.pending_writes().unwrap().is_empty());
+        assert_eq!(db.live_suffix().unwrap().len(), 2);
+        assert_eq!(
+            row_values(&db.live, "items"),
+            vec![Value::Text("second".to_owned())]
+        );
+        assert_eq!(db.write_status(first).unwrap(), Some(WriteStatus::Live));
+        assert_eq!(db.write_status(second).unwrap(), Some(WriteStatus::Live));
+    }
+
+    #[test]
     fn displacements_keep_the_original_write_order() {
         let dir = TempDir::new().unwrap();
         let mut db = Databases::open(dir.path()).unwrap();
@@ -1518,7 +1656,7 @@ mod tests {
             db.commit_local_write(retry_id, retry).unwrap();
 
             let retried = db.pending_publish().unwrap().unwrap();
-            let inscription = ChannelInscription::decode(&retried.payload).unwrap();
+            let inscription = ChannelWrite::decode(&retried.payload).unwrap();
             assert_eq!(inscription.tx_id, retry_id);
             assert_eq!(inscription.transaction, original);
         }
@@ -1816,7 +1954,7 @@ mod tests {
             .expect("pending publication should load")
             .expect("pending publication should exist");
         let channel_inscription =
-            ChannelInscription::decode(&pending.payload).expect("payload should decode");
+            ChannelWrite::decode(&pending.payload).expect("payload should decode");
         let functions = channel_inscription
             .captured_function_calls
             .as_slice()
@@ -1881,7 +2019,7 @@ mod tests {
             .expect("pending publication should load")
             .expect("pending publication should exist");
         let channel_inscription =
-            ChannelInscription::decode(&pending.payload).expect("payload should decode");
+            ChannelWrite::decode(&pending.payload).expect("payload should decode");
 
         assert_eq!(
             channel_inscription.captured_function_calls.as_slice().len(),
@@ -1904,7 +2042,7 @@ mod tests {
             .execute("CREATE TABLE items(value INTEGER)", [])
             .expect("application table should be created");
 
-        let write = ChannelInscription {
+        let write = ChannelWrite {
             tx_id: TxId::from([7; 32]),
             transaction: transaction("INSERT INTO items VALUES (random())"),
             captured_function_calls: CapturedFunctionCalls::empty(),
@@ -1934,7 +2072,7 @@ mod tests {
 
         let captured = CapturedFunctionCall::new(CapturedFunction::Random, Value::Integer(7))
             .expect("captured result should be valid");
-        let write = ChannelInscription {
+        let write = ChannelWrite {
             tx_id: TxId::from([7; 32]),
             transaction: transaction("INSERT INTO items VALUES (1)"),
             captured_function_calls: CapturedFunctionCalls::new(vec![captured])
@@ -1964,12 +2102,12 @@ mod tests {
             .expect("application table should be created");
 
         let tx_id = TxId::from([7; 32]);
-        let first = ChannelInscription {
+        let first = ChannelWrite {
             tx_id,
             transaction: insert("first"),
             captured_function_calls: CapturedFunctionCalls::empty(),
         };
-        let conflicting = ChannelInscription {
+        let conflicting = ChannelWrite {
             tx_id,
             transaction: insert("conflicting"),
             captured_function_calls: CapturedFunctionCalls::empty(),
@@ -2004,12 +2142,12 @@ mod tests {
         }
 
         let tx_id = TxId::from([7; 32]);
-        let first = ChannelInscription {
+        let first = ChannelWrite {
             tx_id,
             transaction: insert("first"),
             captured_function_calls: CapturedFunctionCalls::empty(),
         };
-        let conflicting = ChannelInscription {
+        let conflicting = ChannelWrite {
             tx_id,
             transaction: insert("conflicting"),
             captured_function_calls: CapturedFunctionCalls::empty(),

@@ -10,18 +10,22 @@ use lb_zone_sdk::{
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
+    time::{Instant, sleep_until},
 };
 
 use crate::{
     applier,
-    db::{Databases, PendingPublish},
+    db::Databases,
     error::Error,
     protocol::{Transaction, TxId},
+    publication::Publication,
     status::{Displacement, WriteStatus},
 };
 
 const COMMAND_CHANNEL_CAPACITY: usize = 16;
 const PUBLISH_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+// A short window lets sequential execute calls share publication overhead.
+const BATCH_DELAY: Duration = Duration::from_millis(10);
 const TARGET: &str = lb_log_targets::logos_sql::RUNTIME;
 
 /// Requests processed by the task that owns the sequencer and database writer.
@@ -78,6 +82,7 @@ pub fn spawn(
         ready_tx: Some(ready_tx),
         event_pending_retry: None,
         publish_state: PublishState::Idle,
+        next_publish_at: Instant::now() + BATCH_DELAY,
     };
     let task = tokio::spawn(runtime.run(restored_checkpoint));
 
@@ -191,7 +196,7 @@ impl RuntimeHandle {
 enum PublishState {
     Idle,
     CheckpointPending {
-        pending: PendingPublish,
+        pending: Publication,
         this_msg: lb_zone_sdk::node_types::MsgId,
         checkpoint: Box<SequencerCheckpoint>,
     },
@@ -209,6 +214,7 @@ struct Runtime {
     ready_tx: Option<oneshot::Sender<()>>,
     event_pending_retry: Option<PendingEvent>,
     publish_state: PublishState,
+    next_publish_at: Instant,
 }
 
 /// A channel event retained with the error from its latest application attempt.
@@ -225,7 +231,10 @@ impl Runtime {
         retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
-            let retry_needed = self.has_pending_work()?;
+            let publication_ready = self.can_publish()
+                && self.event_pending_retry.is_none()
+                && (matches!(self.publish_state, PublishState::CheckpointPending { .. })
+                    || self.db.has_pending_writes()?);
 
             // `ZoneSDK::publish` only queues the node post; `next_event` drives
             // it. Do not poll events until the returned checkpoint commits. A
@@ -237,28 +246,31 @@ impl Runtime {
                         return Ok(());
                     };
 
-                    if !self.handle_command(command).await {
+                    if !self.handle_command(command) {
                         return self.shutdown_result();
                     }
                 },
                 event = self.sequencer.next_event(), if self.event_pending_retry.is_none() && !matches!(self.publish_state, PublishState::CheckpointPending { .. }) => {
-                    self.handle_event(event).await;
+                    self.handle_event(event);
                 },
-                _ = retry.tick(), if retry_needed => {
-                    self.retry_pending_work().await?;
+                _ = retry.tick(), if self.event_pending_retry.is_some() => {
+                    self.retry_pending_event()?;
+                },
+                () = sleep_until(self.next_publish_at), if publication_ready => {
+                    self.publish_queued_writes().await;
                 }
             }
         }
     }
 
-    async fn handle_command(&mut self, command: Command) -> bool {
+    fn handle_command(&mut self, command: Command) -> bool {
         match command {
             Command::Execute {
                 tx_id,
                 transaction,
                 response_tx,
             } => {
-                let result = self.execute(tx_id, transaction).await;
+                let result = self.execute(tx_id, &transaction);
                 drop(response_tx.send(result));
 
                 true
@@ -267,7 +279,7 @@ impl Runtime {
                 displacement,
                 response_tx,
             } => {
-                let result = self.retry_displacement(&displacement).await;
+                let result = self.retry_displacement(&displacement);
                 drop(response_tx.send(result));
 
                 true
@@ -310,7 +322,7 @@ impl Runtime {
         }
     }
 
-    async fn execute(&mut self, tx_id: TxId, transaction: Transaction) -> Result<TxId, Error> {
+    fn execute(&mut self, tx_id: TxId, transaction: &Transaction) -> Result<TxId, Error> {
         self.ensure_ready_to_write()?;
 
         // No await between checking and committing: a channel event cannot
@@ -319,14 +331,20 @@ impl Runtime {
             return Err(Error::UnhandledDisplacements);
         }
 
-        self.db.commit_local_write(tx_id, &transaction)?;
-        self.publish_committed_write(tx_id).await;
+        let queue_was_empty = !self.db.has_pending_writes()?;
+        self.db.commit_local_write(tx_id, transaction)?;
+
+        if queue_was_empty {
+            self.next_publish_at = Instant::now() + BATCH_DELAY;
+        }
+
+        tracing::trace!(target: TARGET, ?tx_id, "local write queued for publication");
 
         Ok(tx_id)
     }
 
     /// An explicit retry may write while other displacements await handling.
-    async fn retry_displacement(&mut self, displacement: &Displacement) -> Result<TxId, Error> {
+    fn retry_displacement(&mut self, displacement: &Displacement) -> Result<TxId, Error> {
         self.ensure_ready_to_write()?;
 
         // Check the exact occurrence before committing, without yielding to
@@ -336,14 +354,17 @@ impl Runtime {
         }
 
         let tx_id = TxId::generate();
+        let queue_was_empty = !self.db.has_pending_writes()?;
         self.db
             .commit_local_write(tx_id, &displacement.transaction)?;
+
+        if queue_was_empty {
+            self.next_publish_at = Instant::now() + BATCH_DELAY;
+        }
 
         // This control.db update is separate from the LIVE.db commit.
         // A failure here does not roll back the retry's SQL changes.
         self.db.mark_displacement_handled(displacement)?;
-
-        self.publish_committed_write(tx_id).await;
 
         Ok(tx_id)
     }
@@ -357,6 +378,10 @@ impl Runtime {
             return Err(Error::RuntimeHalted);
         }
 
+        if matches!(self.publish_state, PublishState::CheckpointPending { .. }) {
+            return Err(Error::PublishPending);
+        }
+
         if !self.sequencer_ready || self.ready_checkpoint_pending {
             return Err(Error::SequencerNotReady);
         }
@@ -365,39 +390,25 @@ impl Runtime {
     }
 
     /// Publication failures leave the committed write pending for retry.
-    async fn publish_committed_write(&mut self, tx_id: TxId) {
-        tracing::trace!(
-            target: TARGET,
-            ?tx_id,
-            "local write committed"
-        );
+    async fn publish_queued_writes(&mut self) {
+        self.next_publish_at = Instant::now() + BATCH_DELAY;
 
         if let Err(error) = self.advance_publish().await {
+            self.next_publish_at = Instant::now() + PUBLISH_RETRY_INTERVAL;
             tracing::warn!(
                 target: TARGET,
                 %error,
-                ?tx_id,
-                "write committed; publication remains pending"
+                "committed writes remain queued for publication"
             );
         }
     }
 
-    async fn handle_event(&mut self, event: Event) {
+    fn handle_event(&mut self, event: Event) {
         let result = applier::on_event(&mut self.db, &event, self.channel_id);
 
         match result {
             Ok(()) => {
                 self.record_applied_event(&event);
-
-                if self.can_publish()
-                    && let Err(error) = self.advance_publish().await
-                {
-                    tracing::warn!(
-                        target: TARGET,
-                        %error,
-                        "write publication remains pending"
-                    );
-                }
             }
             Err(error) => {
                 tracing::error!(target: TARGET, %error, "applier halted");
@@ -406,21 +417,15 @@ impl Runtime {
         }
     }
 
-    async fn retry_pending_work(&mut self) -> Result<(), Error> {
+    fn retry_pending_event(&mut self) -> Result<(), Error> {
         if let Some(pending) = self.event_pending_retry.take() {
-            return self.retry_event(pending).await;
-        }
-
-        if self.can_publish()
-            && let Err(error) = self.advance_publish().await
-        {
-            tracing::warn!(target: TARGET, %error, "pending publication retry failed");
+            return self.retry_event(pending);
         }
 
         Ok(())
     }
 
-    async fn retry_event(&mut self, pending: PendingEvent) -> Result<(), Error> {
+    fn retry_event(&mut self, pending: PendingEvent) -> Result<(), Error> {
         let event = pending.event;
 
         match applier::on_event(&mut self.db, &event, self.channel_id) {
@@ -436,12 +441,6 @@ impl Runtime {
             }
         }
         self.record_applied_event(&event);
-
-        if self.can_publish()
-            && let Err(error) = self.advance_publish().await
-        {
-            tracing::warn!(target: TARGET, %error, "pending publication retry failed");
-        }
 
         Ok(())
     }
@@ -479,7 +478,7 @@ impl Runtime {
     async fn advance_publish(&mut self) -> Result<(), Error> {
         self.persist_publish_checkpoint()?;
 
-        let Some(pending) = self.db.pending_publish()? else {
+        let Some(pending) = Publication::prepare(self.db.pending_writes()?)? else {
             return Ok(());
         };
 
@@ -494,8 +493,8 @@ impl Runtime {
 
         tracing::trace!(
             target: TARGET,
-            tx_id = ?pending.tx_id,
-            "write accepted by ZoneSDK"
+            writes = pending.writes.len(),
+            "batch accepted by ZoneSDK"
         );
 
         self.publish_state = PublishState::CheckpointPending {
@@ -517,12 +516,13 @@ impl Runtime {
             return Ok(());
         };
 
-        self.db.complete_publish(checkpoint, *this_msg, pending)?;
+        self.db
+            .complete_batch(checkpoint, *this_msg, &pending.writes)?;
 
         tracing::trace!(
             target: TARGET,
-            tx_id = ?pending.tx_id,
-            "write publication recorded"
+            writes = pending.writes.len(),
+            "batch publication recorded"
         );
 
         self.publish_state = PublishState::Idle;
@@ -534,38 +534,33 @@ impl Runtime {
         &mut self,
         checkpoint: Option<&SequencerCheckpoint>,
     ) -> Result<(), Error> {
-        let Some(pending) = self.db.pending_publish()? else {
-            return Ok(());
-        };
+        let pending = self.db.pending_writes()?;
 
         let Some(checkpoint) = checkpoint else {
             return Ok(());
         };
 
-        let submitted = checkpoint
+        for inscription in checkpoint
             .pending_txs
             .iter()
             .flat_map(|(_, transaction)| channel_inscriptions(transaction, self.channel_id))
-            .find(|inscription| inscription.payload.as_inner() == &pending.payload);
-
-        if let Some(inscription) = submitted {
+        {
+            let Some(count) = Publication::matches_pending(inscription.payload.as_ref(), &pending)?
+            else {
+                continue;
+            };
             self.db
-                .complete_publish(checkpoint, inscription.this_msg, &pending)?;
+                .complete_batch(checkpoint, inscription.this_msg, &pending[..count])?;
 
             tracing::debug!(
                 target: TARGET,
-                tx_id = ?pending.tx_id,
-                "restored ZoneSDK checkpoint matched pending write"
+                writes = count,
+                "restored ZoneSDK checkpoint matched queued batch"
             );
+            break;
         }
 
         Ok(())
-    }
-
-    fn has_pending_work(&self) -> Result<bool, Error> {
-        Ok(self.event_pending_retry.is_some()
-            || matches!(self.publish_state, PublishState::CheckpointPending { .. })
-            || self.db.pending_publish()?.is_some())
     }
 
     fn shutdown_result(&mut self) -> Result<(), Error> {
@@ -597,7 +592,113 @@ mod tests {
     use tokio::sync::{mpsc, oneshot};
 
     use super::{COMMAND_CHANNEL_CAPACITY, Command, PendingEvent, PublishState, Runtime};
-    use crate::{db::Databases, error::Error, sql::TransactionBuilder, status::WriteStatus};
+    use crate::{
+        db::Databases, error::Error, publication::Publication, sql::TransactionBuilder,
+        status::WriteStatus,
+    };
+
+    #[tokio::test]
+    async fn writes_queue_locally_and_survive_a_publication_failure() {
+        let (dir, mut runtime, _) = runtime();
+        runtime.sequencer_ready = true;
+        let mut ids = Vec::new();
+
+        for sql in [
+            "CREATE TABLE items(value INTEGER)",
+            "INSERT INTO items VALUES (1)",
+            "INSERT INTO items VALUES (2)",
+        ] {
+            let (tx_id, transaction) = TransactionBuilder::new(sql).finish().unwrap();
+            runtime.execute(tx_id, &transaction).unwrap();
+            ids.push(tx_id);
+        }
+
+        for tx_id in &ids {
+            assert_eq!(
+                runtime.db.write_status(*tx_id).unwrap(),
+                Some(WriteStatus::Live)
+            );
+        }
+
+        // This test sequencer has no node connection and cannot accept a publish.
+        runtime.publish_queued_writes().await;
+        assert_eq!(runtime.db.pending_writes().unwrap().len(), 3);
+        drop(runtime);
+
+        let db = Databases::open(dir.path()).unwrap();
+        let publication = Publication::prepare(db.pending_writes().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            publication
+                .writes
+                .iter()
+                .map(|write| write.tx_id)
+                .collect::<Vec<_>>(),
+            ids
+        );
+        let connection = Databases::open_reader(db.live_path()).unwrap();
+        let count: i64 = connection
+            .query_row("SELECT count(*) FROM items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn adopting_our_batch_keeps_later_queued_writes() {
+        let (_dir, mut runtime, _) = runtime();
+        runtime.sequencer_ready = true;
+
+        for sql in [
+            "CREATE TABLE items(value INTEGER)",
+            "INSERT INTO items VALUES (1)",
+        ] {
+            let (tx_id, transaction) = TransactionBuilder::new(sql).finish().unwrap();
+            runtime.execute(tx_id, &transaction).unwrap();
+        }
+
+        let publication = Publication::prepare(runtime.db.pending_writes().unwrap())
+            .unwrap()
+            .unwrap();
+        let mut event = blocks_processed();
+        let Event::BlocksProcessed {
+            checkpoint,
+            channel_update,
+            ..
+        } = &mut event
+        else {
+            unreachable!()
+        };
+        let this_msg = MsgId::from([4; 32]);
+        runtime
+            .db
+            .complete_batch(checkpoint, this_msg, &publication.writes)
+            .unwrap();
+        channel_update
+            .adopted
+            .push(ChannelUpdateTx::Inscription(InscriptionInfo {
+                tx_hash: TxHash::from([4; 32]),
+                parent_msg: MsgId::root(),
+                this_msg,
+                payload: publication.payload.try_into().unwrap(),
+                signer: None,
+            }));
+
+        let (tx_id, transaction) = TransactionBuilder::new("INSERT INTO items VALUES (2)")
+            .finish()
+            .unwrap();
+        runtime.execute(tx_id, &transaction).unwrap();
+        runtime.handle_event(event);
+
+        assert!(runtime.event_pending_retry.is_none());
+        assert!(runtime.db.unhandled_displacements().unwrap().is_empty());
+        assert_eq!(runtime.db.pending_writes().unwrap()[0].tx_id, tx_id);
+        let connection = Databases::open_reader(runtime.db.live_path()).unwrap();
+        let count: i64 = connection
+            .query_row("SELECT count(*) FROM items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+    }
 
     #[tokio::test]
     async fn read_only_accepts_channel_writes_only() {
@@ -615,7 +716,7 @@ mod tests {
         channel_update
             .adopted
             .push(ChannelUpdateTx::Inscription(inscription.clone()));
-        reader.handle_event(event).await;
+        reader.handle_event(event);
 
         let connection = Databases::open_reader(reader.db.live_path()).unwrap();
         let count: i64 = connection
@@ -630,7 +731,7 @@ mod tests {
             .unwrap();
 
         assert!(matches!(
-            reader.execute(tx_id, transaction).await,
+            reader.execute(tx_id, &transaction),
             Err(Error::ReadOnly)
         ));
         assert!(
@@ -640,11 +741,11 @@ mod tests {
                 .is_err()
         );
 
-        writer.handle_event(orphan_event(inscription)).await;
+        writer.handle_event(orphan_event(inscription));
         let displacement = writer.db.unhandled_displacements().unwrap().remove(0);
 
         assert!(matches!(
-            reader.retry_displacement(&displacement).await,
+            reader.retry_displacement(&displacement),
             Err(Error::ReadOnly)
         ));
         assert!(reader.db.pending_publish().unwrap().is_none());
@@ -655,18 +756,16 @@ mod tests {
         let (_dir, mut runtime, _) = runtime();
         let first = published_local_write(&mut runtime, 2);
         let second = published_local_write(&mut runtime, 3);
-        runtime.handle_event(orphan_event(first)).await;
-        runtime.handle_event(orphan_event(second)).await;
+        runtime.handle_event(orphan_event(first));
+        runtime.handle_event(orphan_event(second));
         let displacements = runtime.db.unhandled_displacements().unwrap();
         let displacement = &displacements[0];
 
         let (response_tx, response_rx) = oneshot::channel();
-        runtime
-            .handle_command(Command::RetryDisplacement {
-                displacement: displacement.clone(),
-                response_tx,
-            })
-            .await;
+        runtime.handle_command(Command::RetryDisplacement {
+            displacement: displacement.clone(),
+            response_tx,
+        });
         assert!(matches!(
             response_rx.await.unwrap(),
             Err(Error::SequencerNotReady)
@@ -675,12 +774,10 @@ mod tests {
 
         runtime.sequencer_ready = true;
         let (response_tx, response_rx) = oneshot::channel();
-        runtime
-            .handle_command(Command::RetryDisplacement {
-                displacement: displacement.clone(),
-                response_tx,
-            })
-            .await;
+        runtime.handle_command(Command::RetryDisplacement {
+            displacement: displacement.clone(),
+            response_tx,
+        });
         let retry_id = response_rx.await.unwrap().unwrap();
 
         assert_ne!(retry_id, displacement.tx_id);
@@ -697,7 +794,7 @@ mod tests {
             .finish()
             .unwrap();
         assert!(matches!(
-            runtime.execute(tx_id, transaction).await,
+            runtime.execute(tx_id, &transaction),
             Err(Error::UnhandledDisplacements)
         ));
     }
@@ -706,7 +803,7 @@ mod tests {
     async fn failed_retry_keeps_the_displacement_available_for_review() {
         let (_dir, mut runtime, _) = runtime();
         let original = published_local_write(&mut runtime, 2);
-        runtime.handle_event(orphan_event(original.clone())).await;
+        runtime.handle_event(orphan_event(original.clone()));
         let displacement = runtime.db.unhandled_displacements().unwrap().remove(0);
 
         // The table now exists, but the original write is still displaced.
@@ -717,12 +814,10 @@ mod tests {
         runtime.sequencer_ready = true;
 
         let (response_tx, response_rx) = oneshot::channel();
-        runtime
-            .handle_command(Command::RetryDisplacement {
-                displacement: displacement.clone(),
-                response_tx,
-            })
-            .await;
+        runtime.handle_command(Command::RetryDisplacement {
+            displacement: displacement.clone(),
+            response_tx,
+        });
 
         assert!(matches!(
             response_rx.await.unwrap(),
@@ -740,7 +835,7 @@ mod tests {
         for restored in [false, true] {
             let (_dir, mut runtime, _) = runtime();
             let original = published_local_write(&mut runtime, 2);
-            runtime.handle_event(orphan_event(original.clone())).await;
+            runtime.handle_event(orphan_event(original.clone()));
             let displacement = runtime.db.unhandled_displacements().unwrap().remove(0);
 
             if restored {
@@ -751,7 +846,7 @@ mod tests {
                 channel_update
                     .adopted
                     .push(ChannelUpdateTx::Inscription(original));
-                runtime.handle_event(event).await;
+                runtime.handle_event(event);
             } else {
                 runtime.db.mark_displacement_handled(&displacement).unwrap();
             }
@@ -759,7 +854,7 @@ mod tests {
             runtime.sequencer_ready = true;
 
             assert!(matches!(
-                runtime.retry_displacement(&displacement).await,
+                runtime.retry_displacement(&displacement),
                 Err(Error::StaleDisplacement)
             ));
             assert!(runtime.db.pending_publish().unwrap().is_none());
@@ -770,7 +865,7 @@ mod tests {
     async fn an_old_displacement_cannot_retry_a_new_occurrence() {
         let (_dir, mut runtime, _) = runtime();
         let original = published_local_write(&mut runtime, 2);
-        runtime.handle_event(orphan_event(original.clone())).await;
+        runtime.handle_event(orphan_event(original.clone()));
         let old = runtime.db.unhandled_displacements().unwrap().remove(0);
 
         let mut event = blocks_processed();
@@ -780,13 +875,13 @@ mod tests {
         channel_update
             .adopted
             .push(ChannelUpdateTx::Inscription(original.clone()));
-        runtime.handle_event(event).await;
-        runtime.handle_event(orphan_event(original)).await;
+        runtime.handle_event(event);
+        runtime.handle_event(orphan_event(original));
         let current = runtime.db.unhandled_displacements().unwrap();
         runtime.sequencer_ready = true;
 
         assert!(matches!(
-            runtime.retry_displacement(&old).await,
+            runtime.retry_displacement(&old),
             Err(Error::StaleDisplacement)
         ));
         assert_eq!(runtime.db.unhandled_displacements().unwrap(), current);
@@ -799,43 +894,41 @@ mod tests {
         runtime.sequencer_ready = true;
         let first = published_local_write(&mut runtime, 2);
         let second = published_local_write(&mut runtime, 3);
-        runtime.handle_event(orphan_event(first)).await;
+        runtime.handle_event(orphan_event(first));
         let first = runtime.db.unhandled_displacements().unwrap()[0].clone();
 
         let (tx_id, transaction) = TransactionBuilder::new("CREATE TABLE resumed(value INTEGER)")
             .finish()
             .unwrap();
         assert!(matches!(
-            runtime.execute(tx_id, transaction).await,
+            runtime.execute(tx_id, &transaction),
             Err(Error::UnhandledDisplacements)
         ));
         assert!(runtime.db.pending_publish().unwrap().is_none());
 
-        runtime.handle_event(orphan_event(second)).await;
+        runtime.handle_event(orphan_event(second));
         runtime.db.mark_displacement_handled(&first).unwrap();
         let (tx_id, transaction) = TransactionBuilder::new("CREATE TABLE resumed(value INTEGER)")
             .finish()
             .unwrap();
         assert!(matches!(
-            runtime.execute(tx_id, transaction).await,
+            runtime.execute(tx_id, &transaction),
             Err(Error::UnhandledDisplacements)
         ));
 
         let remaining = runtime.db.unhandled_displacements().unwrap();
         assert_eq!(remaining.len(), 1);
         let (response_tx, response_rx) = oneshot::channel();
-        runtime
-            .handle_command(Command::HandleDisplacement {
-                displacement: remaining[0].clone(),
-                response_tx,
-            })
-            .await;
+        runtime.handle_command(Command::HandleDisplacement {
+            displacement: remaining[0].clone(),
+            response_tx,
+        });
         response_rx.await.unwrap().unwrap();
 
         let (tx_id, transaction) = TransactionBuilder::new("CREATE TABLE resumed(value INTEGER)")
             .finish()
             .unwrap();
-        assert_eq!(runtime.execute(tx_id, transaction).await.unwrap(), tx_id);
+        assert_eq!(runtime.execute(tx_id, &transaction).unwrap(), tx_id);
         assert_eq!(
             runtime.db.write_status(first.tx_id).unwrap(),
             Some(WriteStatus::Displaced)
@@ -939,7 +1032,7 @@ mod tests {
             )
             .expect("failure should be installed");
 
-        runtime.handle_event(event).await;
+        runtime.handle_event(event);
 
         assert!(runtime.event_pending_retry.is_some());
         assert_eq!(
@@ -950,10 +1043,7 @@ mod tests {
         control
             .execute_batch("DROP TRIGGER fail_checkpoint")
             .expect("failure should be removed");
-        runtime
-            .retry_pending_work()
-            .await
-            .expect("event should recover");
+        runtime.retry_pending_event().expect("event should recover");
 
         assert!(runtime.event_pending_retry.is_none());
         assert!(runtime.db.has_unhandled_displacements().unwrap());
@@ -1034,6 +1124,7 @@ mod tests {
             ready_tx: Some(ready_tx),
             event_pending_retry: None,
             publish_state: PublishState::Idle,
+            next_publish_at: tokio::time::Instant::now() + super::BATCH_DELAY,
         };
 
         (dir, runtime, ready_rx)

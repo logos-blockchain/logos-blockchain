@@ -4,7 +4,7 @@ use lb_binary_codec::canonical::codec_fixtures;
 use rusqlite::types::Value;
 
 use super::{
-    CapturedFunction, CapturedFunctionCall, CapturedFunctionCalls, ChannelInscription,
+    CapturedFunction, CapturedFunctionCall, CapturedFunctionCalls, ChannelBatch, ChannelWrite,
     SqlParameter, SqlText, Statement, Transaction, TxId,
 };
 
@@ -109,8 +109,8 @@ codec_fixtures!(
     transaction_fixture() => "010000000800000053454c454354203100000000"
 );
 
-fn channel_inscription_fixture() -> ChannelInscription {
-    ChannelInscription {
+fn channel_write_fixture() -> ChannelWrite {
+    ChannelWrite {
         tx_id: TxId::from([3; 32]),
         transaction: transaction_fixture(),
         captured_function_calls: CapturedFunctionCalls::empty(),
@@ -118,8 +118,18 @@ fn channel_inscription_fixture() -> ChannelInscription {
 }
 
 codec_fixtures!(
-    ChannelInscription,
-    channel_inscription_fixture() => concat!(
+    ChannelWrite,
+    channel_write_fixture() => concat!(
+        "0303030303030303030303030303030303030303030303030303030303030303",
+        "010000000800000053454c454354203100000000",
+        "00000000"
+    )
+);
+
+codec_fixtures!(
+    ChannelBatch,
+    ChannelBatch::new(vec![channel_write_fixture()]).expect("valid batch") => concat!(
+        "0100",
         "0303030303030303030303030303030303030303030303030303030303030303",
         "010000000800000053454c454354203100000000",
         "00000000"
