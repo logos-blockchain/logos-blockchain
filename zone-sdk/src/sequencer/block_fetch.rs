@@ -2763,6 +2763,69 @@ mod tests {
         txs.iter().map(ChannelUpdateTx::tx_hash).collect()
     }
 
+    /// On an extension the new view is the previous view followed by
+    /// `adopted`: across a checkpoint restore with a pending publish P on the
+    /// finalized tip M, an empty block, the block that mines P (which
+    /// `adopted` never echoes), and a block that mines N on top.
+    #[tokio::test]
+    async fn extension_appends_adopted_to_the_previous_view() {
+        let ch = ChannelId::from([0u8; 32]);
+        let (m_id, _) = ins(ch, MsgId::root(), b"m");
+        let (p_id, p_tx) = ins(ch, m_id, b"p");
+        let (_, n_tx) = ins(ch, p_id, b"n");
+        let mut restored = TxState::new(header_id(0), m_id);
+        restored
+            .submit_inscription(
+                p_tx.clone(),
+                m_id,
+                p_id,
+                Inscription::new_unchecked(b"p".to_vec()),
+            )
+            .unwrap();
+        let blocks = [
+            api_block(1, 0, 1, Vec::new()),
+            api_block(2, 1, 2, vec![p_tx]),
+            api_block(3, 2, 3, vec![n_tx]),
+        ];
+
+        let node = MockNode::default();
+        let mut state = Some(restored);
+        let mut current_tip = None;
+        let mut lib_slot = Slot::genesis();
+        let mut view = hashes(
+            &state
+                .as_ref()
+                .unwrap()
+                .channel_view_txs(header_id(0), &HashSet::new()),
+        );
+        for block in &blocks {
+            let result = handle_block_event(
+                &live_event(block),
+                &mut state,
+                &mut current_tip,
+                &mut lib_slot,
+                ch,
+                &node,
+            )
+            .await
+            .unwrap();
+            let adopted = result.channel_update.as_ref().map_or_else(Vec::new, |u| {
+                assert!(u.orphaned.is_empty(), "an extension");
+                hashes(&u.adopted)
+            });
+            let tip = current_tip.expect("processed");
+            let new_view = hashes(
+                &state
+                    .as_ref()
+                    .unwrap()
+                    .channel_view_txs(tip, &HashSet::new()),
+            );
+            assert_eq!(new_view, [view.clone(), adopted].concat());
+            view = new_view;
+        }
+        assert_eq!(view.len(), 2, "P then N");
+    }
+
     /// A shed bundle the consumer was told to revert can still land: its bytes
     /// stay in the L1 mempool. When it does, on a pure extension, it must be
     /// reported adopted — the shed removed it from pending, so the consumer

@@ -165,7 +165,7 @@ impl ViewChecker {
     fn add_extension(&mut self, adopted: &[ChannelUpdateTx]) {
         for tx in adopted {
             if !self.held.insert(tx.tx_hash()) {
-                fail(&format!(
+                self.record(format!(
                     "{:?} adopted on an extension while already held",
                     tx.tx_hash()
                 ));
@@ -175,7 +175,7 @@ impl ViewChecker {
 
     fn remove_orphaned(&mut self, orphaned: &[ChannelUpdateTx]) {
         if orphaned.is_empty() {
-            fail("a Conflict with nothing orphaned");
+            self.record("a Conflict with nothing orphaned".to_owned());
         }
         for tx in orphaned {
             self.held.remove(&tx.tx_hash());
