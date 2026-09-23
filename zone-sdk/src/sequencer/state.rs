@@ -27,7 +27,7 @@ fn inscription_signer(tx: &SignedOps<Unverified, StandardMode>) -> Option<Ed2551
 }
 
 use super::{
-    block_fetch::{channel_configs, channel_inscriptions, channel_transfers},
+    block_fetch::{channel_configs, channel_inscriptions, channel_transfers, is_pure_config},
     channel_wallet::{ChannelWallet, NoteOp},
     types::{
         AtomicWithdrawInfo, ChannelNote, ChannelUpdateTx, ChannelWalletView, Error,
@@ -64,6 +64,9 @@ struct PendingOtherTx {
     infos: Vec<InscriptionInfo>,
     /// The tx's channel configs in op order, on the config lineage.
     config_infos: Vec<InscriptionInfo>,
+    /// Classified as a single config with at most one funding transfer, the
+    /// shape reported as [`ChannelUpdateTx::Config`].
+    pure_config: bool,
     first_parent: Option<MsgId>,
     last_msg: Option<MsgId>,
     config_parent: Option<MsgId>,
@@ -75,9 +78,15 @@ struct PendingOtherTx {
 /// Where an opaque tx sits in the two lineages, see [`PendingOtherTx`].
 #[derive(Clone, Copy)]
 struct OpaqueLineage {
+    /// Parent of the tx's first inscription: where it attaches to the
+    /// message lineage.
     first_parent: Option<MsgId>,
+    /// Id of the tx's last inscription: the message tip it leaves behind.
     last_msg: Option<MsgId>,
+    /// Parent of the tx's first config: where it attaches to the config
+    /// lineage.
     config_parent: Option<MsgId>,
+    /// Id of the tx's last config: the config tip it leaves behind.
     last_config: Option<MsgId>,
 }
 
@@ -261,13 +270,13 @@ pub enum BlockChannelTx {
     Config(InscriptionInfo),
     /// A shape the SDK cannot produce (bundled deposits, multi-inscribe,
     /// custom-built txs). Kept whole — updates hand the tx back to the
-    /// caller's own recovery logic — along with its tip-advancing entries
-    /// in op order. `config_entries` holds any `ChannelConfig` ops it carries,
-    /// which sit on the separate config lineage and never advance the message
-    /// tip.
+    /// caller's own recovery logic — along with its inscriptions in op order
+    /// (`message_entries`) and any `ChannelConfig` ops it carries
+    /// (`config_entries`), which sit on the separate config lineage and never
+    /// advance the message tip.
     Custom {
         tx: SignedOps<Unverified, StandardMode>,
-        entries: Vec<InscriptionInfo>,
+        message_entries: Vec<InscriptionInfo>,
         config_entries: Vec<InscriptionInfo>,
     },
 }
@@ -280,7 +289,9 @@ impl BlockChannelTx {
             Self::AtomicWithdraw(a) => std::slice::from_ref(&a.inscription),
             Self::PinDeposit(a) => std::slice::from_ref(&a.inscription),
             Self::Config(_) => &[],
-            Self::Custom { entries, .. } => entries,
+            Self::Custom {
+                message_entries, ..
+            } => message_entries,
         }
     }
 
@@ -627,6 +638,7 @@ impl TxState {
         } = lineage;
         let infos = channel_inscriptions(&signed_tx, channel_id);
         let config_infos = channel_configs(&signed_tx, channel_id);
+        let pure_config = is_pure_config(&signed_tx, channel_id);
         if let Some(parent) = first_parent {
             self.pending_by_parent.insert(parent, tx_hash);
         }
@@ -638,6 +650,7 @@ impl TxState {
                 signed_tx,
                 infos,
                 config_infos,
+                pure_config,
                 first_parent,
                 last_msg,
                 config_parent,
@@ -1478,16 +1491,21 @@ impl TxState {
                     .iter()
                     .find(|tx| tx.hash() == info.tx_hash)
                     .map(|tx| ChannelUpdateTx::Config(tx.clone())),
-                BlockChannelTx::Custom { tx, entries, .. } => entries
+                BlockChannelTx::Custom {
+                    tx,
+                    message_entries,
+                    config_entries,
+                } => (message_entries
                     .iter()
                     .any(|entry| !entry.payload.is_empty())
-                    .then(|| ChannelUpdateTx::Custom(tx.clone())),
+                    || !config_entries.is_empty())
+                .then(|| ChannelUpdateTx::Custom(tx.clone())),
             };
         }
         // Not in any held block — the lineage bridged through a pending link.
         if let Some(other) = self.pending_other.get(&info.tx_hash) {
             let tx = other.signed_tx.clone();
-            return Some(if other.infos.is_empty() {
+            return Some(if other.pure_config {
                 ChannelUpdateTx::Config(tx)
             } else {
                 ChannelUpdateTx::Custom(tx)
@@ -2317,6 +2335,70 @@ mod tests {
                 .detect_channel_update(&[], b2, &HashSet::new())
                 .is_none(),
             "finalized configs are not reported"
+        );
+    }
+
+    #[test]
+    fn finalized_configs_are_not_reported_orphaned_on_lib_advance() {
+        let genesis = header_id(0);
+        let b1 = header_id(1);
+        let b2 = header_id(2);
+        let b3 = header_id(3);
+        let mut state = TxState::new(genesis, MsgId::root());
+        let (c1_tx, c1) = config_tx(MsgId::root(), 1);
+        let (c2_tx, c2) = config_tx(c1, 2);
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![],
+            vec![config_block_tx(&c1_tx, c1, MsgId::root())],
+            Vec::new(),
+        );
+        state.process_block(
+            b2,
+            b1,
+            genesis,
+            vec![],
+            vec![config_block_tx(&c2_tx, c2, c1)],
+            Vec::new(),
+        );
+        let old_lineage = state.channel_lineage(b2);
+        state.process_block(b3, b2, b2, vec![], vec![], Vec::new());
+        assert!(
+            state
+                .detect_channel_update(&old_lineage, b3, &HashSet::new())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn custom_tx_advancing_only_the_config_lineage_is_reported_as_custom() {
+        let genesis = header_id(0);
+        let b1 = header_id(1);
+        let mut state = TxState::new(genesis, MsgId::root());
+        let (tx, _) = config_tx(MsgId::root(), 1);
+        let config_entry = |parent: MsgId, this_msg: MsgId| InscriptionInfo {
+            tx_hash: tx.hash(),
+            parent_msg: parent,
+            this_msg,
+            payload: [].into(),
+            signer: None,
+        };
+        let custom = BlockChannelTx::Custom {
+            tx: tx.clone(),
+            message_entries: Vec::new(),
+            config_entries: vec![
+                config_entry(MsgId::root(), msg_id(1)),
+                config_entry(msg_id(1), msg_id(2)),
+            ],
+        };
+        state.process_block(b1, genesis, genesis, vec![], vec![custom], Vec::new());
+        let update = state
+            .detect_channel_update(&[], b1, &HashSet::new())
+            .expect("configs enter the view");
+        assert!(
+            matches!(update.adopted.as_slice(), [ChannelUpdateTx::Custom(t)] if t.hash() == tx.hash())
         );
     }
 

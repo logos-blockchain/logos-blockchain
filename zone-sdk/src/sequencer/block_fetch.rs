@@ -423,7 +423,7 @@ fn demote_non_identity_pin_deposits(
         if !is_identity_deposit_transfer(state, tx, channel_id) {
             *block_tx = BlockChannelTx::Custom {
                 tx: (*tx).clone(),
-                entries: vec![a.inscription.clone()],
+                message_entries: vec![a.inscription.clone()],
                 config_entries: Vec::new(),
             };
         }
@@ -1168,7 +1168,7 @@ pub(super) fn classify_channel_tx(
         } else {
             BlockChannelTx::Custom {
                 tx: tx.clone(),
-                entries,
+                message_entries: entries,
                 config_entries,
             }
         },
@@ -1179,7 +1179,7 @@ pub(super) fn classify_channel_tx(
 /// config-only shape [`classify_channel_tx`] reports as
 /// [`BlockChannelTx::Config`]. Mirrors that rule so a shed config is typed the
 /// same way it was classified on chain.
-fn is_pure_config<Mode: VerificationMode>(
+pub(super) fn is_pure_config<Mode: VerificationMode>(
     tx: &SignedOps<Unverified, Mode>,
     channel_id: ChannelId,
 ) -> bool {
@@ -1447,7 +1447,7 @@ mod tests {
         let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
         assert_eq!(classified.len(), 1);
         assert!(
-            matches!(&classified[0], BlockChannelTx::Custom { entries, .. } if entries.len() == 1)
+            matches!(&classified[0], BlockChannelTx::Custom { message_entries, .. } if message_entries.len() == 1)
         );
 
         let genesis = header_id(0);
@@ -1609,7 +1609,7 @@ mod tests {
             &state,
         );
         assert!(
-            matches!(&classified[0], BlockChannelTx::Custom { entries, .. } if entries.len() == 1)
+            matches!(&classified[0], BlockChannelTx::Custom { message_entries, .. } if message_entries.len() == 1)
         );
 
         mirror_channel_txs(
@@ -1745,7 +1745,7 @@ mod tests {
         let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
         assert_eq!(classified.len(), 1);
         assert!(
-            matches!(&classified[0], BlockChannelTx::Custom { entries, .. } if entries.len() == 2)
+            matches!(&classified[0], BlockChannelTx::Custom { message_entries, .. } if message_entries.len() == 2)
         );
 
         let genesis = header_id(0);
