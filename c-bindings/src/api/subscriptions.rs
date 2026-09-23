@@ -1,6 +1,7 @@
 use std::ffi::{CString, c_char};
 
 use futures::StreamExt as _;
+use lb_chain_network_service::{ProposalEvent as ChainProposalEvent, api::ChainNetworkServiceApi};
 use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
     block::{Block as CoreBlock, BlockTransactions},
@@ -14,8 +15,9 @@ use lb_core::{
     },
 };
 use lb_node::{
-    RuntimeServiceId, SignedOps, api::serializers::blocks::ApiProcessedBlockEventOwned,
-    generic_services::CryptarchiaService,
+    RuntimeServiceId, SignedOps,
+    api::serializers::blocks::ApiProcessedBlockEventOwned,
+    generic_services::{ChainNetworkService, CryptarchiaService},
 };
 use lb_storage_service::api::StorageApi;
 use serde::Serialize;
@@ -312,4 +314,106 @@ pub unsafe extern "C" fn subscribe_to_lib_blocks(
     return_error_if_null_pointer!(node);
     let node = unsafe { &*node };
     subscribe_to_lib_blocks_sync(node, into_boxed_callback(callback_per_event))
+}
+
+#[derive(Serialize)]
+#[serde(tag = "origin", content = "proposal", rename_all = "lowercase")]
+enum ProposalEvent<'proposal> {
+    Local(&'proposal lb_core::block::Proposal),
+    Remote(&'proposal lb_core::block::Proposal),
+}
+
+impl<'proposal> From<&'proposal ChainProposalEvent> for ProposalEvent<'proposal> {
+    fn from(event: &'proposal ChainProposalEvent) -> Self {
+        match event {
+            ChainProposalEvent::Local(proposal) => Self::Local(proposal),
+            ChainProposalEvent::Remote(proposal) => Self::Remote(proposal),
+        }
+    }
+}
+
+#[must_use]
+pub fn subscribe_to_proposed_blocks_sync(
+    node: &LogosBlockchainNode,
+    mut on_event: BoxedCallback<*const c_char>,
+) -> OperationStatus {
+    let runtime_handler = node.get_runtime_handle();
+    let overwatch = node.get_overwatch_handle();
+    runtime_handler.block_on(async move {
+        let relay = match overwatch
+            .relay::<ChainNetworkService<RuntimeServiceId>>()
+            .await
+        {
+            Ok(relay) => relay,
+            Err(e) => {
+                return OperationStatus::error(
+                    OperationStatusCode::RelayError,
+                    format!("Failed to get relay to ChainNetwork: {e}"),
+                );
+            }
+        };
+
+        let api = ChainNetworkServiceApi::<ChainNetworkService<RuntimeServiceId>>::new(relay);
+        let mut receiver = match api.subscribe_to_proposals().await {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                return OperationStatus::error(
+                    OperationStatusCode::ServiceError,
+                    format!("Failed to subscribe to proposals: {error}"),
+                );
+            }
+        };
+
+        runtime_handler.spawn(async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => emit_json(&ProposalEvent::from(&event), &mut on_event),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+                        logging::warning!(
+                            "subscribe_to_proposed_blocks_sync",
+                            "Missed {missed} proposals; the subscriber is not keeping up."
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        logging::warning!(
+                            "subscribe_to_proposed_blocks_sync",
+                            "Proposal stream closed, subscription to proposed blocks ended."
+                        );
+                        break;
+                    }
+                }
+            }
+            on_event(std::ptr::null());
+        });
+        OperationStatus::OK
+    })
+}
+
+/// Subscribes to block proposals and calls `callback_per_event` once for each,
+/// at proposal time, before any of them has been accepted.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
+/// - `callback_per_event`: Called with a pointer to a NUL-terminated JSON event
+///   per proposal. The pointer is only valid for the duration of the call. When
+///   the stream ends the callback is called exactly once with NULL, after which
+///   no further events are delivered; re-subscribe to keep receiving events.
+///
+/// # Returns
+///
+/// An [`OperationStatus`] indicating whether the subscription was established.
+/// On error, the callback is never called.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn subscribe_to_proposed_blocks(
+    node: *const LogosBlockchainNode,
+    callback_per_event: CCallback<*const c_char>,
+) -> OperationStatus {
+    return_error_if_null_pointer!(node);
+    let node = unsafe { &*node };
+    subscribe_to_proposed_blocks_sync(node, into_boxed_callback(callback_per_event))
 }

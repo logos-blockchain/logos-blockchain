@@ -1,8 +1,8 @@
-use lb_core::block::Block;
+use lb_core::block::{Block, Proposal};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
 
-use crate::Message;
+use crate::{Message, ProposalEvent};
 
 pub struct ChainNetworkServiceApi<ChainNetworkService>
 where
@@ -42,6 +42,31 @@ where
                 "{relay_error} while receiving ApplyBlockAndReconcileMempool response"
             ))
         })??)
+    }
+
+    pub async fn subscribe_to_proposals(
+        &self,
+    ) -> Result<broadcast::Receiver<ProposalEvent>, ApiError> {
+        let (result_sender, result_rx) = oneshot::channel();
+        self.relay
+            .send(Message::SubscribeToProposals { result_sender })
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending SubscribeToProposals"))
+            })?;
+
+        result_rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!(
+                "{relay_error} while receiving the proposal subscription"
+            ))
+        })
+    }
+
+    pub async fn register_local_proposal(&self, proposal: Proposal) -> Result<(), ApiError> {
+        self.relay
+            .send(Message::LocalProposal(proposal))
+            .await
+            .map_err(|error| ApiError::CommsFailure(format!("{error} while sending LocalProposal")))
     }
 }
 

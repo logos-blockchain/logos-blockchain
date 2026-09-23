@@ -19,7 +19,8 @@ use lb_chain_service::{
 };
 use lb_core::{
     block::{
-        Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE, UncleHeaders,
+        Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE, Proposal,
+        UncleHeaders,
     },
     header::HeaderId,
     mantle::{
@@ -713,15 +714,30 @@ where
             return;
         }
 
+        Self::publish_block_proposal(block.to_proposal(), chain_network_api, blend_adapter).await;
+
+        metrics::consensus_proposals_created_local();
+    }
+
+    async fn publish_block_proposal(
+        proposal: Proposal,
+        chain_network_api: &ChainNetworkServiceApi<ChainNetwork>,
+        blend_adapter: &BlendAdapter<BlendService>,
+    ) {
+        let proposal_id = proposal.header().id();
+
         #[cfg(not(feature = "testing-disable-proposal-publish"))]
-        blend_adapter.publish_proposal(block.to_proposal()).await;
+        blend_adapter.publish_proposal(proposal.clone()).await;
+
         #[cfg(feature = "testing-disable-proposal-publish")]
         let _ = {
             tracing::warn!(target: LOG_TARGET, "proposal publishing is disabled by the `testing-disable-proposal-publish` feature");
             blend_adapter
         };
 
-        metrics::consensus_proposals_created_local();
+        if let Err(error) = chain_network_api.register_local_proposal(proposal).await {
+            error!(target: LOG_TARGET, "Failed to send our own proposal {proposal_id} to the proposals stream: {error}");
+        }
     }
 
     #[expect(

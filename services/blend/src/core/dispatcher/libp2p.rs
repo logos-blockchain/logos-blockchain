@@ -6,7 +6,7 @@ use core::{
 
 use futures::{Stream, StreamExt as _, stream, stream::BoxStream};
 use lb_binary_codec::bincode::DeserializeOp;
-use lb_chain_network_service::Message as ChainNetworkMsg;
+use lb_chain_network_service::{Message as ChainNetworkMsg, ProposalEvent};
 use lb_core::{
     header::HeaderId,
     mantle::{traits::Hashable, transactions::hash::PrefixedKey},
@@ -148,7 +148,12 @@ where
     };
 
     stop_observing_on_lag(BroadcastStream::new(received), StreamType::Proposals)
-        .filter_map(|proposal| {
+        .filter_map(|event| {
+            // Only a proposal that originated on the network confirms delivery.
+            let ProposalEvent::Remote(proposal) = event else {
+                return ready(None);
+            };
+
             // Encoded the way it was handed to Blend, so that the two are the same
             // bytes and comparing them is all the sender has to do. One that does
             // not fit a payload is one Blend cannot have carried, so it is not a

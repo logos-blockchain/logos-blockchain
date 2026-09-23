@@ -77,7 +77,7 @@ const SERVICE_ID: &str = "ChainNetwork";
 pub(crate) const LOG_TARGET: &str = chain::network::ROOT;
 const FUTURE_BLOCK_MAX_RETRIES: usize = 3;
 const FUTURE_BLOCK_RETRY_DELAY: Duration = Duration::from_millis(500);
-const RECEIVED_PROPOSALS_BUFFER: usize = 64;
+const PROPOSAL_EVENTS_BUFFER: usize = 64;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -119,19 +119,23 @@ impl From<lb_core::block::Error> for Error {
     }
 }
 
+/// A proposal seen at proposal time, before it has been accepted.
+#[derive(Debug, Clone)]
+pub enum ProposalEvent {
+    Local(Proposal),
+    Remote(Proposal),
+}
+
 #[derive(Debug)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Boxing a block in `ApplyBlockAndReconcileMempool` would cost in every apply an allocation to spare the rare subscription eight bytes."
-)]
 pub enum Message<Tx> {
     ApplyBlockAndReconcileMempool {
         block: Block<Tx>,
         resp: oneshot::Sender<Result<(), Error>>,
     },
     SubscribeToProposals {
-        result_sender: oneshot::Sender<broadcast::Receiver<Proposal>>,
+        result_sender: oneshot::Sender<broadcast::Receiver<ProposalEvent>>,
     },
+    LocalProposal(Proposal),
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -171,7 +175,7 @@ pub struct ChainNetwork<
     TimeBackend::Settings: Clone + Send + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    received_proposals_sender: broadcast::Sender<Proposal>,
+    proposal_events_sender: broadcast::Sender<ProposalEvent>,
 }
 
 impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId> ServiceData
@@ -267,10 +271,10 @@ where
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         _initial_state: Self::State,
     ) -> Result<Self, DynError> {
-        let (received_proposals_sender, _) = broadcast::channel(RECEIVED_PROPOSALS_BUFFER);
+        let (proposal_events_sender, _) = broadcast::channel(PROPOSAL_EVENTS_BUFFER);
         Ok(Self {
             service_resources_handle,
-            received_proposals_sender,
+            proposal_events_sender,
         })
     }
 
@@ -416,7 +420,6 @@ where
             loop {
                 tokio::select! {
                     Some(proposal) = incoming_proposals.next() => {
-                        self.note_received_proposal(&proposal);
                         self.handle_incoming_proposal(
                             proposal,
                             orphan_downloader.as_mut().get_mut(),
@@ -514,7 +517,7 @@ where
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
-                        Self::handle_message(msg, &self.received_proposals_sender, &relays).await;
+                        self.handle_message(msg, &relays).await;
                     }
                 }
             }
@@ -593,6 +596,13 @@ where
     ) where
         RuntimeServiceId: Send + Sync + 'static,
     {
+        if self.proposal_events_sender.receiver_count() > 0 {
+            drop(
+                self.proposal_events_sender
+                    .send(ProposalEvent::Remote(proposal.clone())),
+            );
+        }
+
         let block_id = proposal.header().id();
         let block_slot = proposal.header().slot();
         metrics::consensus_proposals_received_total("network");
@@ -795,15 +805,9 @@ where
         }
     }
 
-    fn note_received_proposal(&self, proposal: &Proposal) {
-        if self.received_proposals_sender.receiver_count() > 0 {
-            drop(self.received_proposals_sender.send(proposal.clone()));
-        }
-    }
-
     async fn handle_message(
+        &self,
         msg: Message<Mempool::Item>,
-        received_proposals: &broadcast::Sender<Proposal>,
         relays: &ChainNetworkRelays<
             Cryptarchia,
             Mempool,
@@ -816,12 +820,21 @@ where
     {
         match msg {
             Message::SubscribeToProposals { result_sender } => {
-                if result_sender.send(received_proposals.subscribe()).is_err() {
+                if result_sender
+                    .send(self.proposal_events_sender.subscribe())
+                    .is_err()
+                {
                     error!(
                         target: LOG_TARGET,
-                        "Subscriber hung up before it could be given the received-proposal stream."
+                        "Subscriber hung up before it could be given the proposal stream."
                     );
                 }
+            }
+            Message::LocalProposal(proposal) => {
+                drop(
+                    self.proposal_events_sender
+                        .send(ProposalEvent::Local(proposal)),
+                );
             }
             Message::ApplyBlockAndReconcileMempool { block, resp } => {
                 let result = apply_block_and_reconcile_mempool::<_, Mempool>(
