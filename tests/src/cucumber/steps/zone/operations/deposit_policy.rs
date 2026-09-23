@@ -1,8 +1,8 @@
 use super::{
     ChannelUpdate, ChannelUpdateTx, Event, FinalizedTx, Hash, HashMap, HashSet, Inscription,
-    InscriptionId, Note, NoteId, Outputs, PolicyRuntime, WithdrawArg, WithdrawInputs, ZkPublicKey,
-    ZoneNodeHttpClient, ZoneSequencer, contributed, finalized_inscriptions, inscriptions,
-    make_inscription, runner, to_policy_runtime, warn,
+    InscriptionId, Inscriptions as _, Note, NoteId, Outputs, PolicyRuntime, WithdrawArg,
+    WithdrawInputs, ZkPublicKey, ZoneNodeHttpClient, ZoneSequencer, contributed,
+    finalized_inscriptions, make_inscription, runner, to_policy_runtime, warn,
 };
 
 /// Reactively drive the full deposit lifecycle (pin, then withdraw the
@@ -132,7 +132,8 @@ where
         finalized.extend(finalized_inscriptions(finalized_txs).map(|info| info.payload.clone()));
         // An extension only adds steps; a conflict recomputes them from the view.
         let rebuild = matches!(channel_update, ChannelUpdate::Conflict { .. });
-        let payloads: HashSet<&Inscription> = inscriptions(contributed(channel_update))
+        let payloads: HashSet<&Inscription> = contributed(channel_update)
+            .inscriptions()
             .map(|i| &i.payload)
             .collect();
         for (op_id, state) in deposits.iter_mut() {

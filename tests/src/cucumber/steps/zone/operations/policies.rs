@@ -1,8 +1,8 @@
 use super::{
     Arc, BTreeSet, ChannelUpdate, ChannelUpdateTx, DiscardedPayloads, Event, FinalizedTx, HashMap,
-    HashSet, Inscription, InscriptionInfo, LazyLock, MsgId, PolicyRuntime, SequencerChannelView,
-    VecDeque, ZoneAccountBalances, ZoneNodeHttpClient, ZoneSequencer, contributed,
-    finalized_inscriptions, inscriptions, parse_balance_payload, runner, to_policy_runtime, warn,
+    HashSet, Inscription, InscriptionInfo, Inscriptions as _, LazyLock, MsgId, PolicyRuntime,
+    SequencerChannelView, VecDeque, ZoneAccountBalances, ZoneNodeHttpClient, ZoneSequencer,
+    contributed, finalized_inscriptions, parse_balance_payload, runner, to_policy_runtime, warn,
 };
 
 /// Spawn a sequencer drive task with a no-op policy. Step bodies drive
@@ -97,7 +97,7 @@ where
             return;
         };
         let on_chain: HashSet<&Inscription> =
-            inscriptions(chain).map(|info| &info.payload).collect();
+            chain.inscriptions().map(|info| &info.payload).collect();
         for entry in channel_update.orphaned() {
             let ChannelUpdateTx::Inscription(info) = entry else {
                 continue;
@@ -159,7 +159,7 @@ impl LineageTracker {
             return;
         };
         self.pending.clear();
-        for info in inscriptions(chain) {
+        for info in chain.inscriptions() {
             if let Some(&root) = self.intent_root.get(&info.this_msg) {
                 self.pending.entry(root).or_default().insert(info.this_msg);
             }
@@ -437,7 +437,7 @@ impl BalanceAwareState {
                 updates.retain(|uuid, _| finalized.contains(uuid));
             }
         }
-        for info in inscriptions(contributed(channel_update)) {
+        for info in contributed(channel_update).inscriptions() {
             self.record_applied_payload(&info.payload);
         }
     }
@@ -505,8 +505,11 @@ impl SortedConflictState {
         if let ChannelUpdate::Conflict { .. } = channel_update {
             self.channel_view = self.finalized.iter().cloned().collect();
         }
-        self.channel_view
-            .extend(inscriptions(contributed(channel_update)).map(|info| info.payload.clone()));
+        self.channel_view.extend(
+            contributed(channel_update)
+                .inscriptions()
+                .map(|info| info.payload.clone()),
+        );
     }
 
     /// A discarded payload that landed anyway is no longer ours to re-home.

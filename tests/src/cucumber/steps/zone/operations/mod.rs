@@ -79,12 +79,16 @@ fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &In
         })
 }
 
-/// The inscriptions carried by `txs`, in order — the non-finalized
-/// counterpart of [`finalized_inscriptions`].
-fn inscriptions<'a>(
-    txs: impl IntoIterator<Item = &'a ChannelUpdateTx>,
-) -> impl Iterator<Item = &'a InscriptionInfo> {
-    txs.into_iter().filter_map(ChannelUpdateTx::inscription)
+/// The inscriptions carried by channel-update entries, in order — the
+/// non-finalized counterpart of [`finalized_inscriptions`].
+trait Inscriptions<'a> {
+    fn inscriptions(self) -> impl Iterator<Item = &'a InscriptionInfo>;
+}
+
+impl<'a, I: IntoIterator<Item = &'a ChannelUpdateTx>> Inscriptions<'a> for I {
+    fn inscriptions(self) -> impl Iterator<Item = &'a InscriptionInfo> {
+        self.into_iter().filter_map(ChannelUpdateTx::inscription)
+    }
 }
 
 /// The entries an update contributes to a consumer's non-finalized view: a
