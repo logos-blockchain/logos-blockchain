@@ -601,11 +601,16 @@ pub unsafe extern "C" fn pow_status(node: *const LogosBlockchainNode) -> FfiPoWS
 /// # Safety
 ///
 /// This function is unsafe because it reconstructs a boxed slice from a raw
-/// pointer. The caller must only pass values returned by [`pow_status`] and
-/// must call this exactly once per result.
+/// pointer.
+/// The caller must only pass values returned by [`pow_status`] and must call
+/// this exactly once per result.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_pow_status(status: PoWStatus) -> OperationStatus {
-    return_error_if_null_pointer!(status.auto_claim.targets);
+    // A null list means nothing was allocated — as after an error — so there is
+    // nothing to free and the caller did nothing wrong.
+    if status.auto_claim.targets.is_null() {
+        return OperationStatus::OK;
+    }
     let targets = unsafe {
         Box::from_raw(ptr::slice_from_raw_parts_mut(
             status.auto_claim.targets,
