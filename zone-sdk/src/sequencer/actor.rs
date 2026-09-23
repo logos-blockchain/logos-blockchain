@@ -1960,6 +1960,61 @@ mod tests {
         );
     }
 
+    /// The variant follows `orphaned`: nothing orphaned is an extension,
+    /// otherwise a conflict whose prefix excludes the orphaned entries.
+    #[tokio::test]
+    async fn update_variant_follows_orphaned() {
+        let channel_id = ChannelId::from([0; 32]);
+        let key = Ed25519Key::from_bytes(&[0; 32]);
+        let mut sequencer = ready_sequencer_with_channel(None, key.clone()).await;
+        let entry = |n: u8| {
+            let op = InscriptionOp {
+                channel_id,
+                inscription: Inscription::new_unchecked(vec![n]),
+                parent: MsgId::root(),
+                signer: key.public_key(),
+            };
+            let tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(op.clone())]);
+            ChannelUpdateTx::Inscription(InscriptionInfo {
+                tx_hash: tx.hash(),
+                parent_msg: MsgId::root(),
+                this_msg: MsgId::root(),
+                payload: op.inscription,
+                signer: Some(op.signer),
+            })
+        };
+        let result =
+            |adopted: Vec<ChannelUpdateTx>, orphaned: Vec<ChannelUpdateTx>| BlockEventResult {
+                finalized_items: Vec::new(),
+                channel_update: Some(ChannelUpdateInfo {
+                    orphaned,
+                    adopted,
+                    new_channel_tip: MsgId::root(),
+                }),
+                common_prefix: vec![entry(1), entry(2)],
+                mined_inscriptions: Vec::new(),
+                deposits: Vec::new(),
+            };
+
+        let (update, ..) = sequencer.apply_block_result(result(vec![entry(3)], Vec::new()));
+        assert!(matches!(update, ChannelUpdate::Extension { adopted } if adopted.len() == 1));
+
+        let (update, ..) = sequencer.apply_block_result(result(vec![entry(3)], vec![entry(2)]));
+        let ChannelUpdate::Conflict {
+            common_prefix,
+            adopted,
+            orphaned,
+        } = update
+        else {
+            panic!("an orphaned entry makes a conflict")
+        };
+        let hashes =
+            |txs: &[ChannelUpdateTx]| txs.iter().map(ChannelUpdateTx::tx_hash).collect::<Vec<_>>();
+        assert_eq!(hashes(&common_prefix), hashes(&[entry(1)]));
+        assert_eq!(hashes(&adopted), hashes(&[entry(3)]));
+        assert_eq!(hashes(&orphaned), hashes(&[entry(2)]));
+    }
+
     async fn ready_sequencer_with_channel(
         channel: Option<ChannelState>,
         sequencer_key: Ed25519Key,
