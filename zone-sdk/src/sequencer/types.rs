@@ -521,8 +521,9 @@ pub enum TxSource {
 /// no-ops, so only genuinely-dead work is re-sent.
 #[derive(Debug, Clone)]
 pub enum ChannelUpdate {
-    /// Nothing the consumer holds became invalid. `adopted` is empty when the
-    /// view did not move at all.
+    /// Nothing the consumer holds became invalid: per lineage, the new view
+    /// is the previous view followed by `adopted`. `adopted` is empty when
+    /// the view did not move at all.
     Extension {
         /// Entries that entered the view, in lineage order: every tx that
         /// advanced the canonical message or config tip. Only entries the
