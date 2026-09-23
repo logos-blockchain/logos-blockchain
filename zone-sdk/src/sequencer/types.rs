@@ -789,9 +789,7 @@ mod tests {
         transactions::Ops,
     };
     use lb_groth16::Fr;
-    use lb_key_management_system_service::keys::{
-        Ed25519Key, Ed25519PublicKey, UnverifiedEd25519PublicKey,
-    };
+    use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 
     use super::{Error, PreparedChannelConfig, sign_prepared};
 
@@ -800,11 +798,7 @@ mod tests {
         ops.hash().as_signing_bytes().to_vec()
     }
 
-    fn config_op(keys: Vec<UnverifiedEd25519PublicKey>) -> ChannelConfigOp {
-        let keys = keys
-            .into_iter()
-            .map(|key| Ed25519PublicKey::try_from(key).expect("test key is not small order"))
-            .collect();
+    fn config_op(keys: Vec<Ed25519PublicKey>) -> ChannelConfigOp {
         ChannelConfigOp {
             channel: ChannelId::from([7; 32]),
             parent: MsgId::root(),
@@ -818,13 +812,9 @@ mod tests {
 
     #[test]
     fn proposed_config_exposes_the_built_config() {
-        let new_keys: Vec<UnverifiedEd25519PublicKey> = [1u8, 2, 3]
+        let new_keys: Vec<Ed25519PublicKey> = [1u8, 2, 3]
             .into_iter()
-            .map(|b| {
-                Ed25519Key::from_bytes(&[b; 32])
-                    .public_key()
-                    .into_unverified()
-            })
+            .map(|b| Ed25519Key::from_bytes(&[b; 32]).public_key())
             .collect();
         let op = config_op(new_keys);
         let prepared = PreparedChannelConfig {
@@ -843,35 +833,39 @@ mod tests {
     fn sign_with_delegates_to_sign_prepared() {
         let signer = Ed25519Key::from_bytes(&[5; 32]);
         let accredited = vec![
-            Ed25519Key::from_bytes(&[4; 32])
-                .public_key()
-                .into_unverified(),
-            signer.public_key().into_unverified(),
+            Ed25519Key::from_bytes(&[4; 32]).public_key(),
+            signer.public_key(),
         ];
-        let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited.clone()))]);
+        let accredited_as_unverified_keys = accredited
+            .iter()
+            .map(|k| k.into_unverified())
+            .collect::<Vec<_>>();
+        let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited))]);
         let prepared = PreparedChannelConfig {
             sign_payload: payload_of(&tx),
             tx,
             transfer_proof: None,
-            accredited_keys: accredited.clone(),
+            accredited_keys: accredited_as_unverified_keys.clone(),
             signing_threshold: 2,
         };
 
         assert_eq!(
             prepared.sign_with(&signer).expect("signer is accredited"),
-            sign_prepared(&signer, &accredited, &prepared.sign_payload)
-                .expect("signer is accredited"),
+            sign_prepared(
+                &signer,
+                &accredited_as_unverified_keys,
+                &prepared.sign_payload
+            )
+            .expect("signer is accredited"),
         );
     }
 
     #[test]
     fn tx_exposes_every_op_in_order_so_a_bundled_op_is_visible() {
-        let accredited = vec![
-            Ed25519Key::from_bytes(&[4; 32])
-                .public_key()
-                .into_unverified(),
-        ];
-        let config = Op::ChannelConfig(config_op(accredited.clone()));
+        let accredited = vec![Ed25519Key::from_bytes(&[4; 32]).public_key()];
+        let accredited_as_unverified_keys =
+            accredited.iter().map(|k| k.into_unverified()).collect();
+        let config = Op::ChannelConfig(config_op(accredited));
         // A preparer smuggling a withdraw in alongside the config: one
         // signature over the tx hash would authorize both.
         let smuggled = Op::ChannelWithdraw(ChannelWithdrawOp {
@@ -883,7 +877,7 @@ mod tests {
             sign_payload: payload_of(&tx),
             tx,
             transfer_proof: None,
-            accredited_keys: accredited,
+            accredited_keys: accredited_as_unverified_keys,
             signing_threshold: 1,
         };
 
@@ -898,14 +892,16 @@ mod tests {
     #[test]
     fn sign_with_refuses_a_payload_that_does_not_match_tx() {
         let signer = Ed25519Key::from_bytes(&[5; 32]);
-        let accredited = vec![signer.public_key().into_unverified()];
-        let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited.clone()))]);
+        let accredited = vec![signer.public_key()];
+        let accredited_as_unverified_keys =
+            accredited.iter().map(|k| k.into_unverified()).collect();
+        let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited))]);
         // Honest-looking ops, but the payload belongs to some other tx.
         let prepared = PreparedChannelConfig {
             tx,
             transfer_proof: None,
             sign_payload: vec![0x11; 32],
-            accredited_keys: accredited,
+            accredited_keys: accredited_as_unverified_keys,
             signing_threshold: 1,
         };
 

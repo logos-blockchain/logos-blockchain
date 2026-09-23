@@ -23,7 +23,7 @@ use crate::{
         },
         ops::{
             SignedOperation,
-            channel::{VerifiedChannelKeys, to_unverified_channel_keys},
+            channel::{UnverifiedChannelKeys, VerifiedChannelKeys},
         },
         transactions::{
             hash::TxHashView,
@@ -37,7 +37,8 @@ use crate::{
 pub struct ChannelConfigOp {
     pub channel: ChannelId,
     pub parent: MsgId,
-    // This op is not used in genesis, so we can force channel updates to only use valid keys.
+    // This op is not used in genesis, so we can force channel updates to only use valid (e.g.,
+    // non-weak) public keys.
     pub keys: VerifiedChannelKeys,
     pub posting_timeframe: SlotTimeframe,
     pub posting_timeout: SlotTimeout,
@@ -59,11 +60,11 @@ impl ChannelConfigOp {
         Self {
             channel: ChannelId::from([7u8; 32]),
             parent: MsgId::root(),
-            keys: VerifiedChannelKeys::try_from(vec![
+            keys: [
                 Ed25519Key::from_bytes(&[8; 32]).public_key(),
                 Ed25519Key::from_bytes(&[9; 32]).public_key(),
-            ])
-            .expect("Two keys are within bounds."),
+            ]
+            .into(),
             posting_timeframe: SlotTimeframe::from(10u32),
             posting_timeout: SlotTimeout::from(11u32),
             configuration_threshold: 12,
@@ -210,8 +211,11 @@ impl<Mode: VerificationMode> ExecutableOperation
         let operation = self.operation();
 
         // if the channel doesn't exist, create it otherwise just update the config
+        let keys = UnverifiedChannelKeys::new_unchecked(
+            operation.keys.iter().map(|k| k.into_unverified()).collect(),
+        );
         if let Some(channel) = context.channels.channels.get_mut(&operation.channel) {
-            channel.accredited_keys = Arc::new(to_unverified_channel_keys(&operation.keys));
+            channel.accredited_keys = Arc::new(keys);
             channel.configuration_threshold = operation.configuration_threshold;
             channel.tip_sequencer = 0;
             channel.tip_sequencer_starting_slot = context.block_slot;
@@ -224,7 +228,7 @@ impl<Mode: VerificationMode> ExecutableOperation
             context.channels.channels = context.channels.channels.insert(
                 operation.channel,
                 ChannelState {
-                    accredited_keys: Arc::new(to_unverified_channel_keys(&operation.keys)),
+                    accredited_keys: Arc::new(keys),
                     configuration_threshold: operation.configuration_threshold,
                     tip_message: MsgId::root(),
                     config_tip_hash: operation.id(),
@@ -243,15 +247,10 @@ impl<Mode: VerificationMode> ExecutableOperation
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
     use crate::mantle::{
-        TxHash,
-        gas::test_utils::FixedThresholds,
-        ops::channel::{
-            UnverifiedChannelKeys, verification::test_utils::create_channel_multi_sig_proof,
-        },
+        TxHash, gas::test_utils::FixedThresholds,
+        ops::channel::verification::test_utils::create_channel_multi_sig_proof,
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
     };
 
@@ -553,7 +552,9 @@ mod tests {
 
     fn configured_state(operation: &ChannelConfigOp, block_slot: Slot) -> ChannelState {
         ChannelState {
-            accredited_keys: Arc::new(to_unverified_channel_keys(&operation.keys)),
+            accredited_keys: Arc::new(UnverifiedChannelKeys::new_unchecked(
+                operation.keys.iter().map(|k| k.into_unverified()).collect(),
+            )),
             configuration_threshold: operation.configuration_threshold,
             tip_message: MsgId::root(),
             config_tip_hash: operation.id(),

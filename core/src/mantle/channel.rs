@@ -105,8 +105,8 @@ pub struct Channels {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelState {
-    // We cannot use verified Ed25519 keys here because genesis creates a channel with a key of all
-    // `0`s, which would otherwise fail to deserialize here.
+    // We cannot use verified Ed25519 public keys here because genesis creates a channel with a key
+    // of all `0`s, which would otherwise fail to deserialize here.
     // Channel Configuration
     pub accredited_keys: Arc<UnverifiedChannelKeys>, // keys.len() <= ChannelKeyIndex::MAX
     pub configuration_threshold: u16,                /* indicating how many keys are required to

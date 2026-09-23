@@ -2381,7 +2381,7 @@ mod tests {
                 &utxo_merkle_path,
                 &utxo_merkle_path,
                 *leader_sk.as_fr(),
-                signing_key.public_key().as_unverified(),
+                &signing_key.public_key(),
             ),
             VoucherCm::default(),
         )

@@ -103,6 +103,8 @@ where
             warn!(target: LOG_TARGET, "Failed to decode provider_id to node ID: {e:?}");
         })
         .ok()?;
+    // We know this is a valid Ed25519 public key because provider ID only accept
+    // valid keys.
     let public_key = provider_id.0;
     Some(ZkNode {
         node: Node {

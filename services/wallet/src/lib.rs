@@ -896,8 +896,7 @@ where
             .channel_state(&set_keys_op.channel)
             .ok_or(WalletServiceError::MissingChannelState(set_keys_op.channel))?;
 
-        // First key is authorized key (guaranteed non-empty)
-        let authorized_key = channel.accredited_keys[0];
+        let authorized_key = channel.accredited_keys[0]; // First key is authorized key (guaranteed non-empty)
         let Ok(validated_public_key) = Ed25519PublicKey::try_from(authorized_key) else {
             return Err(WalletServiceError::InvalidSigner(authorized_key.to_bytes()));
         };

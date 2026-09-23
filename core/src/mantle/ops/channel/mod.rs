@@ -20,16 +20,6 @@ type ChannelKeys<Key> = NonEmptyBoundedVec<Key, CHANNEL_MAX_KEYS>;
 pub type VerifiedChannelKeys = ChannelKeys<Ed25519PublicKey>;
 pub type UnverifiedChannelKeys = ChannelKeys<UnverifiedEd25519PublicKey>;
 
-/// Widens configured keys to the form channel state stores.
-///
-/// Channel state keeps unverified keys because the genesis inscription
-/// accredits the all-zero placeholder, which no verified key can hold.
-#[must_use]
-pub fn to_unverified_channel_keys(keys: &VerifiedChannelKeys) -> UnverifiedChannelKeys {
-    // The source is non-empty and within bounds, so the bounds still hold.
-    UnverifiedChannelKeys::new_unchecked(keys.iter().map(|key| *key.as_unverified()).collect())
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryCodec)]
 pub struct ChannelId([u8; 32]);
 serde_bytes_newtype!(ChannelId, 32);

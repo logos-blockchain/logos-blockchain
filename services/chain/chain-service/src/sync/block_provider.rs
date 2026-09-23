@@ -1089,9 +1089,7 @@ mod tests {
                 &utxo_merkle_path, // aged path
                 &utxo_merkle_path, // latest path
                 *leader_sk.as_fr(),
-                &Ed25519Key::from_bytes(&[1u8; 32])
-                    .public_key()
-                    .into_unverified(),
+                &Ed25519Key::from_bytes(&[1u8; 32]).public_key(),
             );
 
             lb_core::proofs::leader_proof::Groth16LeaderProof::prove(

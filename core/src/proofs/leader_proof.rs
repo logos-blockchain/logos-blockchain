@@ -8,7 +8,7 @@ use lb_binary_codec::{
 };
 use lb_groth16::{COMPRESSED_PROOF_SIZE, FR_BYTES_SIZE, Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::{
-    ED25519_PUBLIC_KEY_SIZE, UnverifiedEd25519PublicKey, ZkPublicKey,
+    ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, UnverifiedEd25519PublicKey, ZkPublicKey,
 };
 use lb_log_targets::proofs;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
@@ -117,7 +117,7 @@ impl Groth16LeaderProof {
         Ok(Self {
             proof,
             entropy_contribution,
-            leader_key,
+            leader_key: leader_key.into_unverified(),
             voucher_cm,
         })
     }
@@ -294,7 +294,7 @@ static LEAD_V1: LazyLock<Fr> =
 #[derive(Debug, Clone)]
 pub struct LeaderPrivate {
     input: lb_pol::PolWitnessInputsData,
-    pk: UnverifiedEd25519PublicKey,
+    pk: Ed25519PublicKey,
 }
 
 impl LeaderPrivate {
@@ -305,10 +305,10 @@ impl LeaderPrivate {
         aged_path: &MerklePath<Fr>,
         latest_path: &MerklePath<Fr>,
         secret_key: Fr,
-        leader_pk: &UnverifiedEd25519PublicKey,
+        leader_pk: &Ed25519PublicKey,
     ) -> Self {
         let public_key = *leader_pk;
-        let leader_pk = ed25519_pk_to_fr_tuple(leader_pk);
+        let leader_pk = ed25519_pk_to_fr_tuple(leader_pk.as_unverified());
         let chain = lb_pol::PolChainInputsData {
             slot_number: public.slot,
             epoch_nonce: public.epoch_nonce,

@@ -896,7 +896,7 @@ mod pol_tests {
                 .ok_or(PrivateInputsError::LatestNoteNotFound)?;
             // Generate a random one-time Ed25519 key for P_LEAD (as per PoL spec)
             let leader_signing_key = Ed25519Key::generate(&mut OsRng);
-            let leader_pk = leader_signing_key.public_key().into_unverified();
+            let leader_pk = leader_signing_key.public_key();
             let leader_private = LeaderPrivate::new(
                 public_inputs,
                 *utxo,

@@ -481,7 +481,7 @@ mod tests {
         };
 
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
-        let verifying_key = signing_key.public_key().into_unverified();
+        let verifying_key = signing_key.public_key();
 
         let private_inputs = LeaderPrivate::new(
             public_inputs,

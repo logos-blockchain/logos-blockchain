@@ -8,8 +8,13 @@ pub const X25519_SECRET_KEY_LENGTH: usize = 32;
 pub struct X25519PrivateKey(StaticSecret);
 
 impl X25519PrivateKey {
+    /// Performs a Diffie-Hellman key exchange with an unverified X25519 public
+    /// key.
+    ///
+    /// Returns `Some(SharedKey)` if the key exchange was contributory,
+    /// otherwise `None`.
     #[must_use]
-    pub fn derive_unverified_shared_key(
+    pub fn try_derive_shared_key(
         &self,
         public_key: &UnverifiedX25519PublicKey,
     ) -> Option<SharedKey> {
@@ -17,14 +22,13 @@ impl X25519PrivateKey {
         shared_key.was_contributory().then(|| SharedKey(shared_key))
     }
 
+    /// Performs a Diffie-Hellman key exchange with a verified X25519 public
+    /// key.
+    ///
+    /// Returns the derived shared key.
     #[must_use]
     pub fn derive_shared_key(&self, public_key: &X25519PublicKey) -> SharedKey {
-        let shared_key = self.0.diffie_hellman(&public_key.0.0);
-        assert!(
-            shared_key.was_contributory(),
-            "Shared key derivation failed: non-contributory key exchange. This should not happen with hardened public keys."
-        );
-        SharedKey(shared_key)
+        self.try_derive_shared_key(&public_key.0).expect("Shared key derivation failed: non-contributory key exchange. This should not happen with hardened public keys.")
     }
 }
 

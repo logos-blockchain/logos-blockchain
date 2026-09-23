@@ -440,12 +440,10 @@ mod tests {
                 ..make_channel_state(
                     1,
                     Some(
-                        UnverifiedChannelKeys::try_from(vec![
-                            Ed25519Key::from_bytes(&[15; 32])
-                                .public_key()
-                                .into_unverified(),
-                        ])
-                        .expect("one key is within bounds"),
+                        [Ed25519Key::from_bytes(&[15; 32])
+                            .public_key()
+                            .into_unverified()]
+                        .into(),
                     ),
                 )
             },
@@ -478,12 +476,10 @@ mod tests {
             make_channel_state(
                 1,
                 Some(
-                    UnverifiedChannelKeys::try_from(vec![
-                        Ed25519Key::from_bytes(&[16; 32])
-                            .public_key()
-                            .into_unverified(),
-                    ])
-                    .expect("one key is within bounds"),
+                    [Ed25519Key::from_bytes(&[16; 32])
+                        .public_key()
+                        .into_unverified()]
+                    .into(),
                 ),
             ),
         );
@@ -516,13 +512,13 @@ mod tests {
                 ..make_channel_state(
                     1,
                     Some(
-                        UnverifiedChannelKeys::try_from(vec![
+                        [
                             Ed25519Key::from_bytes(&[16; 32])
                                 .public_key()
                                 .into_unverified(),
                             signer,
-                        ])
-                        .expect("two keys are within bounds"),
+                        ]
+                        .into(),
                     ),
                 )
             },
@@ -582,13 +578,13 @@ mod tests {
         let operation = InscriptionOp::sample();
         let channel_id = operation.channel_id;
         let message_id = operation.id();
-        let keys = UnverifiedChannelKeys::try_from(vec![
+        let keys: UnverifiedChannelKeys = [
             Ed25519Key::from_bytes(&[16; 32])
                 .public_key()
                 .into_unverified(),
             operation.signer,
-        ])
-        .expect("two keys are within bounds");
+        ]
+        .into();
 
         let channels = channels(
             channel_id,

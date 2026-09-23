@@ -435,11 +435,10 @@ pub mod test_utils {
         accredited_keys: Option<UnverifiedChannelKeys>,
     ) -> ChannelState {
         let keys = accredited_keys.unwrap_or_else(|| {
-            UnverifiedChannelKeys::new_unchecked(vec![
-                Ed25519Key::from_bytes(&[0; 32])
-                    .public_key()
-                    .into_unverified(),
-            ])
+            [Ed25519Key::from_bytes(&[0; 32])
+                .public_key()
+                .into_unverified()]
+            .into()
         });
         ChannelState {
             accredited_keys: Arc::new(keys),
