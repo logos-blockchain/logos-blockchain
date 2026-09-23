@@ -51,7 +51,8 @@ pub(super) struct BlockEventResult {
     /// its tx reached the chain (`OnChain` status) even when the tx didn't move
     /// the canonical channel chain.
     pub(super) mined_inscriptions: Vec<InscriptionInfo>,
-    /// Channel deposits observed in this block, in op order. Surfaced
+    /// Channel deposits observed in the blocks this event covers (canonical
+    /// backfill first, then the live block), in block and op order. Surfaced
     /// non-finalized as `ChannelUpdate::adopted_deposits` so a consumer can
     /// pin a deposit without waiting for finalization.
     pub(super) adopted_deposits: Vec<DepositInfo>,
@@ -132,12 +133,12 @@ where
         finalized.iter().map(|block| block.block_id).collect();
     let parent_id = event.block.header.parent_block;
     let parent_known = block_is_known(state, &finalized_block_ids, state_lib, parent_id);
-    let canonical_backfill = if parent_known {
-        Vec::new()
+    let (canonical_backfill, mut adopted_deposits) = if parent_known {
+        (Vec::new(), Vec::new())
     } else {
         let blocks =
             walk_back_to_known(state, &finalized_block_ids, state_lib, parent_id, node).await;
-        prepare_backfill_note_ops(blocks, channel_id, node).await
+        prepare_backfill_blocks(blocks, channel_id, node).await
     };
 
     let our_txs: Vec<TxHash> = event
@@ -172,12 +173,12 @@ where
         &deposit_events,
         event.block.header.slot,
     );
-    let adopted_deposits = block_channel_deposits(
+    adopted_deposits.extend(block_channel_deposits(
         &event.block.transactions,
         channel_id,
         event.block.header.slot,
         &deposit_events,
-    );
+    ));
 
     Ok(PreparedBlockEvent {
         block: &event.block,
@@ -925,19 +926,21 @@ where
     }
 }
 
-/// Prepare each canonical-backfill block with its channel-note ops. Each needs
+/// Prepare each canonical-backfill block with its channel-note ops, and
+/// collect the deposits those blocks carry, in block order. Each block needs
 /// a deposit-events fetch, so this runs in the prepare phase, keeping apply
 /// await-free. Best-effort: on a fetch failure, stop and keep the prefix
 /// already prepared — the rest is retried on the next event.
-async fn prepare_backfill_note_ops<Node>(
+async fn prepare_backfill_blocks<Node>(
     blocks: Vec<ApiBlock>,
     channel_id: ChannelId,
     node: &Node,
-) -> Vec<(ApiBlock, Vec<NoteOp>)>
+) -> (Vec<(ApiBlock, Vec<NoteOp>)>, Vec<DepositInfo>)
 where
     Node: adapter::Node + Sync,
 {
     let mut prepared = Vec::with_capacity(blocks.len());
+    let mut deposits = Vec::new();
     for block in blocks {
         let Some(deposit_events) = backfill_deposit_events(node, &block, channel_id).await else {
             break;
@@ -948,9 +951,15 @@ where
             &deposit_events,
             block.header.slot,
         );
+        deposits.extend(block_channel_deposits(
+            &block.transactions,
+            channel_id,
+            block.header.slot,
+            &deposit_events,
+        ));
         prepared.push((block, note_ops));
     }
-    prepared
+    (prepared, deposits)
 }
 
 async fn fetch_backfill_block<Node>(node: &Node, block_id: HeaderId) -> Option<ApiBlock>
@@ -2001,6 +2010,48 @@ mod tests {
             }
             other => panic!("expected Config, got {other:?}"),
         }
+    }
+
+    /// A deposit mined in a block the stream skipped is observed when the
+    /// canonical backfill fetches that block, ahead of the live block's own.
+    #[tokio::test]
+    async fn canonical_backfill_gap_deposits_are_observed() {
+        // G(0) <- B1 (live) <- B2 (deposit D2, missed) <- B3 (deposit D3, live)
+        let ch = ChannelId::from([0u8; 32]);
+        let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
+        let deposit = |n: u32| {
+            let tag = u8::try_from(n).unwrap();
+            let op = deposit_op(ch, n, Metadata::try_from(vec![tag]).unwrap());
+            let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
+            let note = DepositNote {
+                note_id: NoteId::from(Fr::from(1000 + u64::from(n))),
+                value: 50,
+                pk,
+            };
+            let event = deposit_event(&tx, &op, 50, vec![note]);
+            (op.op_id(), tx, event)
+        };
+        let (d2, d2_tx, d2_event) = deposit(2);
+        let (d3, d3_tx, d3_event) = deposit(3);
+        let b1 = api_block(1, 0, 1, Vec::new());
+        let b2 = api_block(2, 1, 2, vec![d2_tx]);
+        let b3 = api_block(3, 2, 3, vec![d3_tx]);
+        let node = MockNode {
+            blocks: vec![b2],
+            events: HashMap::from([(header_id(2), d2_event), (header_id(3), d3_event)]),
+            ..MockNode::default()
+        };
+
+        let mut state = None;
+        let r = drive_with(&node, &mut state, ch, &[live_event(&b1), live_event(&b3)]).await;
+
+        let observed: Vec<_> = r[1]
+            .result
+            .adopted_deposits
+            .iter()
+            .map(|d| d.op_id)
+            .collect();
+        assert_eq!(observed, vec![d2, d3]);
     }
 
     #[tokio::test]

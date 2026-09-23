@@ -527,8 +527,9 @@ pub struct ChannelUpdate {
     /// branches), so consumers dedup by `this_msg` against their own state
     /// there.
     pub adopted: Vec<ChannelUpdateTx>,
-    /// Channel deposits observed in this block. Surfaced non-finalized so a
-    /// consumer can pin a deposit without waiting for finalization, via
+    /// Channel deposits observed in the blocks this event covers, in block
+    /// and op order. Surfaced non-finalized so a consumer can pin a deposit
+    /// without waiting for finalization, via
     /// [`publish_pin_deposit`](super::SequencerHandle::publish_pin_deposit).
     ///
     /// Reconcile against branch state, don't fire once: a branch change can
