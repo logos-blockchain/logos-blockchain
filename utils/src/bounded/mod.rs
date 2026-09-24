@@ -14,8 +14,8 @@
 //! [`Bounded::check_len_against_bounds`] and
 //! [`Bounded::new_unchecked`].
 //!
-//! The keyed collections ([`BoundedSet`], [`BoundedMap`] and
-//! [`BoundedIndexMap`]) add a second invariant on top of the bound: every
+//! The keyed collections ([`BoundedSet`] and [`BoundedMap`]) add a second
+//! invariant on top of the bound: every
 //! checked construction path rejects a duplicate instead of silently merging
 //! it, so the number of items read is always the number of items held.
 
@@ -24,8 +24,6 @@ use core::fmt::{self, Display, Formatter};
 use serde::{Serialize, Serializer};
 use thiserror::Error;
 
-pub mod index_map;
-pub use index_map::{BoundedIndexMap, NonEmptyBoundedIndexMap, UpperBoundedIndexMap};
 pub mod map;
 pub use map::{BoundedMap, NonEmptyBoundedMap, UpperBoundedMap};
 pub mod multiaddr;

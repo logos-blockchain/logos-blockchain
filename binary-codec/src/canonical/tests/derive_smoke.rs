@@ -2,7 +2,7 @@
 //! `::lb_binary_codec::canonical::` paths emitted by the derive resolve via
 //! the umbrella serialization crate.
 
-use lb_utils::bounded::{BoundedIndexMap, BoundedSet};
+use lb_utils::bounded::{BoundedMap, BoundedSet};
 
 use crate::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, codec_fixtures};
 
@@ -43,13 +43,13 @@ fn derived_tuple_struct_round_trips() {
     assert_eq!(decoded, value);
 }
 
-/// Keyed collection fields derive like any other field: each encodes in
-/// declaration order under its own rules. The set sorts `{7, 0}` to `00 07`;
-/// the index map keeps `9` before `3`.
+/// Keyed collection fields encode like any other field, in declaration order,
+/// each under its own rules: the set sorts `{7, 0}` to `00 07`, and the map
+/// sorts its entries by encoded key, `3` before `9`.
 #[derive(Debug, PartialEq, Eq)]
 struct WithKeyed {
     tags: BoundedSet<u8, 0, 4>,
-    slots: BoundedIndexMap<u8, u16, 1, 4>,
+    slots: BoundedMap<u8, u16, 1, 4>,
 }
 
 impl BinaryEncode for WithKeyed {
@@ -71,8 +71,7 @@ impl BinaryDecode for WithKeyed {
         context: &Self::Context,
     ) -> Result<(&'input [u8], Self), crate::canonical::DecodeError> {
         let (rest, tags) = <BoundedSet<u8, 0, 4> as BinaryDecode>::decode(input, context)?;
-        let (rest, slots) =
-            <BoundedIndexMap<u8, u16, 1, 4> as BinaryDecode>::decode(rest, &((), ()))?;
+        let (rest, slots) = <BoundedMap<u8, u16, 1, 4> as BinaryDecode>::decode(rest, &((), ()))?;
 
         Ok((rest, Self { tags, slots }))
     }
@@ -82,6 +81,6 @@ codec_fixtures!(
     WithKeyed,
     Self {
         tags: BoundedSet::try_from_iter([7, 0]).unwrap(),
-        slots: BoundedIndexMap::try_from_iter([(9, 0x0201), (3, 0x0403)]).unwrap(),
-    } => "02000702090102030304"
+        slots: BoundedMap::try_from_iter([(9, 0x0201), (3, 0x0403)]).unwrap(),
+    } => "02000702030304090102"
 );

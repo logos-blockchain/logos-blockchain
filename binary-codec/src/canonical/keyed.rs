@@ -1,19 +1,15 @@
 //! Canonical encoding shared by the keyed bounded collections: sets and maps.
 //!
-//! All of them encode like a bounded vector, a `MAX`-width length prefix
-//! followed by the items. What they add is a rule for the order of the items:
+//! Both encode like a bounded vector, a `MAX`-width length prefix followed by
+//! the items. What they add is a rule for the order of the items. A hash-backed
+//! collection iterates in an order that changes between runs, so the items are
+//! sorted by the bytes of each encoded key, in byte-wise lexicographic order.
+//! That order needs no `Ord` on the key and can be stated in a specification
+//! without reference to any language. Decoding requires strictly increasing
+//! keys, so every value has exactly one encoding.
 //!
-//! - Hash-backed collections iterate in an order that changes between runs, so
-//!   they sort their items by the bytes of each encoded key, in byte-wise
-//!   lexicographic order. That order needs no `Ord` on the key and can be
-//!   stated in a specification without reference to any language. Decoding
-//!   requires strictly increasing keys, so every value has exactly one
-//!   encoding.
-//! - Insertion-ordered collections keep their own order, which is part of the
-//!   value. Decoding accepts any order but still rejects a repeated key.
-//!
-//! Either way a repeated key is rejected at the item that repeats it. That also
-//! bounds a key type that decodes without consuming input: its second item is a
+//! A repeated key is rejected at the item that repeats it. That also bounds a
+//! key type that decodes without consuming input: its second item is a
 //! duplicate, so no length prefix can make the decode loop spin.
 
 use core::{any::type_name, cmp::Ordering, ops::Range};
@@ -108,10 +104,8 @@ where
 }
 
 /// Up to `MAX` fixtures of `T` with pairwise distinct bytes, in canonical
-/// order.
-///
-/// Used by the hash-backed collections, whose own fixture must list its keys in
-/// the order the encoder emits them.
+/// order: a collection's own fixture must list its keys in the order the
+/// encoder emits them.
 pub(super) fn distinct_fixtures_in_canonical_order<
     Collection,
     T,
@@ -125,33 +119,6 @@ where
     fixtures.sort_by(|a, b| a.bytes.cmp(&b.bytes));
     fixtures.dedup_by(|a, b| a.bytes == b.bytes);
     fixtures.truncate(MAX);
-    require_enough_fixtures::<Collection, T, MIN>(fixtures.len());
-    fixtures
-}
-
-/// Up to `MAX` fixtures of `T` with pairwise distinct bytes, in the order `T`
-/// declares them.
-///
-/// Used by the insertion-ordered collections, whose order is part of the value
-/// and need not be canonical.
-pub(super) fn distinct_fixtures_in_declared_order<
-    Collection,
-    T,
-    const MIN: usize,
-    const MAX: usize,
->() -> Vec<CodecFixture<T>>
-where
-    T: CodecExamples,
-{
-    let mut fixtures: Vec<CodecFixture<T>> = Vec::new();
-    for fixture in T::fixtures() {
-        if fixtures.len() == MAX {
-            break;
-        }
-        if fixtures.iter().all(|kept| kept.bytes != fixture.bytes) {
-            fixtures.push(fixture);
-        }
-    }
     require_enough_fixtures::<Collection, T, MIN>(fixtures.len());
     fixtures
 }
