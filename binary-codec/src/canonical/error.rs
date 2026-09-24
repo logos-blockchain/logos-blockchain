@@ -41,6 +41,16 @@ pub enum DecodeError {
         max: usize,
         limit: usize,
     },
+    #[error("Item at index {index} of {type_name} repeats the key of an earlier item")]
+    DuplicateItem {
+        type_name: &'static str,
+        index: usize,
+    },
+    #[error("Item at index {index} of {type_name} is out of canonical order")]
+    NonCanonicalOrder {
+        type_name: &'static str,
+        index: usize,
+    },
     #[error("{0}")]
     Custom(Cow<'static, str>),
 }
@@ -107,6 +117,32 @@ impl DecodeError {
             type_name: type_name::<T>(),
             max,
             limit,
+        }
+    }
+
+    /// The item at `index` of a keyed `T` (a set or a map) repeats the key of
+    /// an earlier item.
+    #[must_use]
+    pub fn duplicate_item<T>(index: usize) -> Self
+    where
+        T: ?Sized,
+    {
+        Self::DuplicateItem {
+            type_name: type_name::<T>(),
+            index,
+        }
+    }
+
+    /// The item at `index` of a `T` whose items have a canonical order does
+    /// not come after the item before it.
+    #[must_use]
+    pub fn non_canonical_order<T>(index: usize) -> Self
+    where
+        T: ?Sized,
+    {
+        Self::NonCanonicalOrder {
+            type_name: type_name::<T>(),
+            index,
         }
     }
 

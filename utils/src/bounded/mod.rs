@@ -12,20 +12,33 @@
 //! implement [`BoundedLen`] (e.g. foreign types this crate does not depend on)
 //! can still reuse the bound-checking logic via [`Bounded::check_len`] and
 //! [`Bounded::new_unchecked`].
-
-pub mod multiaddr;
-pub mod string;
-pub mod vec;
+//!
+//! The keyed collections ([`BoundedSet`], [`BoundedMap`] and
+//! [`BoundedIndexMap`]) add a second invariant on top of the bound: every
+//! checked construction path rejects a duplicate instead of silently merging
+//! it, so the number of items read is always the number of items held.
 
 use core::fmt::{self, Display, Formatter};
 
 use serde::{Serialize, Serializer};
-pub use string::BoundedString;
 use thiserror::Error;
+
+pub mod index_map;
+pub use index_map::{BoundedIndexMap, NonEmptyBoundedIndexMap, UpperBoundedIndexMap};
+pub mod map;
+pub use map::{BoundedMap, NonEmptyBoundedMap, UpperBoundedMap};
+pub mod multiaddr;
+pub mod set;
+pub use set::{BoundedSet, NonEmptyBoundedSet, UpperBoundedSet};
+pub mod string;
+pub use string::BoundedString;
+pub mod vec;
 pub use vec::{
     BoundedVec, LowerBoundedVec, MaxBoundedVec, NonEmptyBoundedVec, UpperBoundedVec,
     deserialize_bounded_sequence,
 };
+
+mod collection;
 
 #[derive(Debug, Error, Eq, PartialEq, Clone)]
 pub enum BoundedError {
@@ -43,6 +56,45 @@ pub enum BoundedError {
         max: usize,
         capacity: usize,
     },
+    /// Raised by the keyed collections only: the item at `index` (0-based,
+    /// in input order) repeats the key of an earlier item.
+    #[error("Item at index {index} is a duplicate of an earlier item")]
+    DuplicateItem { index: usize },
+}
+
+impl BoundedError {
+    /// The error for `count` items against a minimum of `min`: an empty input
+    /// has its own variant.
+    const fn too_few(count: usize, min: usize) -> Self {
+        if count == 0 {
+            Self::EmptyInput
+        } else {
+            Self::TooFewItems { count, min }
+        }
+    }
+}
+
+/// The most memory, in bytes, a bounded collection reserves up front for a
+/// length it has been told about but has not yet seen.
+const MAX_PREALLOCATION_BYTES: usize = 1024 * 1024;
+
+/// How many items a `MAX`-bounded collection should reserve room for, given a
+/// declared length.
+///
+/// A declared length is only a claim. In a binary format it is read off the
+/// wire before a single item has been seen, so trusting it up to `MAX` would
+/// let a few bytes of input reserve `MAX` items' worth of memory, or, for a
+/// large `MAX`, overflow the allocator and panic. The claim is honoured up to
+/// [`MAX_PREALLOCATION_BYTES`]; past that the collection grows as items
+/// actually arrive. Zero-sized items need no room, so they get none.
+pub(crate) fn allocation_size_for_hint<Item, const MAX: usize>(hint: Option<usize>) -> usize {
+    let item_size = size_of::<Item>();
+    if item_size == 0 {
+        return 0;
+    }
+    hint.unwrap_or(0)
+        .min(MAX)
+        .min(MAX_PREALLOCATION_BYTES / item_size)
 }
 
 /// The measured length of a value, in whatever unit is natural for its type:
@@ -98,13 +150,7 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<T, MIN, MAX> {
     /// call this directly, then wrap with [`Self::new_unchecked`].
     pub const fn check_len_against_bounds(len: usize) -> Result<(), BoundedError> {
         if len < MIN {
-            if len == 0 {
-                return Err(BoundedError::EmptyInput);
-            }
-            return Err(BoundedError::TooFewItems {
-                count: len,
-                min: MIN,
-            });
+            return Err(BoundedError::too_few(len, MIN));
         }
         if len > MAX {
             return Err(BoundedError::TooManyItems {
@@ -153,5 +199,40 @@ where
 {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.0.serialize(serializer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_PREALLOCATION_BYTES, allocation_size_for_hint};
+
+    #[test]
+    fn preallocation_honours_a_small_declared_length() {
+        assert_eq!(allocation_size_for_hint::<u64, 16>(Some(3)), 3);
+    }
+
+    #[test]
+    fn preallocation_is_zero_without_a_declared_length() {
+        assert_eq!(allocation_size_for_hint::<u64, 16>(None), 0);
+    }
+
+    #[test]
+    fn preallocation_never_exceeds_max() {
+        assert_eq!(allocation_size_for_hint::<u64, 16>(Some(1_000)), 16);
+    }
+
+    #[test]
+    fn preallocation_never_exceeds_the_byte_budget() {
+        let capacity = allocation_size_for_hint::<[u8; 32], { usize::MAX }>(Some(usize::MAX));
+
+        assert_eq!(capacity, MAX_PREALLOCATION_BYTES / 32);
+    }
+
+    #[test]
+    fn preallocation_reserves_nothing_for_zero_sized_items() {
+        assert_eq!(
+            allocation_size_for_hint::<(), { usize::MAX }>(Some(usize::MAX)),
+            0
+        );
     }
 }
