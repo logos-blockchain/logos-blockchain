@@ -1,5 +1,5 @@
 use core::{
-    hash::{BuildHasher, Hash},
+    hash::{BuildHasher, Hash, Hasher},
     ops::Deref,
 };
 use std::collections::hash_map::RandomState;
@@ -51,14 +51,13 @@ where
 /// enforces the bound, and the last two also reject a repeated key instead of
 /// letting the later entry overwrite the earlier one.
 ///
-/// Iteration, serialization and deserialization all follow insertion order.
-///
-/// # Equality ignores order
-///
-/// `==` compares as a map, the way [`IndexMap`] does: the same entries in a
-/// different order are equal, even though they encode to different bytes.
-/// Compare [`IndexMap::as_slice`] (reachable through `Deref`) when order must
-/// count.
+/// Iteration, serialization and deserialization all follow insertion order,
+/// in serde formats and in the canonical binary codec alike, so the order is
+/// part of the value. Equality and hashing follow it too, unlike
+/// [`IndexMap`]'s own, which compare as a map: the same entries in a
+/// different order are different values, and encode differently. No
+/// operation on this type reorders the remaining entries: removal shifts,
+/// never swaps.
 ///
 /// Read access goes through `Deref` to the inner [`IndexMap`]. There is no
 /// `DerefMut`: values can be mutated in place, but every mutation that can
@@ -72,7 +71,37 @@ pub type UpperBoundedIndexMap<K, V, const MAX: usize, S = RandomState> =
 pub type NonEmptyBoundedIndexMap<K, V, const MAX: usize, S = RandomState> =
     BoundedIndexMap<K, V, 1, MAX, S>;
 
-impl<K, V, S, const MIN: usize, const MAX: usize> Bounded<IndexMap<K, V, S>, MIN, MAX> {
+impl<K, V, S, const MIN: usize, const MAX: usize> PartialEq for BoundedIndexMap<K, V, MIN, MAX, S>
+where
+    K: PartialEq,
+    V: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl<K, V, S, const MIN: usize, const MAX: usize> Eq for BoundedIndexMap<K, V, MIN, MAX, S>
+where
+    K: Eq,
+    V: Eq,
+{
+}
+
+impl<K, V, S, const MIN: usize, const MAX: usize> Hash for BoundedIndexMap<K, V, MIN, MAX, S>
+where
+    K: Hash,
+    V: Hash,
+{
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: Hasher,
+    {
+        self.as_slice().hash(state);
+    }
+}
+
+impl<K, V, S, const MIN: usize, const MAX: usize> BoundedIndexMap<K, V, MIN, MAX, S> {
     /// Returns the entry at position `index`, with a mutable reference to its
     /// value.
     pub fn get_index_mut(&mut self, index: usize) -> Option<(&K, &mut V)> {
@@ -91,7 +120,7 @@ impl<K, V, S, const MIN: usize, const MAX: usize> Bounded<IndexMap<K, V, S>, MIN
     }
 }
 
-impl<K, V, S, const MIN: usize, const MAX: usize> Bounded<IndexMap<K, V, S>, MIN, MAX>
+impl<K, V, S, const MIN: usize, const MAX: usize> BoundedIndexMap<K, V, MIN, MAX, S>
 where
     S: Default,
 {
@@ -110,7 +139,7 @@ where
     }
 }
 
-impl<K, V, S, const MIN: usize, const MAX: usize> Bounded<IndexMap<K, V, S>, MIN, MAX>
+impl<K, V, S, const MIN: usize, const MAX: usize> BoundedIndexMap<K, V, MIN, MAX, S>
 where
     K: Eq + Hash,
     S: BuildHasher + Default,
@@ -129,7 +158,7 @@ where
     }
 }
 
-impl<K, V, S, const MIN: usize, const MAX: usize> Bounded<IndexMap<K, V, S>, MIN, MAX>
+impl<K, V, S, const MIN: usize, const MAX: usize> BoundedIndexMap<K, V, MIN, MAX, S>
 where
     K: Eq + Hash,
     S: BuildHasher,
@@ -141,12 +170,8 @@ where
     /// the length, and so succeeds even when the map is full, returning the
     /// previous value. Returns [`BoundedError::TooManyItems`] when `key` is new
     /// and the map already holds `MAX` entries.
-    pub fn try_insert(&mut self, key: K, value: V) -> Result<Option<V>, BoundedError>
-    where
-        K: Eq + Hash,
-        S: BuildHasher,
-    {
-        let len = self.0.len();
+    pub fn try_insert(&mut self, key: K, value: V) -> Result<Option<V>, BoundedError> {
+        let len = self.len();
         match self.0.entry(key) {
             Entry::Occupied(mut entry) => Ok(Some(entry.insert(value))),
             Entry::Vacant(_) if len >= MAX => Err(BoundedError::TooManyItems {
@@ -161,7 +186,7 @@ where
     }
 }
 
-impl<K, V, S, const MIN: usize, const MAX: usize> Bounded<IndexMap<K, V, S>, MIN, MAX>
+impl<K, V, S, const MIN: usize, const MAX: usize> BoundedIndexMap<K, V, MIN, MAX, S>
 where
     S: BuildHasher,
 {
@@ -175,12 +200,12 @@ where
     where
         Q: Hash + Equivalent<K> + ?Sized,
     {
-        if !self.0.contains_key(key) {
+        if !self.contains_key(key) {
             return Ok(None);
         }
         // If there was one element to remove, length is not zero, so decrementing is
         // safe here.
-        let remaining = self.0.len() - 1;
+        let remaining = self.len() - 1;
         if remaining < MIN {
             return Err(BoundedError::TooFewItems {
                 count: remaining,
@@ -199,7 +224,7 @@ where
     }
 }
 
-impl<K, V, S, const MIN: usize, const MAX: usize> Default for Bounded<IndexMap<K, V, S>, MIN, MAX>
+impl<K, V, S, const MIN: usize, const MAX: usize> Default for BoundedIndexMap<K, V, MIN, MAX, S>
 where
     S: Default,
 {
@@ -209,7 +234,7 @@ where
 }
 
 impl<K, V, S, const MIN: usize, const MAX: usize> TryFrom<IndexMap<K, V, S>>
-    for Bounded<IndexMap<K, V, S>, MIN, MAX>
+    for BoundedIndexMap<K, V, MIN, MAX, S>
 {
     type Error = BoundedError;
 
@@ -218,35 +243,35 @@ impl<K, V, S, const MIN: usize, const MAX: usize> TryFrom<IndexMap<K, V, S>>
     }
 }
 
-impl<K, V, S, const MIN: usize, const MAX: usize> From<Bounded<Self, MIN, MAX>>
+impl<K, V, S, const MIN: usize, const MAX: usize> From<BoundedIndexMap<K, V, MIN, MAX, S>>
     for IndexMap<K, V, S>
 {
-    fn from(value: Bounded<Self, MIN, MAX>) -> Self {
+    fn from(value: BoundedIndexMap<K, V, MIN, MAX, S>) -> Self {
         value.into_inner()
     }
 }
 
-impl<K, V, S, const MIN: usize, const MAX: usize> Deref for Bounded<IndexMap<K, V, S>, MIN, MAX> {
+impl<K, V, S, const MIN: usize, const MAX: usize> Deref for BoundedIndexMap<K, V, MIN, MAX, S> {
     type Target = IndexMap<K, V, S>;
 
     fn deref(&self) -> &Self::Target {
-        self.as_inner()
+        &self.0
     }
 }
 
 impl<'a, K, V, S, const MIN: usize, const MAX: usize> IntoIterator
-    for &'a Bounded<IndexMap<K, V, S>, MIN, MAX>
+    for &'a BoundedIndexMap<K, V, MIN, MAX, S>
 {
     type Item = (&'a K, &'a V);
     type IntoIter = map::Iter<'a, K, V>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.as_inner().iter()
+        self.iter()
     }
 }
 
 impl<'a, K, V, S, const MIN: usize, const MAX: usize> IntoIterator
-    for &'a mut Bounded<IndexMap<K, V, S>, MIN, MAX>
+    for &'a mut BoundedIndexMap<K, V, MIN, MAX, S>
 {
     type Item = (&'a K, &'a mut V);
     type IntoIter = map::IterMut<'a, K, V>;
@@ -257,7 +282,7 @@ impl<'a, K, V, S, const MIN: usize, const MAX: usize> IntoIterator
 }
 
 impl<K, V, S, const MIN: usize, const MAX: usize> IntoIterator
-    for Bounded<IndexMap<K, V, S>, MIN, MAX>
+    for BoundedIndexMap<K, V, MIN, MAX, S>
 {
     type Item = (K, V);
     type IntoIter = map::IntoIter<K, V>;
@@ -268,7 +293,7 @@ impl<K, V, S, const MIN: usize, const MAX: usize> IntoIterator
 }
 
 impl<'de, K, V, S, const MIN: usize, const MAX: usize> Deserialize<'de>
-    for Bounded<IndexMap<K, V, S>, MIN, MAX>
+    for BoundedIndexMap<K, V, MIN, MAX, S>
 where
     K: Deserialize<'de> + Eq + Hash,
     V: Deserialize<'de>,
@@ -284,6 +309,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::HashSet,
+        hash::{BuildHasher as _, RandomState},
+    };
+
     use indexmap::IndexMap;
 
     use crate::bounded::{BoundedError, BoundedIndexMap, UpperBoundedIndexMap};
@@ -429,12 +459,36 @@ mod tests {
     }
 
     #[test]
-    fn equality_ignores_order_but_slice_comparison_does_not() {
+    fn equality_follows_entry_order() {
+        let forward = TestMap::try_from_iter([(1, 10), (2, 20)]).unwrap();
+        let same = TestMap::try_from_iter([(1, 10), (2, 20)]).unwrap();
+        let backward = TestMap::try_from_iter([(2, 20), (1, 10)]).unwrap();
+
+        assert_eq!(forward, same);
+        assert_ne!(forward, backward);
+        // The inner `IndexMap` compares as a map and still calls them equal.
+        assert_eq!(forward.as_inner(), backward.as_inner());
+    }
+
+    #[test]
+    fn hashing_follows_entry_order_like_equality() {
+        let forward = TestMap::try_from_iter([(1, 10), (2, 20)]).unwrap();
+        let same = TestMap::try_from_iter([(1, 10), (2, 20)]).unwrap();
+        let backward = TestMap::try_from_iter([(2, 20), (1, 10)]).unwrap();
+
+        let state = RandomState::new();
+        assert_eq!(state.hash_one(&forward), state.hash_one(&same));
+
+        // Unequal values may collide in principle, but a set keeps these apart.
+        let set: HashSet<TestMap> = [forward, same, backward].into_iter().collect();
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn different_orders_serialize_differently() {
         let forward = TestMap::try_from_iter([(1, 10), (2, 20)]).unwrap();
         let backward = TestMap::try_from_iter([(2, 20), (1, 10)]).unwrap();
 
-        assert_eq!(forward, backward);
-        assert_ne!(forward.as_slice(), backward.as_slice());
         assert_ne!(
             bincode::serialize(&forward).unwrap(),
             bincode::serialize(&backward).unwrap()
@@ -449,7 +503,7 @@ mod tests {
         let restored: TestMap = serde_json::from_str(&json).unwrap();
 
         assert_eq!(json, r#"{"3":30,"1":10,"2":20}"#);
-        assert_eq!(restored.as_slice(), original.as_slice());
+        assert_eq!(restored, original);
     }
 
     #[test]
@@ -459,7 +513,7 @@ mod tests {
         let encoded = bincode::serialize(&original).unwrap();
         let restored = bincode::deserialize::<TestMap>(&encoded).unwrap();
 
-        assert_eq!(restored.as_slice(), original.as_slice());
+        assert_eq!(restored, original);
         assert_eq!(encoded, bincode::serialize(original.as_inner()).unwrap());
         assert_eq!(
             encoded,

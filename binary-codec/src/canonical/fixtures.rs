@@ -186,9 +186,10 @@ where
         );
 
         // Re-encode: the decoded value encodes back to exactly the pinned
-        // bytes. `==` can be coarser than the encoding (an index map compares
-        // as a map, ignoring order), so the check above cannot see a decoder
-        // that reorders or drops what `==` ignores. This one can.
+        // bytes. `==` can be coarser than the encoding (a type may leave a
+        // field out of its equality that its encoding keeps), so the check
+        // above cannot see a decoder that changes what `==` ignores. This one
+        // can.
         let reencoded = decoded.encode();
         assert!(
             &*reencoded == expected,

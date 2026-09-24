@@ -34,6 +34,8 @@ where
     }
 }
 
+delegate_comparisons_to_inner!([T, S] HashSet<T, S>);
+
 /// A [`HashSet`] whose element count is statically enforced to be in the
 /// range `[MIN, MAX]`.
 ///
@@ -96,11 +98,7 @@ where
     /// already present, which never changes the length and so succeeds even
     /// when the set is full. Returns [`BoundedError::TooManyItems`] when
     /// `value` is new and the set already holds `MAX` elements.
-    pub fn try_insert(&mut self, value: T) -> Result<bool, BoundedError>
-    where
-        T: Eq + Hash,
-        S: BuildHasher,
-    {
+    pub fn try_insert(&mut self, value: T) -> Result<bool, BoundedError> {
         if self.0.len() < MAX {
             return Ok(self.0.insert(value));
         }

@@ -8,6 +8,8 @@ impl BoundedLen for String {
     }
 }
 
+delegate_comparisons_to_inner!([] String);
+
 /// A `String` whose byte length is statically enforced to be in the range
 /// `[MIN, MAX]`.
 ///

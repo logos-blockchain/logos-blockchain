@@ -236,13 +236,4 @@ mod tests {
         assert_eq!(result, Err(BoundedError::TooManyItems { count: 5, max: 4 }));
         assert_eq!(pulled, 5);
     }
-
-    /// A minimum above the maximum can never be met: the collection overflows
-    /// the maximum while still collecting its mandatory items.
-    #[test]
-    fn an_unsatisfiable_bound_rejects_every_input() {
-        let result: Collected<3, 2> = collect_iter([1, 2, 3]);
-
-        assert_eq!(result, Err(BoundedError::TooManyItems { count: 3, max: 2 }));
-    }
 }

@@ -10,7 +10,8 @@
 //! What "length" means is delegated to [`BoundedLen`]: element count for
 //! collections, byte length for strings, and so on. Types that cannot
 //! implement [`BoundedLen`] (e.g. foreign types this crate does not depend on)
-//! can still reuse the bound-checking logic via [`Bounded::check_len`] and
+//! can still reuse the bound-checking logic via
+//! [`Bounded::check_len_against_bounds`] and
 //! [`Bounded::new_unchecked`].
 //!
 //! The keyed collections ([`BoundedSet`], [`BoundedMap`] and
@@ -22,6 +23,83 @@ use core::fmt::{self, Display, Formatter};
 
 use serde::{Serialize, Serializer};
 use thiserror::Error;
+
+/// Implements the comparison traits for `Bounded<$inner, MIN, MAX>` by
+/// delegating to `$inner`, each under the bound the inner type needs for it.
+///
+/// `Bounded` does not derive them: a derive would fix every wrapped type to
+/// its inner type's notion of equality, and `IndexMap`'s ignores an entry
+/// order that is part of a `BoundedIndexMap`'s value. Types whose inner
+/// equality is the right one use this macro; the others implement the traits
+/// by hand.
+///
+/// The generic parameters of `$inner` go in the brackets. A concrete inner
+/// type (empty brackets) must implement all five traits, and gets the
+/// `partial_cmp` clippy asks for when `Ord` is known to hold.
+macro_rules! delegate_comparisons_to_inner {
+    ([$($param:ident),+] $inner:ty) => {
+        delegate_comparisons_to_inner!(@eq_hash_ord [$($param),+] $inner);
+
+        impl<$($param,)+ const MIN: usize, const MAX: usize> ::core::cmp::PartialOrd
+            for $crate::bounded::Bounded<$inner, MIN, MAX>
+        where
+            $inner: ::core::cmp::PartialOrd,
+        {
+            fn partial_cmp(&self, other: &Self) -> Option<::core::cmp::Ordering> {
+                self.as_inner().partial_cmp(other.as_inner())
+            }
+        }
+    };
+    ([] $inner:ty) => {
+        delegate_comparisons_to_inner!(@eq_hash_ord [] $inner);
+
+        impl<const MIN: usize, const MAX: usize> ::core::cmp::PartialOrd
+            for $crate::bounded::Bounded<$inner, MIN, MAX>
+        {
+            fn partial_cmp(&self, other: &Self) -> Option<::core::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+    };
+    (@eq_hash_ord [$($param:ident),*] $inner:ty) => {
+        impl<$($param,)* const MIN: usize, const MAX: usize> ::core::cmp::PartialEq
+            for $crate::bounded::Bounded<$inner, MIN, MAX>
+        where
+            $inner: ::core::cmp::PartialEq,
+        {
+            fn eq(&self, other: &Self) -> bool {
+                self.as_inner() == other.as_inner()
+            }
+        }
+
+        impl<$($param,)* const MIN: usize, const MAX: usize> ::core::cmp::Eq
+            for $crate::bounded::Bounded<$inner, MIN, MAX>
+        where
+            $inner: ::core::cmp::Eq,
+        {
+        }
+
+        impl<$($param,)* const MIN: usize, const MAX: usize> ::core::hash::Hash
+            for $crate::bounded::Bounded<$inner, MIN, MAX>
+        where
+            $inner: ::core::hash::Hash,
+        {
+            fn hash<H: ::core::hash::Hasher>(&self, state: &mut H) {
+                ::core::hash::Hash::hash(self.as_inner(), state);
+            }
+        }
+
+        impl<$($param,)* const MIN: usize, const MAX: usize> ::core::cmp::Ord
+            for $crate::bounded::Bounded<$inner, MIN, MAX>
+        where
+            $inner: ::core::cmp::Ord,
+        {
+            fn cmp(&self, other: &Self) -> ::core::cmp::Ordering {
+                self.as_inner().cmp(other.as_inner())
+            }
+        }
+    };
+}
 
 pub mod index_map;
 pub use index_map::{BoundedIndexMap, NonEmptyBoundedIndexMap, UpperBoundedIndexMap};
@@ -101,9 +179,9 @@ pub(crate) fn allocation_size_for_hint<Item, const MAX: usize>(hint: Option<usiz
 /// element count for collections, byte length for text.
 ///
 /// Implementing this for a type unlocks the ergonomic checked constructors on
-/// [`Bounded`] ([`Bounded::new`], `TryFrom`, [`Bounded::len`]).
+/// [`Bounded`] ([`Bounded::try_new`] and the concrete `TryFrom` impls).
 /// Foreign types that cannot get an impl here can still be bounded manually via
-/// [`Bounded::check_len`] + [`Bounded::new_unchecked`].
+/// [`Bounded::check_len_against_bounds`] + [`Bounded::new_unchecked`].
 pub trait BoundedLen {
     fn bounded_len(&self) -> usize;
 }
@@ -111,11 +189,19 @@ pub trait BoundedLen {
 /// A newtype over `T` whose [measured length](BoundedLen) is statically
 /// enforced to lie within the inclusive range `[MIN, MAX]`.
 ///
-/// The invariant holds at every *checked* construction site ([`Bounded::new`],
-/// the concrete `TryFrom` impls, deserialization). [`Bounded::new_unchecked`]
-/// deliberately bypasses the check and is reserved for callers that have
-/// already validated the length (or measure it out-of-band).
-#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
+/// The invariant holds at every *checked* construction site
+/// ([`Bounded::try_new`], the concrete `TryFrom` impls, deserialization).
+/// [`Bounded::new_unchecked`] deliberately bypasses the check and is reserved
+/// for callers that have already validated the length (or measure it
+/// out-of-band).
+///
+/// The comparison traits are implemented per inner type rather than derived,
+/// so a wrapped type can compare more strictly than its inner type does:
+/// [`BoundedIndexMap`] compares its entries in order, which [`IndexMap`]
+/// alone does not.
+///
+/// [`IndexMap`]: indexmap::IndexMap
+#[derive(Clone, Debug)]
 pub struct Bounded<T, const MIN: usize, const MAX: usize>(T);
 
 impl<T, const MIN: usize, const MAX: usize> Bounded<T, MIN, MAX> {
@@ -125,9 +211,10 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<T, MIN, MAX> {
     /// Wrap `inner` without checking the bound.
     ///
     /// Reserved for callers that have already validated the length. Prefer
-    /// [`Self::new`] (or a concrete `TryFrom`) at trust boundaries.
+    /// [`Self::try_new`] (or a concrete `TryFrom`) at trust boundaries.
     #[must_use]
     pub const fn new_unchecked(inner: T) -> Self {
+        const { assert!(MIN <= MAX, "Bounded MIN must not exceed MAX") }
         Self(inner)
     }
 
@@ -149,6 +236,7 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<T, MIN, MAX> {
     /// themselves out-of-band (because they cannot implement [`BoundedLen`])
     /// call this directly, then wrap with [`Self::new_unchecked`].
     pub const fn check_len_against_bounds(len: usize) -> Result<(), BoundedError> {
+        const { assert!(MIN <= MAX, "Bounded MIN must not exceed MAX") }
         if len < MIN {
             return Err(BoundedError::too_few(len, MIN));
         }

@@ -43,6 +43,8 @@ where
     }
 }
 
+delegate_comparisons_to_inner!([K, V, S] HashMap<K, V, S>);
+
 /// A [`HashMap`] whose entry count is statically enforced to be in the range
 /// `[MIN, MAX]`.
 ///
@@ -83,10 +85,7 @@ where
     ///
     /// Only valid when `MIN` is zero: any other `MIN` fails to compile.
     #[must_use]
-    pub fn empty() -> Self
-    where
-        S: Default,
-    {
+    pub fn empty() -> Self {
         const { assert!(MIN == 0, "Cannot construct empty BoundedMap when MIN > 0") }
         Self::new_unchecked(HashMap::default())
     }
@@ -165,9 +164,8 @@ where
     /// Returns a mutable reference to the value under `key`.
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
-        K: Borrow<Q> + Eq + Hash,
+        K: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
-        S: BuildHasher,
     {
         self.0.get_mut(key)
     }

@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::bounded::{
     Bounded, BoundedError, BoundedLen,
-    collection::{self, BoundedCollection, SeqVisitor, collect_iter},
+    collection::{BoundedCollection, SeqVisitor, collect_iter},
 };
 
 impl<T> BoundedLen for Vec<T> {
@@ -29,6 +29,8 @@ impl<T> BoundedCollection for Vec<T> {
         true
     }
 }
+
+delegate_comparisons_to_inner!([T] Vec<T>);
 
 /// `Vec<T>` whose length is statically enforced to be in the range `[MIN,
 /// MAX]`.
