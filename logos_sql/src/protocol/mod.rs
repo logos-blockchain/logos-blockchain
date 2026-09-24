@@ -30,10 +30,9 @@ const MAX_PAYLOAD_BYTES: usize = Inscription::MAX;
 // the compressed payload must still fit the chain's smaller inscription limit.
 pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
-// At most 256 SQL transactions can share one inscription.
-// The local queue also accepts at most this many writes waiting to be
-// published.
-pub const MAX_BATCH_WRITES: usize = 256;
+// The batch count uses a u16 prefix. Local batching preferences can be smaller;
+// encoded and decompressed byte limits still bound every inscription.
+pub const MAX_BATCH_WRITES: usize = u16::MAX as usize;
 
 /// Stable identity of one application write.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, BinaryCodec)]

@@ -1,5 +1,7 @@
 //! Packs the oldest queued writes into one bounded channel inscription.
 
+use std::num::{NonZeroU16, NonZeroUsize};
+
 use lb_binary_codec::canonical::BinaryEncode as _;
 
 use crate::{
@@ -15,7 +17,10 @@ pub struct Publication {
 }
 
 impl Publication {
-    pub fn prepare(mut pending: Vec<PendingPublish>) -> Result<Option<Self>, Error> {
+    pub fn prepare(
+        mut pending: Vec<PendingPublish>,
+        max_transactions: NonZeroU16,
+    ) -> Result<Option<Self>, Error> {
         if pending.is_empty() {
             return Ok(None);
         }
@@ -23,7 +28,10 @@ impl Publication {
         let mut writes = Vec::new();
         let mut body_len = size_of::<u16>();
 
-        for queued in &pending {
+        for queued in pending
+            .iter()
+            .take(NonZeroUsize::from(max_transactions).get())
+        {
             let write = ChannelWrite::decode(&queued.payload)
                 .map_err(|_| Error::InvalidLocalState("queued write cannot be decoded"))?;
 
@@ -98,6 +106,7 @@ mod tests {
 
     use super::Publication;
     use crate::{
+        PublicationConfig,
         db::PendingPublish,
         protocol::{
             CapturedFunctionCalls, ChannelBatch, EncodedWrite, Statement, Transaction, TxId,
@@ -129,7 +138,10 @@ mod tests {
             queued_write(Value::Integer(2)),
         ];
         let ids: Vec<_> = pending.iter().map(|write| write.tx_id).collect();
-        let publication = Publication::prepare(pending).unwrap().unwrap();
+        let publication =
+            Publication::prepare(pending, PublicationConfig::default().max_transactions)
+                .unwrap()
+                .unwrap();
         let decoded = ChannelBatch::decode(&publication.payload)
             .unwrap()
             .into_writes();
@@ -145,6 +157,26 @@ mod tests {
     }
 
     #[test]
+    fn a_batch_takes_only_its_configured_prefix_of_the_queue() {
+        let pending: Vec<_> = (0..1500)
+            .map(|value| queued_write(Value::Integer(value)))
+            .collect();
+        let expected: Vec<_> = pending.iter().take(1024).map(|write| write.tx_id).collect();
+        let publication = Publication::prepare(pending, 1024.try_into().unwrap())
+            .unwrap()
+            .unwrap();
+        let decoded = ChannelBatch::decode(&publication.payload)
+            .unwrap()
+            .into_writes();
+
+        assert_eq!(
+            decoded.iter().map(|write| write.tx_id).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(publication.writes.len(), 1024);
+    }
+
+    #[test]
     fn an_oversized_batch_leaves_later_writes_for_the_next_publication() {
         let mut random = StdRng::seed_from_u64(4);
         let mut pending = Vec::new();
@@ -156,7 +188,10 @@ mod tests {
         }
 
         let first = pending[0].tx_id;
-        let publication = Publication::prepare(pending).unwrap().unwrap();
+        let publication =
+            Publication::prepare(pending, PublicationConfig::default().max_transactions)
+                .unwrap()
+                .unwrap();
 
         assert_eq!(publication.writes.len(), 1);
         assert_eq!(publication.writes[0].tx_id, first);

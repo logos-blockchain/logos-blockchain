@@ -448,7 +448,8 @@ mod tests {
 
     use super::on_event;
     use crate::{
-        db::{Databases, SuffixWrite},
+        PublicationConfig,
+        db::{Databases, SuffixWrite, tests::open_databases},
         protocol::{
             CapturedFunctionCalls, ChannelBatch, ChannelWrite, EncodedWrite, PAYLOAD_MARKER,
             Statement, Transaction, TxId,
@@ -462,7 +463,7 @@ mod tests {
     #[test]
     fn a_failed_transaction_does_not_rollback_other_batch_members() {
         let dir = TempDir::new().unwrap();
-        let mut db = Databases::open(dir.path()).unwrap();
+        let mut db = open_databases(dir.path()).unwrap();
         let sql = [
             "CREATE TABLE items(value INTEGER PRIMARY KEY)",
             "INSERT INTO items VALUES (1)",
@@ -519,7 +520,7 @@ mod tests {
     #[test]
     fn batched_writes_are_displaced_restored_and_finalized_together() {
         let dir = TempDir::new().unwrap();
-        let mut db = Databases::open(dir.path()).unwrap();
+        let mut db = open_databases(dir.path()).unwrap();
         let first = TxId::from([2; 32]);
         let second = TxId::from([1; 32]);
 
@@ -537,9 +538,12 @@ mod tests {
             .unwrap()
             .query_row("SELECT value FROM items", [], |row| row.get(0))
             .unwrap();
-        let publication = Publication::prepare(db.pending_writes().unwrap())
-            .unwrap()
-            .unwrap();
+        let publication = Publication::prepare(
+            db.pending_writes().unwrap(),
+            PublicationConfig::default().max_transactions,
+        )
+        .unwrap()
+        .unwrap();
         db.complete_batch(&checkpoint(1, 1), MsgId::from([1; 32]), &publication.writes)
             .unwrap();
 
@@ -564,7 +568,7 @@ mod tests {
         assert_eq!(displaced, vec![first, second]);
         drop(db);
 
-        let mut db = Databases::open(dir.path()).unwrap();
+        let mut db = open_databases(dir.path()).unwrap();
         let restore = blocks_processed(
             checkpoint(3, 3),
             vec![ChannelUpdateTx::Inscription(inscription(
@@ -609,7 +613,7 @@ mod tests {
     #[test]
     fn a_changed_base_displaces_every_queued_write() {
         let dir = TempDir::new().unwrap();
-        let mut db = Databases::open(dir.path()).unwrap();
+        let mut db = open_databases(dir.path()).unwrap();
         let first = TxId::generate();
         let second = TxId::generate();
         db.commit_local_write(
@@ -768,7 +772,7 @@ mod tests {
     #[test]
     fn adopted_writes_apply_to_live_in_channel_order() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
         let lib_path = db.lib_path().to_owned();
 
@@ -804,7 +808,7 @@ mod tests {
     #[test]
     fn finalized_backfill_applies_to_lib_and_live_once() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
         let lib_path = db.lib_path().to_owned();
 
@@ -836,7 +840,7 @@ mod tests {
     #[test]
     fn replay_after_apply_completes_checkpoint_without_duplicate_effects() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
         let transaction = Transaction::new(vec![
             Statement::new(
@@ -860,7 +864,7 @@ mod tests {
             .expect("write should apply before the simulated crash");
         drop(db);
 
-        let mut db = Databases::open(dir.path()).expect("databases should reopen");
+        let mut db = open_databases(dir.path()).expect("databases should reopen");
 
         let expected_checkpoint = checkpoint(2, 2);
         let event = blocks_processed(
@@ -889,7 +893,7 @@ mod tests {
     #[test]
     fn locally_applied_write_is_not_executed_when_adopted() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
 
         let setup = transaction("CREATE TABLE items(value INTEGER NOT NULL)", Vec::new());
@@ -939,7 +943,7 @@ mod tests {
     #[test]
     fn finalizing_an_earlier_local_write_preserves_the_next_pending_write() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
         let lib_path = db.lib_path().to_owned();
 
@@ -990,7 +994,7 @@ mod tests {
     #[test]
     fn rejected_sql_does_not_block_following_writes() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
 
         let insert = encoded_write(&transaction(
@@ -1025,7 +1029,7 @@ mod tests {
         assert!(table_exists(&live_path, "items"));
 
         drop(db);
-        let db = Databases::open(dir.path()).expect("databases should reopen");
+        let db = open_databases(dir.path()).expect("databases should reopen");
 
         assert_eq!(
             db.rejected_write_count().expect("rejections should load"),
@@ -1036,7 +1040,7 @@ mod tests {
     #[test]
     fn malformed_payload_does_not_block_following_writes() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
 
         let mut malformed = encoded_write(&transaction(
@@ -1081,7 +1085,7 @@ mod tests {
     #[test]
     fn reused_transaction_id_does_not_block_following_writes() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
 
         let first = encoded_write(&transaction(
@@ -1133,7 +1137,7 @@ mod tests {
     #[test]
     fn unsupported_protocol_does_not_block_following_writes() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
 
         let mut unsupported = encoded_write(&transaction(
@@ -1180,7 +1184,7 @@ mod tests {
     #[test]
     fn active_reader_keeps_its_snapshot_during_live_rebuild() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
@@ -1265,7 +1269,7 @@ mod tests {
     #[test]
     fn local_write_reports_orphaned_adopted_and_finalized() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
@@ -1295,7 +1299,7 @@ mod tests {
         assert_status(&db, local_tx_id, Some(WriteStatus::Displaced));
 
         drop(db);
-        let mut db = Databases::open(dir.path()).expect("databases should reopen");
+        let mut db = open_databases(dir.path()).expect("databases should reopen");
 
         let restore = blocks_processed(
             checkpoint(3, 3),
@@ -1328,7 +1332,7 @@ mod tests {
     #[test]
     fn branch_change_preserves_the_unchanged_live_suffix() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
 
         let create = encoded_write(&transaction(
@@ -1354,7 +1358,7 @@ mod tests {
             .expect("initial suffix should apply");
 
         drop(db);
-        let mut db = Databases::open(dir.path()).expect("databases should reopen");
+        let mut db = open_databases(dir.path()).expect("databases should reopen");
 
         let replacement = encoded_write(&transaction(
             "INSERT INTO items(value) VALUES (?1)",
@@ -1385,7 +1389,7 @@ mod tests {
     #[test]
     fn foreign_adoption_displaces_an_unpublished_local_write() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
@@ -1423,7 +1427,7 @@ mod tests {
     #[test]
     fn rollback_displaces_an_unpublished_write_based_on_removed_state() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
 
         let previous = encoded_write(&transaction(
@@ -1467,7 +1471,7 @@ mod tests {
     #[test]
     fn replay_finishes_a_rebuild_after_the_suffix_commit() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
@@ -1504,7 +1508,7 @@ mod tests {
         .expect("suffix update should commit");
         drop(db);
 
-        let mut db = Databases::open(dir.path()).expect("databases should reopen");
+        let mut db = open_databases(dir.path()).expect("databases should reopen");
         let replayed_event = blocks_processed(
             checkpoint(2, 2),
             vec![ChannelUpdateTx::Inscription(foreign_inscription)],
@@ -1528,7 +1532,7 @@ mod tests {
     #[test]
     fn finalized_backfill_finishes_a_rebuild_after_the_suffix_commit() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
@@ -1565,7 +1569,7 @@ mod tests {
         .expect("suffix update should commit");
         drop(db);
 
-        let mut db = Databases::open(dir.path()).expect("databases should reopen");
+        let mut db = open_databases(dir.path()).expect("databases should reopen");
         let backfilled_event = blocks_processed(
             checkpoint(2, 2),
             Vec::new(),
@@ -1593,7 +1597,7 @@ mod tests {
     #[test]
     fn newly_discovered_finalized_write_displaces_an_unpublished_local_write() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());

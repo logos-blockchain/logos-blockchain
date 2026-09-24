@@ -2,6 +2,7 @@
 
 use std::{
     fs,
+    num::NonZeroUsize,
     ops::Deref,
     path::{Path, PathBuf},
     time::Duration,
@@ -20,7 +21,7 @@ use rusqlite::{
 use crate::{
     error::Error,
     functions::FunctionOverrides,
-    protocol::{ChannelWrite, EncodedWrite, MAX_BATCH_WRITES, Transaction, TxId},
+    protocol::{ChannelWrite, EncodedWrite, Transaction, TxId},
     status::{Displacement, DisplacementReason, WriteStatus},
 };
 
@@ -97,6 +98,9 @@ const CONTROL_SCHEMA: &str = "
         displacement_payload BLOB,
         displacement_handled INTEGER NOT NULL DEFAULT 1 CHECK (displacement_handled IN (0, 1))
     ) STRICT;
+
+    CREATE INDEX IF NOT EXISTS __logos_sql_unhandled_displacements
+    ON __logos_sql_write_statuses(sequence) WHERE displacement_handled = 0;
 ";
 
 const INITIALIZE_CONTROL_STATE: &str = "
@@ -347,6 +351,14 @@ struct ReplicatedDatabase {
     functions: FunctionOverrides,
 }
 
+/// Pending write count and payload bytes, cached to avoid scanning the
+/// queue on every write. Reloaded after publication or a live rebuild.
+#[derive(Clone, Copy)]
+struct PendingPublishUsage {
+    writes: usize,
+    bytes: usize,
+}
+
 /// An isolated replacement for `LIVE.db` while canonical history is replayed.
 pub struct LiveRebuild {
     database: ReplicatedDatabase,
@@ -369,6 +381,8 @@ impl Deref for ReplicatedDatabase {
 
 /// Owns the participant-local database connections.
 pub struct Databases {
+    max_pending_writes: NonZeroUsize,
+    pending_publish_usage: Option<PendingPublishUsage>,
     lib: ReplicatedDatabase,
     live: ReplicatedDatabase,
     control: Connection,
@@ -377,8 +391,8 @@ pub struct Databases {
 }
 
 impl Databases {
-    /// Opens or creates the participant state under `directory`.
-    pub(crate) fn open(directory: &Path) -> Result<Self, Error> {
+    /// Opens or creates local state with a limit on unpublished writes.
+    pub(crate) fn open(directory: &Path, max_pending_writes: NonZeroUsize) -> Result<Self, Error> {
         fs::create_dir_all(directory)?;
 
         let lib_path = directory.join(LIB_DATABASE_FILE);
@@ -401,6 +415,8 @@ impl Databases {
         control.execute(INITIALIZE_CONTROL_STATE, [])?;
 
         Ok(Self {
+            max_pending_writes,
+            pending_publish_usage: None,
             lib,
             live,
             control,
@@ -487,6 +503,8 @@ impl Databases {
 
         transaction.commit()?;
 
+        // Recount once after removing a batch, including recovery retries.
+        self.pending_publish_usage = None;
         let transaction = self.live.connection.transaction()?;
 
         for pending in pending {
@@ -706,6 +724,7 @@ impl Databases {
     /// Atomically replaces the contents of `LIVE.db` for current and future
     /// readers using `SQLite`'s online backup API.
     pub(crate) fn finish_live_rebuild(&mut self, rebuild: LiveRebuild) -> Result<(), Error> {
+        self.pending_publish_usage = None;
         backup_database(&rebuild.database.connection, &mut self.live.connection)?;
 
         let path = rebuild.path.clone();
@@ -744,17 +763,13 @@ impl Databases {
         tx_id: TxId,
         transaction: &Transaction,
     ) -> Result<TxId, Error> {
-        let (queued, bytes): (usize, usize) =
-            self.live
-                .connection
-                .query_row(SELECT_PENDING_QUEUE_SIZE, [], |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                })?;
+        let usage = self.pending_publish_usage()?;
 
-        if queued >= MAX_BATCH_WRITES {
+        if usage.writes >= self.max_pending_writes.get() {
             return Err(Error::PublishPending);
         }
 
+        self.pending_publish_usage = None;
         let capture = self.live.functions.capture();
         let db_transaction = self.live.connection.transaction()?;
 
@@ -762,7 +777,9 @@ impl Databases {
         let captured_function_calls = capture.finish()?;
         let encoded = EncodedWrite::new(tx_id, transaction, captured_function_calls)?;
 
-        if bytes + encoded.payload.len() > MAX_PENDING_BYTES {
+        let bytes = usage.bytes + encoded.payload.len();
+
+        if bytes > MAX_PENDING_BYTES {
             return Err(Error::PublishPending);
         }
 
@@ -777,7 +794,28 @@ impl Databases {
         )?;
         db_transaction.commit()?;
 
+        self.pending_publish_usage = Some(PendingPublishUsage {
+            writes: usage.writes + 1,
+            bytes,
+        });
+
         Ok(encoded.tx_id)
+    }
+
+    fn pending_publish_usage(&mut self) -> Result<PendingPublishUsage, Error> {
+        if let Some(usage) = self.pending_publish_usage {
+            return Ok(usage);
+        }
+
+        let usage = self.live.query_row(SELECT_PENDING_QUEUE_SIZE, [], |row| {
+            Ok(PendingPublishUsage {
+                writes: row.get(0)?,
+                bytes: row.get(1)?,
+            })
+        })?;
+        self.pending_publish_usage = Some(usage);
+
+        Ok(usage)
     }
 
     /// Applies a newly adopted channel write to the live database.
@@ -850,6 +888,10 @@ impl Databases {
             .map_err(Error::from)
     }
 
+    pub(crate) fn pending_write_count(&mut self) -> Result<usize, Error> {
+        Ok(self.pending_publish_usage()?.writes)
+    }
+
     pub(crate) fn pending_writes(&self) -> Result<Vec<PendingPublish>, Error> {
         let mut statement = self.live.connection.prepare(SELECT_PENDING_PUBLISH)?;
         let rows = statement.query_map([], StoredPendingPublish::from_row)?;
@@ -866,7 +908,8 @@ impl Databases {
     }
 
     #[cfg(test)]
-    pub(crate) fn clear_pending_publish(&self, tx_id: TxId) -> Result<(), Error> {
+    pub(crate) fn clear_pending_publish(&mut self, tx_id: TxId) -> Result<(), Error> {
+        self.pending_publish_usage = None;
         let changed = self
             .live
             .connection
@@ -1319,7 +1362,9 @@ fn checkpoint_options() -> impl bincode::Options {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
+    use std::path::Path;
+
     use lb_zone_sdk::{
         node_types::{HeaderId, MsgId, Slot},
         sequencer::SequencerCheckpoint,
@@ -1329,6 +1374,7 @@ mod tests {
 
     use super::{Databases, PendingPublish};
     use crate::{
+        PublicationConfig,
         error::Error,
         protocol::{
             CapturedFunction, CapturedFunctionCall, CapturedFunctionCalls, ChannelWrite, Statement,
@@ -1336,6 +1382,10 @@ mod tests {
         },
         status::WriteStatus,
     };
+
+    pub fn open_databases(directory: &Path) -> Result<Databases, Error> {
+        Databases::open(directory, PublicationConfig::default().max_pending_writes)
+    }
 
     fn checkpoint(byte: u8, slot: u64) -> SequencerCheckpoint {
         SequencerCheckpoint {
@@ -1398,7 +1448,7 @@ mod tests {
 
     fn rejected_application_sql(sql: &str) -> Error {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
 
         db.live
             .execute("CREATE TABLE items(value INTEGER)", [])
@@ -1457,13 +1507,13 @@ mod tests {
     fn checkpoint_survives_reopen() {
         let dir = TempDir::new().expect("temporary directory should be created");
         let expected = checkpoint(7, 42);
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
 
         db.persist_checkpoint(&expected)
             .expect("checkpoint should persist");
         drop(db);
 
-        let db = Databases::open(dir.path()).expect("databases should reopen");
+        let db = open_databases(dir.path()).expect("databases should reopen");
         let actual = db
             .load_checkpoint()
             .expect("checkpoint should load")
@@ -1476,14 +1526,15 @@ mod tests {
     #[test]
     fn a_full_publication_queue_does_not_apply_the_next_write() {
         let dir = TempDir::new().unwrap();
-        let mut db = Databases::open(dir.path()).unwrap();
+        let capacity = 3;
+        let mut db = Databases::open(dir.path(), capacity.try_into().unwrap()).unwrap();
         db.commit_local_write(
             TxId::generate(),
             &transaction("CREATE TABLE items(value TEXT)"),
         )
         .unwrap();
 
-        for _ in 1..crate::protocol::MAX_BATCH_WRITES {
+        for _ in 1..capacity {
             db.commit_local_write(TxId::generate(), &insert("queued"))
                 .unwrap();
         }
@@ -1501,24 +1552,64 @@ mod tests {
             )
             .unwrap();
         assert_eq!(overflow, 0);
+        assert_eq!(db.pending_writes().unwrap().len(), capacity);
+    }
+
+    #[test]
+    fn publication_and_rebuild_make_room_for_new_writes() {
+        let dir = TempDir::new().unwrap();
+        let capacity = 2.try_into().unwrap();
+        let mut db = Databases::open(dir.path(), capacity).unwrap();
+        let schema = transaction("CREATE TABLE items(value TEXT)");
+
+        db.commit_local_write(TxId::generate(), &schema).unwrap();
+        assert!(db.commit_local_write(TxId::generate(), &schema).is_err());
+        db.commit_local_write(TxId::generate(), &insert("queued"))
+            .unwrap();
+        drop(db);
+
+        let mut db = Databases::open(dir.path(), capacity).unwrap();
+        assert!(matches!(
+            db.commit_local_write(TxId::generate(), &insert("overflow")),
+            Err(Error::PublishPending)
+        ));
+
+        let pending = db.pending_writes().unwrap();
+        db.complete_batch(&checkpoint(1, 1), MsgId::from([1; 32]), &pending)
+            .unwrap();
+        db.commit_local_write(TxId::generate(), &insert("after publication"))
+            .unwrap();
+        db.commit_local_write(TxId::generate(), &insert("fills queue"))
+            .unwrap();
+
+        let rebuild = db.begin_live_rebuild().unwrap();
+        db.finish_live_rebuild(rebuild).unwrap();
+        db.commit_local_write(TxId::generate(), &schema).unwrap();
+        db.commit_local_write(TxId::generate(), &insert("after rebuild"))
+            .unwrap();
+
+        assert_eq!(db.pending_writes().unwrap().len(), 2);
         assert_eq!(
-            db.pending_writes().unwrap().len(),
-            crate::protocol::MAX_BATCH_WRITES
+            row_values(&db.live, "items"),
+            vec![Value::Text("after rebuild".to_owned())]
         );
     }
 
     #[test]
     fn batch_publication_recovers_before_removing_queued_writes() {
         let dir = TempDir::new().unwrap();
-        let mut db = Databases::open(dir.path()).unwrap();
+        let mut db = open_databases(dir.path()).unwrap();
         let first = TxId::generate();
         let second = TxId::generate();
         db.commit_local_write(first, &transaction("CREATE TABLE items(value TEXT)"))
             .unwrap();
         db.commit_local_write(second, &insert("second")).unwrap();
-        let publication = crate::publication::Publication::prepare(db.pending_writes().unwrap())
-            .unwrap()
-            .unwrap();
+        let publication = crate::publication::Publication::prepare(
+            db.pending_writes().unwrap(),
+            PublicationConfig::default().max_transactions,
+        )
+        .unwrap()
+        .unwrap();
 
         // Stop after control.db commits, before any queue record is removed.
         db.live.connection.execute_batch(
@@ -1532,7 +1623,7 @@ mod tests {
         );
         drop(db);
 
-        let mut db = Databases::open(dir.path()).unwrap();
+        let mut db = open_databases(dir.path()).unwrap();
         let pending = db.pending_writes().unwrap();
         assert_eq!(pending.len(), 2);
         assert_eq!(
@@ -1561,7 +1652,7 @@ mod tests {
     #[test]
     fn displacements_keep_the_original_write_order() {
         let dir = TempDir::new().unwrap();
-        let mut db = Databases::open(dir.path()).unwrap();
+        let mut db = open_databases(dir.path()).unwrap();
         let first_id = TxId::from([3; 32]);
         let second_id = TxId::from([2; 32]);
         let pending_id = TxId::from([1; 32]);
@@ -1610,7 +1701,7 @@ mod tests {
         db.apply_history_delta(&[], &[first_position], &[]).unwrap();
         drop(db);
 
-        let db = Databases::open(dir.path()).unwrap();
+        let db = open_databases(dir.path()).unwrap();
         assert_eq!(displaced_ids(&db), expected);
     }
 
@@ -1618,7 +1709,7 @@ mod tests {
     fn displaced_sql_can_be_resubmitted_after_rebuild_and_restart() {
         for published in [false, true] {
             let dir = TempDir::new().unwrap();
-            let mut db = Databases::open(dir.path()).unwrap();
+            let mut db = open_databases(dir.path()).unwrap();
             let (original_id, original) = crate::TransactionBuilder::new(
                 "CREATE TABLE credentials(label TEXT, secret BLOB, updated INTEGER)",
             )
@@ -1644,7 +1735,7 @@ mod tests {
             db.finish_live_rebuild(rebuild).unwrap();
             drop(db);
 
-            let mut db = Databases::open(dir.path()).unwrap();
+            let mut db = open_databases(dir.path()).unwrap();
             let displacement = db.unhandled_displacements().unwrap().remove(0);
             let retry_id = TxId::generate();
             let retry = &displacement.transaction;
@@ -1665,7 +1756,7 @@ mod tests {
     #[test]
     fn handling_a_displacement_survives_restart_without_erasing_recovery_state() {
         let dir = TempDir::new().unwrap();
-        let mut db = Databases::open(dir.path()).unwrap();
+        let mut db = open_databases(dir.path()).unwrap();
         db.commit_local_write(
             TxId::generate(),
             &transaction("CREATE TABLE local_write(value INTEGER)"),
@@ -1682,7 +1773,7 @@ mod tests {
         db.mark_displacement_handled(&displacement).unwrap();
         drop(db);
 
-        let mut db = Databases::open(dir.path()).unwrap();
+        let mut db = open_databases(dir.path()).unwrap();
         db.record_pending_write_displacement(&pending).unwrap();
 
         assert!(!db.has_unhandled_displacements().unwrap());
@@ -1699,7 +1790,7 @@ mod tests {
     #[test]
     fn republished_write_returns_to_live_status_at_its_new_position() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let tx_id = TxId::generate();
         let original_position = MsgId::from([7; 32]);
         let pending = publish_write(
@@ -1767,7 +1858,7 @@ mod tests {
     #[test]
     fn invalid_stored_write_status_returns_invalid_local_state() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let db = Databases::open(dir.path()).expect("databases should open");
+        let db = open_databases(dir.path()).expect("databases should open");
         let tx_id = TxId::generate();
 
         db.control
@@ -1789,7 +1880,7 @@ mod tests {
     #[test]
     fn finalized_write_no_longer_needs_displacement_review_after_restart() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let tx_id = TxId::generate();
         let this_msg = MsgId::from([7; 32]);
 
@@ -1823,7 +1914,7 @@ mod tests {
         );
 
         drop(db);
-        let db = Databases::open(dir.path()).expect("databases should reopen");
+        let db = open_databases(dir.path()).expect("databases should reopen");
 
         assert!(!db.has_unhandled_displacements().unwrap());
         assert!(db.unhandled_displacements().unwrap().is_empty());
@@ -1837,7 +1928,7 @@ mod tests {
     #[test]
     fn application_write_and_pending_publish_commit_together() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
 
         db.live
             .execute("CREATE TABLE items(value TEXT NOT NULL)", [])
@@ -1870,7 +1961,7 @@ mod tests {
     #[test]
     fn state_databases_have_the_same_internal_schema() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let db = Databases::open(dir.path()).expect("databases should open");
+        let db = open_databases(dir.path()).expect("databases should open");
 
         assert_eq!(internal_schema(&db.lib), internal_schema(&db.live));
     }
@@ -1878,7 +1969,7 @@ mod tests {
     #[test]
     fn repeated_write_is_a_new_transaction() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
 
         db.live
             .execute("CREATE TABLE items(value TEXT NOT NULL)", [])
@@ -1908,7 +1999,7 @@ mod tests {
     #[test]
     fn function_results_are_replayed_exactly() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let schema = "CREATE TABLE captured(
             random_value,
             random_blob_value,
@@ -1992,7 +2083,7 @@ mod tests {
     #[test]
     fn function_calls_inside_defaults_and_triggers_are_captured() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let schema = "
             CREATE TABLE items(
                 value TEXT,
@@ -2036,7 +2127,7 @@ mod tests {
     #[test]
     fn missing_function_result_rejects_channel_inscription() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
 
         db.live
             .execute("CREATE TABLE items(value INTEGER)", [])
@@ -2064,7 +2155,7 @@ mod tests {
     #[test]
     fn unused_function_result_rejects_channel_inscription() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
 
         db.live
             .execute("CREATE TABLE items(value INTEGER)", [])
@@ -2095,7 +2186,7 @@ mod tests {
     #[test]
     fn reused_transaction_id_with_different_content_is_rejected() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
 
         db.live
             .execute("CREATE TABLE items(value TEXT NOT NULL)", [])
@@ -2133,7 +2224,7 @@ mod tests {
     #[test]
     fn conflicting_finalized_write_does_not_modify_lib() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
 
         for connection in [&db.lib, &db.live] {
             connection
@@ -2173,7 +2264,7 @@ mod tests {
     #[test]
     fn application_write_can_create_persistent_schema() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let transaction = transaction("CREATE TABLE items(value TEXT NOT NULL)");
         db.commit_local_write(TxId::generate(), &transaction)
             .expect("schema write should commit");
@@ -2187,7 +2278,7 @@ mod tests {
     fn application_sql_cannot_control_wrapper_transaction() {
         for control in ["COMMIT", "ROLLBACK", "SAVEPOINT application"] {
             let dir = TempDir::new().expect("temporary directory should be created");
-            let mut db = Databases::open(dir.path()).expect("databases should open");
+            let mut db = open_databases(dir.path()).expect("databases should open");
 
             db.live
                 .execute("CREATE TABLE items(value TEXT NOT NULL)", [])
@@ -2269,7 +2360,7 @@ mod tests {
     #[test]
     fn reserved_name_check_accepts_non_ascii_identifiers() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let transaction = transaction("CREATE TABLE aaaaaaaaaa\u{65e5}(value INTEGER)");
 
         db.commit_local_write(TxId::generate(), &transaction)
@@ -2279,7 +2370,7 @@ mod tests {
     #[test]
     fn application_read_connection_is_read_only() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let db = Databases::open(dir.path()).expect("databases should open");
+        let db = open_databases(dir.path()).expect("databases should open");
 
         db.live
             .execute("CREATE TABLE items(value TEXT NOT NULL)", [])
