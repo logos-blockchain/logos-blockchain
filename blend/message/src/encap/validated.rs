@@ -257,9 +257,7 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
             validated_public_header.into_components();
 
         // Derive the shared key.
-        let Some(shared_key) = private_key.derive_shared_key(&signing_key.derive_x25519()) else {
-            return Err(Error::InvalidSharedSecret);
-        };
+        let shared_key = private_key.derive_shared_key(&signing_key.derive_x25519());
 
         // Decapsulate the encapsulated part.
         match encapsulated_part.decapsulate(

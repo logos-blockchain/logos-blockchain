@@ -1,32 +1,38 @@
 use std::{
     collections::{HashSet, VecDeque},
     fmt::Debug,
-    marker::PhantomData,
     num::NonZeroUsize,
     ops::RangeInclusive,
 };
 
 use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _, future, stream, stream::BoxStream};
-use lb_core::{block::Block, header::HeaderId};
+use lb_core::{
+    block::Block,
+    header::HeaderId,
+    mantle::{
+        TxHash,
+        traits::{Hashable, StorageSize},
+    },
+};
 use lb_cryptarchia_engine::{Branch, Slot};
 use lb_cryptarchia_sync::{BlocksResponse, BlocksUnavailableReason, ProviderResponse};
 use lb_log_targets::chain;
-use lb_storage_service::{StorageMsg, api::chain::StorageChainApi, backends::StorageBackend};
+use lb_storage_service::api::StorageApi;
 use overwatch::DynError;
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
-use tokio::sync::{mpsc::Sender, oneshot};
+use tokio::sync::mpsc::Sender;
 use tracing::{debug, error};
 
-use crate::{relays::StorageRelay, sync::config::BlockProviderConfig};
+use crate::sync::config::BlockProviderConfig;
 
 const LOG_TARGET: &str = chain::service::sync::BLOCK_PROVIDER;
 
 #[derive(Debug, Error, Clone)]
 pub enum GetBlocksError {
-    #[error("Storage channel dropped")]
-    ChannelDropped,
+    #[error("Storage error: {0}")]
+    Storage(String),
     #[error("Block not found in storage for header {0:?}")]
     BlockNotFound(HeaderId),
     #[error("Failed to find start block")]
@@ -35,8 +41,6 @@ pub enum GetBlocksError {
     InvalidState(String),
     #[error("Failed to send to channel: {0}")]
     SendError(String),
-    #[error("Failed to convert block")]
-    ConversionError,
 }
 
 #[derive(Debug, Clone)]
@@ -52,31 +56,23 @@ enum BlockLocation {
     Storage,
 }
 
-pub struct BlockProvider<Storage, Tx>
-where
-    Storage: StorageBackend,
-    Tx: Clone + Eq,
-{
-    storage_relay: StorageRelay<Storage>,
+pub struct BlockProvider<Tx> {
+    storage: StorageApi<Tx>,
     config: BlockProviderConfig,
-    _phantom: PhantomData<fn() -> Tx>,
 }
 
-impl<Storage, Tx> BlockProvider<Storage, Tx>
-where
-    Storage: StorageBackend + 'static,
-    <Storage as StorageChainApi>::Block: TryInto<Block<Tx>> + Into<Bytes>,
-    Tx: Serialize + Clone + Eq + Send + 'static,
-{
+impl<Tx> BlockProvider<Tx> {
     #[must_use]
-    pub const fn new(storage_relay: StorageRelay<Storage>, config: BlockProviderConfig) -> Self {
-        Self {
-            storage_relay,
-            config,
-            _phantom: PhantomData,
-        }
+    pub const fn new(storage: StorageApi<Tx>, config: BlockProviderConfig) -> Self {
+        Self { storage, config }
     }
+}
 
+impl<Tx> BlockProvider<Tx>
+where
+    Tx: DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
+    Tx: Serialize + Clone + Eq + Send + Sync + 'static,
+{
     /// Creates a block stream that leads from one of the [`known_blocks`]
     /// to the [`target_block`], and sends it to the [`reply_sender`].
     pub async fn send_blocks(
@@ -170,7 +166,7 @@ where
         &self,
         path: Vec<HeaderId>,
     ) -> BoxStream<'static, Result<Bytes, DynError>> {
-        let storage = self.storage_relay.clone();
+        let storage = self.storage.clone();
 
         // Skip a block already known to the requester.
         let path = path.into_iter().skip(1);
@@ -489,86 +485,50 @@ where
         &self,
         id: HeaderId,
     ) -> Result<Option<Block<Tx>>, GetBlocksError> {
-        let Some(block) = Self::load_block(id, &self.storage_relay).await? else {
+        let Some(block) = Self::load_block(id, &self.storage).await? else {
             return Ok(None);
         };
 
-        // Check if the block is stored as immutable in the storage
-        let (tx, rx) = oneshot::channel();
-        self.storage_relay
-            .send(StorageMsg::get_immutable_block_id_request(
-                block.header().slot(),
-                tx,
-            ))
+        match self
+            .storage
+            .get_immutable_block_id(block.header().slot())
             .await
-            .map_err(|error| GetBlocksError::SendError(error.to_string()))?;
-
-        match rx.await.map_err(|_| GetBlocksError::ChannelDropped)? {
+            .map_err(|error| GetBlocksError::Storage(error.to_string()))?
+        {
             Some(immutable_id) if immutable_id == id => Ok(Some(block)),
             Some(_) | None => Ok(None),
         }
     }
 
-    /// Loads a block from storage, regardless of whether it is stored as
-    /// immutable or not.
     async fn load_block(
         id: HeaderId,
-        storage: &StorageRelay<Storage>,
+        storage: &StorageApi<Tx>,
     ) -> Result<Option<Block<Tx>>, GetBlocksError> {
-        let (tx, rx) = oneshot::channel();
         storage
-            .send(StorageMsg::get_block_request(id, tx))
+            .try_get_block(&id)
             .await
-            .map_err(|error| GetBlocksError::SendError(error.to_string()))?;
-
-        let response = rx.await.map_err(|_| GetBlocksError::ChannelDropped)?;
-
-        match response {
-            None => Ok(None),
-            Some(block) => Ok(Some(
-                block
-                    .try_into()
-                    .map_err(|_| GetBlocksError::ConversionError)?,
-            )),
-        }
+            .map_err(|error| GetBlocksError::Storage(error.to_string()))
     }
 
-    /// Loads a block from storage as raw bytes, avoiding
-    /// deserialization/serialization
     async fn load_block_bytes(
         id: HeaderId,
-        storage: &StorageRelay<Storage>,
+        storage: &StorageApi<Tx>,
     ) -> Result<Option<Bytes>, GetBlocksError> {
-        let (tx, rx) = oneshot::channel();
         storage
-            .send(StorageMsg::get_block_request(id, tx))
+            .get_block_bytes(&id)
             .await
-            .map_err(|error| GetBlocksError::SendError(error.to_string()))?;
-
-        let response = rx.await.map_err(|_| GetBlocksError::ChannelDropped)?;
-
-        // Convert storage block type to Bytes to satisfy trait bounds.
-        // For RocksBackend this is Bytes -> Bytes (no-op).
-        Ok(response.map(Into::into))
+            .map_err(|error| GetBlocksError::Storage(error.to_string()))
     }
 
-    /// Scans immutable block IDs from the storage,
-    /// starting from the `start_slot`, limited to `limit`.
     async fn scan_immutable_block_ids(
         &self,
         slot_range: RangeInclusive<Slot>,
         limit: NonZeroUsize,
     ) -> Result<Vec<HeaderId>, GetBlocksError> {
-        let (tx, rx) = oneshot::channel();
-
-        self.storage_relay
-            .send(StorageMsg::scan_immutable_block_ids_request(
-                slot_range, limit, tx,
-            ))
+        self.storage
+            .scan_immutable_block_ids(slot_range, limit, false)
             .await
-            .map_err(|error| GetBlocksError::SendError(error.to_string()))?;
-
-        rx.await.map_err(|_| GetBlocksError::ChannelDropped)
+            .map_err(|error| GetBlocksError::Storage(error.to_string()))
     }
 
     async fn send_error(reason: BlocksUnavailableReason, reply_sender: Sender<BlocksResponse>) {
@@ -612,15 +572,15 @@ mod tests {
     use lb_cryptarchia_engine::{Config, UncleSlots};
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
-    use lb_storage_service::{
-        StorageService,
-        backends::rocksdb::{RocksBackend, RocksBackendSettings},
-    };
+    use lb_storage_service::{StorageMsg, StorageService, rocksdb::RocksBackendSettings};
     use lb_utils::math::NonNegativeRatio;
     use lb_utxotree::UtxoTree;
-    use overwatch::{derive_services, overwatch::OverwatchRunner};
+    use overwatch::{derive_services, overwatch::OverwatchRunner, services::relay::OutboundRelay};
     use tempfile::TempDir;
-    use tokio::{runtime::Handle, sync::mpsc};
+    use tokio::{
+        runtime::Handle,
+        sync::{mpsc, oneshot},
+    };
 
     use super::*;
 
@@ -768,7 +728,7 @@ mod tests {
 
     #[derive_services]
     pub struct TestServices {
-        pub storage: StorageService<RocksBackend, RuntimeServiceId>,
+        pub storage: StorageService<RuntimeServiceId>,
     }
 
     type TestBlock = (
@@ -781,10 +741,10 @@ mod tests {
     #[expect(dead_code, reason = "Fix in a separate PR")]
     struct TestEnv {
         service: overwatch::overwatch::Overwatch<RuntimeServiceId>,
-        storage_relay: StorageRelay<RocksBackend>,
+        storage_relay: OutboundRelay<StorageMsg>,
         cryptarchia: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         proof: lb_core::proofs::leader_proof::Groth16LeaderProof,
-        provider: BlockProvider<RocksBackend, SignedOps<Unverified, StandardMode>>,
+        provider: BlockProvider<SignedOps<Unverified, StandardMode>>,
     }
 
     impl TestEnv {
@@ -796,7 +756,7 @@ mod tests {
             );
             let proof = Self::make_test_proof(&cryptarchia);
             let provider = BlockProvider::new(
-                storage_relay.clone(),
+                StorageApi::new(storage_relay.clone()),
                 BlockProviderConfig {
                     batch_size: TEST_BATCH_SIZE,
                 },
@@ -813,7 +773,7 @@ mod tests {
 
         async fn setup_storage() -> (
             overwatch::overwatch::Overwatch<RuntimeServiceId>,
-            StorageRelay<RocksBackend>,
+            OutboundRelay<StorageMsg>,
         ) {
             let temp_path = TempDir::new().unwrap();
             let service = OverwatchRunner::<TestServices>::run(
@@ -837,7 +797,7 @@ mod tests {
 
             let storage_relay = service
                 .handle()
-                .relay::<StorageService<RocksBackend, RuntimeServiceId>>()
+                .relay::<StorageService<RuntimeServiceId>>()
                 .await
                 .expect("Relay connection with StorageService should succeed");
 
@@ -954,14 +914,14 @@ mod tests {
             let (sender, receiver) = oneshot::channel();
 
             self.storage_relay
-                .send(StorageMsg::store_block_data_request(
+                .send(StorageMsg::StoreBlockData {
                     header_id,
                     parent_id,
-                    store_result.unwrap(),
-                    Events::new().try_into().unwrap(),
-                    BTreeMap::new(),
-                    sender,
-                ))
+                    block: store_result.unwrap(),
+                    events: Events::new().try_into().unwrap(),
+                    immutable_ids: BTreeMap::new(),
+                    response_tx: sender,
+                })
                 .await
                 .expect("Failed to store block");
 
@@ -983,10 +943,10 @@ mod tests {
 
             // Mark as immutable
             self.storage_relay
-                .send(StorageMsg::store_immutable_block_ids_request(
-                    BTreeMap::from([(slot, header_id)]),
-                    sender,
-                ))
+                .send(StorageMsg::StoreImmutableBlockIds {
+                    ids: BTreeMap::from([(slot, header_id)]),
+                    response_tx: sender,
+                })
                 .await
                 .expect("Failed to store immutable block id");
 

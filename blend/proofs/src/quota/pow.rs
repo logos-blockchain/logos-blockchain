@@ -139,7 +139,7 @@ mod tests {
     fn fixture_solution_satisfies_its_difficulty() {
         let (PublicInputs { leader, pow, .. }, ProofOfWorkQuotaInputs { pow_nonce }) =
             valid_proof_of_work_quota_inputs(
-                Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+                Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
                 Quota::ONE,
             );
 

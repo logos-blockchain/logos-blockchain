@@ -49,7 +49,7 @@ where
         + Send
         + Display
         + 'static
-        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter,

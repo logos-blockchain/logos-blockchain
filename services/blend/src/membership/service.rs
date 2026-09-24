@@ -90,7 +90,7 @@ fn node_from_provider<NodeId>(
 where
     NodeId: node_id::TryFrom,
 {
-    let provider_id = provider_id.as_ref();
+    let provider_id_bytes = provider_id.as_ref();
     // TODO: Once we provide a proper API for non-empty vectors, we can expose a
     // `first()` method that returns `&T` instead of `Option<&T>`, and remove this
     // `expect`.
@@ -98,16 +98,14 @@ where
         .first()
         .expect("Locators set cannot be empty")
         .clone();
-    let id = NodeId::try_from_provider_id(provider_id)
+    let id = NodeId::try_from_provider_id(provider_id_bytes)
         .map_err(|e| {
             warn!(target: LOG_TARGET, "Failed to decode provider_id to node ID: {e:?}");
         })
         .ok()?;
-    let public_key = Ed25519PublicKey::from_bytes(provider_id)
-        .map_err(|e| {
-            warn!(target: LOG_TARGET, "Failed to decode provider_id to public_key: {e:?}");
-        })
-        .ok()?;
+    // We know this is a valid Ed25519 public key because provider ID only accept
+    // valid keys.
+    let public_key = provider_id.0;
     Some(ZkNode {
         node: Node {
             id,

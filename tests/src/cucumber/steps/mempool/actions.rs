@@ -9,8 +9,8 @@ use lb_core::mantle::{
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_storage_service::{
-    backends::rocksdb::RocksBackendSettings,
     recovery::{load_recovery_data, recovery_key},
+    rocksdb::RocksBackendSettings,
 };
 use lb_testing_framework::USER_CONFIG_FILE;
 use lb_tx_service::{

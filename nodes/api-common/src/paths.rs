@@ -27,6 +27,7 @@ pub const POW_START_AUTO_CLAIM: &str = "/pow/auto-claim/start";
 pub const POW_STOP_AUTO_CLAIM: &str = "/pow/auto-claim/stop";
 pub const POW_CLAIM: &str = "/pow/claim";
 pub const POW_CLAIMABLE_REWARDS: &str = "/pow/rewards/claimable";
+pub const POW_STATUS: &str = "/pow/status";
 pub const LEADER_CLAIM: &str = "/leader/claim";
 pub const LEADER_CLAIM_VOUCHERS: &str = "/leader/claim/vouchers";
 pub const LEADER_AGED_NOTES: &str = "/leader/aged-notes";

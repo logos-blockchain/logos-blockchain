@@ -21,7 +21,6 @@ pub fn start_custom_republish_policy(
     let policy = CustomRepublishPolicy {
         deps,
         view_rx,
-        pending: HashSet::new(),
         finalized: HashSet::new(),
         chain_tip: None,
         ready: false,
@@ -30,11 +29,10 @@ pub fn start_custom_republish_policy(
 }
 
 /// [`OrphanRepublishPolicy`] for the custom-tx flow: orphans that are
-/// neither in `pending` nor finalized are rebuilt and re-submitted.
+/// neither in the view nor finalized are rebuilt and re-submitted.
 struct CustomRepublishPolicy {
     deps: CustomRepublishDeps,
     view_rx: tokio::sync::watch::Receiver<SequencerChannelView>,
-    pending: HashSet<Inscription>,
     finalized: HashSet<Inscription>,
     /// Where our own submitted chain ends; reset on orphans so rebuilds
     /// chain from the channel tip instead.
@@ -74,7 +72,6 @@ impl CustomRepublishPolicy {
         };
         match sequencer.handle().submit_signed_tx(signed_tx, msg_id) {
             Ok((_result, _checkpoint)) => {
-                self.pending.extend(payloads);
                 self.chain_tip = Some(msg_id);
                 true
             }
@@ -125,25 +122,20 @@ where
 
         if let Some(channel_update) = channel_update {
             let orphaned: HashSet<Inscription> = channel_update
-                .orphaned
+                .orphaned()
                 .iter()
                 .flat_map(|entry| self.entry_payloads(entry))
                 .collect();
-            let adopted: Vec<Inscription> = channel_update
-                .adopted
-                .iter()
+            let view: HashSet<Inscription> = channel_update
+                .canonical_chain()
+                .into_iter()
+                .flatten()
                 .flat_map(|entry| self.entry_payloads(entry))
                 .collect();
-            for payload in &orphaned {
-                self.pending.remove(payload);
-            }
-            self.pending.extend(adopted);
 
             let republish: Vec<Inscription> = orphaned
                 .into_iter()
-                .filter(|payload| {
-                    !self.pending.contains(payload) && !self.finalized.contains(payload)
-                })
+                .filter(|payload| !view.contains(payload) && !self.finalized.contains(payload))
                 .collect();
             if self.ready && !republish.is_empty() {
                 self.chain_tip = None;

@@ -80,7 +80,7 @@ mod tests {
         Note, Utxo, VerificationError,
         channel::{Channels, Error},
         ledger::{Inputs, verification_mode::StandardMode},
-        ops::channel::{ChannelId, config::Keys},
+        ops::channel::ChannelId,
         traits::Hashable as _,
         transactions::{
             SignedOps,
@@ -97,7 +97,11 @@ mod tests {
         let channel_id = ChannelId::from([8u8; 32]);
         let key0 = Ed25519Key::from_bytes(&[8; 32]);
         let key1 = Ed25519Key::from_bytes(&[9; 32]);
-        let keys = Keys::new_unchecked(vec![key0.public_key(), key1.public_key()]);
+        let keys = [
+            key0.public_key().into_unverified(),
+            key1.public_key().into_unverified(),
+        ]
+        .into();
 
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let utxo = Utxo {
@@ -122,8 +126,8 @@ mod tests {
         let helper = TestOperationVerificationHelper::new(
             channels,
             [
-                ((channel_id, 0), key0.public_key()),
-                ((channel_id, 1), key1.public_key()),
+                ((channel_id, 0), key0.public_key().into_unverified()),
+                ((channel_id, 1), key1.public_key().into_unverified()),
             ],
         )
         .with_utxos(vec![utxo]);

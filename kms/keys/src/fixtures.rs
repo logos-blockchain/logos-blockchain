@@ -2,7 +2,14 @@ use lb_binary_codec::canonical::codec_fixtures;
 use lb_groth16::Fr;
 use lb_zksign::ZkSignProof;
 
-use crate::keys::{Ed25519PublicKey, Ed25519Signature, ZkPublicKey, ZkSignature};
+use crate::keys::{
+    Ed25519PublicKey, Ed25519Signature, UnverifiedEd25519PublicKey, ZkPublicKey, ZkSignature,
+};
+
+codec_fixtures!(
+    UnverifiedEd25519PublicKey,
+    Self::from_bytes(&[1u8; _]).unwrap() => "0101010101010101010101010101010101010101010101010101010101010101"
+);
 
 codec_fixtures!(
     Ed25519PublicKey,

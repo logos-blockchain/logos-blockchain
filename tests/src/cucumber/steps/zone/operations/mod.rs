@@ -78,6 +78,29 @@ fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &In
             | FinalizedOp::ChannelTransfer(_) => None,
         })
 }
+
+/// The inscriptions carried by channel-update entries, in order — the
+/// non-finalized counterpart of [`finalized_inscriptions`].
+trait Inscriptions<'a> {
+    fn inscriptions(self) -> impl Iterator<Item = &'a InscriptionInfo>;
+}
+
+impl<'a, I: IntoIterator<Item = &'a ChannelUpdateTx>> Inscriptions<'a> for I {
+    fn inscriptions(self) -> impl Iterator<Item = &'a InscriptionInfo> {
+        self.into_iter().filter_map(ChannelUpdateTx::inscription)
+    }
+}
+
+/// The entries an update contributes to a consumer's non-finalized view: a
+/// conflict's whole `canonical_chain()` (the consumer clears first), an
+/// extension's `adopted` (the consumer keeps what it holds).
+fn contributed(update: &ChannelUpdate) -> impl Iterator<Item = &ChannelUpdateTx> {
+    let prefix = match update {
+        ChannelUpdate::Conflict { common_prefix, .. } => common_prefix.as_slice(),
+        ChannelUpdate::Extension { .. } => &[],
+    };
+    prefix.iter().chain(update.adopted())
+}
 use crate::{
     common::{
         chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
@@ -221,6 +244,7 @@ impl PublishDeadline {
 /// drive task; the event mpsc is purely for test observation.
 pub struct PolicyRuntime {
     pub task: JoinHandle<()>,
+    pub view_violation: runner::ViewViolation,
     pub client: SequencerClient,
     pub events: tokio::sync::broadcast::Receiver<Event>,
     pub checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
@@ -233,6 +257,7 @@ pub struct PolicyRuntime {
 fn to_policy_runtime(rt: runner::Runtime) -> PolicyRuntime {
     PolicyRuntime {
         task: rt.task,
+        view_violation: rt.view_violation,
         client: rt.client,
         events: rt.event_rx,
         checkpoint_rx: rt.checkpoint_rx,

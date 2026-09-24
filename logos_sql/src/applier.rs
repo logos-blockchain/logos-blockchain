@@ -88,14 +88,14 @@ pub fn on_event(db: &mut Databases, event: &Event, channel_id: ChannelId) -> Res
             checkpoint,
             channel_update,
             finalized,
-        } => process_blocks(db, checkpoint, channel_update, finalized, channel_id)?,
+            ..
+        } => process_blocks(db, checkpoint, channel_update, finalized, channel_id),
         Event::Ready => {
             tracing::info!(target: TARGET, "sequencer ready");
+            Ok(())
         }
-        Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
+        Event::MempoolPending(_) | Event::TurnNotification { .. } => Ok(()),
     }
-
-    Ok(())
 }
 
 /// Applies one block event before advancing its checkpoint.
@@ -126,7 +126,9 @@ fn process_blocks(
         ApplicationPlan::Rebuild(cause) => changes.rebuild(db, &cause)?,
     }
 
-    db.persist_checkpoint(checkpoint)
+    db.persist_checkpoint(checkpoint)?;
+
+    Ok(())
 }
 
 impl SqlChanges {
@@ -148,8 +150,8 @@ impl SqlChanges {
             .collect();
 
         Self {
-            adopted: Self::collect_channel_inscriptions(&channel_update.adopted, channel_id),
-            orphaned: Self::collect_channel_inscriptions(&channel_update.orphaned, channel_id),
+            adopted: Self::collect_channel_inscriptions(channel_update.adopted(), channel_id),
+            orphaned: Self::collect_channel_inscriptions(channel_update.orphaned(), channel_id),
             finalized,
         }
     }
@@ -191,13 +193,13 @@ impl SqlChanges {
             // `LIVE.db`, which removes its pending-write record. If both records
             // still exist, the process stopped between those two steps and the
             // rebuild must resume.
-            if db.is_write_displaced(pending.tx_id)? {
+            if db.pending_write_rebuild_was_interrupted(pending.tx_id)? {
                 return Ok(ApplicationPlan::Rebuild(
                     RebuildCause::PendingWriteInvalidated(pending),
                 ));
             }
 
-            if self.changes_pending_base(db)? {
+            if self.changes_history_before_pending_write(db)? {
                 return Ok(ApplicationPlan::Rebuild(
                     RebuildCause::PendingWriteInvalidated(pending),
                 ));
@@ -218,7 +220,7 @@ impl SqlChanges {
     /// already retained in the live suffix only moves the finalized
     /// boundary and does not invalidate the pending write's execution
     /// order.
-    fn changes_pending_base(&self, db: &Databases) -> Result<bool, Error> {
+    fn changes_history_before_pending_write(&self, db: &Databases) -> Result<bool, Error> {
         if !self.adopted.is_empty() || !self.orphaned.is_empty() {
             return Ok(true);
         }
@@ -248,14 +250,16 @@ impl SqlChanges {
     fn rebuild(&self, db: &mut Databases, cause: &RebuildCause) -> Result<(), Error> {
         match cause {
             RebuildCause::PendingWriteInvalidated(pending) => {
-                db.record_unpublished_displacement(pending)?;
+                db.record_pending_write_displacement(pending)?;
             }
             RebuildCause::ChannelFork => {}
         }
 
         Self::apply_inscriptions(db, &self.finalized, ApplyTarget::Lib)?;
         self.apply_history_delta(db)?;
-        rebuild_live_from_suffix(db)
+        rebuild_live_from_suffix(db)?;
+
+        Ok(())
     }
 
     fn apply_inscriptions(
@@ -270,8 +274,7 @@ impl SqlChanges {
         Ok(())
     }
 
-    /// Applies this event to the replayable suffix and local displacement
-    /// outcomes.
+    /// Applies this event to the replayable suffix and local write statuses.
     fn apply_history_delta(&self, db: &mut Databases) -> Result<(), Error> {
         let finalized = self
             .finalized
@@ -427,7 +430,7 @@ fn is_logos_sql_inscription(inscription: &InscriptionInfo) -> bool {
 #[cfg(test)]
 mod tests {
     use lb_zone_sdk::{
-        Ed25519PublicKey,
+        UnverifiedEd25519PublicKey,
         node_types::{ChannelId, HeaderId, MsgId, Slot, TxHash},
         sequencer::{
             ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, InscriptionInfo,
@@ -444,6 +447,7 @@ mod tests {
             CapturedFunctionCalls, ChannelInscription, EncodedWrite, PAYLOAD_MARKER, Statement,
             Transaction, TxId,
         },
+        status::WriteStatus,
     };
 
     const CHANNEL_ID: [u8; 32] = [9; 32];
@@ -468,7 +472,7 @@ mod tests {
                 .to_vec()
                 .try_into()
                 .expect("test payload should fit an inscription"),
-            signer: Some(Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()),
+            signer: Some(UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap()),
         }
     }
 
@@ -478,13 +482,19 @@ mod tests {
         orphaned: Vec<ChannelUpdateTx>,
         finalized: Vec<FinalizedTx>,
     ) -> Event {
+        let channel_update = if orphaned.is_empty() {
+            ChannelUpdate::Extension { adopted }
+        } else {
+            ChannelUpdate::Conflict {
+                common_prefix: Vec::new(),
+                adopted,
+                orphaned,
+            }
+        };
         Event::BlocksProcessed {
             checkpoint,
-            channel_update: ChannelUpdate {
-                orphaned,
-                adopted,
-                adopted_deposits: Vec::new(),
-            },
+            channel_update,
+            deposits: Vec::new(),
             finalized,
         }
     }
@@ -540,6 +550,13 @@ mod tests {
             .expect("database should open for reading")
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .expect("journal mode should be readable")
+    }
+
+    fn assert_status(db: &Databases, tx_id: TxId, expected: Option<WriteStatus>) {
+        assert_eq!(
+            db.write_status(tx_id).expect("write status should load"),
+            expected
+        );
     }
 
     fn text_values(path: &std::path::Path, table: &str) -> Vec<String> {
@@ -734,7 +751,8 @@ mod tests {
         let lib_path = db.lib_path().to_owned();
 
         let create = transaction("CREATE TABLE items(value INTEGER NOT NULL)", Vec::new());
-        db.commit_local_write(TxId::generate(), &create)
+        let create_tx_id = db
+            .commit_local_write(TxId::generate(), &create)
             .expect("schema write should commit");
         let create_pending = db
             .pending_publish()
@@ -773,11 +791,7 @@ mod tests {
                 .tx_id,
             insert_tx_id
         );
-        assert!(
-            db.displaced_writes()
-                .expect("displaced writes should load")
-                .is_empty()
-        );
+        assert_status(&db, create_tx_id, Some(WriteStatus::Finalized));
     }
 
     #[test]
@@ -971,14 +985,13 @@ mod tests {
     }
 
     #[test]
-    fn orphaned_local_write_rebuilds_live_and_reports_displacement() {
+    fn active_reader_keeps_its_snapshot_during_live_rebuild() {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = Databases::open(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
-        let local_tx_id = db
-            .commit_local_write(TxId::generate(), &local)
+        db.commit_local_write(TxId::generate(), &local)
             .expect("local write should commit");
         let local_pending = db
             .pending_publish()
@@ -1025,11 +1038,6 @@ mod tests {
         assert!(!table_exists(&live_path, "local_write"));
         assert!(table_exists(&live_path, "adopted_too_early"));
         assert_eq!(journal_mode(&live_path), "wal");
-        assert_eq!(
-            db.displaced_writes().expect("displaced writes should load"),
-            vec![local_tx_id]
-        );
-
         let local_still_visible: bool = reader
             .query_row(
                 "SELECT EXISTS(
@@ -1059,28 +1067,69 @@ mod tests {
             .expect("reader should observe rebuilt state after its snapshot");
 
         assert!(adopted_visible);
+    }
 
-        let restore_original = blocks_processed(
-            checkpoint(3, 3),
-            vec![ChannelUpdateTx::Inscription(inscription(&local_payload, 1))],
-            vec![ChannelUpdateTx::Inscription(inscription(
-                &adopted.payload,
-                2,
-            ))],
+    #[test]
+    fn local_write_reports_orphaned_adopted_and_finalized() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let live_path = db.live_path().to_owned();
+
+        let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
+        let local_tx_id = db
+            .commit_local_write(TxId::generate(), &local)
+            .expect("local write should commit");
+        let pending = db
+            .pending_publish()
+            .expect("pending write should load")
+            .expect("pending write should exist");
+        let payload = pending.payload.clone();
+
+        db.complete_publish(&checkpoint(1, 1), MsgId::from([1; 32]), &pending)
+            .expect("local publish should be complete");
+
+        let orphan = blocks_processed(
+            checkpoint(2, 2),
+            Vec::new(),
+            vec![ChannelUpdateTx::Inscription(inscription(&payload, 1))],
             Vec::new(),
         );
 
-        on_event(&mut db, &restore_original, ChannelId::from(CHANNEL_ID))
-            .expect("restored branch should rebuild live state");
+        on_event(&mut db, &orphan, ChannelId::from(CHANNEL_ID))
+            .expect("local write should be orphaned");
+
+        assert!(!table_exists(&live_path, "local_write"));
+        assert_status(&db, local_tx_id, Some(WriteStatus::Displaced));
+
+        drop(db);
+        let mut db = Databases::open(dir.path()).expect("databases should reopen");
+
+        let restore = blocks_processed(
+            checkpoint(3, 3),
+            vec![ChannelUpdateTx::Inscription(inscription(&payload, 1))],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        on_event(&mut db, &restore, ChannelId::from(CHANNEL_ID))
+            .expect("original channel position should return");
 
         assert!(table_exists(&live_path, "local_write"));
-        assert!(!table_exists(&live_path, "adopted_too_early"));
-        assert!(
-            db.displaced_writes()
-                .expect("displaced writes should load")
-                .is_empty(),
-            "restoring the original channel position clears displacement"
+        assert_status(&db, local_tx_id, Some(WriteStatus::Live));
+
+        let finalize = blocks_processed(
+            checkpoint(4, 4),
+            Vec::new(),
+            Vec::new(),
+            vec![finalized(&payload, 1)],
         );
+
+        on_event(&mut db, &finalize, ChannelId::from(CHANNEL_ID))
+            .expect("local write should finalize");
+
+        assert!(table_exists(&live_path, "local_write"));
+        assert!(table_exists(db.lib_path(), "local_write"));
+        assert_status(&db, local_tx_id, Some(WriteStatus::Finalized));
     }
 
     #[test]
@@ -1137,12 +1186,7 @@ mod tests {
             .expect("replayed branch update should be idempotent");
 
         assert_eq!(text_values(&live_path, "items"), vec!["new"]);
-        assert!(
-            db.displaced_writes()
-                .expect("displaced writes should load")
-                .is_empty(),
-            "foreign orphaned writes are not application outcomes"
-        );
+        assert_status(&db, old_branch.tx_id, None);
     }
 
     #[test]
@@ -1180,10 +1224,7 @@ mod tests {
                 .expect("pending publication should load")
                 .is_none()
         );
-        assert_eq!(
-            db.displaced_writes().expect("displaced writes should load"),
-            vec![local_tx_id]
-        );
+        assert_status(&db, local_tx_id, Some(WriteStatus::Displaced));
     }
 
     #[test]
@@ -1227,10 +1268,7 @@ mod tests {
 
         assert!(!table_exists(&live_path, "previous_write"));
         assert!(!table_exists(&live_path, "local_write"));
-        assert_eq!(
-            db.displaced_writes().expect("displaced writes should load"),
-            vec![local_tx_id]
-        );
+        assert_status(&db, local_tx_id, Some(WriteStatus::Displaced));
     }
 
     #[test]
@@ -1256,7 +1294,7 @@ mod tests {
 
         // Simulate a crash after the control-state transaction commits but
         // before the replacement LIVE database is installed.
-        db.record_unpublished_displacement(&pending)
+        db.record_pending_write_displacement(&pending)
             .expect("displacement should be recorded");
         db.apply_history_delta(
             &[],
@@ -1291,10 +1329,7 @@ mod tests {
                 .expect("pending publication should load")
                 .is_none()
         );
-        assert_eq!(
-            db.displaced_writes().expect("displaced writes should load"),
-            vec![local_tx_id]
-        );
+        assert_status(&db, local_tx_id, Some(WriteStatus::Displaced));
     }
 
     #[test]
@@ -1320,7 +1355,7 @@ mod tests {
 
         // Simulate a crash after the control-state transaction commits but
         // before the replacement LIVE database is installed.
-        db.record_unpublished_displacement(&pending)
+        db.record_pending_write_displacement(&pending)
             .expect("displacement should be recorded");
         db.apply_history_delta(
             &[],
@@ -1359,10 +1394,7 @@ mod tests {
                 .expect("pending publication should load")
                 .is_none()
         );
-        assert_eq!(
-            db.displaced_writes().expect("displaced writes should load"),
-            vec![local_tx_id]
-        );
+        assert_status(&db, local_tx_id, Some(WriteStatus::Displaced));
     }
 
     #[test]
@@ -1393,9 +1425,6 @@ mod tests {
         assert!(!table_exists(&live_path, "local_write"));
         assert!(table_exists(&live_path, "finalized_write"));
         assert!(table_exists(db.lib_path(), "finalized_write"));
-        assert_eq!(
-            db.displaced_writes().expect("displaced writes should load"),
-            vec![local_tx_id]
-        );
+        assert_status(&db, local_tx_id, Some(WriteStatus::Displaced));
     }
 }

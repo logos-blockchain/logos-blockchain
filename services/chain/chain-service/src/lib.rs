@@ -5,7 +5,6 @@ mod notifier;
 mod relays;
 mod service;
 mod states;
-pub mod storage;
 mod sync;
 #[cfg(test)]
 mod tests;
@@ -19,7 +18,6 @@ use std::{
     time::Duration,
 };
 
-use bytes::Bytes;
 use educe::Educe;
 use futures::{Stream, TryStreamExt as _};
 use lb_chain_broadcast_service::BlockBroadcastService;
@@ -47,8 +45,7 @@ use lb_services_utils::{
 };
 use lb_storage_service::{
     StorageService,
-    api::chain::StorageChainApi,
-    backends::StorageBackend,
+    api::StorageApi,
     recovery::{StorageRecoveryBackend, StorageRecoverySettings},
 };
 use lb_time_service::TimeService;
@@ -78,7 +75,6 @@ use crate::{
         Service, delete_stale_blocks_from_storage, load_block_ids_from_storage,
         persist_recovery_state, process_block,
     },
-    storage::{StorageAdapter as _, adapters::StorageAdapter},
     sync::block_provider::BlockProvider,
 };
 
@@ -621,11 +617,9 @@ impl From<GenesisBlock> for StartingState {
 }
 
 #[expect(clippy::allow_attributes_without_reason)]
-pub struct CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
+pub struct CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     TimeBackend: lb_time_service::backends::TimeBackend,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -634,25 +628,22 @@ where
     state: <Self as ServiceData>::State,
 }
 
-impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceData
-    for CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
+impl<Tx, TimeBackend, RuntimeServiceId> ServiceData
+    for CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     TimeBackend: lb_time_service::backends::TimeBackend,
 {
     type Settings = CryptarchiaSettings;
     type State = CryptarchiaConsensusState;
-    type StateOperator = RecoveryOperator<
-        StorageRecoveryBackend<Self::State, Self::Settings, Storage, RuntimeServiceId>,
-    >;
+    type StateOperator =
+        RecoveryOperator<StorageRecoveryBackend<Self::State, Self::Settings, RuntimeServiceId>>;
     type Message = ConsensusMsg<Tx>;
 }
 
 #[async_trait::async_trait]
-impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
+impl<Tx, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
@@ -666,10 +657,6 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     RuntimeServiceId: Debug
@@ -679,7 +666,7 @@ where
         + 'static
         + AsServiceId<Self>
         + AsServiceId<BlockBroadcastService<RuntimeServiceId>>
-        + AsServiceId<StorageService<Storage, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
 {
     fn init(
@@ -697,15 +684,12 @@ where
         })
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
     async fn run(self) -> Result<(), DynError> {
-        let relays: CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId> =
-            CryptarchiaConsensusRelays::from_service_resources_handle::<TimeBackend>(
-                &self.service_resources_handle,
-            )
+        let relays: CryptarchiaConsensusRelays<Tx> =
+            CryptarchiaConsensusRelays::from_service_resources_handle::<
+                TimeBackend,
+                RuntimeServiceId,
+            >(&self.service_resources_handle)
             .await;
 
         let CryptarchiaSettings {
@@ -724,7 +708,7 @@ where
             &self.service_resources_handle.overwatch_handle,
             Some(Duration::from_mins(1)),
             BlockBroadcastService<_>,
-            StorageService<_, _>,
+            StorageService<_>,
             TimeService<_, _>
         )
         .await?;
@@ -752,7 +736,7 @@ where
         let storage_blocks_to_remove = delete_stale_blocks_from_storage(
             pruned_blocks.stale_blocks().copied(),
             &self.state.storage_blocks_to_remove,
-            relays.storage_adapter(),
+            relays.storage(),
         )
         .await;
 
@@ -764,10 +748,8 @@ where
             );
         }
 
-        let sync_blocks_provider: BlockProvider<_, _> = BlockProvider::new(
-            relays.storage_adapter().storage_relay.clone(),
-            sync_config.block_provider,
-        );
+        let sync_blocks_provider: BlockProvider<_> =
+            BlockProvider::new(relays.storage().clone(), sync_config.block_provider);
 
         // Start the timer for periodic state recording for offline grace period
         let state_recording_timer = tokio::time::interval(
@@ -835,8 +817,7 @@ where
     }
 }
 
-impl<Tx, Storage, TimeBackend, RuntimeServiceId>
-    CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
+impl<Tx, TimeBackend, RuntimeServiceId> CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
@@ -850,10 +831,6 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     TimeBackend: lb_time_service::backends::TimeBackend,
     RuntimeServiceId: Display + AsServiceId<Self> + 'static,
 {
@@ -868,7 +845,7 @@ where
 
     /// Get current slot and slot timer from time service.
     async fn get_slot_timer(
-        relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
+        relays: &CryptarchiaConsensusRelays<Tx>,
     ) -> Result<(Slot, lb_time_service::EpochSlotTickStream), DynError> {
         let slot_timer = {
             let (sender, receiver) = oneshot::channel();
@@ -898,7 +875,7 @@ where
     async fn load_recovery_blocks_from_storage(
         tip: HeaderId,
         lib: HeaderId,
-        storage: StorageAdapter<Storage, Tx, RuntimeServiceId>,
+        storage: StorageApi<Tx>,
     ) -> Result<Vec<Block<Tx>>, Error> {
         let ids = load_block_ids_from_storage(tip, lib, storage.clone())
             .try_collect::<Vec<_>>()
@@ -922,7 +899,7 @@ where
     async fn load_recovery_blocks_or_fall_back_to_lib(
         tip: HeaderId,
         lib: HeaderId,
-        storage: StorageAdapter<Storage, Tx, RuntimeServiceId>,
+        storage: StorageApi<Tx>,
     ) -> RecoveryBlocks<Tx> {
         if tip == lib {
             // Cryptarchia already starts from LIB, so there is no branch to replay.
@@ -984,7 +961,7 @@ where
         recovery_state: &CryptarchiaConsensusState,
         bootstrap_config: &BootstrapConfig,
         ledger_config: lb_ledger::Config,
-        relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
+        relays: &CryptarchiaConsensusRelays<Tx>,
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,
         current_slot: Slot,
@@ -1041,7 +1018,7 @@ where
         } = Self::load_recovery_blocks_or_fall_back_to_lib(
             recovery_state.tip,
             lib_id,
-            relays.storage_adapter().clone(),
+            relays.storage().clone(),
         )
         .await;
         info!(

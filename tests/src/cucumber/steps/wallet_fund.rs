@@ -439,7 +439,7 @@ async fn step_fund_inscription_transaction(
         channel_id,
         inscription,
         parent: MsgId::root(),
-        signer: signing_key.public_key(),
+        signer: signing_key.public_key().into_unverified(),
     };
 
     let tx_builder = MantleTxBuilder::new()

@@ -19,11 +19,11 @@ pub use lb_core::{
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
-pub use lb_storage_service::backends::{
-    SerdeOp, StorageBackend,
+use lb_storage_service::recovery::load_recovery_data;
+pub use lb_storage_service::{
+    backend::{SerdeOp, StorageBackend},
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
-use lb_storage_service::recovery::load_recovery_data;
 pub use lb_system_sig_service::SystemSig;
 use lb_time_service::backends::NtpTimeBackend;
 pub use lb_tracing_service::Tracing;
@@ -119,13 +119,9 @@ pub type TimeService = generic_services::TimeService<RuntimeServiceId>;
 
 pub type PoWService = generic_services::PoWService<RuntimeServiceId>;
 
-pub type ApiStorageAdapter<RuntimeServiceId> =
-    lb_api_service::http::storage::adapters::rocksdb::RocksAdapter<RuntimeServiceId>;
-
 pub type ApiService = lb_api_service::ApiService<
     AxumBackend<
         NtpTimeBackend,
-        ApiStorageAdapter<RuntimeServiceId>,
         RocksStorageAdapter<SignedOps<Preverified, StandardMode>, TxHash>,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
@@ -135,7 +131,7 @@ pub type ApiService = lb_api_service::ApiService<
     RuntimeServiceId,
 >;
 
-pub type StorageService = lb_storage_service::StorageService<RocksBackend, RuntimeServiceId>;
+pub type StorageService = lb_storage_service::StorageService<RuntimeServiceId>;
 
 pub type SystemSigService = SystemSig<RuntimeServiceId>;
 

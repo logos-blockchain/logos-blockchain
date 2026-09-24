@@ -12,7 +12,7 @@ use lb_core::{
 };
 use lb_key_management_system_service::backend::preload::PreloadKMSBackend;
 use lb_sdp_service::{SdpSettings, state::SdpState};
-use lb_storage_service::{backends::rocksdb::RocksBackend, recovery::StorageRecoveryBackend};
+use lb_storage_service::recovery::StorageRecoveryBackend;
 use lb_time_service::backends::NtpTimeBackend;
 use lb_tx_service::{backend::pool::Mempool, storage::adapters::rocksdb::RocksStorageAdapter};
 
@@ -68,12 +68,8 @@ pub type MempoolBackend<RuntimeServiceId> = Mempool<
     RuntimeServiceId,
 >;
 
-pub type CryptarchiaService<RuntimeServiceId> = CryptarchiaConsensus<
-    SignedOps<Preverified, StandardMode>,
-    RocksBackend,
-    NtpTimeBackend,
-    RuntimeServiceId,
->;
+pub type CryptarchiaService<RuntimeServiceId> =
+    CryptarchiaConsensus<SignedOps<Preverified, StandardMode>, NtpTimeBackend, RuntimeServiceId>;
 
 pub type ChainNetworkService<RuntimeServiceId> = lb_chain_network_service::ChainNetwork<
     CryptarchiaService<RuntimeServiceId>,
@@ -91,7 +87,6 @@ pub type WalletService<Cryptarchia, RuntimeServiceId> = lb_wallet_service::Walle
     KeyManagementService<RuntimeServiceId>,
     Cryptarchia,
     SignedOps<Preverified, StandardMode>,
-    RocksBackend,
     RuntimeServiceId,
 >;
 
@@ -132,7 +127,7 @@ pub type SdpWalletAdapter<RuntimeServiceId> = sdp::wallet::SdpWalletAdapter<
 >;
 
 pub type SdpRecoveryBackend<RuntimeServiceId> =
-    StorageRecoveryBackend<SdpState, SdpSettings, RocksBackend, RuntimeServiceId>;
+    StorageRecoveryBackend<SdpState, SdpSettings, RuntimeServiceId>;
 
 pub type SdpService<RuntimeServiceId> = lb_sdp_service::SdpService<
     SdpMempoolAdapter<RuntimeServiceId>,
@@ -147,6 +142,5 @@ pub type PoWService<RuntimeServiceId> = lb_pow_service::PoWService<
     BlendService<RuntimeServiceId>,
     WalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>,
     NtpTimeBackend,
-    RocksBackend,
     RuntimeServiceId,
 >;

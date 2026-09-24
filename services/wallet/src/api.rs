@@ -14,7 +14,6 @@ use lb_core::{
 use lb_key_management_system_service::keys::{
     Ed25519Key, ZkPublicKey, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
 };
-use lb_storage_service::backends::StorageBackend;
 use lb_utils::bounded::BoundedError;
 use lb_wallet::WalletBalance;
 use overwatch::{
@@ -57,18 +56,14 @@ pub trait WalletServiceData:
     type Kms;
     type Cryptarchia;
     type Tx;
-    type Storage;
 }
 
-impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> WalletServiceData
-    for crate::WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
-where
-    Storage: StorageBackend + Send + Sync + 'static,
+impl<Kms, Cryptarchia, Tx, RuntimeServiceId> WalletServiceData
+    for crate::WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId>
 {
     type Kms = Kms;
     type Cryptarchia = Cryptarchia;
     type Tx = Tx;
-    type Storage = Storage;
 }
 
 pub struct WalletApi<Wallet, RuntimeServiceId>
@@ -344,7 +339,6 @@ mod tests {
         type Kms = ();
         type Cryptarchia = ();
         type Tx = ();
-        type Storage = ();
     }
 
     #[derive(Debug)]

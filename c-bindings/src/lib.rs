@@ -9,6 +9,7 @@ mod errors;
 pub(crate) mod logging;
 mod macros;
 mod node;
+mod option;
 mod result;
 
 pub use errors::{OperationStatus, OperationStatusCode};

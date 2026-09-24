@@ -28,6 +28,4 @@ pub enum Error {
     NotCoreNodeReceiver,
     #[error("Node could not generate enough proof of the required type")]
     ProofNotAvailable,
-    #[error("Invalid shared secret")]
-    InvalidSharedSecret,
 }

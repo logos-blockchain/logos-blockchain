@@ -3,7 +3,8 @@ mod service;
 mod tickets;
 
 pub use service::{
-    AutoClaimSettings, AutoClaimTick, ClaimTarget, ClaimableRewardsInfo, PoWError,
-    PoWMiningSettings, PoWService, PoWServiceMessage, PoWServiceSettings, PoWServiceState,
+    AutoClaimSettings, AutoClaimStatus, AutoClaimTick, ClaimTarget, ClaimTargetStatus,
+    ClaimableRewardsInfo, PoWError, PoWMiningSettings, PoWService, PoWServiceMessage,
+    PoWServiceSettings, PoWServiceState, PoWStatus,
 };
 pub use tickets::{TicketGenerator, WinningTicket};

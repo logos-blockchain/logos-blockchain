@@ -14,7 +14,6 @@ workspace = true
 
 [dependencies]
 async-trait                   = { workspace = true }
-bytes                         = { workspace = true }
 futures                       = { workspace = true }
 lb-binary-codec               = { workspace = true }
 lb-blend-service              = { workspace = true }
@@ -29,12 +28,11 @@ lb-log-targets                = { workspace = true }
 lb-network-service            = { features = ["openapi"], workspace = true }
 lb-pow-service                = { workspace = true }
 lb-sdp-service                = { workspace = true }
-lb-storage-service            = { features = ["rocksdb-backend"], workspace = true }
+lb-storage-service            = { workspace = true }
 lb-time-service               = { workspace = true }
 lb-tx-service                 = { features = ["openapi"], workspace = true }
 overwatch                     = { workspace = true }
 serde                         = { workspace = true }
-serde_json                    = { workspace = true }
 thiserror                     = { workspace = true }
 tokio                         = { features = ["net"], workspace = true }
 tokio-stream                  = { workspace = true }

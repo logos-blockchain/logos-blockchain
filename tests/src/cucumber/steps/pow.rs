@@ -63,6 +63,95 @@ async fn step_stop_mining(world: &mut CucumberWorld, step: &Step, node_name: Str
     Ok(())
 }
 
+#[then(expr = "node {string} reports PoW mining {word}")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_node_reports_mining(
+    world: &mut CucumberWorld,
+    step: &Step,
+    node_name: String,
+    state: String,
+) -> StepResult {
+    let expected = match state.as_str() {
+        "on" => true,
+        "off" => false,
+        _ => {
+            return Err(StepError::InvalidArgument {
+                message: format!("Step `{}` error: expected `on` or `off`", step.value),
+            });
+        }
+    };
+    let node = world
+        .resolve_node_http_client(&node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        })?;
+
+    let status = node.pow_status().await?;
+    if status.is_mining != expected {
+        return Err(StepError::StepFail {
+            message: format!(
+                "node `{node_name}` reports PoW mining {}, expected {state}",
+                { if status.is_mining { "on" } else { "off" } }
+            ),
+        });
+    }
+
+    info!(target: TARGET, "Node `{node_name}` reports PoW mining {state}");
+    Ok(())
+}
+
+#[then(expr = "node {string} reports PoW auto-claim {word}")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_node_reports_auto_claim(
+    world: &mut CucumberWorld,
+    step: &Step,
+    node_name: String,
+    state: String,
+) -> StepResult {
+    let expected = match state.as_str() {
+        "armed" => true,
+        "disarmed" => false,
+        _ => {
+            return Err(StepError::InvalidArgument {
+                message: format!(
+                    "Step `{}` error: expected `armed` or `disarmed`",
+                    step.value
+                ),
+            });
+        }
+    };
+    let node = world
+        .resolve_node_http_client(&node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        })?;
+
+    let status = node.pow_status().await?;
+    if status.auto_claim.is_armed != expected {
+        return Err(StepError::StepFail {
+            message: format!(
+                "node `{node_name}` reports PoW auto-claim {}, expected {state}",
+                {
+                    if status.auto_claim.is_armed {
+                        "armed"
+                    } else {
+                        "disarmed"
+                    }
+                }
+            ),
+        });
+    }
+
+    info!(target: TARGET, "Node `{node_name}` reports PoW auto-claim {state}");
+    Ok(())
+}
+
 #[when(expr = "node {string} has at least {int} claimable PoW rewards within {int} seconds")]
 #[then(expr = "node {string} has at least {int} claimable PoW rewards within {int} seconds")]
 #[expect(

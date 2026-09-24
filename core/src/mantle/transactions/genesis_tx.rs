@@ -387,7 +387,9 @@ pub struct CryptarchiaParameter {
 #[cfg(test)]
 mod tests {
     use lb_groth16::AdditiveGroup as _;
-    use lb_key_management_system_keys::keys::{Ed25519Signature, ZkKey, ZkPublicKey};
+    use lb_key_management_system_keys::keys::{
+        Ed25519PublicKey, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey,
+    };
     use num_bigint::BigUint;
 
     use super::*;
@@ -395,7 +397,7 @@ mod tests {
         mantle::{
             OpProof,
             ledger::{Inputs, Note, Outputs, Utxo, Value},
-            ops::channel::{Ed25519PublicKey, inscribe::Inscription},
+            ops::channel::inscribe::Inscription,
             transactions::{OpProofs, Ops},
         },
         sdp::{Locator, ProviderId, ServiceType},
@@ -405,7 +407,7 @@ mod tests {
         channel_id: ChannelId,
         cryptarchia_param: &CryptarchiaParameter,
         parent: MsgId,
-        signer: Ed25519PublicKey,
+        signer: UnverifiedEd25519PublicKey,
     ) -> InscriptionOp {
         InscriptionOp {
             channel_id,
@@ -476,7 +478,7 @@ mod tests {
                 ChannelId::from([1; 32]),
                 &cryptarchia_param(),
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
                 &[0u8; 64],
@@ -493,7 +495,7 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
                 MsgId::from([1; 32]),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
                 &[0u8; 64],
@@ -510,7 +512,7 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[1; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[1; 32]).unwrap(),
             ))],
             vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
                 &[0u8; 64],
@@ -527,7 +529,7 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
                 &[0u8; 64],
@@ -543,7 +545,7 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             )
         };
 
@@ -582,10 +584,10 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             )
         };
-        let verifying_key = Ed25519PublicKey::from_bytes(&[0; 32]).unwrap();
+        let verifying_key = Ed25519PublicKey::from_bytes(&[1; 32]).unwrap();
         let utxo1 = Utxo::new([0u8; 32], 0, create_test_note(1000));
         let utxo2 = Utxo::new([1u8; 32], 1, create_test_note(2000));
         let sdp_declare_op_helper = |utxo_to_use: Utxo, zk_id_value: u8| {
@@ -637,7 +639,7 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
                 &[0u8; 64],
@@ -714,7 +716,7 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &param,
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::Ed25519Sig(Ed25519Signature::zero())],
         );
@@ -735,7 +737,7 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::Ed25519Sig(Ed25519Signature::zero())],
         );
@@ -745,14 +747,14 @@ mod tests {
 
     #[test]
     fn into_genesis_ops_splits_the_transfer_the_inscription_and_the_declarations() {
-        let verifying_key = Ed25519PublicKey::from_bytes(&[0; 32]).unwrap();
+        let verifying_key = Ed25519PublicKey::from_bytes(&[1; 32]).unwrap();
         let utxo = Utxo::new([0u8; 32], 0, create_test_note(1000));
         let declare_op = sdp_declare_op(utxo, 0, verifying_key);
         let inscribe_op = inscription_op(
             ChannelId::from([0; 32]),
             &cryptarchia_param(),
             MsgId::root(),
-            verifying_key,
+            UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         );
         let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
         let tx = create_trusted_tx_with_transfer(

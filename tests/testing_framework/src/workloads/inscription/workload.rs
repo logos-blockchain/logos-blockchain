@@ -383,7 +383,7 @@ fn build_inscription_transaction(
         channel_id: channel.channel_id,
         inscription: build_payload(channel, payload_bytes),
         parent: channel.parent,
-        signer: channel.signing_key.public_key(),
+        signer: channel.signing_key.public_key().into_unverified(),
     };
     let msg_id = op.id();
 

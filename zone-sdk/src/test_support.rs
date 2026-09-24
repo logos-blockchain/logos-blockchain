@@ -22,8 +22,7 @@ use lb_core::{
         ops::{
             OpId as _,
             channel::{
-                ChannelId, MsgId,
-                config::Keys,
+                ChannelId, MsgId, UnverifiedChannelKeys,
                 deposit::DepositOp,
                 inscribe::{Inscription, InscriptionOp},
             },
@@ -355,7 +354,12 @@ pub fn funding_config() -> FundingConfig {
 /// thresholds at 1.
 pub fn single_key_channel_state() -> ChannelState {
     ChannelState {
-        accredited_keys: Keys::from(Ed25519Key::from_bytes(&[0; 32]).public_key()).into(),
+        accredited_keys: UnverifiedChannelKeys::from(
+            Ed25519Key::from_bytes(&[0; 32])
+                .public_key()
+                .into_unverified(),
+        )
+        .into(),
         configuration_threshold: 1,
         tip_message: MsgId::root(),
         config_tip_hash: MsgId::root(),
@@ -418,7 +422,9 @@ pub fn inscribe_op(channel_id: ChannelId, parent: MsgId, payload: &[u8]) -> Insc
         channel_id,
         inscription: Inscription::new_unchecked(payload.to_vec()),
         parent,
-        signer: Ed25519Key::from_bytes(&[0u8; 32]).public_key(),
+        signer: Ed25519Key::from_bytes(&[0u8; 32])
+            .public_key()
+            .into_unverified(),
     }
 }
 

@@ -29,8 +29,8 @@ use lb_services_utils::overwatch::{
 };
 use lb_storage_service::{
     StorageService,
-    backends::rocksdb::{self, RocksBackend},
     recovery::{StorageRecoveryBackend, load_recovery_data},
+    rocksdb,
 };
 use lb_tracing_service::{Tracing, TracingSettings};
 use lb_utils::noop_service::NoService;
@@ -54,7 +54,6 @@ use tempfile::TempDir;
 type MockRecoveryBackend = StorageRecoveryBackend<
     TxMempoolState<PoolRecoveryState<MockTxId>, MempoolSettings, ()>,
     TxMempoolSettings<MempoolSettings, ()>,
-    RocksBackend,
     RuntimeServiceId,
 >;
 
@@ -76,7 +75,7 @@ type MockMempoolService = GenericTxMempoolService<
 struct MockPoolNode {
     logging: Tracing<RuntimeServiceId>,
     network: NetworkService<Mock, RuntimeServiceId>,
-    storage: StorageService<RocksBackend, RuntimeServiceId>,
+    storage: StorageService<RuntimeServiceId>,
     mockpool: MockMempoolService,
     no_service: NoService,
 }
@@ -199,15 +198,12 @@ struct FailingStorageAdapter;
 
 #[async_trait]
 impl MempoolStorageAdapter<RuntimeServiceId> for InMemoryStorageAdapter {
-    type Backend = RocksBackend;
     type Item = MockTransaction<MockMessage>;
     type Key = MockTxId;
     type Error = Infallible;
 
     fn new(
-        _storage_relay: OutboundRelay<
-            <StorageService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        _storage_relay: OutboundRelay<<StorageService<RuntimeServiceId> as ServiceData>::Message>,
     ) -> Self {
         Self::default()
     }
@@ -250,15 +246,12 @@ impl MempoolStorageAdapter<RuntimeServiceId> for InMemoryStorageAdapter {
 
 #[async_trait]
 impl MempoolStorageAdapter<RuntimeServiceId> for FailingStorageAdapter {
-    type Backend = RocksBackend;
     type Item = MockTransaction<MockMessage>;
     type Key = MockTxId;
     type Error = MempoolError;
 
     fn new(
-        _storage_relay: OutboundRelay<
-            <StorageService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        _storage_relay: OutboundRelay<<StorageService<RuntimeServiceId> as ServiceData>::Message>,
     ) -> Self {
         Self
     }

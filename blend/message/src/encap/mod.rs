@@ -83,13 +83,12 @@ mod encoded_size_tests {
 
     fn encapsulated_message(layers: usize, payload_body: &[u8]) -> EncapsulatedMessage {
         let recipient = UnsecuredEd25519Key::from_bytes(&[1u8; 32]);
-        let input = EncapsulationInput::try_new(
+        let input = EncapsulationInput::new(
             UnsecuredEd25519Key::generate_with_chacha_rng(),
             &recipient.public_key(),
             VerifiedProofOfQuota::from_bytes_unchecked([0; PROOF_OF_QUOTA_SIZE]),
             VerifiedProofOfSelection::from_bytes_unchecked([0; PROOF_OF_SELECTION_SIZE]),
-        )
-        .expect("the encapsulation input is well formed");
+        );
 
         EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             &[input],
