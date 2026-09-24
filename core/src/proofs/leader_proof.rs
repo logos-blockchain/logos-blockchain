@@ -153,13 +153,13 @@ impl Groth16LeaderProof {
     pub(crate) const fn from_parts(
         proof: lb_pol::PoLProof,
         entropy_contribution: Fr,
-        leader_key: UnverifiedEd25519PublicKey,
+        leader_key: Ed25519PublicKey,
         voucher_cm: VoucherCm,
     ) -> Self {
         Self {
             proof,
             entropy_contribution,
-            leader_key,
+            leader_key: leader_key.into_unverified(),
             voucher_cm,
         }
     }

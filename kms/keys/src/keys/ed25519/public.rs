@@ -63,6 +63,12 @@ impl UnverifiedPublicKey {
         self.0.verify_strict(message, signature.as_inner())
     }
 
+    /// Checks if the public key is weak (i.e., has small order).
+    #[must_use]
+    pub fn is_weak(&self) -> bool {
+        self.0.is_weak()
+    }
+
     #[must_use]
     pub const fn into_inner(self) -> VerifyingKey {
         self.0

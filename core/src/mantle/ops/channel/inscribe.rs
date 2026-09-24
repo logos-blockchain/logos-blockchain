@@ -127,6 +127,13 @@ impl PreverifiableOperation<StandardMode>
     type Error = Error;
 
     fn preverify(&self, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        // Even if the signer weakness is also checked as part of the `.verify()`
+        // function below, we still explicitly check it here, in case something changes
+        // within the `.verify()` implementation.
+        if self.operation().signer.is_weak() {
+            return Err(Error::InvalidSigner);
+        }
+
         // Check the signature
         self.operation()
             .signer

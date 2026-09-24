@@ -65,6 +65,8 @@ pub enum Error {
         channel_id: ChannelId,
         signer: String,
     },
+    #[error("Invalid signer")]
+    InvalidSigner,
     #[error("Invalid signature")]
     InvalidSignature,
     #[error(
