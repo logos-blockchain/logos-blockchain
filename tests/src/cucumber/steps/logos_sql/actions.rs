@@ -3,20 +3,47 @@
 use futures::future::join_all;
 use lb_core::mantle::gas::GasCost;
 use lb_zone_sdk::sequencer::FundingConfig;
-use logos_sql::{LogosSql, LogosSqlConfig, TransactionBuilder, WriterConfig};
+use logos_sql::{LogosSql, LogosSqlConfig, PublicationConfig, TransactionBuilder, WriterConfig};
 use tracing::info;
 
 use super::tables::{InstanceRow, WriteRow};
-use crate::cucumber::{
-    error::{StepError, StepResult},
-    steps::TARGET,
-    world::CucumberWorld,
+use crate::{
+    benchmarks::logos_sql::{LogosSqlBenchmark, SqlWorkload},
+    cucumber::{
+        error::{StepError, StepResult},
+        steps::TARGET,
+        world::CucumberWorld,
+    },
 };
+
+#[derive(Clone, Copy)]
+pub(super) enum InstanceMode {
+    ReadOnly,
+    Writer {
+        priority_fee_percent: u64,
+        publication: PublicationConfig,
+    },
+}
+
+impl Default for InstanceMode {
+    fn default() -> Self {
+        Self::Writer {
+            priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
+            publication: PublicationConfig::default(),
+        }
+    }
+}
+
+impl InstanceMode {
+    const fn is_read_only(self) -> bool {
+        matches!(self, Self::ReadOnly)
+    }
+}
 
 pub(super) async fn start_instances(
     world: &mut CucumberWorld,
     rows: Vec<InstanceRow>,
-    read_only: bool,
+    mode: InstanceMode,
 ) -> StepResult {
     let test_context =
         world
@@ -28,21 +55,26 @@ pub(super) async fn start_instances(
             })?;
 
     for row in rows {
-        let writer = if read_only {
-            None
-        } else {
-            let node_name = world.zone.sequencer_node_name(&row.sequencer)?.to_owned();
-            let funding_pk = world.funding_wallet(&node_name)?.public_key()?;
+        let writer = match mode {
+            InstanceMode::ReadOnly => None,
+            InstanceMode::Writer {
+                priority_fee_percent,
+                publication,
+            } => {
+                let node_name = world.zone.sequencer_node_name(&row.sequencer)?.to_owned();
+                let funding_pk = world.funding_wallet(&node_name)?.public_key()?;
 
-            Some(WriterConfig {
-                signing_key: world.zone.sequencer_signing_key(&row.sequencer)?.clone(),
-                funding: FundingConfig {
-                    funding_pk,
-                    change_pk: None,
-                    max_tx_fee: GasCost::new(u64::MAX),
-                    priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
-                },
-            })
+                Some(WriterConfig {
+                    publication,
+                    signing_key: world.zone.sequencer_signing_key(&row.sequencer)?.clone(),
+                    funding: FundingConfig {
+                        funding_pk,
+                        change_pk: None,
+                        max_tx_fee: GasCost::new(u64::MAX),
+                        priority_fee_percent,
+                    },
+                })
+            }
         };
 
         let config = LogosSqlConfig {
@@ -61,7 +93,7 @@ pub(super) async fn start_instances(
             target: TARGET,
             instance = %row.alias,
             sequencer = %row.sequencer,
-            read_only,
+            read_only = mode.is_read_only(),
             "Starting Logos SQL instance"
         );
 
@@ -131,4 +163,27 @@ pub(super) async fn execute_writes_concurrently(
     }
 
     Ok(())
+}
+
+/// Connects the benchmark to the instances and output directory of this
+/// scenario.
+pub(super) async fn benchmark(
+    world: &CucumberWorld,
+    writer_alias: &str,
+    replica_alias: &str,
+    sequencer_alias: &str,
+    workload: SqlWorkload,
+) -> StepResult {
+    let client = world.zone_node_http_client_for_sequencer(sequencer_alias)?;
+    let channel_id = world.zone.sequencer_channel_id(sequencer_alias)?;
+    let benchmark = LogosSqlBenchmark {
+        writer: world.logos_sql.instance(writer_alias)?,
+        replica: world.logos_sql.instance(replica_alias)?,
+        node: &client,
+        channel_id,
+        output_dir: &world.lifecycle.scenario_base_dir,
+        workload,
+    };
+
+    benchmark.run().await
 }

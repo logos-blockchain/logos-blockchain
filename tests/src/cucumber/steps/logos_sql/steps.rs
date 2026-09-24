@@ -1,20 +1,55 @@
 //! Cucumber entrypoints for Logos SQL scenarios.
 
+use std::{
+    num::{NonZeroU16, NonZeroUsize},
+    time::Duration,
+};
+
 use cucumber::{gherkin::Step, given, then, when};
+use logos_sql::PublicationConfig;
 
 use super::{
-    DatabaseKind, actions, assertions,
+    DatabaseKind,
+    actions::{self, InstanceMode},
+    assertions,
     tables::{instance_rows, write_rows},
 };
-use crate::cucumber::{
-    error::{StepError, StepResult},
-    world::CucumberWorld,
+use crate::{
+    benchmarks::logos_sql::SqlWorkload,
+    cucumber::{
+        error::{StepError, StepResult},
+        world::CucumberWorld,
+    },
 };
 
 #[given("I start Logos SQL instances:")]
 #[when("I start Logos SQL instances:")]
 async fn step_start_logos_sql_instances(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    actions::start_instances(world, instance_rows(step)?, false).await
+    actions::start_instances(world, instance_rows(step)?, InstanceMode::default()).await
+}
+
+#[given(
+    expr = "I start Logos SQL instances with a {int}% fee reserve, batches of {int} writes and a queue of {int} writes:"
+)]
+#[when(
+    expr = "I start Logos SQL instances with a {int}% fee reserve, batches of {int} writes and a queue of {int} writes:"
+)]
+async fn step_start_logos_sql_instances_with_batching(
+    world: &mut CucumberWorld,
+    priority_fee_percent: u64,
+    max_transactions: NonZeroU16,
+    max_pending_writes: NonZeroUsize,
+    step: &Step,
+) -> StepResult {
+    let mode = InstanceMode::Writer {
+        priority_fee_percent,
+        publication: PublicationConfig {
+            max_transactions,
+            max_pending_writes,
+        },
+    };
+
+    actions::start_instances(world, instance_rows(step)?, mode).await
 }
 
 #[given("I start read-only Logos SQL instances:")]
@@ -23,7 +58,7 @@ async fn step_start_read_only_logos_sql_instances(
     world: &mut CucumberWorld,
     step: &Step,
 ) -> StepResult {
-    actions::start_instances(world, instance_rows(step)?, true).await
+    actions::start_instances(world, instance_rows(step)?, InstanceMode::ReadOnly).await
 }
 
 #[when(expr = "I stop Logos SQL instance {string}")]
@@ -50,6 +85,36 @@ async fn step_execute_logos_sql_writes_concurrently(
     step: &Step,
 ) -> StepResult {
     actions::execute_writes_concurrently(world, write_rows(step)?).await
+}
+
+#[when(
+    expr = "I benchmark Logos SQL writer {string} and replica {string} on sequencer {string} for {int} seconds with {int} byte rows"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first mutable argument"
+)]
+async fn step_benchmark_logos_sql(
+    world: &mut CucumberWorld,
+    writer_alias: String,
+    replica_alias: String,
+    sequencer_alias: String,
+    seconds: u64,
+    payload_bytes: usize,
+) -> StepResult {
+    let workload = SqlWorkload {
+        payload_bytes,
+        measure_for: Duration::from_secs(seconds),
+    };
+
+    actions::benchmark(
+        world,
+        &writer_alias,
+        &replica_alias,
+        &sequencer_alias,
+        workload,
+    )
+    .await
 }
 
 #[then(
