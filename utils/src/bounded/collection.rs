@@ -1,5 +1,5 @@
 //! Building a bounded collection item by item, from an iterator or from a
-//! serde sequence or map.
+//! serde sequence.
 //!
 //! Every checked path that builds a [`Bounded`] collection one item at a time
 //! goes through [`collect`], so the same rules hold for all of them:
@@ -8,10 +8,9 @@
 //!   that ends before them fails where it ends.
 //! - Past `MIN` the input may end at any point, and it is stopped one item past
 //!   `MAX`.
-//! - A collection may refuse an item whose key it already holds. That is an
-//!   error, never a silent merge: merging would let `[a, a]` pass a `MIN = 2`
-//!   bound that it does not meet, and would let two different inputs produce
-//!   the same value.
+//! - A collection may refuse an item it already holds. That is an error, never
+//!   a silent merge: merging would let `[a, a]` pass a `MIN = 2` bound that it
+//!   does not meet, and would let two different inputs produce the same value.
 //! - A declared length is trusted for pre-allocation only up to the budget
 //!   every bounded collection shares (see [`allocation_size_for_hint`]).
 //!
@@ -23,22 +22,21 @@ use core::{convert::identity, fmt, marker::PhantomData};
 
 use serde::{
     Deserialize,
-    de::{Error as _, MapAccess, SeqAccess, Visitor},
+    de::{Error as _, SeqAccess, Visitor},
 };
 
 use crate::bounded::{Bounded, BoundedError, allocation_size_for_hint};
 
 /// A collection a bounded type can be built from, one item at a time.
 pub trait BoundedCollection: Sized {
-    /// What one insertion adds: an element for a vector or a set, a
-    /// `(key, value)` pair for a map.
+    /// What one insertion adds.
     type Item;
 
     fn with_capacity(capacity: usize) -> Self;
 
-    /// Adds `item`, unless the collection already holds its key, in which case
-    /// the collection is left untouched and `false` is returned. A vector
-    /// accepts every item.
+    /// Adds `item`, unless the collection already holds it, in which case the
+    /// collection is left untouched and `false` is returned. A vector accepts
+    /// every item.
     fn add(&mut self, item: Self::Item) -> bool;
 }
 
@@ -96,8 +94,8 @@ where
     collect(Some(items.size_hint().0), || Ok(items.next()), identity)
 }
 
-/// Adds the item at input position `index`, refusing it past `MAX` or when its
-/// key is already held.
+/// Adds the item at input position `index`, refusing it past `MAX` or when it
+/// is already held.
 fn try_add<Collection, const MAX: usize>(
     collection: &mut Collection,
     item: Collection::Item,
@@ -136,7 +134,7 @@ where
     })
 }
 
-/// Deserializes a sequence into a bounded vector or set.
+/// Deserializes a sequence into a bounded vector or ordered set.
 pub struct SeqVisitor<Collection, const MIN: usize, const MAX: usize>(PhantomData<Collection>);
 
 impl<Collection, const MIN: usize, const MAX: usize> SeqVisitor<Collection, MIN, MAX> {
@@ -163,41 +161,6 @@ where
         let hint = sequence.size_hint();
         check_declared_len::<Collection, A::Error, MIN, MAX>(hint)?;
         collect(hint, || sequence.next_element(), A::Error::custom)
-    }
-}
-
-/// Deserializes a map into a bounded map.
-pub struct MapVisitor<Collection, const MIN: usize, const MAX: usize>(PhantomData<Collection>);
-
-impl<Collection, const MIN: usize, const MAX: usize> MapVisitor<Collection, MIN, MAX> {
-    pub const fn new() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<'de, Collection, K, V, const MIN: usize, const MAX: usize> Visitor<'de>
-    for MapVisitor<Collection, MIN, MAX>
-where
-    Collection: BoundedCollection<Item = (K, V)>,
-    K: Deserialize<'de>,
-    V: Deserialize<'de>,
-{
-    type Value = Bounded<Collection, MIN, MAX>;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "a map of between {MIN} and {MAX} entries with distinct keys"
-        )
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let hint = map.size_hint();
-        check_declared_len::<Collection, A::Error, MIN, MAX>(hint)?;
-        collect(hint, || map.next_entry(), A::Error::custom)
     }
 }
 

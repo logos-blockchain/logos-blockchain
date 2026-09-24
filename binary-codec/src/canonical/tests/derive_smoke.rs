@@ -2,9 +2,9 @@
 //! `::lb_binary_codec::canonical::` paths emitted by the derive resolve via
 //! the umbrella serialization crate.
 
-use lb_utils::bounded::{BoundedMap, BoundedSet};
+use lb_utils::bounded::BoundedOrderedSet;
 
-use crate::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, codec_fixtures};
+use crate::canonical::{BinaryCodec, BinaryDecode as _, BinaryEncode as _, codec_fixtures};
 
 #[derive(Debug, PartialEq, Eq, BinaryCodec)]
 struct Named {
@@ -43,44 +43,18 @@ fn derived_tuple_struct_round_trips() {
     assert_eq!(decoded, value);
 }
 
-/// Keyed collection fields encode like any other field, in declaration order,
-/// each under its own rules: the set sorts `{7, 0}` to `00 07`, and the map
-/// sorts its entries by encoded key, `3` before `9`.
-#[derive(Debug, PartialEq, Eq)]
-struct WithKeyed {
-    tags: BoundedSet<u8, 0, 4>,
-    slots: BoundedMap<u8, u16, 1, 4>,
-}
-
-impl BinaryEncode for WithKeyed {
-    fn encoded_length(&self) -> usize {
-        self.tags.encoded_length() + self.slots.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.tags.encode_into(out);
-        self.slots.encode_into(out);
-    }
-}
-
-impl BinaryDecode for WithKeyed {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        context: &Self::Context,
-    ) -> Result<(&'input [u8], Self), crate::canonical::DecodeError> {
-        let (rest, tags) = <BoundedSet<u8, 0, 4> as BinaryDecode>::decode(input, context)?;
-        let (rest, slots) = <BoundedMap<u8, u16, 1, 4> as BinaryDecode>::decode(rest, &((), ()))?;
-
-        Ok((rest, Self { tags, slots }))
-    }
+/// An ordered set field derives like any other field: it encodes in its own
+/// order, `7` before `0`, between its neighbours.
+#[derive(Debug, PartialEq, Eq, BinaryCodec)]
+struct WithOrderedSet {
+    tags: BoundedOrderedSet<u8, 0, 4>,
+    count: u16,
 }
 
 codec_fixtures!(
-    WithKeyed,
+    WithOrderedSet,
     Self {
-        tags: BoundedSet::try_from_iter([7, 0]).unwrap(),
-        slots: BoundedMap::try_from_iter([(9, 0x0201), (3, 0x0403)]).unwrap(),
-    } => "02000702030304090102"
+        tags: BoundedOrderedSet::try_from_iter([7, 0]).unwrap(),
+        count: 0x0201,
+    } => "0207000102"
 );

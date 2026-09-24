@@ -11,12 +11,10 @@
 
 mod array;
 mod boolean;
-mod bounded_map;
-mod bounded_set;
+mod bounded_ordered_set;
 mod bounded_vec;
 mod error;
 mod fixtures;
-mod keyed;
 mod length_prefix;
 mod numbers;
 

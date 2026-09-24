@@ -17,6 +17,7 @@ async-trait    = { workspace = true }
 const-hex      = { features = ["alloc"], workspace = true }
 futures        = { optional = true, workspace = true }
 humantime      = { optional = true, workspace = true }
+indexmap       = { features = ["serde", "std"], workspace = true }
 lb-log-targets = { workspace = true }
 multiaddr      = { workspace = true }
 overwatch      = { workspace = true }
