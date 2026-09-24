@@ -25,9 +25,7 @@ use thiserror::Error;
 
 pub mod multiaddr;
 pub mod ordered_set;
-pub use ordered_set::{
-    BoundedOrderedSet, NonEmptyBoundedOrderedSet, OrderedSet, UpperBoundedOrderedSet,
-};
+pub use ordered_set::{BoundedOrderedSet, NonEmptyBoundedOrderedSet, UpperBoundedOrderedSet};
 pub mod string;
 pub use string::BoundedString;
 pub mod vec;

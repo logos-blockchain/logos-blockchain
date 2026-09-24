@@ -1,140 +1,23 @@
 use core::{
-    cmp::Ordering,
-    fmt::{self, Debug, Formatter},
-    hash::{BuildHasher, Hash, Hasher},
+    hash::{BuildHasher, Hash},
     ops::Deref,
 };
 use std::collections::hash_map::RandomState;
 
 use indexmap::{IndexSet, set};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer};
 
-use crate::bounded::{
-    Bounded, BoundedError, BoundedLen,
-    collection::{self, BoundedCollection, SeqVisitor},
+use crate::{
+    bounded::{
+        Bounded, BoundedError, BoundedLen,
+        collection::{self, BoundedCollection, SeqVisitor},
+    },
+    ordered_set::OrderedSet,
 };
-
-/// A set that keeps its elements in the order they were inserted and compares
-/// as the sequence it holds.
-///
-/// Membership is a set's: each element appears at most once, and lookup takes
-/// constant time. Everything else is a vector's. Iteration, indexing,
-/// serialization and the canonical encoding all follow the insertion order,
-/// and so do equality, hashing and ordering. Two ordered sets are equal exactly
-/// when they hold the same elements in the same order, which is exactly when
-/// they encode to the same bytes. That is what lets a receiver rebuild the
-/// value a sender built, and no other. The wrapped [`IndexSet`] alone compares
-/// as a set, ignoring the order that its encoding keeps, which is why it is
-/// not used directly.
-///
-/// Read access goes through `Deref` to the [`IndexSet`].
-#[derive(Clone)]
-pub struct OrderedSet<T, S = RandomState>(IndexSet<T, S>);
-
-impl<T, S> OrderedSet<T, S> {
-    /// Borrow the wrapped set.
-    #[must_use]
-    pub const fn as_index_set(&self) -> &IndexSet<T, S> {
-        &self.0
-    }
-
-    /// Consume the wrapper and return the wrapped set.
-    #[must_use]
-    pub fn into_index_set(self) -> IndexSet<T, S> {
-        self.0
-    }
-}
-
-impl<T, S> Debug for OrderedSet<T, S>
-where
-    T: Debug,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        // Printed as the sequence it compares as, not as a set.
-        self.0.as_slice().fmt(f)
-    }
-}
-
-impl<T, S> PartialEq for OrderedSet<T, S>
-where
-    T: PartialEq,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.0.as_slice() == other.0.as_slice()
-    }
-}
-
-impl<T, S> Eq for OrderedSet<T, S> where T: Eq {}
-
-impl<T, S> Hash for OrderedSet<T, S>
-where
-    T: Hash,
-{
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.as_slice().hash(state);
-    }
-}
-
-impl<T, S> PartialOrd for OrderedSet<T, S>
-where
-    T: PartialOrd,
-{
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.0.as_slice().partial_cmp(other.0.as_slice())
-    }
-}
-
-impl<T, S> Ord for OrderedSet<T, S>
-where
-    T: Ord,
-{
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.as_slice().cmp(other.0.as_slice())
-    }
-}
-
-impl<T, S> Default for OrderedSet<T, S>
-where
-    S: Default,
-{
-    fn default() -> Self {
-        Self(IndexSet::default())
-    }
-}
-
-impl<T, S> Deref for OrderedSet<T, S> {
-    type Target = IndexSet<T, S>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T, S> From<IndexSet<T, S>> for OrderedSet<T, S> {
-    fn from(set: IndexSet<T, S>) -> Self {
-        Self(set)
-    }
-}
-
-impl<T, S> From<OrderedSet<T, S>> for IndexSet<T, S> {
-    fn from(set: OrderedSet<T, S>) -> Self {
-        set.0
-    }
-}
-
-// Transparent, like `Bounded` itself: a plain sequence in insertion order.
-impl<T, S> Serialize for OrderedSet<T, S>
-where
-    IndexSet<T, S>: Serialize,
-{
-    fn serialize<Ser: Serializer>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error> {
-        self.0.serialize(serializer)
-    }
-}
 
 impl<T, S> BoundedLen for OrderedSet<T, S> {
     fn bounded_len(&self) -> usize {
-        self.0.len()
+        self.len()
     }
 }
 
@@ -146,11 +29,11 @@ where
     type Item = T;
 
     fn with_capacity(capacity: usize) -> Self {
-        Self(IndexSet::with_capacity_and_hasher(capacity, S::default()))
+        Self::from(IndexSet::with_capacity_and_hasher(capacity, S::default()))
     }
 
     fn add(&mut self, item: T) -> bool {
-        self.0.insert(item)
+        self.insert(item)
     }
 }
 
@@ -232,7 +115,7 @@ where
                 max: MAX,
             });
         }
-        if self.0.0.insert(value) {
+        if self.0.insert(value) {
             Ok(())
         } else {
             Err(BoundedError::DuplicateItem { index: len })
@@ -247,7 +130,7 @@ where
         if self.is_empty() || self.len() - 1 < MIN {
             return Ok(None);
         }
-        Ok(self.0.0.pop())
+        Ok(self.0.pop())
     }
 
     /// Removes and returns the element at `index` if the minimum length is
@@ -270,7 +153,6 @@ where
             });
         }
         Ok(self
-            .0
             .0
             .shift_remove_index(index)
             .expect("index was checked against the length"))
@@ -312,7 +194,7 @@ impl<T, S, const MIN: usize, const MAX: usize> From<BoundedOrderedSet<T, MIN, MA
     for IndexSet<T, S>
 {
     fn from(value: BoundedOrderedSet<T, MIN, MAX, S>) -> Self {
-        value.into_inner().into_index_set()
+        value.into_inner().into()
     }
 }
 
@@ -323,10 +205,10 @@ impl<T, S, const MIN: usize, const MAX: usize> From<BoundedOrderedSet<T, MIN, MA
 }
 
 impl<T, S, const MIN: usize, const MAX: usize> Deref for BoundedOrderedSet<T, MIN, MAX, S> {
-    type Target = IndexSet<T, S>;
+    type Target = OrderedSet<T, S>;
 
     fn deref(&self) -> &Self::Target {
-        self.as_inner().as_index_set()
+        self.as_inner()
     }
 }
 
@@ -346,7 +228,7 @@ impl<T, S, const MIN: usize, const MAX: usize> IntoIterator for BoundedOrderedSe
     type IntoIter = set::IntoIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.into_inner().into_index_set().into_iter()
+        self.into_inner().into_iter()
     }
 }
 
@@ -530,10 +412,7 @@ mod tests {
         assert_ne!(forward, backward);
         assert!(forward < backward);
         // The wrapped `IndexSet` compares as a set and still calls them equal.
-        assert_eq!(
-            forward.as_inner().as_index_set(),
-            backward.as_inner().as_index_set()
-        );
+        assert_eq!(**forward.as_inner(), **backward.as_inner());
 
         let state = RandomState::new();
         assert_eq!(state.hash_one(&forward), state.hash_one(&same));
