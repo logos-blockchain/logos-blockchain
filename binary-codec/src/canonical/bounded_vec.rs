@@ -3,76 +3,10 @@ use std::borrow::Cow;
 use lb_utils::bounded::BoundedVec;
 
 use super::{
-    BinaryDecode, BinaryEncode, CodecExamples, CodecFixture, CodecFixtures, DecodeError, sealed,
+    BinaryDecode, BinaryEncode, CodecExamples, CodecFixture, CodecFixtures, DecodeError,
+    length_prefix::{decode_bounded_length, encode_length_prefix_into, length_prefix_len},
+    sealed,
 };
-
-#[derive(Debug, Clone, Copy)]
-enum NOfBytes {
-    One,
-    Two,
-    Four,
-    Eight,
-}
-
-const fn length_prefix_width<const MAX_LENGTH: usize>() -> NOfBytes {
-    if MAX_LENGTH <= u8::MAX as usize {
-        NOfBytes::One
-    } else if MAX_LENGTH <= u16::MAX as usize {
-        NOfBytes::Two
-    } else if MAX_LENGTH <= u32::MAX as usize {
-        NOfBytes::Four
-    } else {
-        NOfBytes::Eight
-    }
-}
-
-/// Byte-width of the length prefix for a `MAX_LENGTH`-bounded collection.
-const fn length_prefix_len<const MAX_LENGTH: usize>() -> usize {
-    match length_prefix_width::<MAX_LENGTH>() {
-        NOfBytes::One => 1,
-        NOfBytes::Two => 2,
-        NOfBytes::Four => 4,
-        NOfBytes::Eight => 8,
-    }
-}
-
-fn encode_length_prefix_into<const MAX_LENGTH: usize>(actual_length: usize, out: &mut Vec<u8>) {
-    match length_prefix_width::<MAX_LENGTH>() {
-        NOfBytes::One => u8::try_from(actual_length)
-            .expect("Actual length should be smaller than u8 MAX_LENGTH")
-            .encode_into(out),
-        NOfBytes::Two => u16::try_from(actual_length)
-            .expect("Actual length should be smaller than u16 MAX_LENGTH")
-            .encode_into(out),
-        NOfBytes::Four => u32::try_from(actual_length)
-            .expect("Actual length should be smaller than u32 MAX_LENGTH")
-            .encode_into(out),
-        NOfBytes::Eight => u64::try_from(actual_length)
-            .expect("Actual length should be smaller than u64 MAX_LENGTH")
-            .encode_into(out),
-    }
-}
-
-fn decode_length_prefix<const MAX_LENGTH: usize>(
-    input: &[u8],
-) -> Result<(&[u8], usize), DecodeError> {
-    match length_prefix_width::<MAX_LENGTH>() {
-        NOfBytes::One => u8::decode(input, &()).map(|(rest, len)| (rest, usize::from(len))),
-        NOfBytes::Two => u16::decode(input, &()).map(|(rest, len)| (rest, usize::from(len))),
-        NOfBytes::Four => u32::decode(input, &()).map(|(rest, len)| {
-            (
-                rest,
-                len.try_into().expect("usize should be able to hold u32"),
-            )
-        }),
-        NOfBytes::Eight => u64::decode(input, &()).map(|(rest, len)| {
-            (
-                rest,
-                len.try_into().expect("usize should be able to hold u64"),
-            )
-        }),
-    }
-}
 
 /// Largest `MAX` for which an element type that decodes without consuming input
 /// is still supported.
@@ -111,13 +45,9 @@ where
         input: &'input [u8],
         context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (mut rest, len) = decode_length_prefix::<MAX>(input)?;
-
-        // Check the length before decoding, so an oversized prefix never causes
-        // us to decode a too-large payload.
-        if len < MIN || len > MAX {
-            return Err(DecodeError::length_out_of_bounds::<Self>(len, MIN, MAX));
-        }
+        // The length is checked before decoding, so an oversized prefix never
+        // causes us to decode a too-large payload.
+        let (mut rest, len) = decode_bounded_length::<Self, MIN, MAX>(input)?;
 
         let mut items = Vec::new();
 
@@ -430,80 +360,11 @@ mod tests {
 
 #[cfg(test)]
 mod allocation_tests {
-    use std::{
-        alloc::{GlobalAlloc, Layout, System},
-        cell::Cell,
-    };
-
     use lb_utils::bounded::BoundedVec;
 
-    use crate::canonical::{BinaryDecodeExt as _, DecodeError};
-
-    /// Runs `f` and reports how many bytes it allocated on this thread.
-    fn bytes_allocated_by<F, R>(f: F) -> (R, usize)
-    where
-        F: FnOnce() -> R,
-    {
-        let before = ALLOCATED_BYTES.get();
-        let result = f();
-        (result, ALLOCATED_BYTES.get() - before)
-    }
-
-    /// Forwards to the system allocator, tallying every byte handed out. Growth
-    /// is counted too, so a `Vec` that reallocates as it fills is not free.
-    ///
-    /// Installed for the whole test binary — every test in this crate allocates
-    /// through it — but it only adds a counter bump on top of `System`.
-    struct CountingAllocator;
-
-    // SAFETY: every method forwards its arguments unchanged to `System`, which
-    // upholds the `GlobalAlloc` contract. The only added work is a thread-local
-    // counter bump, which allocates nothing and so cannot re-enter the
-    // allocator.
-    unsafe impl GlobalAlloc for CountingAllocator {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            record_allocation(layout.size());
-            // SAFETY: `layout` is forwarded untouched from our caller.
-            unsafe { System.alloc(layout) }
-        }
-
-        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-            record_allocation(layout.size());
-            // SAFETY: `layout` is forwarded untouched from our caller.
-            unsafe { System.alloc_zeroed(layout) }
-        }
-
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-            // SAFETY: `ptr` was handed out by `System` under `layout`, since
-            // every allocating method here delegates to it.
-            unsafe { System.dealloc(ptr, layout) }
-        }
-
-        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-            record_allocation(new_size.saturating_sub(layout.size()));
-            // SAFETY: as `dealloc`; `new_size` is forwarded untouched.
-            unsafe { System.realloc(ptr, layout, new_size) }
-        }
-    }
-
-    // The tally is thread-local, not a global counter: the harness runs the
-    // tests in this binary in parallel, each on its own thread, so a global one
-    // would attribute their allocations to whoever happens to be measuring.
-    //
-    // `const`-initialised so reading it neither allocates nor registers a
-    // destructor — either would re-enter the allocator below.
-    thread_local! {
-        static ALLOCATED_BYTES: Cell<usize> = const { Cell::new(0) };
-    }
-
-    fn record_allocation(bytes: usize) {
-        // `try_with` because TLS is gone while a thread is being torn down, and
-        // an allocation at that point is not part of any measurement anyway.
-        let _ = ALLOCATED_BYTES.try_with(|counter| counter.set(counter.get() + bytes));
-    }
-
-    #[global_allocator]
-    static ALLOCATOR: CountingAllocator = CountingAllocator;
+    use crate::canonical::{
+        BinaryDecodeExt as _, DecodeError, tests::allocation::bytes_allocated_by,
+    };
 
     /// A declared length of `u16::MAX` backed by a single item must cost us
     /// roughly one item, not `u16::MAX` of them. Without the cap the decoder

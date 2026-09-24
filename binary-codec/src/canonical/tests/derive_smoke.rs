@@ -2,6 +2,8 @@
 //! `::lb_binary_codec::canonical::` paths emitted by the derive resolve via
 //! the umbrella serialization crate.
 
+use lb_utils::bounded::{BoundedIndexMap, BoundedSet};
+
 use crate::canonical::{BinaryCodec, BinaryDecodeExt as _, BinaryEncode as _, codec_fixtures};
 
 #[derive(Debug, PartialEq, Eq, BinaryCodec)]
@@ -40,3 +42,20 @@ fn derived_tuple_struct_round_trips() {
     assert!(rest.is_empty());
     assert_eq!(decoded, value);
 }
+
+/// Keyed collection fields derive like any other field: each encodes in
+/// declaration order under its own rules. The set sorts `{7, 0}` to `00 07`;
+/// the index map keeps `9` before `3`.
+#[derive(Debug, PartialEq, Eq, BinaryCodec)]
+struct WithKeyed {
+    tags: BoundedSet<u8, 0, 4>,
+    slots: BoundedIndexMap<u8, u16, 1, 4>,
+}
+
+codec_fixtures!(
+    WithKeyed,
+    Self {
+        tags: BoundedSet::try_from_iter([7, 0]).unwrap(),
+        slots: BoundedIndexMap::try_from_iter([(9, 0x0201), (3, 0x0403)]).unwrap(),
+    } => "02000702090102030304"
+);

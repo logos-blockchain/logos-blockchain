@@ -185,6 +185,18 @@ where
             expected_value = fixture.value,
         );
 
+        // Re-encode: the decoded value encodes back to exactly the pinned
+        // bytes. `==` can be coarser than the encoding (an index map compares
+        // as a map, ignoring order), so the check above cannot see a decoder
+        // that reorders or drops what `==` ignores. This one can.
+        let reencoded = decoded.encode();
+        assert!(
+            &*reencoded == expected,
+            "{type_name}: encode(decode(bytes)) differs from the well-known bytes\n  actual   (hex): {actual}\n  expected (hex): {expected_hex}",
+            actual = hex::encode(&*reencoded),
+            expected_hex = hex::encode(expected),
+        );
+
         // Round-trip: encode then decode is the identity (independent of the
         // pinned bytes, so it catches encode/decode asymmetry directly).
         let (rest, round_tripped) = T::decode(&encoded, &context)

@@ -69,6 +69,9 @@ const fn map_notes_bounded_error(error: &BoundedError) -> Error {
         BoundedError::CapacityOutOfBounds { .. } => {
             panic!("CapacityOutOfBounds should not occur here")
         }
+        BoundedError::DuplicateItem { .. } => {
+            panic!("DuplicateItem should not occur here")
+        }
     }
 }
 
@@ -846,6 +849,9 @@ where
             }
             BoundedError::IndexOutOfBounds { .. } => {
                 unreachable!("construction cannot produce an index error")
+            }
+            BoundedError::DuplicateItem { .. } => {
+                unreachable!("a vector does not reject duplicates")
             }
         }
     })
