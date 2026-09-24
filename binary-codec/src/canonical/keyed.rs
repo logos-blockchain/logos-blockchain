@@ -24,9 +24,11 @@ use super::{CodecExamples, CodecFixture, DecodeError};
 /// each item's encoded key.
 ///
 /// `encode_item` appends one item's full encoding (key first) and returns the
-/// length of its key.
-pub(super) fn encode_items_sorted_by_key<Items, EncodeFn>(
+/// length of its key. `items_encoded_length` is the total length of those
+/// encodings, which sizes the scratch buffer they are sorted in.
+pub(super) fn encode_items_sorted_by_key<Collection, Items, EncodeFn>(
     items: Items,
+    items_encoded_length: usize,
     out: &mut Vec<u8>,
     mut encode_item: EncodeFn,
 ) where
@@ -38,23 +40,30 @@ pub(super) fn encode_items_sorted_by_key<Items, EncodeFn>(
         item: Range<usize>,
     }
 
-    let mut encoded_keys_buffer = Vec::new();
+    let mut encoded_items = Vec::with_capacity(items_encoded_length);
     let mut entry_ranges = Vec::with_capacity(items.len());
     for item in items {
-        let start = encoded_keys_buffer.len();
-        let key_len = encode_item(item, &mut encoded_keys_buffer);
+        let start = encoded_items.len();
+        let key_len = encode_item(item, &mut encoded_items);
         entry_ranges.push(EntryRange {
             key: start..start + key_len,
-            item: start..encoded_keys_buffer.len(),
+            item: start..encoded_items.len(),
         });
     }
 
-    // Keys are distinct, so their encodings are too, and the order is total.
-    entry_ranges.sort_unstable_by(|a, b| {
-        encoded_keys_buffer[a.key.clone()].cmp(&encoded_keys_buffer[b.key.clone()])
-    });
+    let key_bytes = |entry: &EntryRange| &encoded_items[entry.key.clone()];
+    entry_ranges.sort_unstable_by(|a, b| key_bytes(a).cmp(key_bytes(b)));
+    // Distinct keys must encode to distinct bytes, or the decoder rejects the
+    // result as a duplicate. That is a contract violation of the key type's
+    // codec, not something input can cause.
+    debug_assert!(
+        entry_ranges.is_sorted_by(|a, b| key_bytes(a) < key_bytes(b)),
+        "{}: two distinct keys encode to the same bytes, so the encoding cannot be decoded; \
+         the key type's encoding is not injective",
+        type_name::<Collection>(),
+    );
     for entry in entry_ranges {
-        out.extend_from_slice(&encoded_keys_buffer[entry.item]);
+        out.extend_from_slice(&encoded_items[entry.item]);
     }
 }
 
@@ -76,9 +85,26 @@ where
     }
 }
 
-/// The bytes a decoder consumed: the part of `before` that is not `after`.
-pub(super) fn consumed<'input>(before: &'input [u8], after: &[u8]) -> &'input [u8] {
-    &before[..before.len() - after.len()]
+/// The bytes an element decoder consumed: the part of `before` that is not
+/// `after`, the remainder the decoder returned.
+///
+/// A decoder that honours the contract returns a suffix of its input, so
+/// `after` is never longer than `before`. One that does not is reported as an
+/// error naming the element type `T`, rather than a panic.
+pub(super) fn consumed<'input, T>(
+    before: &'input [u8],
+    after: &[u8],
+) -> Result<&'input [u8], DecodeError>
+where
+    T: ?Sized,
+{
+    let consumed_len = before.len().checked_sub(after.len()).ok_or_else(|| {
+        DecodeError::custom(format!(
+            "{} returned more input than it was given",
+            type_name::<T>()
+        ))
+    })?;
+    Ok(&before[..consumed_len])
 }
 
 /// Up to `MAX` fixtures of `T` with pairwise distinct bytes, in canonical

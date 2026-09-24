@@ -38,13 +38,20 @@ where
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         encode_length_prefix_into::<MAX>(self.len(), out);
-        encode_items_sorted_by_key(self.iter(), out, |(key, value), buffer| {
-            let start = buffer.len();
-            key.encode_into(buffer);
-            let key_len = buffer.len() - start;
-            value.encode_into(buffer);
-            key_len
-        });
+        // The prefix is written, so the rest of `encoded_length` is the entries'.
+        let encoded_entries_total_length = self.encoded_length() - length_prefix_len::<MAX>();
+        encode_items_sorted_by_key::<Self, _, _>(
+            self.iter(),
+            encoded_entries_total_length,
+            out,
+            |(key, value), buffer| {
+                let start = buffer.len();
+                key.encode_into(buffer);
+                let key_len = buffer.len() - start;
+                value.encode_into(buffer);
+                key_len
+            },
+        );
     }
 }
 
@@ -66,7 +73,7 @@ where
         let mut previous_key = None;
         for index in 0..len {
             let (after_key, key) = K::decode(rest, &())?;
-            let encoded_key = consumed(rest, after_key);
+            let encoded_key = consumed::<K>(rest, after_key)?;
             // Checked before the value is decoded, so a bad key costs nothing
             // more.
             check_canonical_order::<Self>(previous_key, encoded_key, index)?;

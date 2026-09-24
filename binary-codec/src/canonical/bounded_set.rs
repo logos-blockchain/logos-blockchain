@@ -33,13 +33,20 @@ where
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         encode_length_prefix_into::<MAX>(self.len(), out);
+        // The prefix is written, so the rest of `encoded_length` is the elements'.
+        let encoded_elements_total_length = self.encoded_length() - length_prefix_len::<MAX>();
         // To ensure encoding is independent of iteration order, we sort items by
         // encoded key.
-        encode_items_sorted_by_key(self.iter(), out, |element, buffer| {
-            let start = buffer.len();
-            element.encode_into(buffer);
-            buffer.len() - start
-        });
+        encode_items_sorted_by_key::<Self, _, _>(
+            self.iter(),
+            encoded_elements_total_length,
+            out,
+            |element, buffer| {
+                let start = buffer.len();
+                element.encode_into(buffer);
+                buffer.len() - start
+            },
+        );
     }
 }
 
@@ -60,7 +67,7 @@ where
         let mut previous = None;
         for index in 0..len {
             let (next, element) = T::decode(rest, context)?;
-            let encoded = consumed(rest, next);
+            let encoded = consumed::<T>(rest, next)?;
             check_canonical_order::<Self>(previous, encoded, index)?;
             // Distinct bytes almost always mean distinct elements, but `Eq` is
             // the set's own notion of a duplicate.
