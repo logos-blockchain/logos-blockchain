@@ -4,6 +4,11 @@
 //! within the reward window, runs a concurrent search for a "winning" ticket:
 //! a random key whose derived puzzle ticket meets the block's difficulty
 //! target. Winning tickets are surfaced through the [`TicketGenerator`] stream.
+//!
+//! A search is bounded by what the reward pool can still pay: it ends once it
+//! has found as many winners as the pool funds, net of the tickets the node
+//! already holds (see [`block_ticket_limit`]), so a node never mines tickets it
+//! could not claim.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -21,7 +26,10 @@ use lb_chain_service::{
 use lb_core::{
     crypto::ZkHash,
     header::HeaderId,
-    mantle::ops::pow::{ClaimPowRewardOp, PowTarget},
+    mantle::{
+        Value,
+        ops::pow::{ClaimPowRewardOp, PowTarget},
+    },
 };
 use lb_key_management_system_keys::keys::UnsecuredZkKey;
 use lb_ledger::LedgerState;
@@ -89,12 +97,19 @@ pub struct TicketGenerator {
     /// keeping that work off Tokio's runtime threads. Cloned into every active
     /// per-block search so the searches share the same threads.
     pool: Arc<ThreadPool>,
-    /// Maximum number of ticket-search attempts kept in flight concurrently for
-    /// each block (the `buffer_unordered` degree of every per-block search).
+    /// Number of ticket-search attempts kept in flight concurrently for each
+    /// block (the `buffer_unordered` degree of every per-block search). This
+    /// is a concurrency degree, not a cap on the winners a search yields: that
+    /// is set by [`block_ticket_limit`].
     max_tickets_per_block: NonZeroUsize,
     /// Acceptance window, in slots: a block older than this leaves the reward
     /// window and its search is pruned. Matches the consensus `slot_window`.
     slot_window: NonZeroU64,
+    /// Winning tickets the node already holds but whose reward has not been
+    /// paid out of the pool yet (ready plus pending claims). They count against
+    /// the pool when sizing a new block's search. Kept current by the consumer
+    /// through [`TicketGenerator::set_outstanding_tickets`].
+    outstanding_tickets: usize,
 }
 
 impl TicketGenerator {
@@ -134,8 +149,35 @@ impl TicketGenerator {
             pool,
             max_tickets_per_block,
             slot_window,
+            outstanding_tickets: 0,
         })
     }
+
+    /// Records how many winning tickets the node currently holds unpaid (ready
+    /// plus pending claims), so searches started from now on only look for the
+    /// winners the reward pool can still fund on top of them.
+    ///
+    /// Searches already running keep the limit they were started with.
+    pub const fn set_outstanding_tickets(&mut self, outstanding: usize) {
+        self.outstanding_tickets = outstanding;
+    }
+}
+
+/// Number of winning tickets worth searching for on a block: the claims its
+/// `reward_pool` can still pay at `epoch_reward` per claim, less the
+/// `outstanding` tickets already held against that pool.
+///
+/// Returns `0` when there is nothing left to earn, including when rewards are
+/// disabled (`epoch_reward == 0`); no search should be started then. Any
+/// further per-block cap (e.g. a consensus limit on claims per block) is meant
+/// to be `min()`ed into the result.
+fn block_ticket_limit(reward_pool: Value, epoch_reward: Value, outstanding: usize) -> usize {
+    let Some(claims_affordable) = reward_pool.checked_div(epoch_reward) else {
+        return 0;
+    };
+    usize::try_from(claims_affordable)
+        .unwrap_or(usize::MAX)
+        .saturating_sub(outstanding)
 }
 
 /// Enriches a raw processed-block event with its epoch and ledger state.
@@ -173,24 +215,23 @@ where
     }
 }
 
-/// Builds an unbounded stream that searches for winning tickets for a single
-/// block.
+/// Builds a stream that searches for winning tickets for a single block.
 ///
 /// Up to `max_tickets_per_block` attempts run concurrently; each draws a fresh
-/// random key and checks the resulting ticket against the block's difficulty
-/// target. The stream yields every winning `(secret key, claim)` pair it finds
-/// and never terminates on its own — it is dropped once the block leaves the
+/// random key and checks the resulting ticket against `difficulty`. The stream
+/// yields winning `(secret key, claim)` pairs and ends after `max_winners` of
+/// them, dropping any attempt still in flight so the search pool goes idle. If
+/// the limit is not reached first, it is dropped once the block leaves the
 /// reward window (see [`prune_out_of_window_streams`]).
 fn new_block_search_stream(
     block_header: HeaderId,
     block_slot: Slot,
-    epoch_state: &EpochState,
-    ledger_state: &LedgerState,
+    epoch_nonce: ZkHash,
+    difficulty: PowTarget,
+    max_winners: NonZeroUsize,
     pool: Arc<ThreadPool>,
     max_tickets_per_block: NonZeroUsize,
 ) -> WinnerTicketStream {
-    let epoch_nonce = epoch_state.nonce;
-    let difficulty = ledger_state.mantle_ledger().pow.reward_difficulty();
     #[expect(
         rustc::closure_returning_async_block,
         reason = "`repeat_with` takes a FnMut not an async closure"
@@ -199,7 +240,8 @@ fn new_block_search_stream(
         search_winner_ticket(block_header, epoch_nonce, difficulty, Arc::clone(&pool))
     });
     let results = stream::iter(tasks).buffer_unordered(max_tickets_per_block.get());
-    let winners = tokio_stream::StreamExt::filter_map(results, |maybe_winner| maybe_winner);
+    let winners = tokio_stream::StreamExt::filter_map(results, |maybe_winner| maybe_winner)
+        .take(max_winners.get());
     // Tag every winner with the block's slot so the consumer can track the
     // reward window.
     Box::pin(winners.map(move |ticket| (block_slot, ticket)))
@@ -302,13 +344,23 @@ impl Stream for TicketGenerator {
                     this.tip = tip;
                     // compute which slot is old enough
                     let frontier_slot = tip_slot.saturating_sub(Slot::new(this.slot_window.get()));
-                    // trigger new stream if its new enough
-                    if frontier_slot < block_slot {
+                    // trigger new stream if its new enough and the pool can
+                    // still pay for what it would find
+                    let pow = &ledger_state.mantle_ledger().pow;
+                    let max_winners = NonZeroUsize::new(block_ticket_limit(
+                        pow.reward_pool(),
+                        pow.epoch_reward(),
+                        this.outstanding_tickets,
+                    ));
+                    if let Some(max_winners) = max_winners
+                        && frontier_slot < block_slot
+                    {
                         let stream = new_block_search_stream(
                             block_id,
                             block_slot,
-                            &epoch_state,
-                            &ledger_state,
+                            epoch_state.nonce,
+                            pow.reward_difficulty(),
+                            max_winners,
                             Arc::clone(&this.pool),
                             this.max_tickets_per_block,
                         );
@@ -352,7 +404,7 @@ mod tests {
         task::{Context, Poll},
     };
 
-    use futures::{Stream, stream, task::noop_waker_ref};
+    use futures::{Stream, StreamExt as _, stream, task::noop_waker_ref};
     use lb_chain_service::{EpochState, ProcessedBlockEvent, Slot};
     use lb_core::{header::HeaderId, mantle::ops::pow::ClaimPowRewardOp};
     use lb_groth16::{AdditiveGroup as _, Fr};
@@ -362,8 +414,8 @@ mod tests {
     use tokio_stream::StreamMap;
 
     use super::{
-        TicketGenerator, WinnerTicketStream, WinningTicket, prune_out_of_window_streams,
-        search_winner_ticket,
+        TicketGenerator, WinnerTicketStream, WinningTicket, block_ticket_limit,
+        new_block_search_stream, prune_out_of_window_streams, search_winner_ticket,
     };
 
     const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
@@ -475,6 +527,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn block_ticket_limit_is_what_the_pool_can_pay() {
+        // 10 claims fit in the pool; the remainder cannot fund an 11th.
+        assert_eq!(block_ticket_limit(1_050, 100, 0), 10);
+        assert_eq!(block_ticket_limit(99, 100, 0), 0);
+    }
+
+    #[test]
+    fn block_ticket_limit_is_zero_when_rewards_are_disabled() {
+        assert_eq!(block_ticket_limit(1_000, 0, 0), 0);
+        assert_eq!(block_ticket_limit(0, 0, 0), 0);
+    }
+
+    #[test]
+    fn block_ticket_limit_discounts_outstanding_tickets() {
+        assert_eq!(block_ticket_limit(1_000, 100, 4), 6);
+        assert_eq!(block_ticket_limit(1_000, 100, 10), 0);
+        assert_eq!(block_ticket_limit(1_000, 100, 25), 0);
+    }
+
+    #[tokio::test]
+    async fn block_search_ends_after_max_winners() {
+        // Maximum field element: every attempt wins, so without the limit the
+        // search would never end.
+        let difficulty = Fr::ZERO - Fr::from(1u64);
+        let winners: Vec<_> = new_block_search_stream(
+            HeaderId::from([5u8; 32]),
+            Slot::new(11),
+            zero_fr(),
+            difficulty,
+            NonZeroUsize::new(3).unwrap(),
+            test_pool(),
+            NonZeroUsize::new(4).unwrap(),
+        )
+        .collect()
+        .await;
+        assert_eq!(winners.len(), 3);
+        assert!(winners.iter().all(|(slot, _)| *slot == Slot::new(11)));
+    }
+
     type ProcessedBlockStream =
         Pin<Box<dyn Stream<Item = (EpochState, LedgerState, ProcessedBlockEvent)> + Send>>;
 
@@ -525,6 +617,7 @@ mod tests {
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
             slot_window: SLOT_WINDOW,
+            outstanding_tickets: 0,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
     }
@@ -546,6 +639,7 @@ mod tests {
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
             slot_window: SLOT_WINDOW,
+            outstanding_tickets: 0,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
     }
@@ -562,6 +656,7 @@ mod tests {
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
             slot_window: SLOT_WINDOW,
+            outstanding_tickets: 0,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Pending));
     }
@@ -585,6 +680,7 @@ mod tests {
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
             slot_window: SLOT_WINDOW,
+            outstanding_tickets: 0,
         };
 
         let Poll::Ready(Some(winner)) = poll_once(&mut generator) else {
@@ -610,6 +706,7 @@ mod tests {
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
             slot_window: SLOT_WINDOW,
+            outstanding_tickets: 0,
         };
 
         // A winner already produced is emitted first...
