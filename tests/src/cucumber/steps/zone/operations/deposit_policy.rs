@@ -1,7 +1,8 @@
 use super::{
-    ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, Hash, HashMap, HashSet, Inscription,
+    ChannelUpdate, ChannelUpdateTx, Event, FinalizedTx, Hash, HashMap, HashSet, Inscription,
     InscriptionId, Note, NoteId, Outputs, PolicyRuntime, WithdrawArg, WithdrawInputs, ZkPublicKey,
-    ZoneNodeHttpClient, ZoneSequencer, make_inscription, runner, to_policy_runtime, warn,
+    ZoneNodeHttpClient, ZoneSequencer, finalized_inscriptions, make_inscription, runner,
+    to_policy_runtime, view_inscriptions, warn,
 };
 
 /// Reactively drive the full deposit lifecycle (pin, then withdraw the
@@ -15,6 +16,7 @@ pub fn start_deposit_lifecycle_policy(
         withdraw_outputs,
         recipient,
         deposits: HashMap::new(),
+        finalized: HashSet::new(),
     };
     to_policy_runtime(runner::spawn(sequencer, policy))
 }
@@ -32,6 +34,8 @@ struct DepositLifecyclePolicy {
     withdraw_outputs: Vec<u64>,
     recipient: ZkPublicKey,
     deposits: HashMap<Hash, DepositLifecycleState>,
+    /// Finalized payloads: permanently on chain.
+    finalized: HashSet<Inscription>,
 }
 
 fn pin_payload(op_id: &Hash) -> Inscription {
@@ -40,43 +44,6 @@ fn pin_payload(op_id: &Hash) -> Inscription {
 
 fn withdraw_payload(op_id: &Hash) -> Inscription {
     make_inscription(&format!("withdraw deposit {op_id:?}"))
-}
-
-fn mark_payload(
-    deposits: &mut HashMap<Hash, DepositLifecycleState>,
-    payload: &Inscription,
-    present: bool,
-) {
-    for (op_id, state) in deposits.iter_mut() {
-        if *payload == pin_payload(op_id) {
-            state.pinned = present;
-        } else if *payload == withdraw_payload(op_id) {
-            state.withdrawn = present;
-        }
-    }
-}
-
-/// Set each phase flag to `present` for deposits whose payload appears in
-/// `txs`.
-fn apply_channel_txs(
-    deposits: &mut HashMap<Hash, DepositLifecycleState>,
-    txs: &[ChannelUpdateTx],
-    present: bool,
-) {
-    for tx in txs {
-        if let Some(payload) = tx.inscription().map(|info| &info.payload) {
-            mark_payload(deposits, payload, present);
-        }
-    }
-}
-
-/// Mark finalized steps present — canonical, so never un-set.
-fn apply_finalized(deposits: &mut HashMap<Hash, DepositLifecycleState>, finalized: &[FinalizedTx]) {
-    for op in finalized.iter().flat_map(|tx| tx.ops.iter()) {
-        if let FinalizedOp::Inscription(info) = op {
-            mark_payload(deposits, &info.payload, true);
-        }
-    }
 }
 
 async fn publish_deposit_inscription<Node>(
@@ -138,7 +105,7 @@ where
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
         let Event::BlocksProcessed {
             channel_update,
-            finalized,
+            finalized: finalized_txs,
             ..
         } = event
         else {
@@ -149,6 +116,7 @@ where
             withdraw_outputs,
             recipient,
             deposits,
+            finalized,
         } = self;
 
         for deposit in &channel_update.adopted_deposits {
@@ -160,10 +128,16 @@ where
                     withdrawn: false,
                 });
         }
-        // orphaned first, then adopted/finalized (canonical) which win.
-        apply_channel_txs(deposits, &channel_update.orphaned, false);
-        apply_channel_txs(deposits, &channel_update.adopted, true);
-        apply_finalized(deposits, finalized);
+        finalized.extend(finalized_inscriptions(finalized_txs).map(|info| info.payload.clone()));
+        let view: HashSet<&Inscription> = view_inscriptions(channel_update)
+            .map(|info| &info.payload)
+            .collect();
+        for (op_id, state) in deposits.iter_mut() {
+            let present =
+                |payload: &Inscription| finalized.contains(payload) || view.contains(payload);
+            state.pinned = present(&pin_payload(op_id));
+            state.withdrawn = present(&withdraw_payload(op_id));
+        }
 
         let wallet: HashSet<NoteId> = {
             let view = sequencer.channel_wallet();
@@ -232,17 +206,19 @@ struct DepositWithdrawPolicy {
     deposits: HashMap<Hash, DepositWithdrawState>,
 }
 
-fn drop_shed_withdraws(
+/// Forget a withdraw that is neither in the view nor finalized: it was shed.
+fn retain_live_withdraws(
     deposits: &mut HashMap<Hash, DepositWithdrawState>,
-    orphaned: &[ChannelUpdateTx],
+    channel_update: &ChannelUpdate,
+    finalized: &[FinalizedTx],
 ) {
-    for tx in orphaned {
-        let hash = tx.tx_hash();
-        for state in deposits.values_mut() {
-            if state.withdraw_tx == Some(hash) {
-                state.withdraw_tx = None;
-            }
-        }
+    let live: HashSet<InscriptionId> = channel_update
+        .canonical_chain()
+        .map(ChannelUpdateTx::tx_hash)
+        .chain(finalized.iter().map(|tx| tx.tx_hash))
+        .collect();
+    for state in deposits.values_mut() {
+        state.withdraw_tx = state.withdraw_tx.filter(|hash| live.contains(hash));
     }
 }
 
@@ -251,7 +227,12 @@ where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
 {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
-        let Event::BlocksProcessed { channel_update, .. } = event else {
+        let Event::BlocksProcessed {
+            channel_update,
+            finalized,
+            ..
+        } = event
+        else {
             return;
         };
 
@@ -272,7 +253,7 @@ where
                     });
             }
         }
-        drop_shed_withdraws(deposits, &channel_update.orphaned);
+        retain_live_withdraws(deposits, channel_update, finalized);
 
         let wallet: HashSet<NoteId> = {
             let view = sequencer.channel_wallet();

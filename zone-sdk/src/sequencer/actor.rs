@@ -6,7 +6,10 @@
 use std::collections::HashSet;
 
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
-use lb_core::mantle::{channel::ChannelState, ops::channel::ChannelId, traits::Hashable as _};
+use lb_core::mantle::{
+    channel::ChannelState, ops::channel::ChannelId, traits::Hashable as _,
+    transactions::hash::TxHash,
+};
 use tracing::{debug, error, warn};
 
 use super::{
@@ -363,7 +366,7 @@ where
         channel
             .accredited_keys
             .iter()
-            .position(|pk| *pk == self.signing_key.public_key())
+            .position(|pk| *pk == self.signing_key.public_key().into_unverified())
             .map(|idx| idx as u16)
     }
 
@@ -522,6 +525,7 @@ where
                 built
             }
             None => ChannelUpdate {
+                common_prefix: Vec::new(),
                 orphaned: Vec::new(),
                 adopted: Vec::new(),
                 adopted_deposits: Vec::new(),
@@ -531,9 +535,8 @@ where
         // the lineage moved.
         channel_update.adopted_deposits = result.adopted_deposits;
 
-        // Shed pending configs superseded on the config lineage on every
-        // block: a foreign config landing alone moves no message lineage and
-        // reports no update, but still invalidates a pending config of ours.
+        // Shed pending configs superseded on the config lineage; the lineage
+        // diff already reports them orphaned.
         let stale_configs = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => s.shed_stale_pending_configs(tip),
             _ => Vec::new(),
@@ -575,6 +578,18 @@ where
         if config_shed_any && let (Some(s), Some(tip)) = (self.state.as_ref(), self.current_tip) {
             self.last_msg_id = s.channel_tip_at(tip);
         }
+
+        // The view was captured before the shed passes; whatever they
+        // orphaned has left it.
+        let orphaned: HashSet<TxHash> = channel_update
+            .orphaned
+            .iter()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect();
+        channel_update.common_prefix = result.common_prefix;
+        channel_update
+            .common_prefix
+            .retain(|tx| !orphaned.contains(&tx.tx_hash()));
 
         (
             channel_update,
@@ -677,9 +692,10 @@ where
         }
 
         ChannelUpdate {
+            // Set by `apply_block_result`, along with the observed deposits.
+            common_prefix: Vec::new(),
             orphaned,
             adopted: u.adopted,
-            // Set by `apply_block_result` from the block's observed deposits.
             adopted_deposits: Vec::new(),
         }
     }
@@ -708,8 +724,8 @@ mod tests {
             ops::{
                 OpProof, OpProofRef, OpRef,
                 channel::{
-                    MsgId,
-                    config::{ChannelConfigOp, Keys},
+                    MsgId, UnverifiedChannelKeys, VerifiedChannelKeys,
+                    config::ChannelConfigOp,
                     deposit::DepositOp,
                     inscribe::{Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
@@ -1241,9 +1257,11 @@ mod tests {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
         let mut channel = single_key_channel_state();
-        channel.accredited_keys = Keys::try_from(vec![
-            sequencer_key.public_key(),
-            Ed25519Key::from_bytes(&[1; 32]).public_key(),
+        channel.accredited_keys = UnverifiedChannelKeys::try_from(vec![
+            sequencer_key.public_key().into_unverified(),
+            Ed25519Key::from_bytes(&[1; 32])
+                .public_key()
+                .into_unverified(),
         ])
         .unwrap()
         .into();
@@ -1375,12 +1393,12 @@ mod tests {
             channel_id,
             inscription: b"bundle".to_vec().try_into().unwrap(),
             parent: MsgId::root(),
-            signer: sequencer_key.public_key(),
+            signer: sequencer_key.public_key().into_unverified(),
         };
         let config = ChannelConfigOp {
             channel: channel_id,
             parent: MsgId::root(),
-            keys: Keys::try_from(vec![sequencer_key.public_key()]).unwrap(),
+            keys: VerifiedChannelKeys::try_from(vec![sequencer_key.public_key()]).unwrap(),
             posting_timeframe: SlotTimeframe::from(0u32),
             posting_timeout: SlotTimeout::from(0u32),
             configuration_threshold: 1,
@@ -1415,6 +1433,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(clippy::too_many_lines, reason = "Test function.")]
     async fn config_only_block_orphans_pending_inscription_but_keeps_message_tip() {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
@@ -1422,7 +1441,10 @@ mod tests {
         let config_op = ChannelConfigOp {
             channel: channel_id,
             parent: MsgId::root(),
-            keys: Keys::try_from(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()]).unwrap(),
+            keys: VerifiedChannelKeys::try_from(vec![
+                Ed25519Key::from_bytes(&[0; 32]).public_key(),
+            ])
+            .unwrap(),
             posting_timeframe: SlotTimeframe::from(0u32),
             posting_timeout: SlotTimeout::from(0u32),
             configuration_threshold: 1,
@@ -1523,6 +1545,7 @@ mod tests {
             checkpoint.pending_txs.iter().all(|(h, _)| *h != p_hash),
             "the pending inscription must be shed from the pending set"
         );
+        assert!(update.common_prefix.iter().all(|tx| tx.tx_hash() != p_hash));
         // The chaining pointer resets to the (unchanged) message tip so the
         // resubmit re-posts there. Nothing was mined, so the tip is root.
         assert_eq!(
@@ -1550,7 +1573,9 @@ mod tests {
             channel_id,
             inscription: Inscription::try_from(b"hello".to_vec()).unwrap(),
             parent: MsgId::root(),
-            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+            signer: Ed25519Key::from_bytes(&[0; 32])
+                .public_key()
+                .into_unverified(),
         };
         let mantle_tx = Ops::from([
             Op::ChannelWithdraw(withdraw_op.clone()),
@@ -1584,7 +1609,9 @@ mod tests {
             channel_id,
             inscription: Inscription::try_from(b"hello".to_vec()).unwrap(),
             parent: MsgId::root(),
-            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+            signer: Ed25519Key::from_bytes(&[0; 32])
+                .public_key()
+                .into_unverified(),
         };
         let mantle_tx = Ops::from([Op::ChannelInscribe(inscribe_op)]);
         let tx_hash = mantle_tx.hash();
@@ -1609,7 +1636,9 @@ mod tests {
             channel_id: other_channel,
             inscription: Inscription::try_from(b"hello".to_vec()).unwrap(),
             parent: MsgId::root(),
-            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+            signer: Ed25519Key::from_bytes(&[0; 32])
+                .public_key()
+                .into_unverified(),
         };
         let mantle_tx = Ops::from([Op::ChannelInscribe(inscribe_op)]);
         let tx_hash = mantle_tx.hash();
@@ -1643,7 +1672,7 @@ mod tests {
             channel_id,
             parent: MsgId::root(),
             inscription: Inscription::new_unchecked(Vec::new()),
-            signer: sequencer_key.public_key(),
+            signer: sequencer_key.public_key().into_unverified(),
         };
         let expected_msg_id = inscribe.id();
         let genesis_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(inscribe)]);
@@ -1771,7 +1800,10 @@ mod tests {
         let config_op = ChannelConfigOp {
             channel: channel_id,
             parent: MsgId::root(),
-            keys: Keys::try_from(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()]).unwrap(),
+            keys: VerifiedChannelKeys::try_from(vec![
+                Ed25519Key::from_bytes(&[0; 32]).public_key(),
+            ])
+            .unwrap(),
             posting_timeframe: SlotTimeframe::from(0u32),
             posting_timeout: SlotTimeout::from(0u32),
             configuration_threshold: 1,
@@ -1851,14 +1883,14 @@ mod tests {
             channel_id,
             parent: MsgId::root(),
             inscription: Inscription::new_unchecked(b"a".to_vec()),
-            signer: sequencer_key.public_key(),
+            signer: sequencer_key.public_key().into_unverified(),
         };
         let a_id = a.id();
         let y = InscriptionOp {
             channel_id,
             parent: a_id,
             inscription: Inscription::new_unchecked(b"y".to_vec()),
-            signer: sequencer_key.public_key(),
+            signer: sequencer_key.public_key().into_unverified(),
         };
         let y_id = y.id();
 
@@ -1968,9 +2000,9 @@ mod tests {
         let own_key = Ed25519Key::from_bytes(&[7; 32]);
         let leading_key = Ed25519Key::from_bytes(&[0; 32]);
         let channel = ChannelState {
-            accredited_keys: Keys::new_unchecked(vec![
-                leading_key.public_key(),
-                own_key.public_key(),
+            accredited_keys: UnverifiedChannelKeys::new_unchecked(vec![
+                leading_key.public_key().into_unverified(),
+                own_key.public_key().into_unverified(),
             ])
             .into(),
             ..single_key_channel_state()
@@ -1980,7 +2012,7 @@ mod tests {
         let (_receipt, signed_ops) = sequencer
             .handle()
             .channel_config(
-                Keys::new_unchecked(vec![own_key.public_key()]),
+                VerifiedChannelKeys::new_unchecked(vec![own_key.public_key()]),
                 SlotTimeframe::from(0u32),
                 SlotTimeout::from(0u32),
                 1,
@@ -2007,6 +2039,7 @@ mod tests {
         );
         own_key
             .public_key()
+            .into_unverified()
             .verify(
                 signed_ops.hash().as_signing_bytes(),
                 &signatures[0].signature,
@@ -2025,7 +2058,7 @@ mod tests {
         let (_receipt, signed_ops) = sequencer
             .handle()
             .channel_config(
-                Keys::new_unchecked(vec![own_key.public_key()]),
+                VerifiedChannelKeys::new_unchecked(vec![own_key.public_key()]),
                 SlotTimeframe::from(0u32),
                 SlotTimeout::from(0u32),
                 1,
@@ -2059,7 +2092,7 @@ mod tests {
         let error = sequencer
             .handle()
             .channel_config(
-                Keys::new_unchecked(vec![own_key.public_key()]),
+                VerifiedChannelKeys::new_unchecked(vec![own_key.public_key()]),
                 SlotTimeframe::from(0u32),
                 SlotTimeout::from(0u32),
                 1,
@@ -2079,9 +2112,11 @@ mod tests {
     async fn channel_config_rejects_multi_sig_threshold() {
         let own_key = Ed25519Key::from_bytes(&[7; 32]);
         let channel = ChannelState {
-            accredited_keys: Keys::new_unchecked(vec![
-                own_key.public_key(),
-                Ed25519Key::from_bytes(&[0; 32]).public_key(),
+            accredited_keys: UnverifiedChannelKeys::new_unchecked(vec![
+                own_key.public_key().into_unverified(),
+                Ed25519Key::from_bytes(&[0; 32])
+                    .public_key()
+                    .into_unverified(),
             ])
             .into(),
             configuration_threshold: 2,
@@ -2092,7 +2127,7 @@ mod tests {
         let error = sequencer
             .handle()
             .channel_config(
-                Keys::new_unchecked(vec![own_key.public_key()]),
+                VerifiedChannelKeys::new_unchecked(vec![own_key.public_key()]),
                 SlotTimeframe::from(0u32),
                 SlotTimeout::from(0u32),
                 1,
@@ -2129,7 +2164,7 @@ mod tests {
         let (_receipt, first_tx) = sequencer
             .handle()
             .channel_config(
-                Keys::new_unchecked(vec![own_key.public_key()]),
+                VerifiedChannelKeys::new_unchecked(vec![own_key.public_key()]),
                 SlotTimeframe::from(0u32),
                 SlotTimeout::from(0u32),
                 1,
@@ -2140,7 +2175,7 @@ mod tests {
         let (_receipt, second_tx) = sequencer
             .handle()
             .channel_config(
-                Keys::new_unchecked(vec![own_key.public_key()]),
+                VerifiedChannelKeys::new_unchecked(vec![own_key.public_key()]),
                 SlotTimeframe::from(1u32),
                 SlotTimeout::from(0u32),
                 1,

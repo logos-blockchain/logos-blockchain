@@ -1556,7 +1556,7 @@ mod tests {
                 channel_id: ChannelId::from([0xAA; 32]),
                 inscription: [0xAB; 8].into(),
                 parent: MsgId::from([0xBB; 32]),
-                signer: signing_key.public_key(),
+                signer: signing_key.public_key().into_unverified(),
             }))
             .unwrap();
 
@@ -1609,7 +1609,7 @@ mod tests {
             channel_id: ChannelId::from([0xAA; 32]),
             inscription: [0xAB; 1000].into(),
             parent: MsgId::from([0xBB; 32]),
-            signer: signing_key.public_key(),
+            signer: signing_key.public_key().into_unverified(),
         });
 
         tx_builder = tx_builder.push_op(inscription).unwrap();
@@ -2283,7 +2283,9 @@ mod tests {
             channel_id: ChannelId::from([0; 32]),
             inscription: Inscription::default(),
             parent: MsgId::root(),
-            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+            signer: Ed25519Key::from_bytes(&[0; 32])
+                .public_key()
+                .into_unverified(),
         });
 
         let source_transactions: BlockTransactions<SignedOps<Preverified, StandardMode>> = [

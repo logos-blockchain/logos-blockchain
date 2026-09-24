@@ -2,7 +2,7 @@ use super::{
     Arc, BTreeSet, ChannelUpdate, ChannelUpdateTx, DiscardedPayloads, Event, FinalizedTx, HashMap,
     HashSet, Inscription, InscriptionInfo, LazyLock, MsgId, PolicyRuntime, SequencerChannelView,
     VecDeque, ZoneAccountBalances, ZoneNodeHttpClient, ZoneSequencer, finalized_inscriptions,
-    parse_balance_payload, runner, to_policy_runtime, warn,
+    parse_balance_payload, runner, to_policy_runtime, view_inscriptions, warn,
 };
 
 /// Spawn a sequencer drive task with a no-op policy. Step bodies drive
@@ -69,15 +69,13 @@ pub fn start_sorted_conflict_policy(
 /// Assumes unique payloads; for repeating payloads see
 /// [`RepublishLineagePolicy`].
 ///
-/// Tracks canonical on-chain state keyed by id, decided by payload (see
-/// `on_event`): a dead twin's id leaves while a live twin keeps the payload
-/// covered, so a payload still on chain is never re-homed.
+/// The non-finalized view is read from each update (`common_prefix ++
+/// adopted`), so a payload still on chain — a live twin of a dead one — is
+/// never re-homed.
 #[derive(Default)]
 struct OrphanRepublishPolicy {
-    /// Canonical on-chain inscriptions by id (adopted-unfinalized + finalized).
-    /// Finalized entries are added and never removed — they can't be orphaned —
-    /// so this one set is the whole on-chain view.
-    canonical: HashMap<MsgId, Inscription>,
+    /// Finalized payloads: permanently on chain, never orphaned.
+    finalized: HashSet<Inscription>,
 }
 
 impl<Node> runner::Policy<Node> for OrphanRepublishPolicy
@@ -93,34 +91,16 @@ where
         else {
             return;
         };
-        // 1. Remove orphaned by id — a dead twin leaves, a live twin stays.
-        for entry in &channel_update.orphaned {
-            if let Some(info) = entry.inscription() {
-                self.canonical.remove(&info.this_msg);
-            }
-        }
-        // 2. Add finalized by id (permanent — finalized can't be orphaned).
-        for info in finalized_inscriptions(finalized) {
-            self.canonical.insert(info.this_msg, info.payload.clone());
-        }
-        // 3. Add adopted by id (this block's new canonical).
-        for info in channel_update
-            .adopted
-            .iter()
-            .filter_map(ChannelUpdateTx::inscription)
-        {
-            self.canonical.insert(info.this_msg, info.payload.clone());
-        }
-        // 4. Republish orphaned whose payload no canonical id still carries.
+        self.finalized
+            .extend(finalized_inscriptions(finalized).map(|info| info.payload.clone()));
+        let on_chain: HashSet<&Inscription> = view_inscriptions(channel_update)
+            .map(|info| &info.payload)
+            .collect();
         for entry in &channel_update.orphaned {
             let ChannelUpdateTx::Inscription(info) = entry else {
                 continue;
             };
-            if self
-                .canonical
-                .values()
-                .any(|payload| *payload == info.payload)
-            {
+            if on_chain.contains(&info.payload) || self.finalized.contains(&info.payload) {
                 continue;
             }
             if let Err(error) = sequencer.handle().publish(info.payload.clone()).await {
@@ -145,8 +125,8 @@ struct LineageTracker {
     /// Every `this_msg` we've published (originals + republishes) → intent
     /// root.
     intent_root: HashMap<MsgId, MsgId>,
-    /// Per intent root, the `this_msg`s currently pending (in the
-    /// non-finalized channel view).
+    /// Per intent root, the `this_msg`s in the non-finalized view, plus those
+    /// published since the last event.
     pending: HashMap<MsgId, HashSet<MsgId>>,
     /// Intent roots that have finalized — permanently landed, so the intent is
     /// considered live forever and never re-homed again.
@@ -167,24 +147,14 @@ impl LineageTracker {
         self.pending.entry(root).or_default().insert(republished);
     }
 
-    /// Fold a delta into per-intent liveness — only our `msg_id`s are relevant.
-    /// Adopted members become live; orphaned members stop being live.
-    fn observe(&mut self, channel_update: &ChannelUpdate) {
-        for info in channel_update
-            .adopted
-            .iter()
-            .filter_map(ChannelUpdateTx::inscription)
-        {
+    /// Rebuild per-intent liveness from the view: our members in
+    /// `common_prefix ++ adopted` are live. A republish issued last event is
+    /// in the prefix as pending, so nothing carries over.
+    fn rebuild(&mut self, channel_update: &ChannelUpdate) {
+        self.pending.clear();
+        for info in view_inscriptions(channel_update) {
             if let Some(&root) = self.intent_root.get(&info.this_msg) {
                 self.pending.entry(root).or_default().insert(info.this_msg);
-            }
-        }
-        for entry in &channel_update.orphaned {
-            if let ChannelUpdateTx::Inscription(info) = entry
-                && let Some(&root) = self.intent_root.get(&info.this_msg)
-                && let Some(members) = self.pending.get_mut(&root)
-            {
-                members.remove(&info.this_msg);
             }
         }
     }
@@ -253,7 +223,7 @@ where
             } => {
                 self.lineage
                     .observe_finalized(finalized_inscriptions(finalized).map(|i| i.this_msg));
-                self.lineage.observe(channel_update);
+                self.lineage.rebuild(channel_update);
                 for entry in &channel_update.orphaned {
                     let ChannelUpdateTx::Inscription(info) = entry else {
                         continue;
@@ -280,11 +250,10 @@ where
 /// Inline policy: republish orphans only when the local balance view still
 /// allows it; publish planned payloads as soon as it's our turn to write.
 ///
-/// The balance view is rebuilt from the full delta — every orphaned op is
-/// removed and every adopted op applied — so affordability reflects all
-/// inscriptions on the channel. Removing an orphan we never applied (never-
-/// landed pending) is a no-op, and an already-adopted op is skipped because its
-/// id is already in the applied set after `record_adopted_payloads`.
+/// The balance view is rebuilt from each update's `common_prefix ++ adopted`
+/// over the finalized deltas, so affordability reflects all inscriptions on
+/// the channel. A payload we published since the last event is in the prefix
+/// as pending, so it is never applied twice.
 struct BalanceAwarePolicy {
     balances: BalanceAwareState,
     planned: VecDeque<Inscription>,
@@ -303,10 +272,9 @@ where
         } = event
         {
             self.balances.record_finalized_payloads(finalized);
-            let ChannelUpdate {
-                orphaned, adopted, ..
-            } = channel_update;
-            let orphaned_inscriptions: Vec<InscriptionInfo> = orphaned
+            self.balances.rebuild_view(channel_update);
+            let orphaned_inscriptions: Vec<InscriptionInfo> = channel_update
+                .orphaned
                 .iter()
                 .filter_map(|o| match o {
                     ChannelUpdateTx::Inscription(i) => Some(i.clone()),
@@ -316,9 +284,6 @@ where
                     | ChannelUpdateTx::Config(_) => None,
                 })
                 .collect();
-            self.balances
-                .remove_orphaned_payloads(&orphaned_inscriptions);
-            self.balances.record_adopted_payloads(adopted);
             for info in orphaned_inscriptions {
                 if !self.balances.should_republish(&info.payload) {
                     continue;
@@ -351,9 +316,9 @@ where
 /// Inline policy: republish orphans only when they preserve sorted-payload
 /// order; otherwise mark them as discarded.
 ///
-/// The full delta lets us rebuild the on-chain payload set each update (drop
-/// orphaned, add adopted), so the order floor we gate republishing on falls
-/// back correctly when the highest payload is orphaned.
+/// The on-chain payload set is read from each update (`common_prefix ++
+/// adopted`), so the order floor we gate republishing on falls back correctly
+/// when the highest payload is orphaned.
 struct SortedConflictPolicy {
     state: SortedConflictState,
 }
@@ -371,8 +336,8 @@ where
         else {
             return;
         };
-        // Pin finalized payloads first.
         self.state.record_finalized(finalized);
+        self.state.rebuild_view(channel_update);
         let ChannelUpdate {
             orphaned, adopted, ..
         } = channel_update;
@@ -387,8 +352,6 @@ where
             })
             .collect();
 
-        // Rebuild on-chain state from this delta before deciding anything.
-        self.state.revert_orphaned(&orphaned_inscriptions);
         self.state.record_adoptions(adopted).await;
 
         let readopted: HashSet<&Inscription> = adopted
@@ -458,25 +421,13 @@ impl BalanceAwareState {
         self.applied.entry(account).or_default().insert(uuid, delta);
     }
 
-    fn remove_orphaned_payloads(&mut self, orphaned: &[InscriptionInfo]) {
-        for inscription in orphaned {
-            let Some((uuid, account, _)) = parse_balance_payload(&inscription.payload) else {
-                continue;
-            };
-
-            // A finalized delta is permanent — never drop it on an orphan.
-            if self.finalized.contains(&uuid) {
-                continue;
-            }
-
-            if let Some(account_updates) = self.applied.get_mut(&account) {
-                account_updates.remove(&uuid);
-            }
+    /// Replace the non-finalized deltas with the view's; finalized deltas stay.
+    fn rebuild_view(&mut self, channel_update: &ChannelUpdate) {
+        let finalized = &self.finalized;
+        for updates in self.applied.values_mut() {
+            updates.retain(|uuid, _| finalized.contains(uuid));
         }
-    }
-
-    fn record_adopted_payloads(&mut self, adopted: &[ChannelUpdateTx]) {
-        for info in adopted.iter().filter_map(ChannelUpdateTx::inscription) {
+        for info in view_inscriptions(channel_update) {
             self.record_applied_payload(&info.payload);
         }
     }
@@ -510,8 +461,8 @@ impl BalanceAwareState {
 static EMPTY_BALANCE_UPDATES: LazyLock<HashMap<String, i64>> = LazyLock::new(HashMap::new);
 
 struct SortedConflictState {
-    /// The local channel view: pending (non-finalized) payloads plus the
-    /// pinned finalized base, kept as the ordering floor.
+    /// The ordering floor: the last update's `common_prefix ++ adopted` plus
+    /// what we published since, over the pinned finalized base.
     channel_view: BTreeSet<Inscription>,
     discarded: DiscardedPayloads,
     finalized: HashSet<Inscription>,
@@ -538,21 +489,16 @@ impl SortedConflictState {
         self.finalized.contains(payload)
     }
 
-    /// Drop orphaned payloads from the channel view — the order floor falls
-    /// back to the max of whatever remains. Finalized payloads stay put.
-    fn revert_orphaned(&mut self, orphaned: &[&InscriptionInfo]) {
-        for inscription in orphaned {
-            if self.finalized.contains(&inscription.payload) {
-                continue;
-            }
-            self.channel_view.remove(&inscription.payload);
-        }
+    fn rebuild_view(&mut self, channel_update: &ChannelUpdate) {
+        self.channel_view = self.finalized.iter().cloned().collect();
+        self.channel_view
+            .extend(view_inscriptions(channel_update).map(|info| info.payload.clone()));
     }
 
-    async fn record_adoptions(&mut self, adopted: &[ChannelUpdateTx]) {
+    /// A discarded payload that landed anyway is no longer ours to re-home.
+    async fn record_adoptions(&self, adopted: &[ChannelUpdateTx]) {
         for info in adopted.iter().filter_map(ChannelUpdateTx::inscription) {
             self.discarded.lock().await.remove(&info.payload);
-            self.channel_view.insert(info.payload.clone());
         }
     }
 

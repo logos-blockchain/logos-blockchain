@@ -6,7 +6,7 @@ use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{
     TxHash, Utxo,
     gas::GasCost,
-    ops::channel::{config::Keys, deposit::Metadata, inscribe::Inscription},
+    ops::channel::{VerifiedChannelKeys, deposit::Metadata, inscribe::Inscription},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_testing_framework::NodeHttpClient;
@@ -27,7 +27,7 @@ use super::{
     build_zone_deposit_from_values, ensure_zone_transactions_included,
     errors::{log_step_error, zone_step_error},
     keygen, publish_atomic_zone_withdraw, publish_message_with_retry,
-    runner::{Event, PublishResult, SequencerCheckpoint, SequencerClient},
+    runner::{Event, PublishResult, SequencerCheckpoint, SequencerClient, ViewViolation},
     sequencer_config, sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
     start_custom_republish_policy, start_deposit_lifecycle_policy, start_deposit_withdraw_policy,
     start_republish_lineage_policy, start_sequencer_event_loop, start_sorted_conflict_policy,
@@ -119,6 +119,7 @@ struct PublishedZoneMessage {
 
 struct StartedSequencerRuntime {
     task: JoinHandle<()>,
+    view_violation: ViewViolation,
     client: SequencerClient,
     events: broadcast::Receiver<Event>,
     checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,

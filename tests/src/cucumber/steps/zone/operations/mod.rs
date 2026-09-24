@@ -78,6 +78,14 @@ fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &In
             | FinalizedOp::ChannelTransfer(_) => None,
         })
 }
+
+/// Inscriptions in the non-finalized view an update describes, in lineage
+/// order — the counterpart of [`finalized_inscriptions`].
+fn view_inscriptions(update: &ChannelUpdate) -> impl Iterator<Item = &InscriptionInfo> {
+    update
+        .canonical_chain()
+        .filter_map(ChannelUpdateTx::inscription)
+}
 use crate::{
     common::{
         chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
@@ -221,6 +229,7 @@ impl PublishDeadline {
 /// drive task; the event mpsc is purely for test observation.
 pub struct PolicyRuntime {
     pub task: JoinHandle<()>,
+    pub view_violation: runner::ViewViolation,
     pub client: SequencerClient,
     pub events: tokio::sync::broadcast::Receiver<Event>,
     pub checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
@@ -233,6 +242,7 @@ pub struct PolicyRuntime {
 fn to_policy_runtime(rt: runner::Runtime) -> PolicyRuntime {
     PolicyRuntime {
         task: rt.task,
+        view_violation: rt.view_violation,
         client: rt.client,
         events: rt.event_rx,
         checkpoint_rx: rt.checkpoint_rx,

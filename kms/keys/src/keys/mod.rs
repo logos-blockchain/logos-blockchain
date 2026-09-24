@@ -12,7 +12,8 @@ pub use crate::keys::{
     ed25519::{
         ED25519_PUBLIC_KEY_SIZE, ED25519_SECRET_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519Key,
         PublicKey as Ed25519PublicKey, SharedKey, Signature as Ed25519Signature,
-        UnsecuredEd25519Key, X25519PrivateKey, X25519PublicKey,
+        UnsecuredEd25519Key, UnverifiedPublicKey as UnverifiedEd25519PublicKey,
+        UnverifiedX25519PublicKey, X25519PrivateKey,
     },
     zk::{
         MAX_ZK_SIGNING_KEYS, PublicKey as ZkPublicKey, PublicKeys as ZkPublicKeys,

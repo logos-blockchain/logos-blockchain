@@ -55,7 +55,7 @@ fn make_inscription_tx(payload_size: usize) -> Ops {
         channel_id: ChannelId::from([0xAA; 32]),
         inscription: Inscription::new_unchecked(vec![0xAB; payload_size]),
         parent: MsgId::from([0xBB; 32]),
-        signer: signing_key.public_key(),
+        signer: signing_key.public_key().into_unverified(),
     })])
 }
 

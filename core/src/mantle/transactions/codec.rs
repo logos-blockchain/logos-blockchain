@@ -94,8 +94,8 @@ mod tests {
             ops::{
                 ZkAndEd25519Proof,
                 channel::{
-                    ChannelId, MsgId,
-                    config::{ChannelConfigOp, Keys},
+                    ChannelId, MsgId, VerifiedChannelKeys,
+                    config::ChannelConfigOp,
                     inscribe::{self, Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
@@ -149,7 +149,7 @@ mod tests {
             channel_id: ChannelId::from([0xAA; 32]),
             inscription: b"hello".into(),
             parent: MsgId::from([0xBB; 32]),
-            signer: signing_key.public_key(),
+            signer: signing_key.public_key().into_unverified(),
         })]);
 
         let tx_hash = tx.hash();
@@ -194,7 +194,7 @@ mod tests {
                 channel_id: ChannelId::from([0x11; 32]),
                 inscription: b"first".into(),
                 parent: MsgId::from([0x00; 32]),
-                signer: signing_key.public_key(),
+                signer: signing_key.public_key().into_unverified(),
             }),
             Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([0x22; 32]),
@@ -248,7 +248,7 @@ mod tests {
                     channel_id: ChannelId::from([0xAA; 32]),
                     inscription: large_inscription,
                     parent: MsgId::from([0xBB; 32]),
-                    signer: signing_key.public_key(),
+                    signer: signing_key.public_key().into_unverified(),
                 };
 
                 let tx = Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]);
@@ -338,7 +338,7 @@ mod tests {
             channel_id: ChannelId::from([0xAA; 32]),
             inscription: b"hello world".into(),
             parent: MsgId::from([0xBB; 32]),
-            signer: signing_key.public_key(),
+            signer: signing_key.public_key().into_unverified(),
         };
 
         let mantle_tx = Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]);
@@ -518,7 +518,7 @@ mod tests {
             channel_id: ChannelId::from([0xAA; 32]),
             inscription: b"test".into(),
             parent: MsgId::from([0xBB; 32]),
-            signer: signing_key.public_key(),
+            signer: signing_key.public_key().into_unverified(),
         };
 
         let config_op = ChannelConfigOp {
@@ -614,7 +614,7 @@ mod tests {
             channel_id: ChannelId::from([0x11; 32]),
             inscription: b"complex test inscription with more data".into(),
             parent: MsgId::from([0x22; 32]),
-            signer: signing_key1.public_key(),
+            signer: signing_key1.public_key().into_unverified(),
         };
 
         let config_op = ChannelConfigOp {
@@ -862,7 +862,7 @@ mod tests {
             parent: MsgId::from([0x33; 32]),
             // Using `new_unchecked` to bypass the constructor check since we're testing
             // `decode` directly.
-            keys: Keys::new_unchecked([].into()),
+            keys: VerifiedChannelKeys::new_unchecked([].into()),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,

@@ -238,12 +238,11 @@ mod test {
             ops::{
                 SignedOperation,
                 channel::{
-                    ChannelId,
+                    ChannelId, UnverifiedChannelKeys,
                     channel_transfer::{
                         ChannelTransferExecutionContext, ChannelTransferOp,
                         ChannelTransferValidationContext,
                     },
-                    config::Keys,
                     verification::test_utils::create_channel_multi_sig_proof,
                 },
             },
@@ -278,7 +277,9 @@ mod test {
             CHANNEL_ID,
             make_channel_state(
                 1,
-                Some(Keys::new_unchecked(vec![signing_key().public_key()])),
+                Some(UnverifiedChannelKeys::new_unchecked(vec![
+                    signing_key().public_key().into_unverified(),
+                ])),
             ),
         );
 
@@ -287,7 +288,7 @@ mod test {
             .expect("the note is not owned by another channel")
     }
 
-    fn ledger_view(transfer_threshold: u16, accredited_keys: Keys) -> Channels {
+    fn ledger_view(transfer_threshold: u16, accredited_keys: UnverifiedChannelKeys) -> Channels {
         let mut channels = Channels::new();
         channels.channels.insert_mut(
             CHANNEL_ID,
@@ -376,7 +377,10 @@ mod test {
         let channels = channel_view();
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -419,7 +423,10 @@ mod test {
 
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -472,7 +479,9 @@ mod test {
             CHANNEL_ID,
             make_channel_state(
                 1,
-                Some(Keys::new_unchecked(vec![signing_key().public_key()])),
+                Some(UnverifiedChannelKeys::new_unchecked(vec![
+                    signing_key().public_key().into_unverified(),
+                ])),
             ),
         );
         let channels = channels
@@ -483,7 +492,10 @@ mod test {
 
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(first.id(), first);
@@ -518,7 +530,10 @@ mod test {
         let channels = channel_view();
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -551,12 +566,17 @@ mod test {
             CHANNEL_ID,
             make_channel_state(
                 1,
-                Some(Keys::new_unchecked(vec![signing_key().public_key()])),
+                Some(UnverifiedChannelKeys::new_unchecked(vec![
+                    signing_key().public_key().into_unverified(),
+                ])),
             ),
         );
         let helper = TestOperationVerificationHelper::new(
             channels.clone(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -587,7 +607,10 @@ mod test {
         let channels = channel_view();
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -615,10 +638,18 @@ mod test {
             create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
         );
 
-        let channels = ledger_view(1, Keys::new_unchecked(vec![signing_key().public_key()]));
+        let channels = ledger_view(
+            1,
+            UnverifiedChannelKeys::new_unchecked(vec![
+                signing_key().public_key().into_unverified(),
+            ]),
+        );
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let service_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -646,10 +677,18 @@ mod test {
             create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
         );
 
-        let channels = ledger_view(2, Keys::new_unchecked(vec![signing_key().public_key()]));
+        let channels = ledger_view(
+            2,
+            UnverifiedChannelKeys::new_unchecked(vec![
+                signing_key().public_key().into_unverified(),
+            ]),
+        );
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -683,11 +722,18 @@ mod test {
 
         let channels = ledger_view(
             1,
-            Keys::new_unchecked(vec![Ed25519Key::from_bytes(&[1; 32]).public_key()]),
+            UnverifiedChannelKeys::new_unchecked(vec![
+                Ed25519Key::from_bytes(&[1; 32])
+                    .public_key()
+                    .into_unverified(),
+            ]),
         );
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -715,10 +761,13 @@ mod test {
             create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
         );
 
-        let channels = ledger_view(1, Keys::new_unchecked(vec![]));
+        let channels = ledger_view(1, UnverifiedChannelKeys::new_unchecked(vec![]));
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());

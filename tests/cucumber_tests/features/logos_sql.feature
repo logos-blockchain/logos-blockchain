@@ -85,6 +85,55 @@ Feature: Logos SQL
       And I stop all nodes
 
     @logos_sql_ci
+    Scenario: Read-only replica catches up and follows new writes
+      Given the genesis block has the following wallet resources:
+        | account_index | token_count | token_amount |
+        | 1             | 3           | 100000       |
+      And I have a cluster with capacity of 1 nodes
+      And I start nodes with wallet and sequencer resources:
+        | node_name | account_index | wallet_name | connected_to | sequencers |
+        | NODE_1    | 1             | WALLET_1A   |              | SEQ_A      |
+      When node "NODE_1" is at height 1 in 120 seconds
+      And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+      And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
+      And I start Logos SQL instances:
+        | alias  | sequencer |
+        | WRITER | SEQ_A     |
+      And Logos SQL instance "WRITER" executes write "CREATE_MESSAGES":
+        """
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY,
+            body TEXT NOT NULL
+        )
+        """
+      Then Logos SQL instance "WRITER" has 0 rows in table "messages" in its finalized database in 180 seconds
+      When Logos SQL instance "WRITER" executes write "ADD_MESSAGE":
+        """
+        INSERT INTO messages (id, body) VALUES (1, 'from history')
+        """
+      Then Logos SQL instance "WRITER" has 1 rows in table "messages" in its finalized database in 180 seconds
+      When I start read-only Logos SQL instances:
+        | alias  | sequencer |
+        | READER | SEQ_A     |
+      Then Logos SQL instance "READER" returns text "from history" from this finalized query in 30 seconds:
+        """
+        SELECT body FROM messages WHERE id = 1
+        """
+      When Logos SQL instance "WRITER" executes write "UPDATE_MESSAGE":
+        """
+        UPDATE messages SET body = 'after reader started' WHERE id = 1
+        """
+      Then Logos SQL instance "READER" returns text "after reader started" from this live query in 180 seconds:
+        """
+        SELECT body FROM messages WHERE id = 1
+        """
+      And Logos SQL instance "READER" returns text "after reader started" from this finalized query in 180 seconds:
+        """
+        SELECT body FROM messages WHERE id = 1
+        """
+      And I stop all nodes
+
+    @logos_sql_ci
     Scenario: Replicate nondeterministic SQL results exactly
       Given the genesis block has the following wallet resources:
         | account_index | token_count | token_amount |

@@ -1,11 +1,12 @@
+use std::sync::Arc;
+
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
 #[cfg(any(test, feature = "test-utils"))]
 use lb_key_management_system_keys::keys::Ed25519Key;
-use lb_utils::bounded::NonEmptyBoundedVec;
 use serde::{Deserialize, Serialize};
 
-use super::{ChannelId, Ed25519PublicKey, MsgId};
+use super::{ChannelId, MsgId};
 use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
@@ -20,7 +21,10 @@ use crate::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        ops::SignedOperation,
+        ops::{
+            SignedOperation,
+            channel::{UnverifiedChannelKeys, VerifiedChannelKeys},
+        },
         transactions::{
             hash::TxHashView,
             states::{Preverified, Unverified, Verified},
@@ -29,14 +33,13 @@ use crate::{
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
 
-pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
-pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
-
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ChannelConfigOp {
     pub channel: ChannelId,
     pub parent: MsgId,
-    pub keys: Keys,
+    // This op is not used in genesis, so we can force channel updates to only use valid (e.g.,
+    // non-weak) public keys.
+    pub keys: VerifiedChannelKeys,
     pub posting_timeframe: SlotTimeframe,
     pub posting_timeout: SlotTimeout,
     pub configuration_threshold: u16,
@@ -57,11 +60,11 @@ impl ChannelConfigOp {
         Self {
             channel: ChannelId::from([7u8; 32]),
             parent: MsgId::root(),
-            keys: Keys::try_from(vec![
+            keys: [
                 Ed25519Key::from_bytes(&[8; 32]).public_key(),
                 Ed25519Key::from_bytes(&[9; 32]).public_key(),
-            ])
-            .expect("Two keys are within bounds."),
+            ]
+            .into(),
             posting_timeframe: SlotTimeframe::from(10u32),
             posting_timeout: SlotTimeout::from(11u32),
             configuration_threshold: 12,
@@ -208,8 +211,11 @@ impl<Mode: VerificationMode> ExecutableOperation
         let operation = self.operation();
 
         // if the channel doesn't exist, create it otherwise just update the config
+        let keys = UnverifiedChannelKeys::new_unchecked(
+            operation.keys.iter().map(|k| k.into_unverified()).collect(),
+        );
         if let Some(channel) = context.channels.channels.get_mut(&operation.channel) {
-            channel.accredited_keys = operation.keys.clone().into();
+            channel.accredited_keys = Arc::new(keys);
             channel.configuration_threshold = operation.configuration_threshold;
             channel.tip_sequencer = 0;
             channel.tip_sequencer_starting_slot = context.block_slot;
@@ -222,7 +228,7 @@ impl<Mode: VerificationMode> ExecutableOperation
             context.channels.channels = context.channels.channels.insert(
                 operation.channel,
                 ChannelState {
-                    accredited_keys: operation.keys.clone().into(),
+                    accredited_keys: Arc::new(keys),
                     configuration_threshold: operation.configuration_threshold,
                     tip_message: MsgId::root(),
                     config_tip_hash: operation.id(),
@@ -241,8 +247,6 @@ impl<Mode: VerificationMode> ExecutableOperation
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
     use crate::mantle::{
         TxHash, gas::test_utils::FixedThresholds,
@@ -250,7 +254,11 @@ mod tests {
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
     };
 
-    fn channels(channel_id: ChannelId, configuration_threshold: u16, keys: Keys) -> Channels {
+    fn channels(
+        channel_id: ChannelId,
+        configuration_threshold: u16,
+        keys: UnverifiedChannelKeys,
+    ) -> Channels {
         let mut channels = Channels::new();
         channels.channels.insert_mut(
             channel_id,
@@ -362,7 +370,7 @@ mod tests {
     fn preverify_rejects_an_empty_accredited_key_set() {
         let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
             ChannelConfigOp {
-                keys: Keys::new_unchecked(vec![]),
+                keys: VerifiedChannelKeys::new_unchecked(vec![]),
                 ..ChannelConfigOp::sample()
             },
             ChannelMultiSigProof::sample_with_signatures(1),
@@ -422,7 +430,13 @@ mod tests {
         assert_eq!(
             signed_operation
                 .verify(&ChannelConfigValidationContext {
-                    channels: &channels(channel_id, 2, Keys::new_unchecked(vec![key.public_key()])),
+                    channels: &channels(
+                        channel_id,
+                        2,
+                        UnverifiedChannelKeys::new_unchecked(vec![
+                            key.public_key().into_unverified()
+                        ])
+                    ),
                     tx_hash_view: &TxHashView::from(tx_hash),
                 })
                 .unwrap_err(),
@@ -453,7 +467,9 @@ mod tests {
                     channels: &channels(
                         channel_id,
                         2,
-                        Keys::new_unchecked(vec![accredited.public_key()])
+                        UnverifiedChannelKeys::new_unchecked(vec![
+                            accredited.public_key().into_unverified()
+                        ])
                     ),
                     tx_hash_view: &TxHashView::from(tx_hash),
                 })
@@ -481,7 +497,9 @@ mod tests {
         let channels = channels(
             channel_id,
             1,
-            Keys::new_unchecked(vec![accredited_key.public_key()]),
+            UnverifiedChannelKeys::new_unchecked(vec![
+                accredited_key.public_key().into_unverified(),
+            ]),
         );
 
         assert_eq!(
@@ -507,7 +525,11 @@ mod tests {
             operation,
             create_channel_multi_sig_proof(&signed_hash, &[&key]),
         );
-        let channels = channels(channel_id, 1, Keys::new_unchecked(vec![key.public_key()]));
+        let channels = channels(
+            channel_id,
+            1,
+            UnverifiedChannelKeys::new_unchecked(vec![key.public_key().into_unverified()]),
+        );
 
         assert!(
             signed_operation
@@ -530,7 +552,9 @@ mod tests {
 
     fn configured_state(operation: &ChannelConfigOp, block_slot: Slot) -> ChannelState {
         ChannelState {
-            accredited_keys: Arc::new(operation.keys.clone()),
+            accredited_keys: Arc::new(UnverifiedChannelKeys::new_unchecked(
+                operation.keys.iter().map(|k| k.into_unverified()).collect(),
+            )),
             configuration_threshold: operation.configuration_threshold,
             tip_message: MsgId::root(),
             config_tip_hash: operation.id(),
@@ -582,8 +606,10 @@ mod tests {
                 configuration_threshold: 99,
                 ..make_channel_state(
                     98,
-                    Some(Keys::new_unchecked(vec![
-                        Ed25519Key::from_bytes(&[42; 32]).public_key(),
+                    Some(UnverifiedChannelKeys::new_unchecked(vec![
+                        Ed25519Key::from_bytes(&[42; 32])
+                            .public_key()
+                            .into_unverified(),
                     ])),
                 )
             },

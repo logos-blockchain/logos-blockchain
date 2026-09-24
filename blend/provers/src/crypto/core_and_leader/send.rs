@@ -256,13 +256,12 @@ where
         let inputs = proofs_and_signing_keys
             .into_iter()
             .map(|(proof, receiver_non_ephemeral_signing_key)| {
-                EncapsulationInput::try_new(
+                EncapsulationInput::new(
                     proof.ephemeral_signing_key,
                     &receiver_non_ephemeral_signing_key,
                     proof.proof_of_quota,
                     proof.proof_of_selection,
                 )
-                .expect("Layer proof signing key assumed not to be identity")
             })
             .collect::<Vec<_>>();
 
@@ -331,7 +330,7 @@ mod test {
                 Membership::new_without_local(&[Node {
                     address: Multiaddr::empty(),
                     id: PeerId::random(),
-                    public_key: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE])
+                    public_key: Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE])
                         .unwrap(),
                 }]),
                 PoQVerificationInputsMinusSigningKey {

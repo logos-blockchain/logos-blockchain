@@ -75,12 +75,12 @@ codec_fixtures!(
     EncapsulatedPrivateHeader,
     context = core::num::NonZeroU64::new(1).unwrap(),
     Self::try_initialize(
-        &[EncapsulationInput::try_new(
+        &[EncapsulationInput::new(
             UnsecuredEd25519Key::from_bytes(&[1u8; 32]),
             &UnsecuredEd25519Key::from_bytes(&[2u8; 32]).public_key(),
             VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE]),
             VerifiedProofOfSelection::from_bytes_unchecked([0u8; PROOF_OF_SELECTION_SIZE]),
-        ).unwrap()], 1
+        )], 1
     ).unwrap() => "aac741e4d4aa7dda96f8f12343513612b5b4aaef97b76eeabccd84305ea75366cfa700c71fc60e212e0a81aeadecf66902674a92cf5b9bb8737cc4cda97dd7c4c8a32ce737a704492afbfa0e5e9988d1e746708b59e5aa250a9093712d7fd084bbef87879e7e241cbdd5a2bdafbbc0afaf745d730d655ca70225c2bb0f6f76bdc95d3ed0bac9ea1d54e7cd6f599100bd6ad82be4897abfe33832f8889f748ab5c6081edb3d77a672fe46bb4ef878e1a76fefb190282d97f890ea6c8707dec0747adfc07dbe99e730c392b53fef3a54f5b72f615f7a73c31cc6909d178b9a64da4dc79cc33e0a6bec5ff869584cb048967efc8705946115785193df89ae0b8059c4648560259f84b6096e1758d8c5f165cc70c4eeecab307ceb559b8c49fdaf1098"
 );
 
@@ -92,30 +92,30 @@ codec_fixtures!(
 codec_fixtures!(
     BlendingHeader,
     Self {
-        signing_pubkey: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-        proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE])
+        signing_pubkey: Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+        proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([2; PROOF_OF_QUOTA_SIZE])
             .into_inner(),
-        signature: Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
+        signature: Ed25519Signature::from_bytes(&[3; ED25519_SIGNATURE_SIZE]),
         proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked(
-            [3; PROOF_OF_SELECTION_SIZE],
+            [4; PROOF_OF_SELECTION_SIZE],
         )
         .into_inner(),
         is_last: false,
-    } => "00000000000000000000000000000000000000000000000000000000000000000101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010102020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202030303030303030303030303030303030303030303030303030303030303030300"
+    } => "01010101010101010101010101010101010101010101010101010101010101010202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020203030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303040404040404040404040404040404040404040404040404040404040404040400"
 );
 
 /// The well-known bytes of a `PublicHeader` (version `0x01`, the reconstructed
-/// signing key of all `0x00`, a proof of quota of all `0x01`, and a signature
-/// of all `0x02`). Shared by the `PublicHeader` fixture and the two verified
+/// signing key of all `0x01`, a proof of quota of all `0x02`, and a signature
+/// of all `0x03`). Shared by the `PublicHeader` fixture and the two verified
 /// wrappers, which encode to the same bytes.
-const PUBLIC_HEADER_HEX: &str = "0100000000000000000000000000000000000000000000000000000000000000000101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010102020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202";
+const PUBLIC_HEADER_HEX: &str = "0101010101010101010101010101010101010101010101010101010101010101010202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020203030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303";
 
 codec_fixtures!(
     PublicHeader,
     Self::new(
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-        &VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]).into_inner(),
-        Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
+        Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+        &VerifiedProofOfQuota::from_bytes_unchecked([2; PROOF_OF_QUOTA_SIZE]).into_inner(),
+        Ed25519Signature::from_bytes(&[3; ED25519_SIGNATURE_SIZE]),
     ) => PUBLIC_HEADER_HEX
 );
 
@@ -123,9 +123,10 @@ codec_fixtures!(
     PublicHeaderWithVerifiedSignature,
     encode_only,
     Self::new(
-        VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]).into_inner(),
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-        Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
+        VerifiedProofOfQuota::from_bytes_unchecked([2; PROOF_OF_QUOTA_SIZE]).into_inner(),
+        // A valid Ed25519 cannot be creates from an array of `2`s, so we use `1` here instead, and `2` for the PoQ above.
+        Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+        Ed25519Signature::from_bytes(&[3; ED25519_SIGNATURE_SIZE]),
     ) => PUBLIC_HEADER_HEX
 );
 
@@ -133,9 +134,10 @@ codec_fixtures!(
     VerifiedPublicHeader,
     encode_only,
     Self::new(
-        VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]),
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-        Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
+        VerifiedProofOfQuota::from_bytes_unchecked([2; PROOF_OF_QUOTA_SIZE]),
+        // A valid Ed25519 cannot be creates from an array of `2`s, so we use `1` here instead, and `2` for the PoQ above.
+        Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+        Ed25519Signature::from_bytes(&[3; ED25519_SIGNATURE_SIZE]),
     ) => PUBLIC_HEADER_HEX
 );
 
@@ -146,13 +148,12 @@ codec_fixtures!(
 
 fn wire_fixture_message() -> EncapsulatedMessageWithVerifiedPublicHeader {
     let recipient_signing_key = UnsecuredEd25519Key::from_bytes(&[1u8; 32]);
-    let inputs = [EncapsulationInput::try_new(
+    let inputs = [EncapsulationInput::new(
         UnsecuredEd25519Key::from_bytes(&[2u8; 32]),
         &recipient_signing_key.public_key(),
         VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE]),
         VerifiedProofOfSelection::from_bytes_unchecked([0u8; PROOF_OF_SELECTION_SIZE]),
-    )
-    .expect("well-known encapsulation input is valid")];
+    )];
 
     let payload_body = full_length_body(b"well-known blend message payload");
 

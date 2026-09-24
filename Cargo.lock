@@ -4675,6 +4675,7 @@ dependencies = [
  "async-trait",
  "blake2",
  "bytes",
+ "curve25519-dalek",
  "ed25519-dalek",
  "generic-array 1.4.3",
  "hex",

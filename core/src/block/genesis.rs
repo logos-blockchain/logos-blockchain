@@ -1289,7 +1289,9 @@ impl GenesisBlockBuilder<WithGenesisTx> {
 mod tests {
     use lb_binary_codec::canonical::BinaryEncode as _;
     use lb_groth16::{AdditiveGroup as _, Fr};
-    use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
+    use lb_key_management_system_keys::keys::{
+        Ed25519PublicKey, UnverifiedEd25519PublicKey, ZkPublicKey,
+    };
     use num_bigint::BigUint;
 
     use super::*;
@@ -1322,7 +1324,7 @@ mod tests {
                 .encode_to_vec(),
             ),
             parent: MsgId::root(),
-            signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         }
     }
 
@@ -1338,7 +1340,7 @@ mod tests {
                 .encode_to_vec(),
             ),
             parent: MsgId::root(),
-            signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         }
     }
 
@@ -1353,7 +1355,7 @@ mod tests {
             service_type: ServiceType::BlendNetwork,
             service_note_id: NoteId(Fr::from(u64::from(id))),
             zk_id: ZkPublicKey::from(BigUint::from(u64::from(id) + 1)),
-            provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[0; 32]).unwrap()),
+            provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[1; 32]).unwrap()),
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         }
     }

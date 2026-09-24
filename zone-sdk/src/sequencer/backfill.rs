@@ -139,11 +139,12 @@ where
 
         self.buffered_events.push_back(Event::BlocksProcessed {
             checkpoint,
+            // Backfill is finalized history: nothing sits above LIB, and
+            // deposits surface via `finalized`, not `adopted_deposits`.
             channel_update: ChannelUpdate {
+                common_prefix: Vec::new(),
                 orphaned: Vec::new(),
                 adopted: Vec::new(),
-                // Backfill is finalized history; deposits there surface via
-                // `finalized`, not as non-finalized `adopted_deposits`.
                 adopted_deposits: Vec::new(),
             },
             finalized: batch.items,

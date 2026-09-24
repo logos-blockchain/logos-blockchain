@@ -53,7 +53,9 @@ pub static INSCRIPTION: LazyLock<InscriptionOp> = LazyLock::new(|| InscriptionOp
     channel_id: ChannelId::from([0x20u8; 32]),
     inscription: b"fixture".into(),
     parent: MsgId::from([0x21u8; 32]),
-    signer: Ed25519Key::from_bytes(&[0x22u8; 32]).public_key(),
+    signer: Ed25519Key::from_bytes(&[0x22u8; 32])
+        .public_key()
+        .into_unverified(),
 });
 
 pub static DEPOSIT: LazyLock<DepositOp> = LazyLock::new(|| DepositOp {

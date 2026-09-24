@@ -22,7 +22,7 @@ use lb_core::{
     },
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
-use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, ZkPublicKey};
+use lb_key_management_system_service::keys::{Ed25519Key, UnverifiedEd25519PublicKey, ZkPublicKey};
 
 use super::tx_builder::sign_prepared;
 
@@ -106,7 +106,7 @@ pub struct PreparedChannelConfig {
     /// The channel's current accredited keys, in index order. Each collected
     /// signature must be indexed by this key's position here. Empty for an
     /// unclaimed channel, which needs no signatures.
-    pub accredited_keys: Vec<Ed25519PublicKey>,
+    pub accredited_keys: Vec<UnverifiedEd25519PublicKey>,
     /// The channel's current `configuration_threshold` — how many of the
     /// `accredited_keys` must sign for the config to be valid. `0` for an
     /// unclaimed channel.
@@ -399,6 +399,10 @@ pub enum Error {
 /// methods return the resulting [`SequencerCheckpoint`] inline. There is no
 /// separate `Published` event.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one event per block; boxing would change the public shape of `BlocksProcessed`"
+)]
 pub enum Event {
     /// Fires per ingested block. Carries finalized txs and the non-finalized
     /// channel-tip delta (`channel_update`); either may be empty. Backfill
@@ -488,27 +492,42 @@ pub enum TxSource {
 
 /// How the channel changed across one [`Event::BlocksProcessed`].
 ///
-/// The channel is an ordered chain of inscriptions. It can momentarily fork —
-/// competing inscriptions chain off the same parent — and this reports how the
-/// canonical chain moved since the last event:
+/// The channel is an ordered chain of inscriptions, with configs on their own
+/// lineage beside it. Either can momentarily fork — competing entries chain
+/// off the same parent — and this reports how the canonical chain moved since
+/// the last event:
 ///
-/// - `adopted`: inscriptions now on the channel that weren't before — apply
-///   them.
-/// - `orphaned`: inscriptions that were on the channel (or that you published
-///   and were still waiting to land) and no longer are — revert them and treat
-///   them as republish candidates.
+/// - `adopted`: entries now on the channel that weren't before — apply them.
+/// - `orphaned`: entries that were on the channel (or that you published and
+///   were still waiting to land) and no longer are — revert them and treat them
+///   as republish candidates.
+/// - `common_prefix`: what the previous and the new view share above the
+///   finalized boundary, so `common_prefix ++ adopted` is the whole
+///   non-finalized view at the new tip — rebuild head state from finalized
+///   state without replaying past updates.
 ///
-/// Both empty means nothing changed.
+/// `adopted` and `orphaned` both empty means nothing changed.
 ///
-/// Consumer pattern:
-/// 1. On each event, mirror the channel: revert every `orphaned` entry and
-///    apply every `adopted` entry.
-/// 2. Process the orphans so no useful work is lost — e.g. if your inscriptions
-///    carry Zone transactions, return them to your mempool. Reprocessing is
-///    idempotent: anything still valid is already pending and no-ops, so only
-///    genuinely-dead work is re-sent.
+/// Two ways to consume it:
+/// - Diff: revert every `orphaned` entry, apply every `adopted` entry. For
+///   consumers that can undo an entry's effects.
+/// - Rebuild from LIB: recompute non-finalized state from
+///   [`Self::canonical_chain`] on top of finalized state; `orphaned` is then
+///   only input to republish decisions. For consumers that cannot undo.
+///
+/// Either way, process the orphans so no useful work is lost — e.g. if your
+/// inscriptions carry Zone transactions, return them to your mempool.
+/// Reprocessing is idempotent: anything still valid is already pending and
+/// no-ops, so only genuinely-dead work is re-sent.
 #[derive(Debug, Clone)]
 pub struct ChannelUpdate {
+    /// The non-finalized view at the new tip minus `adopted`, in lineage
+    /// order: mined entries from LIB to the fork point, then the pending tail
+    /// still chaining on it — the sequencer's own publishes and observed
+    /// entries that dropped out of a block without being replaced. Filled on
+    /// every event. Sized by the finality depth: the whole non-finalized view
+    /// is carried per event.
+    pub common_prefix: Vec<ChannelUpdateTx>,
     /// Txs removed from the channel: ones that were on chain, plus our
     /// own pending that can no longer finalize because a conflicting
     /// inscription took their place in the chain (a parent double-spend).
@@ -518,7 +537,8 @@ pub struct ChannelUpdate {
     /// variant.
     pub orphaned: Vec<ChannelUpdateTx>,
     /// Txs added to the channel — every tx that advanced the canonical
-    /// channel tip: messages, atomic withdraw bundles or custom txs.
+    /// message or config tip: messages, atomic withdraw bundles, configs or
+    /// custom txs.
     ///
     /// On a pure extension (`orphaned` empty) this carries only entries the
     /// sequencer wasn't already tracking — its own publishes apply to
@@ -538,6 +558,15 @@ pub struct ChannelUpdate {
     /// `orphaned`. The bundle's transfer consumes the deposited note, so it
     /// can only land where the deposit is.
     pub adopted_deposits: Vec<DepositInfo>,
+}
+
+impl ChannelUpdate {
+    /// The whole non-finalized view at the new tip. Message entries are in
+    /// lineage order, config entries are in lineage order; the two lineages
+    /// are not interleaved with each other.
+    pub fn canonical_chain(&self) -> impl Iterator<Item = &ChannelUpdateTx> {
+        self.common_prefix.iter().chain(&self.adopted)
+    }
 }
 
 /// Information about whose turn it is to post and the current posting
@@ -579,7 +608,7 @@ pub struct InscriptionInfo {
     /// The accredited key that signed this inscription (the message author).
     /// `None` for a channel-config entry, which is authorized by a threshold of
     /// keys rather than a single signer and carries no author.
-    pub signer: Option<Ed25519PublicKey>,
+    pub signer: Option<UnverifiedEd25519PublicKey>,
 }
 
 /// A channel withdraw observed on chain or bundled in a pending atomic tx.
@@ -782,8 +811,7 @@ mod tests {
         channel::{SlotTimeframe, SlotTimeout},
         ledger::{Inputs, NoteId},
         ops::channel::{
-            ChannelId, MsgId,
-            config::{ChannelConfigOp, Keys},
+            ChannelId, MsgId, VerifiedChannelKeys, config::ChannelConfigOp,
             withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
@@ -803,7 +831,7 @@ mod tests {
         ChannelConfigOp {
             channel: ChannelId::from([7; 32]),
             parent: MsgId::root(),
-            keys: Keys::new_unchecked(keys),
+            keys: VerifiedChannelKeys::new_unchecked(keys),
             posting_timeframe: SlotTimeframe::from(15),
             posting_timeout: SlotTimeout::from(3),
             configuration_threshold: 2,
@@ -837,26 +865,36 @@ mod tests {
             Ed25519Key::from_bytes(&[4; 32]).public_key(),
             signer.public_key(),
         ];
-        let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited.clone()))]);
+        let accredited_as_unverified_keys = accredited
+            .iter()
+            .map(|k| k.into_unverified())
+            .collect::<Vec<_>>();
+        let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited))]);
         let prepared = PreparedChannelConfig {
             sign_payload: payload_of(&tx),
             tx,
             transfer_proof: None,
-            accredited_keys: accredited.clone(),
+            accredited_keys: accredited_as_unverified_keys.clone(),
             signing_threshold: 2,
         };
 
         assert_eq!(
             prepared.sign_with(&signer).expect("signer is accredited"),
-            sign_prepared(&signer, &accredited, &prepared.sign_payload)
-                .expect("signer is accredited"),
+            sign_prepared(
+                &signer,
+                &accredited_as_unverified_keys,
+                &prepared.sign_payload
+            )
+            .expect("signer is accredited"),
         );
     }
 
     #[test]
     fn tx_exposes_every_op_in_order_so_a_bundled_op_is_visible() {
         let accredited = vec![Ed25519Key::from_bytes(&[4; 32]).public_key()];
-        let config = Op::ChannelConfig(config_op(accredited.clone()));
+        let accredited_as_unverified_keys =
+            accredited.iter().map(|k| k.into_unverified()).collect();
+        let config = Op::ChannelConfig(config_op(accredited));
         // A preparer smuggling a withdraw in alongside the config: one
         // signature over the tx hash would authorize both.
         let smuggled = Op::ChannelWithdraw(ChannelWithdrawOp {
@@ -868,7 +906,7 @@ mod tests {
             sign_payload: payload_of(&tx),
             tx,
             transfer_proof: None,
-            accredited_keys: accredited,
+            accredited_keys: accredited_as_unverified_keys,
             signing_threshold: 1,
         };
 
@@ -884,13 +922,15 @@ mod tests {
     fn sign_with_refuses_a_payload_that_does_not_match_tx() {
         let signer = Ed25519Key::from_bytes(&[5; 32]);
         let accredited = vec![signer.public_key()];
-        let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited.clone()))]);
+        let accredited_as_unverified_keys =
+            accredited.iter().map(|k| k.into_unverified()).collect();
+        let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited))]);
         // Honest-looking ops, but the payload belongs to some other tx.
         let prepared = PreparedChannelConfig {
             tx,
             transfer_proof: None,
             sign_payload: vec![0x11; 32],
-            accredited_keys: accredited,
+            accredited_keys: accredited_as_unverified_keys,
             signing_threshold: 1,
         };
 

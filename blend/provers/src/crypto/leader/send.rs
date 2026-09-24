@@ -217,13 +217,12 @@ where
         let inputs = proofs_and_signing_keys
             .into_iter()
             .map(|(proof, receiver_non_ephemeral_signing_key)| {
-                EncapsulationInput::try_new(
+                EncapsulationInput::new(
                     proof.ephemeral_signing_key,
                     &receiver_non_ephemeral_signing_key,
                     proof.proof_of_quota,
                     proof.proof_of_selection,
                 )
-                .expect("Layer proof signing key assumed not to be identity")
             })
             .collect::<Vec<_>>();
 

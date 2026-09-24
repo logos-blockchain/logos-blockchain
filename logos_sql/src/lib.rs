@@ -16,7 +16,7 @@ mod sql;
 mod status;
 
 pub use error::Error;
-pub use logos_sql::{LogosSql, LogosSqlConfig};
+pub use logos_sql::{LogosSql, LogosSqlConfig, WriterConfig};
 pub use protocol::TxId;
 pub use rusqlite::types::ToSql;
 pub use sql::TransactionBuilder;

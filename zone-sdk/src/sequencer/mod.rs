@@ -92,7 +92,7 @@ pub use lb_core::{
     },
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
-pub use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
+pub use lb_key_management_system_service::keys::{Ed25519Key, UnverifiedEd25519PublicKey};
 // Pure key-only signing primitive for prepared multi-sig artifacts — usable by
 // an offline key holder with no sequencer or chain state.
 pub use tx_builder::sign_prepared;

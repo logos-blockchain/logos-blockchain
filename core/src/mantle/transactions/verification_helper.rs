@@ -1,7 +1,7 @@
 use std::num::NonZeroU64;
 
 use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
 use rpds::HashTrieMapSync;
 
 use crate::{
@@ -55,7 +55,7 @@ pub trait OperationVerificationHelper {
         &self,
         channel_id: &ChannelId,
         key_index: &ChannelKeyIndex,
-    ) -> Result<Ed25519PublicKey, VerificationError>;
+    ) -> Result<UnverifiedEd25519PublicKey, VerificationError>;
 
     // `PoW` claim validation inputs, one per
     // [`ClaimPoWRewardVerificationContext`] field. The current block slot comes
@@ -98,6 +98,7 @@ pub mod test_utils {
     use std::{collections::HashMap, num::NonZeroU64};
 
     use lb_cryptarchia_engine::{Epoch, Slot};
+    use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
     use rpds::{HashTrieMapSync, HashTrieSetSync};
 
     use crate::{
@@ -107,7 +108,7 @@ pub mod test_utils {
             channel::Channels,
             ledger::{Declarations, Utxos},
             ops::{
-                channel::{ChannelId, ChannelKeyIndex, Ed25519PublicKey},
+                channel::{ChannelId, ChannelKeyIndex},
                 leader_claim::{RewardsRoot, VoucherNullifier},
                 pow::{PowNullifier, PowReward, PowTarget},
             },
@@ -118,7 +119,7 @@ pub mod test_utils {
 
     pub struct TestOperationVerificationHelper {
         channels: Channels,
-        keys: HashMap<(ChannelId, ChannelKeyIndex), Ed25519PublicKey>,
+        keys: HashMap<(ChannelId, ChannelKeyIndex), UnverifiedEd25519PublicKey>,
         service_notes: ServiceNotes,
         utxos: Utxos,
         declarations: Declarations,
@@ -141,7 +142,7 @@ pub mod test_utils {
         #[must_use]
         pub fn new(
             channels: Channels,
-            keys: impl IntoIterator<Item = ((ChannelId, ChannelKeyIndex), Ed25519PublicKey)>,
+            keys: impl IntoIterator<Item = ((ChannelId, ChannelKeyIndex), UnverifiedEd25519PublicKey)>,
         ) -> Self {
             Self {
                 channels,
@@ -301,7 +302,7 @@ pub mod test_utils {
             &self,
             channel_id: &ChannelId,
             key_index: &ChannelKeyIndex,
-        ) -> Result<Ed25519PublicKey, VerificationError> {
+        ) -> Result<UnverifiedEd25519PublicKey, VerificationError> {
             self.keys.get(&(*channel_id, *key_index)).copied().ok_or(
                 VerificationError::KeyNotFound {
                     channel_id: *channel_id,

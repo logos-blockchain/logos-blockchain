@@ -12,6 +12,25 @@ use super::{
     wait_for_withdraw, wait_until_sorted_conflict_settles, zone_step_error,
 };
 
+#[cucumber::then("the channel view contract holds for all zone sequencers")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+fn step_channel_view_contract_holds(world: &mut CucumberWorld) -> StepResult {
+    let violations = world.zone.view_violations();
+    if violations.is_empty() {
+        return Ok(());
+    }
+    Err(StepError::LogicalError {
+        message: violations
+            .iter()
+            .map(|(alias, message)| format!("{alias}: {message}"))
+            .collect::<Vec<_>>()
+            .join("; "),
+    })
+}
+
 #[cucumber::then(expr = "all zone messages are safe in {int} seconds")]
 #[expect(
     clippy::needless_pass_by_ref_mut,

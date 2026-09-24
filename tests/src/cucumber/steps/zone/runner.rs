@@ -13,6 +13,12 @@
 //! there is no window where an event was observed but the policy's reaction
 //! hasn't been applied to the SDK's state.
 
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+};
+
+use lb_core::mantle::{ops::channel::MsgId, transactions::hash::TxHash};
 pub use lb_zone_sdk::sequencer::{
     AtomicWithdrawInfo, ChannelUpdate, ChannelUpdateTx, DepositInfo, Error, Event, FinalizedOp,
     FinalizedTx, FundingConfig, IndexedSignature, InscriptionId, InscriptionInfo, PendingTx,
@@ -25,6 +31,7 @@ use tokio::{
     sync::{broadcast, watch},
     task::JoinHandle,
 };
+use tracing::error;
 
 /// Inline policy executed on the drive task for each SDK event before the
 /// event is forwarded to test observers.
@@ -62,6 +69,9 @@ where
 /// `RecvError::Lagged` they can recover from.
 pub struct Runtime {
     pub task: JoinHandle<()>,
+    /// The first channel-view contract violation the drive loop's checker
+    /// recorded; asserted by the `channel view contract holds` step.
+    pub view_violation: ViewViolation,
     pub client: SequencerClient,
     pub event_rx: broadcast::Receiver<Event>,
     pub checkpoint_rx: watch::Receiver<Option<SequencerCheckpoint>>,
@@ -80,16 +90,127 @@ pub struct Runtime {
 /// are processed inside `next_event`; no separate command path is needed.
 ///
 /// Pulled out as a free async function so callers can spawn it themselves.
-pub(super) async fn run<Node, P>(mut sequencer: ZoneSequencer<Node>, mut policy: P)
-where
+pub(super) async fn run<Node, P>(
+    mut sequencer: ZoneSequencer<Node>,
+    mut policy: P,
+    violation: ViewViolation,
+) where
     Node: adapter::Node + Clone + Send + Sync + 'static,
     P: Policy<Node>,
 {
+    let mut view = ViewChecker::new(violation);
     loop {
         let ev = sequencer.next_event().await;
+        view.observe(&ev);
         policy.on_event(&mut sequencer, &ev).await;
         // Event already broadcast via the SDK's `emit_now`; nothing for the
         // runner to forward.
+    }
+}
+
+/// Asserts the [`ChannelUpdate`] contract on every block event: what a
+/// consumer holds from the stream (adopted, not orphaned since, not
+/// finalized) must equal `common_prefix ++ adopted`, up to the sequencer's own
+/// in-flight publishes, which the prefix carries and the stream never echoes.
+struct ViewChecker {
+    held: HashSet<TxHash>,
+    violation: ViewViolation,
+}
+
+/// The first contract violation a [`ViewChecker`] recorded.
+pub type ViewViolation = Arc<Mutex<Option<String>>>;
+
+impl ViewChecker {
+    fn new(violation: ViewViolation) -> Self {
+        Self {
+            held: HashSet::new(),
+            violation,
+        }
+    }
+
+    /// Keep the first violation; a broken invariant makes later checks noise.
+    fn record(&self, message: String) {
+        let mut violation = self.violation.lock().expect("checker mutex");
+        if violation.is_none() {
+            error!("channel view contract violated: {message}");
+            *violation = Some(message);
+        }
+    }
+
+    fn observe(&mut self, event: &Event) {
+        let Event::BlocksProcessed {
+            checkpoint,
+            channel_update,
+            finalized,
+        } = event
+        else {
+            return;
+        };
+        self.remove_orphaned(channel_update);
+        self.add_adopted(channel_update);
+        self.remove_finalized(finalized);
+        self.check_view(channel_update, checkpoint);
+    }
+
+    fn remove_orphaned(&mut self, update: &ChannelUpdate) {
+        for tx in &update.orphaned {
+            self.held.remove(&tx.tx_hash());
+        }
+    }
+
+    fn add_adopted(&mut self, update: &ChannelUpdate) {
+        for tx in &update.adopted {
+            self.held.insert(tx.tx_hash());
+        }
+    }
+
+    fn remove_finalized(&mut self, finalized: &[FinalizedTx]) {
+        for tx in finalized {
+            self.held.remove(&tx.tx_hash);
+        }
+    }
+
+    /// `canonical_chain()` carries only what is held or in flight, everything
+    /// held, and every message after its parent.
+    fn check_view(&self, update: &ChannelUpdate, checkpoint: &SequencerCheckpoint) {
+        let ids: HashSet<MsgId> = update
+            .canonical_chain()
+            .filter_map(ChannelUpdateTx::inscription)
+            .map(|info| info.this_msg)
+            .collect();
+        let mut seen: HashSet<MsgId> = HashSet::new();
+        for info in update
+            .canonical_chain()
+            .filter_map(ChannelUpdateTx::inscription)
+        {
+            if ids.contains(&info.parent_msg) && !seen.contains(&info.parent_msg) {
+                self.record(format!(
+                    "{:?} listed before its parent {:?}",
+                    info.this_msg, info.parent_msg
+                ));
+            }
+            seen.insert(info.this_msg);
+        }
+
+        let view: HashSet<TxHash> = update
+            .canonical_chain()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect();
+        let pending: HashSet<TxHash> = checkpoint.pending_txs.iter().map(|(h, _)| *h).collect();
+        for tx in &view {
+            if !self.held.contains(tx) && !pending.contains(tx) {
+                self.record(format!(
+                    "common_prefix carries {tx:?}, which was never adopted and is not pending"
+                ));
+            }
+        }
+        for tx in &self.held {
+            if !view.contains(tx) {
+                self.record(format!(
+                    "{tx:?} was adopted and never orphaned or finalized, but left common_prefix"
+                ));
+            }
+        }
     }
 }
 
@@ -111,10 +232,12 @@ where
     let event_rx = sequencer.subscribe_events();
     let client = sequencer.client();
 
-    let task = tokio::spawn(run(sequencer, policy));
+    let view_violation = ViewViolation::default();
+    let task = tokio::spawn(run(sequencer, policy, Arc::clone(&view_violation)));
 
     Runtime {
         task,
+        view_violation,
         client,
         event_rx,
         checkpoint_rx,

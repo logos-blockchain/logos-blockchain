@@ -39,7 +39,7 @@ pub fn valid_proof_of_quota_inputs(
         },
         private_inputs,
     ) = valid_proof_of_core_quota_inputs(
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE])
+        Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE])
             .unwrap()
             .into_inner(),
         core_quota,
@@ -62,7 +62,7 @@ pub fn valid_proof_of_leader_inputs(
         },
         private_inputs,
     ) = valid_proof_of_leadership_quota_inputs(
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE])
+        Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE])
             .unwrap()
             .into_inner(),
         leader_quota,
@@ -80,7 +80,7 @@ pub fn valid_proof_of_work_inputs(pow_quota: Quota) -> PoQVerificationInputsMinu
         },
         _,
     ) = valid_proof_of_work_quota_inputs(
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE])
+        Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE])
             .unwrap()
             .into_inner(),
         pow_quota,

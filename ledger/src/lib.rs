@@ -1025,7 +1025,7 @@ mod tests {
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{CompressedGroth16Proof, Field as _};
     use lb_key_management_system_keys::keys::{
-        Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey, ZkSignature,
+        Ed25519Key, Ed25519PublicKey, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey, ZkSignature,
     };
     use num_bigint::BigUint;
 
@@ -1157,7 +1157,7 @@ mod tests {
         config: &Config,
         id: ChannelId,
         signing_key: &Ed25519Key,
-        verifying_key: Ed25519PublicKey,
+        verifying_key: UnverifiedEd25519PublicKey,
     ) -> LedgerState {
         let tx = create_signed_tx(
             Op::ChannelInscribe(InscriptionOp {
@@ -1333,7 +1333,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3, 4].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let tx = create_signed_tx(Op::ChannelInscribe(inscribe_op), &Key::Ed25519(signing_key));
@@ -1394,7 +1394,7 @@ mod tests {
                 .get(&channel_id)
                 .unwrap()
                 .accredited_keys,
-            verifying_key.into()
+            verifying_key.into_unverified().into()
         );
         assert!(events.is_empty());
     }
@@ -1461,7 +1461,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let mut tip = first_inscribe.id();
         let first_tx = create_signed_tx(
@@ -1491,7 +1491,7 @@ mod tests {
                 channel_id,
                 inscription: [byte].into(),
                 parent: tip,
-                signer: verifying_key,
+                signer: verifying_key.into_unverified(),
             };
             tip = inscribe.id();
             let tx = create_signed_tx(
@@ -1599,7 +1599,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let first_tx = create_signed_tx(
             Op::ChannelInscribe(first_inscribe.clone()),
@@ -1631,7 +1631,7 @@ mod tests {
             channel_id,
             inscription: [4, 5, 6].into(),
             parent: first_inscribe.id(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let second_tx = create_signed_tx(
             Op::ChannelInscribe(second_inscribe.clone()),
@@ -1665,7 +1665,7 @@ mod tests {
             &test_config,
             channel_id,
             &signing_key,
-            verifying_key,
+            verifying_key.into_unverified(),
         );
         assert!(
             ledger_state
@@ -1759,7 +1759,7 @@ mod tests {
             &test_config,
             channel_id,
             &signing_key,
-            verifying_key,
+            verifying_key.into_unverified(),
         );
 
         // Deposit some funds into the channel
@@ -1916,7 +1916,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let config_op = ChannelConfigOp {
             channel: channel_id,
@@ -1985,7 +1985,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let deposit = DepositOp {
             channel_id,
@@ -2054,7 +2054,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let deposit = DepositOp {
             channel_id,
@@ -2124,7 +2124,7 @@ mod tests {
             &test_config,
             channel_id,
             &signing_key,
-            verifying_key,
+            verifying_key.into_unverified(),
         );
 
         let deposit = DepositOp {
@@ -2190,7 +2190,7 @@ mod tests {
             &test_config,
             channel_id,
             &signing_key,
-            verifying_key,
+            verifying_key.into_unverified(),
         );
 
         // Deposit some funds into the channel
@@ -2269,7 +2269,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let first_tx = create_signed_tx(
@@ -2287,7 +2287,7 @@ mod tests {
             channel_id,
             inscription: [4, 5, 6].into(),
             parent: wrong_parent,
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let second_tx = create_signed_tx(
@@ -2312,7 +2312,7 @@ mod tests {
             channel_id: empty_channel_id,
             inscription: [7, 8, 9].into(),
             parent: MsgId::from([1; 32]), // non-root parent
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let empty_tx = create_signed_tx(
@@ -2344,7 +2344,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let correct_parent = first_inscribe.id();
@@ -2362,7 +2362,7 @@ mod tests {
             channel_id,
             inscription: [4, 5, 6].into(),
             parent: correct_parent,
-            signer: unauthorized_verifying_key,
+            signer: unauthorized_verifying_key.into_unverified(),
         };
 
         let second_tx = create_signed_tx(
@@ -2401,14 +2401,14 @@ mod tests {
             channel_id: channel1,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: vk1,
+            signer: vk1.into_unverified(),
         };
 
         let inscribe_op2 = InscriptionOp {
             channel_id: channel2,
             inscription: [4, 5, 6].into(),
             parent: MsgId::root(),
-            signer: vk2,
+            signer: vk2.into_unverified(),
         };
 
         let config_op = ChannelConfigOp {
@@ -2425,7 +2425,7 @@ mod tests {
             channel_id: channel1,
             inscription: [7, 8, 9].into(),
             parent: inscribe_op1.id(),
-            signer: vk3,
+            signer: vk3.into_unverified(),
         };
 
         let ops = vec![

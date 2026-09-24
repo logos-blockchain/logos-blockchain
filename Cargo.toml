@@ -208,6 +208,7 @@ color-eyre                         = { default-features = false, version = "0.6.
 console-subscriber                 = { default-features = false, version = "0.5" }
 const-hex                          = { default-features = false, version = "1" }
 cucumber                           = { default-features = false, version = "=0.23.0" }
+curve25519-dalek                   = { default-features = false, version = "4" }
 dhat                               = { default-features = false, version = "0.3.3" }
 divan                              = { default-features = false, version = "0.1" }
 ed25519                            = { default-features = false, version = "2.2.3" }

@@ -405,7 +405,7 @@ pub mod test_utils {
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ledger::{Inputs, verification_mode::StandardMode},
         ops::channel::{
-            ChannelId, ChannelKeyIndex, MsgId, config::Keys, inscribe::InscriptionOp,
+            ChannelId, ChannelKeyIndex, MsgId, UnverifiedChannelKeys, inscribe::InscriptionOp,
             verification::test_utils::create_channel_multi_sig_proof, withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
@@ -423,7 +423,7 @@ pub mod test_utils {
             channel_id: [0; 32].into(),
             inscription: [1, 2, 3].into(),
             parent: [0; 32].into(),
-            signer: signing_key.public_key(),
+            signer: signing_key.public_key().into_unverified(),
         }
     }
 
@@ -432,10 +432,13 @@ pub mod test_utils {
     #[must_use]
     pub fn make_channel_state(
         transfer_threshold: ChannelKeyIndex,
-        accredited_keys: Option<Keys>,
+        accredited_keys: Option<UnverifiedChannelKeys>,
     ) -> ChannelState {
         let keys = accredited_keys.unwrap_or_else(|| {
-            Keys::new_unchecked(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()])
+            [Ed25519Key::from_bytes(&[0; 32])
+                .public_key()
+                .into_unverified()]
+            .into()
         });
         ChannelState {
             accredited_keys: Arc::new(keys),
