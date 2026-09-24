@@ -80,7 +80,7 @@ impl LogosSql {
         let writer = if let Some(writer) = config.writer {
             writer
         } else {
-            if db.pending_publish()?.is_some()
+            if db.has_pending_writes()?
                 || checkpoint
                     .as_ref()
                     .is_some_and(|cp| !cp.pending_txs.is_empty())
@@ -149,6 +149,8 @@ impl LogosSql {
     ///
     /// A successful return means the SQL effects and recovery record are
     /// committed locally. Publication and finality remain asynchronous.
+    /// Nearby writes share an inscription, but each remains a separate SQL
+    /// transaction with its own identity and outcome.
     /// [`TransactionBuilder::tx_id`] exposes the same identity before the
     /// asynchronous call, allowing the application to record how transaction
     /// outcomes map to its own operations.
