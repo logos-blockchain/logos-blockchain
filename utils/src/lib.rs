@@ -2,6 +2,7 @@ pub mod bounded;
 pub mod math;
 pub mod net;
 pub mod noop_service;
+pub mod ordered_map;
 pub mod ordered_set;
 pub mod types;
 pub mod yaml;

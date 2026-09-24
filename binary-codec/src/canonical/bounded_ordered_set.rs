@@ -18,6 +18,7 @@ use lb_utils::bounded::BoundedOrderedSet;
 
 use super::{
     BinaryDecode, BinaryEncode, CodecExamples, CodecFixture, CodecFixtures, DecodeError,
+    fixtures::distinct_fixtures_in_declared_order,
     length_prefix::{decode_bounded_length, encode_length_prefix_into, length_prefix_len},
     sealed,
 };
@@ -104,35 +105,6 @@ where
         }]
         .into()
     }
-}
-
-/// Up to `MAX` fixtures of `T` with pairwise distinct bytes, in the order `T`
-/// declares them.
-fn distinct_fixtures_in_declared_order<Collection, T, const MIN: usize, const MAX: usize>()
--> Vec<CodecFixture<T>>
-where
-    T: CodecExamples,
-{
-    let mut fixtures: Vec<CodecFixture<T>> = Vec::new();
-    for fixture in T::fixtures() {
-        if fixtures.len() == MAX {
-            break;
-        }
-        if fixtures.iter().all(|kept| kept.bytes != fixture.bytes) {
-            fixtures.push(fixture);
-        }
-    }
-    // The set's fixture needs `MIN` distinct elements, and the only source of
-    // elements is the element type's own fixtures.
-    assert!(
-        fixtures.len() >= MIN,
-        "{collection}: its fixture needs at least {MIN} distinct fixtures of {element}, but \
-         {element} has {available}; add more to the `codec_fixtures!` of {element}",
-        collection = type_name::<Collection>(),
-        element = type_name::<T>(),
-        available = fixtures.len(),
-    );
-    fixtures
 }
 
 #[cfg(test)]

@@ -14,9 +14,10 @@
 //! [`Bounded::check_len_against_bounds`] and
 //! [`Bounded::new_unchecked`].
 //!
-//! [`BoundedOrderedSet`] adds a second invariant on top of the bound: every
-//! checked construction path rejects a duplicate instead of silently merging
-//! it, so the number of items read is always the number of items held.
+//! [`BoundedOrderedSet`] and [`BoundedOrderedMap`] add a second invariant on
+//! top of the bound: every checked construction path rejects a repeated
+//! element or key instead of silently merging it, so the number of items read
+//! is always the number of items held.
 
 use core::fmt::{self, Display, Formatter};
 
@@ -24,6 +25,8 @@ use serde::{Serialize, Serializer};
 use thiserror::Error;
 
 pub mod multiaddr;
+pub mod ordered_map;
+pub use ordered_map::{BoundedOrderedMap, NonEmptyBoundedOrderedMap, UpperBoundedOrderedMap};
 pub mod ordered_set;
 pub use ordered_set::{BoundedOrderedSet, NonEmptyBoundedOrderedSet, UpperBoundedOrderedSet};
 pub mod string;
@@ -52,8 +55,8 @@ pub enum BoundedError {
         max: usize,
         capacity: usize,
     },
-    /// Raised by [`BoundedOrderedSet`] only: the item at `index` (0-based, in
-    /// input order) repeats an earlier item.
+    /// Raised by [`BoundedOrderedSet`] and [`BoundedOrderedMap`]: the item at
+    /// `index` (0-based, in input order) repeats an earlier element or key.
     #[error("Item at index {index} is a duplicate of an earlier item")]
     DuplicateItem { index: usize },
 }

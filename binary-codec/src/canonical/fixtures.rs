@@ -214,3 +214,53 @@ where
         );
     }
 }
+
+/// Up to `MAX` fixtures of `T` with pairwise distinct bytes, in the order `T`
+/// declares them: what an ordered collection's own fixture is built from.
+///
+/// The collection's fixture needs `MIN` distinct items, and the only source of
+/// items is the item type's own fixtures, so fewer than `MIN` of them is a
+/// panic that says what to add.
+pub(super) fn distinct_fixtures_in_declared_order<
+    Collection,
+    T,
+    const MIN: usize,
+    const MAX: usize,
+>() -> Vec<CodecFixture<T>>
+where
+    T: CodecExamples,
+{
+    let mut fixtures: Vec<CodecFixture<T>> = Vec::new();
+    for fixture in T::fixtures() {
+        if fixtures.len() == MAX {
+            break;
+        }
+        if fixtures.iter().all(|kept| kept.bytes != fixture.bytes) {
+            fixtures.push(fixture);
+        }
+    }
+    assert!(
+        fixtures.len() >= MIN,
+        "{collection}: its fixture needs at least {MIN} distinct fixtures of {item}, but {item} \
+         has {available}; add more to the `codec_fixtures!` of {item}",
+        collection = core::any::type_name::<Collection>(),
+        item = core::any::type_name::<T>(),
+        available = fixtures.len(),
+    );
+    fixtures
+}
+
+/// The fixture of `V` at `index`, cycling through all of `V`'s fixtures.
+///
+/// Gives every entry of a map fixture a value without requiring `V: Clone`.
+pub(super) fn cycled_fixture<V>(index: usize) -> CodecFixture<V>
+where
+    V: CodecExamples,
+{
+    let fixtures = V::fixtures();
+    let position = index % fixtures.len();
+    fixtures
+        .into_iter()
+        .nth(position)
+        .expect("the position is within the fixtures")
+}

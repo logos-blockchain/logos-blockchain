@@ -11,6 +11,7 @@
 
 mod array;
 mod boolean;
+mod bounded_ordered_map;
 mod bounded_ordered_set;
 mod bounded_vec;
 mod error;

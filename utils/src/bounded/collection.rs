@@ -1,5 +1,5 @@
 //! Building a bounded collection item by item, from an iterator or from a
-//! serde sequence.
+//! serde sequence or map.
 //!
 //! Every checked path that builds a [`Bounded`] collection one item at a time
 //! goes through [`collect`], so the same rules hold for all of them:
@@ -22,7 +22,7 @@ use core::{convert::identity, fmt, marker::PhantomData};
 
 use serde::{
     Deserialize,
-    de::{Error as _, SeqAccess, Visitor},
+    de::{Error as _, MapAccess, SeqAccess, Visitor},
 };
 
 use crate::bounded::{Bounded, BoundedError, allocation_size_for_hint};
@@ -161,6 +161,41 @@ where
         let hint = sequence.size_hint();
         check_declared_len::<Collection, A::Error, MIN, MAX>(hint)?;
         collect(hint, || sequence.next_element(), A::Error::custom)
+    }
+}
+
+/// Deserializes a map into a bounded ordered map.
+pub struct MapVisitor<Collection, const MIN: usize, const MAX: usize>(PhantomData<Collection>);
+
+impl<Collection, const MIN: usize, const MAX: usize> MapVisitor<Collection, MIN, MAX> {
+    pub const fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<'de, Collection, K, V, const MIN: usize, const MAX: usize> Visitor<'de>
+    for MapVisitor<Collection, MIN, MAX>
+where
+    Collection: BoundedCollection<Item = (K, V)>,
+    K: Deserialize<'de>,
+    V: Deserialize<'de>,
+{
+    type Value = Bounded<Collection, MIN, MAX>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "a map of between {MIN} and {MAX} entries with distinct keys"
+        )
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let hint = map.size_hint();
+        check_declared_len::<Collection, A::Error, MIN, MAX>(hint)?;
+        collect(hint, || map.next_entry(), A::Error::custom)
     }
 }
 
