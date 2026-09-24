@@ -43,8 +43,6 @@ where
     }
 }
 
-delegate_comparisons_to_inner!([K, V, S] HashMap<K, V, S>);
-
 /// A [`HashMap`] whose entry count is statically enforced to be in the range
 /// `[MIN, MAX]`.
 ///

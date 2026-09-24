@@ -9,8 +9,6 @@ impl BoundedLen for Multiaddr {
     }
 }
 
-delegate_comparisons_to_inner!([] Multiaddr);
-
 /// A `Multiaddr` whose byte length is statically enforced to be in the range
 /// `[MIN, MAX]`.
 ///

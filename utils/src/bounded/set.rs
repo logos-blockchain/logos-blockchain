@@ -34,8 +34,6 @@ where
     }
 }
 
-delegate_comparisons_to_inner!([T, S] HashSet<T, S>);
-
 /// A [`HashSet`] whose element count is statically enforced to be in the
 /// range `[MIN, MAX]`.
 ///

@@ -30,8 +30,6 @@ impl<T> BoundedCollection for Vec<T> {
     }
 }
 
-delegate_comparisons_to_inner!([T] Vec<T>);
-
 /// `Vec<T>` whose length is statically enforced to be in the range `[MIN,
 /// MAX]`.
 ///
