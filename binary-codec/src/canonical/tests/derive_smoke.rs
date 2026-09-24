@@ -4,7 +4,7 @@
 
 use lb_utils::bounded::{BoundedIndexMap, BoundedSet};
 
-use crate::canonical::{BinaryCodec, BinaryDecodeExt as _, BinaryEncode as _, codec_fixtures};
+use crate::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, codec_fixtures};
 
 #[derive(Debug, PartialEq, Eq, BinaryCodec)]
 struct Named {
@@ -27,7 +27,7 @@ fn derived_named_struct_round_trips() {
     assert_eq!(bytes, vec![9, 0xEF, 0xBE]);
     assert_eq!(value.encoded_length(), 3);
 
-    let (rest, decoded) = Named::decode(&bytes).unwrap();
+    let (rest, decoded) = Named::decode(&bytes, &()).unwrap();
     assert!(rest.is_empty());
     assert_eq!(decoded, value);
 }
@@ -38,7 +38,7 @@ fn derived_tuple_struct_round_trips() {
     let bytes = value.encode_to_vec();
     assert_eq!(value.encoded_length(), bytes.len());
 
-    let (rest, decoded) = Tuple::decode(&bytes).unwrap();
+    let (rest, decoded) = Tuple::decode(&bytes, &()).unwrap();
     assert!(rest.is_empty());
     assert_eq!(decoded, value);
 }
@@ -46,10 +46,36 @@ fn derived_tuple_struct_round_trips() {
 /// Keyed collection fields derive like any other field: each encodes in
 /// declaration order under its own rules. The set sorts `{7, 0}` to `00 07`;
 /// the index map keeps `9` before `3`.
-#[derive(Debug, PartialEq, Eq, BinaryCodec)]
+#[derive(Debug, PartialEq, Eq)]
 struct WithKeyed {
     tags: BoundedSet<u8, 0, 4>,
     slots: BoundedIndexMap<u8, u16, 1, 4>,
+}
+
+impl BinaryEncode for WithKeyed {
+    fn encoded_length(&self) -> usize {
+        self.tags.encoded_length() + self.slots.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.tags.encode_into(out);
+        self.slots.encode_into(out);
+    }
+}
+
+impl BinaryDecode for WithKeyed {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        context: &Self::Context,
+    ) -> Result<(&'input [u8], Self), crate::canonical::DecodeError> {
+        let (rest, tags) = <BoundedSet<u8, 0, 4> as BinaryDecode>::decode(input, context)?;
+        let (rest, slots) =
+            <BoundedIndexMap<u8, u16, 1, 4> as BinaryDecode>::decode(rest, &((), ()))?;
+
+        Ok((rest, Self { tags, slots }))
+    }
 }
 
 codec_fixtures!(

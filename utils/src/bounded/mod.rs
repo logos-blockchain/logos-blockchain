@@ -24,83 +24,6 @@ use core::fmt::{self, Display, Formatter};
 use serde::{Serialize, Serializer};
 use thiserror::Error;
 
-/// Implements the comparison traits for `Bounded<$inner, MIN, MAX>` by
-/// delegating to `$inner`, each under the bound the inner type needs for it.
-///
-/// `Bounded` does not derive them: a derive would fix every wrapped type to
-/// its inner type's notion of equality, and `IndexMap`'s ignores an entry
-/// order that is part of a `BoundedIndexMap`'s value. Types whose inner
-/// equality is the right one use this macro; the others implement the traits
-/// by hand.
-///
-/// The generic parameters of `$inner` go in the brackets. A concrete inner
-/// type (empty brackets) must implement all five traits, and gets the
-/// `partial_cmp` clippy asks for when `Ord` is known to hold.
-macro_rules! delegate_comparisons_to_inner {
-    ([$($param:ident),+] $inner:ty) => {
-        delegate_comparisons_to_inner!(@eq_hash_ord [$($param),+] $inner);
-
-        impl<$($param,)+ const MIN: usize, const MAX: usize> ::core::cmp::PartialOrd
-            for $crate::bounded::Bounded<$inner, MIN, MAX>
-        where
-            $inner: ::core::cmp::PartialOrd,
-        {
-            fn partial_cmp(&self, other: &Self) -> Option<::core::cmp::Ordering> {
-                self.as_inner().partial_cmp(other.as_inner())
-            }
-        }
-    };
-    ([] $inner:ty) => {
-        delegate_comparisons_to_inner!(@eq_hash_ord [] $inner);
-
-        impl<const MIN: usize, const MAX: usize> ::core::cmp::PartialOrd
-            for $crate::bounded::Bounded<$inner, MIN, MAX>
-        {
-            fn partial_cmp(&self, other: &Self) -> Option<::core::cmp::Ordering> {
-                Some(self.cmp(other))
-            }
-        }
-    };
-    (@eq_hash_ord [$($param:ident),*] $inner:ty) => {
-        impl<$($param,)* const MIN: usize, const MAX: usize> ::core::cmp::PartialEq
-            for $crate::bounded::Bounded<$inner, MIN, MAX>
-        where
-            $inner: ::core::cmp::PartialEq,
-        {
-            fn eq(&self, other: &Self) -> bool {
-                self.as_inner() == other.as_inner()
-            }
-        }
-
-        impl<$($param,)* const MIN: usize, const MAX: usize> ::core::cmp::Eq
-            for $crate::bounded::Bounded<$inner, MIN, MAX>
-        where
-            $inner: ::core::cmp::Eq,
-        {
-        }
-
-        impl<$($param,)* const MIN: usize, const MAX: usize> ::core::hash::Hash
-            for $crate::bounded::Bounded<$inner, MIN, MAX>
-        where
-            $inner: ::core::hash::Hash,
-        {
-            fn hash<H: ::core::hash::Hasher>(&self, state: &mut H) {
-                ::core::hash::Hash::hash(self.as_inner(), state);
-            }
-        }
-
-        impl<$($param,)* const MIN: usize, const MAX: usize> ::core::cmp::Ord
-            for $crate::bounded::Bounded<$inner, MIN, MAX>
-        where
-            $inner: ::core::cmp::Ord,
-        {
-            fn cmp(&self, other: &Self) -> ::core::cmp::Ordering {
-                self.as_inner().cmp(other.as_inner())
-            }
-        }
-    };
-}
-
 pub mod index_map;
 pub use index_map::{BoundedIndexMap, NonEmptyBoundedIndexMap, UpperBoundedIndexMap};
 pub mod map;
@@ -194,14 +117,7 @@ pub trait BoundedLen {
 /// [`Bounded::new_unchecked`] deliberately bypasses the check and is reserved
 /// for callers that have already validated the length (or measure it
 /// out-of-band).
-///
-/// The comparison traits are implemented per inner type rather than derived,
-/// so a wrapped type can compare more strictly than its inner type does:
-/// [`BoundedIndexMap`] compares its entries in order, which [`IndexMap`]
-/// alone does not.
-///
-/// [`IndexMap`]: indexmap::IndexMap
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct Bounded<T, const MIN: usize, const MAX: usize>(T);
 
 impl<T, const MIN: usize, const MAX: usize> Bounded<T, MIN, MAX> {

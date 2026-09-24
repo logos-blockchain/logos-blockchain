@@ -51,11 +51,11 @@ where
 impl<K, V, S, const MIN: usize, const MAX: usize> BinaryDecode
     for BoundedIndexMap<K, V, MIN, MAX, S>
 where
-    K: BinaryDecode<Context = ()> + Eq + Hash,
+    K: BinaryDecode + Eq + Hash,
     V: BinaryDecode,
     S: BuildHasher + Default,
 {
-    type Context = V::Context;
+    type Context = (K::Context, V::Context);
 
     fn decode<'input>(
         input: &'input [u8],
@@ -65,14 +65,14 @@ where
 
         let mut map = IndexMap::with_hasher(S::default());
         for index in 0..len {
-            let (after_key, key) = K::decode(rest, &())?;
+            let (after_key, key) = K::decode(rest, &context.0)?;
             // Checked before the value is decoded, so a repeated key costs
             // nothing more. A key type that decodes without consuming input
             // repeats on its second entry, so it cannot make this loop spin.
             if map.contains_key(&key) {
                 return Err(DecodeError::duplicate_item::<Self>(index));
             }
-            let (next, value) = V::decode(after_key, context)?;
+            let (next, value) = V::decode(after_key, &context.1)?;
             map.insert(key, value);
             rest = next;
         }
@@ -128,8 +128,8 @@ mod tests {
     use lb_utils::bounded::BoundedIndexMap;
 
     use crate::canonical::{
-        BinaryDecodeExt as _, BinaryEncode as _, CodecExamples as _, DecodeError,
-        assert_codec_fixtures, tests::allocation::bytes_allocated_by,
+        BinaryDecode as _, BinaryEncode as _, CodecExamples as _, DecodeError,
+        assert_codec_fixtures_with, tests::allocation::bytes_allocated_by,
     };
 
     /// Bound used across the tests: between 2 and 4 entries.
@@ -164,7 +164,7 @@ mod tests {
     fn decode_accepts_any_order_and_keeps_it() {
         let bytes = [2, 0x01, 0x00, 0xAA, 0x00, 0x01, 0xBB];
 
-        let (rest, decoded) = Map::decode(&bytes).unwrap();
+        let (rest, decoded) = Map::decode(&bytes, &((), ())).unwrap();
 
         assert!(rest.is_empty());
         assert_eq!(entries(&decoded), [(1, 0xAA), (256, 0xBB)]);
@@ -173,20 +173,20 @@ mod tests {
 
     #[test]
     fn decode_rejects_a_repeated_key_even_with_a_different_value() {
-        let err = Map::decode(&[2, 0x01, 0x00, 0xAA, 0x01, 0x00, 0xBB]).unwrap_err();
+        let err = Map::decode(&[2, 0x01, 0x00, 0xAA, 0x01, 0x00, 0xBB], &((), ())).unwrap_err();
 
         assert!(matches!(err, DecodeError::DuplicateItem { index: 1, .. }));
     }
 
     #[test]
     fn decode_rejects_a_length_outside_the_bounds_before_decoding_entries() {
-        let too_few = Map::decode(&[1, 0x01, 0x00, 0xAA]).unwrap_err();
+        let too_few = Map::decode(&[1, 0x01, 0x00, 0xAA], &((), ())).unwrap_err();
         assert!(matches!(
             too_few,
             DecodeError::LengthOutOfBounds { len: 1, .. }
         ));
 
-        let too_many = Map::decode(&[5]).unwrap_err();
+        let too_many = Map::decode(&[5], &((), ())).unwrap_err();
         assert!(matches!(
             too_many,
             DecodeError::LengthOutOfBounds { len: 5, .. }
@@ -195,7 +195,8 @@ mod tests {
 
     #[test]
     fn decode_leaves_trailing_bytes_untouched() {
-        let (rest, decoded) = Map::decode(&[2, 0x01, 0x00, 0xAA, 0x00, 0x01, 0xBB, 0xCC]).unwrap();
+        let (rest, decoded) =
+            Map::decode(&[2, 0x01, 0x00, 0xAA, 0x00, 0x01, 0xBB, 0xCC], &((), ())).unwrap();
 
         assert_eq!(rest, &[0xCC]);
         assert_eq!(entries(&decoded), [(1, 0xAA), (256, 0xBB)]);
@@ -211,7 +212,7 @@ mod tests {
         let mut input = u64::MAX.to_le_bytes().to_vec();
         input.extend_from_slice(&[0xAA, 0xBB]);
 
-        let err = ZeroLength::decode(&input).unwrap_err();
+        let err = ZeroLength::decode(&input, &((), ())).unwrap_err();
 
         assert!(matches!(err, DecodeError::DuplicateItem { index: 1, .. }));
     }
@@ -225,7 +226,7 @@ mod tests {
         input.extend_from_slice(&7u64.to_le_bytes());
         input.extend_from_slice(&8u64.to_le_bytes());
 
-        let (err, allocated) = bytes_allocated_by(|| Wide::decode(&input).unwrap_err());
+        let (err, allocated) = bytes_allocated_by(|| Wide::decode(&input, &((), ())).unwrap_err());
 
         assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
         assert!(
@@ -243,14 +244,14 @@ mod tests {
         let fixture = fixtures.first().unwrap();
 
         assert_eq!(fixture.bytes.as_ref(), &[2, 0x07, 0x07, 0x00, 0x00]);
-        assert_codec_fixtures::<BoundedIndexMap<u8, u8, 0, 4>>();
+        assert_codec_fixtures_with::<BoundedIndexMap<u8, u8, 0, 4>, _>(|| ((), ()));
     }
 
     #[test]
     fn fixtures_respect_small_bounds() {
-        assert_codec_fixtures::<BoundedIndexMap<u8, u16, 0, 0>>();
-        assert_codec_fixtures::<BoundedIndexMap<u8, u16, 1, 1>>();
-        assert_codec_fixtures::<BoundedIndexMap<u16, bool, 2, 2>>();
+        assert_codec_fixtures_with::<BoundedIndexMap<u8, u16, 0, 0>, _>(|| ((), ()));
+        assert_codec_fixtures_with::<BoundedIndexMap<u8, u16, 1, 1>, _>(|| ((), ()));
+        assert_codec_fixtures_with::<BoundedIndexMap<u16, bool, 2, 2>, _>(|| ((), ()));
     }
 
     #[test]
