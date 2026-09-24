@@ -5244,6 +5244,7 @@ dependencies = [
  "opentelemetry_sdk",
  "rand 0.8.6",
  "serde",
+ "tempfile",
  "tokio",
  "tonic",
  "tracing",
