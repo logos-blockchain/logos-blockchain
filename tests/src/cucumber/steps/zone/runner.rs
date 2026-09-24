@@ -18,7 +18,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use lb_core::mantle::transactions::hash::TxHash;
+use lb_core::mantle::{ops::channel::MsgId, transactions::hash::TxHash};
 pub use lb_zone_sdk::sequencer::{
     AtomicWithdrawInfo, ChannelUpdate, ChannelUpdateTx, DepositInfo, Error, Event, FinalizedOp,
     FinalizedTx, FundingConfig, IndexedSignature, InscriptionId, InscriptionInfo, PendingTx,
@@ -170,9 +170,28 @@ impl ViewChecker {
         }
     }
 
-    /// `common_prefix ++ adopted` carries only what is held or in flight, and
-    /// everything held.
+    /// `canonical_chain()` carries only what is held or in flight, everything
+    /// held, and every message after its parent.
     fn check_view(&self, update: &ChannelUpdate, checkpoint: &SequencerCheckpoint) {
+        let ids: HashSet<MsgId> = update
+            .canonical_chain()
+            .filter_map(ChannelUpdateTx::inscription)
+            .map(|info| info.this_msg)
+            .collect();
+        let mut seen: HashSet<MsgId> = HashSet::new();
+        for info in update
+            .canonical_chain()
+            .filter_map(ChannelUpdateTx::inscription)
+        {
+            if ids.contains(&info.parent_msg) && !seen.contains(&info.parent_msg) {
+                self.record(format!(
+                    "{:?} listed before its parent {:?}",
+                    info.this_msg, info.parent_msg
+                ));
+            }
+            seen.insert(info.this_msg);
+        }
+
         let view: HashSet<TxHash> = update
             .canonical_chain()
             .map(ChannelUpdateTx::tx_hash)

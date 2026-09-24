@@ -521,11 +521,11 @@ pub enum TxSource {
 #[derive(Debug, Clone)]
 pub struct ChannelUpdate {
     /// The non-finalized view at the new tip minus `adopted`, in lineage
-    /// order: the mined entries from LIB to the fork point, entries not mined
-    /// on this branch that still chain on its tip (reported adopted and never
-    /// orphaned), and the sequencer's own pending publishes. Filled on every
-    /// event. Sized by the finality depth: the whole non-finalized view is
-    /// carried per event.
+    /// order: mined entries from LIB to the fork point, then the pending tail
+    /// still chaining on it — the sequencer's own publishes and observed
+    /// entries that dropped out of a block without being replaced. Filled on
+    /// every event. Sized by the finality depth: the whole non-finalized view
+    /// is carried per event.
     pub common_prefix: Vec<ChannelUpdateTx>,
     /// Txs removed from the channel: ones that were on chain, plus our
     /// own pending that can no longer finalize because a conflicting
@@ -560,9 +560,9 @@ pub struct ChannelUpdate {
 }
 
 impl ChannelUpdate {
-    /// The whole non-finalized view at the new tip: `common_prefix` followed
-    /// by `adopted`. Message entries are in lineage order, config entries are
-    /// in lineage order; the two lineages are not interleaved with each other.
+    /// The whole non-finalized view at the new tip. Message entries are in
+    /// lineage order, config entries are in lineage order; the two lineages
+    /// are not interleaved with each other.
     pub fn canonical_chain(&self) -> impl Iterator<Item = &ChannelUpdateTx> {
         self.common_prefix.iter().chain(&self.adopted)
     }

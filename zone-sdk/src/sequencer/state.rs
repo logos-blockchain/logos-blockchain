@@ -1447,6 +1447,29 @@ impl TxState {
         self.update_txs_from_infos(lineage.iter().filter(|i| !finalized.contains(&i.this_msg)))
     }
 
+    /// The part of the view at `tip` that `tracked` entries chain on: those
+    /// entries and every ancestor of theirs above LIB, in lineage order. A
+    /// pending entry restored from a checkpoint proves its ancestors were the
+    /// view before the restart.
+    pub(super) fn lineage_under(
+        &self,
+        tip: HeaderId,
+        tracked: &HashSet<TxHash>,
+    ) -> Vec<InscriptionInfo> {
+        let lineage = self.channel_lineage(tip);
+        let mut known: HashSet<MsgId> = HashSet::new();
+        for info in lineage.iter().rev() {
+            if tracked.contains(&info.tx_hash) || known.contains(&info.this_msg) {
+                known.insert(info.this_msg);
+                known.insert(info.parent_msg);
+            }
+        }
+        lineage
+            .into_iter()
+            .filter(|info| known.contains(&info.this_msg))
+            .collect()
+    }
+
     /// Msg-ids of `lineage`'s prefix up to and including the finalized
     /// message or config entry, whichever comes later; empty when both lie
     /// below the lineage's start. The message is matched as a
