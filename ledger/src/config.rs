@@ -155,6 +155,9 @@ pub struct RewardPoWConfig {
     /// it is already given. Seeding it from a token amount cannot express a
     /// field-scale value, so the chain would start ~60 orders of magnitude
     /// too hard. Spec: 26.
+    ///
+    /// It is also the minimum difficulty: the retarget never eases the target
+    /// past it.
     pub initial_difficulty: ModulusShift,
     /// EMA smoothing factor `F` (weight of the prior estimate). Must be below
     /// [`Self::ema_smoothing_precision`]: `P - F` is a divisor in
