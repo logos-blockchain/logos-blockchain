@@ -319,6 +319,9 @@ async fn step_zone_indexer_returns_finalized_channel_transfer_input_count(
 #[cucumber::then(
     expr = "the channel wallet of {string} contains a note of value {int} in {int} seconds"
 )]
+#[cucumber::when(
+    expr = "the channel wallet of {string} contains a note of value {int} in {int} seconds"
+)]
 #[expect(
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require `&mut World` as the first parameter"

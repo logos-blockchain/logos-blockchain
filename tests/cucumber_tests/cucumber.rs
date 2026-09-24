@@ -93,8 +93,6 @@ async fn main() {
         .repeat_failed()
         // .fail_fast() // Remove comment to enable fail-fast behavior for development
         .max_concurrent_scenarios(get_max_concurrent_scenarios())
-        // Ensure that all the steps were covered.
-        .fail_on_skipped()
         // Replaces Writer.
         .with_writer(
             writer::Summarize::new(writer::Basic::new(
@@ -110,6 +108,9 @@ async fn main() {
             .tee::<CucumberWorld, _>(writer::JUnit::for_tee(junit_xml_file, 0))
             .normalized(),
         )
+        // Ensure that all the steps were covered. Keep this after `with_writer`, which replaces
+        // the runner's writer and would otherwise discard the skipped-step failure wrapper.
+        .fail_on_skipped()
         // Sets a hook, executed on each Scenario before running all its Steps, including Background
         // ones.
         .before(move |feature, _rule, scenario, world| {
