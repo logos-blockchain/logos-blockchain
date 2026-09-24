@@ -1427,7 +1427,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[expect(clippy::too_many_lines, reason = "Test function.")]
     async fn config_only_block_orphans_pending_inscription_but_keeps_message_tip() {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
@@ -1972,7 +1971,7 @@ mod tests {
                 channel_id,
                 inscription: Inscription::new_unchecked(vec![n]),
                 parent: MsgId::root(),
-                signer: key.public_key(),
+                signer: key.public_key().into_unverified(),
             };
             let tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(op.clone())]);
             ChannelUpdateTx::Inscription(InscriptionInfo {
