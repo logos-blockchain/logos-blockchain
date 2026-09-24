@@ -171,6 +171,8 @@ pub struct ClaimTargetStatus {
 }
 
 pub enum PoWServiceMessage {
+    /// Start mining. Auto-claim stops it again once every target has reached
+    /// its threshold.
     StartMining,
     StopMining,
     /// Re-arm the auto-claim ticker after it stopped itself (or was stopped).
@@ -539,8 +541,10 @@ where
 
         // Auto-claim arms itself when the network pays rewards and targets are
         // configured, and disarms once every target has reached its
-        // threshold. Like `mining` it is a runtime flag, so a restart re-arms
-        // it and the thresholds are re-evaluated against fresh balances.
+        // threshold, stopping mining along with it: with every target funded
+        // there is nothing left to mine for. Like `mining` it is a runtime
+        // flag, so a restart re-arms it and the thresholds are re-evaluated
+        // against fresh balances.
         let auto_claim = &settings.auto_claim;
         let mut auto_claiming = settings.rewards_enabled && !auto_claim.targets.is_empty();
 
@@ -648,7 +652,8 @@ where
                     retire_settled_claims(&cryptarchia_api, &mut state, &state_updater, processed_block, settings.slot_window).await;
                 }
                 // Auto-claim tick: drain the ready tickets into the neediest
-                // target.
+                // target. Once every target is funded, stop both auto-claim
+                // and mining.
                 Some(()) = claim_ticks.next(), if auto_claiming => {
                     auto_claiming = run_auto_claim(
                         &cryptarchia_api,
@@ -660,6 +665,10 @@ where
                         settings.slot_window,
                     )
                     .await;
+                    if !auto_claiming && is_mining {
+                        info!(target: LOG_TARGET, "Every PoW auto-claim target reached its threshold; stopping mining");
+                        is_mining = false;
+                    }
                 }
             }
         }
@@ -873,8 +882,13 @@ fn neediest_target(
 /// threshold is where we stop *choosing* it, not a cap on a single payment.
 ///
 /// Returns `false` once every target has reached its threshold, which disarms
-/// the ticker until an operator re-arms it with
-/// [`PoWServiceMessage::StartAutoClaim`].
+/// the ticker and stops mining until an operator re-arms them with
+/// [`PoWServiceMessage::StartAutoClaim`] and
+/// [`PoWServiceMessage::StartMining`].
+///
+/// The thresholds are checked on every tick, even with no ticket ready: mining
+/// may be paused on the reward pool while earlier claims settle, and the
+/// balances those claims raise are what should stop it.
 async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
@@ -891,11 +905,6 @@ where
     WalletService: WalletServiceData,
     RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
 {
-    // Nothing mined since the last tick: skip the wallet round-trip entirely.
-    if state.ready_to_claim.is_empty() {
-        return true;
-    }
-
     let claim_address = match select_claim_target(wallet_api, targets).await {
         Ok(Some(claim_address)) => claim_address,
         Ok(None) => {
@@ -910,6 +919,10 @@ where
             return true;
         }
     };
+    // Nothing mined since the last tick: no claim to publish.
+    if state.ready_to_claim.is_empty() {
+        return true;
+    }
 
     drain_ready_rewards(
         cryptarchia_api,

@@ -49,7 +49,9 @@ where
     }
 
     /// Enable mining. Fire-and-forget: mining is a boolean toggle that carries
-    /// no response. Note it is not persisted, so a restart clears it.
+    /// no response. Note it is not persisted, so a restart clears it. While
+    /// auto-claim is armed, the service stops mining once every claim target
+    /// has reached its threshold.
     pub async fn start_mining(&self) -> Result<(), ApiError> {
         self.relay
             .send(PoWServiceMessage::StartMining)
@@ -66,8 +68,8 @@ where
     }
 
     /// Enable unattended claiming. Fire-and-forget. Ignored when no claim
-    /// targets are configured; the service stops itself again once every
-    /// target has reached its threshold.
+    /// targets are configured; the service stops itself, and mining, once
+    /// every target has reached its threshold.
     pub async fn start_auto_claim(&self) -> Result<(), ApiError> {
         self.relay
             .send(PoWServiceMessage::StartAutoClaim)
