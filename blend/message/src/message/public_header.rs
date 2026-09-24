@@ -380,8 +380,8 @@ mod tests {
         let header_with_invalid_version = PublicHeader {
             version: 2,
             signing_pubkey: Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-            proof_of_quota: [1; _].try_into().unwrap(),
-            signature: [2; _].into(),
+            proof_of_quota: [2; _].try_into().unwrap(),
+            signature: [3; _].into(),
         };
 
         let serialized_header = header_with_invalid_version.to_bytes().unwrap();
