@@ -79,7 +79,7 @@ mod tests {
     use crate::mantle::{
         Note, Utxo, VerificationError,
         channel::{Channels, Error},
-        ledger::{Inputs, verification_mode::StandardMode},
+        ledger::{BoundedInputs, verification_mode::StandardMode},
         ops::channel::ChannelId,
         traits::Hashable as _,
         transactions::{
@@ -110,7 +110,7 @@ mod tests {
             note: Note::new(10, input_sk.to_public_key()),
         };
         let note_id = utxo.id();
-        let withdraw_inputs = Inputs::from([note_id]);
+        let withdraw_inputs = BoundedInputs::from(note_id).into();
 
         let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1], Some(withdraw_inputs));
 

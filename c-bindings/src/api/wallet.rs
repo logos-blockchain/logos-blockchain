@@ -10,7 +10,7 @@ use lb_core::{
     mantle::{
         Note, NoteId as CoreNoteId, Op, OpProof, SignedOps,
         gas::GasCost,
-        ledger::{Inputs, Outputs, verification_mode::StandardMode},
+        ledger::{BoundedInputs, Inputs, Outputs, verification_mode::StandardMode},
         ops::{
             channel::{
                 ChannelId,
@@ -1426,7 +1426,7 @@ pub(crate) fn channel_deposit_sync(
             .id();
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([deposit_note_id]),
+            inputs: BoundedInputs::from(deposit_note_id).into(),
             metadata,
         };
 

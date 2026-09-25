@@ -396,7 +396,7 @@ mod tests {
     use crate::{
         mantle::{
             OpProof,
-            ledger::{Inputs, Note, Outputs, Utxo, Value},
+            ledger::{BoundedInputs, Inputs, Note, Outputs, Utxo, Value},
             ops::channel::inscribe::Inscription,
             transactions::{OpProofs, Ops},
         },
@@ -728,7 +728,7 @@ mod tests {
     fn from_tx_rejects_a_transfer_that_spends_an_input() {
         let utxo = Utxo::new([0u8; 32], 0, create_test_note(1000));
         let transfer_op = TransferOp::new(
-            Inputs::new([utxo.id()]),
+            BoundedInputs::from(utxo.id()).into(),
             Outputs::new([create_test_note(1000)]),
         );
         let tx = create_trusted_tx_with_transfer(

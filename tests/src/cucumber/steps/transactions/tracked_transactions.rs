@@ -3,7 +3,7 @@ use std::{collections::HashSet, time::Duration};
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     Note, NoteId, Op, OpProof, SignedOps,
-    ledger::{Inputs, Outputs, verification_mode::StandardMode},
+    ledger::{BoundedInputs, Inputs, Outputs, verification_mode::StandardMode},
     ops::transfer::TransferOp,
     traits::Hashable as _,
     transactions::{OpProofs, Ops, hash::TxHash, states::Unverified},
@@ -264,7 +264,7 @@ fn create_stateful_invalid_transaction() -> SignedOps<Unverified, StandardMode> 
     let nonexistent_input = NoteId(Fr::from(0xDEAD_BEEFu64));
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
     let transfer_op = TransferOp::new(
-        Inputs::new([nonexistent_input]),
+        BoundedInputs::from(nonexistent_input).into(),
         Outputs::new([output_note]),
     );
 

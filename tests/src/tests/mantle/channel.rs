@@ -8,7 +8,7 @@ use lb_core::{
     mantle::{
         NoteId,
         gas::GasCost,
-        ledger::Inputs,
+        ledger::BoundedInputs,
         ops::channel::{ChannelId, deposit::DepositOp},
         traits::Hashable as _,
         transactions::hash::TxHash,
@@ -118,7 +118,7 @@ async fn channel_deposit() {
     assert_eq!(selected_deposit_amount, deposit_amount);
     let deposit_op = DepositOp {
         channel_id,
-        inputs: Inputs::new([note_id]),
+        inputs: BoundedInputs::from(note_id).into(),
         metadata: format!("Mint {deposit_amount} to Alice in Zone")
             .into_bytes()
             .try_into()
@@ -438,7 +438,7 @@ async fn submit_channel_deposit(
     assert_eq!(selected_deposit_amount, deposit_amount);
     let deposit_op = DepositOp {
         channel_id,
-        inputs: Inputs::new([note_id]),
+        inputs: BoundedInputs::from(note_id).into(),
         metadata: format!("Mint {deposit_amount} to Alice in Zone")
             .into_bytes()
             .try_into()

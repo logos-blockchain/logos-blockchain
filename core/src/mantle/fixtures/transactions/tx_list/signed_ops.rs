@@ -20,7 +20,7 @@ use crate::mantle::{
             ZK_AND_ED25519_SIGS, ZK_AND_ED25519_SIGS_HEX, ZK_SIG, ZK_SIG_HEX,
         },
     },
-    ledger::{Outputs, verification_mode::VerificationMode},
+    ledger::{BoundedInputs, Outputs, verification_mode::VerificationMode},
     ops::{
         NoOpProof, SignedOp, SignedOperation,
         channel::{
@@ -67,7 +67,7 @@ const TWO_OPS_HEX: &str = concat!(
 fn two_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<State, Mode> {
     let transfer = SignedOperation::<TransferOp, Unverified, Mode>::new(
         TransferOp {
-            inputs: [NoteId(Fr::ZERO)].into(),
+            inputs: BoundedInputs::from(NoteId(Fr::ZERO)).into(),
             outputs: Outputs::empty(),
         },
         ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0xAAu8; 128])),

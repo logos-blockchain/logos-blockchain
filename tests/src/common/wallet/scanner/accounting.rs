@@ -223,7 +223,7 @@ mod tests {
         header::{ContentId, HeaderId},
         mantle::{
             Note, SignedOps, Utxo,
-            ledger::{Inputs, Outputs, verification_mode::StandardMode},
+            ledger::{BoundedInputs, Inputs, Outputs, verification_mode::StandardMode},
             ops::{
                 Op,
                 channel::{ChannelId, deposit::DepositOp},
@@ -345,7 +345,7 @@ mod tests {
         let owned = utxo(10, 0, pk(1));
         let ops = Ops::from([Op::ChannelDeposit(DepositOp {
             channel_id: ChannelId::from([0; 32]),
-            inputs: Inputs::from([owned.id()]),
+            inputs: BoundedInputs::from(owned.id()).into(),
             metadata: b"deposit".into(),
         })]);
         let spend = SignedOps::from_ops_with_sample_proofs(ops);

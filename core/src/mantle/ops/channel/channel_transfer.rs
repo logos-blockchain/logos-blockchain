@@ -51,9 +51,11 @@ impl ChannelTransferOp {
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
+        use crate::mantle::ledger::BoundedInputs;
+
         Self {
             channel_id: ChannelId::from([20u8; 32]),
-            inputs: Inputs::new([NoteId(Fr::from(21u64))]),
+            inputs: BoundedInputs::from(NoteId(Fr::from(21u64))).into(),
             outputs: Outputs::new([Note::new(22, ZkPublicKey::from(Fr::from(23u64)))]),
         }
     }
@@ -232,8 +234,9 @@ mod test {
             channel_notes,
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger::{
-                Inputs, InputsError, Outputs, OutputsError, PreverifiableOperation as _, Utxos,
-                VerifiableOperation as _, verification_mode::StandardMode,
+                BoundedInputs, Inputs, InputsError, Outputs, OutputsError,
+                PreverifiableOperation as _, Utxos, VerifiableOperation as _,
+                verification_mode::StandardMode,
             },
             ops::{
                 SignedOperation,
@@ -306,7 +309,7 @@ mod test {
     ) -> SignedOperation<ChannelTransferOp, Preverified, StandardMode> {
         let operation = ChannelTransferOp {
             channel_id: CHANNEL_ID,
-            inputs: Inputs::new([utxo().id()]),
+            inputs: BoundedInputs::from(utxo().id()).into(),
             outputs,
         };
 
@@ -335,7 +338,7 @@ mod test {
     fn preverify_rejects_a_zero_value_output() {
         let channel_transfer = ChannelTransferOp {
             channel_id: ChannelId::from([0u8; 32]),
-            inputs: Inputs::new([utxo().id()]),
+            inputs: BoundedInputs::from(utxo().id()).into(),
             outputs: Outputs::new([Note::new(0, ZkPublicKey::zero())]),
         };
         let proof = ChannelMultiSigProof::try_new([].into()).unwrap();
@@ -464,7 +467,9 @@ mod test {
 
         let operation = ChannelTransferOp {
             channel_id: CHANNEL_ID,
-            inputs: Inputs::new([first.id(), second.id()]),
+            inputs: BoundedInputs::try_from_iter([first.id(), second.id()])
+                .unwrap()
+                .into(),
             outputs: Outputs::new([Note::new(10_000, ZkPublicKey::from(Fr::from(2u64)))]),
         };
         let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
@@ -791,7 +796,7 @@ mod test {
         SignedOperation::<_, Unverified, StandardMode>::new(
             ChannelTransferOp {
                 channel_id: CHANNEL_ID,
-                inputs: Inputs::new([utxo().id()]),
+                inputs: BoundedInputs::from(utxo().id()).into(),
                 outputs,
             },
             ChannelMultiSigProof::sample_with_signatures(1),

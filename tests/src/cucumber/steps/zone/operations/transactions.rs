@@ -1,4 +1,8 @@
-use lb_core::mantle::{SignedOps, ledger::verification_mode::StandardMode, transactions::OpProofs};
+use lb_core::mantle::{
+    SignedOps,
+    ledger::{BoundedInputs, verification_mode::StandardMode},
+    transactions::OpProofs,
+};
 
 use super::*;
 
@@ -17,7 +21,7 @@ pub fn build_zone_deposit(
 
     let deposit = DepositOp {
         channel_id,
-        inputs: Inputs::new([note.id()]),
+        inputs: BoundedInputs::from(note.id()).into(),
         metadata,
     };
     let reserved_inputs = vec![note];
@@ -134,7 +138,7 @@ pub async fn submit_zone_channel_split(
         })?;
     let transfer = ChannelTransferOp {
         channel_id,
-        inputs: Inputs::new([input_note.id()]),
+        inputs: BoundedInputs::from(input_note.id()).into(),
         outputs,
     };
 

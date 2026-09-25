@@ -9,7 +9,7 @@ use crate::{
     mantle::{
         Note, NoteId,
         channel::{SlotTimeframe, SlotTimeout},
-        ledger::{Inputs, Outputs},
+        ledger::{BoundedInputs, Outputs},
         ops::{
             channel::{
                 ChannelId, MsgId,
@@ -31,7 +31,7 @@ use crate::{
 };
 
 pub static TRANSFER: LazyLock<TransferOp> = LazyLock::new(|| TransferOp {
-    inputs: [NoteId::from(Fr::from(0x01u64))].into(),
+    inputs: BoundedInputs::from(NoteId::from(Fr::from(0x01u64))).into(),
     outputs: [Note::new(0x02, ZkPublicKey::from(Fr::from(0x03u64)))].into(),
 });
 
@@ -60,19 +60,19 @@ pub static INSCRIPTION: LazyLock<InscriptionOp> = LazyLock::new(|| InscriptionOp
 
 pub static DEPOSIT: LazyLock<DepositOp> = LazyLock::new(|| DepositOp {
     channel_id: ChannelId::from([0x30u8; 32]),
-    inputs: Inputs::new([NoteId(Fr::from(0x31u64))]),
+    inputs: BoundedInputs::from(NoteId(Fr::from(0x31u64))).into(),
     metadata: Metadata::try_from(b"fixture-metadata".to_vec())
         .expect("the metadata is within bounds"),
 });
 
 pub static CHANNEL_WITHDRAW: LazyLock<ChannelWithdrawOp> = LazyLock::new(|| ChannelWithdrawOp {
     channel_id: ChannelId::from([0x40u8; 32]),
-    inputs: Inputs::new([NoteId(Fr::from(0x41u64))]),
+    inputs: BoundedInputs::from(NoteId(Fr::from(0x41u64))).into(),
 });
 
 pub static CHANNEL_TRANSFER: LazyLock<ChannelTransferOp> = LazyLock::new(|| ChannelTransferOp {
     channel_id: ChannelId::from([0x50u8; 32]),
-    inputs: Inputs::new([NoteId(Fr::from(0x51u64))]),
+    inputs: BoundedInputs::from(NoteId(Fr::from(0x51u64))).into(),
     outputs: Outputs::new([Note::new(0x52, ZkPublicKey::from(Fr::from(0x53u64)))]),
 });
 
