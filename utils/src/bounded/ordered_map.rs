@@ -1,5 +1,7 @@
 use core::{
+    fmt,
     hash::{BuildHasher, Hash},
+    marker::PhantomData,
     ops::Deref,
 };
 use std::collections::hash_map::RandomState;
@@ -8,12 +10,15 @@ use indexmap::{
     Equivalent, IndexMap,
     map::{self, Entry},
 };
-use serde::{Deserialize, Deserializer};
+use serde::{
+    Deserialize, Deserializer,
+    de::{Error as _, MapAccess, Visitor},
+};
 
 use crate::{
     bounded::{
         Bounded, BoundedError, BoundedLen,
-        collection::{self, BoundedCollection, MapVisitor},
+        collection::{self, BoundedCollection, check_declared_len, collect},
     },
     ordered_map::OrderedMap,
 };
@@ -300,7 +305,62 @@ where
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_map(MapVisitor::new())
+        deserializer.deserialize_map(MapVisitor(PhantomData))
+    }
+}
+
+/// Deserializes a map into a [`BoundedOrderedMap`], reading each entry key
+/// first.
+///
+/// An entry the map cannot admit, one past `MAX` or one repeating a key, is
+/// refused on its key, so its value is never decoded and the refusal is the
+/// error reported. The builder repeats both checks, as it does for every
+/// bounded collection.
+struct MapVisitor<K, V, S, const MIN: usize, const MAX: usize>(PhantomData<OrderedMap<K, V, S>>);
+
+impl<'de, K, V, S, const MIN: usize, const MAX: usize> Visitor<'de>
+    for MapVisitor<K, V, S, MIN, MAX>
+where
+    K: Deserialize<'de> + Eq + Hash,
+    V: Deserialize<'de>,
+    S: BuildHasher + Default,
+{
+    type Value = BoundedOrderedMap<K, V, MIN, MAX, S>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "a map of between {MIN} and {MAX} entries with distinct keys"
+        )
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let hint = map.size_hint();
+        check_declared_len::<OrderedMap<K, V, S>, A::Error, MIN, MAX>(hint)?;
+        collect(
+            hint,
+            |built: &OrderedMap<K, V, S>| {
+                let Some(key) = map.next_key()? else {
+                    return Ok(None);
+                };
+                // Refuse on the key, before the value is decoded.
+                let index = built.len();
+                if index >= MAX {
+                    return Err(A::Error::custom(BoundedError::TooManyItems {
+                        count: index.saturating_add(1),
+                        max: MAX,
+                    }));
+                }
+                if built.contains_key(&key) {
+                    return Err(A::Error::custom(BoundedError::DuplicateItem { index }));
+                }
+                Ok(Some((key, map.next_value()?)))
+            },
+            A::Error::custom,
+        )
     }
 }
 
@@ -309,14 +369,61 @@ mod tests {
     use std::{
         collections::HashSet,
         hash::{BuildHasher as _, RandomState},
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use indexmap::IndexMap;
+    use serde::{Deserialize, Deserializer};
 
     use crate::bounded::{BoundedError, BoundedOrderedMap, UpperBoundedOrderedMap};
 
     /// Concrete instantiation used across the tests: between 2 and 4 entries.
     type TestMap = BoundedOrderedMap<u8, u16, 2, 4>;
+
+    /// Like [`TestMap`], but its values count how often they are decoded.
+    type CountingMap = BoundedOrderedMap<u8, CountingValue, 0, 4>;
+
+    static VALUE_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+    static VALUE_ATTEMPTS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// A `u16` value that records every attempt to deserialize it.
+    #[derive(Debug)]
+    struct CountingValue;
+
+    impl<'de> Deserialize<'de> for CountingValue {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            VALUE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+            u16::deserialize(deserializer).map(|_| Self)
+        }
+    }
+
+    /// Deserializes `input` with `deserialize`, and returns its error with the
+    /// number of values it attempted to decode.
+    fn error_and_value_attempts<Input>(
+        input: Input,
+        deserialize: impl FnOnce(Input) -> Result<CountingMap, String>,
+    ) -> (String, usize) {
+        let _test_guard = VALUE_ATTEMPTS_TEST_LOCK.lock().unwrap();
+        VALUE_ATTEMPTS.store(0, Ordering::Relaxed);
+
+        let error = deserialize(input).unwrap_err();
+
+        (error, VALUE_ATTEMPTS.load(Ordering::Relaxed))
+    }
+
+    fn from_json(json: &str) -> Result<CountingMap, String> {
+        serde_json::from_str(json).map_err(|error| error.to_string())
+    }
+
+    fn from_bincode(bytes: &[u8]) -> Result<CountingMap, String> {
+        bincode::deserialize(bytes).map_err(|error| error.to_string())
+    }
 
     /// The entries of `map`, in order.
     fn entries(map: &TestMap) -> Vec<(u8, u16)> {
@@ -543,6 +650,67 @@ mod tests {
             binary.to_string().contains("duplicate"),
             "unexpected error: {binary}"
         );
+    }
+
+    /// Once its key proves an entry cannot be admitted, its value is not worth
+    /// decoding: a repeated key costs no more than the key itself.
+    #[test]
+    fn deserialize_rejects_a_repeated_key_before_decoding_its_value() {
+        let (json_error, json_attempts) =
+            error_and_value_attempts(r#"{"1":1,"2":2,"1":3}"#, from_json);
+        assert!(
+            json_error.contains("Item at index 2 is a duplicate of an earlier item"),
+            "unexpected error: {json_error}"
+        );
+        assert_eq!(json_attempts, 2, "only the two admitted values are decoded");
+
+        let encoded = bincode::serialize(&vec![(1u8, 1u16), (2, 2), (1, 3)]).unwrap();
+        let (binary_error, binary_attempts) = error_and_value_attempts(&encoded[..], from_bincode);
+        assert!(
+            binary_error.contains("duplicate"),
+            "unexpected error: {binary_error}"
+        );
+        assert_eq!(
+            binary_attempts, 2,
+            "only the two admitted values are decoded"
+        );
+    }
+
+    /// The repeated key is the first thing wrong with the input, so it is what
+    /// gets reported, whatever follows it.
+    #[test]
+    fn deserialize_reports_a_repeated_key_even_when_its_value_is_malformed() {
+        let malformed =
+            serde_json::from_str::<TestMap>(r#"{"1":10,"2":20,"1":"malformed"}"#).unwrap_err();
+        assert!(
+            malformed
+                .to_string()
+                .contains("Item at index 2 is a duplicate of an earlier item"),
+            "unexpected error: {malformed}"
+        );
+
+        // Declares two entries, then ends right after repeating the first key.
+        let mut truncated = bincode::serialize(&vec![(1u8, 10u16)]).unwrap();
+        truncated[0] = 2;
+        truncated.push(1);
+        let missing = bincode::deserialize::<TestMap>(&truncated).unwrap_err();
+        assert!(
+            missing.to_string().contains("duplicate"),
+            "unexpected error: {missing}"
+        );
+    }
+
+    /// An entry past `MAX` is refused on its key, like a repeated one.
+    #[test]
+    fn deserialize_stops_before_the_value_of_an_entry_past_maximum() {
+        let (error, attempts) =
+            error_and_value_attempts(r#"{"1":1,"2":2,"3":3,"4":4,"5":5}"#, from_json);
+
+        assert!(
+            error.contains("exceeds static maximum"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(attempts, 4, "only the four admitted values are decoded");
     }
 
     #[test]

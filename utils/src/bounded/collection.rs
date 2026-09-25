@@ -22,7 +22,7 @@ use core::{convert::identity, fmt, marker::PhantomData};
 
 use serde::{
     Deserialize,
-    de::{Error as _, MapAccess, SeqAccess, Visitor},
+    de::{Error as _, SeqAccess, Visitor},
 };
 
 use crate::bounded::{Bounded, BoundedError, allocation_size_for_hint};
@@ -43,6 +43,11 @@ pub trait BoundedCollection: Sized {
 /// Builds a bounded collection from the items `next` yields until it returns
 /// `None`.
 ///
+/// `next` is given the collection built so far, so a source that reads an item
+/// in parts can refuse it before reading the rest, as the ordered map's visitor
+/// does with a key it cannot admit. Whatever `next` yields is still checked
+/// here like any other item.
+///
 /// `hint` is the length the input declares, if any, and only sizes the initial
 /// allocation. `into_error` turns a bound violation into the input's own error
 /// type.
@@ -53,7 +58,7 @@ pub fn collect<Collection, VisitorFn, ErrorFn, Error, const MIN: usize, const MA
 ) -> Result<Bounded<Collection, MIN, MAX>, Error>
 where
     Collection: BoundedCollection,
-    VisitorFn: FnMut() -> Result<Option<Collection::Item>, Error>,
+    VisitorFn: FnMut(&Collection) -> Result<Option<Collection::Item>, Error>,
     ErrorFn: Fn(BoundedError) -> Error,
 {
     let mut collection =
@@ -61,7 +66,7 @@ where
 
     // The input must supply the first `MIN` items.
     for index in 0..MIN {
-        let Some(item) = next()? else {
+        let Some(item) = next(&collection)? else {
             return Err(into_error(BoundedError::too_few(index, MIN)));
         };
         try_add::<Collection, MAX>(&mut collection, item, index).map_err(&into_error)?;
@@ -69,7 +74,7 @@ where
 
     // The input may end at any point, as long as it stops by `MAX`.
     let mut index = MIN;
-    while let Some(item) = next()? {
+    while let Some(item) = next(&collection)? {
         try_add::<Collection, MAX>(&mut collection, item, index).map_err(&into_error)?;
         // `index` can go up to `MAX` which is of the same type, so no overflow risk
         // here.
@@ -91,7 +96,7 @@ where
     Items: IntoIterator<Item = Collection::Item>,
 {
     let mut items = items_iter.into_iter();
-    collect(Some(items.size_hint().0), || Ok(items.next()), identity)
+    collect(Some(items.size_hint().0), |_| Ok(items.next()), identity)
 }
 
 /// Adds the item at input position `index`, refusing it past `MAX` or when it
@@ -123,7 +128,7 @@ where
 /// fails here without a single item being decoded. Formats that declare
 /// nothing, such as JSON, are held to the same bounds by [`collect`] as the
 /// items arrive.
-fn check_declared_len<Collection, Error, const MIN: usize, const MAX: usize>(
+pub fn check_declared_len<Collection, Error, const MIN: usize, const MAX: usize>(
     hint: Option<usize>,
 ) -> Result<(), Error>
 where
@@ -160,42 +165,7 @@ where
     {
         let hint = sequence.size_hint();
         check_declared_len::<Collection, A::Error, MIN, MAX>(hint)?;
-        collect(hint, || sequence.next_element(), A::Error::custom)
-    }
-}
-
-/// Deserializes a map into a bounded ordered map.
-pub struct MapVisitor<Collection, const MIN: usize, const MAX: usize>(PhantomData<Collection>);
-
-impl<Collection, const MIN: usize, const MAX: usize> MapVisitor<Collection, MIN, MAX> {
-    pub const fn new() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<'de, Collection, K, V, const MIN: usize, const MAX: usize> Visitor<'de>
-    for MapVisitor<Collection, MIN, MAX>
-where
-    Collection: BoundedCollection<Item = (K, V)>,
-    K: Deserialize<'de>,
-    V: Deserialize<'de>,
-{
-    type Value = Bounded<Collection, MIN, MAX>;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "a map of between {MIN} and {MAX} entries with distinct keys"
-        )
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let hint = map.size_hint();
-        check_declared_len::<Collection, A::Error, MIN, MAX>(hint)?;
-        collect(hint, || map.next_entry(), A::Error::custom)
+        collect(hint, |_| sequence.next_element(), A::Error::custom)
     }
 }
 
