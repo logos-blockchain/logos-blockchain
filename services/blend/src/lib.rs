@@ -332,7 +332,7 @@ where
         "Submitting Blend service declaration to SDP with locator {locator:?} and service note id {service_note_id:?}",
     );
     let sdp_declaration = DeclarationMessage {
-        locators: [locator].into(),
+        locators: locator.into(),
         service_note_id,
         provider_id: ProviderId(non_ephemeral_signing_key_public),
         service_type: ServiceType::BlendNetwork,

@@ -204,6 +204,49 @@ impl<T, S, const MIN: usize, const MAX: usize> From<BoundedOrderedSet<T, MIN, MA
     }
 }
 
+impl<T, S, const MIN: usize, const MAX: usize> From<T> for BoundedOrderedSet<T, MIN, MAX, S>
+where
+    T: Eq + Hash,
+    S: Default + BuildHasher,
+{
+    fn from(value: T) -> Self {
+        const {
+            assert!(
+                MIN <= 1,
+                "Single-element construction is invalid for minimum bound > 1"
+            );
+            assert!(
+                MAX >= 1,
+                "Single-element construction is invalid for maximum bound < 1"
+            );
+        }
+        Self::try_from_iter([value]).expect("Single-element iterator does not contain duplicates.")
+    }
+}
+
+impl<T, S, const MIN: usize, const MAX: usize, const INPUT_SIZE: usize> TryFrom<[T; INPUT_SIZE]>
+    for BoundedOrderedSet<T, MIN, MAX, S>
+where
+    T: Eq + Hash,
+    S: Default + BuildHasher,
+{
+    type Error = BoundedError;
+
+    fn try_from(value: [T; INPUT_SIZE]) -> Result<Self, Self::Error> {
+        const {
+            assert!(
+                MIN <= INPUT_SIZE,
+                "Array construction is invalid for minimum bound > INPUT_SIZE"
+            );
+            assert!(
+                MAX >= INPUT_SIZE,
+                "Array construction is invalid for maximum bound < INPUT_SIZE"
+            );
+        }
+        Self::try_from_iter(value)
+    }
+}
+
 impl<T, S, const MIN: usize, const MAX: usize> Deref for BoundedOrderedSet<T, MIN, MAX, S> {
     type Target = OrderedSet<T, S>;
 
