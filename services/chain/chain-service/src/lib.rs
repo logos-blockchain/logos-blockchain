@@ -190,7 +190,7 @@ pub struct ChainServiceInfo {
     pub mode: ChainServiceMode,
 }
 
-fn default_mode() -> ChainServiceMode {
+const fn default_mode() -> ChainServiceMode {
     ChainServiceMode::Started(State::Online)
 }
 
