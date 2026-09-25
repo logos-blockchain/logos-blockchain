@@ -43,7 +43,7 @@ use lb_storage_service::{
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
 use lb_time_service::backends::SystemTimeBackend;
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::{bounded::BoundedOrderedSet, math::NonNegativeRatio};
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 use rand::{RngCore as _, thread_rng};
 use tempfile::TempDir;
@@ -327,7 +327,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
         utxo,
         &zk_key,
         u1.header().slot().strict_add(1.into()),
-        UncleHeaders::new([signed_header(&u1)]),
+        UncleHeaders::new(BoundedOrderedSet::from(signed_header(&u1))),
     )
     .unwrap();
     let (b1_id, b2_id, b2_slot) = (b1.header().id(), b2.header().id(), b2.header().slot());
