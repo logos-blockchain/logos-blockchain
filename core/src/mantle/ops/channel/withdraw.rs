@@ -4,7 +4,7 @@ use lb_groth16::Fr;
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(test, feature = "test-utils"))]
-use crate::mantle::NoteId;
+use crate::mantle::{NoteId, ledger::BoundedInputs};
 use crate::{
     events::TxEvent,
     mantle::{
@@ -187,7 +187,7 @@ impl ChannelWithdrawOp {
     pub fn sample() -> Self {
         Self {
             channel_id: ChannelId::from([18u8; 32]),
-            inputs: Inputs::new([NoteId(Fr::from(19u64))]),
+            inputs: BoundedInputs::from(NoteId(Fr::from(19u64))).into(),
         }
     }
 }
@@ -262,7 +262,7 @@ mod test {
     ) -> SignedOperation<ChannelWithdrawOp, Preverified, StandardMode> {
         let operation = ChannelWithdrawOp {
             channel_id: CHANNEL_ID,
-            inputs: Inputs::new([utxo().id()]),
+            inputs: BoundedInputs::from(utxo().id()).into(),
         };
 
         SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
@@ -563,7 +563,7 @@ mod test {
         SignedOperation::<_, Unverified, StandardMode>::new(
             ChannelWithdrawOp {
                 channel_id: CHANNEL_ID,
-                inputs: Inputs::new([utxo().id()]),
+                inputs: BoundedInputs::from(utxo().id()).into(),
             },
             ChannelMultiSigProof::sample_with_signatures(1),
         )

@@ -714,7 +714,7 @@ mod tests {
         mantle::{
             Note, Op, SignedOps, Utxo,
             channel::{SlotTimeframe, SlotTimeout},
-            ledger::{Inputs, verification_mode::StandardMode},
+            ledger::{BoundedInputs, verification_mode::StandardMode},
             ops::{
                 OpProof, OpProofRef, OpRef,
                 channel::{
@@ -780,7 +780,7 @@ mod tests {
         let (sk, utxo) = utxo_with_sk();
         let deposit_op = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: b"to Alice".into(),
         };
 
@@ -1690,7 +1690,7 @@ mod tests {
         let channel_id = ChannelId::from([1u8; 32]);
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([NoteId::from(Fr::from(0u64))]),
+            inputs: BoundedInputs::from(NoteId::from(Fr::from(0u64))).into(),
         };
         let inscribe_op = InscriptionOp {
             channel_id,
