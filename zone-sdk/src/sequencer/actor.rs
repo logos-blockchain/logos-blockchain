@@ -864,6 +864,139 @@ mod tests {
         assert_eq!(sequencer.state.as_ref().unwrap().pending_publish_count(), 1);
     }
 
+    /// A gap block's deposit surfaces once, in order, even when the first
+    /// backfill failed, the stream reconnected and the chain switched to
+    /// another fork and back before the re-delivered event backfills the gap.
+    #[tokio::test]
+    #[expect(clippy::too_many_lines, reason = "Test function.")]
+    async fn gap_deposits_surface_after_a_failed_backfill_and_a_fork_switch() {
+        use std::{
+            collections::HashMap,
+            sync::{Arc, atomic::AtomicUsize},
+        };
+
+        use lb_core::{
+            events::DepositNote,
+            mantle::{
+                ledger::NoteId,
+                ops::{OpId as _, channel::deposit::Metadata},
+            },
+        };
+        use lb_groth16::Fr;
+        use lb_key_management_system_service::keys::ZkPublicKey;
+
+        use crate::test_support::{deposit_event, inscribe_op};
+
+        // G(0) <- B1(A) <- B2(Y, D2) <- B3(D3)   canonical in the end
+        //             \- C(Z)                    canonical in between
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let pk = ZkPublicKey::from(Fr::from(7u64));
+        let deposit = |n: u32| {
+            let op = DepositOp {
+                channel_id,
+                inputs: Inputs::new([NoteId::from(Fr::from(n))]),
+                metadata: Metadata::try_from(vec![u8::try_from(n).unwrap()]).unwrap(),
+            };
+            let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
+            let note = DepositNote {
+                note_id: NoteId::from(Fr::from(1000 + u64::from(n))),
+                value: 50,
+                pk,
+            };
+            let event = deposit_event(&tx, &op, 50, vec![note]);
+            (op.op_id(), tx, event)
+        };
+        let a = inscribe_op(channel_id, MsgId::root(), b"a");
+        let y = inscribe_op(channel_id, a.id(), b"y");
+        let z = inscribe_op(channel_id, a.id(), b"z");
+        let (y_id, z_id) = (y.id(), z.id());
+        let (d2, d2_tx, d2_event) = deposit(2);
+        let (d3, d3_tx, d3_event) = deposit(3);
+        let b1 = api_block(
+            1,
+            0,
+            1,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(a)])],
+        );
+        let b2 = api_block(
+            2,
+            1,
+            2,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(y)]), d2_tx],
+        );
+        let c = api_block(
+            9,
+            1,
+            2,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(z)])],
+        );
+        let b3 = api_block(3, 2, 3, vec![d3_tx]);
+        let node = MockNode {
+            scripts: scripts(vec![
+                StreamScript {
+                    events: vec![live_event(&b1), live_event(&b3)],
+                    then: StreamEnd::Hang,
+                },
+                StreamScript {
+                    events: vec![live_event(&c), live_event(&b3)],
+                    then: StreamEnd::Hang,
+                },
+            ]),
+            blocks: vec![b2],
+            block_fetch_failures: Arc::new(AtomicUsize::new(1)),
+            events: HashMap::from([(header_id(2), d2_event), (header_id(3), d3_event)]),
+            ..MockNode::default()
+        };
+        let config = SequencerConfig {
+            reconnect_delay: std::time::Duration::from_millis(20),
+            ..SequencerConfig::new(funding_config())
+        };
+        let mut sequencer =
+            ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
+        let msg_ids = |txs: &[ChannelUpdateTx]| {
+            txs.iter()
+                .filter_map(|tx| tx.inscription().map(|info| info.this_msg))
+                .collect::<Vec<_>>()
+        };
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut before = Vec::new();
+        let (update, deposits) = loop {
+            let event = tokio::time::timeout_at(deadline, sequencer.next_event())
+                .await
+                .expect("B3 lands after the reconnect and the fork switch");
+            let Event::BlocksProcessed {
+                channel_update,
+                deposits,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            if deposits.iter().any(|d| d.op_id == d2) {
+                break (channel_update, deposits);
+            }
+            before.push(channel_update);
+        };
+
+        assert_eq!(sequencer.current_tip, Some(header_id(3)));
+        assert!(
+            before.iter().all(|u| !msg_ids(u.adopted()).contains(&y_id)),
+            "Y is only adopted with the gap"
+        );
+        let switched_to_fork = before.last().expect("C was processed before B3");
+        assert_eq!(msg_ids(switched_to_fork.adopted()), vec![z_id]);
+        let observed: Vec<_> = deposits.iter().map(|d| d.op_id).collect();
+        assert_eq!(
+            observed,
+            vec![d2, d3],
+            "gap deposit first, then the live block's"
+        );
+        assert_eq!(msg_ids(update.adopted()), vec![y_id]);
+        assert_eq!(msg_ids(update.orphaned()), vec![z_id]);
+    }
+
     #[tokio::test]
     async fn cancelled_next_event_resumes_the_pulled_block() {
         let channel_id = ChannelId::from([0; 32]);

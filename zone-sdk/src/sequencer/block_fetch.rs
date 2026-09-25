@@ -2089,6 +2089,98 @@ mod tests {
         assert_eq!(observed, vec![d2, d3]);
     }
 
+    /// A deposit-events fetch failing on a later gap block, after an earlier
+    /// gap block was prepared, fails the event with nothing applied: no
+    /// partial deposits, no partial blocks, tip unchanged. The retry reports
+    /// every gap block's deposits and the live block's, in order.
+    #[tokio::test]
+    async fn deposit_events_failure_on_a_later_gap_block_applies_nothing() {
+        // G(0) <- B1 (live) <- B2 (D2, missed) <- B3 (D3, missed) <- B4 (D4, live)
+        let ch = ChannelId::from([0u8; 32]);
+        let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
+        let deposit = |n: u32| {
+            let tag = u8::try_from(n).unwrap();
+            let op = deposit_op(ch, n, Metadata::try_from(vec![tag]).unwrap());
+            let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
+            let note = DepositNote {
+                note_id: NoteId::from(Fr::from(1000 + u64::from(n))),
+                value: 50,
+                pk,
+            };
+            let event = deposit_event(&tx, &op, 50, vec![note]);
+            (op.op_id(), tx, event)
+        };
+        let (d2, d2_tx, d2_event) = deposit(2);
+        let (d3, d3_tx, d3_event) = deposit(3);
+        let (d4, d4_tx, d4_event) = deposit(4);
+        let b1 = api_block(1, 0, 1, Vec::new());
+        let b2 = api_block(2, 1, 2, vec![d2_tx]);
+        let b3 = api_block(3, 2, 3, vec![d3_tx]);
+        let b4 = api_block(4, 3, 4, vec![d4_tx]);
+        let without_b3_events = MockNode {
+            blocks: vec![b2.clone(), b3.clone()],
+            events: HashMap::from([
+                (header_id(2), d2_event.clone()),
+                (header_id(4), d4_event.clone()),
+            ]),
+            ..MockNode::default()
+        };
+        let with_b3_events = MockNode {
+            blocks: vec![b2, b3],
+            events: HashMap::from([
+                (header_id(2), d2_event),
+                (header_id(3), d3_event),
+                (header_id(4), d4_event),
+            ]),
+            ..MockNode::default()
+        };
+        let mut state = None;
+        let mut current_tip = None;
+        let mut lib_slot = Slot::genesis();
+
+        handle_block_event(
+            &live_event(&b1),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            ch,
+            &without_b3_events,
+        )
+        .await
+        .expect("B1 processes");
+        let failed = handle_block_event(
+            &live_event(&b4),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            ch,
+            &without_b3_events,
+        )
+        .await;
+        assert!(
+            matches!(failed, Err(Error::Network(_))),
+            "B3's deposit events cannot be served"
+        );
+        assert_eq!(current_tip, Some(header_id(1)), "tip unchanged");
+        assert!(
+            !state.as_ref().unwrap().has_block(&header_id(2)),
+            "the gap block prepared before the failure is not applied either"
+        );
+        let retried = handle_block_event(
+            &live_event(&b4),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            ch,
+            &with_b3_events,
+        )
+        .await
+        .expect("B4 processes once B3's events are served");
+
+        let observed: Vec<_> = retried.deposits.iter().map(|d| d.op_id).collect();
+        assert_eq!(observed, vec![d2, d3, d4]);
+    }
+
     /// A gap block the node cannot serve fails the event and leaves state
     /// untouched, so the re-delivered event backfills the gap once the block
     /// is available. Applying the live block over the hole instead would cut

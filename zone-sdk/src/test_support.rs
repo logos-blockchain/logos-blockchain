@@ -2,7 +2,10 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use async_trait::async_trait;
@@ -84,6 +87,8 @@ pub struct MockNode {
     pub scripts: Arc<Mutex<VecDeque<StreamScript>>>,
     /// Served by `block()`, keyed by header id; unknown ids yield `None`.
     pub blocks: Vec<ApiBlock>,
+    /// How many `block()` calls fail before `blocks` is served normally.
+    pub block_fetch_failures: Arc<AtomicUsize>,
     /// Served by `immutable_blocks()`, filtered by the queried slot range.
     pub immutable: Vec<ApiBlock>,
     /// Optional gate for pausing `immutable_blocks()` calls in cancellation
@@ -122,6 +127,7 @@ impl Default for MockNode {
                 then: StreamEnd::Hang,
             }]),
             blocks: Vec::new(),
+            block_fetch_failures: Arc::new(AtomicUsize::new(0)),
             immutable: Vec::new(),
             immutable_blocks_gate: None,
             immutable_blocks_calls: None,
@@ -245,6 +251,17 @@ impl adapter::Node for MockNode {
     }
 
     async fn block(&self, id: HeaderId) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
+        if self
+            .block_fetch_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(lb_common_http_client::Error::Client(
+                "block fetch failed".to_owned(),
+            ));
+        }
         Ok(self.blocks.iter().find(|b| b.header.id == id).cloned())
     }
 
