@@ -1,5 +1,6 @@
 use std::{
     backtrace::{Backtrace, BacktraceStatus},
+    io::{self, Write as _},
     panic::PanicHookInfo,
 };
 
@@ -31,11 +32,12 @@ pub fn log_and_exit_hook(panic_info: &PanicHookInfo) {
     );
 
     // Write to stderr directly so the panic shows up in output.
-    eprintln!(
+    drop(writeln!(
+        io::stderr(),
         "A panic occurred: {}{}",
         payload.unwrap_or("<non-string payload>"),
         location.map(|l| format!(" at {l}")).unwrap_or_default()
-    );
+    ));
 
     #[cfg(feature = "dhat-heap")]
     crate::global_allocators::dhat_heap::drop_dhat_profiler();

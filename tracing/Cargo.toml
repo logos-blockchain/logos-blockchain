@@ -46,3 +46,6 @@ tracing-loki = { features = ["compat-0-2-1"], workspace = true }
 tracing-opentelemetry = { features = ["metrics"], workspace = true }
 tracing-subscriber = { features = ["env-filter", "std"], workspace = true }
 url = { features = ["serde"], workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
