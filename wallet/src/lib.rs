@@ -878,7 +878,7 @@ mod tests {
             Note, Op, OpProof, SignedOps,
             channel::Channels,
             gas::MainnetGasProfile as Gas,
-            ledger::{Inputs, Outputs},
+            ledger::{BoundedInputs, Inputs, Outputs},
             ops::channel::{
                 ChannelId, MsgId,
                 deposit::Metadata,
@@ -1100,7 +1100,7 @@ mod tests {
         // - voucher v2 is ours -> should be tracked
         let alice_100_nmo_utxo = transfer1.outputs.utxo_by_index(0, &transfer1).unwrap();
         let transfer2 = TransferOp {
-            inputs: Inputs::new([alice_100_nmo_utxo.id()]),
+            inputs: BoundedInputs::from(alice_100_nmo_utxo.id()).into(),
             outputs: Outputs::new([Note::new(20, bob), Note::new(80, alice)]),
         };
 
@@ -1155,7 +1155,7 @@ mod tests {
 
         let deposit = DepositOp {
             channel_id: ChannelId::from([0u8; 32]),
-            inputs: [alice_80_nmo_utxo.id()].into(),
+            inputs: BoundedInputs::from(alice_80_nmo_utxo.id()).into(),
             metadata: Metadata::empty(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, alice_80_nmo_utxo.note);
@@ -1235,7 +1235,7 @@ mod tests {
         // Op B: spend the 100 NMO note created by op A; send 30 to bob,
         // 70 change back to alice.
         let transfer_b = TransferOp {
-            inputs: Inputs::new([intermediate]),
+            inputs: BoundedInputs::from(intermediate).into(),
             outputs: Outputs::new([Note::new(30, bob), Note::new(70, alice)]),
         };
 
@@ -1292,7 +1292,7 @@ mod tests {
             .unwrap()
             .id();
         let transfer_b = TransferOp {
-            inputs: Inputs::new([intermediate]),
+            inputs: BoundedInputs::from(intermediate).into(),
             outputs: Outputs::new([Note::new(30, bob), Note::new(70, alice)]),
         };
 
@@ -1451,7 +1451,7 @@ mod tests {
 
         if let Some(Op::Transfer(transfer_op)) = funded_tx.last() {
             // ensure alices utxo was used to pay the fee
-            assert_eq!(transfer_op.inputs, Inputs::new([utxo2.id()]));
+            assert_eq!(transfer_op.inputs, BoundedInputs::from(utxo2.id()).into());
             // ensure change was returned to alice
             assert_eq!(
                 transfer_op.outputs,
@@ -1968,7 +1968,7 @@ mod tests {
         // Deposit the note into a channel.
         let deposit = DepositOp {
             channel_id: ChannelId::from([0u8; 32]),
-            inputs: [alice_utxo.id()].into(),
+            inputs: BoundedInputs::from(alice_utxo.id()).into(),
             metadata: Metadata::empty(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, alice_utxo.note);
@@ -2037,7 +2037,7 @@ mod tests {
         );
         let deposit = DepositOp {
             channel_id,
-            inputs: [pk1_utxo.id()].into(),
+            inputs: BoundedInputs::from(pk1_utxo.id()).into(),
             metadata: Metadata::empty(),
         };
         let pk1_channel_note = Utxo::new(deposit.op_id(), 0, pk1_utxo.note);
@@ -2057,7 +2057,7 @@ mod tests {
         // Transfer the channel note to `pk2`.
         let transfer_op = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([pk1_channel_note.id()]),
+            inputs: BoundedInputs::from(pk1_channel_note.id()).into(),
             outputs: Outputs::new([Note::new(100, pk2)]),
         };
         let pk2_output_id = transfer_op
@@ -2124,7 +2124,7 @@ mod tests {
         );
         let deposit = DepositOp {
             channel_id,
-            inputs: [alice_utxo.id()].into(),
+            inputs: BoundedInputs::from(alice_utxo.id()).into(),
             metadata: Metadata::empty(),
         };
         let alice_channel_note = Utxo::new(deposit.op_id(), 0, alice_utxo.note);
@@ -2144,7 +2144,7 @@ mod tests {
         // Transfer Alice -> an unknown-to-wallet pk.
         let transfer_op = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([alice_channel_note.id()]),
+            inputs: BoundedInputs::from(alice_channel_note.id()).into(),
             outputs: Outputs::new([Note::new(100, stranger)]),
         };
         let stranger_output_id = transfer_op
@@ -2195,7 +2195,7 @@ mod tests {
         );
         let deposit = DepositOp {
             channel_id,
-            inputs: [alice_utxo.id()].into(),
+            inputs: BoundedInputs::from(alice_utxo.id()).into(),
             metadata: Metadata::empty(),
         };
         let alice_channel_note = Utxo::new(deposit.op_id(), 0, alice_utxo.note);
@@ -2221,7 +2221,7 @@ mod tests {
         // NoteId it got when the deposit re-created it.
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([alice_channel_note.id()]),
+            inputs: BoundedInputs::from(alice_channel_note.id()).into(),
         };
         let withdraw_block = WalletBlock {
             id: HeaderId::from([2; 32]),
@@ -2275,7 +2275,9 @@ mod tests {
 
         let deposit = Op::ChannelDeposit(DepositOp {
             channel_id: ChannelId::from([0; 32]),
-            inputs: Inputs::new([first_input, second_input]),
+            inputs: BoundedInputs::try_from_iter([first_input, second_input])
+                .unwrap()
+                .into(),
             metadata: Metadata::default(),
         });
 

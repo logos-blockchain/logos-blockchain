@@ -1237,6 +1237,7 @@ mod tests {
         mantle::{
             Note, NoteId, Op, Value,
             channel::{SlotTimeframe, SlotTimeout},
+            ledger::BoundedInputs,
             ops::{
                 OpProof,
                 channel::{
@@ -1266,7 +1267,7 @@ mod tests {
     fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: Metadata) -> DepositOp {
         DepositOp {
             channel_id,
-            inputs: Inputs::new([NoteId::from(Fr::from(input_seed))]),
+            inputs: BoundedInputs::from(NoteId::from(Fr::from(input_seed))).into(),
             metadata,
         }
     }
@@ -1516,7 +1517,7 @@ mod tests {
         let msg_id = inscribe.id();
         let transfer = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([input_id]),
+            inputs: BoundedInputs::from(input_id).into(),
             outputs: Outputs::new([Note::new(50, pk)]),
         };
         let tx = unverified_tx_with_ops(vec![
@@ -1567,7 +1568,7 @@ mod tests {
         assert_eq!(update.adopted.len(), 1);
         match &update.adopted[0] {
             ChannelUpdateTx::PinDeposit(a) => {
-                assert_eq!(a.consumed_notes, Inputs::new([input_id]));
+                assert_eq!(a.consumed_notes, BoundedInputs::from(input_id).into());
             }
             other => panic!("expected PinDeposit, got {other:?}"),
         }
@@ -1589,7 +1590,7 @@ mod tests {
         let msg_id = inscribe.id();
         let transfer = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([input_id]),
+            inputs: BoundedInputs::from(input_id).into(),
             outputs: Outputs::new([Note::new(50, rekeyed)]),
         };
         let tx = unverified_tx_with_ops(vec![
@@ -1813,7 +1814,7 @@ mod tests {
         let withdrawn_note = NoteId::from(Fr::from(3u64));
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([withdrawn_note]),
+            inputs: BoundedInputs::from(withdrawn_note).into(),
         };
         let tx = unverified_tx_with_ops(vec![
             Op::ChannelInscribe(inscribe),
@@ -1851,7 +1852,10 @@ mod tests {
             ChannelUpdateTx::AtomicWithdraw(a) => {
                 assert_eq!(a.inscription.this_msg, msg_id);
                 assert_eq!(a.withdraws.len(), 1);
-                assert_eq!(a.withdraws[0].op.inputs, Inputs::new([withdrawn_note]));
+                assert_eq!(
+                    a.withdraws[0].op.inputs,
+                    BoundedInputs::from(withdrawn_note).into()
+                );
             }
             other => panic!("expected AtomicWithdraw, got {other:?}"),
         }
@@ -1867,11 +1871,11 @@ mod tests {
         let other_channel = ChannelId::from([9; 32]);
         let withdraw_for_us = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([NoteId::from(Fr::from(7u64))]),
+            inputs: BoundedInputs::from(NoteId::from(Fr::from(7u64))).into(),
         };
         let withdraw_other = ChannelWithdrawOp {
             channel_id: other_channel,
-            inputs: Inputs::new([NoteId::from(Fr::from(0u64))]),
+            inputs: BoundedInputs::from(NoteId::from(Fr::from(0u64))).into(),
         };
 
         let tx = unverified_tx_with_ops(vec![
@@ -1895,7 +1899,10 @@ mod tests {
             FinalizedOp::Withdraw(w) => {
                 assert_eq!(w.tx_hash, tx_hash);
                 assert_eq!(w.op.channel_id, channel_id);
-                assert_eq!(w.op.inputs, Inputs::new([NoteId::from(Fr::from(7u64))]));
+                assert_eq!(
+                    w.op.inputs,
+                    BoundedInputs::from(NoteId::from(Fr::from(7u64))).into()
+                );
             }
             other => panic!("expected Withdraw, got {other:?}"),
         }
@@ -2602,7 +2609,7 @@ mod tests {
             Op::ChannelInscribe(pin_op.clone()),
             Op::ChannelTransfer(ChannelTransferOp {
                 channel_id: ch,
-                inputs: Inputs::new([recreated]),
+                inputs: BoundedInputs::from(recreated).into(),
                 outputs: Outputs::new([Note::new(50, pk)]),
             }),
         ]);
@@ -2622,7 +2629,7 @@ mod tests {
                 MsgId::root(),
                 pin_id,
                 pin_op.inscription,
-                Inputs::new([recreated]),
+                BoundedInputs::from(recreated).into(),
             )
             .unwrap();
         PinFixture {
@@ -3483,7 +3490,7 @@ mod tests {
 
         let transfer = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([recreated]),
+            inputs: BoundedInputs::from(recreated).into(),
             outputs: Outputs::new([Note::new(50, out_pk)]),
         };
         let out_id = transfer.utxos().next().unwrap().id();

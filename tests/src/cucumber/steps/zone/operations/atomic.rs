@@ -1,4 +1,4 @@
-use lb_core::mantle::transactions::Ops;
+use lb_core::mantle::{ledger::BoundedInputs, transactions::Ops};
 
 use super::*;
 
@@ -48,7 +48,7 @@ pub(super) fn build_atomic_deposit_op(
 
     Ok(DepositOp {
         channel_id,
-        inputs: Inputs::new([deposit_note_id]),
+        inputs: BoundedInputs::from(deposit_note_id).into(),
         metadata,
     })
 }

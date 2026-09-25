@@ -59,7 +59,7 @@ impl DepositOp {
     pub fn sample() -> Self {
         Self {
             channel_id: ChannelId::from([16u8; 32]),
-            inputs: Inputs::new([NoteId(Fr::from(17u64))]),
+            inputs: crate::mantle::ledger::BoundedInputs::from(NoteId(Fr::from(17u64))).into(),
             metadata: Metadata::try_from(b"deposit-metadata".to_vec())
                 .expect("Metadata is within bounds."),
         }
@@ -209,6 +209,7 @@ mod test {
         batch::{Error as BatchError, test_utils::batch_verify},
         channel_notes,
         gas::test_utils::FixedThresholds,
+        ledger::BoundedInputs,
         ops::op_proof::samples::SampleProof as _,
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
     };
@@ -240,7 +241,7 @@ mod test {
         let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
 
         let operation = DepositOp {
-            inputs: Inputs::new([input_utxo.id()]),
+            inputs: BoundedInputs::from(input_utxo.id()).into(),
             ..DepositOp::sample()
         };
         let channel_id = operation.channel_id;
@@ -279,7 +280,7 @@ mod test {
         };
 
         let operation = DepositOp {
-            inputs: Inputs::new([input_utxo.id()]),
+            inputs: BoundedInputs::from(input_utxo.id()).into(),
             ..DepositOp::sample()
         };
 
@@ -322,7 +323,7 @@ mod test {
         let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
 
         let operation = DepositOp {
-            inputs: Inputs::new([input_utxo.id()]),
+            inputs: BoundedInputs::from(input_utxo.id()).into(),
             ..DepositOp::sample()
         };
 
@@ -383,7 +384,11 @@ mod test {
         let (utxos, _) = Utxos::new().insert(first.id(), first);
         let (utxos, _) = utxos.insert(second.id(), second);
 
-        let signed_operation = verified(Inputs::new([first.id(), second.id()]));
+        let signed_operation = verified(
+            BoundedInputs::try_from_iter([first.id(), second.id()])
+                .unwrap()
+                .into(),
+        );
         let operation = signed_operation.operation().clone();
         let tx_hash = TxHash::from([9u8; 32]);
 
@@ -444,7 +449,7 @@ mod test {
     #[test]
     fn execute_rejects_an_input_missing_from_the_ledger() {
         let input = input_utxo(1);
-        let signed_operation = verified(Inputs::new([input.id()]));
+        let signed_operation = verified(BoundedInputs::from(input.id()).into());
 
         assert_eq!(
             signed_operation
@@ -465,7 +470,7 @@ mod test {
         let input = input_utxo(1);
         let (utxos, _) = Utxos::new().insert(input.id(), input);
 
-        let signed_operation = verified(Inputs::new([input.id()]));
+        let signed_operation = verified(BoundedInputs::from(input.id()).into());
         let deposited = Utxo::new(signed_operation.operation().op_id(), 0, input.note).id();
         let channels = Channels::new()
             .register_channel_note(&deposited, &other_channel)
@@ -505,7 +510,7 @@ mod test {
         };
         let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
         let operation = DepositOp {
-            inputs: Inputs::new([input_utxo.id()]),
+            inputs: BoundedInputs::from(input_utxo.id()).into(),
             ..DepositOp::sample()
         };
         let mut channels = Channels::new();

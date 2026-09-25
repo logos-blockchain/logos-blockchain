@@ -995,7 +995,7 @@ mod tests {
             Note, Op, OpProof, SignedOps,
             channel::Channels,
             gas::{MainnetGasProfile, TxGasCalculator as _},
-            ledger::{Inputs, Outputs, Utxos, VerifiableOperation as _},
+            ledger::{BoundedInputs, Inputs, Outputs, Utxos, VerifiableOperation as _},
             ops::{
                 OpId as _, OpRef, SignedOperation,
                 channel::{
@@ -1678,7 +1678,7 @@ mod tests {
         // Submit a deposit operation
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let ops = vec![Op::ChannelDeposit(deposit.clone())];
@@ -1765,7 +1765,7 @@ mod tests {
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
@@ -1787,7 +1787,7 @@ mod tests {
         // keeps the NoteId the deposit gave it.
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         };
         let withdraw_tx = Ops::from([Op::ChannelWithdraw(withdraw)]);
         let withdraw_tx_hash = withdraw_tx.hash();
@@ -1848,13 +1848,13 @@ mod tests {
         };
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         };
         let ops = vec![
             Op::ChannelConfig(config_op),
@@ -1989,13 +1989,13 @@ mod tests {
         };
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         };
         let ops = vec![
             Op::ChannelInscribe(inscribe_op),
@@ -2058,13 +2058,13 @@ mod tests {
         };
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let transfer = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
             outputs: Outputs::try_new(vec![utxo.note]).unwrap(),
         };
         let ops = vec![
@@ -2129,7 +2129,7 @@ mod tests {
 
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
@@ -2147,7 +2147,7 @@ mod tests {
         // it, so the original input never comes back to the ledger.
         let withdraw_tx = Ops::from([Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         })]);
         let withdraw_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
@@ -2196,7 +2196,7 @@ mod tests {
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: Metadata::empty(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
@@ -2217,7 +2217,7 @@ mod tests {
         // Try to withdraw the channel note, but with an invalid proof
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
         let withdraw_tx = Ops::from([Op::ChannelWithdraw(withdraw)]);

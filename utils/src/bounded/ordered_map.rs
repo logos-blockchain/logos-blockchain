@@ -261,6 +261,50 @@ impl<K, V, S, const MIN: usize, const MAX: usize> Deref for BoundedOrderedMap<K,
     }
 }
 
+impl<K, V, S, const MIN: usize, const MAX: usize> From<(K, V)>
+    for BoundedOrderedMap<K, V, MIN, MAX, S>
+where
+    K: Eq + Hash,
+    S: Default + BuildHasher,
+{
+    fn from(value: (K, V)) -> Self {
+        const {
+            assert!(
+                MIN <= 1,
+                "Single-element construction is invalid for minimum bound > 1"
+            );
+            assert!(
+                MAX >= 1,
+                "Single-element construction is invalid for maximum bound < 1"
+            );
+        }
+        Self::try_from_iter([value]).expect("Single-element iterator does not contain duplicates.")
+    }
+}
+
+impl<K, V, S, const MIN: usize, const MAX: usize, const INPUT_SIZE: usize>
+    TryFrom<[(K, V); INPUT_SIZE]> for BoundedOrderedMap<K, V, MIN, MAX, S>
+where
+    K: Eq + Hash,
+    S: Default + BuildHasher,
+{
+    type Error = BoundedError;
+
+    fn try_from(value: [(K, V); INPUT_SIZE]) -> Result<Self, Self::Error> {
+        const {
+            assert!(
+                MIN <= INPUT_SIZE,
+                "Array construction is invalid for minimum bound > INPUT_SIZE"
+            );
+            assert!(
+                MAX >= INPUT_SIZE,
+                "Array construction is invalid for maximum bound < INPUT_SIZE"
+            );
+        }
+        Self::try_from_iter(value)
+    }
+}
+
 impl<'a, K, V, S, const MIN: usize, const MAX: usize> IntoIterator
     for &'a BoundedOrderedMap<K, V, MIN, MAX, S>
 {

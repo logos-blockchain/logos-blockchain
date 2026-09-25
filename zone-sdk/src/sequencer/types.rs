@@ -830,7 +830,7 @@ mod tests {
     use lb_core::mantle::{
         Op,
         channel::{SlotTimeframe, SlotTimeout},
-        ledger::{Inputs, NoteId},
+        ledger::{BoundedInputs, NoteId},
         ops::channel::{
             ChannelId, MsgId, VerifiedChannelKeys, config::ChannelConfigOp,
             withdraw::ChannelWithdrawOp,
@@ -920,7 +920,7 @@ mod tests {
         // signature over the tx hash would authorize both.
         let smuggled = Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id: ChannelId::from([7; 32]),
-            inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
+            inputs: BoundedInputs::from(NoteId::from(Fr::from(1u64))).into(),
         });
         let tx = Ops::new_unchecked(vec![config.clone(), smuggled.clone()]);
         let prepared = PreparedChannelConfig {
