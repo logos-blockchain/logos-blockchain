@@ -1,6 +1,8 @@
 use super::*;
 use crate::cucumber::steps::nodes::diagnostics::log_blend_relay_event;
 
+const NODE_RESTART_GRACE_PERIOD: Duration = Duration::from_secs(3);
+
 // Sort nodes_to_start with empty peers first to ensure standalone nodes start
 // before connected nodes, then by dependency order to ensure all peers of a
 // node are started before the node itself is started. If there is a circular
@@ -187,6 +189,7 @@ pub async fn start_node(
             return Err(error.into());
         }
     };
+    world.lifecycle.node_stopped_at.remove(node_name);
 
     if let Some(metadata) = world.blend_relays.metadata(node_name)? {
         log_blend_relay_event(
@@ -239,11 +242,17 @@ pub async fn start_node(
                 })
         };
         stop_result?;
+        world
+            .lifecycle
+            .node_stopped_at
+            .insert(node_name.to_owned(), Instant::now());
 
         restore_node_state_from_snapshot(&node_snapshot, &node_runtime_dir).inspect_err(|e| {
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
         populate_slots_per_epoch_from_deployment(world, &node_runtime_dir)?;
+
+        wait_for_node_restart_grace_period(world, node_name).await?;
 
         let restart_result = {
             let cluster = world
@@ -259,6 +268,7 @@ pub async fn start_node(
                 })
         };
         restart_result?;
+        world.lifecycle.node_stopped_at.remove(node_name);
         info!(
             target: TARGET,
             "Node {node_name} started from snapshot {}/{}",
@@ -400,7 +410,7 @@ fn check_tokio_console_port(node_name: &str, port: u16) {
 /// Unlike [`restart_node`], which brings it back up and waits for readiness,
 /// this leaves the node down, useful to exercise reconnect behavior while the
 /// node is down.
-pub async fn stop_node(world: &CucumberWorld, step: &str, node_name: &str) -> StepResult {
+pub async fn stop_node(world: &mut CucumberWorld, step: &str, node_name: &str) -> StepResult {
     let cluster = world
         .cluster
         .local_cluster
@@ -422,6 +432,10 @@ pub async fn stop_node(world: &CucumberWorld, step: &str, node_name: &str) -> St
         .inspect_err(|e| {
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
+    world
+        .lifecycle
+        .node_stopped_at
+        .insert(node_name.to_owned(), Instant::now());
 
     log_node_lifecycle_marker(world, "node_stop", node_name, "after").await;
 
@@ -432,7 +446,12 @@ pub async fn stop_node(world: &CucumberWorld, step: &str, node_name: &str) -> St
     Ok(())
 }
 
-pub async fn restart_node(world: &CucumberWorld, step: &str, node_name: &str) -> StepResult {
+pub async fn restart_node(world: &mut CucumberWorld, step: &str, node_name: &str) -> StepResult {
+    if !world.lifecycle.node_stopped_at.contains_key(node_name) {
+        stop_node(world, step, node_name).await?;
+    }
+    wait_for_node_restart_grace_period(world, node_name).await?;
+
     let cluster = world
         .cluster
         .local_cluster
@@ -454,6 +473,7 @@ pub async fn restart_node(world: &CucumberWorld, step: &str, node_name: &str) ->
         .inspect_err(|e| {
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
+    world.lifecycle.node_stopped_at.remove(node_name);
 
     log_node_lifecycle_marker(world, "node_restart", node_name, "after").await;
     let client = world.resolve_node_http_client(node_name).inspect_err(|e| {
@@ -479,6 +499,28 @@ pub async fn restart_node(world: &CucumberWorld, step: &str, node_name: &str) ->
         "Restarted node `{node_name}` (runtime name `{started_node_name}`)"
     );
 
+    Ok(())
+}
+
+async fn wait_for_node_restart_grace_period(world: &CucumberWorld, node_name: &str) -> StepResult {
+    let stopped_at = world
+        .lifecycle
+        .node_stopped_at
+        .get(node_name)
+        .copied()
+        .ok_or(StepError::LogicalError {
+            message: format!("node `{node_name}` has no recorded stop time before restart"),
+        })?;
+    let elapsed = stopped_at.elapsed();
+    if let Some(remaining) = NODE_RESTART_GRACE_PERIOD.checked_sub(elapsed) {
+        info!(
+            target: TARGET,
+            node = node_name,
+            ?remaining,
+            "Waiting for node restart grace period"
+        );
+        sleep(remaining).await;
+    }
     Ok(())
 }
 

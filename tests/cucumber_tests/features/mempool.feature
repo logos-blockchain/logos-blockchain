@@ -1,28 +1,6 @@
 Feature: Mempool lifecycle
 
   @mempool_ci @mempool_manual
-  Scenario: Submitted transaction becomes visible in current-tip mempool view
-    Given the genesis block has the following wallet resources:
-      | account_index | token_count | token_amount |
-      | 1             | 2           | 1000         |
-      | 2             | 0           | 0            |
-    And I have a cluster with capacity of 1 nodes
-    And no nodes are declared as blend providers
-    And I start nodes with wallet resources:
-      | node_name | account_index | wallet_name | connected_to |
-      | NODE_1    | 1             | WALLET_A    |              |
-      | NODE_1    | 2             | WALLET_B    |              |
-    When node "NODE_1" is at height 2 in 240 seconds
-    And I prepare transfer transaction "TX_VISIBLE" of 100 LGO from wallet "WALLET_A" to wallet "WALLET_B"
-    And I submit prepared transaction "TX_VISIBLE" to nodes:
-      | node_name |
-      | NODE_1    |
-    Then transaction "TX_VISIBLE" is pending in mempool of nodes in 30 seconds:
-      | node_name |
-      | NODE_1    |
-    Then I stop all nodes
-
-  @mempool_ci @mempool_manual
   Scenario: Included transaction is removed from mempool view
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -41,8 +19,15 @@ Feature: Mempool lifecycle
     And transaction "TX_INCLUDED" remains not pending in mempool of all nodes for 2 blocks in 180 seconds
     Then I stop all nodes
 
+  # Invariants covered:
+  # - a valid submitted transaction becomes visible in the current-tip mempool;
+  # - while still pending, the transaction is persisted to mempool recovery;
+  # - restarting the node before inclusion restores the transaction as pending.
+  #
+  # Block production is deliberately slowed so the same pending transaction can
+  # be observed in both live and recovery state before restart.
   @mempool_ci @mempool_manual
-  Scenario: Pending transaction survives restart before inclusion
+  Scenario: Pending transaction is visible and survives restart before inclusion
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 2           | 1000         |
