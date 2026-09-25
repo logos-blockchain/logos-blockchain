@@ -227,7 +227,7 @@ pub fn run_node_from_config(
     let kms_config = KmsConfig {
         user: config.user.kms,
     }
-    .into();
+    .try_into()?;
 
     let sdp_config = SdpConfig {
         user: config.user.sdp,

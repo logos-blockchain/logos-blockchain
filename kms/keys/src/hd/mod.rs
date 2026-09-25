@@ -20,6 +20,7 @@ use blake2::{
 };
 use lb_groth16::{Fr, fr_from_bytes_unchecked};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
+use rand_core::{CryptoRng, RngCore};
 #[cfg(feature = "unsafe")]
 use serde::Serializer;
 use serde::{Deserialize, Serialize};
@@ -50,9 +51,12 @@ impl Mnemonic {
 
     /// Generates a new mnemonic of 12 words.
     #[must_use]
-    pub fn generate() -> Self {
+    pub fn generate<R>(rng: &mut R) -> Self
+    where
+        R: RngCore + CryptoRng,
+    {
         Self(
-            bip39::Mnemonic::generate_in(Language::English, Self::DEFAULT_WORD_COUNT)
+            bip39::Mnemonic::generate_in_with(rng, Language::English, Self::DEFAULT_WORD_COUNT)
                 .expect("mnemonic generation should not fail"),
         )
     }

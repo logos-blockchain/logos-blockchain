@@ -128,6 +128,15 @@ pub struct InitArgs {
     #[arg(long, default_value_t = false)]
     pub overwrite: bool,
 
+    /// BIP-39 mnemonic to derive the wallet keys from.
+    /// A new 12-word mnemonic is generated if not given.
+    #[clap(long = "mnemonic", env = "MNEMONIC")]
+    pub mnemonic: Option<String>,
+
+    /// BIP-39 passphrase of the mnemonic, which is empty if not given.
+    #[clap(long = "mnemonic-passphrase", env = "MNEMONIC_PASSPHRASE")]
+    pub mnemonic_passphrase: Option<String>,
+
     #[clap(flatten)]
     pub log: LogArgs,
 
@@ -193,6 +202,13 @@ pub struct EmbeddedInitArgs {
     /// Path for the generated KMS keys YAML file.
     /// Defaults to 'kms.yaml' in the same directory as --output.
     pub kms_file: Option<PathBuf>,
+
+    /// BIP-39 mnemonic to derive the wallet keys from.
+    /// A new 12-word mnemonic is generated if not given.
+    pub mnemonic: Option<String>,
+
+    /// BIP-39 passphrase of the mnemonic, which is empty if not given.
+    pub mnemonic_passphrase: Option<String>,
 }
 
 impl From<EmbeddedInitArgs> for InitArgs {
@@ -200,6 +216,8 @@ impl From<EmbeddedInitArgs> for InitArgs {
         let mut init_args = Self {
             output: args.output.clone(),
             keystore: args.kms_file.clone(),
+            mnemonic: args.mnemonic.clone(),
+            mnemonic_passphrase: args.mnemonic_passphrase.clone(),
             ..Default::default()
         };
 
@@ -241,6 +259,8 @@ impl Default for EmbeddedInitArgs {
             skip_ibd: false,
             log_filter: None,
             kms_file: None,
+            mnemonic: None,
+            mnemonic_passphrase: None,
         }
     }
 }
@@ -384,6 +404,8 @@ impl From<MigrateArgs> for InitArgs {
             state: migrate.state,
             storage_path: migrate.storage_path,
             overwrite: false,
+            mnemonic: None,
+            mnemonic_passphrase: None,
         }
     }
 }

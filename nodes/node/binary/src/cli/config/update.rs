@@ -165,16 +165,13 @@ fn update_sdp_config(keystore: &Keystore, sdp_config: &mut SdpConfig, sdp_args: 
 }
 
 fn update_kms_config(keystore: &Keystore, kms_config: &mut KmsConfig) {
-    kms_config.backend.keys = keystore
-        .get_all()
-        .map(|(id, key)| (id, key.clone()))
-        .collect();
+    kms_config.backend = keystore.kms_backend_settings();
 }
 
 fn update_wallet_config(keystore: &Keystore, wallet_config: &mut WalletConfig) {
     let (voucher_master_key_id, _) = keystore
-        .get(KeyTitle::VAUCHER_MASTER)
-        .expect("Vaucher master key set by default");
+        .get(KeyTitle::VOUCHER_MASTER)
+        .expect("Voucher master key set by default");
 
     wallet_config.voucher_master_key_id = voucher_master_key_id;
     wallet_config.known_keys = keystore

@@ -90,7 +90,7 @@ impl OldConfig {
                 .try_into()
                 .expect("SecretKey is guaranteed to be 32 bytes"),
         );
-        keystore.set(KeyTitle::NETWORK_SWARM, network_secret_key.into());
+        keystore.set(KeyTitle::NETWORK_SWARM, network_secret_key);
 
         if let Some(blend_signing) = old_kms.remove(&self.blend.non_ephemeral_signing_key_id) {
             keystore.set(KeyTitle::BLEND_SIGNING, blend_signing);
@@ -109,7 +109,7 @@ impl OldConfig {
         }
 
         if let Some(voucher_master) = old_kms.remove(&self.wallet.voucher_master_key_id) {
-            keystore.set(KeyTitle::VAUCHER_MASTER, voucher_master);
+            keystore.set(KeyTitle::VOUCHER_MASTER, voucher_master);
         }
 
         keystore
