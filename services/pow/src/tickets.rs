@@ -11,7 +11,7 @@
 //! could not claim.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     iter,
     num::{NonZeroU64, NonZeroUsize},
     pin::Pin,
@@ -41,7 +41,7 @@ use tokio_stream::{
     StreamMap,
     wrappers::{BroadcastStream, errors::BroadcastStreamRecvError},
 };
-use tracing::{error, log::warn};
+use tracing::{error, log::warn, trace};
 
 const LOG_TARGET: &str = pow::ROOT;
 
@@ -81,12 +81,14 @@ pub struct TicketGenerator {
     /// API handle, used to fetch that state.
     processed_block_stream:
         Pin<Box<dyn Stream<Item = (EpochState, LedgerState, ProcessedBlockEvent)> + Send>>,
-    /// Ongoing per-block ticket searches, keyed by block header. Each entry
-    /// yields winning tickets for that block as they are found.
+    /// Ongoing per-block ticket searches, keyed by block header.
+    /// Each entry yields winning tickets for that block as they are found.
     tickets_search: StreamMap<HeaderId, WinnerTicketStream>,
-    /// Index from a block's slot to the headers with an active search at that
-    /// slot, used to prune searches once their block leaves the reward window.
-    tickets_search_by_slot: HashMap<Slot, HashSet<HeaderId>>,
+    /// Inputs of every active search, keyed by block header.
+    /// Includes how many winners it may still yield.
+    /// Used to prune searches once their block leaves the reward window, and to
+    /// rebuild unfinished searches when the search settings change.
+    search_inputs: HashMap<HeaderId, BlockSearch>,
     /// Chain tip from the most recently processed block, cached so emitted
     /// tickets carry the current tip without the consumer having to query it.
     /// Initialized to the genesis id and overwritten by the first processed
@@ -144,7 +146,7 @@ impl TicketGenerator {
         Ok(Self {
             processed_block_stream,
             tickets_search: StreamMap::new(),
-            tickets_search_by_slot: HashMap::new(),
+            search_inputs: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
             pool,
             max_tickets_per_block,
@@ -161,6 +163,49 @@ impl TicketGenerator {
     pub const fn set_outstanding_tickets(&mut self, outstanding: usize) {
         self.outstanding_tickets = outstanding;
     }
+
+    /// Restarts every active search on `pool` with the new settings.
+    ///
+    /// Attempts are independent, so nothing is lost; the old pool shuts down
+    /// once its last search is dropped.
+    pub fn reconfigure(&mut self, pool: Arc<ThreadPool>, max_tickets_per_block: NonZeroUsize) {
+        self.pool = pool;
+        self.max_tickets_per_block = max_tickets_per_block;
+        self.tickets_search.clear();
+        for (&block_id, &search) in &self.search_inputs {
+            let stream = new_block_search_stream(
+                block_id,
+                search,
+                Arc::clone(&self.pool),
+                max_tickets_per_block,
+            );
+            self.tickets_search.insert(block_id, stream);
+        }
+    }
+
+    /// Decrements `block_id`'s remaining winners, dropping the search at zero.
+    fn record_winner(&mut self, block_id: HeaderId) {
+        let Some(search) = self.search_inputs.get_mut(&block_id) else {
+            return;
+        };
+        match NonZeroUsize::new(search.remaining_winners.get() - 1) {
+            Some(remaining_winners) => search.remaining_winners = remaining_winners,
+            None => {
+                self.search_inputs.remove(&block_id);
+            }
+        }
+    }
+}
+
+/// The inputs a per-block ticket search needs, kept so the search can be
+/// rebuilt without re-fetching the block's state.
+#[derive(Clone, Copy)]
+struct BlockSearch {
+    slot: Slot,
+    epoch_nonce: ZkHash,
+    difficulty: PowTarget,
+    /// Winners the search may still yield before it ends.
+    remaining_winners: NonZeroUsize,
 }
 
 /// Number of winning tickets worth searching for on a block: the claims its
@@ -218,17 +263,19 @@ where
 /// Builds a stream that searches for winning tickets for a single block.
 ///
 /// Up to `max_tickets_per_block` attempts run concurrently; each draws a fresh
-/// random key and checks the resulting ticket against `difficulty`. The stream
-/// yields winning `(secret key, claim)` pairs and ends after `max_winners` of
-/// them, dropping any attempt still in flight so the search pool goes idle. If
-/// the limit is not reached first, it is dropped once the block leaves the
-/// reward window (see [`prune_out_of_window_streams`]).
+/// random key and checks the resulting ticket against `difficulty`.
+/// The stream yields winning `(secret key, claim)` pairs and ends after
+/// `remaining_winners` of them, dropping any attempt still in flight so the
+/// search pool goes idle. If the limit is not reached first, it is dropped once
+/// the block leaves the reward window (see [`prune_out_of_window_streams`]).
 fn new_block_search_stream(
     block_header: HeaderId,
-    block_slot: Slot,
-    epoch_nonce: ZkHash,
-    difficulty: PowTarget,
-    max_winners: NonZeroUsize,
+    BlockSearch {
+        slot,
+        epoch_nonce,
+        difficulty,
+        remaining_winners,
+    }: BlockSearch,
     pool: Arc<ThreadPool>,
     max_tickets_per_block: NonZeroUsize,
 ) -> WinnerTicketStream {
@@ -241,10 +288,10 @@ fn new_block_search_stream(
     });
     let results = stream::iter(tasks).buffer_unordered(max_tickets_per_block.get());
     let winners = tokio_stream::StreamExt::filter_map(results, |maybe_winner| maybe_winner)
-        .take(max_winners.get());
-    // Tag every winner with the block's slot so the consumer can track the
-    // reward window.
-    Box::pin(winners.map(move |ticket| (block_slot, ticket)))
+        .take(remaining_winners.get());
+    // Tag every winner with the block's slot so the consumer can track the reward
+    // window.
+    Box::pin(winners.map(move |ticket| (slot, ticket)))
 }
 
 /// Runs a single ticket-search attempt for a block.
@@ -262,6 +309,12 @@ async fn search_winner_ticket(
 ) -> Option<(UnsecuredZkKey, ClaimPowRewardOp)> {
     let (response_sender, response_receiver) = oneshot::channel();
     let pool_task = move || {
+        // Skip the work if the search was dropped while this attempt was queued, e.g.
+        // settings change
+        if response_sender.is_closed() {
+            return;
+        }
+
         let mut rng = rand::thread_rng();
         let sk = UnsecuredZkKey::from_rng(&mut rng);
         let pk = sk.to_public_key();
@@ -276,7 +329,7 @@ async fn search_winner_ticket(
             .is_ok()
             .then_some((sk, claim));
         if response_sender.send(result).is_err() {
-            error!(target: LOG_TARGET, "Failed to send ticket result: receiver dropped");
+            trace!(target: LOG_TARGET, "Dropping ticket result: its search was dropped");
         }
     };
     // Ticket computation is heavy, we have a custom separated threadpool for this
@@ -291,13 +344,10 @@ async fn search_winner_ticket(
 /// can no longer produce claimable tickets.
 fn prune_out_of_window_streams(
     tickets_search: &mut StreamMap<HeaderId, WinnerTicketStream>,
-    tickets_search_by_slot: &mut HashMap<Slot, HashSet<HeaderId>>,
+    search_inputs: &mut HashMap<HeaderId, BlockSearch>,
     frontier_slot: Slot,
 ) {
-    let to_remove = tickets_search_by_slot
-        .extract_if(|k, _| k < &frontier_slot)
-        .flat_map(|(_, headers)| headers);
-    for header in to_remove {
+    for (header, _) in search_inputs.extract_if(|_, search| search.slot < frontier_slot) {
         tickets_search.remove(&header);
     }
 }
@@ -317,9 +367,10 @@ impl Stream for TicketGenerator {
         loop {
             // 1. Emit any winner an active search has already produced, tagged with the
             //    cached tip.
-            if let Poll::Ready(Some((_, (block_slot, (secret_key, claim))))) =
+            if let Poll::Ready(Some((block_id, (block_slot, (secret_key, claim))))) =
                 this.tickets_search.poll_next_unpin(cx)
             {
+                this.record_winner(block_id);
                 return Poll::Ready(Some(WinningTicket {
                     tip: this.tip,
                     block_slot,
@@ -355,25 +406,25 @@ impl Stream for TicketGenerator {
                     if let Some(max_winners) = max_winners
                         && frontier_slot < block_slot
                     {
+                        let search = BlockSearch {
+                            slot: block_slot,
+                            epoch_nonce: epoch_state.nonce,
+                            difficulty: pow.reward_difficulty(),
+                            remaining_winners: max_winners,
+                        };
                         let stream = new_block_search_stream(
                             block_id,
-                            block_slot,
-                            epoch_state.nonce,
-                            pow.reward_difficulty(),
-                            max_winners,
+                            search,
                             Arc::clone(&this.pool),
                             this.max_tickets_per_block,
                         );
                         this.tickets_search.insert(block_id, stream);
-                        this.tickets_search_by_slot
-                            .entry(block_slot)
-                            .or_default()
-                            .insert(block_id);
+                        this.search_inputs.insert(block_id, search);
                     }
                     // prune old enough winning tickets
                     prune_out_of_window_streams(
                         &mut this.tickets_search,
-                        &mut this.tickets_search_by_slot,
+                        &mut this.search_inputs,
                         frontier_slot,
                     );
                     // Fall through to the next loop iteration so the freshly
@@ -397,7 +448,7 @@ impl Stream for TicketGenerator {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{HashMap, HashSet},
+        collections::HashMap,
         num::{NonZeroU64, NonZeroUsize},
         pin::Pin,
         sync::Arc,
@@ -414,7 +465,7 @@ mod tests {
     use tokio_stream::StreamMap;
 
     use super::{
-        TicketGenerator, WinnerTicketStream, WinningTicket, block_ticket_limit,
+        BlockSearch, TicketGenerator, WinnerTicketStream, WinningTicket, block_ticket_limit,
         new_block_search_stream, prune_out_of_window_streams, search_winner_ticket,
     };
 
@@ -440,6 +491,15 @@ mod tests {
         *ZkPublicKey::zero().as_fr()
     }
 
+    fn search_at(slot: u64) -> BlockSearch {
+        BlockSearch {
+            slot: Slot::new(slot),
+            epoch_nonce: zero_fr(),
+            difficulty: Fr::ZERO,
+            remaining_winners: NonZeroUsize::new(2).unwrap(),
+        }
+    }
+
     #[test]
     fn prune_removes_only_searches_below_the_frontier() {
         let old_block = HeaderId::from([1u8; 32]);
@@ -449,28 +509,17 @@ mod tests {
         tickets_search.insert(old_block, pending_stream());
         tickets_search.insert(recent_block, pending_stream());
 
-        let mut tickets_search_by_slot: HashMap<Slot, HashSet<HeaderId>> = HashMap::new();
-        tickets_search_by_slot
-            .entry(Slot::new(5))
-            .or_default()
-            .insert(old_block);
-        tickets_search_by_slot
-            .entry(Slot::new(10))
-            .or_default()
-            .insert(recent_block);
+        let mut search_inputs =
+            HashMap::from([(old_block, search_at(5)), (recent_block, search_at(10))]);
 
-        prune_out_of_window_streams(
-            &mut tickets_search,
-            &mut tickets_search_by_slot,
-            Slot::new(8),
-        );
+        prune_out_of_window_streams(&mut tickets_search, &mut search_inputs, Slot::new(8));
 
         // The slot-5 search aged out; the slot-10 one is still within the window.
         assert_eq!(tickets_search.len(), 1);
         assert!(!tickets_search.contains_key(&old_block));
         assert!(tickets_search.contains_key(&recent_block));
-        assert!(!tickets_search_by_slot.contains_key(&Slot::new(5)));
-        assert!(tickets_search_by_slot.contains_key(&Slot::new(10)));
+        assert!(!search_inputs.contains_key(&old_block));
+        assert!(search_inputs.contains_key(&recent_block));
     }
 
     #[test]
@@ -478,20 +527,69 @@ mod tests {
         let block = HeaderId::from([3u8; 32]);
         let mut tickets_search: StreamMap<HeaderId, WinnerTicketStream> = StreamMap::new();
         tickets_search.insert(block, pending_stream());
-        let mut tickets_search_by_slot: HashMap<Slot, HashSet<HeaderId>> = HashMap::new();
-        tickets_search_by_slot
-            .entry(Slot::new(10))
-            .or_default()
-            .insert(block);
+        let mut search_inputs = HashMap::from([(block, search_at(10))]);
 
         prune_out_of_window_streams(
             &mut tickets_search,
-            &mut tickets_search_by_slot,
+            &mut search_inputs,
             Slot::new(10), // frontier == slot, so it is not "below"
         );
 
         assert!(tickets_search.contains_key(&block));
-        assert!(tickets_search_by_slot.contains_key(&Slot::new(10)));
+        assert!(search_inputs.contains_key(&block));
+    }
+
+    #[test]
+    fn reconfigure_restarts_every_search_and_releases_the_old_pool() {
+        let block = HeaderId::from([4u8; 32]);
+        let search = search_at(10);
+        let old_pool = test_pool();
+        let max_tickets_per_block = NonZeroUsize::new(4).unwrap();
+
+        let mut tickets_search = StreamMap::new();
+        tickets_search.insert(
+            block,
+            new_block_search_stream(block, search, Arc::clone(&old_pool), max_tickets_per_block),
+        );
+        let mut generator = TicketGenerator {
+            processed_block_stream: pending_blocks(),
+            tickets_search,
+            search_inputs: HashMap::from([(block, search)]),
+            tip: HeaderId::from([0u8; 32]),
+            pool: Arc::clone(&old_pool),
+            max_tickets_per_block,
+            slot_window: SLOT_WINDOW,
+            outstanding_tickets: 0,
+        };
+
+        let new_pool = test_pool();
+        generator.reconfigure(Arc::clone(&new_pool), NonZeroUsize::new(2).unwrap());
+
+        assert!(generator.tickets_search.contains_key(&block));
+        assert_eq!(generator.max_tickets_per_block.get(), 2);
+        assert_eq!(Arc::strong_count(&old_pool), 1);
+        assert_eq!(Arc::strong_count(&new_pool), 3);
+    }
+
+    #[test]
+    fn record_winner_counts_down_and_forgets_finished_searches() {
+        let block = HeaderId::from([6u8; 32]);
+        let mut generator = TicketGenerator {
+            processed_block_stream: pending_blocks(),
+            tickets_search: StreamMap::new(),
+            search_inputs: HashMap::from([(block, search_at(10))]),
+            tip: HeaderId::from([0u8; 32]),
+            pool: test_pool(),
+            max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
+            slot_window: SLOT_WINDOW,
+            outstanding_tickets: 0,
+        };
+
+        generator.record_winner(block);
+        assert_eq!(generator.search_inputs[&block].remaining_winners.get(), 1);
+
+        generator.record_winner(block);
+        assert!(!generator.search_inputs.contains_key(&block));
     }
 
     #[tokio::test]
@@ -552,12 +650,15 @@ mod tests {
         // Maximum field element: every attempt wins, so without the limit the
         // search would never end.
         let difficulty = Fr::ZERO - Fr::from(1u64);
+        let search = BlockSearch {
+            slot: Slot::new(11),
+            epoch_nonce: zero_fr(),
+            difficulty,
+            remaining_winners: NonZeroUsize::new(3).unwrap(),
+        };
         let winners: Vec<_> = new_block_search_stream(
             HeaderId::from([5u8; 32]),
-            Slot::new(11),
-            zero_fr(),
-            difficulty,
-            NonZeroUsize::new(3).unwrap(),
+            search,
             test_pool(),
             NonZeroUsize::new(4).unwrap(),
         )
@@ -612,7 +713,7 @@ mod tests {
         let mut generator = TicketGenerator {
             processed_block_stream: no_blocks(),
             tickets_search: StreamMap::new(),
-            tickets_search_by_slot: HashMap::new(),
+            search_inputs: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
@@ -634,7 +735,7 @@ mod tests {
         let mut generator = TicketGenerator {
             processed_block_stream: no_blocks(),
             tickets_search,
-            tickets_search_by_slot: HashMap::new(),
+            search_inputs: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
@@ -651,7 +752,7 @@ mod tests {
         let mut generator = TicketGenerator {
             processed_block_stream: pending_blocks(),
             tickets_search: StreamMap::new(),
-            tickets_search_by_slot: HashMap::new(),
+            search_inputs: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
@@ -675,7 +776,7 @@ mod tests {
         let mut generator = TicketGenerator {
             processed_block_stream: pending_blocks(),
             tickets_search,
-            tickets_search_by_slot: HashMap::new(),
+            search_inputs: HashMap::new(),
             tip,
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
@@ -701,7 +802,7 @@ mod tests {
         let mut generator = TicketGenerator {
             processed_block_stream: no_blocks(),
             tickets_search,
-            tickets_search_by_slot: HashMap::new(),
+            search_inputs: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
