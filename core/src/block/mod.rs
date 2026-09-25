@@ -863,13 +863,12 @@ mod tests {
         use lb_cryptarchia_engine::MAX_UNCLES;
 
         let proof = create_proof();
-        let uncle = signed_uncle(1, &proof);
         let proposal = Block::create(
             [0u8; 32].into(),
             Slot::from(42u64),
             UncleHeaders::new(
-                BoundedOrderedSet::try_from_iter(std::array::from_fn::<_, MAX_UNCLES, _>(|_| {
-                    uncle.clone()
+                BoundedOrderedSet::try_from_iter(std::array::from_fn::<_, MAX_UNCLES, _>(|slot| {
+                    signed_uncle(slot as u64, &proof)
                 }))
                 .unwrap(),
             ),

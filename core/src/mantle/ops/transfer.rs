@@ -71,10 +71,8 @@ impl TransferOp {
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
-        use crate::mantle::ledger::BoundedInputs;
-
         Self::new(
-            BoundedInputs::try_from_iter([NoteId(Fr::from(1u64)), NoteId(Fr::from(2u64))])
+            ledger::BoundedInputs::try_from_iter([NoteId(Fr::from(1u64)), NoteId(Fr::from(2u64))])
                 .unwrap()
                 .into(),
             Outputs::new([

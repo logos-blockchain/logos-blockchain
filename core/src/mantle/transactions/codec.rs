@@ -1003,8 +1003,7 @@ mod tests {
 
     #[test]
     fn test_encode_decode_max_inputs() {
-        let note_id = NoteId(BigUint::from(111u64).into());
-        let inputs = [note_id; u8::MAX as usize];
+        let inputs = (0..u8::MAX).map(|index| NoteId(BigUint::from(index).into()));
         let inputs: Inputs = BoundedInputs::try_from_iter(inputs).unwrap().into();
 
         // Encode should succeed
@@ -1055,9 +1054,12 @@ mod tests {
         let mut valid_input = Vec::new();
         valid_input.push(u8::MAX);
 
-        // Add MAX_INPUT_COUNT field elements (each 32 bytes)
-        for _ in 0..u8::MAX {
-            valid_input.extend_from_slice(&[0x01; 32]);
+        // Add MAX_INPUT_COUNT distinct field elements (each 32 bytes, little
+        // endian)
+        for index in 0..u8::MAX {
+            let mut note_id = [0x01; 32];
+            note_id[0] = index;
+            valid_input.extend_from_slice(&note_id);
         }
 
         let result = BoundedInputs::decode(&valid_input);
