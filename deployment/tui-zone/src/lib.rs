@@ -154,6 +154,10 @@ fn handle_event(
 // Processing loop
 //
 // args: Setup info
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Kept as one select! loop to mirror the tutorial walkthrough step by step."
+)]
 pub async fn run(args: InscribeArgs) {
     // Get node URL
     let node_url: Url = args.node_url.parse().expect("invalid node URL");
