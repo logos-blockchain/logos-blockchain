@@ -64,7 +64,7 @@ cryptarchia:
       # Genesis `d_reward`, as the exponent n in p / 2^n — the same form as
       # the Blend `base_difficulty` above. Fixed by the specification.
       # Also the minimum difficulty: the retarget never eases past it.
-      initial_difficulty: 26
+      initial_difficulty: 19
       ema_smoothing_factor: 9
       ema_smoothing_precision: 10
       # One claim per block: claims are transactions, and the per-block
