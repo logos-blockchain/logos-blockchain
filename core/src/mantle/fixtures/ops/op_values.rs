@@ -81,7 +81,8 @@ pub static SDP_DECLARE: LazyLock<SDPDeclareOp> = LazyLock::new(|| SDPDeclareOp {
     locators: [Locator::new_unchecked(
         "/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap(),
     )]
-    .into(),
+    .try_into()
+    .unwrap(),
     provider_id: ProviderId(Ed25519Key::from_bytes(&[0x60u8; 32]).public_key()),
     zk_id: ZkPublicKey::from(Fr::from(0x61u64)),
     service_note_id: NoteId(Fr::from(0x62u64)),
