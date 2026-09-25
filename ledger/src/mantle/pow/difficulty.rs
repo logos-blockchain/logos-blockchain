@@ -11,7 +11,7 @@ use crate::config::RewardPoWConfig;
 /// claims per block: more claims harden it, fewer ease it. The result is kept
 /// within `[reward_target_floor, genesis target]`: it never hardens below the
 /// floor it could not recover from, and it eases at most back to the genesis
-/// target (`p / 2^initial_difficulty`), so the genesis difficulty is also the
+/// target (`p / 2^minimum_difficulty`), so the genesis difficulty is also the
 /// minimum difficulty.
 pub fn compute_new_reward_difficulty(
     claims_accepted_in_block: u64,
@@ -60,7 +60,7 @@ pub fn compute_new_reward_difficulty(
     // ticket winning). Being at most p / 2, the cap also keeps the conversion
     // back into the field from reducing mod p and wrapping the target.
     let genesis_target =
-        BigUint::from_bytes_le(&fr_to_bytes(&PowTarget::from(config.initial_difficulty)));
+        BigUint::from_bytes_le(&fr_to_bytes(&PowTarget::from(config.minimum_difficulty)));
     PowTarget::from(new_target.max(target_floor).min(genesis_target))
 }
 
@@ -85,7 +85,7 @@ mod tests {
         RewardPoWConfig {
             reward_pool_genesis: 1_000_000_000,
             epoch_reward_genesis: 1_000_000,
-            initial_difficulty: ModulusShift::new::<26>(),
+            minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: factor,
             ema_smoothing_precision: NonZeroU64::new(precision)
                 .expect("test precision is non-zero"),
@@ -143,9 +143,9 @@ mod tests {
         );
     }
 
-    /// The genesis target `p / 2^initial_difficulty` of [`test_config`].
+    /// The genesis target `p / 2^minimum_difficulty` of [`test_config`].
     fn genesis_target() -> PowTarget {
-        PowTarget::from(test_config().initial_difficulty)
+        PowTarget::from(test_config().minimum_difficulty)
     }
 
     fn to_biguint(target: PowTarget) -> BigUint {

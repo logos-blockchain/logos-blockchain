@@ -86,7 +86,7 @@ impl PowState {
             reward: RewardPowState {
                 reward_pool: config.reward_pool_genesis,
                 epoch_reward: config.epoch_reward_genesis,
-                reward_difficulty: PowTarget::from(config.initial_difficulty),
+                reward_difficulty: PowTarget::from(config.minimum_difficulty),
                 refill_rewards: 0,
                 nullifiers: HashTrieMapSync::new_sync(),
                 block_slots: HashTrieMapSync::new_sync(),
@@ -302,7 +302,7 @@ mod tests {
         RewardPoWConfig {
             reward_pool_genesis: POW_REWARD_POOL_GENESIS,
             epoch_reward_genesis: POW_EPOCH_REWARD_POOL_GENESIS,
-            initial_difficulty: ModulusShift::new::<26>(),
+            minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).expect("10 is non-zero"),
             target_claims_per_block: 100,
