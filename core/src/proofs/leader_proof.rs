@@ -24,7 +24,7 @@ use crate::{
 
 const LOG_TARGET: &str = proofs::LEADER;
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Groth16LeaderProof {
     #[serde(with = "proof_serde")]
     proof: lb_pol::PoLProof,
