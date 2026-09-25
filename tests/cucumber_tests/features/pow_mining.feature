@@ -14,7 +14,7 @@ Feature: PoW mining
   # Two deployment tweaks make mining observable in a short test:
   #   * `rate_num = 1` enables the reward payout (the shipped configs disable it
   #     with `rate_num = 0`).
-  #   * `initial_difficulty = 1` starts `d_reward` at `p / 2`, half the scalar
+  #   * `minimum_difficulty = 1` starts `d_reward` at `p / 2`, half the scalar
   #     field, so a winning ticket is trivial to find from the first block.
   #     (The exponent inverts: a *larger* n means a *smaller* target, i.e.
   #     harder.) The EMA is also tuned (factor 1, huge precision and
@@ -40,7 +40,7 @@ Feature: PoW mining
     # fast, and the claim is capped to `reward_pool / reward` tickets — so a
     # single-ticket cap keeps the reward-claim transaction small and fast.
     And I have deployment config override "cryptarchia.pow_config.reward.reward_pool_genesis" as "1000000"
-    And I have deployment config override "cryptarchia.pow_config.reward.initial_difficulty" as "1"
+    And I have deployment config override "cryptarchia.pow_config.reward.minimum_difficulty" as "1"
     And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
     And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_precision" as "1000000000000000000"
     And I have deployment config override "cryptarchia.pow_config.reward.target_claims_per_block" as "1000000000000000000"
@@ -98,7 +98,7 @@ Feature: PoW mining
     # Funds 1000 claims, so `reward_pool / reward` no longer caps the batch and
     # the node's own per-transaction limits decide how many tickets it takes.
     And I have deployment config override "cryptarchia.pow_config.reward.reward_pool_genesis" as "1000000000"
-    And I have deployment config override "cryptarchia.pow_config.reward.initial_difficulty" as "1"
+    And I have deployment config override "cryptarchia.pow_config.reward.minimum_difficulty" as "1"
     And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
     And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_precision" as "1000000000000000000"
     And I have deployment config override "cryptarchia.pow_config.reward.target_claims_per_block" as "1000000000000000000"
@@ -142,7 +142,7 @@ Feature: PoW mining
     And I have deployment config override "cryptarchia.pow_config.reward.rate_num" as "1"
     And I have deployment config override "cryptarchia.pow_config.reward.epoch_reward_genesis" as "1000000"
     And I have deployment config override "cryptarchia.pow_config.reward.reward_pool_genesis" as "1000000"
-    And I have deployment config override "cryptarchia.pow_config.reward.initial_difficulty" as "1"
+    And I have deployment config override "cryptarchia.pow_config.reward.minimum_difficulty" as "1"
     And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
     And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_precision" as "1000000000000000000"
     And I have deployment config override "cryptarchia.pow_config.reward.target_claims_per_block" as "1000000000000000000"
