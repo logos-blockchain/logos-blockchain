@@ -108,7 +108,8 @@ pub(super) async fn run<Node, P>(
     }
 }
 
-/// Asserts the [`ChannelUpdate`] contract on every block event: what a
+/// Asserts the [`ChannelUpdate`] contract on every block event. An extension
+/// only adds entries the consumer does not hold. On a conflict, what a
 /// consumer holds from the stream (adopted, not orphaned since, not
 /// finalized) must equal `common_prefix ++ adopted`, up to the sequencer's own
 /// in-flight publishes, which the prefix carries and the stream never echoes.
@@ -142,24 +143,47 @@ impl ViewChecker {
             checkpoint,
             channel_update,
             finalized,
+            ..
         } = event
         else {
             return;
         };
-        self.remove_orphaned(channel_update);
-        self.add_adopted(channel_update);
+        match channel_update {
+            ChannelUpdate::Extension { adopted } => self.add_extension(adopted),
+            ChannelUpdate::Conflict {
+                adopted, orphaned, ..
+            } => {
+                self.remove_orphaned(orphaned);
+                self.add_adopted(adopted);
+            }
+        }
         self.remove_finalized(finalized);
         self.check_view(channel_update, checkpoint);
     }
 
-    fn remove_orphaned(&mut self, update: &ChannelUpdate) {
-        for tx in &update.orphaned {
+    /// An extension only adds entries the consumer does not hold.
+    fn add_extension(&mut self, adopted: &[ChannelUpdateTx]) {
+        for tx in adopted {
+            if !self.held.insert(tx.tx_hash()) {
+                self.record(format!(
+                    "{:?} adopted on an extension while already held",
+                    tx.tx_hash()
+                ));
+            }
+        }
+    }
+
+    fn remove_orphaned(&mut self, orphaned: &[ChannelUpdateTx]) {
+        if orphaned.is_empty() {
+            self.record("a Conflict with nothing orphaned".to_owned());
+        }
+        for tx in orphaned {
             self.held.remove(&tx.tx_hash());
         }
     }
 
-    fn add_adopted(&mut self, update: &ChannelUpdate) {
-        for tx in &update.adopted {
+    fn add_adopted(&mut self, adopted: &[ChannelUpdateTx]) {
+        for tx in adopted {
             self.held.insert(tx.tx_hash());
         }
     }
@@ -170,19 +194,20 @@ impl ViewChecker {
         }
     }
 
-    /// `canonical_chain()` carries only what is held or in flight, everything
-    /// held, and every message after its parent.
+    /// On a conflict, `canonical_chain()` carries only what is held or in
+    /// flight, everything held, and every message after its parent.
     fn check_view(&self, update: &ChannelUpdate, checkpoint: &SequencerCheckpoint) {
-        let ids: HashSet<MsgId> = update
-            .canonical_chain()
-            .filter_map(ChannelUpdateTx::inscription)
+        let Some(chain) = update.canonical_chain() else {
+            return;
+        };
+        let chain: Vec<&ChannelUpdateTx> = chain.collect();
+        let ids: HashSet<MsgId> = chain
+            .iter()
+            .filter_map(|tx| tx.inscription())
             .map(|info| info.this_msg)
             .collect();
         let mut seen: HashSet<MsgId> = HashSet::new();
-        for info in update
-            .canonical_chain()
-            .filter_map(ChannelUpdateTx::inscription)
-        {
+        for info in chain.iter().filter_map(|tx| tx.inscription()) {
             if ids.contains(&info.parent_msg) && !seen.contains(&info.parent_msg) {
                 self.record(format!(
                     "{:?} listed before its parent {:?}",
@@ -192,10 +217,7 @@ impl ViewChecker {
             seen.insert(info.this_msg);
         }
 
-        let view: HashSet<TxHash> = update
-            .canonical_chain()
-            .map(ChannelUpdateTx::tx_hash)
-            .collect();
+        let view: HashSet<TxHash> = chain.iter().map(|tx| tx.tx_hash()).collect();
         let pending: HashSet<TxHash> = checkpoint.pending_txs.iter().map(|(h, _)| *h).collect();
         for tx in &view {
             if !self.held.contains(tx) && !pending.contains(tx) {

@@ -122,12 +122,14 @@ where
 
         if let Some(channel_update) = channel_update {
             let orphaned: HashSet<Inscription> = channel_update
-                .orphaned
+                .orphaned()
                 .iter()
                 .flat_map(|entry| self.entry_payloads(entry))
                 .collect();
             let view: HashSet<Inscription> = channel_update
                 .canonical_chain()
+                .into_iter()
+                .flatten()
                 .flat_map(|entry| self.entry_payloads(entry))
                 .collect();
 

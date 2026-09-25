@@ -60,8 +60,8 @@
 //!
 //! loop {
 //!     match sequencer.next_event().await {
-//!         Event::BlocksProcessed { checkpoint, channel_update, finalized } => {
-//!             let _ = (checkpoint, channel_update, finalized);
+//!         Event::BlocksProcessed { checkpoint, channel_update, deposits, finalized } => {
+//!             let _ = (checkpoint, channel_update, deposits, finalized);
 //!         }
 //!         Event::Ready                             => {}
 //!         Event::TurnNotification { notification } => { let _ = notification; }

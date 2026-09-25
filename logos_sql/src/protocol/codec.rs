@@ -4,7 +4,7 @@ use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::bounded::UpperBoundedVec;
 use rusqlite::types::Value;
 
-use super::{CapturedFunction, MAX_PAYLOAD_BYTES, SqlParameter, SqlText};
+use super::{CapturedFunction, MAX_BODY_BYTES, SqlParameter, SqlText};
 
 // Stable wire tags for SQLite value variants. Existing values must never be
 // renumbered because inscriptions remain part of the channel history.
@@ -29,12 +29,12 @@ const CURRENT_DATE: u8 = 9;
 const CURRENT_TIME: u8 = 10;
 const CURRENT_TIMESTAMP: u8 = 11;
 
-type BoundedBytes = UpperBoundedVec<u8, MAX_PAYLOAD_BYTES>;
+type BoundedBytes = UpperBoundedVec<u8, MAX_BODY_BYTES>;
 
 // Every variable-length field uses the same fixed-width prefix. Keep the two
 // leaf encoders in lockstep with the bounded collection decoder.
-const _: () = assert!(MAX_PAYLOAD_BYTES > u16::MAX as usize);
-const _: () = assert!(MAX_PAYLOAD_BYTES <= u32::MAX as usize);
+const _: () = assert!(MAX_BODY_BYTES > u16::MAX as usize);
+const _: () = assert!(MAX_BODY_BYTES <= u32::MAX as usize);
 
 impl BinaryEncode for CapturedFunction {
     fn encoded_length(&self) -> usize {

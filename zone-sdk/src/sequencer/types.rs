@@ -404,14 +404,26 @@ pub enum Error {
     reason = "one event per block; boxing would change the public shape of `BlocksProcessed`"
 )]
 pub enum Event {
-    /// Fires per ingested block. Carries finalized txs and the non-finalized
-    /// channel-tip delta (`channel_update`); either may be empty. Backfill
-    /// batches (cold start and reconnect catch-up) emit a single
-    /// `BlocksProcessed` per batch with empty `channel_update` — backfill
-    /// walks canonical history, so there is no tip delta to report.
+    /// Fires per ingested block. Carries how the channel view moved
+    /// (`channel_update`), the deposits observed in this block, and the
+    /// finalized txs; any of them may be empty. Cold-start
+    /// backfill emits one `BlocksProcessed` per batch with an empty
+    /// [`ChannelUpdate::Extension`]: it walks finalized history, so there is
+    /// no view change to report.
     BlocksProcessed {
         checkpoint: SequencerCheckpoint,
         channel_update: ChannelUpdate,
+        /// Channel deposits observed in this block, in op order. Surfaced
+        /// non-finalized so a consumer can pin a deposit without waiting for
+        /// finalization, via
+        /// [`publish_pin_deposit`](super::SequencerHandle::publish_pin_deposit).
+        ///
+        /// Observations, not view: reconcile against branch state, a branch
+        /// change can re-surface the same deposit or reorg it out. Pin a
+        /// deposit only while it is on the current branch and no bundle
+        /// consuming it is in flight; the pin's transfer consumes the
+        /// deposited note, so it can only land where the deposit is.
+        deposits: Vec<DepositInfo>,
         finalized: Vec<FinalizedTx>,
     },
     /// The sequencer is connected and ready to publish. Emitted once when
@@ -490,29 +502,17 @@ pub enum TxSource {
     Other,
 }
 
-/// How the channel changed across one [`Event::BlocksProcessed`].
+/// How the channel view moved across one [`Event::BlocksProcessed`].
 ///
 /// The channel is an ordered chain of inscriptions, with configs on their own
 /// lineage beside it. Either can momentarily fork — competing entries chain
-/// off the same parent — and this reports how the canonical chain moved since
-/// the last event:
-///
-/// - `adopted`: entries now on the channel that weren't before — apply them.
-/// - `orphaned`: entries that were on the channel (or that you published and
-///   were still waiting to land) and no longer are — revert them and treat them
-///   as republish candidates.
-/// - `common_prefix`: what the previous and the new view share above the
-///   finalized boundary, so `common_prefix ++ adopted` is the whole
-///   non-finalized view at the new tip — rebuild head state from finalized
-///   state without replaying past updates.
-///
-/// `adopted` and `orphaned` both empty means nothing changed.
-///
-/// Two ways to consume it:
+/// off the same parent — and this reports how the canonical view moved since
+/// the last event. Two ways to consume it:
 /// - Diff: revert every `orphaned` entry, apply every `adopted` entry. For
 ///   consumers that can undo an entry's effects.
-/// - Rebuild from LIB: recompute non-finalized state from
-///   [`Self::canonical_chain`] on top of finalized state; `orphaned` is then
+/// - Rebuild from LIB: on an [`Self::Extension`] append `adopted`; on a
+///   [`Self::Conflict`] recompute non-finalized state from
+///   [`Self::canonical_chain`] on top of finalized state. `orphaned` is then
 ///   only input to republish decisions. For consumers that cannot undo.
 ///
 /// Either way, process the orphans so no useful work is lost — e.g. if your
@@ -520,52 +520,73 @@ pub enum TxSource {
 /// Reprocessing is idempotent: anything still valid is already pending and
 /// no-ops, so only genuinely-dead work is re-sent.
 #[derive(Debug, Clone)]
-pub struct ChannelUpdate {
-    /// The non-finalized view at the new tip minus `adopted`, in lineage
-    /// order: mined entries from LIB to the fork point, then the pending tail
-    /// still chaining on it — the sequencer's own publishes and observed
-    /// entries that dropped out of a block without being replaced. Filled on
-    /// every event. Sized by the finality depth: the whole non-finalized view
-    /// is carried per event.
-    pub common_prefix: Vec<ChannelUpdateTx>,
-    /// Txs removed from the channel: ones that were on chain, plus our
-    /// own pending that can no longer finalize because a conflicting
-    /// inscription took their place in the chain (a parent double-spend).
-    /// Revert from state and treat as republish candidates.
-    ///
-    /// See [`ChannelUpdateTx`] for how the consumer republishes each
-    /// variant.
-    pub orphaned: Vec<ChannelUpdateTx>,
-    /// Txs added to the channel — every tx that advanced the canonical
-    /// message or config tip: messages, atomic withdraw bundles, configs or
-    /// custom txs.
-    ///
-    /// On a pure extension (`orphaned` empty) this carries only entries the
-    /// sequencer wasn't already tracking — its own publishes apply to
-    /// consumer state at publish time and don't echo back. On a branch
-    /// change the full delta is reported (entries can move between
-    /// branches), so consumers dedup by `this_msg` against their own state
-    /// there.
-    pub adopted: Vec<ChannelUpdateTx>,
-    /// Channel deposits observed in this block. Surfaced non-finalized so a
-    /// consumer can pin a deposit without waiting for finalization, via
-    /// [`publish_pin_deposit`](super::SequencerHandle::publish_pin_deposit).
-    ///
-    /// Reconcile against branch state, don't fire once: a branch change can
-    /// re-surface the same deposit or reorg it out. Publish an inscription for
-    /// a deposit only while it is on the current branch and none consuming
-    /// it is already in flight, and republish if yours is reported in
-    /// `orphaned`. The bundle's transfer consumes the deposited note, so it
-    /// can only land where the deposit is.
-    pub adopted_deposits: Vec<DepositInfo>,
+pub enum ChannelUpdate {
+    /// Nothing the consumer holds became invalid: per lineage, the new view
+    /// is the previous view followed by `adopted`. `adopted` is empty when
+    /// the view did not move at all.
+    Extension {
+        /// Entries that entered the view, in lineage order: every tx that
+        /// advanced the canonical message or config tip. Only entries the
+        /// sequencer wasn't already tracking — its own publishes apply to
+        /// consumer state at publish time and don't echo back.
+        adopted: Vec<ChannelUpdateTx>,
+    },
+    /// Entries left the view: a competing entry took their parent, a
+    /// competing spend took a bundle's inputs, or a config change invalidated
+    /// the pending tail. `orphaned` is never empty.
+    Conflict {
+        /// The non-finalized view at the new tip minus `adopted`, in lineage
+        /// order: mined entries from LIB to the fork point, then the pending
+        /// tail still chaining on it — the sequencer's own publishes and
+        /// observed entries that dropped out of a block without being
+        /// replaced. Sized by the finality depth: the whole non-finalized
+        /// view is carried.
+        common_prefix: Vec<ChannelUpdateTx>,
+        /// Entries that entered the view, in lineage order. The full delta:
+        /// entries can move between branches, so consumers dedup by
+        /// `this_msg` against their own state. A publish of ours appears here
+        /// only after it was reported orphaned.
+        adopted: Vec<ChannelUpdateTx>,
+        /// Entries that left the view: ones that were on chain, plus our own
+        /// pending that can no longer land. Revert from state and treat as
+        /// republish candidates; see [`ChannelUpdateTx`] for how to republish
+        /// each variant.
+        orphaned: Vec<ChannelUpdateTx>,
+    },
 }
 
 impl ChannelUpdate {
+    /// Entries that entered the view.
+    #[must_use]
+    pub fn adopted(&self) -> &[ChannelUpdateTx] {
+        match self {
+            Self::Extension { adopted } | Self::Conflict { adopted, .. } => adopted,
+        }
+    }
+
+    /// Entries that left the view; empty on an extension.
+    #[must_use]
+    pub fn orphaned(&self) -> &[ChannelUpdateTx] {
+        match self {
+            Self::Extension { .. } => &[],
+            Self::Conflict { orphaned, .. } => orphaned,
+        }
+    }
+
     /// The whole non-finalized view at the new tip. Message entries are in
     /// lineage order, config entries are in lineage order; the two lineages
-    /// are not interleaved with each other.
-    pub fn canonical_chain(&self) -> impl Iterator<Item = &ChannelUpdateTx> {
-        self.common_prefix.iter().chain(&self.adopted)
+    /// are not interleaved with each other. `None` on an extension, where the
+    /// view is the previous one plus `adopted`.
+    #[must_use]
+    pub fn canonical_chain(&self) -> Option<impl Iterator<Item = &ChannelUpdateTx>> {
+        match self {
+            Self::Extension { .. } => None,
+            Self::Conflict {
+                common_prefix,
+                adopted,
+                ..
+            } => Some(common_prefix.iter().chain(adopted)),
+        }
     }
 }
 

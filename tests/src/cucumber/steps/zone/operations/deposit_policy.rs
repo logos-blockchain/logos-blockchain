@@ -1,8 +1,8 @@
 use super::{
     ChannelUpdate, ChannelUpdateTx, Event, FinalizedTx, Hash, HashMap, HashSet, Inscription,
-    InscriptionId, Note, NoteId, Outputs, PolicyRuntime, WithdrawArg, WithdrawInputs, ZkPublicKey,
-    ZoneNodeHttpClient, ZoneSequencer, finalized_inscriptions, make_inscription, runner,
-    to_policy_runtime, view_inscriptions, warn,
+    InscriptionId, Inscriptions as _, Note, NoteId, Outputs, PolicyRuntime, WithdrawArg,
+    WithdrawInputs, ZkPublicKey, ZoneNodeHttpClient, ZoneSequencer, contributed,
+    finalized_inscriptions, make_inscription, runner, to_policy_runtime, warn,
 };
 
 /// Reactively drive the full deposit lifecycle (pin, then withdraw the
@@ -105,6 +105,7 @@ where
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
         let Event::BlocksProcessed {
             channel_update,
+            deposits: observed,
             finalized: finalized_txs,
             ..
         } = event
@@ -119,7 +120,7 @@ where
             finalized,
         } = self;
 
-        for deposit in &channel_update.adopted_deposits {
+        for deposit in observed {
             deposits
                 .entry(deposit.op_id)
                 .or_insert_with(|| DepositLifecycleState {
@@ -129,14 +130,18 @@ where
                 });
         }
         finalized.extend(finalized_inscriptions(finalized_txs).map(|info| info.payload.clone()));
-        let view: HashSet<&Inscription> = view_inscriptions(channel_update)
-            .map(|info| &info.payload)
+        // An extension only adds steps; a conflict recomputes them from the view.
+        let rebuild = matches!(channel_update, ChannelUpdate::Conflict { .. });
+        let payloads: HashSet<&Inscription> = contributed(channel_update)
+            .inscriptions()
+            .map(|i| &i.payload)
             .collect();
         for (op_id, state) in deposits.iter_mut() {
-            let present =
-                |payload: &Inscription| finalized.contains(payload) || view.contains(payload);
-            state.pinned = present(&pin_payload(op_id));
-            state.withdrawn = present(&withdraw_payload(op_id));
+            let present = |payload: &Inscription, was: bool| {
+                finalized.contains(payload) || payloads.contains(payload) || (!rebuild && was)
+            };
+            state.pinned = present(&pin_payload(op_id), state.pinned);
+            state.withdrawn = present(&withdraw_payload(op_id), state.withdrawn);
         }
 
         let wallet: HashSet<NoteId> = {
@@ -206,14 +211,17 @@ struct DepositWithdrawPolicy {
     deposits: HashMap<Hash, DepositWithdrawState>,
 }
 
-/// Forget a withdraw that is neither in the view nor finalized: it was shed.
+/// On a conflict, forget a withdraw that is neither in the view nor
+/// finalized: it was shed. Nothing leaves on an extension.
 fn retain_live_withdraws(
     deposits: &mut HashMap<Hash, DepositWithdrawState>,
     channel_update: &ChannelUpdate,
     finalized: &[FinalizedTx],
 ) {
-    let live: HashSet<InscriptionId> = channel_update
-        .canonical_chain()
+    let Some(chain) = channel_update.canonical_chain() else {
+        return;
+    };
+    let live: HashSet<InscriptionId> = chain
         .map(ChannelUpdateTx::tx_hash)
         .chain(finalized.iter().map(|tx| tx.tx_hash))
         .collect();
@@ -229,6 +237,7 @@ where
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
         let Event::BlocksProcessed {
             channel_update,
+            deposits: observed,
             finalized,
             ..
         } = event
@@ -243,7 +252,7 @@ where
             deposits,
         } = self;
 
-        for deposit in &channel_update.adopted_deposits {
+        for deposit in observed {
             if deposit.amount == *target_amount {
                 deposits
                     .entry(deposit.op_id)

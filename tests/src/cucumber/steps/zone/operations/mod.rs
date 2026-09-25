@@ -79,12 +79,27 @@ fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &In
         })
 }
 
-/// Inscriptions in the non-finalized view an update describes, in lineage
-/// order — the counterpart of [`finalized_inscriptions`].
-fn view_inscriptions(update: &ChannelUpdate) -> impl Iterator<Item = &InscriptionInfo> {
-    update
-        .canonical_chain()
-        .filter_map(ChannelUpdateTx::inscription)
+/// The inscriptions carried by channel-update entries, in order — the
+/// non-finalized counterpart of [`finalized_inscriptions`].
+trait Inscriptions<'a> {
+    fn inscriptions(self) -> impl Iterator<Item = &'a InscriptionInfo>;
+}
+
+impl<'a, I: IntoIterator<Item = &'a ChannelUpdateTx>> Inscriptions<'a> for I {
+    fn inscriptions(self) -> impl Iterator<Item = &'a InscriptionInfo> {
+        self.into_iter().filter_map(ChannelUpdateTx::inscription)
+    }
+}
+
+/// The entries an update contributes to a consumer's non-finalized view: a
+/// conflict's whole `canonical_chain()` (the consumer clears first), an
+/// extension's `adopted` (the consumer keeps what it holds).
+fn contributed(update: &ChannelUpdate) -> impl Iterator<Item = &ChannelUpdateTx> {
+    let prefix = match update {
+        ChannelUpdate::Conflict { common_prefix, .. } => common_prefix.as_slice(),
+        ChannelUpdate::Extension { .. } => &[],
+    };
+    prefix.iter().chain(update.adopted())
 }
 use crate::{
     common::{

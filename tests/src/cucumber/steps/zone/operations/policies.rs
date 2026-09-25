@@ -1,8 +1,8 @@
 use super::{
     Arc, BTreeSet, ChannelUpdate, ChannelUpdateTx, DiscardedPayloads, Event, FinalizedTx, HashMap,
-    HashSet, Inscription, InscriptionInfo, LazyLock, MsgId, PolicyRuntime, SequencerChannelView,
-    VecDeque, ZoneAccountBalances, ZoneNodeHttpClient, ZoneSequencer, finalized_inscriptions,
-    parse_balance_payload, runner, to_policy_runtime, view_inscriptions, warn,
+    HashSet, Inscription, InscriptionInfo, Inscriptions as _, LazyLock, MsgId, PolicyRuntime,
+    SequencerChannelView, VecDeque, ZoneAccountBalances, ZoneNodeHttpClient, ZoneSequencer,
+    contributed, finalized_inscriptions, parse_balance_payload, runner, to_policy_runtime, warn,
 };
 
 /// Spawn a sequencer drive task with a no-op policy. Step bodies drive
@@ -93,10 +93,12 @@ where
         };
         self.finalized
             .extend(finalized_inscriptions(finalized).map(|info| info.payload.clone()));
-        let on_chain: HashSet<&Inscription> = view_inscriptions(channel_update)
-            .map(|info| &info.payload)
-            .collect();
-        for entry in &channel_update.orphaned {
+        let Some(chain) = channel_update.canonical_chain() else {
+            return;
+        };
+        let on_chain: HashSet<&Inscription> =
+            chain.inscriptions().map(|info| &info.payload).collect();
+        for entry in channel_update.orphaned() {
             let ChannelUpdateTx::Inscription(info) = entry else {
                 continue;
             };
@@ -147,12 +149,17 @@ impl LineageTracker {
         self.pending.entry(root).or_default().insert(republished);
     }
 
-    /// Rebuild per-intent liveness from the view: our members in
-    /// `common_prefix ++ adopted` are live. A republish issued last event is
-    /// in the prefix as pending, so nothing carries over.
-    fn rebuild(&mut self, channel_update: &ChannelUpdate) {
+    /// Refresh per-intent liveness. On a conflict our members in
+    /// `common_prefix ++ adopted` are the live ones; a republish issued last
+    /// event is in the prefix as pending, so nothing carries over. On an
+    /// extension nothing of ours leaves, and our own publishes never appear
+    /// in `adopted`, so there is nothing to fold.
+    fn observe(&mut self, channel_update: &ChannelUpdate) {
+        let Some(chain) = channel_update.canonical_chain() else {
+            return;
+        };
         self.pending.clear();
-        for info in view_inscriptions(channel_update) {
+        for info in chain.inscriptions() {
             if let Some(&root) = self.intent_root.get(&info.this_msg) {
                 self.pending.entry(root).or_default().insert(info.this_msg);
             }
@@ -223,8 +230,8 @@ where
             } => {
                 self.lineage
                     .observe_finalized(finalized_inscriptions(finalized).map(|i| i.this_msg));
-                self.lineage.rebuild(channel_update);
-                for entry in &channel_update.orphaned {
+                self.lineage.observe(channel_update);
+                for entry in channel_update.orphaned() {
                     let ChannelUpdateTx::Inscription(info) = entry else {
                         continue;
                     };
@@ -250,10 +257,11 @@ where
 /// Inline policy: republish orphans only when the local balance view still
 /// allows it; publish planned payloads as soon as it's our turn to write.
 ///
-/// The balance view is rebuilt from each update's `common_prefix ++ adopted`
-/// over the finalized deltas, so affordability reflects all inscriptions on
-/// the channel. A payload we published since the last event is in the prefix
-/// as pending, so it is never applied twice.
+/// The balance view follows each update: an extension's `adopted` is applied
+/// on top, a conflict rebuilds the non-finalized deltas from
+/// `common_prefix ++ adopted` over the finalized ones. A payload we published
+/// since the last event is in the prefix as pending, so it is never applied
+/// twice.
 struct BalanceAwarePolicy {
     balances: BalanceAwareState,
     planned: VecDeque<Inscription>,
@@ -272,9 +280,9 @@ where
         } = event
         {
             self.balances.record_finalized_payloads(finalized);
-            self.balances.rebuild_view(channel_update);
+            self.balances.observe(channel_update);
             let orphaned_inscriptions: Vec<InscriptionInfo> = channel_update
-                .orphaned
+                .orphaned()
                 .iter()
                 .filter_map(|o| match o {
                     ChannelUpdateTx::Inscription(i) => Some(i.clone()),
@@ -316,9 +324,10 @@ where
 /// Inline policy: republish orphans only when they preserve sorted-payload
 /// order; otherwise mark them as discarded.
 ///
-/// The on-chain payload set is read from each update (`common_prefix ++
-/// adopted`), so the order floor we gate republishing on falls back correctly
-/// when the highest payload is orphaned.
+/// The on-chain payload set follows each update: an extension's `adopted`
+/// joins it, a conflict rebuilds it from `common_prefix ++ adopted`, so the
+/// order floor we gate republishing on falls back correctly when the highest
+/// payload is orphaned.
 struct SortedConflictPolicy {
     state: SortedConflictState,
 }
@@ -337,10 +346,8 @@ where
             return;
         };
         self.state.record_finalized(finalized);
-        self.state.rebuild_view(channel_update);
-        let ChannelUpdate {
-            orphaned, adopted, ..
-        } = channel_update;
+        self.state.observe(channel_update);
+        let (orphaned, adopted) = (channel_update.orphaned(), channel_update.adopted());
         let orphaned_inscriptions: Vec<&InscriptionInfo> = orphaned
             .iter()
             .filter_map(|o| match o {
@@ -421,13 +428,16 @@ impl BalanceAwareState {
         self.applied.entry(account).or_default().insert(uuid, delta);
     }
 
-    /// Replace the non-finalized deltas with the view's; finalized deltas stay.
-    fn rebuild_view(&mut self, channel_update: &ChannelUpdate) {
-        let finalized = &self.finalized;
-        for updates in self.applied.values_mut() {
-            updates.retain(|uuid, _| finalized.contains(uuid));
+    /// Apply an extension's `adopted`; on a conflict replace the
+    /// non-finalized deltas with the view's. Finalized deltas stay.
+    fn observe(&mut self, channel_update: &ChannelUpdate) {
+        if let ChannelUpdate::Conflict { .. } = channel_update {
+            let finalized = &self.finalized;
+            for updates in self.applied.values_mut() {
+                updates.retain(|uuid, _| finalized.contains(uuid));
+            }
         }
-        for info in view_inscriptions(channel_update) {
+        for info in contributed(channel_update).inscriptions() {
             self.record_applied_payload(&info.payload);
         }
     }
@@ -461,7 +471,7 @@ impl BalanceAwareState {
 static EMPTY_BALANCE_UPDATES: LazyLock<HashMap<String, i64>> = LazyLock::new(HashMap::new);
 
 struct SortedConflictState {
-    /// The ordering floor: the last update's `common_prefix ++ adopted` plus
+    /// The ordering floor: the non-finalized view as of the last update plus
     /// what we published since, over the pinned finalized base.
     channel_view: BTreeSet<Inscription>,
     discarded: DiscardedPayloads,
@@ -489,10 +499,17 @@ impl SortedConflictState {
         self.finalized.contains(payload)
     }
 
-    fn rebuild_view(&mut self, channel_update: &ChannelUpdate) {
-        self.channel_view = self.finalized.iter().cloned().collect();
-        self.channel_view
-            .extend(view_inscriptions(channel_update).map(|info| info.payload.clone()));
+    /// Extend the floor with an extension's `adopted`; on a conflict rebuild
+    /// it from the view over the finalized base.
+    fn observe(&mut self, channel_update: &ChannelUpdate) {
+        if let ChannelUpdate::Conflict { .. } = channel_update {
+            self.channel_view = self.finalized.iter().cloned().collect();
+        }
+        self.channel_view.extend(
+            contributed(channel_update)
+                .inscriptions()
+                .map(|info| info.payload.clone()),
+        );
     }
 
     /// A discarded payload that landed anyway is no longer ours to re-home.

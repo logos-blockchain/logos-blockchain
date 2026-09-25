@@ -607,15 +607,7 @@ mod tests {
         reader.read_only = true;
         reader.sequencer_ready = true;
 
-        let mut event = blocks_processed();
-        let Event::BlocksProcessed { channel_update, .. } = &mut event else {
-            unreachable!()
-        };
-
-        channel_update
-            .adopted
-            .push(ChannelUpdateTx::Inscription(inscription.clone()));
-        reader.handle_event(event).await;
+        reader.handle_event(adopt_event(inscription.clone())).await;
 
         let connection = Databases::open_reader(reader.db.live_path()).unwrap();
         let count: i64 = connection
@@ -744,14 +736,7 @@ mod tests {
             let displacement = runtime.db.unhandled_displacements().unwrap().remove(0);
 
             if restored {
-                let mut event = blocks_processed();
-                let Event::BlocksProcessed { channel_update, .. } = &mut event else {
-                    unreachable!()
-                };
-                channel_update
-                    .adopted
-                    .push(ChannelUpdateTx::Inscription(original));
-                runtime.handle_event(event).await;
+                runtime.handle_event(adopt_event(original)).await;
             } else {
                 runtime.db.mark_displacement_handled(&displacement).unwrap();
             }
@@ -773,14 +758,7 @@ mod tests {
         runtime.handle_event(orphan_event(original.clone())).await;
         let old = runtime.db.unhandled_displacements().unwrap().remove(0);
 
-        let mut event = blocks_processed();
-        let Event::BlocksProcessed { channel_update, .. } = &mut event else {
-            unreachable!()
-        };
-        channel_update
-            .adopted
-            .push(ChannelUpdateTx::Inscription(original.clone()));
-        runtime.handle_event(event).await;
+        runtime.handle_event(adopt_event(original.clone())).await;
         runtime.handle_event(orphan_event(original)).await;
         let current = runtime.db.unhandled_displacements().unwrap();
         runtime.sequencer_ready = true;
@@ -875,16 +853,17 @@ mod tests {
     }
 
     fn orphan_event(inscription: InscriptionInfo) -> Event {
-        let mut event = blocks_processed();
-        let Event::BlocksProcessed { channel_update, .. } = &mut event else {
-            unreachable!()
-        };
+        update_event(ChannelUpdate::Conflict {
+            common_prefix: Vec::new(),
+            adopted: Vec::new(),
+            orphaned: vec![ChannelUpdateTx::Inscription(inscription)],
+        })
+    }
 
-        channel_update
-            .orphaned
-            .push(ChannelUpdateTx::Inscription(inscription));
-
-        event
+    fn adopt_event(inscription: InscriptionInfo) -> Event {
+        update_event(ChannelUpdate::Extension {
+            adopted: vec![ChannelUpdateTx::Inscription(inscription)],
+        })
     }
 
     #[tokio::test]
@@ -913,22 +892,14 @@ mod tests {
                 .expect("payload should fit"),
             signer: None,
         };
-        let mut event = blocks_processed();
-        let Event::BlocksProcessed {
-            checkpoint,
-            channel_update,
-            ..
-        } = &mut event
-        else {
+        let event = orphan_event(inscription.clone());
+        let Event::BlocksProcessed { checkpoint, .. } = &event else {
             unreachable!()
         };
         runtime
             .db
             .complete_publish(checkpoint, inscription.this_msg, &pending)
             .expect("publication should be recorded");
-        channel_update
-            .orphaned
-            .push(ChannelUpdateTx::Inscription(inscription));
 
         let control =
             Connection::open(dir.path().join("control.db")).expect("control database should open");
@@ -1040,6 +1011,12 @@ mod tests {
     }
 
     fn blocks_processed() -> Event {
+        update_event(ChannelUpdate::Extension {
+            adopted: Vec::new(),
+        })
+    }
+
+    fn update_event(channel_update: ChannelUpdate) -> Event {
         Event::BlocksProcessed {
             checkpoint: SequencerCheckpoint {
                 last_msg_id: MsgId::root(),
@@ -1049,12 +1026,8 @@ mod tests {
                 channel_notes: Vec::new(),
                 finalized_config: MsgId::root(),
             },
-            channel_update: ChannelUpdate {
-                common_prefix: Vec::new(),
-                adopted: Vec::new(),
-                orphaned: Vec::new(),
-                adopted_deposits: Vec::new(),
-            },
+            channel_update,
+            deposits: Vec::new(),
             finalized: Vec::new(),
         }
     }
