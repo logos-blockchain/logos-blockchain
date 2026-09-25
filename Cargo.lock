@@ -5127,6 +5127,7 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-zone-sdk",
+ "rand 0.8.6",
  "reqwest",
  "serde",
  "serde_json",

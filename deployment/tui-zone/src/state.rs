@@ -1,5 +1,4 @@
-use lb_core::mantle::ops::channel::MsgId;
-use lb_zone_sdk::sequencer::{InscriptionInfo, SequencerChannelView, SequencerCheckpoint};
+use lb_zone_sdk::sequencer::{InscriptionInfo, SequencerCheckpoint};
 
 use crate::message::Msg;
 
@@ -28,4 +27,59 @@ pub trait ZoneState: Send {
     fn load_checkpoint(&self) -> Option<&SequencerCheckpoint>;
 }
 
-// Your Code Here
+// Keep track of Zone state in memory
+//
+// published: Inscriptions published by your sequencer, not yet finalised
+// finalized: All finalised inscriptions
+// checkpoint: Last message in Zone state—lets the sequencer resume after a
+// restart
+#[derive(Default)]
+pub struct InMemoryZoneState {
+    published: Vec<Msg>,
+    finalized: Vec<Msg>,
+    checkpoint: Option<SequencerCheckpoint>,
+}
+
+impl InMemoryZoneState {
+    // Record a tx we just published locally, so the local view stays in
+    // sync with what the SDK accepted. Called at the publish-call site.
+    pub fn on_published(&mut self, info: &InscriptionInfo) {
+        self.published
+            .push(Msg::from_payload(info.this_msg, &info.payload));
+    }
+}
+
+impl ZoneState for InMemoryZoneState {
+    // Move our finalised publishes out of `published` and into `finalized`.
+    fn on_finalized(&mut self, inscriptions: &[InscriptionInfo]) {
+        for info in inscriptions {
+            if let Some(i) = self
+                .published
+                .iter()
+                .position(|m| m.msg_id == info.this_msg)
+            {
+                self.published.remove(i);
+            }
+            if !self.finalized.iter().any(|m| m.msg_id == info.this_msg) {
+                self.finalized
+                    .push(Msg::from_payload(info.this_msg, &info.payload));
+            }
+        }
+    }
+
+    fn published(&self) -> &[Msg] {
+        &self.published
+    }
+
+    fn finalized(&self) -> &[Msg] {
+        &self.finalized
+    }
+
+    fn save_checkpoint(&mut self, checkpoint: SequencerCheckpoint) {
+        self.checkpoint = Some(checkpoint);
+    }
+
+    fn load_checkpoint(&self) -> Option<&SequencerCheckpoint> {
+        self.checkpoint.as_ref()
+    }
+}
