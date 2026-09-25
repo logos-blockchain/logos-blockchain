@@ -2,9 +2,15 @@
 //!
 //! Spec: [Wallet Technical Standard](https://lip.logos.co/blockchain/raw/wallet-technical-standard.html)
 
-use std::{fmt, sync::LazyLock};
+use core::fmt::Debug;
+use std::{
+    fmt::{self},
+    str::FromStr,
+    sync::LazyLock,
+};
 
 pub use arbitrary_int::u31;
+use bip39::Language;
 use blake2::{
     Blake2bVarCore,
     digest::{
@@ -14,6 +20,9 @@ use blake2::{
 };
 use lb_groth16::{Fr, fr_from_bytes_unchecked};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
+#[cfg(feature = "unsafe")]
+use serde::Serializer;
+use serde::{Deserialize, Serialize};
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::keys::ZkKey;
@@ -31,11 +40,72 @@ static ZK_KEY_DST: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"WAL
 const HASH_SIZE: usize = 64;
 const HALF_HASH_SIZE: usize = div_exact(HASH_SIZE, 2);
 
+/// An English BIP-39 mnemonic, written as its words separated by spaces.
+#[derive(Clone, PartialEq, Eq, Deserialize, ZeroizeOnDrop)]
+#[serde(try_from = "String")]
+pub struct Mnemonic(bip39::Mnemonic);
+
+impl Mnemonic {
+    const DEFAULT_WORD_COUNT: usize = 12;
+
+    /// Generates a new mnemonic of 12 words.
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(
+            bip39::Mnemonic::generate_in(Language::English, Self::DEFAULT_WORD_COUNT)
+                .expect("mnemonic generation should not fail"),
+        )
+    }
+}
+
+impl FromStr for Mnemonic {
+    type Err = InvalidMnemonicError;
+
+    fn from_str(mnemonic: &str) -> Result<Self, Self::Err> {
+        Ok(Self(bip39::Mnemonic::parse_in(
+            Language::English,
+            mnemonic,
+        )?))
+    }
+}
+
+impl TryFrom<String> for Mnemonic {
+    type Error = InvalidMnemonicError;
+
+    fn try_from(mnemonic: String) -> Result<Self, Self::Error> {
+        mnemonic.parse()
+    }
+}
+
+#[cfg(feature = "unsafe")]
+impl Serialize for Mnemonic {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl Debug for Mnemonic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Mnemonic(<redacted>)")
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid mnemonic: {0}")]
+pub struct InvalidMnemonicError(#[from] bip39::Error);
+
 /// A 64-byte master seed from which the master key is derived.
 #[derive(ZeroizeOnDrop)]
 pub struct MasterSeed([u8; 64]);
 
 impl MasterSeed {
+    /// Derives the master seed from a mnemonic and a passphrase, which is
+    /// empty if the user set none.
+    #[must_use]
+    pub fn from_mnemonic(mnemonic: &Mnemonic, passphrase: &str) -> Self {
+        Self(mnemonic.0.to_seed(passphrase))
+    }
+
     /// Derives the master key.
     #[must_use]
     pub fn to_key(&self) -> MasterKey {
