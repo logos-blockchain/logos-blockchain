@@ -57,11 +57,9 @@ impl DepositOp {
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
-        use crate::mantle::ledger::BoundedInputs;
-
         Self {
             channel_id: ChannelId::from([16u8; 32]),
-            inputs: BoundedInputs::from(NoteId(Fr::from(17u64))).into(),
+            inputs: crate::mantle::ledger::BoundedInputs::from(NoteId(Fr::from(17u64))).into(),
             metadata: Metadata::try_from(b"deposit-metadata".to_vec())
                 .expect("Metadata is within bounds."),
         }

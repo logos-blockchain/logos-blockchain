@@ -859,7 +859,7 @@ pub mod tests {
             OpProof::ZkSig,
             SignedOps,
             gas::MainnetGasProfile,
-            ledger::{Inputs, Outputs},
+            ledger::{Inputs, InputsError, Outputs},
             ops::{ZkAndEd25519Proof, leader_claim::VoucherCm, sdp::SDPDeclareOp},
             traits::Hashable as _,
             transactions::{
@@ -874,7 +874,10 @@ pub mod tests {
     use lb_key_management_system_keys::keys::{
         Ed25519Key, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey, ZkSignature,
     };
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
+    use lb_utils::{
+        bounded::BoundedError,
+        math::{NonNegativeRatio, PositiveF64},
+    };
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
 
@@ -1996,7 +1999,6 @@ pub mod tests {
     #[test]
     fn test_invalid_double_spend_transfer() {
         let note_sk = ZkKey::from(BigUint::from(1u8));
-        let output_note_sk = ZkKey::from(BigUint::from(2u8));
         let input_note = Note::new(100, note_sk.to_public_key());
         let input_utxo = Utxo {
             op_id: [1u8; 32],
@@ -2004,19 +2006,16 @@ pub mod tests {
             note: input_note,
         };
 
-        let output_note = Note::new(200, output_note_sk.to_public_key());
+        // A transfer's inputs are a set, so spending the same note twice is
+        // refused before the transfer can even be built.
+        let result = Inputs::try_new(vec![input_utxo.id(), input_utxo.id()]);
 
-        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (_tx, transfer_op, transfer_proof) = create_tx_with_transfer(
-            &[(&note_sk, &input_utxo), (&note_sk, &input_utxo)],
-            vec![output_note],
+        assert_eq!(
+            result.err(),
+            Some(InputsError::BoundedError(BoundedError::DuplicateItem {
+                index: 1
+            }))
         );
-        let signed_operation =
-            SignedOperation::new(transfer_op, transfer_proof).into_state_trusted();
-
-        let result = ledger_state.try_apply_transfer::<(), MainnetGasProfile>(signed_operation);
-
-        assert!(result.is_err());
     }
 
     #[test]

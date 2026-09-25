@@ -51,11 +51,9 @@ impl ChannelTransferOp {
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
-        use crate::mantle::ledger::BoundedInputs;
-
         Self {
             channel_id: ChannelId::from([20u8; 32]),
-            inputs: BoundedInputs::from(NoteId(Fr::from(21u64))).into(),
+            inputs: crate::mantle::ledger::BoundedInputs::from(NoteId(Fr::from(21u64))).into(),
             outputs: Outputs::new([Note::new(22, ZkPublicKey::from(Fr::from(23u64)))]),
         }
     }
