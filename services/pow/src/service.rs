@@ -71,7 +71,7 @@ use tokio::{
 };
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream, errors::BroadcastStreamRecvError};
 use tracing::{
-    error,
+    debug, error,
     log::{info, warn},
 };
 
@@ -128,6 +128,8 @@ pub enum PoWError {
     NoClaimTarget,
     #[error("failed to build signed transaction: {0}")]
     SignedOps(#[from] lb_core::mantle::transactions::tx_list::signed_ops::Error),
+    #[error("failed to build the ticket search thread pool: {0}")]
+    SearchPool(#[from] rayon::ThreadPoolBuildError),
 }
 
 /// Max inputs a single `Transfer` op can carry: its `ZkSig` is a
@@ -190,6 +192,14 @@ pub enum PoWServiceMessage {
     },
     Status {
         response: oneshot::Sender<PoWStatus>,
+    },
+    SetMiningSettings {
+        settings: PoWMiningSettings,
+        response: oneshot::Sender<Result<(), PoWError>>,
+    },
+    SetAutoClaimSettings {
+        settings: AutoClaimSettings,
+        response: oneshot::Sender<Result<(), PoWError>>,
     },
 }
 
@@ -279,7 +289,7 @@ const fn default_max_tickets_per_block() -> NonZeroUsize {
 /// starve Tokio's runtime threads. Both fields have sensible defaults, so an
 /// omitted `mining` section keeps the previous behaviour. The non-zero types
 /// make a `0` configuration a deserialization error rather than a silent stall.
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct PoWMiningSettings {
     /// Worker threads in the dedicated ticket-search pool. `None` lets rayon
     /// pick its default (one thread per logical CPU).
@@ -309,17 +319,15 @@ impl Default for PoWMiningSettings {
 /// [`rayon::ThreadPoolBuilder`] never becomes part of the service's async
 /// state. `max_threads == None` lets rayon default to one thread per logical
 /// CPU.
-fn build_search_pool(max_threads: Option<NonZeroUsize>) -> Arc<rayon::ThreadPool> {
+fn build_search_pool(
+    max_threads: Option<NonZeroUsize>,
+) -> Result<Arc<rayon::ThreadPool>, PoWError> {
     let mut builder = rayon::ThreadPoolBuilder::new();
     builder = builder.thread_name(|index| format!("logos/pow/pow-ticket-search-{index}"));
     if let Some(threads) = max_threads {
         builder = builder.num_threads(threads.get());
     }
-    Arc::new(
-        builder
-            .build()
-            .expect("PoW ticket search thread pool should build"),
-    )
+    Ok(Arc::new(builder.build()?))
 }
 
 impl StorageRecoverySettings for PoWServiceSettings {
@@ -516,12 +524,13 @@ where
 
         // Dedicated thread pool for the CPU-heavy ticket search, keeping it off
         // Tokio's runtime threads.
-        let pool = build_search_pool(settings.mining.max_threads);
+        let mut search_pool = build_search_pool(settings.mining.max_threads)?;
+        let mut mining_settings = settings.mining.clone();
 
         // Stream of winning PoW tickets, one per solved puzzle.
         let mut winning_tickets = TicketGenerator::new::<Tx, _>(
             cryptarchia_api.clone(),
-            pool,
+            Arc::clone(&search_pool),
             settings.mining.max_tickets_per_block,
             settings.slot_window,
         )
@@ -545,15 +554,16 @@ where
         // there is nothing left to mine for. Like `mining` it is a runtime
         // flag, so a restart re-arms it and the thresholds are re-evaluated
         // against fresh balances.
-        let auto_claim = &settings.auto_claim;
-        let mut auto_claiming = settings.rewards_enabled && !auto_claim.targets.is_empty();
+        let mut auto_claim_settings = settings.auto_claim;
+        let mut is_auto_claiming =
+            settings.rewards_enabled && !auto_claim_settings.targets.is_empty();
 
         // One stream for either pacing, so the run loop has a single arm and
         // neither kind needs a guard. Slot pacing rides the time service's own
         // slot clock rather than block arrivals, so it keeps ticking through a
         // gap in block production.
         let mut claim_ticks = auto_claim_tick_stream::<TimeBackendType, _>(
-            auto_claim.tick,
+            auto_claim_settings.tick,
             &service_resources_handle.overwatch_handle,
         )
         .await?;
@@ -582,20 +592,20 @@ where
                         PoWServiceMessage::StartAutoClaim => {
                             if !settings.rewards_enabled {
                                 warn!(target: LOG_TARGET, "PoW auto-claim not started: rewards disabled");
-                            } else if auto_claim.targets.is_empty() {
+                            } else if auto_claim_settings.targets.is_empty() {
                                 warn!(target: LOG_TARGET, "PoW auto-claim not started: no claim targets configured");
                             } else {
-                                if !auto_claiming {
+                                if !is_auto_claiming {
                                     info!(target: LOG_TARGET, "PoW auto-claim started");
                                 }
-                                auto_claiming = true;
+                                is_auto_claiming = true;
                             }
                         }
                         PoWServiceMessage::StopAutoClaim => {
-                            if auto_claiming {
+                            if is_auto_claiming {
                                 info!(target: LOG_TARGET, "PoW auto-claim stopped");
                             }
-                            auto_claiming = false;
+                            is_auto_claiming = false;
                         }
                         PoWServiceMessage::Claim { claim_address, response } => {
                             let result = manual_claim(
@@ -603,7 +613,7 @@ where
                                 &blend_api,
                                 &wallet_api,
                                 claim_address,
-                                &auto_claim.targets,
+                                &auto_claim_settings.targets,
                                 &mut state,
                                 settings.slot_window,
                             )
@@ -623,10 +633,77 @@ where
                             let status = PoWStatus {
                                 is_mining,
                                 are_rewards_enabled: settings.rewards_enabled,
-                                auto_claim: auto_claim_status(&wallet_api, auto_claim, auto_claiming).await,
+                                auto_claim: auto_claim_status(&wallet_api, &auto_claim_settings, is_auto_claiming).await,
                             };
                             if response.send(status).is_err() {
                                 error!(target: LOG_TARGET, "Status response receiver was dropped");
+                            }
+                        }
+                        PoWServiceMessage::SetMiningSettings { settings: new_settings, response } => {
+                            if new_settings.max_threads != mining_settings.max_threads {
+                                debug!(
+                                    target: LOG_TARGET,
+                                    "Rebuilding the ticket search pool: max_threads {:?} -> {:?}",
+                                    mining_settings.max_threads,
+                                    new_settings.max_threads
+                                );
+
+                                match build_search_pool(new_settings.max_threads) {
+                                    Ok(pool) => search_pool = pool,
+                                    Err(error) => {
+                                        error!(target: LOG_TARGET, "Refusing the new PoW mining settings: {error}");
+                                        if response.send(Err(error)).is_err() {
+                                            error!(target: LOG_TARGET, "SetMiningSettings response receiver was dropped");
+                                        }
+                                        continue;
+                                    }
+                                }
+                            }
+
+                            if new_settings != mining_settings {
+                                winning_tickets.reconfigure(Arc::clone(&search_pool), new_settings.max_tickets_per_block);
+                                mining_settings = new_settings;
+                                info!(
+                                    target: LOG_TARGET,
+                                    "PoW mining settings updated: max_threads={:?}, max_tickets_per_block={}",
+                                    mining_settings.max_threads,
+                                    mining_settings.max_tickets_per_block
+                                );
+                            }
+
+                            if response.send(Ok(())).is_err() {
+                                error!(target: LOG_TARGET, "SetMiningSettings response receiver was dropped");
+                            }
+                        }
+                        PoWServiceMessage::SetAutoClaimSettings { settings: new_settings, response } => {
+                            let result = apply_auto_claim_settings::<TimeBackendType, _, _>(
+                                new_settings,
+                                &wallet_api,
+                                &service_resources_handle.overwatch_handle,
+                                &mut auto_claim_settings,
+                                &mut claim_ticks,
+                            )
+                            .await;
+
+                            if let Err(error) = &result {
+                                error!(target: LOG_TARGET, "Refusing the new PoW auto-claim settings: {error}");
+                            } else {
+                                // With no targets left, the next tick would stop mining too, so
+                                // stop auto-claim here.
+                                if auto_claim_settings.targets.is_empty() {
+                                    is_auto_claiming = false;
+                                }
+
+                                info!(
+                                    target: LOG_TARGET,
+                                    "PoW auto-claim settings updated: {} target(s), tick={:?}",
+                                    auto_claim_settings.targets.len(),
+                                    auto_claim_settings.tick
+                                );
+                            }
+
+                            if response.send(result).is_err() {
+                                error!(target: LOG_TARGET, "SetAutoClaimSettings response receiver was dropped");
                             }
                         }
                     }
@@ -654,18 +731,18 @@ where
                 // Auto-claim tick: drain the ready tickets into the neediest
                 // target. Once every target is funded, stop both auto-claim
                 // and mining.
-                Some(()) = claim_ticks.next(), if auto_claiming => {
-                    auto_claiming = run_auto_claim(
+                Some(()) = claim_ticks.next(), if is_auto_claiming => {
+                    is_auto_claiming = run_auto_claim(
                         &cryptarchia_api,
                         &blend_api,
                         &wallet_api,
-                        &auto_claim.targets,
+                        &auto_claim_settings.targets,
                         &mut state,
                         &state_updater,
                         settings.slot_window,
                     )
                     .await;
-                    if !auto_claiming && is_mining {
+                    if !is_auto_claiming && is_mining {
                         info!(target: LOG_TARGET, "Every PoW auto-claim target reached its threshold; stopping mining");
                         is_mining = false;
                     }
@@ -673,6 +750,43 @@ where
             }
         }
     }
+}
+
+/// Applies new auto-claim settings to a running service.
+async fn apply_auto_claim_settings<TimeBackendType, WalletService, RuntimeServiceId>(
+    new_settings: AutoClaimSettings,
+    wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
+    overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+    auto_claim: &mut AutoClaimSettings,
+    claim_ticks: &mut Pin<Box<dyn Stream<Item = ()> + Send>>,
+) -> Result<(), PoWError>
+where
+    TimeBackendType: TimeBackend + Send + Sync + 'static,
+    TimeBackendType::Settings: Send + Sync,
+    WalletService: WalletServiceData,
+    RuntimeServiceId: Debug
+        + Sync
+        + Display
+        + AsServiceId<WalletService>
+        + AsServiceId<TimeService<TimeBackendType, RuntimeServiceId>>,
+{
+    validate_claim_targets(wallet_api, &new_settings.targets).await?;
+
+    if new_settings.tick != auto_claim.tick {
+        debug!(
+            target: LOG_TARGET,
+            "Rebuilding the auto-claim tick stream: tick {:?} -> {:?}",
+            auto_claim.tick,
+            new_settings.tick
+        );
+        *claim_ticks =
+            auto_claim_tick_stream::<TimeBackendType, _>(new_settings.tick, overwatch_handle)
+                .await?;
+    }
+
+    *auto_claim = new_settings;
+
+    Ok(())
 }
 
 /// Builds the auto-claim ticker for the configured pacing.
