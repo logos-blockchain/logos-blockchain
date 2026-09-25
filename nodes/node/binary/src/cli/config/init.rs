@@ -10,7 +10,7 @@ use crate::{
     NetworkArgs, UserConfig,
     cli::{
         InitArgs,
-        config::keystore::{KeyTitle, Keystore},
+        config::keystore::{KeyTitle, Keystore, KeystoreError},
     },
     config::{
         ApiConfig, BlendArgs, CryptarchiaArgs, CryptarchiaConfig, KmsConfig, PoWConfig, SdpArgs,
@@ -52,7 +52,7 @@ pub fn run(args: InitArgs) -> Result<()> {
     }
 
     let keystore = Keystore::default();
-    let user_config = build_user_config(&keystore, args);
+    let user_config = build_user_config(&keystore, args)?;
 
     let user_config_yaml = serde_yaml::to_string(&user_config)?;
     std::fs::write(&user_config_path, &user_config_yaml)?;
@@ -63,8 +63,11 @@ pub fn run(args: InitArgs) -> Result<()> {
     Ok(())
 }
 
-#[must_use]
-pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> UserConfig {
+/// # Errors
+///
+/// Returns [`KeystoreError`] if the keystore lacks a predefined key or holds
+/// it with the wrong key type.
+pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> Result<UserConfig, KeystoreError> {
     let InitArgs {
         log: log_args,
         network: network_args,
@@ -94,21 +97,21 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> UserConfig {
     update_tracing(&mut tracing_config, log_args).expect("Cli tracing params can be parsed");
 
     let initial_peers = network_args.initial_peers.clone();
-    let network_config = build_network_config(keystore, network_args);
+    let network_config = build_network_config(keystore, network_args)?;
 
-    let blend_config = build_blend_config(keystore, blend_args);
+    let blend_config = build_blend_config(keystore, blend_args)?;
 
-    let cryptarchia_config = build_cryptarchia_config(keystore, initial_peers, cryptarchia_args);
+    let cryptarchia_config = build_cryptarchia_config(keystore, initial_peers, cryptarchia_args)?;
 
-    let sdp_config = build_sdp_config(keystore, sdp_args);
+    let sdp_config = build_sdp_config(keystore, sdp_args)?;
 
-    let wallet_config = build_wallet_config(keystore);
+    let wallet_config = build_wallet_config(keystore)?;
 
     let kms_config = build_kms_config(keystore);
 
-    let pow_config = build_pow_config(keystore);
+    let pow_config = build_pow_config(keystore)?;
 
-    UserConfig {
+    Ok(UserConfig {
         network: network_config,
         blend: blend_config,
         cryptarchia: cryptarchia_config,
@@ -121,14 +124,14 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> UserConfig {
         pow: pow_config,
         tracing: tracing_config,
         state: state_config,
-    }
+    })
 }
 
-fn build_network_config(keystore: &Keystore, network_args: NetworkArgs) -> NetworkConfig {
-    let unsecured_key = keystore
-        .get_ed25519(KeyTitle::NETWORK_SWARM)
-        .map(|(_, key)| key)
-        .expect("Network key set by default");
+fn build_network_config(
+    keystore: &Keystore,
+    network_args: NetworkArgs,
+) -> Result<NetworkConfig, KeystoreError> {
+    let (_, unsecured_key) = keystore.get_ed25519(KeyTitle::NETWORK_SWARM)?;
     let mut network_secret_key_bytes: [u8; 32] = *unsecured_key.as_bytes();
 
     let mut network_config = NetworkConfig::default();
@@ -138,33 +141,34 @@ fn build_network_config(keystore: &Keystore, network_args: NetworkArgs) -> Netwo
     update_network(&mut network_config, network_args)
         .expect("Network configuration should update from cli args");
 
-    network_config
+    Ok(network_config)
 }
 
-fn build_blend_config(keystore: &Keystore, blend_args: BlendArgs) -> BlendConfig {
+fn build_blend_config(
+    keystore: &Keystore,
+    blend_args: BlendArgs,
+) -> Result<BlendConfig, KeystoreError> {
     let (blend_signing_key_id, _) = keystore
         .get(KeyTitle::BLEND_SIGNING)
-        .expect("Blend signing key set by default");
+        .ok_or_else(|| KeystoreError::NotFound(KeyTitle::BLEND_SIGNING.into()))?;
     let (blend_zk_key_id, _) = keystore
         .get(KeyTitle::BLEND_ZK)
-        .expect("Blend zk key set by default");
+        .ok_or_else(|| KeystoreError::NotFound(KeyTitle::BLEND_ZK.into()))?;
     let mut blend_config = BlendConfig::with_required_values(BlendConfigRequiredValues {
         non_ephemeral_signing_key_id: blend_signing_key_id,
         secret_key_kms_id: blend_zk_key_id,
     });
     update_blend(&mut blend_config, blend_args);
 
-    blend_config
+    Ok(blend_config)
 }
 
 fn build_cryptarchia_config(
     keystore: &Keystore,
     initial_peers: Option<Vec<Multiaddr>>,
     cryptarchia_args: CryptarchiaArgs,
-) -> CryptarchiaConfig {
-    let (_, cryptarchia_funding_key) = keystore
-        .get_zk(KeyTitle::LEADER_FUNDING)
-        .expect("Cryptarchia funding key set by default");
+) -> Result<CryptarchiaConfig, KeystoreError> {
+    let (_, cryptarchia_funding_key) = keystore.get_zk(KeyTitle::LEADER_FUNDING)?;
     let mut cryptarchia_config =
         CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues {
             funding_pk: cryptarchia_funding_key.to_public_key(),
@@ -182,19 +186,17 @@ fn build_cryptarchia_config(
     }
     update_cryptarchia(&mut cryptarchia_config, cryptarchia_args);
 
-    cryptarchia_config
+    Ok(cryptarchia_config)
 }
 
-fn build_sdp_config(keystore: &Keystore, sdp_args: SdpArgs) -> SdpConfig {
-    let (_, sdp_funding_key) = keystore
-        .get_zk(KeyTitle::SDP_FUNDING)
-        .expect("Sdp funding key set by default");
+fn build_sdp_config(keystore: &Keystore, sdp_args: SdpArgs) -> Result<SdpConfig, KeystoreError> {
+    let (_, sdp_funding_key) = keystore.get_zk(KeyTitle::SDP_FUNDING)?;
     let mut sdp_config = SdpConfig::with_required_values(SdpConfigRequiredValues {
         funding_pk: sdp_funding_key.to_public_key(),
     });
     update_sdp(&mut sdp_config, sdp_args);
 
-    sdp_config
+    Ok(sdp_config)
 }
 
 fn build_kms_config(keystore: &Keystore) -> KmsConfig {
@@ -210,10 +212,8 @@ fn build_kms_config(keystore: &Keystore) -> KmsConfig {
 /// Mining defaults, with auto-claim paying the `PoWClaim` key without a cap,
 /// so a generated node claims its mined rewards unattended once mining is
 /// started.
-fn build_pow_config(keystore: &Keystore) -> PoWConfig {
-    let (_, pow_claim_key) = keystore
-        .get_zk(KeyTitle::POW_CLAIM)
-        .expect("PoW claim key set by default");
+fn build_pow_config(keystore: &Keystore) -> Result<PoWConfig, KeystoreError> {
+    let (_, pow_claim_key) = keystore.get_zk(KeyTitle::POW_CLAIM)?;
 
     let mut pow_config = PoWConfig::default();
     pow_config.auto_claim.targets = vec![ClaimTarget {
@@ -221,13 +221,13 @@ fn build_pow_config(keystore: &Keystore) -> PoWConfig {
         threshold: Value::MAX,
     }];
 
-    pow_config
+    Ok(pow_config)
 }
 
-fn build_wallet_config(keystore: &Keystore) -> WalletConfig {
+fn build_wallet_config(keystore: &Keystore) -> Result<WalletConfig, KeystoreError> {
     let (voucher_master_key_id, _) = keystore
         .get(KeyTitle::VAUCHER_MASTER)
-        .expect("Vaucher master key set by default");
+        .ok_or_else(|| KeystoreError::NotFound(KeyTitle::VAUCHER_MASTER.into()))?;
 
     let mut wallet_config = WalletConfig::with_required_values(WalletConfigRequiredValues {
         voucher_master_key_id,
@@ -237,5 +237,5 @@ fn build_wallet_config(keystore: &Keystore) -> WalletConfig {
         .map(|(id, key)| (id, key.to_public_key()))
         .collect();
 
-    wallet_config
+    Ok(wallet_config)
 }
