@@ -1,9 +1,13 @@
-use std::ptr;
+use std::{
+    ffi::{CStr, c_char},
+    ptr,
+};
 
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_node::{PoWService, RuntimeServiceId};
-use lb_pow_service::AutoClaimTick;
+use lb_pow_service::{AutoClaimSettings, AutoClaimTick, PoWMiningSettings};
+use serde::de::DeserializeOwned;
 
 use crate::{
     LogosBlockchainNode, OperationStatus,
@@ -619,5 +623,165 @@ pub unsafe extern "C" fn free_pow_status(status: PoWStatus) -> OperationStatus {
     };
 
     drop(targets);
+    OperationStatus::OK
+}
+
+/// Parses a settings section handed over as a JSON object.
+///
+/// The shape is the one the configuration file uses for that section, so a
+/// caller can send the same object it would have written to YAML.
+///
+/// # Safety
+///
+/// `json` must be non-null and point to a valid NUL-terminated C string.
+unsafe fn parse_settings_json<T: DeserializeOwned>(json: *const c_char) -> StatusResult<T> {
+    let json = unsafe { CStr::from_ptr(json) }.to_str().map_err(|error| {
+        OperationStatus::error(
+            OperationStatusCode::ConfigurationError,
+            format!("The settings are not valid UTF-8: {error}"),
+        )
+    })?;
+
+    serde_json::from_str(json).map_err(|error| {
+        OperationStatus::error(
+            OperationStatusCode::ConfigurationError,
+            format!("Could not parse the settings: {error}"),
+        )
+    })
+}
+
+/// Replaces the `PoW` ticket-search tuning on a running node.
+///
+/// This is a synchronous wrapper around the asynchronous
+/// [`set_mining_settings`](lb_api_service::http::pow::set_mining_settings)
+/// function.
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+/// - `settings`: The tuning to apply.
+///
+/// # Returns
+///
+/// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
+/// success.
+pub(crate) fn pow_set_mining_settings_sync(
+    node: &LogosBlockchainNode,
+    settings: PoWMiningSettings,
+) -> StatusResult<()> {
+    node.get_runtime_handle().block_on(async {
+        lb_api_service::http::pow::set_mining_settings::<PoWService, RuntimeServiceId>(
+            node.get_overwatch_handle(),
+            settings,
+        )
+        .await
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::ServiceError,
+                format!("Failed to set the PoW mining settings: {error}"),
+            )
+        })
+    })
+}
+
+/// Replaces the `PoW` ticket-search tuning on a running node.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance.
+/// - `settings_json`: A non-null pointer to a NUL-terminated JSON object with
+///   the shape of [`PoWMiningSettings`].
+///
+/// # Returns
+///
+/// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
+/// success.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that `node` points to a valid [`LogosBlockchainNode`]
+/// and that `settings_json` is a valid NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pow_set_mining_settings(
+    node: *const LogosBlockchainNode,
+    settings_json: *const c_char,
+) -> OperationStatus {
+    return_error_if_null_pointer!(node);
+    return_error_if_null_pointer!(settings_json);
+
+    let node = unsafe { &*node };
+    let settings = unwrap_or_return_error!(unsafe { parse_settings_json(settings_json) });
+
+    unwrap_or_return_error!(pow_set_mining_settings_sync(node, settings));
+
+    OperationStatus::OK
+}
+
+/// Replaces the `PoW` auto-claim configuration on a running node.
+///
+/// This is a synchronous wrapper around the asynchronous
+/// [`set_auto_claim_settings`](lb_api_service::http::pow::set_auto_claim_settings)
+/// function.
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+/// - `settings`: The auto-claim configuration to apply.
+///
+/// # Returns
+///
+/// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
+/// success.
+pub(crate) fn pow_set_auto_claim_settings_sync(
+    node: &LogosBlockchainNode,
+    settings: AutoClaimSettings,
+) -> StatusResult<()> {
+    node.get_runtime_handle().block_on(async {
+        lb_api_service::http::pow::set_auto_claim_settings::<PoWService, RuntimeServiceId>(
+            node.get_overwatch_handle(),
+            settings,
+        )
+        .await
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::ServiceError,
+                format!("Failed to set the PoW auto-claim settings: {error}"),
+            )
+        })
+    })
+}
+
+/// Replaces the `PoW` auto-claim configuration on a running node.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance.
+/// - `settings_json`: A non-null pointer to a NUL-terminated JSON object with
+///   the shape of [`AutoClaimSettings`].
+///
+/// # Returns
+///
+/// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
+/// success.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that `node` points to a valid [`LogosBlockchainNode`]
+/// and that `settings_json` is a valid NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pow_set_auto_claim_settings(
+    node: *const LogosBlockchainNode,
+    settings_json: *const c_char,
+) -> OperationStatus {
+    return_error_if_null_pointer!(node);
+    return_error_if_null_pointer!(settings_json);
+
+    let node = unsafe { &*node };
+    let settings = unwrap_or_return_error!(unsafe { parse_settings_json(settings_json) });
+
+    unwrap_or_return_error!(pow_set_auto_claim_settings_sync(node, settings));
+
     OperationStatus::OK
 }
