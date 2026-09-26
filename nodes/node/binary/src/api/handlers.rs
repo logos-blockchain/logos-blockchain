@@ -548,6 +548,7 @@ where
                 genesis_time_unix_ms: service_info.genesis_time_unix_ms,
                 current_slot: u64::from(service_info.current_slot),
                 current_epoch: u32::from(service_info.current_epoch),
+                slots_per_epoch: service_info.slots_per_epoch,
             };
             (StatusCode::OK, Json(api_info)).into_response()
         }
