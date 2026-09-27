@@ -1370,7 +1370,7 @@ pub(crate) struct ContinuousTransactionLoadCheckpoint {
 
 impl ContinuousTransactionLoadProgress {
     #[must_use]
-    pub(crate) fn new(transactions_per_round: usize) -> Self {
+    pub fn new(transactions_per_round: usize) -> Self {
         Self {
             completed_verified_transactions: Arc::default(),
             checkpoint_transactions: Arc::default(),
@@ -1378,7 +1378,7 @@ impl ContinuousTransactionLoadProgress {
         }
     }
 
-    pub(crate) fn record_completed_round(&self) {
+    pub fn record_completed_round(&self) {
         self.completed_verified_transactions.fetch_add(
             self.transactions_per_round,
             std::sync::atomic::Ordering::Release,
@@ -1386,12 +1386,12 @@ impl ContinuousTransactionLoadProgress {
     }
 
     #[must_use]
-    pub(crate) const fn transactions_per_round(&self) -> usize {
+    const fn transactions_per_round(&self) -> usize {
         self.transactions_per_round
     }
 
     #[must_use]
-    pub(crate) fn snapshot(&self) -> (usize, usize) {
+    pub fn snapshot(&self) -> (usize, usize) {
         let transactions = self
             .completed_verified_transactions
             .load(std::sync::atomic::Ordering::Acquire);
@@ -1402,7 +1402,7 @@ impl ContinuousTransactionLoadProgress {
     }
 
     #[must_use]
-    pub(crate) fn checkpoint(&self) -> ContinuousTransactionLoadCheckpoint {
+    pub fn checkpoint(&self) -> ContinuousTransactionLoadCheckpoint {
         let completed_verified_transactions = self
             .completed_verified_transactions
             .load(std::sync::atomic::Ordering::Acquire);
@@ -2033,7 +2033,7 @@ impl CucumberWorld {
     /// Node clients, wallet observations, and scanner observations remain
     /// shared with the owning scenario world; only the selected user wallets
     /// are visible to the workload.
-    pub(crate) fn background_workload_view(
+    pub fn background_workload_view(
         &self,
         user_wallet_node_names: &[String],
     ) -> Result<Self, StepError> {
@@ -2093,7 +2093,7 @@ impl CucumberWorld {
 
     /// Spawn a scenario-owned task whose cancellation and result are tracked
     /// until explicitly joined.
-    pub(crate) fn spawn_background_task<F, Fut>(&mut self, name: &str, task: F) -> StepResult
+    pub fn spawn_background_task<F, Fut>(&mut self, name: &str, task: F) -> StepResult
     where
         F: FnOnce(tokio_watch::Receiver<bool>) -> Fut + Send + 'static,
         Fut: Future<Output = StepResult> + Send + 'static,
@@ -2133,7 +2133,7 @@ impl CucumberWorld {
         Ok(())
     }
 
-    pub(crate) fn ensure_background_task_healthy(&self, name: &str) -> StepResult {
+    pub fn ensure_background_task_healthy(&self, name: &str) -> StepResult {
         let task =
             self.background_tasks
                 .tasks
@@ -2155,7 +2155,7 @@ impl CucumberWorld {
         }
     }
 
-    pub(crate) fn background_task_status(&self, name: &str) -> Result<String, StepError> {
+    pub fn background_task_status(&self, name: &str) -> Result<String, StepError> {
         let task =
             self.background_tasks
                 .tasks
@@ -2173,7 +2173,7 @@ impl CucumberWorld {
         })
     }
 
-    pub(crate) fn ensure_background_tasks_healthy(&self) -> StepResult {
+    pub fn ensure_background_tasks_healthy(&self) -> StepResult {
         for (name, task) in &self.background_tasks.tasks {
             let status = task.status.lock().map_err(|_| StepError::LogicalError {
                 message: format!("background task `{name}` status lock was poisoned"),
@@ -2195,7 +2195,7 @@ impl CucumberWorld {
         Ok(())
     }
 
-    pub(crate) async fn stop_background_task(&mut self, name: &str) -> StepResult {
+    pub async fn stop_background_task(&mut self, name: &str) -> StepResult {
         let task =
             self.background_tasks
                 .tasks
@@ -2241,7 +2241,7 @@ impl CucumberWorld {
         result
     }
 
-    pub(crate) async fn stop_all_background_tasks(&mut self) -> StepResult {
+    async fn stop_all_background_tasks(&mut self) -> StepResult {
         let mut task_names = self
             .background_tasks
             .tasks
