@@ -7,6 +7,7 @@ use tracing::{info, warn};
 use crate::{
     common::wallet::WalletUtxos,
     cucumber::{
+        background_tasks::{CONTINUOUS_NEXT_WALLET_LOAD_TASK, ContinuousTransactionLoadProgress},
         error::{StepError, StepResult},
         steps::{
             TARGET,
@@ -38,10 +39,7 @@ use crate::{
             submissions::create_and_submit_transaction_hashes_with_utxo_cache,
             sync::{WalletSendReadiness, wait_wallet_send_ready},
         },
-        world::{
-            CONTINUOUS_NEXT_WALLET_LOAD_TASK, ContinuousTransactionLoadProgress, CucumberWorld,
-            WalletInfo, WalletType,
-        },
+        world::{CucumberWorld, WalletInfo, WalletType},
     },
     non_zero,
 };
