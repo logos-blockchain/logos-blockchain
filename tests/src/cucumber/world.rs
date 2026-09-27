@@ -4,13 +4,15 @@ use std::{
     fmt::Debug,
     hash::BuildHasher,
     num::NonZero,
+    panic::AssertUnwindSafe,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicUsize},
     time::Duration,
 };
 
 use cucumber::World;
 use educe::Educe;
+use futures::FutureExt as _;
 use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_core::{
     header::HeaderId,
@@ -42,7 +44,7 @@ use testing_framework_core::{
     scenario::{PeerSelection, Scenario, StartedNode},
     topology::DeploymentSeed,
 };
-use tokio::task::JoinHandle;
+use tokio::{sync::watch as tokio_watch, task::JoinHandle};
 use tracing::warn;
 
 use crate::{
@@ -63,7 +65,10 @@ use crate::{
         fee_reserve::{SCENARIO_FEE_ACCOUNT_NAME, ScenarioFeeState},
         logos_sql::LogosSqlState,
         steps::{
-            nodes::BlendRelayRegistry,
+            nodes::{
+                BlendRelayRegistry, diagnostics::BlendDiagnosticEventLogger,
+                restore_all_blend_reachability,
+            },
             tokio_console::profile::TokioConsoleProfile,
             zone::runner::{
                 Event, IndexedSignature, InscriptionId, PreparedChannelConfig, SequencerCheckpoint,
@@ -80,6 +85,27 @@ type ScenarioBuilderWith = ScenarioBuilder;
 type ConsensusLiveness = workloads::ConsensusLiveness;
 pub type SharedTrackedWallets = Arc<Mutex<TrackedWallets>>;
 pub type SharedObservedTransactionHashes = Arc<Mutex<HashSet<TxHash>>>;
+
+pub(crate) const CONTINUOUS_NEXT_WALLET_LOAD_TASK: &str = "continuous next-wallet transaction load";
+
+#[derive(Default)]
+pub(crate) struct BackgroundBestNodeSelection {
+    /// Keep diagnostic workloads waiting until a majority tip appears or the
+    /// owning scenario cancels the task.
+    pub(crate) timeout_override: Option<Duration>,
+    pub(crate) cancellation: Option<tokio_watch::Receiver<bool>>,
+    pub(crate) timeline_logger: Option<BlendDiagnosticEventLogger>,
+}
+
+impl Debug for BackgroundBestNodeSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackgroundBestNodeSelection")
+            .field("timeout_override", &self.timeout_override)
+            .field("has_cancellation", &self.cancellation.is_some())
+            .field("has_timeline_logger", &self.timeline_logger.is_some())
+            .finish()
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DeployerKind {
@@ -1065,19 +1091,77 @@ impl NodeHeightSnapshots {
 /// scenarios.
 #[derive(Default)]
 pub struct BlendDiagnosticState {
-    /// Current phase of the diagnostic scenario.
-    pub phase: Option<BlendDiagnosticPhase>,
+    /// Shared phase and provider reachability state. Background diagnostics
+    /// can update it without borrowing the Cucumber world.
+    pub reachability: BlendDiagnosticReachability,
     /// Node whose Time-service clock drives the diagnostic observation.
     pub reference_node: Option<String>,
     /// Number of epoch-observation steps completed by the scenario.
     pub observation_count: u32,
     /// Nodes successfully stopped during the diagnostic outage phase.
     pub stopped_nodes: HashSet<String>,
-    /// Nodes whose Blend endpoint is intentionally unreachable during the
-    /// diagnostic outage phase while their processes remain running.
-    pub blend_unreachable_nodes: HashSet<String>,
     /// Whether this scenario has written its diagnostic timeline header.
-    pub timeline_header_written: Mutex<bool>,
+    pub timeline_header_written: Arc<Mutex<bool>>,
+}
+
+#[derive(Clone, Default)]
+pub struct BlendDiagnosticReachability {
+    inner: Arc<Mutex<BlendDiagnosticReachabilityState>>,
+}
+
+#[derive(Default)]
+struct BlendDiagnosticReachabilityState {
+    phase: Option<BlendDiagnosticPhase>,
+    /// Nodes whose Blend endpoint is intentionally unreachable while their
+    /// processes remain running.
+    unreachable_nodes: HashSet<String>,
+}
+
+impl BlendDiagnosticReachability {
+    #[must_use]
+    pub fn phase(&self) -> Option<BlendDiagnosticPhase> {
+        self.lock().phase
+    }
+
+    pub fn set_phase(&self, phase: Option<BlendDiagnosticPhase>) {
+        self.lock().phase = phase;
+    }
+
+    pub fn set_reachable(&self, node_name: &str, reachable: bool) {
+        let mut state = self.lock();
+        if reachable {
+            state.unreachable_nodes.remove(node_name);
+            if state.phase == Some(BlendDiagnosticPhase::Outage) {
+                state.phase = Some(BlendDiagnosticPhase::Recovery);
+            }
+        } else {
+            if state.unreachable_nodes.is_empty() {
+                state.phase = Some(BlendDiagnosticPhase::Outage);
+            }
+            state.unreachable_nodes.insert(node_name.to_owned());
+        }
+    }
+
+    #[must_use]
+    pub fn unreachable_nodes(&self) -> HashSet<String> {
+        self.lock().unreachable_nodes.clone()
+    }
+
+    pub fn replace_unreachable_nodes(
+        &self,
+        unreachable_nodes: HashSet<String>,
+        phase: BlendDiagnosticPhase,
+    ) {
+        let mut state = self.lock();
+        state.unreachable_nodes = unreachable_nodes;
+        state.phase = Some(phase);
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, BlendDiagnosticReachabilityState> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 /// Node-startup configuration written by steps before nodes start and consumed
@@ -1202,6 +1286,8 @@ pub struct WalletScanner {
     pub seeds: HashMap<String, ScannerSeed>,
     /// Manual: Transaction hashes observed in blocks by the wallet scanner.
     pub observed_transaction_hashes: SharedObservedTransactionHashes,
+    /// The scanner runtime is owned by another `CucumberWorld` view.
+    runtime_is_shared: bool,
 }
 
 impl WalletScanner {
@@ -1212,9 +1298,148 @@ impl WalletScanner {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum BackgroundTaskStatus {
+    Running,
+    Failed(String),
+    Stopped,
+}
+
+struct BackgroundTaskHandle {
+    cancellation: tokio_watch::Sender<bool>,
+    join: JoinHandle<()>,
+    status: Arc<Mutex<BackgroundTaskStatus>>,
+}
+
+#[derive(Default)]
+struct BackgroundTasks {
+    tasks: HashMap<String, BackgroundTaskHandle>,
+}
+
+impl Debug for BackgroundTasks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut task_names = self.tasks.keys().collect::<Vec<_>>();
+        task_names.sort();
+        f.debug_struct("BackgroundTasks")
+            .field("task_names", &task_names)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct BlendChurnProgress {
+    pub(crate) rows_applied: Arc<AtomicUsize>,
+    pub(crate) total_rows: usize,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct ContinuousTransactionLoadProgress {
+    completed_verified_transactions: Arc<AtomicUsize>,
+    checkpoint_transactions: Arc<AtomicUsize>,
+    transactions_per_round: usize,
+}
+
+fn log_continuous_transaction_load_stop_event(
+    event_logger: &BlendDiagnosticEventLogger,
+    event: &str,
+    progress: &ContinuousTransactionLoadProgress,
+    task_status: &str,
+    error: Option<&str>,
+) {
+    let (completed_rounds, completed_verified_transactions) = progress.snapshot();
+    event_logger.append_named_timeline_record(
+        event,
+        &serde_json::json!({
+            "task_status": task_status,
+            "completed_rounds": completed_rounds,
+            "completed_verified_transactions": completed_verified_transactions,
+            "transactions_per_round": progress.transactions_per_round(),
+            "error": error,
+        }),
+    );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ContinuousTransactionLoadCheckpoint {
+    pub(crate) completed_rounds: usize,
+    pub(crate) completed_verified_transactions: usize,
+    pub(crate) rounds_since_previous_check: usize,
+    pub(crate) verified_transactions_since_previous_check: usize,
+    pub(crate) transactions_per_round: usize,
+}
+
+impl ContinuousTransactionLoadProgress {
+    #[must_use]
+    pub(crate) fn new(transactions_per_round: usize) -> Self {
+        Self {
+            completed_verified_transactions: Arc::default(),
+            checkpoint_transactions: Arc::default(),
+            transactions_per_round,
+        }
+    }
+
+    pub(crate) fn record_completed_round(&self) {
+        self.completed_verified_transactions.fetch_add(
+            self.transactions_per_round,
+            std::sync::atomic::Ordering::Release,
+        );
+    }
+
+    #[must_use]
+    pub(crate) const fn transactions_per_round(&self) -> usize {
+        self.transactions_per_round
+    }
+
+    #[must_use]
+    pub(crate) fn snapshot(&self) -> (usize, usize) {
+        let transactions = self
+            .completed_verified_transactions
+            .load(std::sync::atomic::Ordering::Acquire);
+        let rounds = transactions
+            .checked_div(self.transactions_per_round)
+            .unwrap_or_default();
+        (rounds, transactions)
+    }
+
+    #[must_use]
+    pub(crate) fn checkpoint(&self) -> ContinuousTransactionLoadCheckpoint {
+        let completed_verified_transactions = self
+            .completed_verified_transactions
+            .load(std::sync::atomic::Ordering::Acquire);
+        let previous_transactions = self.checkpoint_transactions.swap(
+            completed_verified_transactions,
+            std::sync::atomic::Ordering::AcqRel,
+        );
+        let verified_transactions_since_previous_check =
+            completed_verified_transactions.saturating_sub(previous_transactions);
+        let rounds_since_previous_check = verified_transactions_since_previous_check
+            .checked_div(self.transactions_per_round)
+            .unwrap_or_default();
+        let completed_rounds = completed_verified_transactions
+            .checked_div(self.transactions_per_round)
+            .unwrap_or_default();
+
+        ContinuousTransactionLoadCheckpoint {
+            completed_rounds,
+            completed_verified_transactions,
+            rounds_since_previous_check,
+            verified_transactions_since_previous_check,
+            transactions_per_round: self.transactions_per_round,
+        }
+    }
+}
+
+impl BackgroundTasks {
+    fn abort_all(&mut self) {
+        for (_, task) in self.tasks.drain() {
+            task.join.abort();
+        }
+    }
+}
+
 /// Fork-group assignment of nodes: a forward map plus a reverse lookup kept in
 /// lockstep. Empty means "no groups defined" and all nodes participate.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ForkGroups {
     /// `group_name` -> set of `node_names`.
     node_groups: HashMap<String, BTreeSet<String>>,
@@ -1322,15 +1547,50 @@ pub struct CucumberWorld {
     /// the wallet's known keys at startup; the override is per-node because a
     /// target key a node's wallet does not track aborts that node's startup.
     pub auto_claim_overrides: HashMap<String, Vec<ConfigOverride>>,
+    /// Scenario-owned background diagnostics and transaction workloads.
+    background_tasks: BackgroundTasks,
+    /// Progress for the currently scheduled per-epoch Blend churn rows.
+    pub(crate) blend_churn_progress: Option<BlendChurnProgress>,
+    /// Completed-batch counters for the continuous next-wallet load task.
+    pub(crate) continuous_transaction_load_progress: Option<ContinuousTransactionLoadProgress>,
+    /// Best-node polling settings for a scenario-owned background workload.
+    pub(crate) background_best_node_selection: BackgroundBestNodeSelection,
 }
 
 impl Drop for CucumberWorld {
     fn drop(&mut self) {
         self.logos_sql.clear();
         self.zone.clear();
+        self.background_tasks.abort_all();
         self.blend_relays.shutdown();
         self.scanner.shutdown();
         self.wallet_registry.shutdown();
+    }
+}
+
+async fn stop_background_task(name: &str, task: BackgroundTaskHandle) -> StepResult {
+    let _ = task.cancellation.send(true);
+    if let Err(error) = task.join.await {
+        let task_error = format!("background task `{name}` failed while joining: {error}");
+        if let Ok(mut status) = task.status.lock() {
+            *status = BackgroundTaskStatus::Failed(task_error.clone());
+        }
+        return Err(StepError::StepFail {
+            message: task_error,
+        });
+    }
+
+    let status = task.status.lock().map_err(|_| StepError::LogicalError {
+        message: format!("background task `{name}` status lock was poisoned"),
+    })?;
+    match &*status {
+        BackgroundTaskStatus::Stopped => Ok(()),
+        BackgroundTaskStatus::Failed(error) => Err(StepError::StepFail {
+            message: format!("background task `{name}` failed: {error}"),
+        }),
+        BackgroundTaskStatus::Running => Err(StepError::StepFail {
+            message: format!("background task `{name}` exited without recording its status"),
+        }),
     }
 }
 
@@ -1538,7 +1798,10 @@ impl Debug for CucumberWorld {
                 "deployment_config_overrides",
                 &user_config_overrides_display(&self.startup.deployment_config_overrides),
             )
-            .field("blend_diagnostic_phase", &self.blend_diagnostics.phase)
+            .field(
+                "blend_diagnostic_phase",
+                &self.blend_diagnostics.reachability.phase(),
+            )
             .field(
                 "blend_diagnostic_reference_node",
                 &self.blend_diagnostics.reference_node,
@@ -1553,9 +1816,22 @@ impl Debug for CucumberWorld {
             )
             .field(
                 "blend_diagnostic_unreachable_nodes",
-                &self.blend_diagnostics.blend_unreachable_nodes,
+                &self.blend_diagnostics.reachability.unreachable_nodes(),
             )
             .field("blend_relays", &self.blend_relays.is_enabled().ok())
+            .field("background_tasks", &self.background_tasks)
+            .field("blend_churn_progress", &self.blend_churn_progress)
+            .field(
+                "continuous_transaction_load_progress",
+                &self
+                    .continuous_transaction_load_progress
+                    .as_ref()
+                    .map(ContinuousTransactionLoadProgress::snapshot),
+            )
+            .field(
+                "background_best_node_selection",
+                &self.background_best_node_selection,
+            )
             .field("sdp_funding_config", &self.cluster.sdp_funding_config)
             .field(
                 "deployment_config_override_path",
@@ -1713,6 +1989,7 @@ pub type ChainInfoMap = HashMap<u64, String>;
 pub type WalletInfoMap = HashMap<String, WalletInfo>;
 
 /// Information about a started node in the world
+#[derive(Clone)]
 pub struct NodeInfo {
     /// Node name
     pub name: String,
@@ -1752,6 +2029,266 @@ impl NodeInfo {
 }
 
 impl CucumberWorld {
+    /// Build an owned Cucumber world view for a detached transaction workload.
+    /// Node clients, wallet observations, and scanner observations remain
+    /// shared with the owning scenario world; only the selected user wallets
+    /// are visible to the workload.
+    pub(crate) fn background_workload_view(
+        &self,
+        user_wallet_node_names: &[String],
+    ) -> Result<Self, StepError> {
+        let selected_nodes = user_wallet_node_names
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
+        if selected_nodes.is_empty() {
+            return Err(StepError::InvalidArgument {
+                message: "background transaction load requires at least one wallet node".to_owned(),
+            });
+        }
+        for node_name in &selected_nodes {
+            if !self.nodes_info.contains_key(node_name) {
+                return Err(StepError::LogicalError {
+                    message: format!(
+                        "background transaction load node `{node_name}` is not running"
+                    ),
+                });
+            }
+        }
+
+        let mut background = Self::default();
+        background.chain.slots_per_epoch = self.chain.slots_per_epoch;
+        background.background_best_node_selection.timeout_override = Some(Duration::MAX);
+        background.background_best_node_selection.timeline_logger =
+            Some(BlendDiagnosticEventLogger::from_world(self));
+        background.nodes_info = self
+            .nodes_info
+            .iter()
+            .map(|(node_name, node_info)| (node_name.clone(), node_info.clone()))
+            .collect();
+        background.fork_groups = self.fork_groups.clone();
+        background.wallet_registry.wallet_info = self
+            .wallet_registry
+            .wallet_info
+            .iter()
+            .filter(|(_, wallet)| {
+                wallet.is_user_wallet() && selected_nodes.contains(&wallet.node_name)
+            })
+            .map(|(name, wallet)| (name.clone(), wallet.clone()))
+            .collect();
+        if background.wallet_registry.wallet_info.is_empty() {
+            return Err(StepError::InvalidArgument {
+                message: "background transaction load nodes have no user wallets".to_owned(),
+            });
+        }
+        background.wallet_registry.wallets = Arc::clone(&self.wallet_registry.wallets);
+        background.wallet_registry.fee_state = self.wallet_registry.fee_state.clone();
+        background.scanner.state = Arc::clone(&self.scanner.state);
+        background.scanner.observed_transaction_hashes =
+            Arc::clone(&self.scanner.observed_transaction_hashes);
+        background.scanner.runtime_is_shared = true;
+
+        Ok(background)
+    }
+
+    /// Spawn a scenario-owned task whose cancellation and result are tracked
+    /// until explicitly joined.
+    pub(crate) fn spawn_background_task<F, Fut>(&mut self, name: &str, task: F) -> StepResult
+    where
+        F: FnOnce(tokio_watch::Receiver<bool>) -> Fut + Send + 'static,
+        Fut: Future<Output = StepResult> + Send + 'static,
+    {
+        if self.background_tasks.tasks.contains_key(name) {
+            return Err(StepError::LogicalError {
+                message: format!("background task `{name}` is already registered"),
+            });
+        }
+
+        let (cancellation, receiver) = tokio_watch::channel(false);
+        let status = Arc::new(Mutex::new(BackgroundTaskStatus::Running));
+        let task_status = Arc::clone(&status);
+        let task_name = name.to_owned();
+        let join = tokio::spawn(async move {
+            let result = AssertUnwindSafe(task(receiver)).catch_unwind().await;
+            let outcome = match result {
+                Ok(Ok(())) => BackgroundTaskStatus::Stopped,
+                Ok(Err(error)) => BackgroundTaskStatus::Failed(error.to_string()),
+                Err(_) => BackgroundTaskStatus::Failed("task panicked".to_owned()),
+            };
+            if let Ok(mut status) = task_status.lock() {
+                *status = outcome;
+            } else {
+                warn!(target: TARGET, task = %task_name, "Background task status lock was poisoned");
+            }
+        });
+
+        self.background_tasks.tasks.insert(
+            name.to_owned(),
+            BackgroundTaskHandle {
+                cancellation,
+                join,
+                status,
+            },
+        );
+        Ok(())
+    }
+
+    pub(crate) fn ensure_background_task_healthy(&self, name: &str) -> StepResult {
+        let task =
+            self.background_tasks
+                .tasks
+                .get(name)
+                .ok_or_else(|| StepError::LogicalError {
+                    message: format!("background task `{name}` is not running"),
+                })?;
+        let status = task.status.lock().map_err(|_| StepError::LogicalError {
+            message: format!("background task `{name}` status lock was poisoned"),
+        })?;
+        match &*status {
+            BackgroundTaskStatus::Running => Ok(()),
+            BackgroundTaskStatus::Failed(error) => Err(StepError::StepFail {
+                message: format!("background task `{name}` failed: {error}"),
+            }),
+            BackgroundTaskStatus::Stopped => Err(StepError::StepFail {
+                message: format!("background task `{name}` stopped unexpectedly"),
+            }),
+        }
+    }
+
+    pub(crate) fn background_task_status(&self, name: &str) -> Result<String, StepError> {
+        let task =
+            self.background_tasks
+                .tasks
+                .get(name)
+                .ok_or_else(|| StepError::LogicalError {
+                    message: format!("background task `{name}` is not registered"),
+                })?;
+        let status = task.status.lock().map_err(|_| StepError::LogicalError {
+            message: format!("background task `{name}` status lock was poisoned"),
+        })?;
+        Ok(match &*status {
+            BackgroundTaskStatus::Running => "Running".to_owned(),
+            BackgroundTaskStatus::Failed(error) => format!("Failed({error})"),
+            BackgroundTaskStatus::Stopped => "Stopped".to_owned(),
+        })
+    }
+
+    pub(crate) fn ensure_background_tasks_healthy(&self) -> StepResult {
+        for (name, task) in &self.background_tasks.tasks {
+            let status = task.status.lock().map_err(|_| StepError::LogicalError {
+                message: format!("background task `{name}` status lock was poisoned"),
+            })?;
+            match &*status {
+                BackgroundTaskStatus::Running => {}
+                BackgroundTaskStatus::Failed(error) => {
+                    return Err(StepError::StepFail {
+                        message: format!("background task `{name}` failed: {error}"),
+                    });
+                }
+                BackgroundTaskStatus::Stopped => {
+                    return Err(StepError::StepFail {
+                        message: format!("background task `{name}` stopped unexpectedly"),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn stop_background_task(&mut self, name: &str) -> StepResult {
+        let task =
+            self.background_tasks
+                .tasks
+                .remove(name)
+                .ok_or_else(|| StepError::LogicalError {
+                    message: format!("background task `{name}` is not registered"),
+                })?;
+        let is_transaction_load = name == CONTINUOUS_NEXT_WALLET_LOAD_TASK;
+        let progress = is_transaction_load
+            .then(|| self.continuous_transaction_load_progress.clone())
+            .flatten();
+        let event_logger =
+            is_transaction_load.then(|| BlendDiagnosticEventLogger::from_world(self));
+        let task_status = Arc::clone(&task.status);
+        if let (Some(progress), Some(event_logger)) = (&progress, &event_logger) {
+            let status = task_status.lock().map_or_else(
+                |_| "Unavailable(status lock poisoned)".to_owned(),
+                |status| format!("{status:?}"),
+            );
+            log_continuous_transaction_load_stop_event(
+                event_logger,
+                "continuous_transaction_load_stop_requested",
+                progress,
+                &status,
+                None,
+            );
+        }
+
+        let result = stop_background_task(name, task).await;
+        if let (Some(progress), Some(event_logger)) = (progress, event_logger) {
+            let status = task_status.lock().map_or_else(
+                |_| "Unavailable(status lock poisoned)".to_owned(),
+                |status| format!("{status:?}"),
+            );
+            log_continuous_transaction_load_stop_event(
+                &event_logger,
+                "continuous_transaction_load_stopped",
+                &progress,
+                &status,
+                result.as_ref().err().map(ToString::to_string).as_deref(),
+            );
+        }
+        result
+    }
+
+    pub(crate) async fn stop_all_background_tasks(&mut self) -> StepResult {
+        let mut task_names = self
+            .background_tasks
+            .tasks
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        task_names.sort();
+
+        let mut errors = Vec::new();
+        for name in task_names {
+            if let Err(error) = self.stop_background_task(&name).await {
+                errors.push(error.to_string());
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(StepError::StepFail {
+                message: errors.join("; "),
+            })
+        }
+    }
+
+    /// Join scenario-owned tasks, restore provider reachability, then close
+    /// controllable Blend relays. The Cucumber after-hook also calls this so
+    /// failed scenarios do not leave background work running into the next.
+    pub async fn stop_background_activity(&mut self) -> StepResult {
+        let mut errors = Vec::new();
+        if let Err(error) = self.stop_all_background_tasks().await {
+            errors.push(error.to_string());
+        }
+        self.continuous_transaction_load_progress = None;
+        self.blend_churn_progress = None;
+        if let Err(error) = restore_all_blend_reachability(self).await {
+            errors.push(error.to_string());
+        }
+        self.blend_relays.shutdown();
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(StepError::StepFail {
+                message: errors.join("; "),
+            })
+        }
+    }
+
     /// Return the stable deployment seed for this manual-cluster scenario,
     /// generating it on first use.
     pub fn manual_cluster_deployment_seed(&mut self) -> DeploymentSeed {
@@ -1871,7 +2408,7 @@ impl CucumberWorld {
     }
 
     pub async fn ensure_wallet_scanner_started(&mut self) -> StepResult {
-        if self.scanner.runtime.is_some() {
+        if self.scanner.runtime.is_some() || self.scanner.runtime_is_shared {
             tokio::task::yield_now().await;
             return Ok(());
         }
@@ -2994,6 +3531,174 @@ mod node_wallet_tests {
         assert!(!node_wallet(NodeWalletKeyRole::VoucherMaster).is_scanner_tracked_wallet());
         assert!(!node_wallet(NodeWalletKeyRole::BlendZk).is_scanner_tracked_wallet());
         assert!(!node_wallet(NodeWalletKeyRole::General).is_scanner_tracked_wallet());
+    }
+}
+
+#[cfg(test)]
+mod background_task_tests {
+    use std::fs;
+
+    use super::{
+        CONTINUOUS_NEXT_WALLET_LOAD_TASK, ContinuousTransactionLoadProgress, CucumberWorld,
+    };
+    use crate::cucumber::error::StepError;
+
+    #[tokio::test]
+    async fn reports_background_task_failure_to_health_check_and_join() {
+        let mut world = CucumberWorld::default();
+        world
+            .spawn_background_task("failing task", async move |_cancellation| {
+                Err(StepError::StepFail {
+                    message: "producer failed".to_owned(),
+                })
+            })
+            .expect("task should start");
+
+        tokio::task::yield_now().await;
+
+        let health = world.ensure_background_task_healthy("failing task");
+        assert!(matches!(
+            health,
+            Err(StepError::StepFail { message }) if message.contains("producer failed")
+        ));
+
+        let joined = world.stop_background_task("failing task").await;
+        assert!(matches!(
+            joined,
+            Err(StepError::StepFail { message }) if message.contains("producer failed")
+        ));
+    }
+
+    #[tokio::test]
+    async fn abnormal_cleanup_logs_continuous_load_stop_markers_with_final_progress() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let mut world = CucumberWorld::default();
+        world.lifecycle.scenario_base_dir = temp_dir.path().to_owned();
+        world.set_scenario_name("abnormal background load cleanup");
+
+        let progress = ContinuousTransactionLoadProgress::new(8);
+        progress.record_completed_round();
+        progress.record_completed_round();
+        world.continuous_transaction_load_progress = Some(progress);
+        world
+            .spawn_background_task(
+                CONTINUOUS_NEXT_WALLET_LOAD_TASK,
+                async move |mut cancellation| {
+                    cancellation
+                        .changed()
+                        .await
+                        .expect("cleanup should signal cancellation");
+                    Ok(())
+                },
+            )
+            .expect("load task should start");
+
+        world
+            .stop_background_activity()
+            .await
+            .expect("abnormal cleanup should stop the task successfully");
+
+        let timeline = fs::read_to_string(temp_dir.path().join("blend_diagnostic_timeline.ndjson"))
+            .expect("cleanup timeline should be readable");
+        let records = timeline
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("timeline records should be valid JSON");
+        let stop_requested = records
+            .iter()
+            .find(|record| record["event"] == "continuous_transaction_load_stop_requested")
+            .expect("cleanup should log a stop request");
+        let stopped = records
+            .iter()
+            .find(|record| record["event"] == "continuous_transaction_load_stopped")
+            .expect("cleanup should log task completion");
+
+        assert_eq!(stop_requested["task_status"], "Running");
+        assert_eq!(stopped["task_status"], "Stopped");
+        assert_eq!(stopped["completed_rounds"], 2);
+        assert_eq!(stopped["completed_verified_transactions"], 16);
+        assert_eq!(stopped["transactions_per_round"], 8);
+    }
+}
+
+#[cfg(test)]
+mod blend_diagnostic_reachability_tests {
+    use super::{BlendDiagnosticPhase, BlendDiagnosticReachability};
+
+    #[test]
+    fn cloned_handle_tracks_relay_churn_and_recovery() {
+        let reachability = BlendDiagnosticReachability::default();
+        let background_handle = reachability.clone();
+        reachability.set_phase(Some(BlendDiagnosticPhase::Baseline));
+        background_handle.set_phase(Some(BlendDiagnosticPhase::Outage));
+        assert_eq!(reachability.phase(), Some(BlendDiagnosticPhase::Outage));
+
+        background_handle.set_reachable("NODE_1", false);
+        background_handle.set_reachable("NODE_3", false);
+        assert_eq!(reachability.phase(), Some(BlendDiagnosticPhase::Outage));
+        let unreachable = reachability.unreachable_nodes();
+        assert_eq!(unreachable.len(), 2);
+        assert!(unreachable.contains("NODE_1"));
+        assert!(unreachable.contains("NODE_3"));
+
+        background_handle.set_reachable("NODE_1", true);
+        assert_eq!(reachability.phase(), Some(BlendDiagnosticPhase::Recovery));
+        assert_eq!(
+            reachability
+                .unreachable_nodes()
+                .into_iter()
+                .collect::<Vec<_>>(),
+            ["NODE_3".to_owned()]
+        );
+
+        background_handle.set_reachable("NODE_3", true);
+        assert_eq!(reachability.phase(), Some(BlendDiagnosticPhase::Recovery));
+        assert!(reachability.unreachable_nodes().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod continuous_transaction_load_progress_tests {
+    use super::ContinuousTransactionLoadProgress;
+
+    #[test]
+    fn checkpoints_report_completed_rounds_and_verified_transaction_deltas() {
+        let progress = ContinuousTransactionLoadProgress::new(80);
+        assert_eq!(progress.snapshot(), (0, 0));
+        let empty_checkpoint = progress.checkpoint();
+        assert_eq!(empty_checkpoint.completed_rounds, 0);
+        assert_eq!(empty_checkpoint.completed_verified_transactions, 0);
+        assert_eq!(empty_checkpoint.rounds_since_previous_check, 0);
+        assert_eq!(
+            empty_checkpoint.verified_transactions_since_previous_check,
+            0
+        );
+
+        progress.record_completed_round();
+        assert_eq!(progress.snapshot(), (1, 80));
+        let first_round = progress.checkpoint();
+        assert_eq!(first_round.completed_rounds, 1);
+        assert_eq!(first_round.completed_verified_transactions, 80);
+        assert_eq!(first_round.rounds_since_previous_check, 1);
+        assert_eq!(first_round.verified_transactions_since_previous_check, 80);
+
+        progress.record_completed_round();
+        progress.record_completed_round();
+        assert_eq!(progress.snapshot(), (3, 240));
+        let later_rounds = progress.checkpoint();
+        assert_eq!(later_rounds.completed_rounds, 3);
+        assert_eq!(later_rounds.completed_verified_transactions, 240);
+        assert_eq!(later_rounds.rounds_since_previous_check, 2);
+        assert_eq!(later_rounds.verified_transactions_since_previous_check, 160);
+
+        let stalled_checkpoint = progress.checkpoint();
+        assert_eq!(stalled_checkpoint.rounds_since_previous_check, 0);
+        assert_eq!(
+            stalled_checkpoint.verified_transactions_since_previous_check,
+            0
+        );
     }
 }
 

@@ -7,19 +7,29 @@ use hex::ToHex as _;
 use lb_chain_service::CryptarchiaInfo;
 use lb_testing_framework::{NodeHttpClient, is_truthy_env};
 use tokio::{
+    sync::watch,
     task::JoinSet,
     time::{Instant, sleep, timeout},
 };
 use tracing::{info, warn};
 
 use crate::cucumber::{
-    defaults::CUCUMBER_VERBOSE_CONSOLE, error::StepError, wallet::TARGET, world::CucumberWorld,
+    defaults::CUCUMBER_VERBOSE_CONSOLE, error::StepError,
+    steps::nodes::diagnostics::BlendDiagnosticEventLogger, wallet::TARGET, world::CucumberWorld,
 };
 
 const BEST_NODE_SELECTION_TIMEOUT: Duration = Duration::from_mins(3);
 const BEST_NODE_SELECTION_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const BEST_NODE_SELECTION_LOG_INTERVAL: Duration = Duration::from_secs(5);
+const BEST_NODE_SELECTION_TIMELINE_INTERVAL: Duration = Duration::from_mins(2);
 const BEST_NODE_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Default)]
+struct BestNodeSelectionOptions<'a> {
+    timeout: Option<Duration>,
+    cancellation: Option<&'a watch::Receiver<bool>>,
+    timeline_logger: Option<&'a BlendDiagnosticEventLogger>,
+}
 
 /// Best-node selection result, keyed by group name.
 /// When no groups are configured the single key is the empty string "".
@@ -183,6 +193,14 @@ pub async fn determine_best_node(
         &node_clients,
         last_verbose_msg,
         None,
+        BestNodeSelectionOptions {
+            timeout: world.background_best_node_selection.timeout_override,
+            cancellation: world.background_best_node_selection.cancellation.as_ref(),
+            timeline_logger: world
+                .background_best_node_selection
+                .timeline_logger
+                .as_ref(),
+        },
     )
     .await
 }
@@ -224,6 +242,7 @@ pub async fn get_best_node_info_from_clients(
         node_clients,
         last_verbose_msg,
         Some("scanner"),
+        BestNodeSelectionOptions::default(),
     )
     .await
 }
@@ -368,6 +387,7 @@ async fn determine_best_node_from_clients(
     node_clients: &BTreeMap<String, NodeHttpClient>,
     mut last_verbose_msg: Option<&mut String>,
     tag: Option<&str>,
+    options: BestNodeSelectionOptions<'_>,
 ) -> Result<BestNodeInfo, StepError> {
     let tag = tag.map_or(String::new(), |tag| format!("[{tag}]: "));
     let group_key = node_to_group
@@ -388,10 +408,19 @@ async fn determine_best_node_from_clients(
     }
 
     let start = Instant::now();
+    let selection_timeout = options.timeout.unwrap_or(BEST_NODE_SELECTION_TIMEOUT);
     let mut last_log_at: Option<Instant> = None;
+    let mut last_timeline_event_at = start;
     let mut last_group_summary = None;
 
     loop {
+        if options
+            .cancellation
+            .is_some_and(|receiver| *receiver.borrow())
+        {
+            return Err(StepError::BackgroundTaskCancelled);
+        }
+
         let (mut ordered_snapshots, mut unreachable) =
             collect_ordered_group_snapshots_from_clients(&candidates, node_clients).await;
         unreachable.sort();
@@ -462,13 +491,45 @@ async fn determine_best_node_from_clients(
             .clone()
             .unwrap_or_else(|| format!("no responsive nodes [{}]", unreachable.join(", ")));
 
-        if start.elapsed() >= BEST_NODE_SELECTION_TIMEOUT {
+        let elapsed = start.elapsed();
+        if let Some(logger) = options.timeline_logger
+            && last_timeline_event_at.elapsed() >= BEST_NODE_SELECTION_TIMELINE_INTERVAL
+        {
+            let elapsed_seconds = elapsed.as_secs();
+            let group_name = display_group_key(&group_key);
+            info!(
+                target: TARGET,
+                event = "continuous_transaction_load_waiting_for_majority_tip",
+                reference_node = wallet_node_name,
+                fork_group = group_name,
+                elapsed_seconds,
+                reachable_nodes = responsive_count,
+                total_nodes = candidates.len(),
+                tip_groups = %last_group_summary,
+                "Continuous transaction load is waiting for a majority tip"
+            );
+            logger.append_named_timeline_record(
+                "continuous_transaction_load_waiting_for_majority_tip",
+                &serde_json::json!({
+                    "reference_node": wallet_node_name,
+                    "fork_group": group_name,
+                    "elapsed_seconds": elapsed_seconds,
+                    "wait_interval_seconds": BEST_NODE_SELECTION_TIMELINE_INTERVAL.as_secs(),
+                    "reachable_nodes": responsive_count,
+                    "total_nodes": candidates.len(),
+                    "tip_groups": &last_group_summary,
+                }),
+            );
+            last_timeline_event_at = Instant::now();
+        }
+
+        if elapsed >= selection_timeout {
             return Err(StepError::LogicalError {
                 message: format!(
                     "{tag}No stable majority tip for group '{}' after {:.2?}, reachable nodes: \
                     {}/{}, tip groups: {}",
                     display_group_key(&group_key),
-                    start.elapsed(),
+                    elapsed,
                     responsive_count,
                     candidates.len(),
                     last_group_summary,
@@ -482,7 +543,7 @@ async fn determine_best_node_from_clients(
                 "{tag}Waiting for consensus majority tip for group '{}' - elapsed: {:.2?}, \
                 reachable: {}/{}, tips: {}",
                 display_group_key(&group_key),
-                start.elapsed(),
+                elapsed,
                 responsive_count,
                 candidates.len(),
                 last_group_summary,
@@ -490,6 +551,12 @@ async fn determine_best_node_from_clients(
             last_log_at = Some(Instant::now());
         }
 
+        if options
+            .cancellation
+            .is_some_and(|receiver| *receiver.borrow())
+        {
+            return Err(StepError::BackgroundTaskCancelled);
+        }
         sleep(BEST_NODE_SELECTION_POLL_INTERVAL).await;
     }
 }

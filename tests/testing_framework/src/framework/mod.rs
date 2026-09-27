@@ -59,6 +59,7 @@ pub type LbcK8sDeployer = testing_framework_runner_k8s::K8sDeployer<LbcEnv>;
 pub type LbcManualCluster = ManualCluster<LbcEnv>;
 pub type LbcK8sManualCluster = testing_framework_runner_k8s::ManualCluster<LbcEnv>;
 
+#[derive(Clone)]
 pub struct LbcEnv;
 
 #[async_trait]

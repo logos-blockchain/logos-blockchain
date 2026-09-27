@@ -49,6 +49,8 @@ pub enum StepError {
     Timeout { message: String },
     #[error("Step fail: {message}")]
     StepFail { message: String },
+    #[error("background task cancelled")]
+    BackgroundTaskCancelled,
     #[error(transparent)]
     ParseError(#[from] strum::ParseError),
     #[error(transparent)]

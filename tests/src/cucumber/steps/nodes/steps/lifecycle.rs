@@ -528,15 +528,20 @@ async fn step_restart_node(
     node_name: String,
 ) -> StepResult {
     let diagnostic_restart = world.blend_diagnostics.observation_count > 0;
-    let previous_phase = world.blend_diagnostics.phase;
+    let previous_phase = world.blend_diagnostics.reachability.phase();
     if diagnostic_restart {
-        world.blend_diagnostics.phase =
-            Some(crate::cucumber::world::BlendDiagnosticPhase::Recovery);
+        world
+            .blend_diagnostics
+            .reachability
+            .set_phase(Some(crate::cucumber::world::BlendDiagnosticPhase::Recovery));
     }
 
     if let Err(error) = restart_node(world, &step.value, &node_name).await {
         if diagnostic_restart {
-            world.blend_diagnostics.phase = previous_phase;
+            world
+                .blend_diagnostics
+                .reachability
+                .set_phase(previous_phase);
         }
         return Err(error);
     }
@@ -550,7 +555,10 @@ async fn step_restart_node(
 #[when(expr = "I stop node {string}")]
 async fn step_stop_node(world: &mut CucumberWorld, step: &Step, node_name: String) -> StepResult {
     if world.blend_diagnostics.observation_count > 0 {
-        world.blend_diagnostics.phase = Some(crate::cucumber::world::BlendDiagnosticPhase::Outage);
+        world
+            .blend_diagnostics
+            .reachability
+            .set_phase(Some(crate::cucumber::world::BlendDiagnosticPhase::Outage));
     }
     stop_node(world, &step.value, &node_name).await?;
     if world.blend_diagnostics.observation_count > 0 {
