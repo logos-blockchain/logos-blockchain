@@ -12,40 +12,140 @@ macro_rules! declare_api_doc {
         #[openapi(
             paths($($doc),*),
             components(schemas(
-                schema::Status,
-                schema::MempoolMetrics,
+                lb_tx_service::backend::Status,
+                lb_tx_service::MempoolMetrics,
+                schema::Null,
                 crate::api::errors::ErrorBody,
                 // Referenced by `BlocksStreamQuery`'s `IntoParams` derive.
                 // utoipa collects schemas reached through request and response
                 // bodies automatically, but not through query parameters.
                 lb_http_api_common::queries::BlockFilter,
-                lb_http_api_common::queries::BlockSortOrder
+                lb_http_api_common::queries::BlockSortOrder,
+                // Referenced only by path parameters, which utoipa does not
+                // collect schemas from either.
+                lb_core::mantle::ops::channel::ChannelId
             )),
-            tags()
+            tags(),
+            modifiers(&AxumPathTemplates)
         )]
         pub struct ApiDoc;
 
         /// The `(method, path)` pairs the router serves, as declared by the
         /// table. Compared against the generated document in the tests below.
         #[cfg(test)]
-        const ROUTE_TABLE: &[(&str, &str)] = &[$((stringify!($method), $path)),*];
+        pub(in crate::api) const ROUTE_TABLE: &[(&str, &str)] = &[$((stringify!($method), $path)),*];
     };
 }
 
 api_routes!(declare_api_doc);
 
+/// Where the node HTTP API is specified. Every test that guards the API
+/// surface points here, so an engineer changing the API knows the
+/// specification has to change with it.
+#[cfg(test)]
+pub const SPEC_URL: &str = "https://lip.logos.co/blockchain/raw/node-http-api.html";
+
+/// Where the specification's sources live, including its copy of
+/// `openapi.json`.
+#[cfg(test)]
+pub const SPEC_SOURCE: &str =
+    "https://github.com/logos-co/logos-lips/tree/master/docs/blockchain/raw";
+
+/// Rewrites axum's `:param` path segments into `OpenAPI`'s `{param}` form.
+///
+/// The route table is shared with the router, so its paths use axum syntax;
+/// the published document must use `OpenAPI` path templating.
+struct AxumPathTemplates;
+
+impl utoipa::Modify for AxumPathTemplates {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let paths = std::mem::take(&mut openapi.paths.paths);
+        openapi.paths.paths = paths
+            .into_iter()
+            .map(|(path, item)| (openapi_path(&path), item))
+            .collect();
+    }
+}
+
+#[must_use]
+pub fn openapi_path(axum_path: &str) -> String {
+    axum_path
+        .split('/')
+        .map(|segment| {
+            segment
+                .strip_prefix(':')
+                .map_or_else(|| segment.to_owned(), |name| format!("{{{name}}}"))
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Schemas for bodies whose Rust types live outside the `OpenAPI`-aware
+/// crates, or have no Rust type at all.
 pub mod schema {
-    use lb_tx_service::{MempoolMetrics as DomainMempoolMetrics, backend::Status as DomainStatus};
-    use serde::Serialize;
-    use utoipa::ToSchema;
+    use std::{borrow::Cow, collections::HashMap};
 
-    #[derive(ToSchema, Serialize)]
-    #[serde(transparent)]
-    pub struct MempoolMetrics(pub DomainMempoolMetrics);
+    use utoipa::{
+        PartialSchema, ToSchema,
+        openapi::{ObjectBuilder, RefOr, Schema, Type},
+    };
 
-    #[derive(ToSchema, Serialize)]
-    #[serde(transparent)]
-    pub struct Status(pub DomainStatus);
+    /// A signed transaction as clients submit it. Named without generic
+    /// parameters because `#[utoipa::path]` would otherwise require schemas
+    /// for the verification-state markers.
+    pub type SignedTx = lb_core::mantle::SignedOps<
+        lb_core::mantle::transactions::states::Preverified,
+        lb_core::mantle::ledger::verification_mode::StandardMode,
+    >;
+
+    /// One value of the block streams; see [`SignedTx`] for why it is named.
+    pub type BlockEvent = crate::api::serializers::blocks::ApiProcessedBlockEvent<
+        'static,
+        lb_core::mantle::transactions::states::Preverified,
+        lb_core::mantle::ledger::verification_mode::StandardMode,
+    >;
+
+    /// The JSON literal `null`: the body of endpoints that acknowledge a
+    /// command without returning a result.
+    pub struct Null;
+
+    impl PartialSchema for Null {
+        fn schema() -> RefOr<Schema> {
+            ObjectBuilder::new()
+                .schema_type(Type::Null)
+                .description(Some("The JSON literal `null`."))
+                .into()
+        }
+    }
+
+    impl ToSchema for Null {
+        fn name() -> Cow<'static, str> {
+            Cow::Borrowed("Null")
+        }
+    }
+
+    /// A tracing verbosity level. Matched case-insensitively; `1` (error) to
+    /// `5` (trace) are accepted as well.
+    #[derive(ToSchema)]
+    #[schema(rename_all = "lowercase")]
+    #[expect(dead_code, reason = "Only describes the wire format.")]
+    pub enum LogLevel {
+        Error,
+        Warn,
+        Info,
+        Debug,
+        Trace,
+    }
+
+    /// Mirrors `lb_tracing::filter::envfilter::EnvFilterConfig`.
+    #[derive(ToSchema)]
+    #[schema(as = EnvFilterConfig)]
+    #[expect(dead_code, reason = "Only describes the wire format.")]
+    pub struct EnvFilterConfig {
+        /// Level per tracing target. The `*` key sets the default level.
+        #[schema(example = json!({"*": "info", "lb_blend": "debug"}))]
+        pub filters: HashMap<String, LogLevel>,
+    }
 }
 
 #[cfg(test)]
@@ -108,7 +208,7 @@ mod tests {
     fn documented_methods_match_the_routed_methods() {
         let routed: BTreeSet<(String, String)> = ROUTE_TABLE
             .iter()
-            .map(|(method, path)| ((*method).to_uppercase(), (*path).to_owned()))
+            .map(|(method, path)| ((*method).to_uppercase(), super::openapi_path(path)))
             .collect();
         let documented = documented_operations();
 
@@ -285,6 +385,42 @@ mod schema_conformance_tests {
         assert_round_trip_matches_component::<crate::api::handlers::DialPeerRequestBody>(
             "DialPeerRequestBody",
             serde_json::json!({ "addr": "/ip4/127.0.0.1/tcp/3000" }),
+        );
+    }
+}
+
+/// The checked-in document is the published specification. It is generated
+/// from the handler annotations, and this test fails whenever the two drift.
+#[cfg(test)]
+mod published_spec {
+    use super::{SPEC_SOURCE, SPEC_URL, document};
+
+    const SPEC_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json");
+
+    pub fn render() -> String {
+        let mut rendered = serde_json::to_string_pretty(&document()).expect("serialize document");
+        rendered.push('\n');
+        rendered
+    }
+
+    #[test]
+    fn checked_in_spec_matches_the_code() {
+        let generated = render();
+        if std::env::var_os("UPDATE_API_SPEC").is_some() {
+            std::fs::write(SPEC_FILE, &generated).expect("write openapi.json");
+            return;
+        }
+        let checked_in = std::fs::read_to_string(SPEC_FILE).unwrap_or_default();
+        assert!(
+            checked_in == generated,
+            "The node HTTP API no longer matches its published specification, {SPEC_URL}.\n\n\
+             If this change to the API is intended:\n  \
+             1. regenerate the checked-in document with\n     \
+             UPDATE_API_SPEC=1 cargo test -p logos-blockchain-node --lib checked_in_spec_matches_the_code\n  \
+             2. commit {SPEC_FILE} together with the code change\n  \
+             3. open a pull request against {SPEC_SOURCE} that copies it to\n     \
+             node-http-api/openapi.json and updates node-http-api.md to match\n\n\
+             Otherwise, revert the change to the API."
         );
     }
 }

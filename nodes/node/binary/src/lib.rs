@@ -119,17 +119,16 @@ pub type TimeService = generic_services::TimeService<RuntimeServiceId>;
 
 pub type PoWService = generic_services::PoWService<RuntimeServiceId>;
 
-pub type ApiService = lb_api_service::ApiService<
-    AxumBackend<
-        NtpTimeBackend,
-        RocksStorageAdapter<SignedOps<Preverified, StandardMode>, TxHash>,
-        SdpMempoolAdapter<RuntimeServiceId>,
-        SdpWalletAdapter<RuntimeServiceId>,
-        SdpRecoveryBackend<RuntimeServiceId>,
-        CryptarchiaLeaderService,
-    >,
-    RuntimeServiceId,
+pub(crate) type ApiBackend = AxumBackend<
+    NtpTimeBackend,
+    RocksStorageAdapter<SignedOps<Preverified, StandardMode>, TxHash>,
+    SdpMempoolAdapter<RuntimeServiceId>,
+    SdpWalletAdapter<RuntimeServiceId>,
+    SdpRecoveryBackend<RuntimeServiceId>,
+    CryptarchiaLeaderService,
 >;
+
+pub type ApiService = lb_api_service::ApiService<ApiBackend, RuntimeServiceId>;
 
 pub type StorageService = lb_storage_service::StorageService<RuntimeServiceId>;
 

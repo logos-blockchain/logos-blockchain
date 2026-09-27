@@ -16,7 +16,7 @@ pub mod balance {
 
     const LOG_TARGET: &str = api::http::wallet::BALANCE;
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
     pub struct WalletBalanceResponseBody {
         pub tip: HeaderId,
         pub balance: Value,
@@ -37,7 +37,12 @@ pub mod balance {
                 panic!("WalletBalanceResponseBody serialization failed: {e}")
             });
 
-            (StatusCode::OK, json).into_response()
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                json,
+            )
+                .into_response()
         }
     }
 }
@@ -60,13 +65,13 @@ pub mod claimable_vouchers {
 
     const LOG_TARGET: &str = api::http::wallet::CLAIMABLE_VOUCHERS;
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
     pub struct ClaimableVoucherInfoResponseBody {
         pub commitment: VoucherCm,
         pub nullifier: VoucherNullifier,
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
     pub struct WalletClaimableVouchersResponseBody {
         pub tip: HeaderId,
         pub vouchers: Vec<ClaimableVoucherInfoResponseBody>,
@@ -95,7 +100,12 @@ pub mod claimable_vouchers {
                 panic!("WalletClaimableVouchersResponseBody serialization failed: {e}")
             });
 
-            (StatusCode::OK, json).into_response()
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                json,
+            )
+                .into_response()
         }
     }
 }
@@ -118,7 +128,7 @@ pub mod aged_notes {
 
     /// One wallet-owned UTXO old enough to take part in the leadership
     /// lottery.
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
     pub struct LeaderAgedNoteResponseBody {
         pub note_id: NoteId,
         pub value: Value,
@@ -138,7 +148,7 @@ pub mod aged_notes {
     /// The set is reported unfiltered. The leader service additionally skips
     /// the faucet UTXO when a `faucet_pk` is configured, which only matters on
     /// a faucet node.
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
     pub struct LeaderAgedNotesResponseBody {
         pub tip: HeaderId,
         pub notes: Vec<LeaderAgedNoteResponseBody>,
@@ -162,7 +172,12 @@ pub mod aged_notes {
                 panic!("LeaderAgedNotesResponseBody serialization failed: {e}")
             });
 
-            (StatusCode::OK, json).into_response()
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                json,
+            )
+                .into_response()
         }
     }
 }
@@ -186,7 +201,7 @@ pub mod transfer_funds {
 
     const LOG_TARGET: &str = api::http::wallet::TRANSFER_FUNDS;
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
     pub struct WalletTransferFundsRequestBody {
         pub tip: Option<HeaderId>,
         pub change_public_key: ZkPublicKey,
@@ -195,7 +210,7 @@ pub mod transfer_funds {
         pub amount: Value,
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
     pub struct WalletTransferFundsResponseBody {
         pub hash: lb_core::mantle::transactions::TxHash,
     }
@@ -221,7 +236,12 @@ pub mod transfer_funds {
                 panic!("WalletTransferFundsResponseBody serialization failed: {e}")
             });
 
-            (StatusCode::CREATED, json).into_response()
+            (
+                StatusCode::CREATED,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                json,
+            )
+                .into_response()
         }
     }
 }
@@ -238,7 +258,7 @@ pub mod fund {
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use serde::{Deserialize, Serialize};
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
     pub struct WalletFundRequestBody {
         pub tip: Option<HeaderId>,
         pub tx_builder: MantleTxBuilder,
@@ -261,13 +281,14 @@ pub mod fund {
         pub priority_fee_percent: u64,
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
     pub struct WalletFundResponseBody {
         /// Tip the transaction was funded against.
         pub tip: HeaderId,
         /// The funded transaction, with the fee transfer appended as the last
         /// op. All ops are still unsigned.
         #[serde(with = "mantle_spec")]
+        #[schema(value_type = lb_core::openapi::MantleTx)]
         pub funded_tx: Ops,
         /// Proof for the appended fee transfer, signed over the funded
         /// transaction hash. `None` if funding required no transfer (zero
@@ -283,24 +304,27 @@ pub mod sign {
     };
     use serde::{Deserialize, Serialize};
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
     pub struct WalletSignTxEd25519RequestBody {
         pub tx_hash: TxHash,
+        #[schema(value_type = lb_key_management_system_keys::keys::Ed25519PublicKey)]
         pub pk: <Ed25519Key as SecuredKey>::PublicKey,
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
     pub struct WalletSignTxEd25519ResponseBody {
+        #[schema(value_type = lb_key_management_system_keys::keys::Ed25519Signature)]
         pub sig: <Ed25519Key as SecuredKey>::Signature,
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
     pub struct WalletSignTxZkRequestBody {
         pub tx_hash: TxHash,
+        #[schema(value_type = lb_key_management_system_keys::openapi::ZkPublicKeys)]
         pub pks: ZkPublicKeys,
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
     pub struct WalletSignTxZkResponseBody {
         pub sig: ZkSignature,
     }

@@ -6,7 +6,9 @@ use lb_core::mantle::{
 };
 use serde::Serialize;
 
-#[derive(Serialize)]
+/// A transaction as the API presents it: its ops, with the transaction hash.
+#[derive(Serialize, utoipa::ToSchema)]
+#[schema(as = ApiMantleTx)]
 pub struct ApiTransactionSerializer<'tx> {
     hash: TxHash,
     ops: OpRefs<'tx>,
@@ -24,7 +26,8 @@ where
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
+#[schema(as = ApiSignedTransaction)]
 pub struct ApiSignedTransaction<'tx> {
     mantle_tx: ApiTransactionSerializer<'tx>,
     ops_proofs: OpProofRefs<'tx>,

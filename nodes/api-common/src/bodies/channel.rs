@@ -5,7 +5,7 @@ use lb_core::{
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChannelDepositRequestBody {
     pub tip: Option<HeaderId>,
     pub deposit: DepositOp,
@@ -14,7 +14,7 @@ pub struct ChannelDepositRequestBody {
     pub max_tx_fee: GasCost,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChannelDepositResponseBody {
     pub hash: TxHash,
 }
