@@ -20,6 +20,7 @@ const BROADCAST_CHANNEL_SIZE: usize = 128;
 const LOG_TARGET: &str = chain::broadcast::ROOT;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct BlockInfo {
     pub height: u64,
     pub header_id: HeaderId,

@@ -136,6 +136,7 @@ pub enum PoWError {
 const MAX_TRANSFER_INPUTS: usize = MAX_ZK_SIGNING_KEYS;
 
 /// A summary of the rewards this node can currently claim.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClaimableRewardsInfo {
     /// Number of mined tickets still within the reward window.
@@ -146,6 +147,7 @@ pub struct ClaimableRewardsInfo {
 }
 
 /// The runtime state of the `PoW` service, as the running service holds it.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PoWStatus {
     pub is_mining: bool,
@@ -154,6 +156,7 @@ pub struct PoWStatus {
 }
 
 /// The runtime state of unattended claiming.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AutoClaimStatus {
     pub is_armed: bool,
@@ -162,6 +165,7 @@ pub struct AutoClaimStatus {
 }
 
 /// One auto-claim target alongside its current balance.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClaimTargetStatus {
     pub public_key: ZkPublicKey,
@@ -236,6 +240,38 @@ pub struct ClaimTarget {
 pub enum AutoClaimTick {
     Seconds(NonZeroU64),
     Slots(NonZeroU64),
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for AutoClaimTick {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        use utoipa::openapi::{KnownFormat, ObjectBuilder, Type, schema::SchemaFormat};
+
+        ObjectBuilder::new()
+            .property(
+                "unit",
+                ObjectBuilder::new()
+                    .schema_type(Type::String)
+                    .enum_values(Some(["seconds", "slots"])),
+            )
+            .property(
+                "value",
+                ObjectBuilder::new()
+                    .schema_type(Type::Integer)
+                    .format(Some(SchemaFormat::KnownFormat(KnownFormat::Int64)))
+                    .minimum(Some(1)),
+            )
+            .required("unit")
+            .required("value")
+            .into()
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for AutoClaimTick {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("AutoClaimTick")
+    }
 }
 
 /// Default auto-claim period: five minutes of wall-clock time.

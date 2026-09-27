@@ -4284,6 +4284,7 @@ dependencies = [
  "serde",
  "tokio",
  "tracing",
+ "utoipa",
 ]
 
 [[package]]
@@ -4891,6 +4892,7 @@ dependencies = [
  "http",
  "libp2p",
  "logos-blockchain-api-service",
+ "logos-blockchain-binary-codec",
  "logos-blockchain-blend",
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-broadcast-service",
@@ -4901,6 +4903,7 @@ dependencies = [
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-http-api-common",
+ "logos-blockchain-key-management-system-keys",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-ledger",
  "logos-blockchain-libp2p",
@@ -4918,11 +4921,13 @@ dependencies = [
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "logos-blockchain-version",
+ "logos-blockchain-wallet",
  "logos-blockchain-wallet-service",
  "num-bigint",
  "nutype",
  "overwatch",
  "rand 0.8.6",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -5039,6 +5044,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "utoipa",
 ]
 
 [[package]]
