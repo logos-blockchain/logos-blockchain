@@ -65,6 +65,92 @@ where
     T::Proof::decode(input, &()).map(|(rest, proof)| (rest, proof.into()))
 }
 
+#[cfg(feature = "openapi")]
+mod openapi {
+    use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
+    use utoipa::{
+        PartialSchema, ToSchema,
+        openapi::{
+            RefOr, Type,
+            schema::{AdditionalProperties, ObjectBuilder, OneOfBuilder, Schema},
+        },
+    };
+
+    use super::OpProof;
+    use crate::{
+        mantle::ops::{OpProofRef, ZkAndEd25519Proof},
+        openapi::{Schemas, collect, reference},
+        proofs::{
+            channel_multi_sig_proof::ChannelMultiSigProof,
+            leader_claim_proof::Groth16LeaderClaimProof,
+        },
+    };
+
+    /// `serde`'s externally tagged form: an object whose only key is the
+    /// variant.
+    fn variant(tag: &str, value: impl Into<RefOr<Schema>>) -> ObjectBuilder {
+        ObjectBuilder::new()
+            .schema_type(Type::Object)
+            .title(Some(tag))
+            .property(tag, value)
+            .required(tag)
+            .additional_properties(Some(AdditionalProperties::FreeForm(false)))
+    }
+
+    impl PartialSchema for OpProof {
+        fn schema() -> RefOr<Schema> {
+            OneOfBuilder::new()
+                .item(variant("Ed25519Sig", reference::<Ed25519Signature>()))
+                .item(variant("ZkSig", reference::<ZkSignature>()))
+                .item(variant(
+                    "ZkAndEd25519Sigs",
+                    reference::<ZkAndEd25519Proof>(),
+                ))
+                .item(variant("PoC", reference::<Groth16LeaderClaimProof>()))
+                .item(variant(
+                    "ChannelMultiSigProof",
+                    reference::<ChannelMultiSigProof>(),
+                ))
+                .item(variant(
+                    "None",
+                    ObjectBuilder::new().schema_type(Type::Null),
+                ))
+                .description(Some(
+                    "The proof authorizing the operation at the same index. Which variant is \
+                     required is determined by that operation.",
+                ))
+                .into()
+        }
+    }
+
+    impl ToSchema for OpProof {
+        fn schemas(schemas: &mut Schemas) {
+            collect::<Ed25519Signature>(schemas);
+            collect::<ZkSignature>(schemas);
+            collect::<ZkAndEd25519Proof>(schemas);
+            collect::<Groth16LeaderClaimProof>(schemas);
+            collect::<ChannelMultiSigProof>(schemas);
+        }
+    }
+
+    /// Serializes exactly like [`OpProof`], so it shares its component.
+    impl PartialSchema for OpProofRef<'_> {
+        fn schema() -> RefOr<Schema> {
+            OpProof::schema()
+        }
+    }
+
+    impl ToSchema for OpProofRef<'_> {
+        fn name() -> std::borrow::Cow<'static, str> {
+            OpProof::name()
+        }
+
+        fn schemas(schemas: &mut Schemas) {
+            OpProof::schemas(schemas);
+        }
+    }
+}
+
 pub struct OpProofDecodeContext<'op> {
     pub op: &'op Op,
 }

@@ -196,6 +196,96 @@ impl Op {
     }
 }
 
+#[cfg(feature = "openapi")]
+mod openapi {
+    use utoipa::{
+        PartialSchema, ToSchema,
+        openapi::{
+            RefOr, Type,
+            schema::{ObjectBuilder, OneOfBuilder, Schema},
+        },
+    };
+
+    use super::{
+        ChannelConfigOp, ChannelTransferOp, ChannelWithdrawOp, ClaimPowRewardOp, DepositOp,
+        InscriptionOp, LeaderClaimOp, Op, OpRef, SDPActiveOp, SDPDeclareOp, SDPWithdrawOp,
+        TransferOp,
+    };
+    use crate::{
+        mantle::ledger::ProvableOperation,
+        openapi::{Schemas, collect, reference},
+    };
+
+    /// The `{ "opcode", "payload" }` wire shape of the operation `T`.
+    fn variant<T: ProvableOperation + ToSchema>(title: &str) -> ObjectBuilder {
+        ObjectBuilder::new()
+            .schema_type(Type::Object)
+            .title(Some(title))
+            .property(
+                "opcode",
+                ObjectBuilder::new()
+                    .schema_type(Type::Integer)
+                    .enum_values(Some([T::CODE])),
+            )
+            .property("payload", reference::<T>())
+            .required("opcode")
+            .required("payload")
+    }
+
+    macro_rules! op_schema {
+        ($($variant:ident => $operation:ty),* $(,)?) => {
+            impl PartialSchema for Op {
+                fn schema() -> RefOr<Schema> {
+                    OneOfBuilder::new()
+                        $(.item(variant::<$operation>(stringify!($variant))))*
+                        .description(Some(
+                            "A Mantle operation, tagged by its `opcode`, with the operation \
+                             itself as its `payload`.",
+                        ))
+                        .into()
+                }
+            }
+
+            impl ToSchema for Op {
+                fn schemas(schemas: &mut Schemas) {
+                    $(collect::<$operation>(schemas);)*
+                }
+            }
+        };
+    }
+
+    op_schema! {
+        ChannelInscribe => InscriptionOp,
+        ChannelConfig => ChannelConfigOp,
+        ChannelDeposit => DepositOp,
+        ChannelWithdraw => ChannelWithdrawOp,
+        ChannelTransfer => ChannelTransferOp,
+        SDPDeclare => SDPDeclareOp,
+        SDPWithdraw => SDPWithdrawOp,
+        SDPActive => SDPActiveOp,
+        LeaderClaim => LeaderClaimOp,
+        Transfer => TransferOp,
+        ClaimPowReward => ClaimPowRewardOp,
+    }
+
+    /// Serializes exactly like [`Op`], so it shares its component.
+    impl PartialSchema for OpRef<'_> {
+        fn schema() -> RefOr<Schema> {
+            Op::schema()
+        }
+    }
+
+    impl ToSchema for OpRef<'_> {
+        fn name() -> std::borrow::Cow<'static, str> {
+            Op::name()
+        }
+
+        fn schemas(schemas: &mut Schemas) {
+            Op::schemas(schemas);
+        }
+    }
+}
+
 macro_rules! impl_from_operation {
     ($($variant:ident => $operation:ident),* $(,)?) => {
         $(

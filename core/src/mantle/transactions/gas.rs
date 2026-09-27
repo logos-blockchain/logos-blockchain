@@ -12,6 +12,7 @@ pub const GENESIS_STORAGE_GAS_PRICE: GasPrice = GasPrice::new(1);
 pub const GENESIS_EXECUTION_GAS_PRICE: GasPrice = GasPrice::new(1);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct GasPrices {
     pub execution_base_gas_price: GasPrice,
     pub storage_gas_price: GasPrice,

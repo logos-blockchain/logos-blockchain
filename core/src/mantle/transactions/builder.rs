@@ -71,6 +71,70 @@ pub struct MantleTxBuilder {
     channel_multi_sig_proofs: HashMap<usize, ChannelMultiSigProof>,
 }
 
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for MantleTxBuilder {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        use utoipa::openapi::{
+            Type,
+            schema::{AdditionalProperties, ArrayBuilder, ObjectBuilder},
+        };
+
+        use crate::{mantle::ledger::MAX_TRANSACTION_INPUTS, openapi::reference};
+
+        ObjectBuilder::new()
+            .schema_type(Type::Object)
+            .description(Some(
+                "A partially built transaction, e.g. one to be funded by a wallet.",
+            ))
+            .property("mantle_tx", reference::<crate::openapi::MantleTx>())
+            .property(
+                "ledger_inputs",
+                ArrayBuilder::new()
+                    .items(reference::<Utxo>())
+                    .max_items(Some(MAX_TRANSACTION_INPUTS))
+                    .description(Some(
+                        "The notes spent by `pending_transfer`, matching its inputs one to one.",
+                    )),
+            )
+            .property("pending_transfer", reference::<TransferOp>())
+            .property(
+                "channel_multi_sig_proofs",
+                ObjectBuilder::new()
+                    .schema_type(Type::Object)
+                    .description(Some(
+                        "Channel multi-signature proofs keyed by the (decimal) index of the \
+                         operation in `mantle_tx.ops` they authorize.",
+                    ))
+                    .property_names(Some(
+                        ObjectBuilder::new()
+                            .schema_type(Type::String)
+                            .pattern(Some("^[0-9]+$")),
+                    ))
+                    .additional_properties(Some(AdditionalProperties::RefOr(reference::<
+                        ChannelMultiSigProof,
+                    >(
+                    )))),
+            )
+            .required("mantle_tx")
+            .required("ledger_inputs")
+            .required("pending_transfer")
+            .required("channel_multi_sig_proofs")
+            .into()
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for MantleTxBuilder {
+    fn schemas(schemas: &mut crate::openapi::Schemas) {
+        use crate::openapi::collect;
+
+        collect::<crate::openapi::MantleTx>(schemas);
+        collect::<Utxo>(schemas);
+        collect::<TransferOp>(schemas);
+        collect::<ChannelMultiSigProof>(schemas);
+    }
+}
+
 impl Default for MantleTxBuilder {
     fn default() -> Self {
         Self::new()

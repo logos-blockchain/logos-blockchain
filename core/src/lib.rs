@@ -4,6 +4,8 @@ pub mod crypto;
 pub mod events;
 pub mod header;
 pub mod mantle;
+#[cfg(feature = "openapi")]
+pub mod openapi;
 pub mod proofs;
 pub mod sdp;
 pub mod utils;

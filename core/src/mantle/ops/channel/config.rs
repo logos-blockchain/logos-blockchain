@@ -34,15 +34,22 @@ use crate::{
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ChannelConfigOp {
     pub channel: ChannelId,
     pub parent: MsgId,
     // This op is not used in genesis, so we can force channel updates to only use valid (e.g.,
     // non-weak) public keys.
+    #[cfg_attr(
+        feature = "openapi",
+        schema(value_type = Vec<lb_key_management_system_keys::keys::Ed25519PublicKey>, min_items = 1, max_items = 65535)
+    )]
     pub keys: VerifiedChannelKeys,
     pub posting_timeframe: SlotTimeframe,
     pub posting_timeout: SlotTimeout,
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::u16_value))]
     pub configuration_threshold: u16,
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::u16_value))]
     pub transfer_threshold: u16,
 }
 

@@ -3,6 +3,7 @@ use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ZkAndEd25519Proof {
     pub zk_sig: ZkSignature,
     pub ed25519_sig: Ed25519Signature,

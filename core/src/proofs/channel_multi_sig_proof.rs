@@ -9,8 +9,10 @@ use thiserror::Error;
 use crate::mantle::ops::channel::ChannelKeyIndex;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct IndexedSignature {
     pub signature: Ed25519Signature,
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::u16_value))]
     pub channel_key_index: ChannelKeyIndex, /* Using ChannelKeyIndex ensures indices are
                                              * bounded, and MAX provides an upper limit for the
                                              * number of unique signatures (one per index) */
@@ -56,6 +58,33 @@ pub enum Error {
 
 pub const MAX_SIGNATURES: usize = u16::MAX as usize;
 pub type IndexedSignatures = UpperBoundedVec<IndexedSignature, MAX_SIGNATURES>;
+
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for ChannelMultiSigProof {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::schema::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::Type::Object)
+            .property(
+                "signatures",
+                utoipa::openapi::schema::ArrayBuilder::new()
+                    .items(crate::openapi::reference::<IndexedSignature>())
+                    .max_items(Some(MAX_SIGNATURES))
+                    .description(Some(
+                        "Ordered by strictly increasing `channel_key_index`; other orderings are \
+                         rejected.",
+                    )),
+            )
+            .required("signatures")
+            .into()
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for ChannelMultiSigProof {
+    fn schemas(schemas: &mut crate::openapi::Schemas) {
+        crate::openapi::collect::<IndexedSignature>(schemas);
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 // Serde goes through `ChannelMultiSigProofRepr` via `try_from`/`into`: `Deserialize`

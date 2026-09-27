@@ -37,6 +37,7 @@ use crate::{
 
 // ChannelTransfer = ChannelId Inputs Outputs — plain field-order concat.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ChannelTransferOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,

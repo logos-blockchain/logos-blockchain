@@ -19,8 +19,10 @@ use crate::{
 const LOG_TARGET: &str = proofs::LEADER_CLAIM;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Groth16LeaderClaimProof {
     #[serde(with = "proof_serde")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::compressed_proof))]
     proof: lb_poc::PoCProof,
 }
 

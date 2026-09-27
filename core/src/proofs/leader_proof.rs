@@ -25,10 +25,13 @@ use crate::{
 const LOG_TARGET: &str = proofs::LEADER;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Groth16LeaderProof {
     #[serde(with = "proof_serde")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::compressed_proof))]
     proof: lb_pol::PoLProof,
     #[serde(with = "serde_fr")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::fr))]
     entropy_contribution: Fr,
     // We cannot use the verified one because a key of `0`s is used in the genesis block, and that
     // would fail verification during deserialization.

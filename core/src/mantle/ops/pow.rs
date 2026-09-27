@@ -36,6 +36,9 @@ pub type PowReward = Value;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct PowNullifier(#[serde(with = "serde_fr")] ZkHash);
 
+#[cfg(feature = "openapi")]
+crate::openapi::fr_newtype_schema!(PowNullifier);
+
 impl PowNullifier {
     #[must_use]
     pub const fn as_fr(&self) -> &Fr {
@@ -79,12 +82,15 @@ impl From<PowNullifier> for ZkHash {
 /// `public_key` (see [`Self::get_puzzle_ticket`]) and checking that ticket
 /// against the current reward difficulty during validation.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ClaimPowRewardOp {
     /// Epoch nonce the puzzle was solved against; must match the current or
     /// previous epoch nonce.
     #[serde(with = "serde_fr")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::fr))]
     pub epoch_nonce: ZkHash,
     /// Hash of the block the puzzle solution is anchored to.
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::hash_byte_values))]
     pub block_hash: Hash,
     /// Public key of the reward beneficiary.
     pub public_key: ZkPublicKey,

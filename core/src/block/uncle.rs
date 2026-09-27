@@ -62,6 +62,7 @@ impl UncleHeaders {
 
 /// A header together with the signature its leader produced over it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SignedHeader {
     header: Header,
     signature: Ed25519Signature,
