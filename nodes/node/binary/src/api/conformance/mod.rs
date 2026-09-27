@@ -1,8 +1,9 @@
 //! HTTP API conformance suite.
 //!
 //! Every route the node serves is exercised through the production backend
-//! (see [`harness`]) and each exchange is checked against the published
-//! specification, `openapi.json`:
+//! (see [`harness`]) and each exchange is checked against the `OpenAPI`
+//! document generated from the handler annotations, which is the published
+//! specification:
 //!
 //! - the request body, if any, must match the operation's declared request
 //!   schema;
@@ -22,9 +23,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use super::openapi::{ROUTE_TABLE, SPEC_URL, openapi_path};
-
-const SPEC: &str = include_str!("../../../openapi.json");
+use super::openapi::{ROUTE_TABLE, SPEC_URL, document, openapi_path};
 
 /// One request against one route, and the status it must produce.
 pub struct Case {
@@ -72,10 +71,6 @@ impl Case {
             self.status
         )
     }
-}
-
-fn spec() -> Value {
-    serde_json::from_str(SPEC).expect("openapi.json is valid JSON")
 }
 
 /// Escapes a JSON-pointer token and percent-encodes it for a URI fragment.
@@ -300,7 +295,7 @@ fn check_parameters(spec: &Value, path: &str, case: &Case) -> Result<(), String>
 #[tokio::test(flavor = "multi_thread")]
 async fn every_case_conforms_to_the_published_spec() {
     let node = harness::Node::start().await;
-    let spec = spec();
+    let spec = document();
 
     let mut failures = Vec::new();
     for case in cases::all() {
@@ -315,9 +310,9 @@ async fn every_case_conforms_to_the_published_spec() {
 
     assert!(
         failures.is_empty(),
-        "{} of the node HTTP API exchanges do not match the published specification.\n\
-         If the API change is intended, update the specification at {SPEC_URL} \
-         and regenerate openapi.json (see `checked_in_spec_matches_the_code`).\n\n{}",
+        "{} of the node HTTP API exchanges do not match the handlers' `OpenAPI` annotations, \
+         which are the published specification ({SPEC_URL}).\n\
+         Fix the handler, or correct its annotation and update the specification to match.\n\n{}",
         failures.len(),
         failures.join("\n\n")
     );

@@ -45,12 +45,6 @@ api_routes!(declare_api_doc);
 #[cfg(test)]
 pub const SPEC_URL: &str = "https://lip.logos.co/blockchain/raw/node-http-api.html";
 
-/// Where the specification's sources live, including its copy of
-/// `openapi.json`.
-#[cfg(test)]
-pub const SPEC_SOURCE: &str =
-    "https://github.com/logos-co/logos-lips/tree/master/docs/blockchain/raw";
-
 /// Rewrites axum's `:param` path segments into `OpenAPI`'s `{param}` form.
 ///
 /// The route table is shared with the router, so its paths use axum syntax;
@@ -149,7 +143,7 @@ pub mod schema {
 }
 
 #[cfg(test)]
-fn document() -> serde_json::Value {
+pub(in crate::api) fn document() -> serde_json::Value {
     use utoipa::OpenApi as _;
     serde_json::from_str(&ApiDoc::openapi().to_json().expect("serialize document"))
         .expect("document is valid JSON")
@@ -389,38 +383,19 @@ mod schema_conformance_tests {
     }
 }
 
-/// The checked-in document is the published specification. It is generated
-/// from the handler annotations, and this test fails whenever the two drift.
+/// Writes the generated document, pretty-printed, to the path in
+/// `OPENAPI_OUT`.
+///
+/// CI runs this on both sides of a pull request and reports any difference,
+/// since a change to the document is a change to the published
+/// specification. It is also how the specification's copy of the document is
+/// produced.
 #[cfg(test)]
-mod published_spec {
-    use super::{SPEC_SOURCE, SPEC_URL, document};
-
-    const SPEC_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json");
-
-    pub fn render() -> String {
-        let mut rendered = serde_json::to_string_pretty(&document()).expect("serialize document");
-        rendered.push('\n');
-        rendered
-    }
-
-    #[test]
-    fn checked_in_spec_matches_the_code() {
-        let generated = render();
-        if std::env::var_os("UPDATE_API_SPEC").is_some() {
-            std::fs::write(SPEC_FILE, &generated).expect("write openapi.json");
-            return;
-        }
-        let checked_in = std::fs::read_to_string(SPEC_FILE).unwrap_or_default();
-        assert!(
-            checked_in == generated,
-            "The node HTTP API no longer matches its published specification, {SPEC_URL}.\n\n\
-             If this change to the API is intended:\n  \
-             1. regenerate the checked-in document with\n     \
-             UPDATE_API_SPEC=1 cargo test -p logos-blockchain-node --lib checked_in_spec_matches_the_code\n  \
-             2. commit {SPEC_FILE} together with the code change\n  \
-             3. open a pull request against {SPEC_SOURCE} that copies it to\n     \
-             node-http-api/openapi.json and updates node-http-api.md to match\n\n\
-             Otherwise, revert the change to the API."
-        );
-    }
+#[test]
+#[ignore = "writes the OpenAPI document to $OPENAPI_OUT"]
+fn dump_openapi() {
+    let path = std::env::var_os("OPENAPI_OUT").expect("OPENAPI_OUT is set");
+    let mut rendered = serde_json::to_string_pretty(&document()).expect("serialize document");
+    rendered.push('\n');
+    std::fs::write(path, rendered).expect("write the OpenAPI document");
 }
