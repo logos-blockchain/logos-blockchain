@@ -1,4 +1,4 @@
-use core::{fmt, time::Duration};
+use core::{fmt, iter, time::Duration};
 use std::collections::BTreeMap;
 
 use lb_cryptarchia_engine::Epoch;
@@ -59,6 +59,13 @@ impl EraSchedule {
     pub fn into_genesis_era_parameters(self) -> EraParameters {
         self.genesis_era
     }
+
+    /// Every era of the schedule with the epoch it starts at, in activation
+    /// order: only the genesis era, for now.
+    #[must_use]
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (Epoch, &EraParameters)> {
+        iter::once((GENESIS_EPOCH, &self.genesis_era))
+    }
 }
 
 impl From<EraSchedule> for BTreeMap<Epoch, EraParameters> {
@@ -71,7 +78,11 @@ impl From<EraSchedule> for BTreeMap<Epoch, EraParameters> {
 pub enum EraScheduleError {
     #[error("the era schedule must contain at least one era")]
     Empty,
-    #[error("the first era must start at epoch {GENESIS_EPOCH}, not at epoch {}", .0.into_inner())]
+    #[error(
+        "the first era must start at epoch {}, not at epoch {}",
+        GENESIS_EPOCH.into_inner(),
+        .0.into_inner()
+    )]
     FirstEraAfterGenesis(Epoch),
     #[error(
         "eras must be listed by strictly increasing first epoch, but epoch {} follows epoch {}",
@@ -123,7 +134,11 @@ impl<'de> Visitor<'de> for EraScheduleVisitor {
     type Value = EraSchedule;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a map from strictly increasing first epochs to era parameters")
+        write!(
+            formatter,
+            "a map from first epochs, strictly increasing from epoch {}, to era parameters",
+            GENESIS_EPOCH.into_inner()
+        )
     }
 
     fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
