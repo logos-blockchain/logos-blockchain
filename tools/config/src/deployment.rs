@@ -159,6 +159,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
             security_param: NonZero::new(SECURITY_PARAM).unwrap(),
             uncle_reference_window_in_block: NonZero::new(UNCLE_REFERENCE_WINDOW_IN_BLOCK).unwrap(),
             time_finality_window: None,
+            epoch_base_period_length: None,
             slot_activation_coeff: NonNegativeRatio::new(
                 SLOT_ACTIVATION_COEFF_NUMERATOR,
                 NonZero::new(SLOT_ACTIVATION_COEFF_DENOMINATOR).unwrap(),

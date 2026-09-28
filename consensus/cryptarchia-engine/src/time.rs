@@ -245,7 +245,8 @@ impl From<Slot> for u64 {
 pub struct EpochConfig {
     // The stake distribution is always taken at the beginning of the previous epoch.
     // This parameters controls how many slots to wait for it to be stabilized
-    // The value is computed as epoch_stake_distribution_stabilization * int(floor(k / f))
+    // The value is computed as epoch_stake_distribution_stabilization * the base period
+    // length (`epoch_base_period_length`, by default int(floor(k / f)))
     pub epoch_stake_distribution_stabilization: NonZero<u8>,
     // This parameter controls how many slots we wait after the stake distribution
     // snapshot has stabilized to take the nonce snapshot.
