@@ -212,7 +212,7 @@ pub fn node_wallet_keys_from_node_yaml(path: &Path) -> Result<Vec<NodeWalletKey>
 
     // The keys configured, of which only the ZK keys hold notes
     let known_keys = config.wallet.known_keys.iter().filter_map(|key_id| {
-        let Key::Zk(secret_key) = &config.kms.backend.resolve_key(key_id)? else {
+        let Key::Zk(secret_key) = config.kms.backend.keys.get(key_id)? else {
             return None;
         };
         let role = if key_id == &blend_zk_key_id {

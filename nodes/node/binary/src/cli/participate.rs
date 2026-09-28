@@ -14,7 +14,10 @@ use serde::Serialize;
 use super::ParticipateArgs;
 use crate::{
     UserConfig,
-    cli::config::keystore::{KeyTitle, Keystore},
+    cli::{
+        addresses::addresses_from_config,
+        config::keystore::{KeyTitle, Keystore},
+    },
     config::network::serde::nat,
 };
 
@@ -40,15 +43,11 @@ pub fn run(args: &ParticipateArgs) -> Result<()> {
     let keystore_yaml = std::fs::read_to_string(&args.keystore)?;
     let keystore: Keystore = serde_yaml::from_str(&keystore_yaml)?;
 
-    let (_, stake_key) = keystore.get_zk(KeyTitle::STAKE)?;
-    let (_, leader_funding_key) = keystore.get_zk(KeyTitle::LEADER_FUNDING)?;
-    let (_, sdp_funding_key) = keystore.get_zk(KeyTitle::SDP_FUNDING)?;
-
-    let mut stakeholder_identities = vec![
-        stake_key.to_public_key(),
-        leader_funding_key.to_public_key(),
-        sdp_funding_key.to_public_key(),
-    ];
+    // The stake addresses and the first receive address of the wallet
+    let mut stakeholder_identities = addresses_from_config(&user_config)
+        .into_iter()
+        .map(|address| address.public_key)
+        .collect::<Vec<_>>();
 
     let blend = build_blend_data(&user_config, &keystore, args.external_address)?;
     if let Some(blend) = &blend {

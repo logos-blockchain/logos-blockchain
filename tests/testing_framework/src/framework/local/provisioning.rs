@@ -646,7 +646,7 @@ fn plan_local_node_config(
         for account in &descriptors.config().wallet_config.accounts {
             let key: Key = account.secret_key.clone().into();
             let key_id = key_id_for_preload_backend(&key);
-            keys.entry(key_id).or_insert_with(|| key.into());
+            keys.entry(key_id).or_insert_with(|| key);
         }
 
         config

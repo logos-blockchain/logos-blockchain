@@ -224,7 +224,7 @@ pub fn apply_wallet_genesis_overrides(
                 .backend
                 .keys
                 .entry(key_id)
-                .or_insert_with(|| key.into());
+                .or_insert_with(|| key);
         }
     }
 

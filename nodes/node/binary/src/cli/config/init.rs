@@ -11,6 +11,7 @@ use crate::{
     NetworkArgs, UserConfig,
     cli::{
         InitArgs,
+        addresses::addresses_from_config,
         config::keystore::{KeyTitle, Keystore, KeystoreError},
     },
     config::{
@@ -60,6 +61,10 @@ pub fn run(args: InitArgs) -> Result<()> {
 
     let keystore_yaml = serde_yaml::to_string(&keystore)?;
     std::fs::write(&keystore_path, &keystore_yaml)?;
+
+    for address in addresses_from_config(&user_config) {
+        println!("{address}");
+    }
 
     Ok(())
 }

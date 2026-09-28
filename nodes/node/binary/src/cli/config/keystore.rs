@@ -1,19 +1,16 @@
 use std::collections::HashMap;
 
-use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::{
     backend::preload::KeyId,
     hd::{MasterKey, MasterSeed, Mnemonic},
-    keys::{
-        Ed25519Key, Key, UnsecuredEd25519Key, UnsecuredZkKey, ZkKey, secured_key::SecuredKey as _,
-    },
+    keys::{Ed25519Key, Key, UnsecuredEd25519Key, UnsecuredZkKey, ZkKey},
 };
 use num_bigint::BigUint;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::config::kms::serde::{KeyEntry, PreloadKmsBackendSettings};
+use crate::config::kms::serde::PreloadKmsBackendSettings;
 
 const WARNING: &str = "Do not share your mnemonic and secret keys";
 
@@ -24,23 +21,10 @@ pub struct KeyTitle(pub String);
 impl KeyTitle {
     pub const BLEND_SIGNING: &str = "BlendSigning";
     pub const BLEND_ZK: &str = "BlendZk";
-    pub const LEADER_FUNDING: &str = "LeaderFunding";
     pub const NETWORK_SWARM: &str = "NetworkSwarm";
-    pub const POW_CLAIM: &str = "PoWClaim";
-    pub const SDP_FUNDING: &str = "SdpFunding";
-    pub const VOUCHER_MASTER: &str = "VoucherMaster";
-    pub const STAKE: &str = "Stake";
 
     pub const PREDEFINED_ED25519: [&'static str; 2] = [Self::BLEND_SIGNING, Self::NETWORK_SWARM];
     pub const PREDEFINED_ZK: [&'static str; 1] = [Self::BLEND_ZK];
-    /// The ZK keys derived from the mnemonic, with their HD paths.
-    pub const PREDEFINED_HD: [(&'static str, &'static str); 5] = [
-        (Self::LEADER_FUNDING, "m/154'/0'/0'/0'"),
-        (Self::SDP_FUNDING, "m/154'/0'/0'/1'"),
-        (Self::STAKE, "m/154'/0'/0'/2'"),
-        (Self::POW_CLAIM, "m/154'/0'/0'/3'"),
-        (Self::VOUCHER_MASTER, "m/154'/0'/2'"),
-    ];
 }
 
 impl<S: Into<String>> From<S> for KeyTitle {
@@ -61,30 +45,31 @@ pub enum KeystoreError {
     ZkExpected(KeyTitle),
 }
 
+/// The secrets of a node: the mnemonic that its wallet keys are derived
+/// from, and the keys that are not derived from it.
+///
+/// The id of a key in the KMS is its title.
 #[derive(Serialize, Deserialize)]
 pub struct Keystore {
-    /// The BIP-39 mnemonic that the [`KeyEntry::Hd`] keys are derived from.
+    /// The BIP-39 mnemonic that the wallet keys are derived from
     mnemonic: Mnemonic,
-    /// The BIP-39 passphrase of the mnemonic, which is empty if not set.
+    /// The BIP-39 passphrase of the mnemonic, which is empty if not set
     #[serde(default)]
     passphrase: Option<String>,
-    // Convenience mapping for users to inspect when serialized.
-    public_keys: HashMap<KeyTitle, KeyId>,
-    secret_keys: HashMap<KeyTitle, KeyEntry>,
+    secret_keys: HashMap<KeyTitle, Key>,
 
     #[serde(rename = "WARNING")]
     warning: String,
 }
 
 impl Keystore {
-    /// Creates a keystore with the predefined keys, deriving the HD ones from
-    /// `mnemonic` and `passphrase`.
+    /// Creates a keystore with the mnemonic and newly generated predefined
+    /// keys.
     #[must_use]
     pub fn new(mnemonic: Mnemonic, passphrase: Option<String>) -> Self {
         let mut keystore = Self {
             mnemonic,
             passphrase,
-            public_keys: HashMap::new(),
             secret_keys: HashMap::new(),
             warning: WARNING.to_owned(),
         };
@@ -97,37 +82,27 @@ impl Keystore {
             keystore.generate_zk(title);
         }
 
-        for (title, path) in KeyTitle::PREDEFINED_HD {
-            let path = path.parse().expect("Predefined HD path is valid");
-            keystore.set(title, KeyEntry::Hd(path));
-        }
-
         keystore
     }
 
-    pub fn set(&mut self, name: impl Into<KeyTitle>, key: impl Into<KeyEntry>) {
-        let title = name.into();
-        let entry = key.into();
-        let key = resolve(&entry, &self.master_key());
-        self.public_keys.insert(title.clone(), key_id(&key));
-        self.secret_keys.insert(title, entry);
+    pub fn set(&mut self, name: impl Into<KeyTitle>, key: impl Into<Key>) {
+        self.secret_keys.insert(name.into(), key.into());
     }
 
     #[must_use]
     pub fn get(&self, name: impl Into<KeyTitle>) -> Option<(KeyId, Key)> {
-        let entry = self.secret_keys.get(&name.into())?;
-        let key = resolve(entry, &self.master_key());
-        Some((key_id(&key), key))
+        let title = name.into();
+        let key = self.secret_keys.get(&title)?;
+        Some((title.0, key.clone()))
     }
 
     /// The ids of all keys, in a stable order.
     #[must_use]
     pub fn key_ids(&self) -> Vec<KeyId> {
-        let master = self.master_key();
         let mut key_ids = self
             .secret_keys
-            .values()
-            .map(|entry| key_id(&resolve(entry, &master)))
+            .keys()
+            .map(|title| title.0.clone())
             .collect::<Vec<_>>();
         key_ids.sort();
         key_ids
@@ -136,19 +111,20 @@ impl Keystore {
     /// The KMS settings that load every key of the keystore.
     #[must_use]
     pub fn kms_backend_settings(&self) -> PreloadKmsBackendSettings {
-        let master = self.master_key();
         PreloadKmsBackendSettings {
             mnemonic: self.mnemonic.clone(),
             passphrase: self.passphrase.clone(),
             keys: self
                 .secret_keys
-                .values()
-                .map(|entry| (key_id(&resolve(entry, &master)), entry.clone()))
+                .iter()
+                .map(|(title, key)| (title.0.clone(), key.clone()))
                 .collect(),
         }
     }
 
-    fn master_key(&self) -> MasterKey {
+    /// The master key that the wallet keys are derived from
+    #[must_use]
+    pub fn master_key(&self) -> MasterKey {
         let passphrase = self.passphrase.as_deref().unwrap_or_default();
         MasterSeed::from_mnemonic(&self.mnemonic, passphrase).to_key()
     }
@@ -183,28 +159,13 @@ impl Keystore {
         }
     }
 
-    pub fn get_all_zk(&self) -> impl Iterator<Item = (KeyId, UnsecuredZkKey)> + '_ {
-        let master = self.master_key();
-        self.secret_keys.values().filter_map(move |entry| {
-            let key = resolve(entry, &master);
-            match &key {
-                Key::Zk(inner_key) => {
-                    let id = key_id(&key);
-                    let unsecured = inner_key.clone().into_unsecured();
-                    Some((id, unsecured))
-                }
-                Key::Ed25519(_) => None,
-            }
-        })
-    }
-
     pub fn generate_ed25519(&mut self, title: impl Into<KeyTitle>) -> (KeyId, UnsecuredEd25519Key) {
         let title = title.into();
         let secure_key = Ed25519Key::generate(&mut OsRng);
         let unsecured = secure_key.clone().into_unsecured();
 
         self.set(title.clone(), Key::Ed25519(secure_key));
-        (self.public_keys[&title].clone(), unsecured)
+        (title.0, unsecured)
     }
 
     pub fn generate_zk(&mut self, title: impl Into<KeyTitle>) -> (KeyId, UnsecuredZkKey) {
@@ -213,15 +174,13 @@ impl Keystore {
         let unsecured = secure_key.clone().into_unsecured();
 
         self.set(title.clone(), Key::Zk(secure_key));
-        (self.public_keys[&title].clone(), unsecured)
+        (title.0, unsecured)
     }
 
     pub fn remove(&mut self, title: impl Into<KeyTitle>) -> Option<(KeyId, Key)> {
         let title = title.into();
-        self.public_keys.remove(&title);
-        let entry = self.secret_keys.remove(&title)?;
-        let key = resolve(&entry, &self.master_key());
-        Some((key_id(&key), key))
+        let key = self.secret_keys.remove(&title)?;
+        Some((title.0, key))
     }
 }
 
@@ -232,18 +191,6 @@ impl Default for Keystore {
     }
 }
 
-fn resolve(entry: &KeyEntry, master: &MasterKey) -> Key {
-    entry.resolve(master)
-}
-
-fn key_id(key: &Key) -> KeyId {
-    let key_id_bytes = match key {
-        Key::Ed25519(ed25519_secret_key) => ed25519_secret_key.as_public_key().to_bytes(),
-        Key::Zk(zk_secret_key) => fr_to_bytes(zk_secret_key.as_public_key().as_fr()),
-    };
-    hex::encode(key_id_bytes)
-}
-
 fn generate_zk_key_from_random_bytes() -> ZkKey {
     let mut bytes = [0u8; 32];
     rand::RngCore::fill_bytes(&mut OsRng, &mut bytes);
@@ -252,6 +199,8 @@ fn generate_zk_key_from_random_bytes() -> ZkKey {
 
 #[cfg(test)]
 mod tests {
+    use lb_groth16::fr_to_bytes;
+
     use super::*;
 
     // Test vectors of the spec
@@ -261,32 +210,30 @@ mod tests {
         "5e09bf4ce6b3f42970104a6f5940104407f98da0eb946104c13fb4f94c011f16";
 
     #[test]
-    fn predefined_hd_keys_are_derived_from_mnemonic() {
+    fn wallet_keys_are_derived_from_mnemonic() {
         let keystore = Keystore::new(MNEMONIC.parse().unwrap(), None);
-        let (_, key) = keystore.get(KeyTitle::LEADER_FUNDING).unwrap();
-        let Key::Zk(key) = &key else {
-            panic!("expected a ZK key");
-        };
-        assert_eq!(hex::encode(fr_to_bytes(key.as_fr())), RECEIVE_0_ZK_KEY);
+        assert_eq!(receive_0_key(&keystore), RECEIVE_0_ZK_KEY);
     }
 
     #[test]
-    fn get_all_zk_includes_hd_keys() {
-        let keystore = Keystore::new(MNEMONIC.parse().unwrap(), None);
-        assert_eq!(
-            keystore.get_all_zk().count(),
-            KeyTitle::PREDEFINED_ZK.len() + KeyTitle::PREDEFINED_HD.len()
-        );
-    }
-
-    #[test]
-    fn passphrase_changes_hd_keys() {
+    fn passphrase_changes_wallet_keys() {
         let keystore = Keystore::new(MNEMONIC.parse().unwrap(), Some("passphrase".to_owned()));
-        let (_, key) = keystore.get(KeyTitle::LEADER_FUNDING).unwrap();
-        let Key::Zk(key) = &key else {
-            panic!("expected a ZK key");
-        };
-        assert_ne!(hex::encode(fr_to_bytes(key.as_fr())), RECEIVE_0_ZK_KEY);
+        assert_ne!(receive_0_key(&keystore), RECEIVE_0_ZK_KEY);
+    }
+
+    #[test]
+    fn keys_are_identified_by_their_titles() {
+        let keystore = Keystore::default();
+        assert_eq!(
+            keystore.key_ids(),
+            [
+                KeyTitle::BLEND_SIGNING,
+                KeyTitle::BLEND_ZK,
+                KeyTitle::NETWORK_SWARM
+            ]
+        );
+        let (key_id, _) = keystore.get(KeyTitle::BLEND_ZK).unwrap();
+        assert_eq!(key_id, KeyTitle::BLEND_ZK);
     }
 
     #[test]
@@ -300,18 +247,25 @@ mod tests {
         let yaml = serde_yaml::to_string(&keystore).unwrap();
         let deserialized: Keystore = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(deserialized.mnemonic, keystore.mnemonic);
-        assert_eq!(deserialized.public_keys, keystore.public_keys);
         assert_eq!(deserialized.secret_keys, keystore.secret_keys);
     }
 
     #[test]
     fn kms_backend_settings_load_every_key() {
         let keystore = Keystore::new(MNEMONIC.parse().unwrap(), Some("passphrase".to_owned()));
-        let keys = keystore.kms_backend_settings().resolve_keys();
-        assert_eq!(keys.len(), keystore.secret_keys.len());
+        let settings = keystore.kms_backend_settings();
+        assert_eq!(settings.keys.len(), keystore.secret_keys.len());
         for title in keystore.secret_keys.keys() {
             let (key_id, key) = keystore.get(title.clone()).unwrap();
-            assert_eq!(keys.get(&key_id), Some(&key));
+            assert_eq!(settings.keys.get(&key_id), Some(&key));
         }
+    }
+
+    fn receive_0_key(keystore: &Keystore) -> String {
+        let key = keystore
+            .master_key()
+            .derive_key(&"m/154'/0'/0'/0'".parse().unwrap())
+            .to_zk_key();
+        hex::encode(fr_to_bytes(key.as_fr()))
     }
 }

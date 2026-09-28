@@ -112,15 +112,15 @@ fn build_kms_config_for_node(
             keys: [
                 (
                     blend_conf.non_ephemeral_signing_key_id.clone(),
-                    Key::Ed25519(private_key.clone()).into(),
+                    Key::Ed25519(private_key.clone()),
                 ),
                 (
                     blend_conf.core.zk.secret_key_kms_id.clone(),
-                    Key::Zk(secret_zk_key.clone()).into(),
+                    Key::Zk(secret_zk_key.clone()),
                 ),
                 (
                     key_id_for_preload_backend(&Key::Zk(consensus_config.blend_note.sk.clone())),
-                    Key::Zk(consensus_config.blend_note.sk.clone()).into(),
+                    Key::Zk(consensus_config.blend_note.sk.clone()),
                 ),
             ]
             .into(),

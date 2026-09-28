@@ -1,10 +1,6 @@
 use std::{collections::HashMap, fmt};
 
-use lb_key_management_system_service::{
-    backend::preload::KeyId,
-    hd::{Mnemonic, Path},
-    keys::{Ed25519Key, Key, ZkKey},
-};
+use lb_key_management_system_service::{backend::preload::KeyId, hd::Mnemonic, keys::Key};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -21,7 +17,7 @@ pub struct PreloadKmsBackendSettings {
     pub passphrase: Option<String>,
     /// The keys to load under a name
     #[serde(default)]
-    pub keys: HashMap<KeyId, KeyEntry>,
+    pub keys: HashMap<KeyId, Key>,
 }
 
 impl fmt::Debug for PreloadKmsBackendSettings {
@@ -37,39 +33,9 @@ impl fmt::Debug for PreloadKmsBackendSettings {
     }
 }
 
-/// A key to load into the KMS, either given as is or derived from the
-/// mnemonic.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum KeyEntry {
-    Ed25519(Ed25519Key),
-    Zk(ZkKey),
-    /// The ZK key of the leaf at the HD path.
-    Hd(Path),
-}
-
-impl From<Key> for KeyEntry {
-    fn from(key: Key) -> Self {
-        match &key {
-            Key::Ed25519(key) => Self::Ed25519(key.clone()),
-            Key::Zk(key) => Self::Zk(key.clone()),
-        }
-    }
-}
-
-impl From<Ed25519Key> for KeyEntry {
-    fn from(key: Ed25519Key) -> Self {
-        Self::Ed25519(key)
-    }
-}
-
-impl From<ZkKey> for KeyEntry {
-    fn from(key: ZkKey) -> Self {
-        Self::Zk(key)
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
     use rand::rngs::OsRng;
 
@@ -83,15 +49,11 @@ mod tests {
             keys: [
                 (
                     "ed25519".into(),
-                    KeyEntry::Ed25519(Ed25519Key::generate(&mut OsRng)),
+                    Key::Ed25519(Ed25519Key::generate(&mut OsRng)),
                 ),
                 (
                     "zk".into(),
-                    KeyEntry::Zk(ZkKey::new(BigUint::from_bytes_le(&[1u8; 32]).into())),
-                ),
-                (
-                    "hd".into(),
-                    KeyEntry::Hd("m/154'/0'/0'/0'".parse().unwrap()),
+                    Key::Zk(ZkKey::new(BigUint::from_bytes_le(&[1u8; 32]).into())),
                 ),
             ]
             .into(),

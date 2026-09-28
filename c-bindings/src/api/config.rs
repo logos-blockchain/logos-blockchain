@@ -272,51 +272,6 @@ pub unsafe extern "C" fn migrate_user_config(
     }
 }
 
-/// Migrates a 0.1.2 config file to a new user config and keystore, equivalent
-/// to the `migrate-from-0.1.2` CLI command.
-///
-/// # Arguments
-///
-/// - `new_config_path`: Output path for the generated user config YAML file.
-///   Must not exist yet.
-/// - `old_config_path`: Path to the existing 0.1.2 config YAML file.
-/// - `keystore_path`: Output path for the generated keystore YAML file. Must
-///   not exist yet.
-///
-/// # Returns
-///
-/// An [`OperationStatus`] indicating the result of the operation.
-///
-/// # Safety
-///
-/// This function is unsafe because it dereferences raw pointers. The caller
-/// must ensure that all pointers are valid NUL-terminated C strings.
-#[must_use]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn migrate_user_config_0_1_2(
-    new_config_path: *const c_char,
-    old_config_path: *const c_char,
-    keystore_path: *const c_char,
-) -> OperationStatus {
-    return_error_if_null_pointer!(new_config_path);
-    return_error_if_null_pointer!(old_config_path);
-    return_error_if_null_pointer!(keystore_path);
-
-    let args = lb_node::cli::config::migrate_0_1_2::MigrateArgs::new(
-        unsafe { cstr_to_path(new_config_path) },
-        unsafe { cstr_to_path(old_config_path) },
-        unsafe { cstr_to_path(keystore_path) },
-    );
-
-    match lb_node::cli::config::migrate_0_1_2::run(args) {
-        Ok(()) => OperationStatus::OK,
-        Err(error) => OperationStatus::error(
-            OperationStatusCode::ConfigurationError,
-            format!("Error migrating config: {error:?}"),
-        ),
-    }
-}
-
 /// Merge behaviour flags. Mirror of [`MergeFlags`] for the C API.
 #[repr(C)]
 pub struct MergeConfigFlags {

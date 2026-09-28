@@ -1,3 +1,4 @@
+pub mod addresses;
 pub mod config;
 pub mod get_peer_id;
 pub mod keys;
@@ -14,10 +15,7 @@ use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use libp2p::Multiaddr;
 
 use crate::{
-    cli::{
-        config::migrate_0_1_2,
-        keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
-    },
+    cli::keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
     config::{
         ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, LogArgs,
         NetworkArgs, RunConfig, StateArgs, UserConfig, api::serde::AxumBackendSettings,
@@ -94,9 +92,6 @@ pub enum Command {
     UpdateConfig(Box<UpdateArgs>),
     /// Migrates a new user config with generated keys
     MigrateConfig(Box<MigrateArgs>),
-    /// Migrates 0.1.2 config to a new user config
-    #[command(name = "migrate-from-0.1.2")]
-    Migrate0_1_2(Box<migrate_0_1_2::MigrateArgs>),
     /// Generate a new key of type.
     GenerateKey(Box<GenerateKeyArgs>),
     /// Add a key of type to a keystore.
