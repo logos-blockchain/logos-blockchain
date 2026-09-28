@@ -109,11 +109,11 @@ impl PreverifiableOperation<StandardMode> for SignedOperation<DepositOp, Unverif
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<DepositOp, Preverified, StandardMode> {
-    type Output = DeferredZkpVerification;
+    type DeferredProof = DeferredZkpVerification;
     type Context<'a> = DepositValidationContext<'a>;
     type Error = Error;
 
-    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::Output, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         // Check that the channel exists

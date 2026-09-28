@@ -137,11 +137,11 @@ impl PreverifiableOperation<StandardMode>
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverified, StandardMode> {
-    type Output = DeferredZkpVerification;
+    type DeferredProof = DeferredZkpVerification;
     type Context<'a> = TransferValidationContext<'a>;
     type Error = TransferError;
 
-    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::Output, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         // Validate Inputs

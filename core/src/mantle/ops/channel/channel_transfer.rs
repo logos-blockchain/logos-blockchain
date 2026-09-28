@@ -116,11 +116,11 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<ChannelTransferOp, Preverified, StandardMode>
 {
-    type Output = ();
+    type DeferredProof = ();
     type Context<'a> = ChannelTransferValidationContext<'a>;
     type Error = Error;
 
-    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::Output, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
         let proof = self.proof();
 
@@ -626,7 +626,7 @@ mod test {
     }
 
     #[test]
-    fn has_no_deferred_zkp() {
+    fn verify_accepts_a_signature_count_meeting_the_ledger_view_threshold() {
         let signed_hash = TxHash::from([9u8; 32]);
         let signed_operation = preverified(
             Outputs::new([Note::new(10_000, ZkPublicKey::from(Fr::from(2u64)))]),
@@ -649,7 +649,7 @@ mod test {
         let service_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
 
-        let () = signed_operation
+        signed_operation
             .verify(&ChannelTransferValidationContext {
                 channels: &channels,
                 service_notes: &service_notes,
