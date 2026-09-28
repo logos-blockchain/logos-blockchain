@@ -291,7 +291,7 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
                 payload,
                 verified_proof_of_selection,
             } => {
-                let (payload_type, payload_body) = payload.try_into_components()?;
+                let (payload_type, payload_body) = payload.into_components();
                 let blending_token = BlendingToken::new(
                     signing_key,
                     verified_proof_of_quota,
