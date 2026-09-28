@@ -145,6 +145,8 @@ fn cryptarchia_time_finality_advances_lib_on_slot() {
         0,
         UncleSlots::default(),
     );
+    // The first slot tick starts the node's online period.
+    assert!(cryptarchia.update_slot(Slot::new(0)).is_empty());
 
     let mut block_ids = vec![genesis_id];
     let mut slot = Slot::new(1);
@@ -169,9 +171,8 @@ fn cryptarchia_time_finality_advances_lib_on_slot() {
     }
     assert_eq!(cryptarchia.lib(), genesis_id);
 
-    // The chain is [G, B1, B2, B3] and the node has been online since B1's
-    // slot. Once B3 is `L_w` = 10,000 slots old, it is final without any new
-    // block.
+    // The chain is [G, B1, B2, B3] and the node has been online since slot 0.
+    // Once B3 is `L_w` = 10,000 slots old, it is final without any new block.
     let b3_slot = cryptarchia.tip_branch().slot();
     let pruned_blocks = cryptarchia.update_slot(b3_slot.strict_add(10_000.into()));
     assert_eq!(cryptarchia.lib(), block_ids[3]);

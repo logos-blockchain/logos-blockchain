@@ -27,10 +27,7 @@ pub struct Settings {
     pub learning_rate: NonNegativeF64,
     /// `W`, the uncle reference window in expected block-intervals.
     pub uncle_reference_window_in_block: NonZeroU32,
-    /// `L_w`, the time-based finality window in slots. When set, a block on
-    /// the local chain at least `L_w` slots old is final (the LIB), once the
-    /// node has been online for `L_w` slots; the k-deep block stays final too.
-    /// Unset: k-deep finality only.
+    /// `L_w`, the time-based finality window in slots (unset: k-deep only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_finality_window: Option<NonZeroU64>,
     pub sdp_config: SdpConfig,

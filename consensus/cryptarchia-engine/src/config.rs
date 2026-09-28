@@ -19,13 +19,9 @@ pub struct Config {
     /// `W`, the width of the uncle reference window in expected
     /// block-intervals.
     uncle_reference_window_in_block: NonZero<u32>,
-    /// `L_w`, the time-based finality window in slots.
-    ///
-    /// When set, a block on the local chain whose slot is at least `L_w`
-    /// slots in the past is final (it becomes the LIB), provided the node has
-    /// been online for at least `L_w` slots. The k-deep block stays final as
-    /// well, so the LIB is whichever of the two is higher. When unset, only
-    /// the k-deep rule applies.
+    /// `L_w`, the time-based finality window in slots. When set, the LIB is
+    /// the higher of the k-deep block and the latest block at least `L_w`
+    /// slots old (once online for `L_w` slots). Unset: k-deep only.
     time_finality_window: Option<NonZero<u64>>,
     /// Lottery approximation constants computed from `slot_activation_coeff`
     #[serde(skip)]
@@ -78,8 +74,7 @@ impl Config {
         }
     }
 
-    /// Enables time-based finality with window `L_w` (in slots), or disables
-    /// it with `None`. See [`Self::time_finality_window`].
+    /// Sets the time-based finality window `L_w` in slots (`None`: disabled).
     #[must_use]
     pub const fn with_time_finality_window(
         mut self,

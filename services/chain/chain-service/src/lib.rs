@@ -477,8 +477,6 @@ impl Cryptarchia {
             })?
             .verify_batch_proofs()?;
 
-        // Time-based finality needs the current slot to place the LIB.
-        self.consensus.set_current_slot(current_slot);
         let outcome = self
             .consensus
             .receive_block_with_canonical_change(id, parent, slot, block_uncle_headers_slots)

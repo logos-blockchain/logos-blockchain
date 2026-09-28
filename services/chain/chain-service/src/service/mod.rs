@@ -265,6 +265,7 @@ where
         notify_lib_advanced(
             &self.cryptarchia,
             prev_lib,
+            new_lib,
             &pruned_blocks,
             0,
             &self.relays,
@@ -888,6 +889,7 @@ where
         notify_lib_advanced(
             cryptarchia,
             prev_lib,
+            new_lib,
             &applied.pruned_blocks,
             applied.reorged_blocks.len(),
             relays,
@@ -920,6 +922,7 @@ where
 async fn notify_lib_advanced<Tx>(
     cryptarchia: &Cryptarchia,
     prev_lib: HeaderId,
+    new_lib: HeaderId,
     pruned_blocks: &PrunedBlocks<HeaderId>,
     reorged_blocks_count: usize,
     relays: &CryptarchiaConsensusRelays<Tx>,
@@ -927,7 +930,6 @@ async fn notify_lib_advanced<Tx>(
 ) where
     Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
 {
-    let new_lib = cryptarchia.lib();
     log_lib_advanced(
         &prev_lib,
         &new_lib,
@@ -936,8 +938,14 @@ async fn notify_lib_advanced<Tx>(
         reorged_blocks_count,
     );
 
+    let height = cryptarchia
+        .consensus
+        .branches()
+        .get(&cryptarchia.lib())
+        .expect("LIB branch not available")
+        .length();
     let block_info = BlockInfo {
-        height: cryptarchia.lib_branch().length(),
+        height,
         header_id: new_lib,
     };
 
@@ -946,7 +954,7 @@ async fn notify_lib_advanced<Tx>(
     }
 
     let lib_update = LibUpdate {
-        new_lib,
+        new_lib: cryptarchia.lib(),
         pruned_blocks: PrunedBlocksInfo {
             stale_blocks: pruned_blocks.stale_blocks().copied().collect(),
             immutable_blocks: pruned_blocks.immutable_blocks().clone(),
