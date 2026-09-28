@@ -895,7 +895,7 @@ mod tests {
         let deposit = |n: u32| {
             let op = DepositOp {
                 channel_id,
-                inputs: Inputs::new([NoteId::from(Fr::from(n))]),
+                inputs: BoundedInputs::from(NoteId::from(Fr::from(n))).into(),
                 metadata: Metadata::try_from(vec![u8::try_from(n).unwrap()]).unwrap(),
             };
             let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
