@@ -63,11 +63,11 @@ pub trait PreverifiableOperation<Mode: VerificationMode> {
 }
 
 pub trait VerifiableOperation<Mode: VerificationMode> {
-    type Output;
+    type DeferredProof;
     type Context<'a>;
     type Error;
 
-    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::Output, Self::Error>;
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error>;
 }
 
 pub trait ExecutableOperation {

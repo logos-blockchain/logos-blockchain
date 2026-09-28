@@ -186,11 +186,11 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<SDPDeclareOp, Preverified, StandardMode>
 {
-    type Output = DeferredZkpVerification;
+    type DeferredProof = DeferredZkpVerification;
     type Context<'a> = SDPDeclareVerificationContext<'a>;
     type Error = SdpError;
 
-    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::Output, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         // Check that the note exist
@@ -238,11 +238,11 @@ impl PreverifiableOperation<GenesisMode>
 }
 
 impl VerifiableOperation<GenesisMode> for SignedOperation<SDPDeclareOp, Preverified, GenesisMode> {
-    type Output = ();
+    type DeferredProof = ();
     type Context<'a> = SDPDeclareGenesisValidationContext<'a>;
     type Error = SdpError;
 
-    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::Output, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         // Check that the note exist

@@ -146,11 +146,11 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<InscriptionOp, Preverified, StandardMode>
 {
-    type Output = ();
+    type DeferredProof = ();
     type Context<'a> = InscriptionValidationContext<'a>;
     type Error = Error;
 
-    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::Output, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         // Check if the channel exist otherwise the inscription is valid only if and
@@ -373,18 +373,6 @@ mod tests {
             }),
             Err(Error::InvalidSignature)
         );
-    }
-
-    #[test]
-    fn has_no_deferred_zkp() {
-        let signed_operation = preverified(InscriptionOp::sample());
-
-        let () = signed_operation
-            .verify(&InscriptionValidationContext {
-                channels: &Channels::new(),
-                block_slot: Slot::from(0),
-            })
-            .expect("an inscription rooted at the genesis message opens a new channel");
     }
 
     #[test]

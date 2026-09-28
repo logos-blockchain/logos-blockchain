@@ -76,12 +76,6 @@ impl DeferredZkpVerifications {
     }
 }
 
-impl From<DeferredZkpVerification> for DeferredZkpVerifications {
-    fn from(value: DeferredZkpVerification) -> Self {
-        Self::from_iter([value])
-    }
-}
-
 impl FromIterator<DeferredZkpVerification> for DeferredZkpVerifications {
     fn from_iter<T: IntoIterator<Item = DeferredZkpVerification>>(iter: T) -> Self {
         let mut verifications = Self::new();
@@ -109,7 +103,7 @@ pub mod test_utils {
     use super::{DeferredZkpVerification, DeferredZkpVerifications, Error};
 
     pub fn batch_verify(deferred_zkp: DeferredZkpVerification) -> Result<(), Error> {
-        DeferredZkpVerifications::from(deferred_zkp).verify()
+        DeferredZkpVerifications::from_iter([deferred_zkp]).verify()
     }
 }
 

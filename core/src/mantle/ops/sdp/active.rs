@@ -58,11 +58,11 @@ impl PreverifiableOperation<StandardMode>
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverified, StandardMode> {
-    type Output = DeferredZkpVerification;
+    type DeferredProof = DeferredZkpVerification;
     type Context<'a> = SDPActiveValidationContext<'a>;
     type Error = SdpError;
 
-    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::Output, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         // Check the declaration exists

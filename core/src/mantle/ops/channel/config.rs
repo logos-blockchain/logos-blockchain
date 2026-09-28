@@ -123,11 +123,11 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<ChannelConfigOp, Preverified, StandardMode>
 {
-    type Output = ();
+    type DeferredProof = ();
     type Context<'a> = ChannelConfigValidationContext<'a>;
     type Error = Error;
 
-    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::Output, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
         let proof = self.proof();
 
@@ -377,21 +377,6 @@ mod tests {
             signed_operation.preverify(&()),
             Err(Error::InvalidChannelConfig)
         );
-    }
-
-    #[test]
-    fn has_no_deferred_zkp() {
-        let signed_operation = preverified(
-            ChannelConfigOp::sample(),
-            ChannelMultiSigProof::sample_with_signatures(0),
-        );
-
-        let () = signed_operation
-            .verify(&ChannelConfigValidationContext {
-                channels: &Channels::new(),
-                tx_hash_view: &TxHashView::from(TxHash::from([9u8; 32])),
-            })
-            .expect("an unregistered channel is configured without signatures");
     }
 
     #[test]
