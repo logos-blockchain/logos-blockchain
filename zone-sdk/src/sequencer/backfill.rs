@@ -14,7 +14,7 @@ use super::{
     block_fetch::fetch_and_process_blocks,
     slot_clock::SlotClock,
     state::TxState,
-    types::{ChannelUpdate, Error, Event, FinalizedOp, TxSource, TxStatus},
+    types::{ChannelUpdate, Error, Event, FinalizedOp},
     zone_sequencer::ZoneSequencer,
 };
 use crate::adapter;
@@ -128,14 +128,6 @@ where
         let Some(checkpoint) = self.publish_checkpoint() else {
             return Some(None);
         };
-
-        for tx in &batch.items {
-            let source = self
-                .state
-                .as_ref()
-                .map_or(TxSource::Other, |state| state.tx_source(&tx.tx_hash));
-            self.queue_tx_status(tx.tx_hash, TxStatus::Finalized(source));
-        }
 
         self.buffered_events.push_back(Event::BlocksProcessed {
             checkpoint,

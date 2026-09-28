@@ -45,8 +45,8 @@ use super::{
     types::{
         AtomicWithdrawInfo, ChannelWalletView, Error, Event, FundingConfig, InscriptionInfo,
         PendingTx, PinDepositInfo, PreparedChannelConfig, PublishResult, SequencerChannelView,
-        SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
-        WithdrawArg, WithdrawInfo, WithdrawInputs,
+        SequencerCheckpoint, SequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo,
+        WithdrawInputs,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -144,7 +144,6 @@ pub struct ZoneSequencer<Node> {
     pub(super) channel_view_tx: watch::Sender<SequencerChannelView>,
     pub(super) turn_to_write_tx: watch::Sender<TurnNotification>,
     pub(super) checkpoint_tx: watch::Sender<Option<SequencerCheckpoint>>,
-    pub(super) tx_status_tx: broadcast::Sender<TxStatusUpdate>,
 
     // Request channel for actor-routed commands from cheap-to-clone
     // `SequencerClient`s. `request_tx` is retained so `client()` can vend new
@@ -279,7 +278,6 @@ where
                     warn!(target: TARGET, "Dropping checkpointed tx {hash:?}: {taken}");
                 }
             }
-            tx_state.prune_local_tx_tracking(config.max_local_tx_tracking);
             (Some(tx_state), lib_slot, last_msg_id, false)
         } else {
             info!(target: TARGET, "Starting fresh (no checkpoint)");
@@ -301,7 +299,6 @@ where
             .as_ref()
             .map(|s| build_checkpoint(s, last_msg_id, lib_slot));
         let (checkpoint_tx, _) = watch::channel(initial_checkpoint);
-        let (tx_status_tx, _) = broadcast::channel(256);
         let (request_tx, request_rx) = mpsc::unbounded_channel();
 
         Self {
@@ -333,7 +330,6 @@ where
             channel_view_tx,
             turn_to_write_tx,
             checkpoint_tx,
-            tx_status_tx,
             request_tx,
             request_rx,
         }
@@ -371,7 +367,6 @@ where
             self.channel_view_tx.clone(),
             self.turn_to_write_tx.clone(),
             self.checkpoint_tx.clone(),
-            self.tx_status_tx.clone(),
         )
     }
 
@@ -457,17 +452,6 @@ where
         let mut rx = self.checkpoint_tx.subscribe();
         rx.mark_changed();
         rx
-    }
-
-    /// Subscribe to tx-status changes.
-    ///
-    /// These updates are broadcast as soon as the sequencer classifies a tx.
-    /// When a block causes `OnChain`, `Orphaned`, or `Finalized`, the matching
-    /// [`super::Event::BlocksProcessed`] is queued separately and may be
-    /// observed later by consumers listening to both streams.
-    #[must_use]
-    pub fn subscribe_tx_status(&self) -> broadcast::Receiver<TxStatusUpdate> {
-        self.tx_status_tx.subscribe()
     }
 
     /// Subscribe to the broadcast channel of events.
@@ -568,10 +552,8 @@ where
             Some(results) = self.in_flight.next() => {
                 for (tx_hash, success) in results {
                     self.posting.remove(&tx_hash);
-                    if success
-                        && let Some(state) = self.state.as_mut()
-                        && state.mark_pending_inscription_posted(&tx_hash) {
-                            self.queue_tx_status(tx_hash, TxStatus::PendingMempool);
+                    if success && let Some(state) = self.state.as_mut() {
+                        state.mark_pending_inscription_posted(&tx_hash);
                     }
                 }
                 self.buffered_events.pop_front().map(|event| self.emit_now(event))
@@ -774,7 +756,6 @@ where
         let state = self.state.as_mut().unwrap();
         state.submit_inscription(signed_tx.clone(), parent, new_msg_id, data)?;
         self.last_msg_id = new_msg_id;
-        self.queue_tx_status(id, TxStatus::AcceptedLocally);
 
         if self.can_publish_inscription_now() {
             self.queue_publish_post(id, signed_tx);
@@ -909,7 +890,6 @@ where
             outputs.clone(),
         )?;
         self.last_msg_id = msg_id;
-        self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
         if self.can_publish_inscription_now() {
             self.queue_publish_post(tx_hash, signed_tx);
@@ -1083,7 +1063,6 @@ where
             consumed_inputs.clone(),
         )?;
         self.last_msg_id = msg_id;
-        self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
         if self.can_publish_inscription_now() {
             self.queue_publish_post(tx_hash, signed_tx);
@@ -1223,7 +1202,6 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         state.submit_other(signed_tx.clone(), self.channel_id)?;
-        self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
         info!(target: TARGET, "Submitted channel_config transaction {}", hex::encode(tx_hash.0));
 
@@ -1379,7 +1357,6 @@ where
             );
         }
         self.last_msg_id = new_tip;
-        self.queue_tx_status(id, TxStatus::AcceptedLocally);
 
         info!(target: TARGET, "Submitted tx including inscription {:?}", id);
 
@@ -1444,29 +1421,6 @@ where
     pub(super) fn emit_now(&self, event: Event) -> Event {
         drop(self.event_tx.send(event.clone()));
         event
-    }
-
-    pub(super) fn queue_tx_status(&mut self, tx_hash: TxHash, status: TxStatus) {
-        let update = TxStatusUpdate { tx_hash, status };
-        drop(self.tx_status_tx.send(update));
-        if matches!(status, TxStatus::PendingMempool) {
-            self.buffered_events
-                .push_back(Event::MempoolPending(tx_hash));
-        }
-        if let Some(state) = self.state.as_mut() {
-            match status {
-                TxStatus::AcceptedLocally => {
-                    state.prune_local_tx_tracking(self.config.max_local_tx_tracking);
-                }
-                TxStatus::Finalized(TxSource::Local) => {
-                    state.remove_local_tx(&tx_hash);
-                }
-                TxStatus::PendingMempool
-                | TxStatus::OnChain(_)
-                | TxStatus::Orphaned(_)
-                | TxStatus::Finalized(TxSource::Other) => {}
-            }
-        }
     }
 
     /// Push a single-tx publish post into `in_flight`. Used by
