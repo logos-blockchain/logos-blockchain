@@ -1,50 +1,70 @@
 use core::time::Duration;
 
-use lb_core::mantle::transactions::genesis_tx::{ChainId, GenesisTime};
+use lb_core::{
+    block::genesis::GenesisBlock,
+    mantle::{
+        traits::GenesisTx as _,
+        transactions::genesis_tx::{ChainId, GenesisTime},
+    },
+};
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{
-    blend::deployment::Settings as BlendDeploymentSettings,
-    cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
-    mempool::deployment::Settings as MempoolDeploymentSettings,
-    network::deployment::Settings as NetworkDeploymentSettings,
-    time::deployment::Settings as TimeDeploymentSettings,
-};
+use crate::config::network::deployment::Settings as NetworkDeploymentSettings;
+
+mod era;
+pub use era::{EraParameters, EraSchedule, EraScheduleError};
 
 pub const SERIALIZED_DEPLOYMENT: &[u8] = include_bytes!("settings.yaml");
 
+/// Everything that defines a chain: the parameters of each of its eras, and
+/// the genesis block they start from.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DeploymentSettings {
-    pub blend: BlendDeploymentSettings,
+    pub eras: EraSchedule,
+    // TODO: These will be removed from the deployment settings and derived from the era
+    // definitions instead, per era. To be done in a follow-up PR.
     pub network: NetworkDeploymentSettings,
-    pub cryptarchia: CryptarchiaDeploymentSettings,
-    pub time: TimeDeploymentSettings,
-    pub mempool: MempoolDeploymentSettings,
+    pub genesis_block: GenesisBlock,
 }
 
 impl DeploymentSettings {
     /// The chain this deployment targets, read off the genesis inscription.
     #[must_use]
     pub fn chain_id(&self) -> ChainId {
-        self.cryptarchia.chain_id()
+        self.genesis_block
+            .genesis_tx()
+            .cryptarchia_parameter()
+            .chain_id
     }
 
     /// When this deployment's chain starts, read off the genesis inscription.
     #[must_use]
     pub fn genesis_time(&self) -> GenesisTime {
-        self.cryptarchia.genesis_time()
+        self.genesis_block
+            .genesis_tx()
+            .cryptarchia_parameter()
+            .genesis_time
     }
 
     #[must_use]
-    pub const fn blend_round_duration(&self) -> Duration {
-        self.blend.round_duration(&self.time.slot_duration)
+    pub const fn genesis_era_parameters(&self) -> &EraParameters {
+        self.eras.genesis_era_parameters()
+    }
+
+    pub const fn genesis_era_parameters_mut(&mut self) -> &mut EraParameters {
+        self.eras.genesis_era_parameters_mut()
     }
 
     #[must_use]
-    pub fn blend_reward_params(&self) -> RewardsParameters {
-        self.blend.rewards_params(&self.cryptarchia, &self.time)
+    pub const fn genesis_blend_round_duration(&self) -> Duration {
+        self.genesis_era_parameters().blend_round_duration()
+    }
+
+    #[must_use]
+    pub fn genesis_blend_reward_params(&self) -> RewardsParameters {
+        self.genesis_era_parameters().blend_reward_params()
     }
 }
 
@@ -80,10 +100,11 @@ mod tests {
         // `N_b` follows from the consensus schedule — so changing
         // `security_param` or `slot_activation_coeff` moves this value too.
         let settings = DeploymentSettings::default();
-        let reward = &settings.cryptarchia.pow_config.reward;
+        let cryptarchia = &settings.genesis_era_parameters().cryptarchia;
+        let reward = &cryptarchia.pow_config.reward;
         let denominator = u128::from(reward.rate_den.get())
             * u128::from(reward.target_claim_per_block.get())
-            * u128::from(settings.cryptarchia.expected_blocks_per_epoch().get());
+            * u128::from(cryptarchia.expected_blocks_per_epoch().get());
         assert_eq!(
             u128::from(reward.epoch_reward_genesis),
             u128::from(reward.reward_pool_genesis) * u128::from(reward.rate_num) / denominator,

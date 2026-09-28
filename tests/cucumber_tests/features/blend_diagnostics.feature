@@ -53,10 +53,10 @@ Feature: Blend diagnostics
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
 
     And the cluster uses cryptarchia security parameter <k>
-    And I have deployment config override "time.slot_duration" as "seconds(1)"
-    And I have deployment config override "cryptarchia.epoch_config.epoch_stake_distribution_stabilization" as "<p1>"
-    And I have deployment config override "cryptarchia.epoch_config.epoch_period_nonce_buffer" as "<p2>"
-    And I have deployment config override "cryptarchia.epoch_config.epoch_period_nonce_stabilization" as "<p3>"
+    And I have deployment config override "eras.0.time.slot_duration" as "seconds(1)"
+    And I have deployment config override "eras.0.cryptarchia.epoch_config.epoch_stake_distribution_stabilization" as "<p1>"
+    And I have deployment config override "eras.0.cryptarchia.epoch_config.epoch_period_nonce_buffer" as "<p2>"
+    And I have deployment config override "eras.0.cryptarchia.epoch_config.epoch_period_nonce_stabilization" as "<p3>"
 
     And I start node "NODE_2"
     And I start peer node "NODE_3" connected to node "NODE_2"

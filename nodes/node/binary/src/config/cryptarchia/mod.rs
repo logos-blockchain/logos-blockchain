@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
-use lb_core::sdp::ServiceParameters;
+use lb_core::{block::genesis::GenesisBlock, sdp::ServiceParameters};
 use lb_cryptarchia_engine::EpochConfig;
 use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 use lb_libp2p::PeerId;
@@ -25,7 +25,9 @@ impl ServiceConfig {
     )]
     pub fn into_cryptarchia_services_settings(
         self,
+        genesis_block: GenesisBlock,
         blend_rewards_params: RewardsParameters,
+        proposal_topic: String,
         recovery_data: RecoveryData,
     ) -> (
         lb_chain_service::CryptarchiaSettings,
@@ -107,7 +109,7 @@ impl ServiceConfig {
             },
             config: ledger_config.clone(),
             recovery_data,
-            starting_state: self.deployment.genesis_block.into(),
+            starting_state: genesis_block.into(),
             sync: lb_chain_service::SyncConfig {
                 block_provider: lb_chain_service::BlockProviderConfig {
                     batch_size: self.user.service.sync.block_provider.batch_size,
@@ -130,7 +132,7 @@ impl ServiceConfig {
                 },
             },
             network: LibP2pAdapterSettings {
-                topic: self.deployment.gossipsub_protocol.clone(),
+                topic: proposal_topic,
                 max_connected_peers_to_try_download: self
                     .user
                     .network

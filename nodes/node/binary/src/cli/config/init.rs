@@ -13,8 +13,9 @@ use crate::{
         config::keystore::{KeyTitle, Keystore, KeystoreError},
     },
     config::{
-        ApiConfig, BlendArgs, CryptarchiaArgs, CryptarchiaConfig, KmsConfig, PoWConfig, SdpArgs,
-        SdpConfig, StateConfig, StorageConfig, TimeConfig, TracingConfig, WalletConfig,
+        ApiConfig, BlendArgs, CryptarchiaArgs, CryptarchiaConfig, KmsConfig, MempoolConfig,
+        PoWConfig, SdpArgs, SdpConfig, StateConfig, StorageConfig, TimeConfig, TracingConfig,
+        WalletConfig,
         blend::serde::{Config as BlendConfig, RequiredValues as BlendConfigRequiredValues},
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
         network::serde::Config as NetworkConfig,
@@ -105,6 +106,8 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> Result<UserConf
 
     let sdp_config = build_sdp_config(keystore, sdp_args)?;
 
+    let mempool_config = MempoolConfig::default();
+
     let wallet_config = build_wallet_config(keystore)?;
 
     let kms_config = build_kms_config(keystore);
@@ -120,6 +123,7 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> Result<UserConf
         api: api_config,
         storage: storage_config,
         kms: kms_config,
+        mempool: mempool_config,
         wallet: wallet_config,
         pow: pow_config,
         tracing: tracing_config,

@@ -48,8 +48,8 @@ Feature: Mempool lifecycle
       | 1             | 2           | 1000         |
       | 2             | 0           | 0            |
     # Keep block production slow enough that the tx stays pending across restart.
-    And I have deployment config override "time.slot_duration" as "seconds(60)"
-    And I have deployment config override "cryptarchia.slot_activation_coeff.numerator" as "9"
+    And I have deployment config override "eras.0.time.slot_duration" as "seconds(60)"
+    And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "9"
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
     And I have a cluster with capacity of 1 nodes
     And no nodes are declared as blend providers

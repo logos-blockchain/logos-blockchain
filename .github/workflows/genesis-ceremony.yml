@@ -43,7 +43,7 @@ jobs:
             --stake-holders deployment/ceremony/genesis/$LB_TARGET_ENV/stakeholders.yaml \
             --providers deployment/ceremony/genesis/$LB_TARGET_ENV/providers.yaml \
             --faucet deployment/ceremony/genesis/$LB_TARGET_ENV/faucet.yaml \
-            --deployment /tmp/deployment-generated.yaml \
+            --template /tmp/deployment-generated.yaml \
             --output nodes/node/binary/src/config/deployment/settings.yaml
 
       - name: Commit and Push changes

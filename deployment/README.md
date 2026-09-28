@@ -78,7 +78,7 @@ deployment/ceremony/genesis/
   shared/                         # (optional) inputs common to ALL environments
   <env>/
     inscribe.yaml                 # TEMPLATE entropy + PER-RELEASE chain_id/genesis_time
-    deployment-template.yaml      # PER-TYPE consensus / network / blend params
+    deployment-template.yaml      # PER-TYPE era-zero params (consensus / blend / time) + network names
     stakeholders.yaml             # PER-TYPE genesis stake distribution
     providers.yaml                # PER-TYPE bootstrap providers (id, locators)
     faucet.yaml                   # PER-TYPE faucet identity + funds

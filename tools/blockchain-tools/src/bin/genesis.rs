@@ -18,11 +18,12 @@ use lb_core::{
 use lb_node::config::deployment::DeploymentSettings;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use logos_blockchain_tools::{
+    apply_dotted_kv,
     genesis::{
         distribution::{self, Faucet, ProviderInfo, StakeHolderInfo},
         inscription::{self, InscribeParams},
     },
-    overwrite_yaml, value_from_dotted_kv,
+    overwrite_yaml, set_at_path,
 };
 use serde_yaml::Value;
 
@@ -51,7 +52,7 @@ enum Commands {
     Config(ConfigArgs),
 
     /// Build a genesis block from component files and optionally embed it into
-    /// a deployment config under `cryptarchia.genesis_block`.
+    /// a deployment config under `genesis_block`.
     Block(BlockArgs),
 
     /// Calculate the distribution of notes and SDP declarations from
@@ -83,11 +84,15 @@ pub struct CeremonyArgs {
     #[arg(long, value_name = "FILE")]
     pub faucet: PathBuf,
 
-    /// The path to a custom deployment config.
-    #[arg(long = "deployment", value_name = "FILE")]
-    pub custom_deployment_path: Option<PathBuf>,
+    /// The genesis template: the parameters of era zero and, until they are
+    /// derived, the network protocol names under `network`. The ceremony
+    /// generates the rest of the deployment config from it. Without it, the
+    /// default deployment's era zero and network are used.
+    #[arg(long, value_name = "FILE")]
+    pub template: Option<PathBuf>,
 
-    /// Optional overrides for the deployment config.
+    /// Optional overrides for the generated deployment config, applied before
+    /// its generated values are set.
     #[arg(long = "override", value_name = "KEY=VALUE|FILE", num_args = 1)]
     pub overrides: Vec<String>,
 
@@ -106,8 +111,10 @@ struct ConfigArgs {
     pub custom_deployment_path: Option<PathBuf>,
 
     /// Override to apply on top of the base config. Each occurrence is either
-    /// a dot-notation key=value pair (e.g. `cryptarchia.security_param=60`)
-    /// or a path to a YAML file that is deep-merged into the config.
+    /// a dot-notation key=value pair, where a number indexes a list or names
+    /// an integer key (e.g. the first epoch in
+    /// `eras.0.cryptarchia.security_param=60`), or a path to a YAML file that
+    /// is deep-merged into the config.
     /// Repeated flags are applied left-to-right.
     #[arg(long = "override", value_name = "KEY=VALUE|FILE", num_args = 1)]
     overrides: Vec<String>,
@@ -152,7 +159,7 @@ struct BlockArgs {
     declarations: PathBuf,
 
     /// Existing deployment config YAML to embed the genesis block into.
-    /// When provided, the block is written into `cryptarchia.genesis_block`
+    /// When provided, the block is written into `genesis_block`
     /// and the merged config is written to --output. Without this flag,
     /// only the serialized genesis block is written.
     #[arg(long, value_name = "FILE")]
@@ -220,6 +227,13 @@ fn main() -> Result<()> {
     }
 }
 
+/// Where a deployment config keeps its genesis block.
+const GENESIS_BLOCK_PATH: &str = "genesis_block";
+
+/// Where a deployment config keeps the faucet key of the era starting at
+/// genesis, which is the era a genesis ceremony configures.
+const GENESIS_ERA_FAUCET_PK_PATH: &str = "eras.0.cryptarchia.faucet_pk";
+
 // ── ceremony implementation
 // ─────────────────────────────────────────────────────
 
@@ -239,10 +253,9 @@ fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
         .context("Failed to calculate distribution during ceremony")?;
     let notes: Vec<Note> = transfer_op.notes().collect();
 
-    let mut config_value = load_base_config(args.custom_deployment_path.as_ref())?;
+    let mut config_value = load_genesis_template(args.template.as_ref())?;
     for raw in &args.overrides {
-        let patch = resolve_override(raw)?;
-        config_value = overwrite_yaml(config_value, patch);
+        apply_override(&mut config_value, raw)?;
     }
 
     if notes.is_empty() {
@@ -253,17 +266,22 @@ fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
     }
     let genesis_block = build_genesis_block(notes, inscription_op, declarations)?;
 
-    let block_value = struct_to_yaml_value(&genesis_block)?;
-    let block_patch = wrap_as_cryptarchia_genesis_block(block_value);
-    config_value = overwrite_yaml(config_value, block_patch);
+    set_at_path(
+        &mut config_value,
+        GENESIS_BLOCK_PATH,
+        struct_to_yaml_value(&genesis_block)?,
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
+    set_at_path(
+        &mut config_value,
+        GENESIS_ERA_FAUCET_PK_PATH,
+        struct_to_yaml_value(&faucet.zk_id)?,
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
 
-    let faucet_pk_value = struct_to_yaml_value(&faucet.zk_id)?;
-    let faucet_patch = wrap_as_cryptarchia_faucet_pk(faucet_pk_value);
-    let final_config = overwrite_yaml(config_value, faucet_patch);
+    ensure_valid_deployment_settings(&config_value)?;
 
-    ensure_valid_deployment_settings(&final_config)?;
-
-    write_yaml(&final_config, args.output.as_deref())
+    write_yaml(&config_value, args.output.as_deref())
 }
 
 // ── config implementation
@@ -273,8 +291,7 @@ fn run_config(args: &ConfigArgs) -> Result<()> {
     let mut config = load_base_config(args.custom_deployment_path.as_ref())?;
 
     for raw in &args.overrides {
-        let patch = resolve_override(raw)?;
-        config = overwrite_yaml(config, patch);
+        apply_override(&mut config, raw)?;
     }
 
     ensure_valid_deployment_settings(&config)?;
@@ -298,20 +315,55 @@ fn load_base_config(path: Option<&PathBuf>) -> Result<Value> {
         .with_context(|| format!("cannot parse YAML from '{}'", path.display()))
 }
 
-/// Resolve a single `--override` argument.
+/// Load a genesis template, and assemble from it the deployment config the
+/// ceremony completes: the template's era definition becomes era zero, and its
+/// `network` the config's network protocol names.
 ///
-/// If `s` contains `=`, it is parsed as a dotted `key=value` pair.
-/// Otherwise it is treated as a path to a YAML file.
-fn resolve_override(s: &str) -> Result<Value> {
+/// If `path` is `None`, returns the default deployment config, whose genesis
+/// block the ceremony replaces.
+fn load_genesis_template(path: Option<&PathBuf>) -> Result<Value> {
+    let Some(path) = path else {
+        return struct_to_yaml_value(&DeploymentSettings::default());
+    };
+
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("cannot read genesis template '{}'", path.display()))?;
+    let template: Value = serde_yaml::from_str(&content)
+        .with_context(|| format!("cannot parse YAML from '{}'", path.display()))?;
+    let Value::Mapping(mut era) = template else {
+        bail!("genesis template '{}' is not a mapping", path.display());
+    };
+    let network = era.remove("network").with_context(|| {
+        format!(
+            "genesis template '{}' has no `network` protocol names",
+            path.display()
+        )
+    })?;
+
+    let mut eras = serde_yaml::Mapping::new();
+    eras.insert(Value::from(0u64), Value::Mapping(era));
+    let mut config = serde_yaml::Mapping::new();
+    config.insert(Value::from("eras"), Value::Mapping(eras));
+    config.insert(Value::from("network"), network);
+    Ok(Value::Mapping(config))
+}
+
+/// Apply a single `--override` argument to `config`.
+///
+/// If `s` contains `=`, it is applied as a dotted `key=value` pair.
+/// Otherwise it is treated as a path to a YAML file, deep-merged into `config`.
+fn apply_override(config: &mut Value, s: &str) -> Result<()> {
     if s.contains('=') {
-        return value_from_dotted_kv(s).map_err(|e| anyhow::anyhow!(e));
+        return apply_dotted_kv(config, s).map_err(|e| anyhow::anyhow!(e));
     }
 
     let path = Path::new(s);
     let content = fs::read_to_string(path)
         .with_context(|| format!("cannot read override file '{}'", path.display()))?;
-    serde_yaml::from_str(&content)
-        .with_context(|| format!("cannot parse YAML from override file '{}'", path.display()))
+    let patch = serde_yaml::from_str(&content)
+        .with_context(|| format!("cannot parse YAML from override file '{}'", path.display()))?;
+    *config = overwrite_yaml(std::mem::take(config), patch);
+    Ok(())
 }
 
 // ── block implementation
@@ -333,10 +385,14 @@ fn run_block(args: &BlockArgs) -> Result<()> {
 
     let result = match args.embed_in {
         Some(ref embed_path) => {
-            let block_value = struct_to_yaml_value(&genesis_block)?;
-            let patch = wrap_as_cryptarchia_genesis_block(block_value);
-            let base: Value = load_yaml_file(embed_path)?;
-            overwrite_yaml(base, patch)
+            let mut base: Value = load_yaml_file(embed_path)?;
+            set_at_path(
+                &mut base,
+                GENESIS_BLOCK_PATH,
+                struct_to_yaml_value(&genesis_block)?,
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+            base
         }
         None => struct_to_yaml_value(&genesis_block)?,
     };
@@ -375,36 +431,6 @@ fn build_genesis_block(
     }
 
     builder.build().context("failed to build genesis block")
-}
-
-/// Wrap a serialised `GenesisBlock` value in the mapping that corresponds to
-/// `cryptarchia.genesis_block` in a deployment config.
-fn wrap_as_cryptarchia_genesis_block(block_value: Value) -> Value {
-    let mut inner = serde_yaml::Mapping::new();
-    inner.insert(Value::String("genesis_block".to_owned()), block_value);
-
-    let mut outer = serde_yaml::Mapping::new();
-    outer.insert(
-        Value::String("cryptarchia".to_owned()),
-        Value::Mapping(inner),
-    );
-
-    Value::Mapping(outer)
-}
-
-/// Wrap a serialised faucet public key in the mapping that corresponds to
-/// `cryptarchia.faucet_pk` in a deployment config.
-fn wrap_as_cryptarchia_faucet_pk(faucet_pk: Value) -> Value {
-    let mut inner = serde_yaml::Mapping::new();
-    inner.insert(Value::String("faucet_pk".to_owned()), faucet_pk);
-
-    let mut outer = serde_yaml::Mapping::new();
-    outer.insert(
-        Value::String("cryptarchia".to_owned()),
-        Value::Mapping(inner),
-    );
-
-    Value::Mapping(outer)
 }
 
 // ── distribute implementation

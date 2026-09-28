@@ -23,8 +23,9 @@ use serde::{Deserialize, Serialize};
 pub use crate::config::{
     api::serde::Config as ApiConfig, blend::serde::Config as BlendConfig,
     cryptarchia::serde::Config as CryptarchiaConfig, deployment::DeploymentSettings,
-    kms::serde::Config as KmsConfig, network::serde::Config as NetworkConfig,
-    pow::serde::Config as PoWConfig, sdp::serde::Config as SdpConfig, state::Config as StateConfig,
+    kms::serde::Config as KmsConfig, mempool::serde::Config as MempoolConfig,
+    network::serde::Config as NetworkConfig, pow::serde::Config as PoWConfig,
+    sdp::serde::Config as SdpConfig, state::Config as StateConfig,
     storage::serde::Config as StorageConfig, time::serde::Config as TimeConfig,
     tracing::serde::Config as TracingConfig, wallet::serde::Config as WalletConfig,
 };
@@ -69,6 +70,8 @@ pub struct UserConfig {
     pub storage: StorageConfig,
     #[serde(default)]
     pub kms: KmsConfig,
+    #[serde(default)]
+    pub mempool: MempoolConfig,
     pub wallet: WalletConfig,
     /// Optional: an omitted section leaves mining on its defaults and
     /// auto-claim off.
@@ -101,6 +104,7 @@ impl UserConfig {
             // through `pow.auto_claim.targets`.
             pow: PoWConfig::default(),
             kms: KmsConfig::default(),
+            mempool: MempoolConfig::default(),
             network: NetworkConfig::default(),
             state: StateConfig::default(),
             storage: StorageConfig::default(),

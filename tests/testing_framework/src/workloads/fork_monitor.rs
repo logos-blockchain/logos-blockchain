@@ -294,7 +294,11 @@ where
         propagation_budget(3, node_count, &deployment, 3.0),
         propagation_budget(6, node_count, &deployment, 3.0),
         propagation_budget(
-            deployment.cryptarchia.security_param.get(),
+            deployment
+                .genesis_era_parameters()
+                .cryptarchia
+                .security_param
+                .get(),
             node_count,
             &deployment,
             3.0,
@@ -310,24 +314,25 @@ fn propagation_budget(
     deployment: &DeploymentSettings,
     margin_factor: f64,
 ) -> Duration {
-    let proposal_interval = deployment
+    let parameters = deployment.genesis_era_parameters();
+    let proposal_interval = parameters
         .time
         .slot_duration
-        .div_f64(deployment.cryptarchia.slot_activation_coeff.as_f64());
+        .div_f64(parameters.cryptarchia.slot_activation_coeff.as_f64());
 
     let blend_latency =
-        if blend_network_size < deployment.blend.common.minimum_network_size.into_inner() {
+        if blend_network_size < parameters.blend.common.minimum_network_size.into_inner() {
             Duration::ZERO
         } else {
-            deployment.blend_round_duration().saturating_mul(
-                (deployment
+            deployment.genesis_blend_round_duration().saturating_mul(
+                (parameters
                     .blend
                     .core
                     .scheduler
                     .delayer
                     .maximum_release_delay_in_rounds
                     .get()
-                    * deployment.blend.common.num_blend_layers.get())
+                    * parameters.blend.common.num_blend_layers.get())
                 .try_into()
                 .expect("blend latency multiplier must fit u32"),
             )

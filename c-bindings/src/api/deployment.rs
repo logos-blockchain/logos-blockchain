@@ -36,12 +36,12 @@ impl DeploymentInfo {
             chain_id: into_c_string(deployment.chain_id().as_ref())?,
             genesis_time: deployment.genesis_time().unix_timestamp(),
             protocol_names: ProtocolNames {
-                blend: into_c_string(deployment.blend.common.protocol_name.as_ref())?,
-                cryptarchia: into_c_string(&deployment.cryptarchia.gossipsub_protocol)?,
+                blend: into_c_string(deployment.network.blend_protocol_name.as_ref())?,
+                cryptarchia: into_c_string(&deployment.network.cryptarchia_topic)?,
                 kademlia: into_c_string(deployment.network.kademlia_protocol_name.as_ref())?,
                 identify: into_c_string(deployment.network.identify_protocol_name.as_ref())?,
                 chain_sync: into_c_string(deployment.network.chain_sync_protocol_name.as_ref())?,
-                mempool: into_c_string(&deployment.mempool.pubsub_topic)?,
+                mempool: into_c_string(&deployment.network.mempool_topic)?,
             },
             node_version: into_c_string(&lb_version::build_version_info().version)?,
         })

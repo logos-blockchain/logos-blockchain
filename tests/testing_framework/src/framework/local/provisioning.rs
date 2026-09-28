@@ -8,7 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use config::{api, sdp, state, storage, wallet};
+use config::{api, mempool, sdp, state, storage, wallet};
 use flate2::read::GzDecoder;
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::mantle;
@@ -777,6 +777,7 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
                 })
             }
         },
+        mempool: mempool::serde::Config::default(),
         kms: config::kms::serde::Config {
             backend: config::kms::serde::PreloadKmsBackendSettings {
                 keys: config.kms_config.backend.keys,
