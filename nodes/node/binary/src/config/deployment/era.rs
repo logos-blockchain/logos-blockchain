@@ -143,7 +143,7 @@ impl EraScheduleBuilder {
             1 => Ok(EraSchedule {
                 genesis_era: eras.next().unwrap().1,
             }),
-            eras_count => Err(EraScheduleError::MultipleEras(eras_count + 1)),
+            eras_count => Err(EraScheduleError::MultipleEras(eras_count)),
         }
     }
 }
