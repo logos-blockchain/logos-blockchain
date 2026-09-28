@@ -11,7 +11,7 @@ use lb_core::{
     mantle::{GenesisTime, TxHash},
     sdp::Locator,
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::keys::{Key, ZkPublicKey};
 use lb_libp2p::{PeerId, identity, identity::ed25519};
 use lb_node::UserConfig;
 use lb_testing_framework::{CoreBuilderExt as _, ScenarioBuilder};
@@ -204,7 +204,16 @@ pub fn node_wallet_keys_from_node_yaml(path: &Path) -> Result<Vec<NodeWalletKey>
     let blend_zk_key_id = config.blend.core.zk.secret_key_kms_id.clone();
     let mut keys_by_public_key = BTreeMap::<String, NodeWalletKey>::new();
 
-    for (key_id, public_key) in &config.wallet.known_keys {
+    for key_id in &config.wallet.known_keys {
+        let key = config.kms.backend.resolve_key(key_id);
+        let key = key.map_err(|source| StepError::LogicalError {
+            message: format!("Failed to resolve known key '{key_id}': {source}"),
+        })?;
+        // Only the ZK keys hold notes.
+        let Some(Key::Zk(secret_key)) = &key else {
+            continue;
+        };
+        let public_key = &secret_key.to_public_key();
         let wallet_pk = public_key.to_bytes()?.encode_hex::<String>();
         let role = if *public_key == cryptarchia_funding_pk || *public_key == sdp_funding_pk {
             NodeWalletKeyRole::Funding

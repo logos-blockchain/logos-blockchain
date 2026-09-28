@@ -46,7 +46,7 @@ pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
         api: api_config,
         storage: StorageConfig::default(),
         sdp: sdp_config,
-        wallet: create_wallet_config(&config.consensus_config, config.kms_config.backend.clone()),
+        wallet: create_wallet_config(&config.consensus_config, &config.kms_config.backend),
         // Mining defaults, auto-claim off: generated nodes mine and claim on
         // demand, naming the destination key on each claim request.
         pow: PoWConfig::default(),
@@ -71,36 +71,11 @@ fn create_axum_backend_settings(listen_address: SocketAddr) -> AxumBackendSettin
 
 fn create_wallet_config(
     consensus: &GeneralConsensusConfig,
-    kms: PreloadKmsBackendSettings,
+    kms: &PreloadKmsBackendSettings,
 ) -> WalletConfig {
-    let kms_keys = kms
-        .resolve_keys()
-        .expect("KMS keys of a generated config are resolvable");
-    let known_keys = [
-        (
-            key_id_for_preload_backend(&Key::Zk(consensus.known_key.clone())),
-            consensus.known_key.as_public_key(),
-        ),
-        (
-            key_id_for_preload_backend(&Key::Zk(consensus.funding_sk.clone())),
-            consensus.funding_sk.as_public_key(),
-        ),
-    ]
-    .into_iter()
-    .chain(consensus.other_keys.iter().map(|sk| {
-        (
-            key_id_for_preload_backend(&Key::Zk(sk.clone())),
-            sk.as_public_key(),
-        )
-    }))
-    .chain(kms_keys.values().filter_map(|key| match key {
-        Key::Zk(sk) => Some((
-            key_id_for_preload_backend(&Key::Zk(sk.clone())),
-            sk.as_public_key(),
-        )),
-        Key::Ed25519(_) => None,
-    }))
-    .collect();
+    // Every key of the KMS, in a stable order.
+    let mut known_keys = kms.keys.keys().cloned().collect::<Vec<_>>();
+    known_keys.sort();
 
     let mut config = WalletConfig::with_required_values(WalletConfigRequiredValues {
         voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(consensus.known_key.clone())),

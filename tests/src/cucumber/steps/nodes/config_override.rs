@@ -478,11 +478,47 @@ fn set_at_path(
     let rest = &path[1..];
     let is_last = rest.is_empty();
 
+    if segment == APPEND_SEGMENT {
+        return push_seq(current, segment, value, full_path, is_last);
+    }
+
     if let Ok(index) = segment.parse::<usize>() {
         return set_seq(current, segment, index, rest, value, full_path, is_last);
     }
 
     set_map(current, segment, rest, value, full_path, is_last)
+}
+
+/// The path segment that appends the value to a YAML sequence, e.g.
+/// `wallet.known_keys.+`.
+const APPEND_SEGMENT: &str = "+";
+
+fn push_seq(
+    current: &mut YamlValue,
+    segment: &str,
+    value: YamlValue,
+    full_path: &str,
+    is_last: bool,
+) -> Result<(), StepError> {
+    if !is_last {
+        return Err(invalid_path(
+            full_path,
+            &format!("segment '{segment}' must be the last one"),
+        ));
+    }
+    if current.is_null() {
+        *current = YamlValue::Sequence(Vec::new());
+    }
+
+    let sequence = current.as_sequence_mut().ok_or_else(|| {
+        invalid_path(
+            full_path,
+            &format!("segment '{segment}' expects a YAML sequence"),
+        )
+    })?;
+    sequence.push(value);
+
+    Ok(())
 }
 
 fn set_seq(
@@ -553,7 +589,7 @@ fn set_map(
 fn default_child(rest: &[&str]) -> YamlValue {
     if rest
         .first()
-        .is_some_and(|segment| segment.parse::<usize>().is_ok())
+        .is_some_and(|segment| *segment == APPEND_SEGMENT || segment.parse::<usize>().is_ok())
     {
         YamlValue::Sequence(Vec::new())
     } else {
@@ -705,6 +741,35 @@ mod tests {
             sequence[1].as_str(),
             Some("/ip4/127.0.0.1/udp/3000/quic-v1")
         );
+    }
+
+    #[test]
+    fn apply_override_appends_to_sequence() {
+        let mut root: YamlValue =
+            serde_yaml::from_str("wallet:\n  known_keys:\n    - a\n").unwrap();
+
+        for key_id in ["b", "c"] {
+            apply_override(
+                &mut root,
+                &ConfigOverride {
+                    path: "wallet.known_keys.+".to_owned(),
+                    value: YamlValue::String(key_id.to_owned()),
+                },
+            )
+            .unwrap();
+        }
+        apply_override(
+            &mut root,
+            &ConfigOverride {
+                path: "wallet.other_keys.+".to_owned(),
+                value: YamlValue::String("d".to_owned()),
+            },
+        )
+        .unwrap();
+
+        let expected: YamlValue =
+            serde_yaml::from_str("wallet:\n  known_keys: [a, b, c]\n  other_keys: [d]\n").unwrap();
+        assert_eq!(root, expected);
     }
 
     #[test]

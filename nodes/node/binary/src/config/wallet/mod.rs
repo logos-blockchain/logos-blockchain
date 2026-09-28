@@ -16,12 +16,7 @@ impl ServiceConfig {
         recovery_data: RecoveryData,
     ) -> WalletServiceSettings {
         WalletServiceSettings {
-            known_keys: self
-                .user
-                .known_keys
-                .into_iter()
-                .map(|(key_id, public_key)| (key_id.into(), public_key))
-                .collect(),
+            known_keys: self.user.known_keys.into_iter().map(Into::into).collect(),
             voucher_master_key_id: self.user.voucher_master_key_id.into(),
             recovery_data,
             pending_note_expiry_blocks: self.user.pending_note_expiry_blocks,

@@ -1,7 +1,7 @@
 pub mod api;
 mod states;
 
-use std::{collections::HashMap, num::NonZeroU64, time::Duration};
+use std::{num::NonZeroU64, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -64,9 +64,9 @@ use tokio::{
 };
 use tracing::{debug, error, info, trace, warn};
 
-use crate::states::{RecoveryState, ServiceState, Wallet};
+use crate::states::{KnownKeys, RecoveryState, ServiceState, Wallet};
 
-type KmsBackend = HdKMSBackend;
+pub(crate) type KmsBackend = HdKMSBackend;
 type KeyId = <KmsBackend as KMSBackend>::KeyId;
 
 const LOG_TARGET: &str = wallet::SERVICE;
@@ -90,6 +90,12 @@ pub enum WalletServiceError {
 
     #[error("KMS API error: {0}")]
     KmsApi(DynError),
+
+    #[error("ZK key {0:?} is not a key of the wallet")]
+    UnknownZkKey(ZkPublicKey),
+
+    #[error("Ed25519 key {0:?} is not a key of the wallet")]
+    UnknownEd25519Key([u8; ED25519_PUBLIC_KEY_SIZE]),
 
     #[error("Cryptarchia API error: {0}")]
     CryptarchiaApi(#[from] lb_chain_service::api::ApiError),
@@ -356,7 +362,9 @@ impl WalletMsg {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WalletServiceSettings {
-    pub known_keys: HashMap<KeyId, ZkPublicKey>,
+    /// The keys of the KMS that the wallet signs with. The notes of the ZK
+    /// keys among them are tracked.
+    pub known_keys: Vec<KeyId>,
     pub voucher_master_key_id: KeyId,
     #[serde(skip)]
     pub recovery_data: RecoveryData,
@@ -513,9 +521,12 @@ where
             .await?
             .ok_or(WalletServiceError::LedgerStateNotFound(lib))?;
 
+        let known_keys = KnownKeys::fetch(&kms, &settings.known_keys).await?;
+
         let mut state = ServiceState::new(
             self.initial_state,
             &settings,
+            known_keys,
             lib,
             &lib_ledger,
             &service_resources_handle.state_updater,
@@ -754,7 +765,7 @@ where
                 let funded_notes: Vec<NoteId> =
                     tx_builder.notes_consumed_or_used_in_service().collect();
 
-                let resp = Self::sign_tx(tx_builder, tip, ledger, kms, state.wallet())
+                let resp = Self::sign_tx(tx_builder, tip, ledger, kms, state)
                     .await
                     .map(|signed_tx| TipResponse {
                         tip,
@@ -777,7 +788,7 @@ where
                 pk,
                 resp_tx,
             } => {
-                let result = Self::sign_ed25519(tx_hash, pk, kms).await;
+                let result = Self::sign_ed25519(tx_hash, pk, state, kms).await;
                 if resp_tx.send(result).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to SignTxWithEd25519");
                 }
@@ -787,7 +798,7 @@ where
                 pks,
                 resp_tx,
             } => {
-                let result = Self::sign_zksig(tx_hash, pks, kms).await;
+                let result = Self::sign_zksig(tx_hash, pks, state, kms).await;
                 if resp_tx.send(result).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to SignTxWithZk");
                 }
@@ -861,6 +872,7 @@ where
     async fn sign_inscription(
         tx_hash: TxHash,
         inscribe_op: &InscriptionOp,
+        state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<OpProof, WalletServiceError> {
         let Ok(validated_public_key) = Ed25519PublicKey::try_from(inscribe_op.signer) else {
@@ -868,18 +880,19 @@ where
                 inscribe_op.signer.to_bytes(),
             ));
         };
-        let ed25519_sig = Self::sign_ed25519(tx_hash, validated_public_key, kms).await?;
+        let ed25519_sig = Self::sign_ed25519(tx_hash, validated_public_key, state, kms).await?;
         Ok(OpProof::Ed25519Sig(ed25519_sig))
     }
 
     async fn sign_channel_deposit(
         tx_hash: TxHash,
         note_ids: Inputs,
+        state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         ledger: &LedgerState,
     ) -> Result<OpProof, WalletServiceError> {
         let input_pks = Self::resolve_note_input_pks(ledger, note_ids.into_inner())?;
-        let zk_sig = Self::sign_zksig(tx_hash, input_pks, kms).await?;
+        let zk_sig = Self::sign_zksig(tx_hash, input_pks, state, kms).await?;
 
         Ok(OpProof::ZkSig(zk_sig))
     }
@@ -888,6 +901,7 @@ where
         tx_hash: TxHash,
         set_keys_op: &ChannelConfigOp,
         ledger: &LedgerState,
+        state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<OpProof, WalletServiceError> {
         let channel = ledger
@@ -900,7 +914,7 @@ where
         let Ok(validated_public_key) = Ed25519PublicKey::try_from(authorized_key) else {
             return Err(WalletServiceError::InvalidSigner(authorized_key.to_bytes()));
         };
-        let ed25519_sig = Self::sign_ed25519(tx_hash, validated_public_key, kms).await?;
+        let ed25519_sig = Self::sign_ed25519(tx_hash, validated_public_key, state, kms).await?;
 
         Ok(OpProof::Ed25519Sig(ed25519_sig))
     }
@@ -909,6 +923,7 @@ where
         tx_hash: TxHash,
         declare_op: &SDPDeclareOp,
         ledger: &LedgerState,
+        state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<OpProof, WalletServiceError> {
         // For a new declaration, the note is still in the UTXOs (not yet locked).
@@ -928,8 +943,8 @@ where
                 declare_op.service_note_id,
             ))?;
 
-        let zk_sig = Self::sign_zksig(tx_hash, [note.pk, declare_op.zk_id], kms).await?;
-        let ed25519_sig = Self::sign_ed25519(tx_hash, declare_op.provider_id.0, kms).await?;
+        let zk_sig = Self::sign_zksig(tx_hash, [note.pk, declare_op.zk_id], state, kms).await?;
+        let ed25519_sig = Self::sign_ed25519(tx_hash, declare_op.provider_id.0, state, kms).await?;
 
         let proof = ZkAndEd25519Proof {
             zk_sig,
@@ -942,6 +957,7 @@ where
         tx_hash: TxHash,
         withdraw_op: &SDPWithdrawOp,
         ledger: &LedgerState,
+        state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<OpProof, WalletServiceError> {
         let declaration = ledger
@@ -960,7 +976,8 @@ where
                 declaration.service_note_id,
             ))?;
 
-        let zk_sig = Self::sign_zksig(tx_hash, [service_note.pk, declaration.zk_id], kms).await?;
+        let zk_sig =
+            Self::sign_zksig(tx_hash, [service_note.pk, declaration.zk_id], state, kms).await?;
 
         Ok(OpProof::ZkSig(zk_sig))
     }
@@ -969,6 +986,7 @@ where
         tx_hash: TxHash,
         active_op: &SDPActiveOp,
         ledger: &LedgerState,
+        state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<OpProof, WalletServiceError> {
         let declaration = ledger
@@ -979,7 +997,7 @@ where
                 active_op.declaration_id,
             ))?;
 
-        let zk_sig = Self::sign_zksig(tx_hash, [declaration.zk_id], kms).await?;
+        let zk_sig = Self::sign_zksig(tx_hash, [declaration.zk_id], state, kms).await?;
 
         Ok(OpProof::ZkSig(zk_sig))
     }
@@ -1019,11 +1037,12 @@ where
     async fn sign_transfer(
         tx_hash: TxHash,
         note_ids: Inputs,
+        state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         ledger: &LedgerState,
     ) -> Result<OpProof, WalletServiceError> {
         let input_pks = Self::resolve_note_input_pks(ledger, note_ids.into_inner())?;
-        let zk_sig = Self::sign_zksig(tx_hash, input_pks, kms).await?;
+        let zk_sig = Self::sign_zksig(tx_hash, input_pks, state, kms).await?;
 
         Ok(OpProof::ZkSig(zk_sig))
     }
@@ -1033,7 +1052,7 @@ where
         tip: HeaderId,
         tip_leader: LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        wallet: &Wallet,
+        state: &ServiceState<'_>,
     ) -> Result<SignedOps<Preverified, StandardMode>, WalletServiceError> {
         // TODO: Maybe Unverified?
         // Extract input public keys before building the transaction
@@ -1045,14 +1064,21 @@ where
         for (i, op) in mantle_tx.op_refs().into_iter().enumerate() {
             let op_proof = match op {
                 OpRef::ChannelInscribe(inscribe_op) => {
-                    Self::sign_inscription(tx_hash, inscribe_op, kms).await?
+                    Self::sign_inscription(tx_hash, inscribe_op, state, kms).await?
                 }
                 OpRef::ChannelConfig(set_keys_op) => {
-                    Self::sign_channel_set_key(tx_hash, set_keys_op, &tip_leader, kms).await?
+                    Self::sign_channel_set_key(tx_hash, set_keys_op, &tip_leader, state, kms)
+                        .await?
                 }
                 OpRef::ChannelDeposit(deposit_op) => {
-                    Self::sign_channel_deposit(tx_hash, deposit_op.inputs.clone(), kms, &tip_leader)
-                        .await?
+                    Self::sign_channel_deposit(
+                        tx_hash,
+                        deposit_op.inputs.clone(),
+                        state,
+                        kms,
+                        &tip_leader,
+                    )
+                    .await?
                 }
                 OpRef::ChannelWithdraw(_) | OpRef::ChannelTransfer(_) => {
                     let proof = channel_multi_sig_proofs
@@ -1061,20 +1087,26 @@ where
                     OpProof::ChannelMultiSigProof(proof)
                 }
                 OpRef::SDPDeclare(declare_op) => {
-                    Self::sign_sdp_declare(tx_hash, declare_op, &tip_leader, kms).await?
+                    Self::sign_sdp_declare(tx_hash, declare_op, &tip_leader, state, kms).await?
                 }
                 OpRef::SDPWithdraw(withdraw_op) => {
-                    Self::sign_sdp_withdraw(tx_hash, withdraw_op, &tip_leader, kms).await?
+                    Self::sign_sdp_withdraw(tx_hash, withdraw_op, &tip_leader, state, kms).await?
                 }
                 OpRef::SDPActive(active_op) => {
-                    Self::sign_sdp_active(tx_hash, active_op, &tip_leader, kms).await?
+                    Self::sign_sdp_active(tx_hash, active_op, &tip_leader, state, kms).await?
                 }
                 OpRef::LeaderClaim(claim_op) => {
-                    Self::sign_leader_claim(tx_hash, claim_op, tip, wallet, kms).await?
+                    Self::sign_leader_claim(tx_hash, claim_op, tip, state.wallet(), kms).await?
                 }
                 OpRef::Transfer(transfer_op) => {
-                    Self::sign_transfer(tx_hash, transfer_op.inputs.clone(), kms, &tip_leader)
-                        .await?
+                    Self::sign_transfer(
+                        tx_hash,
+                        transfer_op.inputs.clone(),
+                        state,
+                        kms,
+                        &tip_leader,
+                    )
+                    .await?
                 }
                 OpRef::ClaimPowReward(_) => OpProof::None(NoOpProof),
             };
@@ -1092,10 +1124,13 @@ where
     async fn sign_ed25519(
         tx_hash: TxHash,
         pk: <Ed25519Key as SecuredKey>::PublicKey,
+        state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<<Ed25519Key as SecuredKey>::Signature, WalletServiceError> {
-        // Use hex-encoded public key as key_id for now
-        let key_id = hex::encode(pk.as_bytes()).into();
+        let key_id = state
+            .ed25519_key_id(&pk)
+            .ok_or_else(|| WalletServiceError::UnknownEd25519Key(pk.to_bytes()))?
+            .clone();
 
         let payload = PayloadEncoding::Ed25519(Bytes::copy_from_slice(tx_hash.as_signing_bytes()));
         let signature = kms
@@ -1115,14 +1150,19 @@ where
     async fn sign_zksig(
         tx_hash: TxHash,
         pks: impl IntoIterator<Item = ZkPublicKey>,
+        state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<ZkSignature, WalletServiceError> {
         let pks = ZkPublicKeys::try_from_iter(pks)?;
-        // Use hex-encoded public key as key_id for now
-        let key_ids: Vec<_> = pks
+        let key_ids = pks
             .into_iter()
-            .map(|pk| hex::encode(lb_groth16::fr_to_bytes(&pk.into_inner())).into())
-            .collect();
+            .map(|pk| {
+                state
+                    .zk_key_id(&pk)
+                    .cloned()
+                    .ok_or(WalletServiceError::UnknownZkKey(pk))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         let payload = PayloadEncoding::Zk(tx_hash.to_fr());
         let signature = kms
@@ -1432,7 +1472,7 @@ where
             });
         }
 
-        Self::sign_tx(funded_tx_builder, request.tip, ledger, kms, state.wallet()).await
+        Self::sign_tx(funded_tx_builder, request.tip, ledger, kms, state).await
     }
 
     async fn backfill_if_not_in_sync(

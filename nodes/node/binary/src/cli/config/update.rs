@@ -174,8 +174,5 @@ fn update_wallet_config(keystore: &Keystore, wallet_config: &mut WalletConfig) {
         .expect("Voucher master key set by default");
 
     wallet_config.voucher_master_key_id = voucher_master_key_id;
-    wallet_config.known_keys = keystore
-        .get_all_zk()
-        .map(|(id, key)| (id, key.to_public_key()))
-        .collect();
+    wallet_config.known_keys = keystore.key_ids();
 }

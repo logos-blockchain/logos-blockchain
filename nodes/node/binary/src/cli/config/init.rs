@@ -234,10 +234,7 @@ fn build_wallet_config(keystore: &Keystore) -> Result<WalletConfig, KeystoreErro
     let mut wallet_config = WalletConfig::with_required_values(WalletConfigRequiredValues {
         voucher_master_key_id,
     });
-    wallet_config.known_keys = keystore
-        .get_all_zk()
-        .map(|(id, key)| (id, key.to_public_key()))
-        .collect();
+    wallet_config.known_keys = keystore.key_ids();
 
     Ok(wallet_config)
 }

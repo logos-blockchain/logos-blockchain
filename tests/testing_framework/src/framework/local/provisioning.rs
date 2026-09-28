@@ -733,39 +733,15 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
             },
         },
         wallet: {
-            let known_keys: HashMap<_, _> = [
-                (
-                    key_id_for_preload_backend(&Key::Zk(config.consensus_config.known_key.clone())),
-                    config.consensus_config.known_key.as_public_key(),
-                ),
-                (
-                    key_id_for_preload_backend(&Key::Zk(
-                        config.consensus_config.funding_sk.clone(),
-                    )),
-                    config.consensus_config.funding_sk.as_public_key(),
-                ),
-            ]
-            .into_iter()
-            .chain(config.consensus_config.other_keys.iter().map(|sk| {
-                (
-                    key_id_for_preload_backend(&sk.clone().into()),
-                    sk.as_public_key(),
-                )
-            }))
-            .chain(
-                config
-                    .kms_config
-                    .backend
-                    .clone()
-                    .resolve_keys()
-                    .expect("KMS keys of a provisioned config are resolvable")
-                    .into_values()
-                    .filter_map(|key| match &key {
-                        Key::Zk(sk) => Some((key_id_for_preload_backend(&key), sk.as_public_key())),
-                        Key::Ed25519(_) => None,
-                    }),
-            )
-            .collect();
+            // Every key of the KMS, in a stable order.
+            let mut known_keys = config
+                .kms_config
+                .backend
+                .keys
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            known_keys.sort();
 
             wallet::serde::Config {
                 known_keys,

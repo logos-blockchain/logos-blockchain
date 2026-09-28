@@ -229,9 +229,9 @@ fn step_configure_pow_auto_claim(
 
     // Auto-claim reads its targets' balances through the node's wallet, so the
     // account has to be one the node holds: preload the secret into the KMS and
-    // list its public key under `wallet.known_keys`, keyed the same way the
-    // preload backend derives ids.
-    let key: Key = account.secret_key.clone().into();
+    // list its id under `wallet.known_keys`, keyed the same way the preload
+    // backend derives ids.
+    let key: Key = account.secret_key.into();
     let key_id = key_id_for_preload_backend(&key);
     let key_value = serde_yaml::to_value(&key).map_err(|source| StepError::InvalidArgument {
         message: format!(
@@ -252,15 +252,8 @@ fn step_configure_pow_auto_claim(
                 value: key_value,
             },
             ConfigOverride {
-                path: format!("wallet.known_keys.{key_id}"),
-                value: serde_yaml::to_value(account.public_key()).map_err(|source| {
-                    StepError::InvalidArgument {
-                        message: format!(
-                            "Step `{}` error: failed to serialize auto-claim public key: {source}",
-                            step.value
-                        ),
-                    }
-                })?,
+                path: "wallet.known_keys.+".to_owned(),
+                value: serde_yaml::Value::String(key_id),
             },
         ],
     );

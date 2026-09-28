@@ -181,14 +181,9 @@ fn extract_blend_zk_key(config: &UserConfig) -> Result<ZkPublicKey> {
         .blend_zk_key()
         .map_err(|e| anyhow!(e))
         .with_context(|| "Failed to extract zk ID from provided config.")?;
-    let Some(wallet_key) = config.wallet.known_keys.get(&zk_public_key_id) else {
+    if !config.wallet.known_keys.contains(&zk_public_key_id) {
         bail!(
             "ZK ID '{zk_public_key_id}' extracted from config was not found in wallet known keys"
-        );
-    };
-    if wallet_key != &zk_public_key {
-        bail!(
-            "ZK ID '{zk_public_key_id}' extracted from config does not match the corresponding public key in wallet known keys"
         );
     }
     Ok(zk_public_key)

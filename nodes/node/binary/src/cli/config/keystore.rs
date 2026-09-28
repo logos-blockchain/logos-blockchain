@@ -120,6 +120,19 @@ impl Keystore {
         Some((key_id(&key), key))
     }
 
+    /// The ids of all keys, in a stable order.
+    #[must_use]
+    pub fn key_ids(&self) -> Vec<KeyId> {
+        let master = self.master_key();
+        let mut key_ids = self
+            .secret_keys
+            .values()
+            .map(|entry| key_id(&resolve(entry, &master)))
+            .collect::<Vec<_>>();
+        key_ids.sort();
+        key_ids
+    }
+
     /// The KMS settings that load every key of the keystore.
     #[must_use]
     pub fn kms_backend_settings(&self) -> PreloadKmsBackendSettings {
