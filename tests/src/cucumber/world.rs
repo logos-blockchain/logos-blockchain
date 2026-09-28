@@ -1604,7 +1604,7 @@ pub struct PreparedPriorityFee {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum NodeWalletKeyRole {
     Funding,
-    VoucherMaster,
+    Stake,
     BlendZk,
     General,
 }
@@ -1614,7 +1614,7 @@ impl NodeWalletKeyRole {
     pub const fn priority(self) -> u8 {
         match self {
             Self::Funding => 0,
-            Self::VoucherMaster => 1,
+            Self::Stake => 1,
             Self::BlendZk => 2,
             Self::General => 3,
         }
@@ -2991,7 +2991,7 @@ mod node_wallet_tests {
     #[test]
     fn scanner_tracks_only_the_node_funding_role() {
         assert!(node_wallet(NodeWalletKeyRole::Funding).is_scanner_tracked_wallet());
-        assert!(!node_wallet(NodeWalletKeyRole::VoucherMaster).is_scanner_tracked_wallet());
+        assert!(!node_wallet(NodeWalletKeyRole::Stake).is_scanner_tracked_wallet());
         assert!(!node_wallet(NodeWalletKeyRole::BlendZk).is_scanner_tracked_wallet());
         assert!(!node_wallet(NodeWalletKeyRole::General).is_scanner_tracked_wallet());
     }

@@ -33,14 +33,12 @@ type VoucherId = (KeyId, VoucherIndex);
 pub type Wallet = lb_wallet::Wallet<KeyId, VoucherId>;
 
 /// The keys of the KMS that the wallet signs with
-#[derive(Default)]
 pub struct KnownKeys {
     /// The ZK keys configured, by public key
     zk: HashMap<ZkPublicKey, KeyId>,
     /// The Ed25519 keys configured, by public key
     ed25519: HashMap<Ed25519PublicKey, KeyId>,
-    /// `None` if the KMS could not derive them
-    hd: Option<HdKeys>,
+    hd: HdKeys,
 }
 
 impl KnownKeys {
@@ -61,15 +59,12 @@ impl KnownKeys {
             state.next_receive_index,
             state.next_change_index,
         )
-        .await
-        .inspect_err(|err| {
-            warn!(target: wallet::SERVICE, "Running without HD keys: {err}");
-        })
-        .ok();
+        .await?;
 
         let mut known_keys = Self {
+            zk: HashMap::new(),
+            ed25519: HashMap::new(),
             hd,
-            ..Self::default()
         };
         for key_id in &settings.known_keys {
             let public_key = kms
@@ -298,8 +293,7 @@ pub struct ServiceState<'u> {
     next_new_voucher_index: VoucherIndex,
     wallet: Wallet,
     ed25519_keys: HashMap<Ed25519PublicKey, KeyId>,
-    /// `None` if the KMS has no master key to derive them from
-    hd_keys: Option<HdKeys>,
+    hd_keys: HdKeys,
     lib: HeaderId,
     updater: &'u StateUpdater<Option<RecoveryState>>,
     pending_claims: PendingClaims,
@@ -330,7 +324,7 @@ impl<'u> ServiceState<'u> {
             ed25519: ed25519_keys,
             hd: hd_keys,
         } = known_keys;
-        known_keys.extend(hd_keys.iter().flat_map(HdKeys::key_ids));
+        known_keys.extend(hd_keys.key_ids());
 
         // Initialize [`Wallet`] either from the persisted [`WalletState`]
         // or from the current chain's LIB ledger state.
@@ -373,34 +367,22 @@ impl<'u> ServiceState<'u> {
         self.ed25519_keys.get(public_key)
     }
 
-    pub fn hd_keys(&self) -> Result<&HdKeys, WalletServiceError> {
-        self.hd_keys
-            .as_ref()
-            .ok_or(WalletServiceError::HdKeysUnavailable)
+    pub const fn hd_keys(&self) -> &HdKeys {
+        &self.hd_keys
     }
 
     /// Tracks the next receive address, whose public key is given.
-    pub fn add_receive_key(&mut self, public_key: ZkPublicKey) -> Result<(), WalletServiceError> {
-        let hd_keys = self
-            .hd_keys
-            .as_mut()
-            .ok_or(WalletServiceError::HdKeysUnavailable)?;
-        let path = hd_keys.add_receive_key(public_key);
+    pub fn add_receive_key(&mut self, public_key: ZkPublicKey) {
+        let path = self.hd_keys.add_receive_key(public_key);
         self.wallet.add_known_key(public_key, KeyId::Path(path));
         self.update_state();
-        Ok(())
     }
 
     /// Tracks the next change address, whose public key is given.
-    pub fn add_change_key(&mut self, public_key: ZkPublicKey) -> Result<(), WalletServiceError> {
-        let hd_keys = self
-            .hd_keys
-            .as_mut()
-            .ok_or(WalletServiceError::HdKeysUnavailable)?;
-        let path = hd_keys.add_change_key(public_key);
+    pub fn add_change_key(&mut self, public_key: ZkPublicKey) {
+        let path = self.hd_keys.add_change_key(public_key);
         self.wallet.add_known_key(public_key, KeyId::Path(path));
         self.update_state();
-        Ok(())
     }
 
     pub const fn next_new_voucher_index(&self) -> VoucherIndex {
@@ -532,8 +514,8 @@ impl<'u> ServiceState<'u> {
             .expect("WalletState at LIB must exist");
 
         self.updater.update(Some(RecoveryState {
-            next_receive_index: self.hd_keys.as_ref().map_or(0, HdKeys::next_receive_index),
-            next_change_index: self.hd_keys.as_ref().map_or(0, HdKeys::next_change_index),
+            next_receive_index: self.hd_keys.next_receive_index(),
+            next_change_index: self.hd_keys.next_change_index(),
             next_new_voucher_index: self.next_new_voucher_index,
             vouchers: self.wallet.vouchers().clone(),
             lib_wallet_state: Some((self.lib, lib_wallet_state)),
@@ -716,7 +698,6 @@ mod tests {
         let settings = WalletServiceSettings {
             known_keys: Vec::new(),
             funding_start_index: 1,
-            voucher_master_key_id: "voucher-master".into(),
             recovery_data: RecoveryData::default(),
             pending_note_expiry_blocks: 10,
         };
@@ -739,7 +720,11 @@ mod tests {
         let mut state = ServiceState::new(
             recovery,
             &settings,
-            KnownKeys::default(),
+            KnownKeys {
+                zk: HashMap::new(),
+                ed25519: HashMap::new(),
+                hd: HdKeys::for_tests(1, 0, 0),
+            },
             genesis,
             &ledger,
             &updater,

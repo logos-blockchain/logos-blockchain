@@ -745,11 +745,7 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
 
             wallet::serde::Config {
                 known_keys,
-                ..wallet::serde::Config::with_required_values(wallet::serde::RequiredValues {
-                    voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(
-                        config.consensus_config.known_key.clone(),
-                    )),
-                })
+                ..wallet::serde::Config::default()
             }
         },
         kms: config::kms::serde::Config {

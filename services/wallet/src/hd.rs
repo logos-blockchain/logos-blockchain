@@ -6,6 +6,9 @@
 //! The receive addresses below [`HdKeys::funding_start_index`] hold the stake:
 //! funding never spends their notes, because a note has to age again to lead
 //! after it is spent.
+//!
+//! The voucher secrets are derived from the voucher master key of the same
+//! account.
 
 use std::{
     collections::HashMap,
@@ -38,6 +41,12 @@ pub fn receive_path(index: Index) -> Path {
 #[must_use]
 pub fn change_path(index: Index) -> Path {
     note_path(NoteRole::Change, index)
+}
+
+/// The path of the voucher master key
+#[must_use]
+pub const fn voucher_master_path() -> Path {
+    Path::VoucherMaster { account: ACCOUNT }
 }
 
 fn note_path(role: NoteRole, index: Index) -> Path {
@@ -137,6 +146,26 @@ impl HdKeys {
     }
 }
 
+#[cfg(test)]
+impl HdKeys {
+    /// Keys whose receive address at index `i` has the public key `i`.
+    #[must_use]
+    pub fn for_tests(
+        funding_start_index: Index,
+        next_receive_index: Index,
+        next_change_index: Index,
+    ) -> Self {
+        Self {
+            funding_start_index,
+            next_receive_index,
+            next_change_index,
+            public_keys: (0..next_receive_index)
+                .map(|index| (receive_path(index), ZkPublicKey::new(index.into())))
+                .collect(),
+        }
+    }
+}
+
 /// Asks the KMS for the public key of the key at the path.
 pub async fn public_key_at<Kms, RuntimeServiceId>(
     kms: &KmsServiceApi<Kms, RuntimeServiceId>,
@@ -168,6 +197,7 @@ mod tests {
         assert_eq!(receive_path(7).to_string(), "m/154'/0'/0'/7'");
         assert_eq!(change_path(0).to_string(), "m/154'/0'/1'/0'");
         assert_eq!(change_path(7).to_string(), "m/154'/0'/1'/7'");
+        assert_eq!(voucher_master_path().to_string(), "m/154'/0'/2'");
     }
 
     #[test]
@@ -194,20 +224,12 @@ mod tests {
         assert_eq!(keys.key_ids().count(), 5);
     }
 
-    /// Keys whose receive address at index `i` has [`public_key(i)`].
     fn keys(
         funding_start_index: Index,
         next_receive_index: Index,
         next_change_index: Index,
     ) -> HdKeys {
-        HdKeys {
-            funding_start_index,
-            next_receive_index,
-            next_change_index,
-            public_keys: (0..next_receive_index)
-                .map(|index| (receive_path(index), public_key(index)))
-                .collect(),
-        }
+        HdKeys::for_tests(funding_start_index, next_receive_index, next_change_index)
     }
 
     fn public_key(seed: u32) -> ZkPublicKey {

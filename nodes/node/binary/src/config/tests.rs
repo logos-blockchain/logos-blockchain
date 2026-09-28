@@ -22,6 +22,7 @@ use crate::{
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues,
         },
+        kms::serde::{Config as KmsConfig, PreloadKmsBackendSettings},
         mempool::ServiceConfig as MempoolServiceConfig,
         parse_log_filter_layer,
         sdp::{
@@ -36,10 +37,7 @@ use crate::{
             console::{Layer as ConsoleLayer, TokioConfig},
             filter::{EnvConfig, Layer},
         },
-        wallet::{
-            ServiceConfig as WalletServiceConfig,
-            serde::{Config as WalletConfig, RequiredValues as WalletRequiredValues},
-        },
+        wallet::ServiceConfig as WalletServiceConfig,
     },
 };
 
@@ -141,10 +139,20 @@ fn minimal_user_config() -> UserConfig {
         sdp: SdpConfig::with_required_values(SdpRequiredValues {
             funding_pk: ZkPublicKey::zero(),
         }),
-        wallet: WalletConfig::with_required_values(WalletRequiredValues {
-            voucher_master_key_id: "voucher_master_key_id".into(),
-        }),
+        kms: kms_config(),
     })
+}
+
+fn kms_config() -> KmsConfig {
+    KmsConfig {
+        backend: PreloadKmsBackendSettings {
+            mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+                .parse()
+                .expect("Mnemonic is valid"),
+            passphrase: None,
+            keys: HashMap::new(),
+        },
+    }
 }
 
 /// Environment variables applied on top of the YAML config must reach the
@@ -202,9 +210,6 @@ fn service_settings_receive_recovery_data() {
     let sdp_config = SdpConfig::with_required_values(SdpRequiredValues {
         funding_pk: ZkPublicKey::zero(),
     });
-    let wallet_config = WalletConfig::with_required_values(WalletRequiredValues {
-        voucher_master_key_id: "voucher_master_key_id".into(),
-    });
     let storage_config = StorageConfig {
         backend: RocksDbSettings {
             folder_name: "db".into(),
@@ -216,7 +221,7 @@ fn service_settings_receive_recovery_data() {
             blend: blend_config,
             cryptarchia: cryptarchia_config,
             sdp: sdp_config,
-            wallet: wallet_config,
+            kms: kms_config(),
         });
         base_config.storage = storage_config;
         base_config

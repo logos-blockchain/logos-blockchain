@@ -138,7 +138,7 @@ impl Keystore {
     pub fn kms_backend_settings(&self) -> PreloadKmsBackendSettings {
         let master = self.master_key();
         PreloadKmsBackendSettings {
-            mnemonic: Some(self.mnemonic.clone()),
+            mnemonic: self.mnemonic.clone(),
             passphrase: self.passphrase.clone(),
             keys: self
                 .secret_keys
@@ -233,9 +233,7 @@ impl Default for Keystore {
 }
 
 fn resolve(entry: &KeyEntry, master: &MasterKey) -> Key {
-    entry
-        .resolve(Some(master))
-        .expect("Every entry resolves with a master key")
+    entry.resolve(master)
 }
 
 fn key_id(key: &Key) -> KeyId {
@@ -309,7 +307,7 @@ mod tests {
     #[test]
     fn kms_backend_settings_load_every_key() {
         let keystore = Keystore::new(MNEMONIC.parse().unwrap(), Some("passphrase".to_owned()));
-        let keys = keystore.kms_backend_settings().resolve_keys().unwrap();
+        let keys = keystore.kms_backend_settings().resolve_keys();
         assert_eq!(keys.len(), keystore.secret_keys.len());
         for title in keystore.secret_keys.keys() {
             let (key_id, key) = keystore.get(title.clone()).unwrap();

@@ -18,7 +18,6 @@ impl ServiceConfig {
         WalletServiceSettings {
             known_keys: self.user.known_keys.into_iter().map(Into::into).collect(),
             funding_start_index: self.user.funding_start_index,
-            voucher_master_key_id: self.user.voucher_master_key_id.into(),
             recovery_data,
             pending_note_expiry_blocks: self.user.pending_note_expiry_blocks,
         }

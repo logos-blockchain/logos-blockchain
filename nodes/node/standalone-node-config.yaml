@@ -174,6 +174,7 @@ storage:
     column_family: blocks
 kms:
   backend:
+    mnemonic: abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
     keys:
       852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a: !Zk 1a66f6ab42521b1ac82784e2e2d3abd2fb49e5e3312a2b5fc2ef9d3ecf365c16
       e3635f207984ae779cf76b5f20714b514373f61ff96260879fe0a6d71f2dce07: !Zk b45e4886f04f676b9c014efb6b928ea7ed560ab19f3d2b5d0ba0a1d1e0946627
@@ -191,7 +192,6 @@ wallet:
     - cce9796339efd968df9cd463bc2248e4b29c86409496e8b2599da8c4c1074d22
     - dc4aec617a8889e651c88997f2c4ba7e606cc553434a526f73109d26aa9d69ac
     - e3635f207984ae779cf76b5f20714b514373f61ff96260879fe0a6d71f2dce07
-  voucher_master_key_id: cce9796339efd968df9cd463bc2248e4b29c86409496e8b2599da8c4c1074d22
 pow:
   auto_claim:
     # How often to try claiming: `seconds` paces off the wall clock, `slots`

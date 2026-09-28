@@ -27,7 +27,7 @@ pub fn create_kms_configs(
         .enumerate()
         .map(|(i, (blend_conf, private_key, zk_secret_key))| KmsConfig {
             backend: PreloadKmsBackendSettings {
-                mnemonic: None,
+                mnemonic: consensus_configs[i].mnemonic.clone(),
                 passphrase: None,
                 keys: [
                     (
@@ -43,14 +43,6 @@ pub fn create_kms_configs(
                             &consensus_configs[i].blend_note.sk.clone().into(),
                         ),
                         consensus_configs[i].blend_note.sk.clone().into(),
-                    ),
-                    (
-                        key_id_for_preload_backend(&consensus_configs[i].known_key.clone().into()),
-                        consensus_configs[i].known_key.clone().into(),
-                    ),
-                    (
-                        key_id_for_preload_backend(&consensus_configs[i].funding_sk.clone().into()),
-                        consensus_configs[i].funding_sk.clone().into(),
                     ),
                 ]
                 .into(),

@@ -1021,7 +1021,7 @@ pub(super) fn node_wallet_name(
 ) -> String {
     let role = match key.role {
         NodeWalletKeyRole::Funding => "FUNDING".to_owned(),
-        NodeWalletKeyRole::VoucherMaster => "VOUCHER_MASTER".to_owned(),
+        NodeWalletKeyRole::Stake => "STAKE".to_owned(),
         NodeWalletKeyRole::BlendZk => "BLEND_ZK".to_owned(),
         NodeWalletKeyRole::General => {
             *generic_key_index += 1;

@@ -14,26 +14,15 @@ pub struct Config {
     /// addresses below it hold the stake, which funding never spends.
     #[serde(default = "default_funding_start_index")]
     pub funding_start_index: Index,
-    pub voucher_master_key_id: KeyId,
     #[serde(default = "default_pending_note_expiry_blocks")]
     pub pending_note_expiry_blocks: u64,
 }
 
-pub struct RequiredValues {
-    pub voucher_master_key_id: KeyId,
-}
-
-impl Config {
-    #[must_use]
-    pub fn with_required_values(
-        RequiredValues {
-            voucher_master_key_id,
-        }: RequiredValues,
-    ) -> Self {
+impl Default for Config {
+    fn default() -> Self {
         Self {
             known_keys: Vec::new(),
             funding_start_index: default_funding_start_index(),
-            voucher_master_key_id,
             pending_note_expiry_blocks: default_pending_note_expiry_blocks(),
         }
     }

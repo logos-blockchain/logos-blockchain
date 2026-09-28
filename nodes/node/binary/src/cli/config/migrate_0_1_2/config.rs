@@ -1,8 +1,12 @@
-use lb_key_management_system_service::{backend::preload::KeyId, keys::Ed25519Key};
+use std::collections::HashMap;
+
+use lb_key_management_system_service::{
+    backend::preload::KeyId,
+    keys::{Ed25519Key, Key},
+};
 use lb_libp2p::ed25519::SecretKey;
 use serde::{Deserialize, Deserializer};
 
-pub use crate::config::{kms::serde::Config as KmsConfig, wallet::serde::Config as WalletConfig};
 use crate::{
     cli::config::keystore::{KeyTitle, Keystore},
     config::parse_hex_ed25519_key,
@@ -65,6 +69,21 @@ pub struct OldSdpWallet {
     pub funding_pk: KeyId,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct OldKmsConfig {
+    pub backend: OldKmsBackend,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OldKmsBackend {
+    pub keys: HashMap<KeyId, Key>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OldWalletConfig {
+    pub voucher_master_key_id: KeyId,
+}
+
 /// Holds the values of v0.1.2 configuration that should be transfered to a new
 /// config version.
 #[derive(Debug, Clone, Deserialize)]
@@ -73,8 +92,8 @@ pub struct OldConfig {
     pub blend: OldBlendConfig,
     pub cryptarchia: OldCryptarchiaConfig,
     pub sdp: OldSdpConfig,
-    pub kms: KmsConfig,
-    pub wallet: WalletConfig,
+    pub kms: OldKmsConfig,
+    pub wallet: OldWalletConfig,
 }
 
 impl OldConfig {

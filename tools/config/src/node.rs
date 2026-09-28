@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
+use lb_key_management_system_service::keys::secured_key::SecuredKey as _;
 use lb_node::{
     UserConfig,
     config::{
@@ -9,11 +9,10 @@ use lb_node::{
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
         kms::serde::PreloadKmsBackendSettings,
         sdp::serde::RequiredValues as SdpConfigRequiredValues, state::Config as StateConfig,
-        wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };
 
-use crate::{GeneralConfig, consensus::GeneralConsensusConfig, kms::key_id_for_preload_backend};
+use crate::GeneralConfig;
 
 /// Builds the node user configuration from generated deployment material.
 ///
@@ -46,7 +45,7 @@ pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
         api: api_config,
         storage: StorageConfig::default(),
         sdp: sdp_config,
-        wallet: create_wallet_config(&config.consensus_config, &config.kms_config.backend),
+        wallet: create_wallet_config(&config.kms_config.backend),
         // Mining defaults, auto-claim off: generated nodes mine and claim on
         // demand, naming the destination key on each claim request.
         pow: PoWConfig::default(),
@@ -69,17 +68,13 @@ fn create_axum_backend_settings(listen_address: SocketAddr) -> AxumBackendSettin
     }
 }
 
-fn create_wallet_config(
-    consensus: &GeneralConsensusConfig,
-    kms: &PreloadKmsBackendSettings,
-) -> WalletConfig {
+fn create_wallet_config(kms: &PreloadKmsBackendSettings) -> WalletConfig {
     // Every key of the KMS, in a stable order.
     let mut known_keys = kms.keys.keys().cloned().collect::<Vec<_>>();
     known_keys.sort();
 
-    let mut config = WalletConfig::with_required_values(WalletConfigRequiredValues {
-        voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(consensus.known_key.clone())),
-    });
-    config.known_keys = known_keys;
-    config
+    WalletConfig {
+        known_keys,
+        ..WalletConfig::default()
+    }
 }

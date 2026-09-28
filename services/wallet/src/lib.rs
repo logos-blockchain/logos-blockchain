@@ -98,9 +98,6 @@ pub enum WalletServiceError {
     #[error("Ed25519 key {0:?} is not a key of the wallet")]
     UnknownEd25519Key([u8; ED25519_PUBLIC_KEY_SIZE]),
 
-    #[error("The wallet has no HD keys, because the KMS could not derive them")]
-    HdKeysUnavailable,
-
     #[error("Cryptarchia API error: {0}")]
     CryptarchiaApi(#[from] lb_chain_service::api::ApiError),
 
@@ -382,7 +379,6 @@ pub struct WalletServiceSettings {
     /// addresses below it hold the stake, which funding never spends.
     #[serde(default = "default_funding_start_index")]
     pub funding_start_index: hd::Index,
-    pub voucher_master_key_id: KeyId,
     #[serde(skip)]
     pub recovery_data: RecoveryData,
     /// How much LIB progress a pending note reservation survives before being
@@ -554,7 +550,6 @@ where
             &service_resources_handle.state_updater,
             security_param,
         );
-        let voucher_master_key_id = settings.voucher_master_key_id;
 
         Self::backfill_missing_blocks(
             cryptarchia_info.tip,
@@ -571,7 +566,7 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &kms, &epoch_config)).await;
+                    Box::pin(Self::handle_wallet_message(msg, &mut state, &storage, &cryptarchia_api, &kms, &epoch_config)).await;
                 }
                 Ok(event) = new_block_receiver.recv() => {
                     Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &epoch_config).await;
@@ -632,7 +627,6 @@ where
     async fn handle_wallet_message(
         msg: WalletMsg,
         state: &mut ServiceState<'_>,
-        voucher_master_key_id: &KeyId,
         storage: &StorageApi<Tx>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
@@ -849,7 +843,7 @@ where
             WalletMsg::GenerateNewVoucherSecret { resp_tx } => {
                 Self::generate_new_voucher_secret(
                     state,
-                    voucher_master_key_id.clone(),
+                    KeyId::Path(hd::voucher_master_path()),
                     kms,
                     resp_tx,
                 )
@@ -917,15 +911,11 @@ where
         state: &mut ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<MantleTxBuilder, WalletServiceError> {
-        let funding_pks = if let Some(funding_pks) = funding_pks {
-            funding_pks
-        } else {
-            state.hd_keys()?.spendable_public_keys()
-        };
+        let funding_pks = funding_pks.unwrap_or_else(|| state.hd_keys().spendable_public_keys());
         let next_change_pk = if change_pk.is_some() {
             None
         } else {
-            let path = hd::change_path(state.hd_keys()?.next_change_index());
+            let path = hd::change_path(state.hd_keys().next_change_index());
             Some(hd::public_key_at(kms, path).await?)
         };
         let change_pk = change_pk
@@ -944,7 +934,7 @@ where
         // The change address is tracked before the transaction is in a block,
         // for the wallet to find the change note when it is.
         if let Some(next_change_pk) = next_change_pk {
-            state.add_change_key(next_change_pk)?;
+            state.add_change_key(next_change_pk);
         }
 
         Ok(funded)
@@ -956,9 +946,9 @@ where
         state: &mut ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<ZkPublicKey, WalletServiceError> {
-        let path = hd::receive_path(state.hd_keys()?.next_receive_index());
+        let path = hd::receive_path(state.hd_keys().next_receive_index());
         let public_key = hd::public_key_at(kms, path).await?;
-        state.add_receive_key(public_key)?;
+        state.add_receive_key(public_key);
         Ok(public_key)
     }
 

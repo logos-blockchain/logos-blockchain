@@ -23,7 +23,6 @@ use crate::{
         sdp::serde::RequiredValues as SdpConfigRequiredValues,
         update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
         update_tracing,
-        wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };
 
@@ -111,7 +110,7 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> Result<UserConf
 
     let sdp_config = build_sdp_config(keystore, sdp_args)?;
 
-    let wallet_config = build_wallet_config(keystore)?;
+    let wallet_config = build_wallet_config(keystore);
 
     let kms_config = build_kms_config(keystore);
 
@@ -226,15 +225,9 @@ fn build_pow_config(keystore: &Keystore) -> Result<PoWConfig, KeystoreError> {
     Ok(pow_config)
 }
 
-fn build_wallet_config(keystore: &Keystore) -> Result<WalletConfig, KeystoreError> {
-    let (voucher_master_key_id, _) = keystore
-        .get(KeyTitle::VOUCHER_MASTER)
-        .ok_or_else(|| KeystoreError::NotFound(KeyTitle::VOUCHER_MASTER.into()))?;
-
-    let mut wallet_config = WalletConfig::with_required_values(WalletConfigRequiredValues {
-        voucher_master_key_id,
-    });
-    wallet_config.known_keys = keystore.key_ids();
-
-    Ok(wallet_config)
+fn build_wallet_config(keystore: &Keystore) -> WalletConfig {
+    WalletConfig {
+        known_keys: keystore.key_ids(),
+        ..WalletConfig::default()
+    }
 }

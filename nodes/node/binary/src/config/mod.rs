@@ -67,8 +67,8 @@ pub struct UserConfig {
     pub api: ApiConfig,
     #[serde(default)]
     pub storage: StorageConfig,
-    #[serde(default)]
     pub kms: KmsConfig,
+    #[serde(default)]
     pub wallet: WalletConfig,
     /// Optional: an omitted section leaves mining on its defaults and
     /// auto-claim off.
@@ -84,7 +84,7 @@ pub struct RequiredValues {
     pub blend: BlendConfig,
     pub cryptarchia: CryptarchiaConfig,
     pub sdp: SdpConfig,
-    pub wallet: WalletConfig,
+    pub kms: KmsConfig,
 }
 
 impl UserConfig {
@@ -94,13 +94,13 @@ impl UserConfig {
             blend: required_values.blend,
             cryptarchia: required_values.cryptarchia,
             sdp: required_values.sdp,
-            wallet: required_values.wallet,
+            kms: required_values.kms,
 
             api: ApiConfig::default(),
             // Mining defaults, auto-claim off: unattended claiming is opt-in
             // through `pow.auto_claim.targets`.
             pow: PoWConfig::default(),
-            kms: KmsConfig::default(),
+            wallet: WalletConfig::default(),
             network: NetworkConfig::default(),
             state: StateConfig::default(),
             storage: StorageConfig::default(),
@@ -111,12 +111,7 @@ impl UserConfig {
 
     pub fn blend_provider_id(&self) -> Result<ProviderId, String> {
         let key_id = &self.blend.non_ephemeral_signing_key_id;
-        let Some(key) = self
-            .kms
-            .backend
-            .resolve_key(key_id)
-            .map_err(|error| error.to_string())?
-        else {
+        let Some(key) = self.kms.backend.resolve_key(key_id) else {
             return Err(format!(
                 "Blend non-ephemeral signing key '{key_id}' not found in KMS"
             ));
@@ -129,12 +124,7 @@ impl UserConfig {
 
     pub fn blend_zk_key(&self) -> Result<(String, ZkPublicKey), String> {
         let key_id = &self.blend.core.zk.secret_key_kms_id;
-        let Some(key) = self
-            .kms
-            .backend
-            .resolve_key(key_id)
-            .map_err(|error| error.to_string())?
-        else {
+        let Some(key) = self.kms.backend.resolve_key(key_id) else {
             return Err(format!("Blend ZK signing key '{key_id}' not found in KMS"));
         };
         let Key::Zk(secret_key) = &key else {

@@ -59,22 +59,20 @@ pub enum HdBackendError {
     Preload(#[from] PreloadBackendError),
     #[error(transparent)]
     KeyError(#[from] KeyError),
-    #[error("key at {0} cannot be derived because the master key is not set")]
-    MissingMasterKey(Path),
     #[error("key at {0} cannot be registered because it is derived from the master key")]
     RegisteringDerivedKey(Path),
 }
 
 pub struct HdKMSBackend {
     preloaded: PreloadKMSBackend,
-    master: Option<MasterKey>,
+    master: MasterKey,
 }
 
 /// The settings of the [`HdKMSBackend`].
 #[derive(Clone)]
 pub struct HdKMSBackendSettings {
     /// The BIP-39 mnemonic that the keys of [`KeyId::Path`] are derived from.
-    pub mnemonic: Option<Mnemonic>,
+    pub mnemonic: Mnemonic,
     /// The BIP-39 passphrase of the mnemonic, which is empty if not set.
     pub passphrase: Option<String>,
     /// The keys of [`KeyId::Name`], by name.
@@ -96,12 +94,8 @@ impl Debug for HdKMSBackendSettings {
 
 impl HdKMSBackend {
     /// Derives the key at the path from the master key.
-    fn derive(&self, path: &Path) -> Result<Key, HdBackendError> {
-        let master = self
-            .master
-            .as_ref()
-            .ok_or(HdBackendError::MissingMasterKey(*path))?;
-        Ok(Key::Zk(master.derive_key(path).to_zk_key()))
+    fn derive(&self, path: &Path) -> Key {
+        Key::Zk(self.master.derive_key(path).to_zk_key())
     }
 }
 
@@ -122,8 +116,7 @@ impl KMSBackend for HdKMSBackend {
         let passphrase = passphrase.as_deref().unwrap_or_default();
         Self {
             preloaded: PreloadKMSBackend::new(PreloadKMSBackendSettings { keys }),
-            master: mnemonic
-                .map(|mnemonic| MasterSeed::from_mnemonic(&mnemonic, passphrase).to_key()),
+            master: MasterSeed::from_mnemonic(&mnemonic, passphrase).to_key(),
         }
     }
 
@@ -140,7 +133,7 @@ impl KMSBackend for HdKMSBackend {
     ) -> Result<<Self::Key as SecuredKey>::PublicKey, Self::Error> {
         match key_id {
             KeyId::Name(name) => Ok(self.preloaded.public_key(name)?),
-            KeyId::Path(path) => Ok(self.derive(path)?.as_public_key()),
+            KeyId::Path(path) => Ok(self.derive(path).as_public_key()),
         }
     }
 
@@ -151,7 +144,7 @@ impl KMSBackend for HdKMSBackend {
     ) -> Result<<Self::Key as SecuredKey>::Signature, Self::Error> {
         match key_id {
             KeyId::Name(name) => Ok(self.preloaded.sign(name, payload)?),
-            KeyId::Path(path) => Ok(self.derive(path)?.sign(&payload)?),
+            KeyId::Path(path) => Ok(self.derive(path).sign(&payload)?),
         }
     }
 
@@ -160,22 +153,23 @@ impl KMSBackend for HdKMSBackend {
         key_ids: &[Self::KeyId],
         payload: <Self::Key as SecuredKey>::Payload,
     ) -> Result<<Self::Key as SecuredKey>::Signature, Self::Error> {
+        // Derived first, for the keys to outlive the references to them.
         let derived = key_ids
             .iter()
             .map(|key_id| match key_id {
-                KeyId::Name(_) => Ok(None),
-                KeyId::Path(path) => self.derive(path).map(Some),
+                KeyId::Name(_) => None,
+                KeyId::Path(path) => Some(self.derive(path)),
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Vec<_>>();
         let keys = key_ids
             .iter()
             .zip(&derived)
             .map(|(key_id, derived)| match (key_id, derived) {
-                (KeyId::Name(name), _) => Ok(self.preloaded.key(name)?),
+                (KeyId::Name(name), _) => self.preloaded.key(name),
                 (KeyId::Path(_), Some(key)) => Ok(key),
-                (KeyId::Path(path), None) => Err(HdBackendError::MissingMasterKey(*path)),
+                (KeyId::Path(_), None) => unreachable!("Key at a path is derived"),
             })
-            .collect::<Result<Vec<_>, HdBackendError>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self::Key::sign_multiple(&keys, &payload)?)
     }
@@ -187,7 +181,7 @@ impl KMSBackend for HdKMSBackend {
     ) -> Result<(), Self::Error> {
         match key_id {
             KeyId::Name(name) => Ok(self.preloaded.execute(name, operator).await?),
-            KeyId::Path(path) => Ok(self.derive(path)?.execute(operator).await?),
+            KeyId::Path(path) => Ok(self.derive(path).execute(operator).await?),
         }
     }
 }
@@ -234,7 +228,7 @@ mod tests {
     #[test]
     fn passphrase_changes_derived_keys() {
         let backend = HdKMSBackend::new(HdKMSBackendSettings {
-            mnemonic: Some(MNEMONIC.parse().unwrap()),
+            mnemonic: MNEMONIC.parse().unwrap(),
             passphrase: Some("passphrase".to_owned()),
             keys: HashMap::new(),
         });
@@ -243,20 +237,6 @@ mod tests {
             backend.public_key(&receive(0)).unwrap(),
             receive_0_key().as_public_key()
         );
-    }
-
-    #[test]
-    fn deriving_requires_master_key() {
-        let backend = HdKMSBackend::new(HdKMSBackendSettings {
-            mnemonic: None,
-            passphrase: None,
-            keys: HashMap::new(),
-        });
-
-        assert!(matches!(
-            backend.public_key(&receive(0)),
-            Err(HdBackendError::MissingMasterKey(_))
-        ));
     }
 
     #[test]
@@ -307,7 +287,7 @@ mod tests {
 
     fn backend(keys: HashMap<preload::KeyId, Key>) -> HdKMSBackend {
         HdKMSBackend::new(HdKMSBackendSettings {
-            mnemonic: Some(MNEMONIC.parse().unwrap()),
+            mnemonic: MNEMONIC.parse().unwrap(),
             passphrase: None,
             keys,
         })
