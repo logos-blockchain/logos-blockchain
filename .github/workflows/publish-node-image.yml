@@ -8,7 +8,6 @@ on:
       lc_core_version:
         description: 'LC Core Version'
         required: false
-        default: '0.3.0'
         type: string
       lb_node_version:
         description: 'LB Node Version'

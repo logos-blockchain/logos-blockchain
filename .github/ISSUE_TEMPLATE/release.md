@@ -74,6 +74,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow to complete before moving on to the next step
 - [ ] Manually trigger the [node-docker-build-workflow] from the `X.Y.Z` tag
+- [ ] Manually trigger the [node-docker-build-workflow] from the `X.Y.Z` tag. Use latest (A.B.C) Logos Core relase for `LC Core Version` and `X.Y.Z` for `LB Node Version`.
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow to complete before moving on to the next section
 

@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="${1:-0.3.0}"
+VERSION="${1}"
 PLATFORM="${2:-x86_64-linux}"
 
 # 0.3.0 merged logoscore, lgpd and lgpm into a single `logosctl` binary.

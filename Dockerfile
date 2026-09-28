@@ -2,8 +2,8 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-ARG LC_CORE_VERSION=0.3.0
-ARG LB_NODE_VERSION=0.3.0
+ARG LC_CORE_VERSION
+ARG LB_NODE_VERSION
 
 # ===========================
 # BUILD IMAGE
