@@ -1,3 +1,3 @@
-use lb_key_management_system_service::{KMSService, backend::preload::PreloadKMSBackend};
+use lb_key_management_system_service::{KMSService, backend::hd::HdKMSBackend};
 
-pub type PreloadKmsService<RuntimeServiceId> = KMSService<PreloadKMSBackend, RuntimeServiceId>;
+pub type HdKmsService<RuntimeServiceId> = KMSService<HdKMSBackend, RuntimeServiceId>;

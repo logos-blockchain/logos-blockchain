@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use lb_key_management_system_service::{
-    backend::preload::{KeyId, PreloadKMSBackendSettings},
+    backend::{hd::HdKMSBackendSettings, preload::KeyId},
     hd::{MasterKey, MasterSeed},
     keys::Key,
 };
@@ -14,12 +14,15 @@ pub struct ServiceConfig {
     pub user: Config,
 }
 
-impl TryFrom<ServiceConfig> for PreloadKMSBackendSettings {
+impl TryFrom<ServiceConfig> for HdKMSBackendSettings {
     type Error = MissingMnemonicError;
 
     fn try_from(value: ServiceConfig) -> Result<Self, Self::Error> {
+        let backend = value.user.backend;
         Ok(Self {
-            keys: value.user.backend.resolve_keys()?,
+            mnemonic: backend.mnemonic.clone(),
+            passphrase: backend.passphrase.clone(),
+            keys: backend.resolve_keys()?,
         })
     }
 }

@@ -36,7 +36,7 @@ use lb_core::{
 };
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
-    backend::{KMSBackend, preload::PreloadKMSBackend},
+    backend::{KMSBackend, hd::HdKMSBackend},
     keys::{
         ED25519_PUBLIC_KEY_SIZE, Ed25519Key, Ed25519PublicKey, KeyOperators, PayloadEncoding,
         SignatureEncoding, ZkPublicKey, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
@@ -66,7 +66,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::states::{RecoveryState, ServiceState, Wallet};
 
-type KmsBackend = PreloadKMSBackend;
+type KmsBackend = HdKMSBackend;
 type KeyId = <KmsBackend as KMSBackend>::KeyId;
 
 const LOG_TARGET: &str = wallet::SERVICE;
@@ -1095,7 +1095,7 @@ where
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<<Ed25519Key as SecuredKey>::Signature, WalletServiceError> {
         // Use hex-encoded public key as key_id for now
-        let key_id = hex::encode(pk.as_bytes());
+        let key_id = hex::encode(pk.as_bytes()).into();
 
         let payload = PayloadEncoding::Ed25519(Bytes::copy_from_slice(tx_hash.as_signing_bytes()));
         let signature = kms
@@ -1121,7 +1121,7 @@ where
         // Use hex-encoded public key as key_id for now
         let key_ids: Vec<_> = pks
             .into_iter()
-            .map(|pk| hex::encode(lb_groth16::fr_to_bytes(&pk.into_inner())))
+            .map(|pk| hex::encode(lb_groth16::fr_to_bytes(&pk.into_inner())).into())
             .collect();
 
         let payload = PayloadEncoding::Zk(tx_hash.to_fr());
