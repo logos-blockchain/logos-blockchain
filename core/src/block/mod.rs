@@ -18,7 +18,7 @@ pub use uncle::{SignedHeader, UncleHeaders};
 
 use crate::{
     crypto::{Digest as _, Hasher},
-    header::{ContentId, Header, HeaderId, Version},
+    header::{ContentId, Header, HeaderId},
     mantle::{
         traits::{Hashable, StorageSize},
         transactions::hash::{TxHash, TxHashPrefix},
@@ -56,8 +56,6 @@ pub enum Error {
 /// Why a header fails the checks that need the header alone.
 #[derive(Debug, thiserror::Error)]
 pub enum HeaderError {
-    #[error("Unsupported header version: {0:?}")]
-    UnsupportedVersion(Version),
     #[error("Expected a non-genesis slot")]
     GenesisSlot,
 }
@@ -357,9 +355,6 @@ impl<Tx> Block<Tx> {
 /// This does not check `proof_of_leadership` and the parent header
 /// since they require a ledger state.
 pub fn verify_header_alone(header: &Header) -> Result<(), HeaderError> {
-    if *header.version() != Version::Bedrock {
-        return Err(HeaderError::UnsupportedVersion(*header.version()));
-    }
     if header.slot() == Slot::genesis() {
         return Err(HeaderError::GenesisSlot);
     }
