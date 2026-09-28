@@ -53,8 +53,8 @@ where
             .fund_tx(
                 None,
                 tx_builder,
-                config.funding_pk,
-                vec![config.funding_pk],
+                Some(config.funding_pk),
+                Some(vec![config.funding_pk]),
                 0,
             )
             .await
@@ -94,8 +94,8 @@ where
             .fund_tx(
                 None,
                 tx_builder,
-                config.funding_pk,
-                vec![config.funding_pk],
+                Some(config.funding_pk),
+                Some(vec![config.funding_pk]),
                 0,
             )
             .await
@@ -135,8 +135,8 @@ where
             .fund_tx(
                 None,
                 tx_builder,
-                config.funding_pk,
-                vec![config.funding_pk],
+                Some(config.funding_pk),
+                Some(vec![config.funding_pk]),
                 0,
             )
             .await

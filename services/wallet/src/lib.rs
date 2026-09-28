@@ -1,4 +1,5 @@
 pub mod api;
+pub mod hd;
 mod states;
 
 use std::{num::NonZeroU64, time::Duration};
@@ -97,6 +98,9 @@ pub enum WalletServiceError {
     #[error("Ed25519 key {0:?} is not a key of the wallet")]
     UnknownEd25519Key([u8; ED25519_PUBLIC_KEY_SIZE]),
 
+    #[error("The wallet has no HD keys, because the KMS could not derive them")]
+    HdKeysUnavailable,
+
     #[error("Cryptarchia API error: {0}")]
     CryptarchiaApi(#[from] lb_chain_service::api::ApiError),
 
@@ -161,8 +165,12 @@ pub enum WalletMsg {
     FundTx {
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-        change_pk: ZkPublicKey,
-        funding_pks: Vec<ZkPublicKey>,
+        /// The key that receives the change, which is the next change
+        /// address if not given.
+        change_pk: Option<ZkPublicKey>,
+        /// The keys whose notes are spent, which are the HD keys but the
+        /// ones of the stake addresses if not given.
+        funding_pks: Option<Vec<ZkPublicKey>>,
         /// Percentage of the final mandatory fee reserved as a priority-fee
         /// reserve; only the unused reserve becomes the effective tip.
         priority_fee_percent: u64,
@@ -207,6 +215,10 @@ pub enum WalletMsg {
     GetClaimableVouchers {
         tip: Option<HeaderId>,
         resp_tx: Sender<Result<TipResponse<ClaimableVouchersInfo>, WalletServiceError>>,
+    },
+    /// Hands out the next receive address.
+    NextReceiveAddress {
+        resp_tx: Sender<Result<ZkPublicKey, WalletServiceError>>,
     },
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
@@ -355,6 +367,7 @@ impl WalletMsg {
             Self::SignTxWithEd25519 { .. }
             | Self::SignTxWithZk { .. }
             | Self::GenerateNewVoucherSecret { .. }
+            | Self::NextReceiveAddress { .. }
             | Self::GetKnownAddresses { .. } => None,
         }
     }
@@ -365,6 +378,10 @@ pub struct WalletServiceSettings {
     /// The keys of the KMS that the wallet signs with. The notes of the ZK
     /// keys among them are tracked.
     pub known_keys: Vec<KeyId>,
+    /// The first receive index that funding spends from. The receive
+    /// addresses below it hold the stake, which funding never spends.
+    #[serde(default = "default_funding_start_index")]
+    pub funding_start_index: hd::Index,
     pub voucher_master_key_id: KeyId,
     #[serde(skip)]
     pub recovery_data: RecoveryData,
@@ -374,6 +391,11 @@ pub struct WalletServiceSettings {
     /// blocks have passed since the reservation.
     #[serde(default = "default_pending_note_expiry_blocks")]
     pub pending_note_expiry_blocks: u64,
+}
+
+#[must_use]
+pub const fn default_funding_start_index() -> hd::Index {
+    1
 }
 
 #[must_use]
@@ -521,7 +543,7 @@ where
             .await?
             .ok_or(WalletServiceError::LedgerStateNotFound(lib))?;
 
-        let known_keys = KnownKeys::fetch(&kms, &settings.known_keys).await?;
+        let known_keys = KnownKeys::fetch(&kms, &settings, &self.initial_state).await?;
 
         let mut state = ServiceState::new(
             self.initial_state,
@@ -658,17 +680,21 @@ where
                     }
                 };
 
-                let funded = match state.fund_tx::<MainnetGasProfile>(
+                let funded = Self::fund_tx(
                     tip,
                     &tx_builder,
                     change_pk,
                     funding_pks,
                     &context,
                     priority_fee_percent,
-                ) {
+                    state,
+                    kms,
+                )
+                .await;
+                let funded = match funded {
                     Ok(funded) => funded,
                     Err(err) => {
-                        Self::send_err(resp_tx, WalletServiceError::from(err));
+                        Self::send_err(resp_tx, err);
                         return;
                     }
                 };
@@ -832,6 +858,12 @@ where
             WalletMsg::GetClaimableVouchers { tip, resp_tx } => {
                 Self::get_claimable_vouchers(tip, resp_tx, state, cryptarchia).await;
             }
+            WalletMsg::NextReceiveAddress { resp_tx } => {
+                let response = Self::next_receive_address(state, kms).await;
+                if resp_tx.send(response).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to NextReceiveAddress");
+                }
+            }
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
             }
@@ -867,6 +899,67 @@ where
         if resp_tx.send(resp).is_err() {
             debug!(target: LOG_TARGET, "Failed to respond to GetBalance");
         }
+    }
+
+    /// Funds the transaction from the keys given, or from the HD keys if
+    /// none is given.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments of `ServiceState::fund_tx` plus the state and the KMS"
+    )]
+    async fn fund_tx(
+        tip: HeaderId,
+        tx_builder: &MantleTxBuilder,
+        change_pk: Option<ZkPublicKey>,
+        funding_pks: Option<Vec<ZkPublicKey>>,
+        context: &OpsContext,
+        priority_fee_percent: u64,
+        state: &mut ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<MantleTxBuilder, WalletServiceError> {
+        let funding_pks = if let Some(funding_pks) = funding_pks {
+            funding_pks
+        } else {
+            state.hd_keys()?.spendable_public_keys()
+        };
+        let next_change_pk = if change_pk.is_some() {
+            None
+        } else {
+            let path = hd::change_path(state.hd_keys()?.next_change_index());
+            Some(hd::public_key_at(kms, path).await?)
+        };
+        let change_pk = change_pk
+            .or(next_change_pk)
+            .expect("Change key is either given or derived");
+
+        let funded = state.fund_tx::<MainnetGasProfile>(
+            tip,
+            tx_builder,
+            change_pk,
+            funding_pks,
+            context,
+            priority_fee_percent,
+        )?;
+
+        // The change address is tracked before the transaction is in a block,
+        // for the wallet to find the change note when it is.
+        if let Some(next_change_pk) = next_change_pk {
+            state.add_change_key(next_change_pk)?;
+        }
+
+        Ok(funded)
+    }
+
+    /// Hands out the next receive address, which the wallet tracks from now
+    /// on.
+    async fn next_receive_address(
+        state: &mut ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<ZkPublicKey, WalletServiceError> {
+        let path = hd::receive_path(state.hd_keys()?.next_receive_index());
+        let public_key = hd::public_key_at(kms, path).await?;
+        state.add_receive_key(public_key)?;
+        Ok(public_key)
     }
 
     async fn sign_inscription(

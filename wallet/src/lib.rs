@@ -721,6 +721,11 @@ where
         &self.known_keys
     }
 
+    /// Tracks the notes that the key receives from now on.
+    pub fn add_known_key(&mut self, pk: ZkPublicKey, id: KeyId) {
+        self.known_keys.insert(pk, id);
+    }
+
     pub fn add_known_voucher(&mut self, cm: VoucherCm, nf: VoucherNullifier, id: VoucherId) {
         self.known_vouchers.insert(cm, nf, id);
     }

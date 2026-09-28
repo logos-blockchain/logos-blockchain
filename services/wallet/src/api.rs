@@ -127,6 +127,15 @@ where
         Ok(rx.await??)
     }
 
+    /// Hands out the next receive address of the wallet.
+    pub async fn next_receive_address(&self) -> Result<ZkPublicKey, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::NextReceiveAddress { resp_tx })
+            .await?;
+        Ok(rx.await??)
+    }
+
     /// Fund a transaction, reserving `priority_fee_percent` percent of its
     /// final mandatory fee as a priority reserve. The mandatory fee includes
     /// execution and storage cost; only the unused reserve becomes an
@@ -135,8 +144,8 @@ where
         &self,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-        change_pk: ZkPublicKey,
-        funding_pks: Vec<ZkPublicKey>,
+        change_pk: Option<ZkPublicKey>,
+        funding_pks: Option<Vec<ZkPublicKey>>,
         priority_fee_percent: u64,
     ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
@@ -193,8 +202,8 @@ where
     pub async fn transfer_funds(
         &self,
         tip: Option<HeaderId>,
-        change_pk: ZkPublicKey,
-        funding_pks: Vec<ZkPublicKey>,
+        change_pk: Option<ZkPublicKey>,
+        funding_pks: Option<Vec<ZkPublicKey>>,
         recipient_pk: ZkPublicKey,
         amount: Value,
     ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {
