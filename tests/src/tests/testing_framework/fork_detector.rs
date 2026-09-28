@@ -1,11 +1,9 @@
 use std::{env as std_env, error::Error, time::Duration};
 
 use lb_testing_framework::{
-    CoreBuilderExt as _, DeploymentBuilder, LbcLocalDeployer, ScenarioBuilder,
-    ScenarioBuilderExt as _, TopologyConfig, configs::network::NetworkLayout, env,
-    run_with_failure_diagnostics,
+    AppHostDeployer, DeploymentBuilder, ScenarioBuilder, ScenarioBuilderExt as _, TopologyConfig,
+    configs::network::NetworkLayout, env, run_with_failure_diagnostics,
 };
-use testing_framework_core::scenario::Deployer as _;
 
 const RUN_DURATION_SECS: u64 = 60 * 60;
 const NODE_COUNT: usize = 3;
@@ -42,8 +40,7 @@ async fn cluster_fork_detector() -> Result<(), Box<dyn Error + Send + Sync>> {
         .expect_cluster_fork_monitor()
         .build()?;
 
-    let deployer = LbcLocalDeployer::default();
-    let runner = deployer.deploy(&scenario).await?;
+    let runner = AppHostDeployer.deploy(&scenario).await?;
     let _handle = run_with_failure_diagnostics(runner, &mut scenario).await?;
 
     Ok(())

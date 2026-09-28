@@ -2,7 +2,6 @@ mod report;
 
 use std::{
     collections::{HashMap, HashSet},
-    marker::PhantomData,
     num::NonZeroU64,
     time::{Duration, Instant},
 };
@@ -10,14 +9,13 @@ use std::{
 use async_trait::async_trait;
 use lb_node::{HeaderId, config::deployment::DeploymentSettings};
 use report::{ReportFormatter, SummaryState};
+use testing_framework_app::AppHostEnv;
 use testing_framework_core::scenario::{DynError, Expectation, RunContext};
 use thiserror::Error;
 
 use crate::{
-    NodeHeadSnapshot,
-    framework::LbcEnv,
-    node::configs::{default_e2e_deployment_settings, deployment::TopologyConfig},
-    workloads::LbcBlockFeedEnv,
+    NodeHeadSnapshot, node::configs::default_e2e_deployment_settings,
+    workloads::LbcRunContextExt as _,
 };
 
 const DEFAULT_TIP_STALL_THRESHOLD: Duration = Duration::from_mins(3);
@@ -33,7 +31,7 @@ const BROADCAST_LATENCY: Duration = Duration::from_secs(1);
 /// snapshots and only fails on *proven* LIB conflicts (incompatible finalized
 /// branches), not on transient tip divergence.
 #[derive(Clone)]
-pub struct ClusterForkMonitor<E = LbcEnv> {
+pub struct ClusterForkMonitor {
     /// Largest number of distinct tips observed in any snapshot.
     max_tip_set_size: usize,
     /// Largest number of distinct LIBs observed in any snapshot.
@@ -58,8 +56,6 @@ pub struct ClusterForkMonitor<E = LbcEnv> {
     ancestry_edges: HashMap<HeaderId, HeaderId>,
     /// Per-node tip progress state used to detect lagging nodes.
     node_progress: HashMap<String, NodeProgressState>,
-    /// Binds the monitor to the scenario environment without storing a value.
-    _env: PhantomData<fn() -> E>,
 }
 
 #[derive(Debug, Error)]
@@ -252,7 +248,7 @@ impl NodeProgressState {
     }
 }
 
-impl<E> Default for ClusterForkMonitor<E> {
+impl Default for ClusterForkMonitor {
     fn default() -> Self {
         Self {
             max_tip_set_size: 0,
@@ -267,19 +263,18 @@ impl<E> Default for ClusterForkMonitor<E> {
             next_progress_log_at: None,
             ancestry_edges: HashMap::new(),
             node_progress: HashMap::new(),
-            _env: PhantomData,
         }
     }
 }
 
 /// Derives runtime stall budgets from the same deployment path used by the
 /// local testing environment.
-fn derive_thresholds<E>(ctx: &RunContext<E>) -> (Duration, Duration, Duration)
-where
-    E: LbcBlockFeedEnv,
-{
-    let config: &TopologyConfig = ctx.descriptors().config();
-    let Some(genesis_tx) = config.genesis_block.clone() else {
+fn derive_thresholds(ctx: &RunContext<AppHostEnv>) -> (Duration, Duration, Duration) {
+    let Some(genesis_tx) = ctx
+        .lbc_deployment()
+        .ok()
+        .and_then(|deployment| deployment.config().genesis_block.clone())
+    else {
         return (
             DEFAULT_TIP_STALL_THRESHOLD,
             DEFAULT_NODE_TIP_STALL_THRESHOLD,
@@ -288,7 +283,7 @@ where
     };
 
     let deployment = default_e2e_deployment_settings(&genesis_tx);
-    let node_count = ctx.node_clients().len() as u64;
+    let node_count = ctx.lbc_clients().map_or(0, |clients| clients.len()) as u64;
 
     (
         propagation_budget(3, node_count, &deployment, 3.0),
@@ -346,28 +341,25 @@ fn propagation_budget(
 }
 
 #[async_trait]
-impl<E> Expectation<E> for ClusterForkMonitor<E>
-where
-    E: LbcBlockFeedEnv,
-{
+impl Expectation<AppHostEnv> for ClusterForkMonitor {
     fn name(&self) -> &'static str {
         "cluster_fork_monitor"
     }
 
-    async fn start_capture(&mut self, ctx: &RunContext<E>) -> Result<(), DynError> {
-        if ctx.node_clients().len() < 2 {
+    async fn start_capture(&mut self, ctx: &RunContext<AppHostEnv>) -> Result<(), DynError> {
+        if ctx.lbc_clients()?.len() < 2 {
             return Err(ClusterForkMonitorError::InsufficientNodes.into());
         }
 
         self.reset_capture_state();
         self.apply_thresholds(derive_thresholds(ctx));
-        self.security_param = NonZeroU64::from(ctx.descriptors().config().security_param).get();
+        self.security_param = NonZeroU64::from(ctx.lbc_deployment()?.config().security_param).get();
 
         Ok(())
     }
 
-    async fn check_during_capture(&mut self, ctx: &RunContext<E>) -> Result<(), DynError> {
-        let snapshot = E::block_feed(ctx)?.snapshot();
+    async fn check_during_capture(&mut self, ctx: &RunContext<AppHostEnv>) -> Result<(), DynError> {
+        let snapshot = ctx.block_feed()?.snapshot();
         let analysis = SnapshotAnalysis::new(&snapshot.node_heads, &snapshot.parent_edges);
 
         self.observe_snapshot(&analysis)?;
@@ -376,8 +368,8 @@ where
         Ok(())
     }
 
-    async fn evaluate(&mut self, ctx: &RunContext<E>) -> Result<(), DynError> {
-        let snapshot = E::block_feed(ctx)?.snapshot();
+    async fn evaluate(&mut self, ctx: &RunContext<AppHostEnv>) -> Result<(), DynError> {
+        let snapshot = ctx.block_feed()?.snapshot();
         let analysis = SnapshotAnalysis::new(&snapshot.node_heads, &snapshot.parent_edges);
 
         self.observe_snapshot(&analysis)?;
@@ -407,7 +399,7 @@ where
     }
 }
 
-impl<E> ClusterForkMonitor<E> {
+impl ClusterForkMonitor {
     /// Resets all runtime state at the start of a new capture window.
     fn reset_capture_state(&mut self) {
         self.next_progress_log_at = Some(Instant::now() + PROGRESS_LOG_INTERVAL);

@@ -1,3 +1,4 @@
+mod app;
 mod block_feed;
 mod compose;
 mod constants;
@@ -10,14 +11,15 @@ mod snapshot;
 use std::{
     env,
     num::{NonZeroU64, NonZeroUsize},
+    time::Duration,
 };
 
+pub use app::LbcClusterApp;
 use async_trait::async_trait;
 pub use block_feed::{
-    BlockFeed, BlockFeedCollector, BlockFeedCollectorRuntime, BlockFeedExtensionFactory,
-    BlockFeedObservation, BlockFeedObserver, BlockFeedSnapshot, BlockFeedWaitError, BlockRecord,
-    BoxedBlockFeedCollector, NodeHeadSnapshot, ObservedBlock, block_feed_source_provider,
-    block_feed_sources, named_block_feed_sources,
+    BlockFeed, BlockFeedCollector, BlockFeedCollectorRuntime, BlockFeedObservation,
+    BlockFeedObserver, BlockFeedSnapshot, BlockFeedWaitError, BlockRecord, BoxedBlockFeedCollector,
+    NodeHeadSnapshot, ObservedBlock, block_feed_sources, named_block_feed_sources,
 };
 use common_http_client::BasicAuthCredentials;
 use lb_config::kms::key_id_for_preload_backend;
@@ -25,14 +27,20 @@ use lb_core::block::genesis::GenesisBlock;
 use lb_node::config::RunConfig;
 use reqwest::Url;
 pub use snapshot::NodeStateSnapshotStore;
+pub use testing_framework_app::{
+    AppHost, AppHostDeployError, AppHostDeployer, AppHostEnv, AppRunContextExt,
+};
+use testing_framework_app::{AppHostScenarioBuilder, AppScenarioBuilderExt as _};
 use testing_framework_core::{
     scenario::{
-        Application, DynError, ExternalNodeSource, NodeAccess,
-        ScenarioBuilder as CoreScenarioBuilder,
+        Application, DynError, Expectation, ExternalNodeSource, NodeAccess, ReadinessProbe,
+        Scenario, ScenarioBuildError, Workload,
     },
-    topology::{DeploymentProvider, DeploymentSeed, DynTopologyError},
+    topology::DeploymentProvider,
 };
-use testing_framework_runner_local::{ManualCluster, ProcessDeployer};
+use testing_framework_runner_compose::ComposeProvisioner;
+use testing_framework_runner_k8s::K8sClusterProvisioner;
+use testing_framework_runner_local::ManualCluster;
 
 use crate::{
     FailureDiagnosticsExpectation,
@@ -49,15 +57,13 @@ use crate::{
 
 const DEFAULT_PAYLOAD_BYTES: usize = 128;
 
-pub type ScenarioBuilder = CoreScenarioBuilder<LbcEnv>;
 pub type ScenarioBuilderWith = ScenarioBuilder;
-
-pub type LbcLocalDeployer = ProcessDeployer<LbcEnv>;
-pub type LbcComposeDeployer = testing_framework_runner_compose::ComposeDeployer<LbcEnv>;
-pub type LbcK8sDeployer = testing_framework_runner_k8s::K8sDeployer<LbcEnv>;
 
 pub type LbcManualCluster = ManualCluster<LbcEnv>;
 pub type LbcK8sManualCluster = testing_framework_runner_k8s::ManualCluster<LbcEnv>;
+
+/// Scenario over the application host environment hosting the Logos cluster.
+pub type LbcScenario = Scenario<AppHostEnv>;
 
 #[derive(Clone)]
 pub struct LbcEnv;
@@ -85,8 +91,10 @@ impl Application for LbcEnv {
         Ok(NodeHttpClient::from_url(base_url))
     }
 
-    fn node_readiness_path() -> &'static str {
-        lb_http_api_common::paths::CRYPTARCHIA_INFO
+    fn node_readiness_probe() -> ReadinessProbe {
+        ReadinessProbe::Http {
+            path: lb_http_api_common::paths::CRYPTARCHIA_INFO,
+        }
     }
 }
 
@@ -104,51 +112,111 @@ fn external_basic_auth(endpoint: &Url) -> Option<BasicAuthCredentials> {
     Some(BasicAuthCredentials::new(username, Some(password)))
 }
 
-pub trait CoreBuilderExt: Sized {
-    #[must_use]
-    fn deployment_with(f: impl FnOnce(DeploymentBuilder) -> DeploymentBuilder) -> Self;
-
-    #[must_use]
-    fn with_block_feed(self) -> Self;
-
-    #[must_use]
-    fn with_wallet_config(self, wallet: WalletConfig) -> Self;
+/// Backend that provisions the Logos cluster application.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LbcClusterBackend {
+    #[default]
+    Local,
+    Compose,
+    K8s,
 }
 
-impl CoreBuilderExt for ScenarioBuilder {
-    fn deployment_with(f: impl FnOnce(DeploymentBuilder) -> DeploymentBuilder) -> Self {
+/// Scenario builder for Logos blockchain clusters over the unified
+/// app-composition model.
+///
+/// The cluster is registered as an application when the scenario is built;
+/// the backend provisioner is selected with [`Self::with_backend`]. Deploy the
+/// built scenario with [`AppHostDeployer`].
+pub struct ScenarioBuilder {
+    inner: AppHostScenarioBuilder,
+    app: LbcClusterApp,
+    backend: LbcClusterBackend,
+}
+
+impl ScenarioBuilder {
+    #[must_use]
+    pub fn new(deployment_provider: Box<dyn DeploymentProvider<DeploymentPlan>>) -> Self {
+        Self {
+            inner: AppHost::scenario(),
+            app: LbcClusterApp::new(deployment_provider),
+            backend: LbcClusterBackend::default(),
+        }
+    }
+
+    #[must_use]
+    pub fn deployment_with(f: impl FnOnce(DeploymentBuilder) -> DeploymentBuilder) -> Self {
         let topology = f(DeploymentBuilder::new(TopologyConfig::empty()));
 
         Self::new(Box::new(topology)).with_block_feed()
     }
 
-    fn with_block_feed(self) -> Self {
-        testing_framework_core::scenario::CoreBuilderExt::with_runtime_extension_factory(
-            self,
-            Box::new(BlockFeedExtensionFactory),
-        )
+    #[must_use]
+    pub const fn with_backend(mut self, backend: LbcClusterBackend) -> Self {
+        self.backend = backend;
+        self
     }
 
-    fn with_wallet_config(self, wallet: WalletConfig) -> Self {
-        self.map_deployment_provider(|provider| {
-            Box::new(WalletConfigProvider {
-                inner: provider,
-                wallet,
-            })
-        })
+    #[must_use]
+    pub fn with_block_feed(mut self) -> Self {
+        self.app = self.app.with_block_feed();
+        self
     }
-}
 
-struct WalletConfigProvider {
-    inner: Box<dyn DeploymentProvider<DeploymentPlan>>,
-    wallet: WalletConfig,
-}
+    #[must_use]
+    pub fn with_wallet_config(mut self, wallet: WalletConfig) -> Self {
+        self.app = self.app.with_wallet_config(wallet);
+        self
+    }
 
-impl DeploymentProvider<DeploymentPlan> for WalletConfigProvider {
-    fn build(&self, seed: Option<&DeploymentSeed>) -> Result<DeploymentPlan, DynTopologyError> {
-        let mut deployment = self.inner.build(seed)?;
-        apply_wallet_config_to_deployment(&mut deployment, &self.wallet);
-        Ok(deployment)
+    #[must_use]
+    pub fn with_external_node(mut self, node: ExternalNodeSource) -> Self {
+        self.app = self.app.with_external_node(node);
+        self
+    }
+
+    #[must_use]
+    pub fn with_external_only(mut self) -> Self {
+        self.app = self.app.with_external_only();
+        self
+    }
+
+    #[must_use]
+    pub fn with_run_duration(mut self, duration: Duration) -> Self {
+        self.inner = self.inner.with_run_duration(duration);
+        self
+    }
+
+    #[must_use]
+    pub fn with_workload<W>(mut self, workload: W) -> Self
+    where
+        W: Workload<AppHostEnv> + 'static,
+    {
+        self.inner = self.inner.with_workload(workload);
+        self
+    }
+
+    #[must_use]
+    pub fn with_expectation<X>(mut self, expectation: X) -> Self
+    where
+        X: Expectation<AppHostEnv> + 'static,
+    {
+        self.inner = self.inner.with_expectation(expectation);
+        self
+    }
+
+    pub fn build(self) -> Result<LbcScenario, ScenarioBuildError> {
+        let Self {
+            inner,
+            app,
+            backend,
+        } = self;
+
+        match backend {
+            LbcClusterBackend::Local => inner.with_app(app),
+            LbcClusterBackend::Compose => inner.with_app_using(app, ComposeProvisioner::default()),
+            LbcClusterBackend::K8s => inner.with_app_using(app, K8sClusterProvisioner),
+        }
+        .build()
     }
 }
 
@@ -261,9 +329,9 @@ impl ScenarioBuilderExt for ScenarioBuilderWith {
     }
 
     fn expect_cluster_fork_monitor(self) -> Self {
-        self.with_expectation(FailureDiagnosticsExpectation::new(ClusterForkMonitor::<
-            LbcEnv,
-        >::default()))
+        self.with_expectation(FailureDiagnosticsExpectation::new(
+            ClusterForkMonitor::default(),
+        ))
     }
 
     fn initialize_wallet(self, total_funds: u64, users: usize) -> Self {

@@ -8,34 +8,53 @@ use std::sync::Arc;
 pub use consensus_liveness::ConsensusLiveness;
 pub use fork_monitor::ClusterForkMonitor;
 pub use inscription::*;
-use testing_framework_core::scenario::{Application, DynError, RunContext};
+use testing_framework_app::{AppHostEnv, AppRunContextExt as _};
+use testing_framework_core::scenario::{ClusterHandle, DynError, RunContext};
 use tokio::sync::broadcast;
 
 use crate::{BlockFeed, BlockRecord, NodeHttpClient, framework::LbcEnv, node::DeploymentPlan};
 
 pub type BlockFeedSubscription = broadcast::Receiver<Arc<BlockRecord>>;
 
-/// Common environment bounds required by Logos Blockchain-specific workloads.
-pub trait LbcScenarioEnv:
-    Application<Deployment = DeploymentPlan, NodeClient = NodeHttpClient>
-{
+/// Access to the Logos cluster application from workload run contexts.
+pub trait LbcRunContextExt {
+    /// Returns the Logos cluster handle exposed by the cluster application.
+    fn lbc_cluster(&self) -> Result<ClusterHandle<LbcEnv>, DynError>;
+
+    /// Returns the deployment plan the managed cluster was provisioned from.
+    fn lbc_deployment(&self) -> Result<DeploymentPlan, DynError>;
+
+    /// Returns the current node clients of the Logos cluster.
+    fn lbc_clients(&self) -> Result<Vec<NodeHttpClient>, DynError>;
+
+    /// Returns the shared block feed exposed by the cluster application.
+    fn block_feed(&self) -> Result<BlockFeed, DynError>;
+
+    /// Subscribes to the shared block feed.
+    fn block_feed_subscription(&self) -> Result<BlockFeedSubscription, DynError>;
 }
 
-impl LbcScenarioEnv for LbcEnv {}
-
-/// Extension trait for environments that expose block feed views.
-pub trait LbcBlockFeedEnv: LbcScenarioEnv + Sized {
-    fn block_feed_subscription(ctx: &RunContext<Self>) -> Result<BlockFeedSubscription, DynError>;
-
-    fn block_feed(ctx: &RunContext<Self>) -> Result<BlockFeed, DynError>;
-}
-
-impl LbcBlockFeedEnv for LbcEnv {
-    fn block_feed_subscription(ctx: &RunContext<Self>) -> Result<BlockFeedSubscription, DynError> {
-        Self::block_feed(ctx).map(|feed| feed.subscribe())
+impl LbcRunContextExt for RunContext<AppHostEnv> {
+    fn lbc_cluster(&self) -> Result<ClusterHandle<LbcEnv>, DynError> {
+        self.require_app::<ClusterHandle<LbcEnv>>()
     }
 
-    fn block_feed(ctx: &RunContext<Self>) -> Result<BlockFeed, DynError> {
-        ctx.require_extension::<BlockFeed>()
+    fn lbc_deployment(&self) -> Result<DeploymentPlan, DynError> {
+        self.lbc_cluster()?
+            .deployment()
+            .cloned()
+            .ok_or_else(|| "logos cluster has no managed deployment plan".into())
+    }
+
+    fn lbc_clients(&self) -> Result<Vec<NodeHttpClient>, DynError> {
+        Ok(self.lbc_cluster()?.clients())
+    }
+
+    fn block_feed(&self) -> Result<BlockFeed, DynError> {
+        self.require_app::<BlockFeed>()
+    }
+
+    fn block_feed_subscription(&self) -> Result<BlockFeedSubscription, DynError> {
+        self.block_feed().map(|feed| feed.subscribe())
     }
 }

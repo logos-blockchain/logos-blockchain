@@ -164,8 +164,7 @@ pub async fn start_node(
     let start_result = {
         let cluster = world
             .cluster
-            .local_cluster
-            .as_ref()
+            .local_cluster()
             .expect("local cluster checked");
         Box::pin(cluster.start_node_with(node_name, start_options))
             .await
@@ -231,8 +230,7 @@ pub async fn start_node(
         let stop_result = {
             let cluster = world
                 .cluster
-                .local_cluster
-                .as_ref()
+                .local_cluster()
                 .expect("local cluster checked");
             cluster
                 .stop_node(&started_node_name)
@@ -257,8 +255,7 @@ pub async fn start_node(
         let restart_result = {
             let cluster = world
                 .cluster
-                .local_cluster
-                .as_ref()
+                .local_cluster()
                 .expect("local cluster checked");
             cluster
                 .restart_node(&started_node_name)
@@ -341,8 +338,7 @@ pub async fn start_node(
     if !immediate_start {
         let cluster = world
             .cluster
-            .local_cluster
-            .as_ref()
+            .local_cluster()
             .expect("local cluster checked");
         ensure_node_ready(
             cluster,
@@ -413,8 +409,7 @@ fn check_tokio_console_port(node_name: &str, port: u16) {
 pub async fn stop_node(world: &mut CucumberWorld, step: &str, node_name: &str) -> StepResult {
     let cluster = world
         .cluster
-        .local_cluster
-        .as_ref()
+        .local_cluster()
         .ok_or(StepError::LogicalError {
             message: "No local cluster available".into(),
         })?;
@@ -454,8 +449,7 @@ pub async fn restart_node(world: &mut CucumberWorld, step: &str, node_name: &str
 
     let cluster = world
         .cluster
-        .local_cluster
-        .as_ref()
+        .local_cluster()
         .ok_or(StepError::LogicalError {
             message: "No local cluster available".into(),
         })?;
@@ -755,7 +749,7 @@ fn populate_slots_per_epoch_from_deployment(
 // Ensure this node is ready, and achieved `Mode::OnLine` if it is a bootstrap
 // node.
 async fn ensure_node_ready(
-    cluster: &LbcManualCluster,
+    cluster: &ClusterHandle<LbcEnv>,
     client: &NodeHttpClient,
     node_name: &str,
     started_node_name: &str,
@@ -848,7 +842,7 @@ async fn verify_online(
 
 /// Wait for all nodes to become responsive
 pub async fn wait_all_nodes_responive(
-    cluster: &LbcManualCluster,
+    cluster: &ClusterHandle<LbcEnv>,
     time_out: Duration,
 ) -> StepResult {
     timeout(time_out, cluster.wait_network_ready())

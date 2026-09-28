@@ -1,10 +1,8 @@
 use std::time::Duration;
 
 use lb_testing_framework::{
-    CoreBuilderExt as _, LbcLocalDeployer, ScenarioBuilder, ScenarioBuilderExt as _,
-    run_with_failure_diagnostics,
+    AppHostDeployer, ScenarioBuilder, ScenarioBuilderExt as _, run_with_failure_diagnostics,
 };
-use testing_framework_core::scenario::Deployer as _;
 
 #[tokio::test]
 async fn smoke_two_validators_run_180s() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -19,8 +17,7 @@ async fn smoke_two_validators_run_180s() -> Result<(), Box<dyn std::error::Error
             .with_run_duration(duration)
             .expect_consensus_liveness()
             .build()?;
-    let deployer = LbcLocalDeployer::default();
-    let runner = deployer.deploy(&scenario).await?;
+    let runner = AppHostDeployer.deploy(&scenario).await?;
     let _handle = run_with_failure_diagnostics(runner, &mut scenario).await?;
     Ok(())
 }

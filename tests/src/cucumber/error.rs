@@ -7,7 +7,7 @@ use lb_testing_framework::configs::wallet::WalletConfigError;
 use lb_utils::bounded::BoundedError;
 use lb_wallet::WalletError;
 use lb_zksign::ZkSignError;
-use testing_framework_core::scenario::ScenarioBuildError;
+use testing_framework_core::scenario::{DynError, ScenarioBuildError};
 use testing_framework_runner_local::ManualClusterError;
 use thiserror::Error;
 
@@ -15,6 +15,8 @@ use crate::cucumber::world::DeployerKind;
 
 #[derive(Debug, Error)]
 pub enum StepError {
+    #[error(transparent)]
+    ClusterControl(#[from] DynError),
     #[error("deployer is not selected; set it first (e.g. `Given deployer is \"local\"`)")]
     MissingDeployer,
     #[error("scenario topology is not configured")]

@@ -1,6 +1,5 @@
 use std::{
     collections::HashSet,
-    marker::PhantomData,
     num::{NonZeroU64, NonZeroUsize},
     sync::{
         Arc,
@@ -14,23 +13,23 @@ use common_http_client::ApiBlock;
 use lb_core::mantle::ops::OpRef;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::HeaderId;
+use testing_framework_app::AppHostEnv;
 use testing_framework_core::scenario::{DynError, Expectation, RunContext};
 use thiserror::Error;
 use tokio::{sync::broadcast, time::sleep};
 
 use super::workload::{SubmissionPlan, limited_user_count, submission_plan};
-use crate::{framework::LbcEnv, workloads::LbcBlockFeedEnv};
+use crate::workloads::LbcRunContextExt as _;
 
 const MIN_INCLUSION_RATIO: f64 = 0.5;
 const CATCHUP_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_CATCHUP_WAIT: Duration = Duration::from_mins(1);
 
 #[derive(Clone)]
-pub struct TxInclusionExpectation<E = LbcEnv> {
+pub struct TxInclusionExpectation {
     txs_per_block: NonZeroU64,
     user_limit: Option<NonZeroUsize>,
     capture_state: Option<CaptureState>,
-    _env: PhantomData<fn() -> E>,
 }
 
 #[derive(Clone)]
@@ -51,7 +50,7 @@ enum TxExpectationError {
     InsufficientInclusions { observed: u64, required: u64 },
 }
 
-impl<E> TxInclusionExpectation<E> {
+impl TxInclusionExpectation {
     pub const NAME: &'static str = "tx_inclusion_expectation";
 
     #[must_use]
@@ -60,21 +59,17 @@ impl<E> TxInclusionExpectation<E> {
             txs_per_block,
             user_limit,
             capture_state: None,
-            _env: PhantomData,
         }
     }
 }
 
 #[async_trait]
-impl<E> Expectation<E> for TxInclusionExpectation<E>
-where
-    E: LbcBlockFeedEnv,
-{
+impl Expectation<AppHostEnv> for TxInclusionExpectation {
     fn name(&self) -> &'static str {
         Self::NAME
     }
 
-    async fn start_capture(&mut self, ctx: &RunContext<E>) -> Result<(), DynError> {
+    async fn start_capture(&mut self, ctx: &RunContext<AppHostEnv>) -> Result<(), DynError> {
         if self.capture_state.is_some() {
             return Ok(());
         }
@@ -92,7 +87,7 @@ where
         );
 
         let observed = Arc::new(AtomicU64::new(0));
-        let mut receiver = E::block_feed_subscription(ctx)?;
+        let mut receiver = ctx.block_feed_subscription()?;
         let tracked_accounts = Arc::new(tracked_accounts);
         let captured_observed = Arc::clone(&observed);
 
@@ -138,7 +133,7 @@ where
         Ok(())
     }
 
-    async fn evaluate(&mut self, ctx: &RunContext<E>) -> Result<(), DynError> {
+    async fn evaluate(&mut self, ctx: &RunContext<AppHostEnv>) -> Result<(), DynError> {
         let state = self
             .capture_state
             .as_ref()
@@ -172,10 +167,10 @@ fn report_inclusion_result(observed: u64, required: u64, expected: u64) -> Resul
     Ok(())
 }
 
-async fn wait_for_required_inclusions<E: LbcBlockFeedEnv>(
+async fn wait_for_required_inclusions(
     state: &CaptureState,
     required: u64,
-    ctx: &RunContext<E>,
+    ctx: &RunContext<AppHostEnv>,
 ) -> u64 {
     let mut observed = state.observed.load(Ordering::Relaxed);
     if observed >= required {
@@ -192,11 +187,16 @@ async fn wait_for_required_inclusions<E: LbcBlockFeedEnv>(
     observed
 }
 
-fn build_capture_plan<E: LbcBlockFeedEnv>(
-    expectation: &TxInclusionExpectation<E>,
-    ctx: &RunContext<E>,
+fn build_capture_plan(
+    expectation: &TxInclusionExpectation,
+    ctx: &RunContext<AppHostEnv>,
 ) -> Result<(SubmissionPlan, HashSet<ZkPublicKey>), DynError> {
-    let wallet_accounts = ctx.descriptors().config().wallet_config.accounts.clone();
+    let wallet_accounts = ctx
+        .lbc_deployment()?
+        .config()
+        .wallet_config
+        .accounts
+        .clone();
     if wallet_accounts.is_empty() {
         return Err(TxExpectationError::MissingAccounts.into());
     }
@@ -213,7 +213,7 @@ fn build_capture_plan<E: LbcBlockFeedEnv>(
     Ok((plan, wallet_pks))
 }
 
-const fn catchup_wait_budget<E: LbcBlockFeedEnv>(_ctx: &RunContext<E>) -> Duration {
+const fn catchup_wait_budget(_ctx: &RunContext<AppHostEnv>) -> Duration {
     // Transactions can remain pending until the end of the workload window on
     // slower runners, so a tiny slot-based hint is too optimistic here.
     MAX_CATCHUP_WAIT

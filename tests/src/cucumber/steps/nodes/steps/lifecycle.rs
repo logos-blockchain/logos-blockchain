@@ -14,7 +14,11 @@ use super::{
 
 #[given(expr = "I have a cluster with capacity of {int} nodes")]
 #[when(expr = "I have a cluster with capacity of {int} nodes")]
-fn step_manual_cluster(world: &mut CucumberWorld, step: &Step, nodes_count: usize) -> StepResult {
+async fn step_manual_cluster(
+    world: &mut CucumberWorld,
+    step: &Step,
+    nodes_count: usize,
+) -> StepResult {
     install_local_manual_cluster(
         world,
         ManualClusterSpec {
@@ -22,6 +26,7 @@ fn step_manual_cluster(world: &mut CucumberWorld, step: &Step, nodes_count: usiz
             capacity: nodes_count,
         },
     )
+    .await
     .inspect_err(|e| {
         warn!(target: TARGET, "Step '{step}' error: {e}");
     })
@@ -29,7 +34,7 @@ fn step_manual_cluster(world: &mut CucumberWorld, step: &Step, nodes_count: usiz
 
 #[given(expr = "I have a devnet cluster with capacity of {int} nodes")]
 #[when(expr = "I have a devnet cluster with capacity of {int} nodes")]
-fn step_manual_devnet_cluster(
+async fn step_manual_devnet_cluster(
     world: &mut CucumberWorld,
     step: &Step,
     nodes_count: usize,
@@ -41,6 +46,7 @@ fn step_manual_devnet_cluster(
             capacity: nodes_count,
         },
     )
+    .await
     .inspect_err(|e| {
         warn!(target: TARGET, "Step '{step}' error: {e}");
     })

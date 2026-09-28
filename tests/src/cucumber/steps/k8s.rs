@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use cucumber::{gherkin::Step, given, then, when};
-use lb_testing_framework::{K8sManualClusterError, LbcK8sDeployer};
+use lb_testing_framework::{K8sManualClusterError, LbcK8sManualCluster};
 use testing_framework_core::scenario::{PeerSelection, StartNodeOptions};
 
 use crate::cucumber::{
@@ -25,9 +25,7 @@ use crate::cucumber::{
 async fn step_k8s_manual_cluster(world: &mut CucumberWorld, nodes_count: usize) -> StepResult {
     let deployment = build_manual_cluster_deployment(world, nodes_count)?;
 
-    let deployer = LbcK8sDeployer::default();
-    let cluster = deployer
-        .manual_cluster_from_descriptors(deployment)
+    let cluster = LbcK8sManualCluster::from_topology(deployment)
         .await
         .map_err(|e| match e {
             K8sManualClusterError::ClientInit { source } => StepError::Preflight {
@@ -168,7 +166,7 @@ async fn step_k8s_manual_node_has_peers(
 #[then("I stop all k8s manual nodes")]
 async fn step_k8s_manual_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
     world.reset_wallet_scanner_after_current_iteration().await;
-    stop_active_manual_cluster(world)?;
+    stop_active_manual_cluster(world).await?;
     world.cluster.k8s_manual_cluster = None;
     Ok(())
 }

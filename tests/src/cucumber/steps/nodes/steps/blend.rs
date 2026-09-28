@@ -465,7 +465,7 @@ async fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
 
     world.reset_wallet_scanner_after_current_iteration().await;
     world.zone.clear();
-    if let Err(error) = stop_active_manual_cluster(world) {
+    if let Err(error) = stop_active_manual_cluster(world).await {
         background_cleanup_errors.push(error.to_string());
     }
 

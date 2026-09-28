@@ -9,7 +9,7 @@ use lb_core::mantle::Utxo;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
-    DeploymentBuilder, LbcEnv, LbcLocalDeployer, LbcManualCluster, NodeHttpClient, TopologyConfig,
+    DeploymentBuilder, LbcEnv, LbcManualCluster, NodeHttpClient, TopologyConfig,
     configs::wallet::WalletConfig, internal::DeploymentPlan, is_truthy_env,
     record_system_monitor_event, register_system_monitor_output_file,
     unregister_system_monitor_output_file,
@@ -115,7 +115,7 @@ pub fn build_local_manual_cluster(
         .build()
         .expect("manual-cluster deployment should build");
 
-    let cluster = LbcLocalDeployer::new().manual_cluster_from_descriptors(deployment.clone());
+    let cluster = LbcManualCluster::from_topology(deployment.clone());
     let system_monitor_output_path = scenario_base_dir.join("system_stats.ndjson");
 
     LocalManualClusterHarnessBase {

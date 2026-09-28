@@ -29,10 +29,10 @@ use lb_node::{
 use rand::Rng as _;
 use testing_framework_core::scenario::{Application, DynError, PeerSelection, StartNodeOptions};
 use testing_framework_runner_local::{
-    BinaryProviderRef, BuildBinaryProvider, BuildCommand, BuiltNodeConfig, DownloadBinaryProvider,
-    DownloadChecksum, DownloadUrl, EnvBinaryProvider, FallbackBinaryProvider, LaunchEnvVar,
-    LaunchFile, LocalDeployerEnv, NodeConfigEntry, NodeEndpointPort, NodeEndpoints,
-    PathBinaryProvider, ProcessSpawnError, env::Node, process::LaunchSpec,
+    BinaryProviderRef, BuildBinaryProvider, BuildCommand, DownloadBinaryProvider, DownloadChecksum,
+    DownloadUrl, EnvBinaryProvider, FallbackBinaryProvider, LaunchEnvVar, LaunchFile,
+    LocalBuildContext, LocalDeployerEnv, LocalPeerNode, NodeEndpointPort, NodeEndpoints,
+    PathBinaryProvider, PreparedNode, ProcessSpawnError, env::Node, process::LaunchSpec,
 };
 use tracing::debug;
 
@@ -104,43 +104,34 @@ impl LocalDeployerEnv for LbcEnv {
     }
 
     fn build_node_config(
-        topology: &Self::Deployment,
-        index: usize,
-        peer_ports_by_name: &HashMap<String, u16>,
-        options: &StartNodeOptions<Self>,
-        peer_ports: &[u16],
-    ) -> Result<BuiltNodeConfig<<Self as Application>::NodeConfig>, DynError> {
+        context: LocalBuildContext<'_, Self>,
+    ) -> Result<PreparedNode<Self::NodeConfig>, DynError> {
+        let peer_ports = context
+            .peers
+            .iter()
+            .map(LocalPeerNode::network_port)
+            .collect::<Vec<_>>();
+        let peer_ports_by_name = context
+            .peers
+            .iter()
+            .filter_map(|peer| {
+                peer.name()
+                    .map(|name| (name.to_owned(), peer.network_port()))
+            })
+            .collect();
         build_dynamic_node_config(
-            topology,
-            index,
-            peer_ports_by_name,
-            options,
-            peer_ports,
-            None,
-        )
-    }
-
-    fn build_node_config_from_template(
-        topology: &Self::Deployment,
-        index: usize,
-        peer_ports_by_name: &HashMap<String, u16>,
-        options: &StartNodeOptions<Self>,
-        peer_ports: &[u16],
-        template_config: Option<&<Self as Application>::NodeConfig>,
-    ) -> Result<BuiltNodeConfig<<Self as Application>::NodeConfig>, DynError> {
-        build_dynamic_node_config(
-            topology,
-            index,
-            peer_ports_by_name,
-            options,
-            peer_ports,
-            template_config,
+            context.topology,
+            context.index,
+            &peer_ports_by_name,
+            context.options,
+            &peer_ports,
+            context.template_config,
         )
     }
 
     fn build_initial_node_configs(
         topology: &Self::Deployment,
-    ) -> Result<Vec<NodeConfigEntry<<Self as Application>::NodeConfig>>, ProcessSpawnError> {
+    ) -> Result<Vec<PreparedNode<<Self as Application>::NodeConfig>>, ProcessSpawnError> {
         topology
             .nodes()
             .iter()
@@ -152,8 +143,9 @@ impl LocalDeployerEnv for LbcEnv {
                     topology.config().node_config_override(node.index()),
                 )
                 .map_err(|source| ProcessSpawnError::Config { source })?;
-                Ok::<_, ProcessSpawnError>(NodeConfigEntry {
+                Ok::<_, ProcessSpawnError>(PreparedNode {
                     name: label,
+                    network_port: config.user.network.backend.swarm.port,
                     config,
                 })
             })
@@ -230,18 +222,8 @@ impl LocalDeployerEnv for LbcEnv {
         Ok(endpoints)
     }
 
-    fn node_peer_port(node: &Node<Self>) -> u16 {
-        node.endpoints()
-            .port(&NodeEndpointPort::Network)
-            .unwrap_or_else(|| node.config().user.network.backend.swarm.port)
-    }
-
     fn node_client(endpoints: &NodeEndpoints) -> Result<Self::NodeClient, DynError> {
         Ok(NodeHttpClient::new(endpoints.api))
-    }
-
-    fn readiness_endpoint_path() -> &'static str {
-        "/cryptarchia/info"
     }
 
     async fn wait_readiness_stable(nodes: &[Node<Self>]) -> Result<(), DynError> {
@@ -540,12 +522,12 @@ fn build_dynamic_node_config(
     options: &StartNodeOptions<LbcEnv>,
     peer_ports: &[u16],
     template_config: Option<&RunConfig>,
-) -> Result<BuiltNodeConfig<RunConfig>, DynError> {
+) -> Result<PreparedNode<RunConfig>, DynError> {
     let plan = plan_local_node_config(
         topology,
         index,
         peer_ports_by_name,
-        options.peers.as_ref(),
+        options.common.peers.as_ref(),
         peer_ports,
     )?;
     let mut config =
@@ -563,7 +545,8 @@ fn build_dynamic_node_config(
         }
     }
 
-    Ok(BuiltNodeConfig {
+    Ok(PreparedNode {
+        name: format!("node-{index}"),
         config,
         network_port,
     })

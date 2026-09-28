@@ -31,15 +31,16 @@ use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, ZkPub
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
-    LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
+    LbcClusterBackend, LbcEnv, LbcK8sManualCluster, LbcScenario, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _,
     configs::{deployment::SdpFundingConfig, wallet::WalletAccount},
     env::set_default_env,
     workloads,
 };
 use reqwest::Url;
+use testing_framework_app::DeployedApp;
 use testing_framework_core::{
-    scenario::{PeerSelection, Scenario, StartedNode},
+    scenario::{ClusterHandle, PeerSelection, StartedNode},
     topology::DeploymentSeed,
 };
 use tokio::task::JoinHandle;
@@ -1015,7 +1016,7 @@ pub struct ChainParameters {
 pub struct ClusterState {
     /// Manual: Optional local cluster instance for scenarios that use the local
     /// deployer.
-    pub local_cluster: Option<LbcManualCluster>,
+    pub local_cluster: Option<DeployedApp<ClusterHandle<LbcEnv>>>,
     /// Manual: Optional k8s manual cluster instance for scenarios that use the
     /// k8s deployer.
     pub k8s_manual_cluster: Option<LbcK8sManualCluster>,
@@ -1068,6 +1069,12 @@ impl NodeHeightSnapshots {
     #[must_use]
     fn len(&self) -> usize {
         self.recorded_heights.len()
+    }
+}
+
+impl ClusterState {
+    pub fn local_cluster(&self) -> Option<&ClusterHandle<LbcEnv>> {
+        self.local_cluster.as_ref().map(DeployedApp::handle)
     }
 }
 
@@ -1501,7 +1508,7 @@ impl Debug for CucumberWorld {
             .field("slots_per_epoch", &self.chain.slots_per_epoch)
             .field("local_cluster", {
                 if self.cluster.local_cluster.is_some() {
-                    &"Has LbcManualCluster"
+                    &"Has local app cluster"
                 } else {
                     &"None"
                 }
@@ -2187,7 +2194,7 @@ impl CucumberWorld {
     /// Build a scenario for local deployment based on the current world
     /// configuration. This performs necessary preflight checks and returns
     /// a built scenario ready for deployment.
-    pub fn build_local_scenario(&self) -> Result<Scenario<LbcEnv>, StepError> {
+    pub fn build_local_scenario(&self) -> Result<LbcScenario, StepError> {
         let builder = self.make_builder_for_deployer(DeployerKind::Local)?;
         builder
             .build()
@@ -2196,7 +2203,7 @@ impl CucumberWorld {
 
     /// Build a scenario for k8s deployment based on the current world
     /// configuration.
-    pub fn build_k8s_scenario(&self) -> Result<Scenario<LbcEnv>, StepError> {
+    pub fn build_k8s_scenario(&self) -> Result<LbcScenario, StepError> {
         let builder = self.make_builder_for_deployer(DeployerKind::K8s)?;
         builder
             .build()
@@ -2238,7 +2245,12 @@ impl CucumberWorld {
             .ok_or(StepError::MissingRunDuration)?
             .get();
 
-        let mut builder: ScenarioBuilderWith = make_builder(&topology, self.lifecycle.genesis_time);
+        let mut builder: ScenarioBuilderWith = make_builder(&topology, self.lifecycle.genesis_time)
+            .with_backend(match expected {
+                DeployerKind::Local => LbcClusterBackend::Local,
+                DeployerKind::Compose => LbcClusterBackend::Compose,
+                DeployerKind::K8s => LbcClusterBackend::K8s,
+            });
 
         builder = builder.with_run_duration(Duration::from_secs(duration_secs));
         if let Some(wallets) = self.lifecycle.spec.wallets {
@@ -2743,7 +2755,7 @@ impl CucumberWorld {
             .field("genesis_block_id", &self.chain.genesis_block_id)
             .field("local_cluster", {
                 if self.cluster.local_cluster.is_some() {
-                    &"Has LbcManualCluster"
+                    &"Has local app cluster"
                 } else {
                     &"None"
                 }
