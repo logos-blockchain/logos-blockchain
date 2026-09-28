@@ -10,8 +10,8 @@ use crate::{
         SDP_WITHDRAW_PAYLOAD_HEX,
     },
     sdp::{
-        ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator, ProviderId,
-        ServiceType, WithdrawMessage, blend::ActivityProof,
+        ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, InactivityPeriod,
+        Locator, MinStake, ProviderId, ServiceType, WithdrawMessage, blend::ActivityProof,
     },
 };
 
@@ -20,6 +20,8 @@ codec_fixtures!(
     Self::new_unchecked("/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap()) => "0b00047f00000191020bb8cd03"
 );
 codec_fixtures!(ServiceType, Self::BlendNetwork => "00");
+codec_fixtures!(MinStake, Self { threshold: 1, timestamp: 2 } => "01000000000000000200000000000000");
+codec_fixtures!(InactivityPeriod, encode_only, Self::new(Epoch::new(2)).unwrap() => "02000000");
 codec_fixtures!(ProviderId, Self(Ed25519PublicKey::from_bytes(&[1u8; _]).unwrap()) => "0101010101010101010101010101010101010101010101010101010101010101");
 codec_fixtures!(DeclarationId, Self([0u8; _]) => "0000000000000000000000000000000000000000000000000000000000000000");
 codec_fixtures!(

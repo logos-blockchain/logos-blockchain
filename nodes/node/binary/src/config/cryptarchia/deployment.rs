@@ -1,5 +1,5 @@
 use core::num::{NonZero, NonZeroU32, NonZeroU64};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use lb_chain_service::Epoch;
 use lb_core::sdp::{InactivityPeriod, MinStake, ServiceType};
@@ -84,7 +84,9 @@ pub struct EpochConfig {
 // config instead.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SdpConfig {
-    pub service_params: HashMap<ServiceType, ServiceParameters>,
+    /// Ordered by service type, which is the order the canonical encoding lists
+    /// them in.
+    pub service_params: BTreeMap<ServiceType, ServiceParameters>,
     pub min_stake: MinStake,
 }
 

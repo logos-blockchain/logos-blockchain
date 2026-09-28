@@ -2,6 +2,7 @@ pub mod blend;
 pub mod service_notes;
 
 use core::{
+    cmp::Ordering,
     fmt::{self, Display, Formatter},
     str::FromStr,
 };
@@ -39,7 +40,7 @@ use crate::{
 
 pub type StakeThreshold = u64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct MinStake {
     pub threshold: StakeThreshold,
     pub timestamp: BlockNumber,
@@ -78,6 +79,17 @@ impl InactivityPeriod {
     #[must_use]
     pub const fn into_inner(self) -> NumberOfEpochs {
         self.0
+    }
+}
+
+// An inactivity period: the number of epochs it wraps.
+impl BinaryEncode for InactivityPeriod {
+    fn encoded_length(&self) -> usize {
+        self.0.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
     }
 }
 
@@ -303,6 +315,20 @@ impl AsRef<u8> for ServiceType {
     }
 }
 
+impl PartialOrd for ServiceType {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Service types are ordered by the byte each is encoded as, so a map keyed by
+/// service type iterates in the order of their encodings.
+impl Ord for ServiceType {
+    fn cmp(&self, other: &Self) -> Ordering {
+        <Self as AsRef<u8>>::as_ref(self).cmp(<Self as AsRef<u8>>::as_ref(other))
+    }
+}
+
 impl BinaryEncode for ServiceType {
     fn encoded_length(&self) -> usize {
         <Self as AsRef<u8>>::as_ref(self).encoded_length()
@@ -375,13 +401,13 @@ impl TryFrom<[u8; 32]> for ProviderId {
 }
 
 impl PartialOrd for ProviderId {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for ProviderId {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.as_ref().cmp(other.as_ref())
     }
 }

@@ -2,9 +2,10 @@ pub mod api;
 pub mod cli;
 pub mod config;
 pub mod generic_services;
+pub mod global_allocators;
 pub mod panic;
 
-pub mod global_allocators;
+mod codec;
 
 use std::{collections::HashMap, panic::set_hook};
 

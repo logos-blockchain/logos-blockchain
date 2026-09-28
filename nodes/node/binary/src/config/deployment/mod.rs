@@ -2,6 +2,8 @@ use core::time::Duration;
 
 use lb_core::{
     block::genesis::GenesisBlock,
+    era::{EraDigest, ForkDigest},
+    header::HeaderId,
     mantle::{
         traits::GenesisTx as _,
         transactions::genesis_tx::{ChainId, GenesisTime},
@@ -48,6 +50,25 @@ impl DeploymentSettings {
             .genesis_time
     }
 
+    /// The ID of the genesis block this deployment's chain starts from.
+    #[must_use]
+    pub fn genesis_id(&self) -> HeaderId {
+        self.genesis_block.header().id()
+    }
+
+    /// The digest of the fork this deployment defines: of its genesis block,
+    /// of its chain ID and of every era of its schedule, in activation order.
+    /// With a single era supported, it names the fork a node follows from
+    /// genesis on.
+    #[must_use]
+    pub fn fork_digest(&self) -> ForkDigest {
+        let era_digests = self
+            .eras
+            .iter()
+            .map(|(first_epoch, parameters)| EraDigest::compute(first_epoch, parameters));
+        ForkDigest::compute(self.genesis_id(), &self.chain_id(), era_digests)
+    }
+
     #[must_use]
     pub const fn genesis_era_parameters(&self) -> &EraParameters {
         self.eras.genesis_era_parameters()
@@ -89,6 +110,37 @@ mod tests {
         let settings = DeploymentSettings::default();
         let as_str = serde_yaml::to_string(&settings).unwrap();
         let _recovered: DeploymentSettings = serde_yaml::from_str(&as_str).unwrap();
+    }
+
+    #[test]
+    fn the_fork_digest_survives_a_round_trip_through_yaml() {
+        // Not pinned to a value: the default deployment changes at every
+        // genesis ceremony. What must hold is that the digests depend only on
+        // the settings, not on how they were loaded.
+        let settings = DeploymentSettings::default();
+        let recovered: DeploymentSettings =
+            serde_yaml::from_str(&serde_yaml::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(recovered.fork_digest(), settings.fork_digest());
+    }
+
+    #[test]
+    fn the_fork_digest_commits_to_the_era_parameters() {
+        let settings = DeploymentSettings::default();
+        let mut changed = settings.clone();
+        changed
+            .genesis_era_parameters_mut()
+            .cryptarchia
+            .pow_config
+            .reward
+            .slot_window = changed
+            .genesis_era_parameters()
+            .cryptarchia
+            .pow_config
+            .reward
+            .slot_window
+            .checked_add(1)
+            .unwrap();
+        assert_ne!(changed.fork_digest(), settings.fork_digest());
     }
 
     #[test]
