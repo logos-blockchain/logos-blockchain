@@ -125,8 +125,9 @@ Feature: PoW mining
     Then I stop all nodes
 
   # Same setup as above, but nothing ever calls the claim endpoint: the node is
-  # configured with a `pow.auto_claim` target and claims on its own. The miner's
-  # account starts empty, so any balance at all proves auto-claim ran.
+  # configured with a `pow.auto_claim` threshold and claims on its own, paying
+  # its own wallet. Nothing else pays that wallet, so any growth of its balance
+  # proves auto-claim ran.
   @blend_ci
   Scenario: A mining node claims its PoW rewards unattended
     Given the genesis block has the following wallet resources:
@@ -149,12 +150,12 @@ Feature: PoW mining
     And I start node "NODE_1"
     And I start peer node "NODE_2" connected to node "NODE_1"
     When node "NODE_1" is at height 5 in 300 seconds
-    # Staged before the miner boots: auto-claim validates its targets against
-    # the node's wallet keys at startup, so it cannot be turned on later. The
-    # threshold is far above anything the single fundable claim can pay, so the
-    # target never becomes satisfied and auto-claim stays armed. Slot pacing
-    # ties the tick to chain progress rather than wall-clock time.
-    And I configure PoW auto-claim on node "NODE_3" paying wallet account 1 up to 1000000000 LGO every 1 slots
+    # Staged before the miner boots: auto-claim is configuration-only, so it
+    # cannot be turned on later. The threshold is far above anything the single
+    # fundable claim can pay, so the wallet never reaches it and auto-claim
+    # stays armed. Slot pacing ties the tick to chain progress rather than
+    # wall-clock time.
+    And I configure PoW auto-claim on node "NODE_3" up to 1000000000 LGO every 1 slots
     And I start mining nodes with wallet resources:
       | node_name | account_index | wallet_name  | is_mining_wallet | connected_to |
       | NODE_3    | 1             | WALLET_MINER | true             | NODE_1       |
@@ -162,6 +163,7 @@ Feature: PoW mining
     And node "NODE_3" is at height 6 in 180 seconds
     Then node "NODE_3" reports PoW mining off
     And node "NODE_3" reports PoW auto-claim armed
+    And I record the spendable balance of node "NODE_3" as "MINER_BASELINE"
     When I start mining on node "NODE_3"
     Then node "NODE_3" reports PoW mining on
     # Stop mining once tickets exist, as in the manual scenario: at the eased
@@ -170,7 +172,7 @@ Feature: PoW mining
     When node "NODE_3" has at least 1 claimable PoW rewards within 120 seconds
     And I stop mining on node "NODE_3"
     Then node "NODE_3" reports PoW mining off
-    # No claim step anywhere: the wallet started empty, so a non-zero balance
-    # can only have come from a claim the node issued by itself.
-    Then wallet "WALLET_MINER" has 1 or more LGO in 180 seconds
+    # No claim step anywhere: the growth of the balance can only have come
+    # from a claim the node issued by itself.
+    Then the spendable balance of node "NODE_3" is above "MINER_BASELINE" in 180 seconds
     Then I stop all nodes

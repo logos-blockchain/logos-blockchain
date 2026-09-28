@@ -1,14 +1,11 @@
 use std::net::SocketAddr;
 
-use lb_key_management_system_service::keys::secured_key::SecuredKey as _;
 use lb_node::{
     UserConfig,
     config::{
         ApiConfig, CryptarchiaConfig, PoWConfig, SdpConfig, StorageConfig, WalletConfig,
-        api::serde::AxumBackendSettings,
-        cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
-        kms::serde::PreloadKmsBackendSettings,
-        sdp::serde::RequiredValues as SdpConfigRequiredValues, state::Config as StateConfig,
+        api::serde::AxumBackendSettings, kms::serde::PreloadKmsBackendSettings,
+        state::Config as StateConfig,
     },
 };
 
@@ -22,18 +19,13 @@ use crate::GeneralConfig;
 #[must_use]
 pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
     let api_config = create_api_config(&config);
-    let mut cryptarchia_config =
-        CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues {
-            funding_pk: config.consensus_config.funding_pk,
-        });
+    let mut cryptarchia_config = CryptarchiaConfig::default();
     cryptarchia_config
         .service
         .bootstrap
         .prolonged_bootstrap_period = config.consensus_config.prolonged_bootstrap_period;
 
-    let mut sdp_config = SdpConfig::with_required_values(SdpConfigRequiredValues {
-        funding_pk: config.consensus_config.funding_sk.as_public_key(),
-    });
+    let mut sdp_config = SdpConfig::default();
     sdp_config.declaration_id = config.sdp_config.declaration_id;
 
     UserConfig {

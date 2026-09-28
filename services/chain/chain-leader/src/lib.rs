@@ -795,7 +795,6 @@ where
                 tip,
                 *ledger_state.mantle_ledger().vouchers_snapshot_root(),
                 reward_amount,
-                config.funding_pk,
                 config.max_tx_fee,
             )
             .await?

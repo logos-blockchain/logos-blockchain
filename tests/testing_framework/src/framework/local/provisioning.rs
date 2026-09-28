@@ -12,7 +12,7 @@ use config::{api, sdp, state, storage, wallet};
 use flate2::read::GzDecoder;
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::mantle;
-use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
+use lb_key_management_system_service::keys::Key;
 use lb_libp2p::Multiaddr;
 use lb_node::{
     UserConfig,
@@ -726,7 +726,6 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
             declaration_id: config.sdp_config.declaration_id,
             wallet: sdp::serde::WalletConfig {
                 max_tx_fee: mantle::Value::MAX.into(),
-                funding_pk: config.consensus_config.funding_sk.as_public_key(),
             },
             active_message_tracker: ActiveMessageTrackerConfig {
                 status_check_interval_in_tip_changes: NonZeroU64::new(3).unwrap(),
@@ -821,7 +820,6 @@ fn build_cryptarchia_user_config(
         leader: LeaderConfig {
             wallet: leader::WalletConfig {
                 max_tx_fee: mantle::Value::MAX.into(),
-                funding_pk: consensus.funding_pk,
             },
         },
     }

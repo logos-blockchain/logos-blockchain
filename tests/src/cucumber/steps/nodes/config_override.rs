@@ -933,14 +933,6 @@ mod tests {
         set_user_config_override(
             &mut world,
             "test-step",
-            "cryptarchia.leader.wallet.funding_pk",
-            "hex(0000000000000000000000000000000000000000000000000000000000000000)",
-        )
-        .expect("zkpk hex string override");
-
-        set_user_config_override(
-            &mut world,
-            "test-step",
             "network.backend.swarm.node_key",
             "hex(0101010101010101010101010101010101010101010101010101010101010101)",
         )
@@ -972,10 +964,6 @@ mod tests {
             "/ip4/127.0.0.1/udp/20128/quic-v1"
                 .parse::<Multiaddr>()
                 .expect("multiaddr"),
-        );
-        assert_eq!(
-            config.user.cryptarchia.leader.wallet.funding_pk,
-            lb_key_management_system_service::keys::ZkPublicKey::zero(),
         );
     }
 
@@ -1032,8 +1020,7 @@ mod auto_claim_override_tests {
     use std::num::NonZeroU64;
 
     use lb_node::config::UserConfig;
-    use lb_pow_service::{AutoClaimSettings, AutoClaimTick, ClaimTarget};
-    use lb_testing_framework::configs::wallet::WalletAccount;
+    use lb_pow_service::{AutoClaimSettings, AutoClaimTick};
 
     use super::{ConfigOverride, apply_overrides};
 
@@ -1045,12 +1032,8 @@ mod auto_claim_override_tests {
     /// node that fails to boot midway through the (slow) cucumber scenario.
     #[test]
     fn staged_auto_claim_override_round_trips_into_a_user_config() {
-        let account = WalletAccount::deterministic(1, 0, true).expect("deterministic account");
         let settings = AutoClaimSettings {
-            targets: vec![ClaimTarget {
-                public_key: account.public_key(),
-                threshold: 1_000_000_000,
-            }],
+            threshold: Some(1_000_000_000),
             tick: AutoClaimTick::Slots(NonZeroU64::new(1).expect("1 is non-zero")),
         };
         let value = serde_yaml::to_value(&settings).expect("settings should serialize");
@@ -1073,7 +1056,7 @@ mod auto_claim_override_tests {
         )
         .expect("auto-claim override should apply");
 
-        assert_eq!(config.pow.auto_claim.targets, settings.targets);
+        assert_eq!(config.pow.auto_claim.threshold, settings.threshold);
         assert_eq!(config.pow.auto_claim.tick, settings.tick);
     }
 }

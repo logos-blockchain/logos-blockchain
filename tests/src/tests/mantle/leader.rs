@@ -1,8 +1,15 @@
-use std::{collections::HashSet, num::NonZero, path::PathBuf, time::Duration};
+use std::{
+    collections::HashSet,
+    num::NonZero,
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use futures::StreamExt as _;
 use lb_api_service::http::consensus::leader::LeaderClaimResponseBody;
 use lb_common_http_client::ProcessedBlockEvent;
+use lb_config::consensus::funding_path;
 use lb_core::mantle::transactions::hash::TxHash;
 use lb_groth16::fr_to_bytes;
 use lb_http_api_common::bodies::wallet::{
@@ -15,7 +22,7 @@ use lb_node::{
 };
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
-    configs::wallet::{WalletAccount, WalletConfig},
+    configs::deployment::SdpFundingConfig,
 };
 use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::{
@@ -38,7 +45,7 @@ const NODE_COUNT: usize = 1;
 /// 4. Verify the claim tx is successfully included in the chain.
 #[tokio::test]
 async fn leader_claim() {
-    let (_base, nodes, _leader_funding_pk) = setup_test_nodes("leader_claim").await;
+    let (_base, nodes, _funding_pk) = setup_test_nodes("leader_claim").await;
     let node = &nodes[0];
     let mut block_stream = node.client.blocks_stream().await.unwrap();
 
@@ -56,7 +63,7 @@ async fn leader_claim() {
     wait_for_tx_inclusion(&mut block_stream, tx_hash).await;
 }
 
-fn test_config(mut config: RunConfig, leader_funding_pk: ZkPublicKey) -> RunConfig {
+fn test_config(mut config: RunConfig) -> RunConfig {
     config.deployment.time.slot_duration = Duration::from_secs(1);
     config.deployment.cryptarchia.epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -66,7 +73,6 @@ fn test_config(mut config: RunConfig, leader_funding_pk: ZkPublicKey) -> RunConf
     config.deployment.cryptarchia.security_param = NonZero::new(2).unwrap();
     config.deployment.cryptarchia.slot_activation_coeff =
         NonNegativeRatio::new(1, 2.try_into().unwrap());
-    config.user.cryptarchia.leader.wallet.funding_pk = leader_funding_pk;
 
     config
 }
@@ -135,11 +141,11 @@ async fn claim_leader_rewards(node: &NodeHttpClient, duration: Duration) -> TxHa
 
 #[tokio::test]
 async fn concurrent_leader_claims() {
-    let (_base, nodes, leader_funding_pk) = setup_test_nodes("concurrent_leader_claims").await;
+    let (_base, nodes, funding_pk) = setup_test_nodes("concurrent_leader_claims").await;
     let node = &nodes[0];
     let mut block_stream = node.client.blocks_stream().await.unwrap();
 
-    wait_for_wallet_notes(&node.client, leader_funding_pk, 2, Duration::from_mins(2)).await;
+    wait_for_wallet_notes(&node.client, funding_pk, 2, Duration::from_mins(2)).await;
     let successful_tx_hashes =
         submit_concurrent_leader_claims(&node.client, 2, Duration::from_mins(1)).await;
     assert_unique_tx_hashes(&successful_tx_hashes);
@@ -187,43 +193,44 @@ async fn setup_test_nodes(
     Vec<StartedNode<LbcEnv>>,
     ZkPublicKey,
 ) {
-    let (wallet_config, leader_funding_pk) = leader_funding_wallet_config();
+    // The key that the node pays the fees of its claims with
+    let funding_pk = Arc::new(OnceLock::new());
     let (base, nodes) = start_local_manual_cluster_with_layout(
         "leader-claim",
         "mantle-leader",
         DeploymentBuilder::new(
             TfTopologyConfig::with_node_numbers(NODE_COUNT)
                 .with_allow_multiple_genesis_tokens(true)
-                .with_test_context(Some(test_context.to_owned())),
-        )
-        .with_wallet_config(wallet_config),
+                .with_test_context(Some(test_context.to_owned()))
+                // A note for each of the concurrent claims
+                .with_sdp_funding_config(SdpFundingConfig::new(300_000, 3)),
+        ),
         NODE_COUNT,
         ManualNodeLayout::SelectNodeSeed(0),
-        move |config| Ok::<_, DynError>(test_config(config, leader_funding_pk)),
+        {
+            let funding_pk = Arc::clone(&funding_pk);
+            move |config| {
+                funding_pk.get_or_init(|| node_funding_pk(&config));
+                Ok::<_, DynError>(test_config(config))
+            }
+        },
         Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     )
     .await;
 
-    (base, nodes, leader_funding_pk)
+    let funding_pk = *funding_pk.get().expect("node should have been configured");
+    (base, nodes, funding_pk)
 }
 
-fn leader_funding_wallet_config() -> (WalletConfig, ZkPublicKey) {
-    let account = WalletAccount::deterministic(42, 100_000, false)
-        .expect("leader funding account should be valid");
-    let funding_pk = account.public_key();
-    let accounts = (0..3)
-        .map(|idx| {
-            WalletAccount::new(
-                format!("leader-funding-{idx}"),
-                account.secret_key.clone(),
-                100_000,
-                false,
-            )
-            .expect("leader funding account should be valid")
-        })
-        .collect();
-
-    (WalletConfig::new(accounts), funding_pk)
+fn node_funding_pk(config: &RunConfig) -> ZkPublicKey {
+    config
+        .user
+        .kms
+        .backend
+        .master_key()
+        .derive_key(&funding_path())
+        .to_zk_key()
+        .to_public_key()
 }
 
 async fn wait_for_tx_inclusion(

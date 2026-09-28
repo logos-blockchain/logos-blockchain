@@ -20,10 +20,9 @@ use crate::{
     },
     config::{
         ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, LogArgs,
-        NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig, api::serde::AxumBackendSettings,
+        NetworkArgs, RunConfig, StateArgs, UserConfig, api::serde::AxumBackendSettings,
         blend::serde::core::BackendConfig as BlendCoreConfig, network::serde::SwarmConfig,
-        update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
-        update_tracing,
+        update_api, update_blend, update_network, update_state, update_tracing,
     },
 };
 
@@ -59,9 +58,6 @@ pub struct CliArgs {
     /// Overrides cryptarchia config.
     #[clap(flatten)]
     cryptarchia: CryptarchiaArgs,
-    /// Overrides sdp config.
-    #[clap(flatten)]
-    sdp: SdpArgs,
     /// Overrides http config.
     #[clap(flatten)]
     api: ApiArgs,
@@ -148,9 +144,6 @@ pub struct InitArgs {
 
     #[clap(flatten)]
     pub cryptarchia: CryptarchiaArgs,
-
-    #[clap(flatten)]
-    pub sdp: SdpArgs,
 
     #[clap(flatten)]
     pub api: ApiArgs,
@@ -292,9 +285,6 @@ pub struct UpdateArgs {
     cryptarchia: CryptarchiaArgs,
 
     #[clap(flatten)]
-    sdp: SdpArgs,
-
-    #[clap(flatten)]
     api: ApiArgs,
 
     #[clap(flatten)]
@@ -327,7 +317,6 @@ impl Default for UpdateArgs {
             network: NetworkArgs::default(),
             blend: BlendArgs::default(),
             cryptarchia: CryptarchiaArgs::default(),
-            sdp: SdpArgs::default(),
             api: ApiArgs::default(),
             state: StateArgs::default(),
         }
@@ -357,9 +346,6 @@ pub struct MigrateArgs {
     cryptarchia: CryptarchiaArgs,
 
     #[clap(flatten)]
-    sdp: SdpArgs,
-
-    #[clap(flatten)]
     api: ApiArgs,
 
     #[clap(flatten)]
@@ -382,7 +368,6 @@ impl MigrateArgs {
             network: NetworkArgs::default(),
             blend: BlendArgs::default(),
             cryptarchia: CryptarchiaArgs::default(),
-            sdp: SdpArgs::default(),
             api: ApiArgs::default(),
             state: StateArgs::default(),
             storage_path: None,
@@ -399,7 +384,6 @@ impl From<MigrateArgs> for InitArgs {
             network: migrate.network,
             blend: migrate.blend,
             cryptarchia: migrate.cryptarchia,
-            sdp: migrate.sdp,
             api: migrate.api,
             state: migrate.state,
             storage_path: migrate.storage_path,
@@ -448,8 +432,6 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
         api: api_args,
         network: network_args,
         blend: blend_args,
-        cryptarchia: cryptarchia_args,
-        sdp: sdp_args,
         deployment: deployment_args,
         state: state_args,
         ..
@@ -457,8 +439,6 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
     update_tracing(&mut user_config.tracing, log_args)?;
     update_network(&mut user_config.network, network_args)?;
     update_blend(&mut user_config.blend, blend_args);
-    update_cryptarchia(&mut user_config.cryptarchia, cryptarchia_args);
-    update_sdp(&mut user_config.sdp, sdp_args);
     update_api(&mut user_config.api, api_args);
     update_state(&mut user_config.state, state_args);
 

@@ -1318,9 +1318,7 @@ pub struct CucumberWorld {
     pub mining_claim_addresses: HashMap<String, ZkPublicKey>,
     /// Manual: Per-node `pow.auto_claim` overrides, staged by the auto-claim
     /// configuration step and applied when that node starts. Auto-claim must be
-    /// configured before the node boots, since it validates its targets against
-    /// the wallet's known keys at startup; the override is per-node because a
-    /// target key a node's wallet does not track aborts that node's startup.
+    /// configured before the node boots.
     pub auto_claim_overrides: HashMap<String, Vec<ConfigOverride>>,
 }
 

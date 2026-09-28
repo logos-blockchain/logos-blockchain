@@ -145,7 +145,6 @@ cryptarchia:
   leader:
     wallet:
       max_tx_fee: 18446744073709551615
-      funding_pk: 39e16b432574571a6bcd8ee36e370589641bd9f35367f6f97a972453c46c3225
 time:
   backend:
     server: pool.ntp.org:123
@@ -157,7 +156,6 @@ sdp:
   declaration_id: null
   wallet:
     max_tx_fee: 18446744073709551615
-    funding_pk: 9750fa86471fddc69749aa9f8568ef6635e64d9f9aa815e8cb932cea183c8e18
   active_message_tracker:
     status_check_interval_in_tip_changes: 3
 api:
@@ -199,13 +197,11 @@ pow:
     tick:
       unit: seconds
       value: 300
-    # Keys mined rewards are paid to, each with the balance it should reach.
-    # Auto-claim pays whichever listed key currently holds the least while
-    # still being below its threshold, and stops once all of them are
-    # satisfied. Every key here must also appear in `wallet.known_keys`, or the
-    # node refuses to start. Empty means claims only happen on demand, through
-    # `POST /pow/claim`.
-    targets: []
+    # Spendable balance the wallet should reach. Auto-claim pays mined
+    # rewards to the next receive address of the wallet while the wallet is
+    # below it, and stops once it is reached. Null means claims only happen on
+    # demand, through `POST /pow/claim`.
+    threshold: null
 tracing:
   logger:
     file:

@@ -127,6 +127,18 @@ where
         Ok(rx.await??)
     }
 
+    /// The value of the notes that the wallet funds transactions from
+    pub async fn get_spendable_balance(
+        &self,
+        tip: Option<HeaderId>,
+    ) -> Result<TipResponse<Value>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::GetSpendableBalance { tip, resp_tx })
+            .await?;
+        Ok(rx.await??)
+    }
+
     /// Hands out the next receive address of the wallet.
     pub async fn next_receive_address(&self) -> Result<ZkPublicKey, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
@@ -169,7 +181,6 @@ where
         tip: HeaderId,
         rewards_root: RewardsRoot,
         reward_amount: Value,
-        funding_pk: ZkPublicKey,
         max_tx_fee: GasCost,
     ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
@@ -179,7 +190,6 @@ where
                 tip,
                 rewards_root,
                 reward_amount,
-                funding_pk,
                 max_tx_fee,
                 resp_tx,
             })

@@ -311,6 +311,92 @@ async fn step_record_wallet_balance(
     Ok(())
 }
 
+/// The spendable balance of the wallet of the node, as its `PoW` status
+/// reports it.
+async fn node_spendable_balance(node: &NodeHttpClient, node_name: &str) -> Result<u64, StepError> {
+    node.pow_status()
+        .await?
+        .auto_claim
+        .balance
+        .ok_or_else(|| StepError::StepFail {
+            message: format!("node `{node_name}` could not read the balance of its wallet"),
+        })
+}
+
+#[when(expr = "I record the spendable balance of node {string} as {string}")]
+#[then(expr = "I record the spendable balance of node {string} as {string}")]
+async fn step_record_node_spendable_balance(
+    world: &mut CucumberWorld,
+    step: &Step,
+    node_name: String,
+    baseline_label: String,
+) -> StepResult {
+    let node = world
+        .resolve_node_http_client(&node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        })?;
+    let value = node_spendable_balance(&node, &node_name).await?;
+    world
+        .recorded_wallet_balances
+        .insert(baseline_label.clone(), value);
+
+    info!(
+        target: TARGET,
+        "Recorded spendable balance of node `{node_name}` as `{baseline_label}` = {value} LGO"
+    );
+    Ok(())
+}
+
+#[then(expr = "the spendable balance of node {string} is above {string} in {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_node_spendable_balance_is_above(
+    world: &mut CucumberWorld,
+    step: &Step,
+    node_name: String,
+    baseline_label: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    let baseline = *world
+        .recorded_wallet_balances
+        .get(&baseline_label)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("no recorded balance found for label '{baseline_label}'"),
+        })?;
+    let node = world
+        .resolve_node_http_client(&node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        })?;
+
+    let deadline = Duration::from_secs(timeout_seconds);
+    let started = Instant::now();
+    loop {
+        let latest = node_spendable_balance(&node, &node_name).await?;
+        if latest > baseline {
+            info!(
+                target: TARGET,
+                "Spendable balance of node `{node_name}` grew from {baseline} to {latest} LGO"
+            );
+            return Ok(());
+        }
+
+        if started.elapsed() >= deadline {
+            return Err(StepError::StepFail {
+                message: format!(
+                    "spendable balance {latest} of node `{node_name}` did not grow above \
+                    baseline `{baseline_label}` ({baseline}) within {timeout_seconds} seconds"
+                ),
+            });
+        }
+
+        sleep(BALANCE_POLL_INTERVAL).await;
+    }
+}
+
 /// Sums the values of a transaction's transfer outputs paid to `claim_address`,
 /// by locating the transaction on the chain served by `node`. This is the exact
 /// amount the reward-claim transaction credited to that account.

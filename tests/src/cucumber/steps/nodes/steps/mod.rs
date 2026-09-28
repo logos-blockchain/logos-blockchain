@@ -8,11 +8,10 @@ use std::{
 use cucumber::{gherkin::Step, given, then, when};
 use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_common_http_client::CommonHttpClient;
-use lb_config::kms::key_id_for_preload_backend;
 use lb_core::mantle::GenesisTime;
-use lb_key_management_system_service::keys::{Key, ZkPublicKey};
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
-use lb_pow_service::{AutoClaimSettings, AutoClaimTick, ClaimTarget};
+use lb_pow_service::{AutoClaimSettings, AutoClaimTick};
 use lb_testing_framework::{
     USER_CONFIG_FILE,
     configs::{

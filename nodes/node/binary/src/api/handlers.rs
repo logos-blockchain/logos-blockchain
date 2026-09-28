@@ -1437,7 +1437,7 @@ where
 )]
 pub async fn pow_claim<PoW, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    // An absent or empty body means "pay the auto-claim target", so the body
+    // An absent or empty body means "pay the wallet of the node", so the body
     // is optional rather than required.
     body: Option<Json<pow::PoWClaimRequestBody>>,
 ) -> Response

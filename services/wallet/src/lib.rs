@@ -177,7 +177,6 @@ pub enum WalletMsg {
         tip: HeaderId,
         rewards_root: RewardsRoot,
         reward_amount: Value,
-        funding_pk: ZkPublicKey,
         max_tx_fee: GasCost,
         resp_tx:
             Sender<Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletServiceError>>,
@@ -212,6 +211,11 @@ pub enum WalletMsg {
     GetClaimableVouchers {
         tip: Option<HeaderId>,
         resp_tx: Sender<Result<TipResponse<ClaimableVouchersInfo>, WalletServiceError>>,
+    },
+    /// The value of the notes that funding spends from
+    GetSpendableBalance {
+        tip: Option<HeaderId>,
+        resp_tx: Sender<Result<TipResponse<Value>, WalletServiceError>>,
     },
     /// Hands out the next receive address.
     NextReceiveAddress {
@@ -248,7 +252,6 @@ struct LeaderClaimTxRequest {
     tip: HeaderId,
     rewards_root: RewardsRoot,
     reward_amount: Value,
-    funding_pk: ZkPublicKey,
     max_tx_fee: GasCost,
 }
 
@@ -354,6 +357,7 @@ impl WalletMsg {
     pub const fn tip(&self) -> Option<HeaderId> {
         match self {
             Self::GetBalance { tip, .. }
+            | Self::GetSpendableBalance { tip, .. }
             | Self::FundTx { tip, .. }
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
@@ -712,7 +716,6 @@ where
                 tip,
                 rewards_root,
                 reward_amount,
-                funding_pk,
                 max_tx_fee,
                 resp_tx,
             } => {
@@ -727,7 +730,6 @@ where
                     tip,
                     rewards_root,
                     reward_amount,
-                    funding_pk,
                     max_tx_fee,
                 };
                 // Pinned to keep the future off the stack: `LedgerState` is
@@ -852,6 +854,12 @@ where
             WalletMsg::GetClaimableVouchers { tip, resp_tx } => {
                 Self::get_claimable_vouchers(tip, resp_tx, state, cryptarchia).await;
             }
+            WalletMsg::GetSpendableBalance { tip, resp_tx } => {
+                let response = Self::spendable_balance(tip, state, cryptarchia).await;
+                if resp_tx.send(response).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to GetSpendableBalance");
+                }
+            }
             WalletMsg::NextReceiveAddress { resp_tx } => {
                 let response = Self::next_receive_address(state, kms).await;
                 if resp_tx.send(response).is_err() {
@@ -893,6 +901,28 @@ where
         if resp_tx.send(resp).is_err() {
             debug!(target: LOG_TARGET, "Failed to respond to GetBalance");
         }
+    }
+
+    /// The value of the notes of the keys that funding spends from
+    async fn spendable_balance(
+        tip: Option<HeaderId>,
+        state: &ServiceState<'_>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
+    ) -> Result<TipResponse<Value>, WalletServiceError> {
+        let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
+        let wallet_state = state.wallet().wallet_state_at(tip)?;
+        let balance = state
+            .hd_keys()
+            .spendable_public_keys()
+            .into_iter()
+            .filter_map(|public_key| wallet_state.balance(public_key))
+            .fold(0, |total: Value, balance| {
+                total.saturating_add(balance.balance)
+            });
+        Ok(TipResponse {
+            tip,
+            response: balance,
+        })
     }
 
     /// Funds the transaction from the keys given, or from the HD keys if
@@ -1497,20 +1527,26 @@ where
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<(SignedOps<Preverified, StandardMode>, Vec<NoteId>), WalletServiceError> {
         let context = ledger.tx_context();
+        // The reward is paid to the next receive address.
+        let reward_path = hd::receive_path(state.hd_keys().next_receive_index());
+        let reward_pk = hd::public_key_at(kms, reward_path).await?;
         let tx_builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(LeaderClaimOp {
             rewards_root: request.rewards_root,
             voucher_nullifier,
-            pk: request.funding_pk,
+            pk: reward_pk,
         }))?;
 
-        let funded_tx_builder = state.fund_tx::<MainnetGasProfile>(
+        let funded_tx_builder = Self::fund_tx(
             request.tip,
             &tx_builder,
-            request.funding_pk,
-            [request.funding_pk],
+            None,
+            None,
             &context,
             0,
-        )?;
+            state,
+            kms,
+        )
+        .await?;
 
         let funded_notes: Vec<NoteId> = funded_tx_builder
             .notes_consumed_or_used_in_service()
@@ -1520,7 +1556,12 @@ where
         match Self::sign_funded_leader_claim_tx(request, funded_tx_builder, ledger, state, kms)
             .await
         {
-            Ok(signed_tx) => Ok((signed_tx, funded_notes)),
+            Ok(signed_tx) => {
+                // The reward address is tracked before the transaction is in
+                // a block, for the wallet to find the reward note when it is.
+                state.add_receive_key(reward_pk);
+                Ok((signed_tx, funded_notes))
+            }
             Err(err) => {
                 state.release_pending_notes(funded_notes);
                 Err(err)

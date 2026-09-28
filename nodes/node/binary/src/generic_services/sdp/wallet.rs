@@ -50,13 +50,7 @@ where
             response: funded,
         } = self
             .api
-            .fund_tx(
-                None,
-                tx_builder,
-                Some(config.funding_pk),
-                Some(vec![config.funding_pk]),
-                0,
-            )
+            .fund_tx(None, tx_builder, None, None, 0)
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
 
@@ -91,13 +85,7 @@ where
             response: funded,
         } = self
             .api
-            .fund_tx(
-                None,
-                tx_builder,
-                Some(config.funding_pk),
-                Some(vec![config.funding_pk]),
-                0,
-            )
+            .fund_tx(None, tx_builder, None, None, 0)
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
 
@@ -132,13 +120,7 @@ where
             response: funded,
         } = self
             .api
-            .fund_tx(
-                None,
-                tx_builder,
-                Some(config.funding_pk),
-                Some(vec![config.funding_pk]),
-                0,
-            )
+            .fund_tx(None, tx_builder, None, None, 0)
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
 

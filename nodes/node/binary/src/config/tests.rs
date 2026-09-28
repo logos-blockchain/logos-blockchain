@@ -5,7 +5,6 @@ use std::{
 };
 
 use bytes::Bytes;
-use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_services_utils::overwatch::RecoveryData;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use tracing::Level;
@@ -19,16 +18,10 @@ use crate::{
             ServiceConfig as BlendServiceConfig,
             serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
         },
-        cryptarchia::serde::{
-            Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues,
-        },
         kms::serde::{Config as KmsConfig, PreloadKmsBackendSettings},
         mempool::ServiceConfig as MempoolServiceConfig,
         parse_log_filter_layer,
-        sdp::{
-            ServiceConfig as SdpServiceConfig,
-            serde::{Config as SdpConfig, RequiredValues as SdpRequiredValues},
-        },
+        sdp::ServiceConfig as SdpServiceConfig,
         storage::{
             ServiceConfig as StorageServiceConfig,
             serde::{Config as StorageConfig, RocksDbSettings},
@@ -133,12 +126,6 @@ fn minimal_user_config() -> UserConfig {
             non_ephemeral_signing_key_id: "non_ephemeral_signing_key_id".into(),
             secret_key_kms_id: "secret_key_kms_id".into(),
         }),
-        cryptarchia: CryptarchiaConfig::with_required_values(CryptarchiaRequiredValues {
-            funding_pk: ZkPublicKey::zero(),
-        }),
-        sdp: SdpConfig::with_required_values(SdpRequiredValues {
-            funding_pk: ZkPublicKey::zero(),
-        }),
         kms: kms_config(),
     })
 }
@@ -204,12 +191,6 @@ fn service_settings_receive_recovery_data() {
         non_ephemeral_signing_key_id: "non_ephemeral_signing_key_id".into(),
         secret_key_kms_id: "secret_key_kms_id".into(),
     });
-    let cryptarchia_config = CryptarchiaConfig::with_required_values(CryptarchiaRequiredValues {
-        funding_pk: ZkPublicKey::zero(),
-    });
-    let sdp_config = SdpConfig::with_required_values(SdpRequiredValues {
-        funding_pk: ZkPublicKey::zero(),
-    });
     let storage_config = StorageConfig {
         backend: RocksDbSettings {
             folder_name: "db".into(),
@@ -219,8 +200,6 @@ fn service_settings_receive_recovery_data() {
     let user_config = {
         let mut base_config = UserConfig::with_required_values(ConfigRequiredValues {
             blend: blend_config,
-            cryptarchia: cryptarchia_config,
-            sdp: sdp_config,
             kms: kms_config(),
         });
         base_config.storage = storage_config;

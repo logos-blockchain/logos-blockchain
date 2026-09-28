@@ -50,8 +50,8 @@ where
 
     /// Enable mining. Fire-and-forget: mining is a boolean toggle that carries
     /// no response. Note it is not persisted, so a restart clears it. While
-    /// auto-claim is armed, the service stops mining once every claim target
-    /// has reached its threshold.
+    /// auto-claim is armed, the service stops mining once the wallet has
+    /// reached the threshold.
     pub async fn start_mining(&self) -> Result<(), ApiError> {
         self.relay
             .send(PoWServiceMessage::StartMining)
@@ -67,9 +67,9 @@ where
             .map_err(|error| ApiError::CommsFailure(format!("{error} while sending StopMining")))
     }
 
-    /// Enable unattended claiming. Fire-and-forget. Ignored when no claim
-    /// targets are configured; the service stops itself, and mining, once
-    /// every target has reached its threshold.
+    /// Enable unattended claiming. Fire-and-forget. Ignored when no
+    /// threshold is configured; the service stops itself, and mining, once
+    /// the wallet has reached the threshold.
     pub async fn start_auto_claim(&self) -> Result<(), ApiError> {
         self.relay
             .send(PoWServiceMessage::StartAutoClaim)
@@ -134,7 +134,7 @@ where
     }
 
     /// Report the service's runtime state: whether it is mining, whether
-    /// auto-claim is armed, and each claim target's threshold and balance.
+    /// auto-claim is armed, and the threshold and balance of the wallet.
     pub async fn status(&self) -> Result<PoWStatus, ApiError> {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.relay

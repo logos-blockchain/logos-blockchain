@@ -12,7 +12,7 @@ use crate::{
         InitArgs,
         config::{init::build_user_config, migrate_0_1_2::config::OldConfig},
     },
-    config::{BlendArgs, CryptarchiaArgs, SdpArgs, StateArgs},
+    config::{BlendArgs, CryptarchiaArgs, StateArgs},
 };
 
 #[derive(Parser, Debug)]
@@ -42,9 +42,6 @@ pub struct MigrateArgs {
     cryptarchia: CryptarchiaArgs,
 
     #[clap(flatten)]
-    sdp: SdpArgs,
-
-    #[clap(flatten)]
     api: ApiArgs,
 
     #[clap(flatten)]
@@ -64,7 +61,6 @@ impl MigrateArgs {
             network: NetworkArgs::default(),
             blend: BlendArgs::default(),
             cryptarchia: CryptarchiaArgs::default(),
-            sdp: SdpArgs::default(),
             api: ApiArgs::default(),
             state: StateArgs::default(),
         }
@@ -80,7 +76,6 @@ impl From<MigrateArgs> for InitArgs {
             network: migrate.network,
             blend: migrate.blend,
             cryptarchia: migrate.cryptarchia,
-            sdp: migrate.sdp,
             api: migrate.api,
             state: migrate.state,
             storage_path: None,

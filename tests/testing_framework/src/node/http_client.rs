@@ -459,6 +459,8 @@ pub struct PowStatusBody {
 #[derive(Clone, Debug, Deserialize)]
 pub struct PowAutoClaimStatusBody {
     pub is_armed: bool,
+    /// The spendable balance of the wallet of the node
+    pub balance: Option<u64>,
 }
 
 /// Subset of the node's `ClaimableRewardsInfo` we assert on.
