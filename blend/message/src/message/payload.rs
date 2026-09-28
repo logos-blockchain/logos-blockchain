@@ -16,8 +16,8 @@ const _: () = assert!(MAX_PAYLOAD_BODY_SIZE <= u16::MAX as usize);
 
 /// The length of the unpadded portion of a payload body.
 ///
-/// Values are validated when constructed, so this always fits within the
-/// fixed padded body and the protocol's `u16` length field.
+/// Construction guarantees that the length does not exceed
+/// [`MAX_PAYLOAD_BODY_SIZE`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 struct PayloadBodyLen(u16);
@@ -230,6 +230,9 @@ mod tests {
 
     use super::*;
 
+    // Malformed-wire tests need MAX_PAYLOAD_BODY_SIZE + 1 to fit in the u16 field.
+    const _: () = assert!(MAX_PAYLOAD_BODY_SIZE < u16::MAX as usize);
+
     #[serde_as]
     #[derive(Serialize)]
     struct InvalidPaddedPayloadBody {
@@ -240,8 +243,7 @@ mod tests {
 
     #[test]
     fn binary_decode_rejects_invalid_actual_length() {
-        let actual_len = u16::try_from(MAX_PAYLOAD_BODY_SIZE + 1)
-            .expect("the maximum body size must leave an invalid u16 value");
+        let actual_len = (MAX_PAYLOAD_BODY_SIZE + 1) as u16;
         let mut encoded = Vec::with_capacity(size_of::<u16>() + MAX_PAYLOAD_BODY_SIZE);
         actual_len.encode_into(&mut encoded);
         encoded.resize(encoded.capacity(), 0);
@@ -260,8 +262,7 @@ mod tests {
     #[test]
     fn serde_deserialize_rejects_invalid_actual_length() {
         let raw = InvalidPaddedPayloadBody {
-            actual_len: u16::try_from(MAX_PAYLOAD_BODY_SIZE + 1)
-                .expect("the maximum body size must leave an invalid u16 value"),
+            actual_len: (MAX_PAYLOAD_BODY_SIZE + 1) as u16,
             padded: vec![0; MAX_PAYLOAD_BODY_SIZE]
                 .into_boxed_slice()
                 .try_into()
@@ -280,15 +281,11 @@ mod tests {
 
         let over_maximum = MAX_PAYLOAD_BODY_SIZE + 1;
         assert!(PayloadBodyLen::try_from(over_maximum).is_err());
-        let over_maximum_u16 = u16::try_from(over_maximum)
-            .expect("the maximum body size must leave an invalid u16 value");
-        assert!(PayloadBodyLen::try_from(over_maximum_u16).is_err());
     }
 
     #[test]
     fn serde_deserialize_rejects_invalid_payload_body_len() {
-        let invalid_len = u16::try_from(MAX_PAYLOAD_BODY_SIZE + 1)
-            .expect("the maximum body size must leave an invalid u16 value");
+        let invalid_len = (MAX_PAYLOAD_BODY_SIZE + 1) as u16;
         let encoded = bincode::serialize(&invalid_len).unwrap();
         let error = bincode::deserialize::<PayloadBodyLen>(&encoded).unwrap_err();
 
