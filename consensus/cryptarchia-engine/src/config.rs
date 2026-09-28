@@ -19,9 +19,12 @@ pub struct Config {
     /// `W`, the width of the uncle reference window in expected
     /// block-intervals.
     uncle_reference_window_in_block: NonZero<u32>,
-    /// `L_w`, the time-based finality window in slots. When set, the LIB is
-    /// the higher of the k-deep block and the latest block at least `L_w`
-    /// slots old (once online for `L_w` slots). Unset: k-deep only.
+    /// `L_w`, the time-based finality window in slots. When set, finality is
+    /// time-based only: the LIB is the latest block of the local chain at
+    /// least `L_w` slots old (it advances once the node has been online for
+    /// `L_w` slots, and never moves down), and the online fork choice is the
+    /// longest chain with no depth bound, forks through the LIB being pruned.
+    /// `k` is then used only by the bootstrap rule. Unset: k-deep finality.
     time_finality_window: Option<NonZero<u64>>,
     /// Lottery approximation constants computed from `slot_activation_coeff`
     #[serde(skip)]

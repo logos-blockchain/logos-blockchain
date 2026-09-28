@@ -51,7 +51,13 @@ impl State {
                 maxvalid_bg(&cryptarchia.local_chain, &cryptarchia.branches, k, s_gen)
             }
             Self::Online => {
-                let k = cryptarchia.config.security_param().get().into();
+                // With time-based finality the online rule has no depth bound:
+                // forks that would revert the LIB are pruned instead.
+                let k = if cryptarchia.config.time_finality_window().is_some() {
+                    u64::MAX
+                } else {
+                    cryptarchia.config.security_param().get().into()
+                };
                 maxvalid_mc(&cryptarchia.local_chain, &cryptarchia.branches, k)
             }
         }
@@ -410,30 +416,34 @@ impl<Id> Cryptarchia<Id>
 where
     Id: Eq + Hash + Copy,
 {
-    /// The LIB in the Online state: the k-deep block or, with time-based
-    /// finality, the latest block of the local chain at least `L_w` slots old
-    /// if that is higher. Time-based finality applies once the node has been
-    /// online for `L_w` slots.
+    /// The LIB in the Online state.
+    ///
+    /// Without time-based finality, the k-deep block. With it, the latest block
+    /// of the local chain at least `L_w` slots old, or the current LIB if that
+    /// is higher: the LIB never moves down. It advances only once the node has
+    /// been online for `L_w` slots.
     fn online_lib(&self) -> Id {
-        let k_deep = self
-            .branches
-            .nth_ancestor(&self.local_chain, self.config.security_param().get().into());
-        let (Some(window), Some(online_since)) =
-            (self.config.time_finality_window(), self.online_since)
-        else {
-            return k_deep.id;
+        let Some(window) = self.config.time_finality_window() else {
+            return self
+                .branches
+                .nth_ancestor(&self.local_chain, self.config.security_param().get().into())
+                .id;
+        };
+        let lib = &self.branches.branches[&self.branches.lib];
+        let Some(online_since) = self.online_since else {
+            return lib.id;
         };
         let now = u64::from(self.current_slot);
         if now.saturating_sub(online_since.into()) < window.get() {
-            return k_deep.id;
+            return lib.id;
         }
         let time_final = self
             .branches
             .walk_back_before(&self.local_chain, Slot::from(now - window.get()));
-        if time_final.length > k_deep.length {
+        if time_final.length > lib.length {
             time_final.id
         } else {
-            k_deep.id
+            lib.id
         }
     }
 }
@@ -2055,13 +2065,28 @@ mod time_finality_tests {
     }
 
     #[test]
-    fn k_deep_lib_when_higher() {
-        // k = 1 and current slot 41: the time-final block is at slot 30
-        // (height 3), the k-deep block at height 4.
+    fn k_bounds_neither_lib_nor_fork_choice() {
+        // k = 1 and current slot 41: the LIB is the time-final block at slot 30
+        // (height 3), not the k-deep block at height 4.
         let mut engine = engine(1, true, State::Online);
         let _pruned = engine.update_slot(0.into());
         extend(&mut engine, 1, &[10, 20, 30, 40, 41]);
-        assert_eq!(engine.lib(), id(4));
+        assert_eq!(engine.lib(), id(3));
+
+        // A longer fork diverging at the LIB, 2 blocks deep (> k), is adopted.
+        let _pruned = engine.update_slot(42.into());
+        let _pruned = engine
+            .receive_block(id(100), id(3), 36.into(), UncleSlots::default())
+            .unwrap();
+        let _pruned = engine
+            .receive_block(id(101), id(100), 37.into(), UncleSlots::default())
+            .unwrap();
+        let _pruned = engine
+            .receive_block(id(102), id(101), 42.into(), UncleSlots::default())
+            .unwrap();
+        assert_eq!(engine.tip(), id(102));
+        // Current slot 42: the time-final block of the new chain is at slot 37.
+        assert_eq!(engine.lib(), id(101));
     }
 
     #[test]
@@ -2082,10 +2107,11 @@ mod time_finality_tests {
         extend(&mut engine, 1, &slots(1, 20));
         assert_eq!(engine.lib(), id(0));
 
+        // The LIB holds until the node has been online for `L_w` slots.
         let (mut engine, _pruned) = engine.online();
-        assert_eq!(engine.lib(), id(10));
+        assert_eq!(engine.lib(), id(0));
         let _pruned = engine.update_slot(22.into());
-        assert_eq!(engine.lib(), id(10));
+        assert_eq!(engine.lib(), id(0));
         let _pruned = engine.update_slot(27.into());
         assert_eq!(engine.lib(), id(20));
     }
