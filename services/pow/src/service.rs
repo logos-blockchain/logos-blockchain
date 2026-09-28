@@ -240,9 +240,9 @@ pub enum AutoClaimTick {
     Slots(NonZeroU64),
 }
 
-/// Default auto-claim period: five minutes of wall-clock time.
+/// Default auto-claim period: ten seconds of wall-clock time.
 const fn default_auto_claim_tick() -> AutoClaimTick {
-    AutoClaimTick::Seconds(NonZeroU64::new(300).expect("300 is non-zero"))
+    AutoClaimTick::Seconds(NonZeroU64::new(10).expect("10 is non-zero"))
 }
 
 impl Default for AutoClaimTick {
@@ -1809,11 +1809,11 @@ mod tests {
     }
 
     #[test]
-    fn auto_claim_settings_default_to_a_five_minute_tick_and_no_targets() {
+    fn auto_claim_settings_default_to_a_ten_second_tick_and_no_targets() {
         let settings = AutoClaimSettings::default();
         assert_eq!(
             settings.tick,
-            AutoClaimTick::Seconds(NonZeroU64::new(300).unwrap())
+            AutoClaimTick::Seconds(NonZeroU64::new(10).unwrap())
         );
         assert!(settings.targets.is_empty());
     }
@@ -1827,7 +1827,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             only_targets.tick,
-            AutoClaimTick::Seconds(NonZeroU64::new(300).unwrap())
+            AutoClaimTick::Seconds(NonZeroU64::new(10).unwrap())
         );
         assert_eq!(only_targets.targets, vec![target(1, 42)]);
 
