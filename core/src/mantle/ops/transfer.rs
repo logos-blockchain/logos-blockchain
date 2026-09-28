@@ -137,13 +137,11 @@ impl PreverifiableOperation<StandardMode>
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverified, StandardMode> {
+    type Output = DeferredZkpVerification;
     type Context<'a> = TransferValidationContext<'a>;
     type Error = TransferError;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::Output, Self::Error> {
         let operation = self.operation();
 
         // Validate Inputs
@@ -157,10 +155,10 @@ impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverifi
         let pks = operation.inputs.get_pk(context.utxos)?;
         let inputs = public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &pks)
             .map_err(|_| TransferError::InvalidProof)?;
-        Ok(Some(DeferredZkpVerification::ZkSig(
+        Ok(DeferredZkpVerification::ZkSig(
             *self.proof().as_proof(),
             inputs,
-        )))
+        ))
     }
 }
 
@@ -292,7 +290,7 @@ mod test {
         ZkKey::from(BigUint::from(7u8))
     }
 
-    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
+    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> DeferredZkpVerification {
         let input_utxo = Utxo {
             op_id: [1u8; 32],
             output_index: 0,

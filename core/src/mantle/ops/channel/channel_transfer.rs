@@ -11,7 +11,6 @@ use crate::{
     events::TxEvent,
     mantle::{
         TxHash, Value,
-        batch::DeferredZkpVerification,
         channel::{Channels, Error},
         gas::{
             Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
@@ -117,13 +116,11 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<ChannelTransferOp, Preverified, StandardMode>
 {
+    type Output = ();
     type Context<'a> = ChannelTransferValidationContext<'a>;
     type Error = Error;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::Output, Self::Error> {
         let operation = self.operation();
         let proof = self.proof();
 
@@ -184,7 +181,7 @@ impl VerifiableOperation<StandardMode>
             }
         }
 
-        Ok(None)
+        Ok(())
     }
 }
 
@@ -385,19 +382,17 @@ mod test {
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
 
-        assert!(
-            signed_operation
-                .verify(&ChannelTransferValidationContext {
-                    channels: &channels,
-                    service_notes: &locked_notes,
-                    utxos: &utxos,
-                    tx_hash_view: &TxHashView::from(signed_hash),
-                    op_index: 0,
-                    helper: &helper,
-                })
-                .unwrap()
-                .is_none()
-        );
+        let () = signed_operation
+            .verify(&ChannelTransferValidationContext {
+                channels: &channels,
+                service_notes: &locked_notes,
+                utxos: &utxos,
+                tx_hash_view: &TxHashView::from(signed_hash),
+                op_index: 0,
+                helper: &helper,
+            })
+            .unwrap();
+
         assert_eq!(
             signed_operation
                 .verify(&ChannelTransferValidationContext {
@@ -654,19 +649,16 @@ mod test {
         let service_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
 
-        assert!(
-            signed_operation
-                .verify(&ChannelTransferValidationContext {
-                    channels: &channels,
-                    service_notes: &service_notes,
-                    utxos: &utxos,
-                    tx_hash_view: &TxHashView::from(signed_hash),
-                    op_index: 0,
-                    helper: &helper,
-                })
-                .expect("one accredited signature meets a threshold of one")
-                .is_none()
-        );
+        let () = signed_operation
+            .verify(&ChannelTransferValidationContext {
+                channels: &channels,
+                service_notes: &service_notes,
+                utxos: &utxos,
+                tx_hash_view: &TxHashView::from(signed_hash),
+                op_index: 0,
+                helper: &helper,
+            })
+            .expect("one accredited signature meets a threshold of one");
     }
 
     #[test]
