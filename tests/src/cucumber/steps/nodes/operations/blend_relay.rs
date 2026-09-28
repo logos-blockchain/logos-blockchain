@@ -387,7 +387,6 @@ fn is_declared_blend_provider(config: &RunConfig) -> Result<bool, io::Error> {
     let provider_id = config.user.blend_provider_id().map_err(io::Error::other)?;
     Ok(config
         .deployment
-        .cryptarchia
         .genesis_block
         .genesis_tx()
         .sdp_declarations()

@@ -54,7 +54,7 @@
   And I have user config override "network.backend.swarm.gossipsub.gossip_factor" as "0.5"
 
   # Strings
-  And I have deployment config override "mempool.pubsub_topic" as "my-custom-topic"
+  And I have deployment config override "network.mempool_topic" as "my-custom-topic"
 
   # Complex string (parsed later into Multiaddr etc.)
   And I have user config override "blend.core.backend.listening_address" as "/ip4/127.0.0.1/udp/20128/quic-v1"
@@ -451,12 +451,10 @@ fn get_at_path<'a>(current: &'a YamlValue, path: &[&str]) -> Option<&'a YamlValu
     let mut current = current;
 
     for segment in path {
-        current = if let Ok(index) = segment.parse::<usize>() {
-            current.as_sequence()?.get(index)?
-        } else {
-            current
-                .as_mapping()?
-                .get(YamlValue::String((*segment).to_owned()))?
+        current = match current {
+            YamlValue::Sequence(sequence) => sequence.get(segment.parse::<usize>().ok()?)?,
+            YamlValue::Mapping(mapping) => mapping.get(mapping_key(mapping, segment))?,
+            _ => return None,
         };
     }
 
@@ -478,7 +476,11 @@ fn set_at_path(
     let rest = &path[1..];
     let is_last = rest.is_empty();
 
-    if let Ok(index) = segment.parse::<usize>() {
+    // A number indexes a sequence, unless it lands on a mapping, where it can
+    // name an integer key (the first epoch in `eras.0.time`).
+    if let Ok(index) = segment.parse::<usize>()
+        && !current.is_mapping()
+    {
         return set_seq(current, segment, index, rest, value, full_path, is_last);
     }
 
@@ -536,7 +538,7 @@ fn set_map(
         )
     })?;
 
-    let key = YamlValue::String(segment.to_owned());
+    let key = mapping_key(mapping, segment);
     if is_last {
         mapping.insert(key, value);
         return Ok(());
@@ -548,6 +550,17 @@ fn set_map(
     }
 
     set_at_path(child, rest, value, full_path)
+}
+
+/// The key `segment` names in `mapping`: the integer key it spells out when
+/// the mapping holds one, and otherwise the string itself.
+fn mapping_key(mapping: &Mapping, segment: &str) -> YamlValue {
+    segment
+        .parse::<u64>()
+        .ok()
+        .map(YamlValue::from)
+        .filter(|key| mapping.contains_key(key))
+        .unwrap_or_else(|| YamlValue::String(segment.to_owned()))
 }
 
 fn default_child(rest: &[&str]) -> YamlValue {
@@ -743,20 +756,23 @@ mod tests {
             Duration::ZERO
         );
 
-        let pubsub_topic = config.deployment.mempool.pubsub_topic.clone();
+        let pubsub_topic = config.deployment.network.mempool_topic.clone();
         let override_4 = ConfigOverride {
-            path: "time.slot_duration".to_owned(),
+            path: "eras.0.time.slot_duration".to_owned(),
             value: serde_yaml::to_value(TimeDuration::new(1, 0)).expect("yaml value"),
         };
         let override_5 = ConfigOverride {
-            path: "mempool.pubsub_topic".to_owned(),
+            path: "network.mempool_topic".to_owned(),
             value: serde_yaml::to_value(add_strings!(&[&pubsub_topic, "_test_1234"]))
                 .expect("yaml value"),
         };
         assert!(apply_deployment_config_overrides(&mut config, &[override_4, override_5]).is_ok());
-        assert_eq!(config.deployment.time.slot_duration, Duration::from_secs(1));
         assert_eq!(
-            config.deployment.mempool.pubsub_topic,
+            config.deployment.genesis_era_parameters().time.slot_duration,
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            config.deployment.network.mempool_topic,
             add_strings!(&[&pubsub_topic, "_test_1234"])
         );
     }
@@ -780,8 +796,13 @@ mod tests {
             "seconds(1)",
         )
         .expect("user duration int override");
-        set_deployment_config_override(&mut world, "test-step", "time.slot_duration", "seconds(1)")
-            .expect("deployment duration override");
+        set_deployment_config_override(
+            &mut world,
+            "test-step",
+            "eras.0.time.slot_duration",
+            "seconds(1)",
+        )
+        .expect("deployment duration override");
         set_deployment_config_override(
             &mut world,
             "test-step",
@@ -814,7 +835,10 @@ mod tests {
                 .heartbeat_interval,
             Duration::from_secs(1)
         );
-        assert_eq!(config.deployment.time.slot_duration, Duration::from_secs(1));
+        assert_eq!(
+            config.deployment.genesis_era_parameters().time.slot_duration,
+            Duration::from_secs(1)
+        );
     }
 
     #[test]
@@ -853,7 +877,7 @@ mod tests {
         set_deployment_config_override(
             &mut world,
             "test-step",
-            "mempool.pubsub_topic",
+            "network.mempool_topic",
             "my-custom-topic",
         )
         .expect("string override");
@@ -901,7 +925,7 @@ mod tests {
             5
         );
         assert!((config.user.network.backend.swarm.gossipsub.gossip_factor - 0.5f64).abs() < 1e-9);
-        assert_eq!(config.deployment.mempool.pubsub_topic, "my-custom-topic");
+        assert_eq!(config.deployment.network.mempool_topic, "my-custom-topic");
         assert_eq!(
             config.user.blend.core.backend.listening_address,
             "/ip4/127.0.0.1/udp/20128/quic-v1"

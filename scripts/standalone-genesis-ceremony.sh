@@ -3,5 +3,5 @@
   --stake-holders deployment/ceremony/genesis/standalone/stakeholders.yaml \
   --providers deployment/ceremony/genesis/standalone/providers.yaml \
   --faucet deployment/ceremony/genesis/standalone/faucet.yaml \
-  --deployment deployment/ceremony/genesis/standalone/deployment-template.yaml \
+  --template deployment/ceremony/genesis/standalone/deployment-template.yaml \
   --output nodes/node/standalone-deployment-config.yaml

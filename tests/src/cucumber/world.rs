@@ -153,7 +153,11 @@ pub struct ManualClusterSpec {
 impl ManualNodeConfigOverrides {
     pub const fn apply_to(&self, config: &mut RunConfig) {
         if let Some(security_param) = self.cryptarchia_security_param {
-            config.deployment.cryptarchia.security_param = security_param;
+            config
+                .deployment
+                .genesis_era_parameters_mut()
+                .cryptarchia
+                .security_param = security_param;
         }
 
         if let Some(prolonged_bootstrap_period) = self.prolonged_bootstrap_period {

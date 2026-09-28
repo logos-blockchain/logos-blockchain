@@ -48,6 +48,7 @@ async fn main() {
             serde_yaml::from_slice(&yaml_bytes).expect("Invalid YAML");
 
         deployment
+            .genesis_era_parameters()
             .cryptarchia
             .faucet_pk
             .expect("faucet_pk missing in deployment config")

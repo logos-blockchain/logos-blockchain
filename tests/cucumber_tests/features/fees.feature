@@ -44,9 +44,9 @@ Feature: Fees
   @fees_ci
   Scenario: Execution and storage gas prices respond according to the fee market rules
     Given the cluster uses cryptarchia security parameter 3
-    And I have deployment config override "time.slot_duration" as "seconds(1)"
-    And I have deployment config override "cryptarchia.slot_activation_coeff.numerator" as "1"
-    And I have deployment config override "cryptarchia.slot_activation_coeff.denominator" as "2"
+    And I have deployment config override "eras.0.time.slot_duration" as "seconds(1)"
+    And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
+    And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
     And the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 1           | 10000        |
