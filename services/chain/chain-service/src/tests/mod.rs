@@ -124,6 +124,69 @@ fn cryptarchia_switch_to_online() {
     assert!(cryptarchia.ledger.state(&block_ids[1]).is_none());
 }
 
+#[test]
+fn cryptarchia_time_finality_advances_lib_on_slot() {
+    // k = 10 is never reached by the 3 blocks below: only the time rule moves
+    // the LIB.
+    let mut config = ledger_config(NonZero::<u32>::new(10).unwrap());
+    config.consensus_config = config
+        .consensus_config
+        .with_time_finality_window(NonZero::new(10_000));
+
+    let (zk_key, utxo) = utxo();
+    let genesis_id: HeaderId = [0; 32].into();
+    let mut cryptarchia = Cryptarchia::from_lib(
+        genesis_id,
+        LedgerState::from_utxos([utxo], &config),
+        genesis_id,
+        config,
+        lb_cryptarchia_engine::State::Online,
+        Slot::new(0),
+        0,
+        UncleSlots::default(),
+    );
+
+    let mut block_ids = vec![genesis_id];
+    let mut slot = Slot::new(1);
+    while block_ids.len() < 4 {
+        let (block, _) = try_build_block(
+            &cryptarchia,
+            *block_ids.last().unwrap(),
+            utxo,
+            &zk_key,
+            slot,
+            UncleHeaders::empty(),
+        )
+        .expect("should find a winning slot");
+        let block_header_id = block.header().id();
+        let block_header_slot = block.header().slot();
+        let (pruned_blocks, _, _) = cryptarchia
+            .try_apply_block(block, block_header_slot)
+            .unwrap();
+        assert!(pruned_blocks.is_empty());
+        block_ids.push(block_header_id);
+        slot = block_header_slot.strict_add(1.into());
+    }
+    assert_eq!(cryptarchia.lib(), genesis_id);
+
+    // The chain is [G, B1, B2, B3] and the node has been online since B1's
+    // slot. Once B3 is `L_w` = 10,000 slots old, it is final without any new
+    // block.
+    let b3_slot = cryptarchia.tip_branch().slot();
+    let pruned_blocks = cryptarchia.update_slot(b3_slot.strict_add(10_000.into()));
+    assert_eq!(cryptarchia.lib(), block_ids[3]);
+    assert_eq!(
+        pruned_blocks
+            .immutable_blocks()
+            .values()
+            .collect::<HashSet<_>>(),
+        HashSet::from([&block_ids[0], &block_ids[1], &block_ids[2]])
+    );
+    for id in &block_ids[..3] {
+        assert!(cryptarchia.ledger.state(id).is_none());
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[expect(
     clippy::too_many_lines,

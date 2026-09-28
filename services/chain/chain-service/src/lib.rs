@@ -477,6 +477,8 @@ impl Cryptarchia {
             })?
             .verify_batch_proofs()?;
 
+        // Time-based finality needs the current slot to place the LIB.
+        self.consensus.set_current_slot(current_slot);
         let outcome = self
             .consensus
             .receive_block_with_canonical_change(id, parent, slot, block_uncle_headers_slots)
@@ -548,6 +550,15 @@ impl Cryptarchia {
             }
         }
         log_pruned_ledger_states(pruned_states_count);
+    }
+
+    /// Record the current slot and update the LIB, which advances with time
+    /// under time-based finality. Prunes the ledger states of the pruned
+    /// blocks, and returns them.
+    pub(crate) fn update_slot(&mut self, slot: Slot) -> PrunedBlocks<HeaderId> {
+        let pruned_blocks = self.consensus.update_slot(slot);
+        self.prune_ledger_states(pruned_blocks.all());
+        pruned_blocks
     }
 
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {

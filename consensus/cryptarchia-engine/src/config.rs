@@ -19,6 +19,14 @@ pub struct Config {
     /// `W`, the width of the uncle reference window in expected
     /// block-intervals.
     uncle_reference_window_in_block: NonZero<u32>,
+    /// `L_w`, the time-based finality window in slots.
+    ///
+    /// When set, a block on the local chain whose slot is at least `L_w`
+    /// slots in the past is final (it becomes the LIB), provided the node has
+    /// been online for at least `L_w` slots. The k-deep block stays final as
+    /// well, so the LIB is whichever of the two is higher. When unset, only
+    /// the k-deep rule applies.
+    time_finality_window: Option<NonZero<u64>>,
     /// Lottery approximation constants computed from `slot_activation_coeff`
     #[serde(skip)]
     lottery_constants: LotteryConstants,
@@ -35,6 +43,8 @@ impl<'de> serde::Deserialize<'de> for Config {
             slot_activation_coeff: NonNegativeRatio,
             stake_inference_learning_rate: NonNegativeF64,
             uncle_reference_window_in_block: NonZero<u32>,
+            #[serde(default)]
+            time_finality_window: Option<NonZero<u64>>,
         }
 
         let raw = RawConfig::deserialize(deserializer)?;
@@ -44,6 +54,7 @@ impl<'de> serde::Deserialize<'de> for Config {
             slot_activation_coeff: raw.slot_activation_coeff,
             stake_inference_learning_rate: raw.stake_inference_learning_rate,
             uncle_reference_window_in_block: raw.uncle_reference_window_in_block,
+            time_finality_window: raw.time_finality_window,
             lottery_constants: LotteryConstants::new(raw.slot_activation_coeff),
         })
     }
@@ -62,8 +73,26 @@ impl Config {
             slot_activation_coeff,
             stake_inference_learning_rate,
             uncle_reference_window_in_block,
+            time_finality_window: None,
             lottery_constants: LotteryConstants::new(slot_activation_coeff),
         }
+    }
+
+    /// Enables time-based finality with window `L_w` (in slots), or disables
+    /// it with `None`. See [`Self::time_finality_window`].
+    #[must_use]
+    pub const fn with_time_finality_window(
+        mut self,
+        time_finality_window: Option<NonZero<u64>>,
+    ) -> Self {
+        self.time_finality_window = time_finality_window;
+        self
+    }
+
+    /// `L_w`, the time-based finality window in slots, if enabled.
+    #[must_use]
+    pub const fn time_finality_window(&self) -> Option<NonZero<u64>> {
+        self.time_finality_window
     }
 
     /// `W * f^-1`, the maximum number of slots by which the parent of a

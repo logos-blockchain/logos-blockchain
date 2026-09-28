@@ -235,6 +235,56 @@ where
         Ok(outcome)
     }
 
+    /// On a slot tick, update the LIB, which advances with time under
+    /// time-based finality even when no block arrives. Stores the new
+    /// immutable blocks, deletes the stale ones, and notifies subscribers, as
+    /// after a block.
+    async fn update_lib_on_slot(&mut self) {
+        let prev_lib = self.cryptarchia.lib();
+        let pruned_blocks = self.cryptarchia.update_slot(self.current_slot);
+        let new_lib = self.cryptarchia.lib();
+        if new_lib == prev_lib {
+            return;
+        }
+
+        let immutable_blocks = immutable_blocks_index(
+            &pruned_blocks,
+            Some(prev_lib),
+            new_lib,
+            self.cryptarchia.lib_branch().slot(),
+        );
+        if let Err(err) = self
+            .relays
+            .storage()
+            .store_immutable_block_ids(immutable_blocks)
+            .await
+        {
+            error!(target: LOG_TARGET, %err, "failed to store immutable block IDs");
+        }
+
+        notify_lib_advanced(
+            &self.cryptarchia,
+            prev_lib,
+            &pruned_blocks,
+            0,
+            &self.relays,
+            &self.lib_subscription_sender,
+        )
+        .await;
+
+        self.log_epoch_state_query_sources_became_stale(pruned_blocks.stale_blocks().copied());
+        self.retire_epoch_state_query_sources_behind_lib();
+
+        self.storage_blocks_to_remove = delete_stale_blocks_from_storage(
+            pruned_blocks.stale_blocks().copied(),
+            &self.storage_blocks_to_remove,
+            self.relays.storage(),
+        )
+        .await;
+
+        self.record_recovery_state();
+    }
+
     fn log_epoch_state_query_sources_became_stale(
         &mut self,
         stale_block_ids: impl IntoIterator<Item = HeaderId>,
@@ -835,40 +885,15 @@ where
     }
 
     if prev_lib != new_lib {
-        log_lib_advanced(
-            &prev_lib,
-            &new_lib,
-            applied.pruned_blocks.stale_blocks().count(),
-            applied.pruned_blocks.immutable_blocks().len(),
+        notify_lib_advanced(
+            cryptarchia,
+            prev_lib,
+            &applied.pruned_blocks,
             applied.reorged_blocks.len(),
-        );
-
-        let height = cryptarchia
-            .consensus
-            .branches()
-            .get(&cryptarchia.lib())
-            .expect("LIB branch not available")
-            .length();
-        let block_info = BlockInfo {
-            height,
-            header_id: new_lib,
-        };
-
-        if let Err(e) = broadcast_finalized_block(relays.broadcast_relay(), block_info).await {
-            warn!(target: LOG_TARGET, "Failed to notify finalized-block subscribers: {e}");
-        }
-
-        let lib_update = LibUpdate {
-            new_lib: cryptarchia.lib(),
-            pruned_blocks: PrunedBlocksInfo {
-                stale_blocks: applied.pruned_blocks.stale_blocks().copied().collect(),
-                immutable_blocks: applied.pruned_blocks.immutable_blocks().clone(),
-            },
-        };
-
-        if let Err(e) = lib_broadcaster.send(lib_update) {
-            warn!(target: LOG_TARGET, "No LIB-update subscribers to notify: {e}");
-        }
+            relays,
+            lib_broadcaster,
+        )
+        .await;
     }
 
     let reorged_txs: Vec<_> = join_all(
@@ -888,6 +913,49 @@ where
         reorged_block_ids: applied.reorged_blocks.iter().copied().collect(),
         reorged_txs,
     })
+}
+
+/// Log a LIB change and notify the finalized-block and LIB-update
+/// subscribers.
+async fn notify_lib_advanced<Tx>(
+    cryptarchia: &Cryptarchia,
+    prev_lib: HeaderId,
+    pruned_blocks: &PrunedBlocks<HeaderId>,
+    reorged_blocks_count: usize,
+    relays: &CryptarchiaConsensusRelays<Tx>,
+    lib_broadcaster: &broadcast::Sender<LibUpdate>,
+) where
+    Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
+{
+    let new_lib = cryptarchia.lib();
+    log_lib_advanced(
+        &prev_lib,
+        &new_lib,
+        pruned_blocks.stale_blocks().count(),
+        pruned_blocks.immutable_blocks().len(),
+        reorged_blocks_count,
+    );
+
+    let block_info = BlockInfo {
+        height: cryptarchia.lib_branch().length(),
+        header_id: new_lib,
+    };
+
+    if let Err(e) = broadcast_finalized_block(relays.broadcast_relay(), block_info).await {
+        warn!(target: LOG_TARGET, "Failed to notify finalized-block subscribers: {e}");
+    }
+
+    let lib_update = LibUpdate {
+        new_lib,
+        pruned_blocks: PrunedBlocksInfo {
+            stale_blocks: pruned_blocks.stale_blocks().copied().collect(),
+            immutable_blocks: pruned_blocks.immutable_blocks().clone(),
+        },
+    };
+
+    if let Err(e) = lib_broadcaster.send(lib_update) {
+        warn!(target: LOG_TARGET, "No LIB-update subscribers to notify: {e}");
+    }
 }
 
 async fn log_newly_canonical_blocks<Tx>(
