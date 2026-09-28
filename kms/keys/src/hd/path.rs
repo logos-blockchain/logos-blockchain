@@ -14,7 +14,7 @@ use crate::hd::{ExtendedSecretKey, HardenedIndex, MasterKey};
 /// `m/154'/account'/role'/index'`, where every level is hardened.
 ///
 /// A path is serialized in the BIP-32 notation, e.g. `m/154'/0'/0'/0'`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum Path {
     /// A leaf holding the keys of a single note.
@@ -51,7 +51,7 @@ impl Path {
 }
 
 /// The "role'" field variants dedicated to notes in the spec.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NoteRole {
     /// Notes received from others
     Receive,
