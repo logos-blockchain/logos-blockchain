@@ -14,7 +14,6 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, TxHash, Utxo, Value,
-        batch::DeferredZkpVerification,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
@@ -307,13 +306,11 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<ClaimPowRewardOp, Preverified, StandardMode>
 {
+    type Output = ();
     type Context<'a> = ClaimPoWRewardVerificationContext<'a>;
     type Error = ClaimPowRewardError;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::Output, Self::Error> {
         let operation = self.operation();
 
         context.are_pow_reward_enabled()?;
@@ -322,7 +319,7 @@ impl VerifiableOperation<StandardMode>
         let puzzle_ticket = operation.get_puzzle_ticket();
         context.validate_difficulty_reward(puzzle_ticket)?;
         context.validate_double_claiming(puzzle_ticket)?;
-        Ok(None)
+        Ok(())
     }
 }
 
@@ -579,12 +576,9 @@ mod tests {
             .into_preverified(&())
             .unwrap();
 
-        assert!(
-            signed_operation
-                .verify(&ctx)
-                .expect("a claim with the current epoch nonce is accepted")
-                .is_none()
-        );
+        let () = signed_operation
+            .verify(&ctx)
+            .expect("a claim with the current epoch nonce is accepted");
     }
 
     #[test]

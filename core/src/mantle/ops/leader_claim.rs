@@ -242,13 +242,11 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<LeaderClaimOp, Preverified, StandardMode>
 {
+    type Output = DeferredZkpVerification;
     type Context<'a> = LeaderClaimVerificationContext<'a>;
     type Error = LeaderClaimError;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::Output, Self::Error> {
         let operation = self.operation();
 
         // Check that the nullifier isn't in the set
@@ -263,14 +261,14 @@ impl VerifiableOperation<StandardMode>
 
         // Defer the proof verification so that the caller can batch it.
         // TODO: Remove. Already checked in preverify.
-        Ok(Some(DeferredZkpVerification::LeaderClaim(
+        Ok(DeferredZkpVerification::LeaderClaim(
             *self.proof().proof(),
             PoCVerifierInput::new(
                 operation.voucher_nullifier.into(),
                 context.claimable_vouchers_root.0,
                 *context.tx_hash_view.as_fr(),
             ),
-        )))
+        ))
     }
 }
 
@@ -541,7 +539,7 @@ mod tests {
         );
     }
 
-    fn deferred_zkp_verified_over(tx_hash: TxHash) -> Option<DeferredZkpVerification> {
+    fn deferred_zkp_verified_over(tx_hash: TxHash) -> DeferredZkpVerification {
         let (rewards_root, _, signed_operation) = preverified_claim(TxHash::from([11u8; 32]));
 
         signed_operation

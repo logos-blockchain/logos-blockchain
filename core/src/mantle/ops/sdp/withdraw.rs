@@ -63,13 +63,11 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<SDPWithdrawOp, Preverified, StandardMode>
 {
+    type Output = DeferredZkpVerification;
     type Context<'a> = SDPWithdrawValidationContext<'a>;
     type Error = SdpError;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::Output, Self::Error> {
         let operation = self.operation();
 
         // Check that the declaration exists
@@ -125,10 +123,11 @@ impl VerifiableOperation<StandardMode>
             &[note.pk, declaration.zk_id],
         )
         .map_err(|_| SdpError::InvalidZkSignature)?;
-        Ok(Some(DeferredZkpVerification::ZkSig(
+
+        Ok(DeferredZkpVerification::ZkSig(
             *self.proof().as_proof(),
             inputs,
-        )))
+        ))
     }
 }
 
@@ -351,7 +350,7 @@ mod tests {
         );
     }
 
-    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
+    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> DeferredZkpVerification {
         let operation = SDPWithdrawOp::sample();
         let service_notes = locked_notes(&operation.service_note_id);
         let declarations = declarations(&operation, declaration(operation.service_note_id));
