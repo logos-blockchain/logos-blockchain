@@ -10,23 +10,26 @@ use crate::Error;
 /// largest thing the blend network carries: a block proposal.
 ///
 /// A block proposal is bounded by `Proposal::MAX_ENCODED_SIZE`.
-pub const MAX_PAYLOAD_BODY_SIZE: usize = Proposal::MAX_ENCODED_SIZE;
+const MAX_PAYLOAD_BODY_SIZE_U16: u16 = {
+    assert!(Proposal::MAX_ENCODED_SIZE <= u16::MAX as usize);
+    Proposal::MAX_ENCODED_SIZE as u16
+};
 
-const _: () = assert!(MAX_PAYLOAD_BODY_SIZE <= u16::MAX as usize);
+pub const MAX_PAYLOAD_BODY_SIZE: usize = MAX_PAYLOAD_BODY_SIZE_U16 as usize;
 
 /// The length of the unpadded portion of a payload body.
 ///
 /// Construction guarantees that the length does not exceed
 /// [`MAX_PAYLOAD_BODY_SIZE`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u16")]
 struct PayloadBodyLen(u16);
 
 impl TryFrom<u16> for PayloadBodyLen {
     type Error = Error;
 
     fn try_from(value: u16) -> Result<Self, Self::Error> {
-        if usize::from(value) > MAX_PAYLOAD_BODY_SIZE {
+        if value > MAX_PAYLOAD_BODY_SIZE_U16 {
             return Err(Error::PayloadTooLarge);
         }
 
@@ -46,16 +49,6 @@ impl TryFrom<usize> for PayloadBodyLen {
 impl From<PayloadBodyLen> for usize {
     fn from(value: PayloadBodyLen) -> Self {
         Self::from(value.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for PayloadBodyLen {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = u16::deserialize(deserializer)?;
-        Self::try_from(value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -231,7 +224,7 @@ mod tests {
     use super::*;
 
     // Malformed-wire tests need MAX_PAYLOAD_BODY_SIZE + 1 to fit in the u16 field.
-    const _: () = assert!(MAX_PAYLOAD_BODY_SIZE < u16::MAX as usize);
+    const _: () = assert!(MAX_PAYLOAD_BODY_SIZE_U16 < u16::MAX);
 
     #[serde_as]
     #[derive(Serialize)]
@@ -243,7 +236,7 @@ mod tests {
 
     #[test]
     fn binary_decode_rejects_invalid_actual_length() {
-        let actual_len = (MAX_PAYLOAD_BODY_SIZE + 1) as u16;
+        let actual_len = MAX_PAYLOAD_BODY_SIZE_U16 + 1;
         let mut encoded = Vec::with_capacity(size_of::<u16>() + MAX_PAYLOAD_BODY_SIZE);
         actual_len.encode_into(&mut encoded);
         encoded.resize(encoded.capacity(), 0);
@@ -255,14 +248,14 @@ mod tests {
                 len,
                 max: MAX_PAYLOAD_BODY_SIZE,
                 ..
-            } if len == MAX_PAYLOAD_BODY_SIZE + 1
+            } if len == usize::from(actual_len)
         ));
     }
 
     #[test]
     fn serde_deserialize_rejects_invalid_actual_length() {
         let raw = InvalidPaddedPayloadBody {
-            actual_len: (MAX_PAYLOAD_BODY_SIZE + 1) as u16,
+            actual_len: MAX_PAYLOAD_BODY_SIZE_U16 + 1,
             padded: vec![0; MAX_PAYLOAD_BODY_SIZE]
                 .into_boxed_slice()
                 .try_into()
@@ -276,20 +269,29 @@ mod tests {
 
     #[test]
     fn payload_body_len_accepts_maximum_and_rejects_next_length() {
-        let maximum = PayloadBodyLen::try_from(MAX_PAYLOAD_BODY_SIZE).unwrap();
+        let maximum = PayloadBodyLen::try_from(MAX_PAYLOAD_BODY_SIZE_U16).unwrap();
         assert_eq!(usize::from(maximum), MAX_PAYLOAD_BODY_SIZE);
 
-        let over_maximum = MAX_PAYLOAD_BODY_SIZE + 1;
-        assert!(PayloadBodyLen::try_from(over_maximum).is_err());
+        assert!(PayloadBodyLen::try_from(MAX_PAYLOAD_BODY_SIZE + 1).is_err());
     }
 
     #[test]
     fn serde_deserialize_rejects_invalid_payload_body_len() {
-        let invalid_len = (MAX_PAYLOAD_BODY_SIZE + 1) as u16;
+        let invalid_len = MAX_PAYLOAD_BODY_SIZE_U16 + 1;
         let encoded = bincode::serialize(&invalid_len).unwrap();
         let error = bincode::deserialize::<PayloadBodyLen>(&encoded).unwrap_err();
 
         assert!(format!("{error}").contains("Payload too large"));
+    }
+
+    #[test]
+    fn serde_payload_body_len_keeps_u16_representation() {
+        let length = PayloadBodyLen::try_from(1u16).unwrap();
+
+        assert_eq!(
+            bincode::serialize(&length).unwrap(),
+            bincode::serialize(&1u16).unwrap()
+        );
     }
 
     #[test]
