@@ -223,7 +223,7 @@ fn service_settings_receive_recovery_data() {
     };
 
     let deployment_settings = DeploymentSettings::default();
-    let protocol_names = deployment_settings.protocol_names();
+    let protocol_names = deployment_settings.genesis_protocol_names();
     let genesis_parameters = deployment_settings.eras.into_genesis_era_parameters();
 
     let (blend_service_settings, _, _) = BlendServiceConfig {

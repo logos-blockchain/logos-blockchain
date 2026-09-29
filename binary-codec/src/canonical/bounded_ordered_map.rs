@@ -217,13 +217,13 @@ mod tests {
     }
 
     /// Every key of a zero-length type decodes to the same value, so the
-    /// second entry repeats the first. An 8-byte prefix cannot buy `u64::MAX`
+    /// second entry repeats the first. A 4-byte prefix cannot buy `u32::MAX`
     /// iterations.
     #[test]
     fn a_zero_length_key_type_cannot_drive_an_unbounded_loop() {
-        type ZeroLength = BoundedOrderedMap<[u8; 0], u8, 0, { u64::MAX as usize }>;
+        type ZeroLength = BoundedOrderedMap<[u8; 0], u8, 0, { u32::MAX as usize }>;
 
-        let mut input = u64::MAX.to_le_bytes().to_vec();
+        let mut input = u32::MAX.to_le_bytes().to_vec();
         input.extend_from_slice(&[0xAA, 0xBB]);
 
         let err = ZeroLength::decode(&input, &((), ())).unwrap_err();
