@@ -3,27 +3,23 @@ use std::collections::HashMap;
 use lb_libp2p::{ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig};
 use lb_network_service::{backends::libp2p::config::Libp2pConfig, config::NetworkConfig};
 
-use crate::config::network::{deployment::Settings as DeploymentSettings, serde::Config};
+use crate::config::{deployment::ProtocolNames, network::serde::Config};
 
-pub mod deployment;
 pub mod serde;
 
-/// Libp2p network config which combines user-provided configuration with
-/// deployment-specific settings.
-///
-/// Deployment-specific settings can refer to either a well-known deployment
-/// (e.g., Logos blockchain Mainnet), or to custom values.
+/// Libp2p network config: the user-provided configuration, completed with the
+/// protocol names derived from the deployment.
 pub struct ServiceConfig {
     pub user: Config,
-    pub deployment: DeploymentSettings,
 }
 
 impl ServiceConfig {
     pub fn into_network_config(
         self,
+        protocol_names: &ProtocolNames,
         max_data_size_by_topic: HashMap<lb_libp2p::gossipsub::TopicHash, usize>,
     ) -> NetworkConfig<Libp2pConfig> {
-        let Self { user, deployment } = self;
+        let Self { user } = self;
 
         NetworkConfig {
             backend: Libp2pConfig {
@@ -33,9 +29,9 @@ impl ServiceConfig {
                     host: user.backend.swarm.host,
                     port: user.backend.swarm.port,
                     node_key: user.backend.swarm.node_key,
-                    kad_protocol_name: deployment.kademlia_protocol_name,
-                    identify_protocol_name: deployment.identify_protocol_name,
-                    chain_sync_protocol_name: deployment.chain_sync_protocol_name,
+                    kad_protocol_name: protocol_names.kademlia.clone(),
+                    identify_protocol_name: protocol_names.identify.clone(),
+                    chain_sync_protocol_name: protocol_names.chain_sync.clone(),
                     gossipsub_config: user.backend.swarm.gossipsub.into(),
                     kademlia_config: KademliaSettings {
                         caching: user.backend.swarm.kademlia.caching.map(Into::into),

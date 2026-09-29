@@ -10,7 +10,8 @@ use crate::{
     return_error_if_null_pointer,
 };
 
-/// The libp2p protocol and topic names a deployment uses.
+/// The libp2p protocol and topic names a deployment uses, derived from its
+/// chain ID and fork digest.
 #[repr(C)]
 pub struct ProtocolNames {
     pub blend: *mut c_char,
@@ -32,16 +33,17 @@ pub struct DeploymentInfo {
 
 impl DeploymentInfo {
     fn new(deployment: &DeploymentSettings) -> Result<Self, OperationStatus> {
+        let protocol_names = deployment.protocol_names();
         Ok(Self {
             chain_id: into_c_string(deployment.chain_id().as_ref())?,
             genesis_time: deployment.genesis_time().unix_timestamp(),
             protocol_names: ProtocolNames {
-                blend: into_c_string(deployment.network.blend_protocol_name.as_ref())?,
-                cryptarchia: into_c_string(&deployment.network.cryptarchia_topic)?,
-                kademlia: into_c_string(deployment.network.kademlia_protocol_name.as_ref())?,
-                identify: into_c_string(deployment.network.identify_protocol_name.as_ref())?,
-                chain_sync: into_c_string(deployment.network.chain_sync_protocol_name.as_ref())?,
-                mempool: into_c_string(&deployment.network.mempool_topic)?,
+                blend: into_c_string(protocol_names.blend.as_ref())?,
+                cryptarchia: into_c_string(&protocol_names.cryptarchia_topic)?,
+                kademlia: into_c_string(protocol_names.kademlia.as_ref())?,
+                identify: into_c_string(protocol_names.identify.as_ref())?,
+                chain_sync: into_c_string(protocol_names.chain_sync.as_ref())?,
+                mempool: into_c_string(&protocol_names.mempool_topic)?,
             },
             node_version: into_c_string(&lb_version::build_version_info().version)?,
         })
