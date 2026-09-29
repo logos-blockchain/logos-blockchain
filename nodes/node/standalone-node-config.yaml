@@ -96,13 +96,13 @@ network:
             nanos: 0
     initial_peers: []
 blend:
-  non_ephemeral_signing_key_id: aa70aafc48536ae13168ed4845981a40cbd2dc1c38df88d04c46250e9ad65ce0
+  non_ephemeral_signing_key_id: BlendSigning
   core:
     backend:
       listening_address: /ip4/0.0.0.0/udp/3400/quic-v1
       max_dial_attempts_per_peer: 3
     zk:
-      secret_key_kms_id: 852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a
+      secret_key_kms_id: BlendZk
   edge:
     backend:
       max_dial_attempts_per_peer_per_message: 1
@@ -145,7 +145,6 @@ cryptarchia:
   leader:
     wallet:
       max_tx_fee: 18446744073709551615
-      funding_pk: 39e16b432574571a6bcd8ee36e370589641bd9f35367f6f97a972453c46c3225
 time:
   backend:
     server: pool.ntp.org:123
@@ -157,7 +156,6 @@ sdp:
   declaration_id: null
   wallet:
     max_tx_fee: 18446744073709551615
-    funding_pk: 9750fa86471fddc69749aa9f8568ef6635e64d9f9aa815e8cb932cea183c8e18
   active_message_tracker:
     status_check_interval_in_tip_changes: 3
 api:
@@ -174,22 +172,20 @@ storage:
     column_family: blocks
 kms:
   backend:
+    mnemonic: abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
     keys:
-      852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a: !Zk 1a66f6ab42521b1ac82784e2e2d3abd2fb49e5e3312a2b5fc2ef9d3ecf365c16
-      e3635f207984ae779cf76b5f20714b514373f61ff96260879fe0a6d71f2dce07: !Zk b45e4886f04f676b9c014efb6b928ea7ed560ab19f3d2b5d0ba0a1d1e0946627
-      aa70aafc48536ae13168ed4845981a40cbd2dc1c38df88d04c46250e9ad65ce0: !Ed25519 72ca8bacc83363ed2fc9ec8e79361c5389c872d3e2952de439fcf9721b1f498a
-      39e16b432574571a6bcd8ee36e370589641bd9f35367f6f97a972453c46c3225: !Zk 0ac45982aab6a39cd9b6907d55c9cd11f5073362b14a8d0af1093eaf7e61aa0f
-      cce9796339efd968df9cd463bc2248e4b29c86409496e8b2599da8c4c1074d22: !Zk 23224f5a9a18af3d1ad050c9638ed5e2043fac500fcccc1e623b6e4129727f2f
-      9750fa86471fddc69749aa9f8568ef6635e64d9f9aa815e8cb932cea183c8e18: !Zk b0c674717f055cb39643adffd53447415569346021f47818af78c86812d36b13
-      dc4aec617a8889e651c88997f2c4ba7e606cc553434a526f73109d26aa9d69ac: !Ed25519 e01039077e592ce1c454c5e8ffe2f571f6fad6106ff0e1895c9a403c126ba80f
+      BlendSigning: !Ed25519 72ca8bacc83363ed2fc9ec8e79361c5389c872d3e2952de439fcf9721b1f498a
+      BlendZk: !Zk 1a66f6ab42521b1ac82784e2e2d3abd2fb49e5e3312a2b5fc2ef9d3ecf365c16
+      NetworkSwarm: !Ed25519 e01039077e592ce1c454c5e8ffe2f571f6fad6106ff0e1895c9a403c126ba80f
 wallet:
   known_keys:
-    e3635f207984ae779cf76b5f20714b514373f61ff96260879fe0a6d71f2dce07: e3635f207984ae779cf76b5f20714b514373f61ff96260879fe0a6d71f2dce07
-    cce9796339efd968df9cd463bc2248e4b29c86409496e8b2599da8c4c1074d22: cce9796339efd968df9cd463bc2248e4b29c86409496e8b2599da8c4c1074d22
-    852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a: 852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a
-    39e16b432574571a6bcd8ee36e370589641bd9f35367f6f97a972453c46c3225: 39e16b432574571a6bcd8ee36e370589641bd9f35367f6f97a972453c46c3225
-    9750fa86471fddc69749aa9f8568ef6635e64d9f9aa815e8cb932cea183c8e18: 9750fa86471fddc69749aa9f8568ef6635e64d9f9aa815e8cb932cea183c8e18
-  voucher_master_key_id: cce9796339efd968df9cd463bc2248e4b29c86409496e8b2599da8c4c1074d22
+    - BlendSigning
+    - BlendZk
+    - NetworkSwarm
+  # The first receive index that funding spends from.
+  # The wallet never spends from index below this value.
+  # Addresses that should not be spent (such as stake) should use indices below this value.
+  funding_start_index: 1
 pow:
   auto_claim:
     # How often to try claiming: `seconds` paces off the wall clock, `slots`
@@ -197,13 +193,11 @@ pow:
     tick:
       unit: seconds
       value: 300
-    # Keys mined rewards are paid to, each with the balance it should reach.
-    # Auto-claim pays whichever listed key currently holds the least while
-    # still being below its threshold, and stops once all of them are
-    # satisfied. Every key here must also appear in `wallet.known_keys`, or the
-    # node refuses to start. Empty means claims only happen on demand, through
-    # `POST /pow/claim`.
-    targets: []
+    # Total spendable balance the wallet should reach. Auto-claim pays mined
+    # rewards to the next receive address of the wallet while the total spendable
+    # balance of the wallet is below the threshold. Null means claims only happen
+    # on demand, through `POST /pow/claim`.
+    threshold: null
 tracing:
   logger:
     file:
