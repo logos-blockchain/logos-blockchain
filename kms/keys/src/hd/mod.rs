@@ -2,9 +2,15 @@
 //!
 //! Spec: [Wallet Technical Standard](https://lip.logos.co/blockchain/raw/wallet-technical-standard.html)
 
-use std::sync::LazyLock;
+use core::fmt::Debug;
+use std::{
+    fmt::{self},
+    str::FromStr,
+    sync::LazyLock,
+};
 
 pub use arbitrary_int::u31;
+use bip39::Language;
 use blake2::{
     Blake2bVarCore,
     digest::{
@@ -14,12 +20,18 @@ use blake2::{
 };
 use lb_groth16::{Fr, fr_from_bytes_unchecked};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
+use serde::Deserialize;
+#[cfg(feature = "unsafe")]
+use serde::{Serialize, Serializer};
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::keys::ZkKey;
 
+mod path;
 #[cfg(test)]
 mod tests;
+
+pub use path::{NoteRole, Path, PathError};
 
 const BLAKE2B_PERSONA_SIZE: usize = 16;
 const MASTER_KEY_PERSONALIZATION: &[u8; BLAKE2B_PERSONA_SIZE] = b"Logos_MasterKGen";
@@ -28,9 +40,93 @@ static ZK_KEY_DST: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"WAL
 const HASH_SIZE: usize = 64;
 const HALF_HASH_SIZE: usize = div_exact(HASH_SIZE, 2);
 
+/// An English BIP-39 mnemonic, written as its words separated by spaces.
+#[derive(Clone, PartialEq, Eq, Deserialize, ZeroizeOnDrop)]
+#[serde(try_from = "String")]
+pub struct Mnemonic(bip39::Mnemonic);
+
+impl Mnemonic {
+    const DEFAULT_WORD_COUNT: usize = 12;
+
+    /// Generates a new mnemonic of 12 words.
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(
+            bip39::Mnemonic::generate_in(Language::English, Self::DEFAULT_WORD_COUNT)
+                .expect("mnemonic generation should not fail"),
+        )
+    }
+}
+
+impl FromStr for Mnemonic {
+    type Err = InvalidMnemonicError;
+
+    fn from_str(mnemonic: &str) -> Result<Self, Self::Err> {
+        Ok(Self(bip39::Mnemonic::parse_in(
+            Language::English,
+            mnemonic,
+        )?))
+    }
+}
+
+impl TryFrom<String> for Mnemonic {
+    type Error = InvalidMnemonicError;
+
+    fn try_from(mnemonic: String) -> Result<Self, Self::Error> {
+        mnemonic.parse()
+    }
+}
+
+#[cfg(feature = "unsafe")]
+impl Serialize for Mnemonic {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl Debug for Mnemonic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Mnemonic(<redacted>)")
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid mnemonic: {0}")]
+pub struct InvalidMnemonicError(#[from] bip39::Error);
+
 /// A 64-byte master seed from which the master key is derived.
 #[derive(ZeroizeOnDrop)]
 pub struct MasterSeed([u8; 64]);
+
+impl MasterSeed {
+    /// Derives the master seed from a mnemonic and a passphrase, which is
+    /// empty if the user set none.
+    #[must_use]
+    pub fn from_mnemonic(mnemonic: &Mnemonic, passphrase: &str) -> Self {
+        Self(mnemonic.0.to_seed(passphrase))
+    }
+
+    /// Derives the master key.
+    #[must_use]
+    pub fn to_key(&self) -> MasterKey {
+        MasterKey(ExtendedSecretKey::from_hash(&blake2b512(
+            MASTER_KEY_PERSONALIZATION,
+            &[&self.0],
+        )))
+    }
+}
+
+/// The root of the key hierarchy, from which every leaf is derived.
+#[derive(Clone, ZeroizeOnDrop)]
+pub struct MasterKey(ExtendedSecretKey);
+
+impl MasterKey {
+    /// Derives the key at `path`.
+    #[must_use]
+    pub fn derive_key(&self, path: &Path) -> ExtendedSecretKey {
+        path.derive(self)
+    }
+}
 
 /// A secret key with a chain code, from which hardened child keys are derived.
 #[derive(Clone, ZeroizeOnDrop)]
@@ -40,15 +136,8 @@ pub struct ExtendedSecretKey {
 }
 
 impl ExtendedSecretKey {
-    /// Derives the master key from a seed.
-    #[must_use]
-    pub fn from_seed(seed: &MasterSeed) -> Self {
-        Self::from_hash(&blake2b512(MASTER_KEY_PERSONALIZATION, &[&seed.0]))
-    }
-
     /// Derives the hardened child key at `index`.
-    #[must_use]
-    pub fn derive_child(&self, index: HardenedIndex) -> Self {
+    fn derive_child(&self, index: HardenedIndex) -> Self {
         Self::from_hash(&blake2b512(
             CHILD_KEY_PERSONALIZATION,
             &[&self.chain_code, &[0x00], &self.key, &index.to_be_bytes()],
@@ -63,13 +152,6 @@ impl ExtendedSecretKey {
                 .try_into()
                 .expect("Hash half is HALF_HASH_SIZE bytes"),
         }
-    }
-
-    /// Derives the key at `path`, one hardened child per level.
-    #[must_use]
-    pub fn derive_path(&self, path: &Path) -> Self {
-        path.iter()
-            .fold(self.clone(), |key, index| key.derive_child(*index))
     }
 
     /// Converts this key into the [`ZkKey`] used in logos-blockchain.
@@ -89,10 +171,9 @@ impl ExtendedSecretKey {
     }
 }
 
-/// HD path, a sequence of hardened child indices.
-pub type Path = [HardenedIndex];
-
 /// The index of a hardened child key, in the range `[2^31, 2^32)`.
+///
+/// It is displayed in the BIP-32 notation, e.g. `3'` for the child number 3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HardenedIndex(u32);
 
@@ -112,8 +193,20 @@ impl HardenedIndex {
         Self(child_number.value() + Self::OFFSET)
     }
 
+    /// The child number this index was converted from.
+    #[must_use]
+    pub const fn child_number(self) -> u31 {
+        u31::new(self.0 - Self::OFFSET)
+    }
+
     const fn to_be_bytes(self) -> [u8; 4] {
         self.0.to_be_bytes()
+    }
+}
+
+impl fmt::Display for HardenedIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}'", self.child_number())
     }
 }
 

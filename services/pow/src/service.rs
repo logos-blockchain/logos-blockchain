@@ -240,9 +240,9 @@ pub enum AutoClaimTick {
     Slots(NonZeroU64),
 }
 
-/// Default auto-claim period: five minutes of wall-clock time.
+/// Default auto-claim period: ten seconds of wall-clock time.
 const fn default_auto_claim_tick() -> AutoClaimTick {
-    AutoClaimTick::Seconds(NonZeroU64::new(300).expect("300 is non-zero"))
+    AutoClaimTick::Seconds(NonZeroU64::new(10).expect("10 is non-zero"))
 }
 
 impl Default for AutoClaimTick {
@@ -1371,18 +1371,32 @@ const fn max_claims_by_ops() -> usize {
 /// measures the real batch, and nothing here is signed: it costs microseconds
 /// rather than a proof per transfer group.
 ///
+/// The one value that is not zeroed is each claim's block hash, which holds
+/// the claim's index. A real batch claims distinct tickets, each minting a
+/// note of its own, and a transfer refuses to spend the same note twice, so
+/// identical probe claims would describe a transaction that cannot be built.
+///
 /// [`claim_tx_size_matches_a_signed_transaction`] pins that equivalence.
 fn claim_tx_size(claims: usize) -> Result<u64, PoWError> {
-    let claim = ClaimPowRewardOp {
-        epoch_nonce: *ZkPublicKey::zero().as_fr(),
-        block_hash: [0u8; 32],
-        public_key: ZkPublicKey::zero(),
-    };
     let signature = ZkSignature::new(ZkSignProof::from_bytes(&[0u8; COMPRESSED_PROOF_SIZE]));
     let groups = claims.div_ceil(MAX_TRANSFER_INPUTS);
 
-    let probe_claims = vec![claim.clone(); claims];
-    let note_ids = vec![Utxo::new(claim.op_id(), 0, Note::new(0, claim.public_key)).id(); claims];
+    let probe_claims: Vec<ClaimPowRewardOp> = (0..claims)
+        .map(|index| {
+            let mut block_hash = [0u8; 32];
+            let index = index.to_le_bytes();
+            block_hash[..index.len()].copy_from_slice(&index);
+            ClaimPowRewardOp {
+                epoch_nonce: *ZkPublicKey::zero().as_fr(),
+                block_hash,
+                public_key: ZkPublicKey::zero(),
+            }
+        })
+        .collect();
+    let note_ids: Vec<NoteId> = probe_claims
+        .iter()
+        .map(|claim| Utxo::new(claim.op_id(), 0, Note::new(0, claim.public_key)).id())
+        .collect();
     let transfers = transfer_ops(&note_ids, ZkPublicKey::zero(), &vec![0; groups])?;
 
     let ops = push_reward_claim_ops(MantleTxBuilder::new(), &probe_claims, transfers)?.build()?;
@@ -1809,11 +1823,11 @@ mod tests {
     }
 
     #[test]
-    fn auto_claim_settings_default_to_a_five_minute_tick_and_no_targets() {
+    fn auto_claim_settings_default_to_a_ten_second_tick_and_no_targets() {
         let settings = AutoClaimSettings::default();
         assert_eq!(
             settings.tick,
-            AutoClaimTick::Seconds(NonZeroU64::new(300).unwrap())
+            AutoClaimTick::Seconds(NonZeroU64::new(10).unwrap())
         );
         assert!(settings.targets.is_empty());
     }
@@ -1827,7 +1841,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             only_targets.tick,
-            AutoClaimTick::Seconds(NonZeroU64::new(300).unwrap())
+            AutoClaimTick::Seconds(NonZeroU64::new(10).unwrap())
         );
         assert_eq!(only_targets.targets, vec![target(1, 42)]);
 

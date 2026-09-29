@@ -196,7 +196,7 @@ pow:
     # off chain progress.
     tick:
       unit: seconds
-      value: 300
+      value: 10
     # Keys mined rewards are paid to, each with the balance it should reach.
     # Auto-claim pays whichever listed key currently holds the least while
     # still being below its threshold, and stops once all of them are

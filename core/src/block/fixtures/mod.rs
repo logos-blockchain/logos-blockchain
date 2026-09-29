@@ -2,6 +2,7 @@ use lb_binary_codec::canonical::codec_fixtures;
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
+use lb_utils::bounded::BoundedOrderedSet;
 
 use crate::{
     block::{BlockTransactionReferences, Proposal, References, SignedHeader, UncleHeaders},
@@ -21,7 +22,7 @@ fn three_references() -> BlockTransactionReferences {
 }
 
 fn three_uncle_headers() -> UncleHeaders {
-    UncleHeaders::new([uncle(0x66), uncle(0x77), uncle(0x88)])
+    UncleHeaders::new(BoundedOrderedSet::try_from([uncle(0x66), uncle(0x77), uncle(0x88)]).unwrap())
 }
 
 fn uncle(id: u8) -> SignedHeader {

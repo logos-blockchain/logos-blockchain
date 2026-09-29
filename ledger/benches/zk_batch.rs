@@ -29,7 +29,7 @@ use lb_core::{
         Note, Op, OpProof, SignedOps, Utxo,
         batch::DeferredZkpVerifications,
         gas::MainnetGasProfile,
-        ledger::{Inputs, Outputs, verification_mode::StandardMode},
+        ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
         ops::transfer::TransferOp,
         traits::Hashable as _,
         transactions::{OpProofs, Ops, states::Preverified},
@@ -237,7 +237,7 @@ fn apply(
 /// sends the very little amount to `key`.
 fn build_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
     let transfer_op = TransferOp::new(
-        Inputs::new([utxo.id()]),
+        BoundedInputs::from(utxo.id()).into(),
         // Most of the tx's value goes as a tip, to withstand gas cost increases.
         Outputs::new([Note::new(1, key.to_public_key())]),
     );

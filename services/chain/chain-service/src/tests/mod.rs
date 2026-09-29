@@ -12,7 +12,7 @@ use lb_core::{
         Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
         gas::{MainnetGasProfile, TxGasCalculator as _},
-        ledger::{Inputs, Outputs, verification_mode::StandardMode},
+        ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
         ops::{
             leader_claim::{VoucherCm, VoucherSecret},
             transfer::TransferOp,
@@ -43,7 +43,7 @@ use lb_storage_service::{
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
 use lb_time_service::backends::SystemTimeBackend;
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::{bounded::BoundedOrderedSet, math::NonNegativeRatio};
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 use rand::{RngCore as _, thread_rng};
 use tempfile::TempDir;
@@ -327,7 +327,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
         utxo,
         &zk_key,
         u1.header().slot().strict_add(1.into()),
-        UncleHeaders::new([signed_header(&u1)]),
+        UncleHeaders::new(BoundedOrderedSet::from(signed_header(&u1))),
     )
     .unwrap();
     let (b1_id, b2_id, b2_slot) = (b1.header().id(), b2.header().id(), b2.header().slot());
@@ -480,7 +480,10 @@ fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedOps<Preverif
 }
 
 fn transfer_tx(utxo: Utxo, output_note: Note, key: &ZkKey) -> SignedOps<Unverified, StandardMode> {
-    let transfer_op = TransferOp::new(Inputs::new([utxo.id()]), Outputs::new([output_note]));
+    let transfer_op = TransferOp::new(
+        BoundedInputs::from(utxo.id()).into(),
+        Outputs::new([output_note]),
+    );
     let ops = Ops::from([Op::Transfer(transfer_op)]);
     let op_proofs = OpProofs::from([OpProof::ZkSig(
         ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap(),

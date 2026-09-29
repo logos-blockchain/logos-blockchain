@@ -352,7 +352,7 @@ fn op_to_zone_message(
 mod tests {
     use lb_core::mantle::{
         NoteId, Op,
-        ledger::Inputs,
+        ledger::BoundedInputs,
         ops::channel::{
             deposit::{DepositOp, Metadata},
             withdraw::ChannelWithdrawOp,
@@ -366,7 +366,7 @@ mod tests {
     fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: Metadata) -> DepositOp {
         DepositOp {
             channel_id,
-            inputs: Inputs::new([NoteId::from(Fr::from(input_seed))]),
+            inputs: BoundedInputs::from(NoteId::from(Fr::from(input_seed))).into(),
             metadata,
         }
     }
@@ -378,7 +378,7 @@ mod tests {
     fn withdraw_op(channel_id: ChannelId, input_seed: u32) -> ChannelWithdrawOp {
         ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([NoteId::from(Fr::from(input_seed))]),
+            inputs: BoundedInputs::from(NoteId::from(Fr::from(input_seed))).into(),
         }
     }
 

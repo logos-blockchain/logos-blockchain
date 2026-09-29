@@ -26,7 +26,7 @@ codec_fixtures!(
     DeclarationMessage,
     Self {
         service_type: ServiceType::BlendNetwork,
-        locators: [Locator::new_unchecked("/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap())].into(),
+        locators: Locator::new_unchecked("/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap()).into(),
         provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[1u8; _]).unwrap()),
         zk_id: ZkPublicKey::new(Fr::from(1u64)),
         service_note_id: Fr::from(0u64).into(),

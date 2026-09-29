@@ -20,8 +20,6 @@ pub enum Error {
     PayloadDeserializationFailed,
     #[error("Private header deserialization failed")]
     PrivateHeaderDeserializationFailed,
-    #[error("Invalid payload length")]
-    InvalidPayloadLength,
     #[error("Signature verification failed")]
     SignatureVerificationFailed,
     #[error("Node is not a core node")]
