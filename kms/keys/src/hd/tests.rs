@@ -2,7 +2,9 @@ use arbitrary_int::u31;
 use lb_groth16::{Fr, fr_to_bytes};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 
-use crate::hd::{ExtendedSecretKey, HardenedIndex, MasterKey, MasterSeed, Mnemonic, ZK_KEY_DST};
+use crate::hd::{
+    ExtendedSecretKey, HardenedIndex, MasterKey, MasterSeed, Mnemonic, Passphrase, ZK_KEY_DST,
+};
 
 // Test vectors of the spec
 const MNEMONIC: &str =
@@ -88,6 +90,13 @@ fn mnemonic_deserialize() {
 fn mnemonic_serialize() {
     let json = serde_json::to_string(&mnemonic()).unwrap();
     assert_eq!(json, format!("\"{MNEMONIC}\""));
+}
+
+#[test]
+fn passphrase_is_not_shown() {
+    let passphrase = Passphrase::from("passphrase");
+    assert_eq!(format!("{passphrase:?}"), "Passphrase(<redacted>)");
+    assert_eq!(&*passphrase, "passphrase");
 }
 
 #[test]

@@ -106,7 +106,7 @@ fn build_kms_config_for_node(
     let (blend_conf, private_key, secret_zk_key) = blend_config;
 
     KmsConfig {
-        backend: lb_node::config::kms::serde::PreloadKmsBackendSettings {
+        backend: lb_node::config::kms::serde::KmsBackendSettings {
             keys: [
                 (
                     blend_conf.non_ephemeral_signing_key_id.clone(),

@@ -5,6 +5,7 @@
 use core::fmt::Debug;
 use std::{
     fmt::{self},
+    ops::Deref,
     str::FromStr,
     sync::LazyLock,
 };
@@ -93,6 +94,44 @@ impl Debug for Mnemonic {
 #[derive(Debug, thiserror::Error)]
 #[error("invalid mnemonic: {0}")]
 pub struct InvalidMnemonicError(#[from] bip39::Error);
+
+/// A BIP-39 passphrase
+#[derive(Clone, PartialEq, Eq, Deserialize, ZeroizeOnDrop)]
+#[serde(transparent)]
+pub struct Passphrase(String);
+
+impl From<String> for Passphrase {
+    fn from(passphrase: String) -> Self {
+        Self(passphrase)
+    }
+}
+
+impl From<&str> for Passphrase {
+    fn from(passphrase: &str) -> Self {
+        Self(passphrase.to_owned())
+    }
+}
+
+impl Deref for Passphrase {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[cfg(feature = "unsafe")]
+impl Serialize for Passphrase {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl Debug for Passphrase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Passphrase(<redacted>)")
+    }
+}
 
 /// A 64-byte master seed from which the master key is derived.
 #[derive(ZeroizeOnDrop)]

@@ -7,7 +7,6 @@ use std::{
 use clap::{Parser, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_core::sdp::ProviderId;
-use lb_groth16::fr_from_bytes;
 use lb_key_management_system_service::{
     backend::preload::KeyId,
     keys::{Key, UnsecuredZkKey, ZkPublicKey},
@@ -59,16 +58,18 @@ pub struct UserConfig {
     #[serde(default)]
     pub network: NetworkConfig,
     pub blend: BlendConfig,
+    #[serde(default)]
     pub cryptarchia: CryptarchiaConfig,
     #[serde(default)]
     pub time: TimeConfig,
+    #[serde(default)]
     pub sdp: SdpConfig,
     #[serde(default)]
     pub api: ApiConfig,
     #[serde(default)]
     pub storage: StorageConfig,
-    #[serde(default)]
     pub kms: KmsConfig,
+    #[serde(default)]
     pub wallet: WalletConfig,
     /// Optional: an omitted section leaves mining on its defaults and
     /// auto-claim off.
@@ -82,9 +83,7 @@ pub struct UserConfig {
 
 pub struct RequiredValues {
     pub blend: BlendConfig,
-    pub cryptarchia: CryptarchiaConfig,
-    pub sdp: SdpConfig,
-    pub wallet: WalletConfig,
+    pub kms: KmsConfig,
 }
 
 impl UserConfig {
@@ -92,15 +91,16 @@ impl UserConfig {
     pub fn with_required_values(required_values: RequiredValues) -> Self {
         Self {
             blend: required_values.blend,
-            cryptarchia: required_values.cryptarchia,
-            sdp: required_values.sdp,
-            wallet: required_values.wallet,
+            kms: required_values.kms,
+
+            cryptarchia: CryptarchiaConfig::default(),
+            sdp: SdpConfig::default(),
 
             api: ApiConfig::default(),
             // Mining defaults, auto-claim off: unattended claiming is opt-in
-            // through `pow.auto_claim.targets`.
+            // through `pow.auto_claim.threshold`.
             pow: PoWConfig::default(),
-            kms: KmsConfig::default(),
+            wallet: WalletConfig::default(),
             network: NetworkConfig::default(),
             state: StateConfig::default(),
             storage: StorageConfig::default(),
@@ -271,27 +271,10 @@ pub struct BlendArgs {
 
 #[derive(Parser, Debug, Default, Clone, Copy)]
 pub struct CryptarchiaArgs {
-    #[clap(
-        long = "cryptarchia-funding-pk",
-        env = "CRYPTARCHIA_FUNDING_PK",
-        value_parser = parse_hex_public_key
-    )]
-    pub cryptarchia_funding_pk: Option<ZkPublicKey>,
-
     /// Disable Initial Block Download (IBD) by leaving the IBD peer list
     /// empty, regardless of any peers passed via `--net-initial-peers`/`-p`.
     #[clap(long = "skip-ibd", default_value_t = false)]
     pub skip_ibd: bool,
-}
-
-#[derive(Parser, Debug, Default, Clone, Copy)]
-pub struct SdpArgs {
-    #[clap(
-        long = "sdp-funding-pk",
-        env = "SDP_FUNDING_PK",
-        value_parser = parse_hex_public_key
-    )]
-    pub sdp_funding_pk: Option<ZkPublicKey>,
 }
 
 #[derive(Parser, Debug, Default, Clone)]
@@ -492,30 +475,6 @@ pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
     }
 }
 
-pub const fn update_cryptarchia(
-    cryptarchia: &mut CryptarchiaConfig,
-    cryptarchia_args: CryptarchiaArgs,
-) {
-    let CryptarchiaArgs {
-        cryptarchia_funding_pk: funding_pk,
-        ..
-    } = cryptarchia_args;
-
-    if let Some(pk) = funding_pk {
-        cryptarchia.set_funding_pk(pk);
-    }
-}
-
-pub const fn update_sdp(sdp: &mut SdpConfig, sdp_args: SdpArgs) {
-    let SdpArgs {
-        sdp_funding_pk: funding_pk,
-    } = sdp_args;
-
-    if let Some(pk) = funding_pk {
-        sdp.set_funding_pk(pk);
-    }
-}
-
 pub fn update_api(api: &mut ApiConfig, args: ApiArgs) {
     let ApiArgs { addr, cors_origins } = args;
 
@@ -550,15 +509,6 @@ impl From<RunConfig> for UserConfig {
     fn from(value: RunConfig) -> Self {
         value.user
     }
-}
-
-pub fn parse_hex_public_key(key: &str) -> Result<ZkPublicKey, String> {
-    let bytes = hex::decode(key).map_err(|e| format!("Failed to parse hex string: {e}"))?;
-
-    let fr =
-        fr_from_bytes(&bytes).map_err(|e| format!("Failed to deserialize Fr from bytes: {e}"))?;
-
-    Ok(ZkPublicKey::new(fr))
 }
 
 pub fn parse_hex_zk_key(s: &str) -> Result<UnsecuredZkKey, String> {
