@@ -2,8 +2,8 @@ use crate::OperationStatus;
 
 /// Simple wrapper around a value or an error.
 ///
-/// Value is not guaranteed. You should check the error field before accessing
-/// the value.
+/// Value is not guaranteed.
+/// You should check the error field before accessing the value.
 #[repr(C)]
 pub struct FfiResult<Value, Error> {
     pub value: Value,

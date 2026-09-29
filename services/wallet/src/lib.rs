@@ -38,8 +38,8 @@ use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::{KMSBackend, preload::PreloadKMSBackend},
     keys::{
-        Ed25519Key, KeyOperators, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkPublicKeys,
-        ZkSignature, secured_key::SecuredKey,
+        ED25519_PUBLIC_KEY_SIZE, Ed25519Key, Ed25519PublicKey, KeyOperators, PayloadEncoding,
+        SignatureEncoding, ZkPublicKey, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
     },
     operators::zk::voucher::UnsafeVoucherOperator,
 };
@@ -141,6 +141,8 @@ pub enum WalletServiceError {
 
     #[error(transparent)]
     VerificationError(#[from] VerificationError),
+    #[error("Failed to generated signature for weak public key {}", hex::encode(.0))]
+    InvalidSigner([u8; ED25519_PUBLIC_KEY_SIZE]),
 }
 
 #[derive(Debug)]
@@ -861,7 +863,12 @@ where
         inscribe_op: &InscriptionOp,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<OpProof, WalletServiceError> {
-        let ed25519_sig = Self::sign_ed25519(tx_hash, inscribe_op.signer, kms).await?;
+        let Ok(validated_public_key) = Ed25519PublicKey::try_from(inscribe_op.signer) else {
+            return Err(WalletServiceError::InvalidSigner(
+                inscribe_op.signer.to_bytes(),
+            ));
+        };
+        let ed25519_sig = Self::sign_ed25519(tx_hash, validated_public_key, kms).await?;
         Ok(OpProof::Ed25519Sig(ed25519_sig))
     }
 
@@ -890,7 +897,10 @@ where
             .ok_or(WalletServiceError::MissingChannelState(set_keys_op.channel))?;
 
         let authorized_key = channel.accredited_keys[0]; // First key is authorized key (guaranteed non-empty)
-        let ed25519_sig = Self::sign_ed25519(tx_hash, authorized_key, kms).await?;
+        let Ok(validated_public_key) = Ed25519PublicKey::try_from(authorized_key) else {
+            return Err(WalletServiceError::InvalidSigner(authorized_key.to_bytes()));
+        };
+        let ed25519_sig = Self::sign_ed25519(tx_hash, validated_public_key, kms).await?;
 
         Ok(OpProof::Ed25519Sig(ed25519_sig))
     }

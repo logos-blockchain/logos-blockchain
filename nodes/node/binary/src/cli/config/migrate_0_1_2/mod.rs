@@ -129,7 +129,7 @@ pub fn run(args: MigrateArgs) -> Result<()> {
     let keystore_yaml = serde_yaml::to_string(&keystore)?;
     std::fs::write(&keystore_path, &keystore_yaml)?;
 
-    let user_config = build_user_config(&keystore, args.into());
+    let user_config = build_user_config(&keystore, args.into())?;
     let user_config_yaml = serde_yaml::to_string(&user_config)?;
     std::fs::write(&user_config_path, &user_config_yaml)?;
 

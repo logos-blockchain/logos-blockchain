@@ -3,7 +3,7 @@ use lb_core::{
         SignedOps,
         channel::{SlotTimeframe, SlotTimeout},
         ledger::{NoteId, verification_mode::StandardMode},
-        ops::channel::{MsgId, config::Keys, inscribe::Inscription},
+        ops::channel::{MsgId, VerifiedChannelKeys, inscribe::Inscription},
         transactions::{Ops, states::Unverified},
     },
     proofs::channel_multi_sig_proof::IndexedSignature,
@@ -145,7 +145,7 @@ where
     /// to observe finalization via the event stream.
     pub async fn channel_config(
         &mut self,
-        keys: Keys,
+        keys: VerifiedChannelKeys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
@@ -179,7 +179,7 @@ where
     /// is empty and the threshold `0` — submit with no signatures.
     pub async fn prepare_channel_config(
         &mut self,
-        keys: Keys,
+        keys: VerifiedChannelKeys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,

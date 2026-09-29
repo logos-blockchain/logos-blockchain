@@ -95,7 +95,7 @@ impl BehaviourBuilder {
                 .map(|edge_peer_id| Node {
                     address: Multiaddr::empty(),
                     id: edge_peer_id,
-                    public_key: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE])
+                    public_key: Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE])
                         .unwrap(),
                 })
                 .collect::<Vec<_>>()

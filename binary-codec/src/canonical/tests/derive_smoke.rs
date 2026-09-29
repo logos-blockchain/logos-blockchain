@@ -2,7 +2,9 @@
 //! `::lb_binary_codec::canonical::` paths emitted by the derive resolve via
 //! the umbrella serialization crate.
 
-use crate::canonical::{BinaryCodec, BinaryDecodeExt as _, BinaryEncode as _, codec_fixtures};
+use lb_utils::bounded::BoundedOrderedSet;
+
+use crate::canonical::{BinaryCodec, BinaryDecode as _, BinaryEncode as _, codec_fixtures};
 
 #[derive(Debug, PartialEq, Eq, BinaryCodec)]
 struct Named {
@@ -25,7 +27,7 @@ fn derived_named_struct_round_trips() {
     assert_eq!(bytes, vec![9, 0xEF, 0xBE]);
     assert_eq!(value.encoded_length(), 3);
 
-    let (rest, decoded) = Named::decode(&bytes).unwrap();
+    let (rest, decoded) = Named::decode(&bytes, &()).unwrap();
     assert!(rest.is_empty());
     assert_eq!(decoded, value);
 }
@@ -36,7 +38,23 @@ fn derived_tuple_struct_round_trips() {
     let bytes = value.encode_to_vec();
     assert_eq!(value.encoded_length(), bytes.len());
 
-    let (rest, decoded) = Tuple::decode(&bytes).unwrap();
+    let (rest, decoded) = Tuple::decode(&bytes, &()).unwrap();
     assert!(rest.is_empty());
     assert_eq!(decoded, value);
 }
+
+/// An ordered set field derives like any other field: it encodes in its own
+/// order, `7` before `0`, between its neighbours.
+#[derive(Debug, PartialEq, Eq, BinaryCodec)]
+struct WithOrderedSet {
+    tags: BoundedOrderedSet<u8, 0, 4>,
+    count: u16,
+}
+
+codec_fixtures!(
+    WithOrderedSet,
+    Self {
+        tags: BoundedOrderedSet::try_from_iter([7, 0]).unwrap(),
+        count: 0x0201,
+    } => "0207000102"
+);

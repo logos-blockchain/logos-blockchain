@@ -76,7 +76,7 @@ const BLEND_POW_DAMPING_DEN_OFFSET: u32 = 1;
 // Token-reward PoW parameters. Payout is disabled (`rate_num = 0`).
 const REWARD_POW_POOL_GENESIS: u64 = 1_000_000_000;
 const REWARD_POW_EPOCH_REWARD_GENESIS: u64 = 1_000_000;
-const REWARD_POW_INITIAL_DIFFICULTY_EXPONENT: u32 = 26;
+const REWARD_POW_MINIMUM_DIFFICULTY_EXPONENT: u32 = 19;
 const REWARD_POW_EMA_SMOOTHING_FACTOR: u64 = 9;
 const REWARD_POW_EMA_SMOOTHING_PRECISION: u64 = 10;
 const REWARD_POW_TARGET_CLAIMS_PER_BLOCK: u64 = 100;
@@ -200,7 +200,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 reward: lb_node::config::cryptarchia::deployment::RewardPoWConfig {
                     reward_pool_genesis: REWARD_POW_POOL_GENESIS,
                     epoch_reward_genesis: REWARD_POW_EPOCH_REWARD_GENESIS,
-                    initial_difficulty: ModulusShift::new::<REWARD_POW_INITIAL_DIFFICULTY_EXPONENT>(
+                    minimum_difficulty: ModulusShift::new::<REWARD_POW_MINIMUM_DIFFICULTY_EXPONENT>(
                     ),
                     ema_smoothing_factor: REWARD_POW_EMA_SMOOTHING_FACTOR,
                     ema_smoothing_precision: NonZero::new(REWARD_POW_EMA_SMOOTHING_PRECISION)

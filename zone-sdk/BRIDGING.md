@@ -123,6 +123,38 @@ if let Event::BlocksProcessed { finalized, .. } = event {
 }
 ```
 
+### Observing before finality: pinning
+
+`Event::BlocksProcessed` also carries `deposits`, the channel deposits observed in the block just processed, as `DepositInfo` with the deposit's `op_id`, `amount`, `metadata` and the channel notes it created. These are observations, not part of the channel view.
+
+To credit a deposit before finality, **pin** it with `publish_pin_deposit(inscription, consumed_notes)`: an inscription bundled with a channel transfer that consumes the deposit's notes, so it can only land on a branch where the deposit exists. If the deposit is not on the current branch the call returns `Error::Network` and nothing is posted; pin it again on a later event. The pin surfaces as `ChannelUpdateTx::PinDeposit` in `adopted`, and in `orphaned` if it is shed, in which case pin again.
+
+```rust
+use lb_zone_sdk::sequencer::{ChannelUpdateTx, Error, Event};
+
+if let Event::BlocksProcessed { channel_update, deposits, .. } = event {
+    observed.extend(deposits.iter().cloned());
+    for tx in channel_update.orphaned() {
+        if let ChannelUpdateTx::PinDeposit(info) = tx {
+            pinned.remove(&deposit_of(info));
+        }
+    }
+    for deposit in &observed {
+        if pinned.contains(&deposit.op_id) {
+            continue;
+        }
+        let notes = deposit.notes.iter().map(|note| note.note_id).collect();
+        match sequencer.handle().publish_pin_deposit(pin_payload_for(deposit), notes).await {
+            Ok(_) => { pinned.insert(deposit.op_id); }
+            Err(Error::Network(_)) => {} // not on this branch right now
+            Err(e) => return Err(e),
+        }
+    }
+}
+```
+
+`DepositLifecyclePolicy` in `tests/src/cucumber/steps/zone/operations/deposit_policy.rs` is the reference implementation.
+
 
 ## Withdrawals: Zone -> Blockchain
 
@@ -250,21 +282,21 @@ The finalization pattern is the same as in the single-sig case: `Event::BlocksPr
 
 ### Reorgs and republish
 
-If a withdraw submitted via `publish_atomic_withdraw` has its parent inscription orphaned by a chain reorg, the SDK reports it via the `channel_update` field of `Event::BlocksProcessed`, with the abandoned tx in `channel_update.orphaned`. The original signed transaction is no longer valid. The consumer decides whether to republish — re-call `publish_atomic_withdraw` with the same inscription payload and `WithdrawArg`s reconstructed from the bundle; the SDK refills the inscription parent and the `withdraw_nonce` from current on-chain state.
+If a withdraw submitted via `publish_atomic_withdraw` has its parent inscription orphaned by a chain reorg, the SDK reports it via the `channel_update` field of `Event::BlocksProcessed`: the update is a `ChannelUpdate::Conflict` and the abandoned tx is in its `orphaned` list, reachable through `channel_update.orphaned()`. The original signed transaction is no longer valid. The consumer decides whether to republish — re-call `publish_atomic_withdraw` with the same inscription payload and `WithdrawArg`s reconstructed from the bundle; the SDK refills the inscription parent and the `withdraw_nonce` from current on-chain state.
 
 ```rust
 use lb_zone_sdk::sequencer::{ChannelUpdateTx, Event, WithdrawArg};
 
 if let Event::BlocksProcessed { channel_update, .. } = event {
-    for tx in channel_update.orphaned {
+    for tx in channel_update.orphaned() {
         if let ChannelUpdateTx::AtomicWithdraw(info) = tx {
             let withdraws = info
                 .withdraws
-                .into_iter()
-                .map(|w| WithdrawArg { outputs: w.op.outputs })
+                .iter()
+                .map(|w| WithdrawArg { outputs: w.op.outputs.clone() })
                 .collect();
             let (result, checkpoint) = sequencer.handle().publish_atomic_withdraw(
-                info.inscription.payload,
+                info.inscription.payload.clone(),
                 withdraws,
             )?;
             // Persist `result` + `checkpoint` exactly as on the original publish.

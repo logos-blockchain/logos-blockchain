@@ -63,7 +63,8 @@ cryptarchia:
       epoch_reward_genesis: 100000000
       # Genesis `d_reward`, as the exponent n in p / 2^n — the same form as
       # the Blend `base_difficulty` above. Fixed by the specification.
-      initial_difficulty: 26
+      # Also the minimum difficulty: the retarget never eases past it.
+      minimum_difficulty: 19
       ema_smoothing_factor: 9
       ema_smoothing_precision: 10
       # One claim per block: claims are transactions, and the per-block

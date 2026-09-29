@@ -11,9 +11,12 @@
 
 mod array;
 mod boolean;
+mod bounded_ordered_map;
+mod bounded_ordered_set;
 mod bounded_vec;
 mod error;
 mod fixtures;
+mod length_prefix;
 mod numbers;
 
 #[cfg(test)]

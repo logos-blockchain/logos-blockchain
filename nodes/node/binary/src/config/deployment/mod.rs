@@ -1,6 +1,6 @@
 use core::time::Duration;
 
-use lb_core::mantle::transactions::genesis_tx::ChainId;
+use lb_core::mantle::transactions::genesis_tx::{ChainId, GenesisTime};
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,12 @@ impl DeploymentSettings {
     #[must_use]
     pub fn chain_id(&self) -> ChainId {
         self.cryptarchia.chain_id()
+    }
+
+    /// When this deployment's chain starts, read off the genesis inscription.
+    #[must_use]
+    pub fn genesis_time(&self) -> GenesisTime {
+        self.cryptarchia.genesis_time()
     }
 
     #[must_use]

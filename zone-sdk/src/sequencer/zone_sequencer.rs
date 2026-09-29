@@ -15,9 +15,8 @@ use lb_core::{
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ledger::{Inputs, NoteId, Outputs, verification_mode::StandardMode},
         ops::channel::{
-            ChannelId, MsgId,
+            ChannelId, MsgId, VerifiedChannelKeys,
             channel_transfer::ChannelTransferOp,
-            config::Keys,
             inscribe::{Inscription, InscriptionOp},
             withdraw::ChannelWithdrawOp,
         },
@@ -180,7 +179,7 @@ pub(super) enum ActorRequest {
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
     ChannelConfig {
-        keys: Keys,
+        keys: VerifiedChannelKeys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
@@ -188,7 +187,7 @@ pub(super) enum ActorRequest {
         response_tx: oneshot::Sender<Result<PublishResponse, Error>>,
     },
     PrepareChannelConfig {
-        keys: Keys,
+        keys: VerifiedChannelKeys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
@@ -768,7 +767,7 @@ where
             parent_msg: parent,
             this_msg: new_msg_id,
             payload: data.clone(),
-            signer: Some(self.signing_key.public_key()),
+            signer: Some(self.signing_key.public_key().into_unverified()),
         };
 
         // Safe to unwrap — `ensure_ready` checks state.
@@ -860,7 +859,7 @@ where
             channel_id: self.channel_id,
             inscription: inscribe.clone(),
             parent,
-            signer: self.signing_key.public_key(),
+            signer: self.signing_key.public_key().into_unverified(),
         };
         let msg_id = inscription_op.id();
 
@@ -931,7 +930,7 @@ where
                         parent_msg: parent,
                         this_msg: msg_id,
                         payload: inscribe,
-                        signer: Some(self.signing_key.public_key()),
+                        signer: Some(self.signing_key.public_key().into_unverified()),
                     },
                     withdraws: withdraw_infos,
                     outputs,
@@ -1046,7 +1045,7 @@ where
             channel_id: self.channel_id,
             inscription: inscribe.clone(),
             parent,
-            signer: self.signing_key.public_key(),
+            signer: self.signing_key.public_key().into_unverified(),
         };
         let msg_id = inscription_op.id();
 
@@ -1105,7 +1104,7 @@ where
                         parent_msg: parent,
                         this_msg: msg_id,
                         payload: inscribe,
-                        signer: Some(self.signing_key.public_key()),
+                        signer: Some(self.signing_key.public_key().into_unverified()),
                     },
                     consumed_notes: consumed_inputs,
                 }),
@@ -1150,7 +1149,7 @@ where
 
     pub(super) async fn do_channel_config(
         &mut self,
-        keys: Keys,
+        keys: VerifiedChannelKeys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
@@ -1276,7 +1275,7 @@ where
     )]
     pub(super) async fn do_prepare_channel_config(
         &mut self,
-        keys: Keys,
+        keys: VerifiedChannelKeys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,

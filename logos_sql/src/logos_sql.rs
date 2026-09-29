@@ -2,13 +2,14 @@
 
 use std::path::PathBuf;
 
-use lb_key_management_system_service::keys::Ed25519Key;
+use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
     node_types::ChannelId,
     sequencer::{FundingConfig, ZoneSequencer},
 };
+use rand::rngs::OsRng;
 use reqwest::Url;
 use rusqlite::Connection;
 
@@ -25,14 +26,20 @@ use crate::{
 pub struct LogosSqlConfig {
     /// Channel carrying the write log.
     pub channel_id: ChannelId,
-    /// Key used to sign published inscriptions.
-    pub signing_key: Ed25519Key,
     /// Base URL of the node HTTP API.
     pub node_url: Url,
-    /// Fee funding for published transactions.
-    pub funding: FundingConfig,
     /// Directory containing this participant's local databases.
     pub state_dir: PathBuf,
+    /// Signing and funding configuration. `None` follows the channel read-only.
+    pub writer: Option<WriterConfig>,
+}
+
+/// Credentials needed to publish writes to the channel.
+pub struct WriterConfig {
+    /// Key used to sign published inscriptions.
+    pub signing_key: Ed25519Key,
+    /// Fee funding for published transactions.
+    pub funding: FundingConfig,
 }
 
 /// A running `λSQL` database.
@@ -50,12 +57,16 @@ impl LogosSql {
     /// Opens local state, starts replication, and waits for the initial channel
     /// history to be processed.
     ///
+    /// With `writer: None`, this follows the channel without publishing.
+    /// Execution and displacement retries then return [`Error::ReadOnly`].
+    ///
     /// Must be called from within a tokio runtime.
     ///
     /// # Errors
     ///
     /// Returns an error if no Tokio runtime is active, the local state cannot
     /// be opened, or the replication task stops before becoming ready.
+    /// Read-only startup also rejects state with pending publications.
     pub async fn start(config: LogosSqlConfig) -> Result<Self, Error> {
         tokio::runtime::Handle::try_current().map_err(|_| Error::RuntimeUnavailable)?;
 
@@ -65,15 +76,42 @@ impl LogosSql {
         let checkpoint = db.load_checkpoint()?;
         let node = NodeHttpClient::new(CommonHttpClient::new(None), config.node_url);
 
+        let read_only = config.writer.is_none();
+        let writer = if let Some(writer) = config.writer {
+            writer
+        } else {
+            if db.pending_publish()?.is_some()
+                || checkpoint
+                    .as_ref()
+                    .is_some_and(|cp| !cp.pending_txs.is_empty())
+            {
+                return Err(Error::InvalidLocalState(
+                    "read-only startup cannot resume pending publications",
+                ));
+            }
+
+            // ZoneSDK's observer setup still requires a key and funding config.
+            // Use a fresh key and inert funding; the runtime blocks publication.
+            WriterConfig {
+                signing_key: Ed25519Key::generate(&mut OsRng),
+                funding: FundingConfig {
+                    funding_pk: ZkPublicKey::zero(),
+                    change_pk: None,
+                    max_tx_fee: 0u64.into(),
+                    priority_fee_percent: 0,
+                },
+            }
+        };
+
         let sequencer = ZoneSequencer::init(
             config.channel_id,
-            config.signing_key,
+            writer.signing_key,
             node,
-            config.funding,
+            writer.funding,
             checkpoint.clone(),
         );
 
-        let runtime = runtime::spawn(sequencer, db, config.channel_id, checkpoint);
+        let runtime = runtime::spawn(sequencer, db, config.channel_id, checkpoint, read_only);
 
         let mut logos_sql = Self {
             lib_path,
@@ -259,5 +297,37 @@ impl Drop for LogosSql {
         if let Some(runtime) = &self.runtime {
             runtime.abort();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::{LogosSql, LogosSqlConfig};
+    use crate::{db::Databases, error::Error, sql::TransactionBuilder};
+
+    #[tokio::test]
+    async fn read_only_start_does_not_abandon_a_pending_write() {
+        let directory = TempDir::new().unwrap();
+        let mut db = Databases::open(directory.path()).unwrap();
+        let (tx_id, transaction) = TransactionBuilder::new("CREATE TABLE items(value INTEGER)")
+            .finish()
+            .unwrap();
+        db.commit_local_write(tx_id, &transaction).unwrap();
+        drop(db);
+
+        let result = LogosSql::start(LogosSqlConfig {
+            channel_id: [1; 32].into(),
+            writer: None,
+            node_url: "http://127.0.0.1:1".parse().unwrap(),
+            state_dir: directory.path().to_owned(),
+        })
+        .await;
+
+        assert!(matches!(result, Err(Error::InvalidLocalState(_))));
+
+        let db = Databases::open(directory.path()).unwrap();
+        assert_eq!(db.pending_publish().unwrap().unwrap().tx_id, tx_id);
     }
 }

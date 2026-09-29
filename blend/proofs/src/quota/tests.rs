@@ -34,7 +34,7 @@ fn secret_selection_randomness_dst_encoding() {
 #[test]
 fn valid_proof_of_core_quota() {
     let (public_inputs, private_inputs) = valid_proof_of_core_quota_inputs(
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+        Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
         Quota::ONE,
     );
 
@@ -93,7 +93,7 @@ fn same_key_nullifier_for_different_public_keys() {
 #[test]
 fn valid_proof_of_leadership_quota() {
     let (public_inputs, private_inputs) = valid_proof_of_leadership_quota_inputs(
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+        Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
         Quota::ONE,
     );
 
@@ -113,7 +113,7 @@ fn valid_proof_of_leadership_quota() {
 #[test]
 fn valid_proof_of_work_quota() {
     let (public_inputs, private_inputs) = valid_proof_of_work_quota_inputs(
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+        Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
         Quota::new::<20>(),
     );
 

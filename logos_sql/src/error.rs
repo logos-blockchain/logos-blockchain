@@ -3,6 +3,10 @@
 /// Errors returned by the `λSQL` library.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// This instance follows channel history but does not publish writes.
+    #[error("this Logos SQL instance is read-only")]
+    ReadOnly,
+
     /// Local displacements need an application decision before new writes.
     #[error("handle displaced writes before submitting new writes")]
     UnhandledDisplacements,

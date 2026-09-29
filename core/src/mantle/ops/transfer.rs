@@ -42,7 +42,7 @@ impl TransferOp {
     }
 
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.inputs.is_empty() && self.outputs.is_empty()
     }
 
@@ -72,7 +72,9 @@ impl TransferOp {
     #[must_use]
     pub fn sample() -> Self {
         Self::new(
-            Inputs::new([NoteId(Fr::from(1u64)), NoteId(Fr::from(2u64))]),
+            ledger::BoundedInputs::try_from_iter([NoteId(Fr::from(1u64)), NoteId(Fr::from(2u64))])
+                .unwrap()
+                .into(),
             Outputs::new([
                 Note::new(3, ZkPublicKey::from(Fr::from(4u64))),
                 Note::new(5, ZkPublicKey::from(Fr::from(6u64))),
@@ -195,10 +197,10 @@ mod test {
             batch::{DeferredZkpVerification, Error as BatchError, test_utils::batch_verify},
             channel::Channels,
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
-            ledger,
             ledger::{
-                Inputs, InputsError, Outputs, PreverifiableOperation as _, ProvableOperation,
-                Utxos, VerifiableOperation as _, verification_mode::StandardMode,
+                self, BoundedInputs, Inputs, InputsError, Outputs, PreverifiableOperation as _,
+                ProvableOperation, Utxos, VerifiableOperation as _,
+                verification_mode::StandardMode,
             },
             ops::{
                 OpId as _, SignedOperation,
@@ -231,7 +233,7 @@ mod test {
     fn preverify_rejects_a_zero_value_output() {
         let pk = ZkPublicKey::from(Fr::from(BigUint::from(0u8)));
         let transfer = TransferOp {
-            inputs: Inputs::new([NoteId(Fr::from(BigUint::from(1u8)))]),
+            inputs: BoundedInputs::from(NoteId(Fr::from(BigUint::from(1u8)))).into(),
             outputs: Outputs::new([Note::new(0, pk)]),
         };
         let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
@@ -249,7 +251,7 @@ mod test {
         let pk1 = ZkPublicKey::from(Fr::from(BigUint::from(1u8)));
         let pk2 = ZkPublicKey::from(Fr::from(BigUint::from(2u8)));
         let transfer = TransferOp {
-            inputs: Inputs::new([NoteId(BigUint::from(0u8).into())]),
+            inputs: BoundedInputs::from(NoteId(BigUint::from(0u8).into())).into(),
             outputs: Outputs::new([
                 Note::new(100, pk0),
                 Note::new(200, pk1),
@@ -300,7 +302,7 @@ mod test {
         };
         let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
         let operation = TransferOp::new(
-            Inputs::new([input_utxo.id()]),
+            BoundedInputs::from(input_utxo.id()).into(),
             Outputs::new([Note::new(
                 10_000,
                 ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
@@ -345,7 +347,7 @@ mod test {
         };
 
         let operation = TransferOp::new(
-            Inputs::new([input_utxo.id()]),
+            BoundedInputs::from(input_utxo.id()).into(),
             Outputs::new([Note::new(
                 10_000,
                 ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
@@ -385,7 +387,7 @@ mod test {
         let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
 
         let operation = TransferOp::new(
-            Inputs::new([input_utxo.id()]),
+            BoundedInputs::from(input_utxo.id()).into(),
             Outputs::new([Note::new(
                 10_000,
                 ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
@@ -422,7 +424,7 @@ mod test {
     fn execute_rejects_an_input_missing_from_the_ledger() {
         let missing_note = NoteId(Fr::from(BigUint::from(3u8)));
         let operation = TransferOp::new(
-            Inputs::new([missing_note]),
+            BoundedInputs::from(missing_note).into(),
             Outputs::new([Note::new(
                 10_000,
                 ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
@@ -457,7 +459,7 @@ mod test {
         let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
 
         let operation = TransferOp::new(
-            Inputs::new([input_utxo.id()]),
+            BoundedInputs::from(input_utxo.id()).into(),
             Outputs::new([Note::new(
                 10_000,
                 ZkPublicKey::from(Fr::from(BigUint::from(2u8))),

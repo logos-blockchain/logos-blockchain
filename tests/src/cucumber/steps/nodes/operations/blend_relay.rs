@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{Arc, Mutex},
@@ -18,8 +18,8 @@ use tracing::warn;
 
 use crate::cucumber::{
     error::{StepError, StepResult},
-    steps::nodes::diagnostics::log_blend_relay_event,
-    world::{BlendDiagnosticPhase, CucumberWorld},
+    steps::nodes::diagnostics::BlendDiagnosticEventLogger,
+    world::{BlendDiagnosticPhase, BlendDiagnosticReachability, CucumberWorld},
 };
 
 const UDP_BUFFER_SIZE: usize = 65_536;
@@ -155,6 +155,21 @@ impl BlendRelayRegistry {
             .map_err(|_| io::Error::other("Blend relay registry lock poisoned"))
     }
 
+    pub fn provider_reachability(&self) -> Result<Vec<(String, bool)>, io::Error> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("Blend relay registry lock poisoned"))?;
+        let mut providers = inner
+            .relays
+            .iter()
+            .map(|(node_name, entry)| (node_name.clone(), entry.enabled))
+            .collect::<Vec<_>>();
+        providers.sort_by(|left, right| left.0.cmp(&right.0));
+        drop(inner);
+        Ok(providers)
+    }
+
     pub fn remove_provider(&self, node_name: &str) -> Result<bool, io::Error> {
         let relay = {
             let mut inner = self
@@ -217,6 +232,10 @@ impl BlendRelayRegistry {
     }
 }
 
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "The Cucumber reachability operation is called with its mutable world context"
+)]
 pub async fn set_blend_reachability(
     world: &mut CucumberWorld,
     node_name: &str,
@@ -233,7 +252,7 @@ pub async fn set_blend_reachability(
             message: format!("Node `{node_name}` is not running"),
         });
     }
-    if world.blend_diagnostics.phase.is_none() {
+    if world.blend_diagnostics.reachability.phase().is_none() {
         return Err(StepError::InvalidArgument {
             message: "Blend reachability operations require an active Blend diagnostic".to_owned(),
         });
@@ -244,52 +263,123 @@ pub async fn set_blend_reachability(
         });
     }
 
-    let metadata =
-        world
-            .blend_relays
-            .metadata(node_name)?
-            .ok_or_else(|| StepError::InvalidArgument {
-                message: format!("Node `{node_name}` does not have a controllable Blend relay"),
-            })?;
-    world
-        .blend_relays
+    set_blend_reachability_with_diagnostics(
+        &world.blend_relays,
+        &world.blend_diagnostics.reachability,
+        &BlendDiagnosticEventLogger::from_world(world),
+        node_name,
+        reachable,
+    )
+    .await
+}
+
+/// Changes a provider relay and updates the same reachability state and
+/// diagnostic timeline used by the foreground Blend relay steps.
+pub async fn set_blend_reachability_with_diagnostics(
+    relays: &BlendRelayRegistry,
+    reachability: &BlendDiagnosticReachability,
+    event_logger: &BlendDiagnosticEventLogger,
+    node_name: &str,
+    reachable: bool,
+) -> StepResult {
+    let metadata = relays
+        .metadata(node_name)?
+        .ok_or_else(|| StepError::InvalidArgument {
+            message: format!("Node `{node_name}` does not have a controllable Blend relay"),
+        })?;
+    relays
         .set_enabled(node_name, reachable)
         .await
         .map_err(|error| StepError::LogicalError {
             message: format!("failed to change Blend reachability for `{node_name}`: {error}"),
         })?;
 
-    if reachable {
-        world
-            .blend_diagnostics
-            .blend_unreachable_nodes
-            .remove(node_name);
-        if world.blend_diagnostics.phase == Some(BlendDiagnosticPhase::Outage) {
-            world.blend_diagnostics.phase = Some(BlendDiagnosticPhase::Recovery);
-        }
-    } else {
-        if world.blend_diagnostics.blend_unreachable_nodes.is_empty() {
-            world.blend_diagnostics.phase = Some(BlendDiagnosticPhase::Outage);
-        }
-        world
-            .blend_diagnostics
-            .blend_unreachable_nodes
-            .insert(node_name.to_owned());
-    }
-
-    let event = if reachable {
-        "blend_relay_enabled"
-    } else {
-        "blend_relay_disabled"
-    };
-    log_blend_relay_event(
-        world,
-        event,
+    reachability.set_reachable(node_name, reachable);
+    event_logger.log_blend_relay_event(
+        if reachable {
+            "blend_relay_enabled"
+        } else {
+            "blend_relay_disabled"
+        },
         node_name,
         metadata.declared_addr,
         metadata.backend_addr,
         if reachable { "recovery" } else { "outage" },
     );
+    Ok(())
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct BlendReachabilityTransition {
+    pub restored: Vec<String>,
+    pub made_unreachable: Vec<String>,
+}
+
+/// Applies one complete desired unreachable provider set. Diagnostic state is
+/// reconciled only after all requested relay changes have succeeded; each
+/// successful individual change is still recorded immediately.
+pub async fn apply_blend_reachability_set(
+    relays: &BlendRelayRegistry,
+    reachability: &BlendDiagnosticReachability,
+    event_logger: &BlendDiagnosticEventLogger,
+    current_unreachable: &mut BTreeSet<String>,
+    desired_unreachable: &BTreeSet<String>,
+) -> Result<BlendReachabilityTransition, StepError> {
+    let transition = BlendReachabilityTransition {
+        restored: current_unreachable
+            .difference(desired_unreachable)
+            .cloned()
+            .collect(),
+        made_unreachable: desired_unreachable
+            .difference(current_unreachable)
+            .cloned()
+            .collect(),
+    };
+
+    for node_name in &transition.restored {
+        set_blend_reachability_with_diagnostics(
+            relays,
+            reachability,
+            event_logger,
+            node_name,
+            true,
+        )
+        .await?;
+        current_unreachable.remove(node_name);
+    }
+    for node_name in &transition.made_unreachable {
+        set_blend_reachability_with_diagnostics(
+            relays,
+            reachability,
+            event_logger,
+            node_name,
+            false,
+        )
+        .await?;
+        current_unreachable.insert(node_name.clone());
+    }
+
+    let phase = if desired_unreachable.is_empty() {
+        BlendDiagnosticPhase::Recovery
+    } else {
+        BlendDiagnosticPhase::Outage
+    };
+    current_unreachable.clone_from(desired_unreachable);
+    reachability.replace_unreachable_nodes(desired_unreachable.iter().cloned().collect(), phase);
+    Ok(transition)
+}
+
+pub async fn restore_all_blend_reachability(world: &mut CucumberWorld) -> StepResult {
+    let unreachable_nodes = world
+        .blend_relays
+        .provider_reachability()?
+        .into_iter()
+        .filter_map(|(node_name, enabled)| (!enabled).then_some(node_name))
+        .collect::<Vec<_>>();
+
+    for node_name in unreachable_nodes {
+        set_blend_reachability(world, &node_name, true).await?;
+    }
     Ok(())
 }
 
@@ -514,9 +604,14 @@ mod tests {
     use super::*;
 
     fn test_run_configs(test_context: &str) -> Vec<RunConfig> {
+        test_run_configs_with_nodes(test_context, 2)
+    }
+
+    fn test_run_configs_with_nodes(test_context: &str, nodes: usize) -> Vec<RunConfig> {
         let genesis_time = GenesisTime::try_from(OffsetDateTime::now_utc())
             .expect("current time should fit in GenesisTime");
-        let (configs, genesis_block) = create_general_configs(2, Some(test_context), genesis_time);
+        let (configs, genesis_block) =
+            create_general_configs(nodes, Some(test_context), genesis_time);
         let deployment = e2e_deployment_settings_with_genesis_block(&genesis_block);
         configs
             .into_iter()
@@ -525,6 +620,74 @@ mod tests {
                 user: create_node_user_config(config),
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn complete_desired_set_updates_relays_and_diagnostic_state() {
+        let mut configs = test_run_configs_with_nodes("blend-relay-desired-set", 3);
+        let provider_names = ["NODE_1", "NODE_3", "NODE_6"];
+        let relays = BlendRelayRegistry::default();
+        relays.enable().expect("relay registry should enable");
+        for (node_name, config) in provider_names.iter().zip(&mut configs) {
+            let declared_address = config.user.blend.core.backend.listening_address.clone();
+            relays
+                .configure_provider(node_name, config, &declared_address)
+                .expect("provider relay should configure");
+        }
+
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let mut world = CucumberWorld::default();
+        world.lifecycle.scenario_base_dir = temp_dir.path().to_owned();
+        world
+            .blend_diagnostics
+            .reachability
+            .set_phase(Some(BlendDiagnosticPhase::Baseline));
+        let reachability = world.blend_diagnostics.reachability.clone();
+        let event_logger = BlendDiagnosticEventLogger::from_world(&world);
+        let mut current_unreachable = BTreeSet::new();
+        set_blend_reachability_with_diagnostics(
+            &relays,
+            &reachability,
+            &event_logger,
+            "NODE_1",
+            false,
+        )
+        .await
+        .expect("NODE_1 should become unreachable");
+        current_unreachable.insert("NODE_1".to_owned());
+
+        let desired_unreachable = ["NODE_3".to_owned(), "NODE_6".to_owned()].into();
+        let transition = apply_blend_reachability_set(
+            &relays,
+            &reachability,
+            &event_logger,
+            &mut current_unreachable,
+            &desired_unreachable,
+        )
+        .await
+        .expect("desired provider set should apply");
+
+        assert_eq!(transition.restored, vec!["NODE_1"]);
+        assert_eq!(transition.made_unreachable, vec!["NODE_3", "NODE_6"]);
+        assert_eq!(
+            relays
+                .provider_reachability()
+                .expect("provider reachability should be readable"),
+            vec![
+                ("NODE_1".to_owned(), true),
+                ("NODE_3".to_owned(), false),
+                ("NODE_6".to_owned(), false),
+            ]
+        );
+        assert_eq!(
+            reachability
+                .unreachable_nodes()
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            desired_unreachable
+        );
+        assert_eq!(reachability.phase(), Some(BlendDiagnosticPhase::Outage));
+        relays.shutdown();
     }
 
     #[tokio::test]

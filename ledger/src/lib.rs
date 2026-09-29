@@ -995,7 +995,7 @@ mod tests {
             Note, Op, OpProof, SignedOps,
             channel::Channels,
             gas::{MainnetGasProfile, TxGasCalculator as _},
-            ledger::{Inputs, Outputs, Utxos, VerifiableOperation as _},
+            ledger::{BoundedInputs, Inputs, Outputs, Utxos, VerifiableOperation as _},
             ops::{
                 OpId as _, OpRef, SignedOperation,
                 channel::{
@@ -1025,7 +1025,7 @@ mod tests {
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{CompressedGroth16Proof, Field as _};
     use lb_key_management_system_keys::keys::{
-        Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey, ZkSignature,
+        Ed25519Key, Ed25519PublicKey, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey, ZkSignature,
     };
     use num_bigint::BigUint;
 
@@ -1157,7 +1157,7 @@ mod tests {
         config: &Config,
         id: ChannelId,
         signing_key: &Ed25519Key,
-        verifying_key: Ed25519PublicKey,
+        verifying_key: UnverifiedEd25519PublicKey,
     ) -> LedgerState {
         let tx = create_signed_tx(
             Op::ChannelInscribe(InscriptionOp {
@@ -1333,7 +1333,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3, 4].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let tx = create_signed_tx(Op::ChannelInscribe(inscribe_op), &Key::Ed25519(signing_key));
@@ -1394,7 +1394,7 @@ mod tests {
                 .get(&channel_id)
                 .unwrap()
                 .accredited_keys,
-            verifying_key.into()
+            verifying_key.into_unverified().into()
         );
         assert!(events.is_empty());
     }
@@ -1461,7 +1461,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let mut tip = first_inscribe.id();
         let first_tx = create_signed_tx(
@@ -1491,7 +1491,7 @@ mod tests {
                 channel_id,
                 inscription: [byte].into(),
                 parent: tip,
-                signer: verifying_key,
+                signer: verifying_key.into_unverified(),
             };
             tip = inscribe.id();
             let tx = create_signed_tx(
@@ -1599,7 +1599,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let first_tx = create_signed_tx(
             Op::ChannelInscribe(first_inscribe.clone()),
@@ -1631,7 +1631,7 @@ mod tests {
             channel_id,
             inscription: [4, 5, 6].into(),
             parent: first_inscribe.id(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let second_tx = create_signed_tx(
             Op::ChannelInscribe(second_inscribe.clone()),
@@ -1665,7 +1665,7 @@ mod tests {
             &test_config,
             channel_id,
             &signing_key,
-            verifying_key,
+            verifying_key.into_unverified(),
         );
         assert!(
             ledger_state
@@ -1678,7 +1678,7 @@ mod tests {
         // Submit a deposit operation
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let ops = vec![Op::ChannelDeposit(deposit.clone())];
@@ -1759,13 +1759,13 @@ mod tests {
             &test_config,
             channel_id,
             &signing_key,
-            verifying_key,
+            verifying_key.into_unverified(),
         );
 
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
@@ -1787,7 +1787,7 @@ mod tests {
         // keeps the NoteId the deposit gave it.
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         };
         let withdraw_tx = Ops::from([Op::ChannelWithdraw(withdraw)]);
         let withdraw_tx_hash = withdraw_tx.hash();
@@ -1848,13 +1848,13 @@ mod tests {
         };
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         };
         let ops = vec![
             Op::ChannelConfig(config_op),
@@ -1916,7 +1916,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let config_op = ChannelConfigOp {
             channel: channel_id,
@@ -1985,17 +1985,17 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         };
         let ops = vec![
             Op::ChannelInscribe(inscribe_op),
@@ -2054,17 +2054,17 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let transfer = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
             outputs: Outputs::try_new(vec![utxo.note]).unwrap(),
         };
         let ops = vec![
@@ -2124,12 +2124,12 @@ mod tests {
             &test_config,
             channel_id,
             &signing_key,
-            verifying_key,
+            verifying_key.into_unverified(),
         );
 
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
@@ -2147,7 +2147,7 @@ mod tests {
         // it, so the original input never comes back to the ledger.
         let withdraw_tx = Ops::from([Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         })]);
         let withdraw_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
@@ -2190,13 +2190,13 @@ mod tests {
             &test_config,
             channel_id,
             &signing_key,
-            verifying_key,
+            verifying_key.into_unverified(),
         );
 
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: Metadata::empty(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
@@ -2217,7 +2217,7 @@ mod tests {
         // Try to withdraw the channel note, but with an invalid proof
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
         let withdraw_tx = Ops::from([Op::ChannelWithdraw(withdraw)]);
@@ -2269,7 +2269,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let first_tx = create_signed_tx(
@@ -2287,7 +2287,7 @@ mod tests {
             channel_id,
             inscription: [4, 5, 6].into(),
             parent: wrong_parent,
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let second_tx = create_signed_tx(
@@ -2312,7 +2312,7 @@ mod tests {
             channel_id: empty_channel_id,
             inscription: [7, 8, 9].into(),
             parent: MsgId::from([1; 32]), // non-root parent
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let empty_tx = create_signed_tx(
@@ -2344,7 +2344,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let correct_parent = first_inscribe.id();
@@ -2362,7 +2362,7 @@ mod tests {
             channel_id,
             inscription: [4, 5, 6].into(),
             parent: correct_parent,
-            signer: unauthorized_verifying_key,
+            signer: unauthorized_verifying_key.into_unverified(),
         };
 
         let second_tx = create_signed_tx(
@@ -2401,14 +2401,14 @@ mod tests {
             channel_id: channel1,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: vk1,
+            signer: vk1.into_unverified(),
         };
 
         let inscribe_op2 = InscriptionOp {
             channel_id: channel2,
             inscription: [4, 5, 6].into(),
             parent: MsgId::root(),
-            signer: vk2,
+            signer: vk2.into_unverified(),
         };
 
         let config_op = ChannelConfigOp {
@@ -2425,7 +2425,7 @@ mod tests {
             channel_id: channel1,
             inscription: [7, 8, 9].into(),
             parent: inscribe_op1.id(),
-            signer: vk3,
+            signer: vk3.into_unverified(),
         };
 
         let ops = vec![
@@ -2871,7 +2871,7 @@ mod tests {
             RewardPoWConfig {
                 reward_pool_genesis: 1_000_000_000,
                 epoch_reward_genesis: 1_000_000,
-                initial_difficulty: ModulusShift::new::<26>(),
+                minimum_difficulty: ModulusShift::new::<26>(),
                 ema_smoothing_factor: 9,
                 ema_smoothing_precision: NonZeroU64::new(10).expect("10 is non-zero"),
                 target_claims_per_block: 100,
@@ -2993,16 +2993,29 @@ mod tests {
         fn difficulty_is_seeded_at_genesis_and_the_controller_can_move_it() {
             // Genesis seeds a nonzero initial difficulty (zero would be an
             // absorbing state for the controller, with no ticket ever able
-            // to satisfy it), and the per-block retarget moves it: an empty
-            // block (no claims) eases the target upward.
+            // to satisfy it). It is also the minimum difficulty: an empty
+            // block (no claims) cannot ease the target past it. The per-block
+            // retarget still moves it the other way: excess claims harden it.
             let test_utxo = utxo();
-            let (mut test_ledger, genesis) = ledger(&[test_utxo], config());
+            let config = config();
+            let (mut test_ledger, genesis) = ledger(&[test_utxo], config.clone());
             let genesis_difficulty = difficulty_at(&test_ledger, genesis);
             assert_ne!(genesis_difficulty, Fr::ZERO);
 
             let block_1 = update_ledger(&mut test_ledger, genesis, 1, test_utxo)
                 .expect("empty block should apply");
-            assert!(difficulty_at(&test_ledger, block_1) > genesis_difficulty);
+            assert_eq!(difficulty_at(&test_ledger, block_1), genesis_difficulty);
+
+            let mut state = test_ledger
+                .state(&block_1)
+                .expect("block state should exist")
+                .clone();
+            state.update_pow_reward_difficulty(u64::MAX, &config);
+            let hardened = state.mantle_ledger.pow.reward_difficulty();
+            assert!(
+                BigUint::from_bytes_le(&lb_groth16::fr_to_bytes(&hardened))
+                    < BigUint::from_bytes_le(&lb_groth16::fr_to_bytes(&genesis_difficulty))
+            );
         }
 
         fn claim_tx() -> SignedOps<Preverified, StandardMode> {

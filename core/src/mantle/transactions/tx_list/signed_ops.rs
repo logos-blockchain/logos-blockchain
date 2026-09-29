@@ -403,9 +403,9 @@ pub mod test_utils {
     use crate::mantle::{
         NoteId, Op, OpProof,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
-        ledger::{Inputs, verification_mode::StandardMode},
+        ledger::{BoundedInputs, Inputs, verification_mode::StandardMode},
         ops::channel::{
-            ChannelId, ChannelKeyIndex, MsgId, config::Keys, inscribe::InscriptionOp,
+            ChannelId, ChannelKeyIndex, MsgId, UnverifiedChannelKeys, inscribe::InscriptionOp,
             verification::test_utils::create_channel_multi_sig_proof, withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
@@ -423,7 +423,7 @@ pub mod test_utils {
             channel_id: [0; 32].into(),
             inscription: [1, 2, 3].into(),
             parent: [0; 32].into(),
-            signer: signing_key.public_key(),
+            signer: signing_key.public_key().into_unverified(),
         }
     }
 
@@ -432,10 +432,13 @@ pub mod test_utils {
     #[must_use]
     pub fn make_channel_state(
         transfer_threshold: ChannelKeyIndex,
-        accredited_keys: Option<Keys>,
+        accredited_keys: Option<UnverifiedChannelKeys>,
     ) -> ChannelState {
         let keys = accredited_keys.unwrap_or_else(|| {
-            Keys::new_unchecked(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()])
+            [Ed25519Key::from_bytes(&[0; 32])
+                .public_key()
+                .into_unverified()]
+            .into()
         });
         ChannelState {
             accredited_keys: Arc::new(keys),
@@ -460,7 +463,7 @@ pub mod test_utils {
         signing_keys: &[&Ed25519Key],
         inputs: Option<Inputs>,
     ) -> SignedOps<Preverified, StandardMode> {
-        let inputs = inputs.unwrap_or_else(|| Inputs::new([NoteId(Fr::from(0u64))]));
+        let inputs = inputs.unwrap_or_else(|| BoundedInputs::from(NoteId(Fr::from(0u64))).into());
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id,
             inputs,
@@ -497,7 +500,7 @@ mod tests {
         Note, NoteId, Op, OpProof, SignedOps, Utxo, VerificationError,
         channel::{Channels, Error as ChannelError},
         gas::{MainnetGasProfile, TxGasCalculator as _},
-        ledger::{Inputs, Outputs, OutputsError, verification_mode::StandardMode},
+        ledger::{BoundedInputs, Outputs, OutputsError, verification_mode::StandardMode},
         ops::{
             channel::{
                 ChannelId, MsgId, config::ChannelConfigOp, deposit::DepositOp,
@@ -550,7 +553,7 @@ mod tests {
     fn create_deposit_op(channel_id: ChannelId) -> DepositOp {
         DepositOp {
             channel_id,
-            inputs: Inputs::new([NoteId(Fr::from(0u64))]),
+            inputs: BoundedInputs::from(NoteId(Fr::from(0u64))).into(),
             metadata: [].into(),
         }
     }
@@ -565,7 +568,7 @@ mod tests {
     fn create_withdraw_op(channel_id: ChannelId) -> ChannelWithdrawOp {
         ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([NoteId(Fr::from(0u64))]),
+            inputs: BoundedInputs::from(NoteId(Fr::from(0u64))).into(),
         }
     }
 
@@ -799,7 +802,7 @@ mod tests {
         };
 
         let transfer_op = TransferOp::new(
-            Inputs::new([input_utxo.id()]),
+            BoundedInputs::from(input_utxo.id()).into(),
             Outputs::new([Note::new(0, Fr::from(BigUint::from(2u8)).into())]),
         );
         let mantle_tx = create_test_mantle_tx(vec![Op::Transfer(transfer_op)]);

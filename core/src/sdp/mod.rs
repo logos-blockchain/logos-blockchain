@@ -24,19 +24,15 @@ use lb_groth16::Fr;
 use lb_groth16::fr_to_bytes;
 #[cfg(any(test, feature = "test-utils"))]
 use lb_key_management_system_keys::keys::Ed25519Key;
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
-use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec};
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, ZkPublicKey};
+use lb_utils::bounded::{BoundedVec, NonEmptyBoundedOrderedSet};
 use multiaddr::{Multiaddr, Protocol};
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
 use crate::{
     block::BlockNumber,
-    mantle::{
-        NoteId,
-        ops::{channel::Ed25519PublicKey, sdp::SdpError},
-        transactions::hash::TxHashView,
-    },
+    mantle::{NoteId, ops::sdp::SdpError, transactions::hash::TxHashView},
     sdp::blend::ActivityProof,
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
@@ -502,7 +498,7 @@ impl TryFrom<Declarations> for Bytes {
 }
 
 pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
-pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
+pub type Locators = NonEmptyBoundedOrderedSet<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct DeclarationMessage {

@@ -1,20 +1,32 @@
 use core::{
-    marker::PhantomData,
     ops::Deref,
     slice::{Iter, IterMut},
 };
 use std::{ops::DerefMut, str::FromStr, vec::IntoIter};
 
-use serde::{
-    Deserialize, Deserializer,
-    de::{Error as _, SeqAccess, Visitor},
-};
+use serde::{Deserialize, Deserializer};
 
-use crate::bounded::{Bounded, BoundedError, BoundedLen};
+use crate::bounded::{
+    Bounded, BoundedError, BoundedLen,
+    collection::{BoundedCollection, SeqVisitor, collect_iter},
+};
 
 impl<T> BoundedLen for Vec<T> {
     fn bounded_len(&self) -> usize {
         self.len()
+    }
+}
+
+impl<T> BoundedCollection for Vec<T> {
+    type Item = T;
+
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+
+    fn add(&mut self, item: T) -> bool {
+        self.push(item);
+        true
     }
 }
 
@@ -41,10 +53,12 @@ where
 
 /// Deserialize a sequence directly into a bounded vector.
 ///
-/// Sequence formats may provide a length through [`SeqAccess::size_hint`].
-/// When that length exceeds `MAX`, it is rejected before any element is
-/// decoded. Formats without a reliable hint are still bounded by stopping at
-/// the first element beyond `MAX`.
+/// Sequence formats may declare a length through
+/// [`SeqAccess::size_hint`](serde::de::SeqAccess::size_hint). A declared
+/// length outside `[MIN, MAX]` is rejected before any element is decoded.
+/// Formats that declare nothing are held to the same bounds as elements
+/// arrive: they are stopped at the first element beyond `MAX`, and fail where
+/// they end if that is before `MIN`.
 pub fn deserialize_bounded_sequence<'de, T, const MIN: usize, const MAX: usize, D>(
     deserializer: D,
 ) -> Result<BoundedVec<T, MIN, MAX>, D::Error>
@@ -52,52 +66,7 @@ where
     T: Deserialize<'de>,
     D: Deserializer<'de>,
 {
-    deserializer.deserialize_seq(BoundedSequenceVisitor {
-        marker: PhantomData,
-    })
-}
-
-struct BoundedSequenceVisitor<T, const MIN: usize, const MAX: usize> {
-    marker: PhantomData<T>,
-}
-
-impl<'de, T, const MIN: usize, const MAX: usize> Visitor<'de>
-    for BoundedSequenceVisitor<T, MIN, MAX>
-where
-    T: Deserialize<'de>,
-{
-    type Value = BoundedVec<T, MIN, MAX>;
-
-    fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(formatter, "a sequence with between {MIN} and {MAX} items")
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let size_hint = sequence.size_hint();
-        if let Some(size_hint) = size_hint.filter(|&size_hint| size_hint > MAX) {
-            return Err(A::Error::custom(BoundedError::TooManyItems {
-                count: size_hint,
-                max: MAX,
-            }));
-        }
-
-        let capacity = size_hint.unwrap_or(0).min(MAX);
-        let mut values = Vec::with_capacity(capacity);
-        while let Some(value) = sequence.next_element()? {
-            if values.len() == MAX {
-                return Err(A::Error::custom(BoundedError::TooManyItems {
-                    count: MAX.saturating_add(1),
-                    max: MAX,
-                }));
-            }
-            values.push(value);
-        }
-
-        BoundedVec::try_from(values).map_err(A::Error::custom)
-    }
+    deserializer.deserialize_seq(SeqVisitor::new())
 }
 
 impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
@@ -242,18 +211,7 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
     where
         I: IntoIterator<Item = T>,
     {
-        let mut values = Vec::new();
-
-        for value in iterable {
-            if values.len() == MAX {
-                return Err(BoundedError::TooManyItems {
-                    count: MAX + 1,
-                    max: MAX,
-                });
-            }
-            values.push(value);
-        }
-        Self::try_from(values)
+        collect_iter(iterable)
     }
 
     /// Filters and maps elements while preserving the upper length bound.
@@ -704,6 +662,29 @@ mod tests {
         let encoded = bincode::serialize(&vec![1u8; 5]).unwrap();
 
         let result = bincode::deserialize::<BoundedVec<CountingByte, 0, 4>>(&encoded);
+
+        assert!(result.is_err());
+        assert_eq!(ELEMENT_ATTEMPTS.load(Ordering::Relaxed), 0);
+    }
+
+    /// Reserving the declared length outright would ask for `u64::MAX`
+    /// elements and panic on capacity overflow, from an 8-byte input.
+    #[test]
+    fn deserialize_binary_does_not_preallocate_a_huge_declared_length() {
+        type Unbounded = BoundedVec<u8, 0, { usize::MAX }>;
+
+        let result = bincode::deserialize::<Unbounded>(&u64::MAX.to_le_bytes());
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn deserialize_binary_rejects_undersized_length_before_decoding_elements() {
+        let _test_guard = ELEMENT_ATTEMPTS_TEST_LOCK.lock().unwrap();
+        ELEMENT_ATTEMPTS.store(0, Ordering::Relaxed);
+        let encoded = bincode::serialize(&vec![1u8]).unwrap();
+
+        let result = bincode::deserialize::<BoundedVec<CountingByte, 2, 4>>(&encoded);
 
         assert!(result.is_err());
         assert_eq!(ELEMENT_ATTEMPTS.load(Ordering::Relaxed), 0);

@@ -14,7 +14,16 @@ use crate::cucumber::{
 #[given("I start Logos SQL instances:")]
 #[when("I start Logos SQL instances:")]
 async fn step_start_logos_sql_instances(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    actions::start_instances(world, instance_rows(step)?).await
+    actions::start_instances(world, instance_rows(step)?, false).await
+}
+
+#[given("I start read-only Logos SQL instances:")]
+#[when("I start read-only Logos SQL instances:")]
+async fn step_start_read_only_logos_sql_instances(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    actions::start_instances(world, instance_rows(step)?, true).await
 }
 
 #[when(expr = "I stop Logos SQL instance {string}")]

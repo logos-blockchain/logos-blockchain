@@ -94,8 +94,8 @@ mod tests {
             ops::{
                 ZkAndEd25519Proof,
                 channel::{
-                    ChannelId, MsgId,
-                    config::{ChannelConfigOp, Keys},
+                    ChannelId, MsgId, VerifiedChannelKeys,
+                    config::ChannelConfigOp,
                     inscribe::{self, Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
@@ -149,7 +149,7 @@ mod tests {
             channel_id: ChannelId::from([0xAA; 32]),
             inscription: b"hello".into(),
             parent: MsgId::from([0xBB; 32]),
-            signer: signing_key.public_key(),
+            signer: signing_key.public_key().into_unverified(),
         })]);
 
         let tx_hash = tx.hash();
@@ -194,7 +194,7 @@ mod tests {
                 channel_id: ChannelId::from([0x11; 32]),
                 inscription: b"first".into(),
                 parent: MsgId::from([0x00; 32]),
-                signer: signing_key.public_key(),
+                signer: signing_key.public_key().into_unverified(),
             }),
             Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([0x22; 32]),
@@ -248,7 +248,7 @@ mod tests {
                     channel_id: ChannelId::from([0xAA; 32]),
                     inscription: large_inscription,
                     parent: MsgId::from([0xBB; 32]),
-                    signer: signing_key.public_key(),
+                    signer: signing_key.public_key().into_unverified(),
                 };
 
                 let tx = Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]);
@@ -298,7 +298,8 @@ mod tests {
         let pk = ZkPublicKey::from(BigUint::from(42u64));
         let note = Note::new(1000, pk);
         let note_id = NoteId(BigUint::from(123u64).into());
-        let transfer_op = TransferOp::new(Inputs::new([note_id]), Outputs::new([note]));
+        let transfer_op =
+            TransferOp::new(BoundedInputs::from(note_id).into(), Outputs::new([note]));
 
         let original_tx = Ops::new_unchecked(vec![Op::Transfer(transfer_op)]);
 
@@ -338,7 +339,7 @@ mod tests {
             channel_id: ChannelId::from([0xAA; 32]),
             inscription: b"hello world".into(),
             parent: MsgId::from([0xBB; 32]),
-            signer: signing_key.public_key(),
+            signer: signing_key.public_key().into_unverified(),
         };
 
         let mantle_tx = Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]);
@@ -518,7 +519,7 @@ mod tests {
             channel_id: ChannelId::from([0xAA; 32]),
             inscription: b"test".into(),
             parent: MsgId::from([0xBB; 32]),
-            signer: signing_key.public_key(),
+            signer: signing_key.public_key().into_unverified(),
         };
 
         let config_op = ChannelConfigOp {
@@ -585,7 +586,9 @@ mod tests {
         let note_id3 = NoteId(BigUint::from(333u64).into());
 
         let transfer_op = TransferOp::new(
-            Inputs::new([note_id1, note_id2, note_id3]),
+            BoundedInputs::try_from_iter([note_id1, note_id2, note_id3])
+                .unwrap()
+                .into(),
             Outputs::new([note1, note2]),
         );
 
@@ -614,7 +617,7 @@ mod tests {
             channel_id: ChannelId::from([0x11; 32]),
             inscription: b"complex test inscription with more data".into(),
             parent: MsgId::from([0x22; 32]),
-            signer: signing_key1.public_key(),
+            signer: signing_key1.public_key().into_unverified(),
         };
 
         let config_op = ChannelConfigOp {
@@ -629,7 +632,7 @@ mod tests {
 
         let service_note_sk = ZkKey::from(BigUint::from(1u64));
         let transfer_op = TransferOp {
-            inputs: Inputs::new([NoteId(BigUint::from(777u64).into())]),
+            inputs: BoundedInputs::from(NoteId(BigUint::from(777u64).into())).into(),
             outputs: Outputs::new([Note::new(5000, service_note_sk.to_public_key())]),
         };
 
@@ -726,10 +729,12 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[21u8; 32]);
         let mantle_tx = Ops::new_unchecked(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id: ChannelId::from([0xAB; 32]),
-            inputs: Inputs::new([
+            inputs: BoundedInputs::try_from_iter([
                 NoteId(BigUint::from(100u64).into()),
                 NoteId(BigUint::from(200u64).into()),
-            ]),
+            ])
+            .unwrap()
+            .into(),
         })]);
         let tx_hash = mantle_tx.hash();
         let proof = ChannelMultiSigProof::try_new(
@@ -862,7 +867,7 @@ mod tests {
             parent: MsgId::from([0x33; 32]),
             // Using `new_unchecked` to bypass the constructor check since we're testing
             // `decode` directly.
-            keys: Keys::new_unchecked([].into()),
+            keys: VerifiedChannelKeys::new_unchecked([].into()),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
@@ -998,9 +1003,8 @@ mod tests {
 
     #[test]
     fn test_encode_decode_max_inputs() {
-        let note_id = NoteId(BigUint::from(111u64).into());
-        let inputs = [note_id; u8::MAX as usize];
-        let inputs = BoundedInputs::from(inputs);
+        let inputs = (0..u8::MAX).map(|index| NoteId(BigUint::from(index).into()));
+        let inputs: Inputs = BoundedInputs::try_from_iter(inputs).unwrap().into();
 
         // Encode should succeed
         let encoded = inputs.encode();
@@ -1050,9 +1054,12 @@ mod tests {
         let mut valid_input = Vec::new();
         valid_input.push(u8::MAX);
 
-        // Add MAX_INPUT_COUNT field elements (each 32 bytes)
-        for _ in 0..u8::MAX {
-            valid_input.extend_from_slice(&[0x01; 32]);
+        // Add MAX_INPUT_COUNT distinct field elements (each 32 bytes, little
+        // endian)
+        for index in 0..u8::MAX {
+            let mut note_id = [0x01; 32];
+            note_id[0] = index;
+            valid_input.extend_from_slice(&note_id);
         }
 
         let result = BoundedInputs::decode(&valid_input);

@@ -40,7 +40,7 @@ pub fn build_inscription_tx_builder(
             channel_id,
             inscription,
             parent: parent.unwrap_or_else(MsgId::root),
-            signer: signing_key.public_key(),
+            signer: signing_key.public_key().into_unverified(),
         }))
         .expect("inscription test builder should fit op bounds");
 

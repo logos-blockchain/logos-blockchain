@@ -5,7 +5,7 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use tokio::sync::oneshot;
 
-use crate::service::{ClaimableRewardsInfo, PoWError, PoWServiceMessage};
+use crate::service::{ClaimableRewardsInfo, PoWError, PoWServiceMessage, PoWStatus};
 
 /// Marker trait for the `PoW` service, used to parametrize [`PoWServiceApi`]
 /// over the concrete service type while pinning its message type.
@@ -49,7 +49,9 @@ where
     }
 
     /// Enable mining. Fire-and-forget: mining is a boolean toggle that carries
-    /// no response. Note it is not persisted, so a restart clears it.
+    /// no response. Note it is not persisted, so a restart clears it. While
+    /// auto-claim is armed, the service stops mining once every claim target
+    /// has reached its threshold.
     pub async fn start_mining(&self) -> Result<(), ApiError> {
         self.relay
             .send(PoWServiceMessage::StartMining)
@@ -66,8 +68,8 @@ where
     }
 
     /// Enable unattended claiming. Fire-and-forget. Ignored when no claim
-    /// targets are configured; the service stops itself again once every
-    /// target has reached its threshold.
+    /// targets are configured; the service stops itself, and mining, once
+    /// every target has reached its threshold.
     pub async fn start_auto_claim(&self) -> Result<(), ApiError> {
         self.relay
             .send(PoWServiceMessage::StartAutoClaim)
@@ -128,6 +130,20 @@ where
             ApiError::CommsFailure(format!(
                 "{error} while receiving ClaimableRewardsInfo response"
             ))
+        })
+    }
+
+    /// Report the service's runtime state: whether it is mining, whether
+    /// auto-claim is armed, and each claim target's threshold and balance.
+    pub async fn status(&self) -> Result<PoWStatus, ApiError> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.relay
+            .send(PoWServiceMessage::Status { response: resp_tx })
+            .await
+            .map_err(|error| ApiError::CommsFailure(format!("{error} while sending Status")))?;
+
+        resp_rx.await.map_err(|relay_err| {
+            ApiError::CommsFailure(format!("{relay_err} while receiving Status response"))
         })
     }
 }

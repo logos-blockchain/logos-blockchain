@@ -53,7 +53,7 @@ impl ChannelTransferOp {
     pub fn sample() -> Self {
         Self {
             channel_id: ChannelId::from([20u8; 32]),
-            inputs: Inputs::new([NoteId(Fr::from(21u64))]),
+            inputs: crate::mantle::ledger::BoundedInputs::from(NoteId(Fr::from(21u64))).into(),
             outputs: Outputs::new([Note::new(22, ZkPublicKey::from(Fr::from(23u64)))]),
         }
     }
@@ -232,18 +232,18 @@ mod test {
             channel_notes,
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger::{
-                Inputs, InputsError, Outputs, OutputsError, PreverifiableOperation as _, Utxos,
-                VerifiableOperation as _, verification_mode::StandardMode,
+                BoundedInputs, Inputs, InputsError, Outputs, OutputsError,
+                PreverifiableOperation as _, Utxos, VerifiableOperation as _,
+                verification_mode::StandardMode,
             },
             ops::{
                 SignedOperation,
                 channel::{
-                    ChannelId,
+                    ChannelId, UnverifiedChannelKeys,
                     channel_transfer::{
                         ChannelTransferExecutionContext, ChannelTransferOp,
                         ChannelTransferValidationContext,
                     },
-                    config::Keys,
                     verification::test_utils::create_channel_multi_sig_proof,
                 },
             },
@@ -278,7 +278,9 @@ mod test {
             CHANNEL_ID,
             make_channel_state(
                 1,
-                Some(Keys::new_unchecked(vec![signing_key().public_key()])),
+                Some(UnverifiedChannelKeys::new_unchecked(vec![
+                    signing_key().public_key().into_unverified(),
+                ])),
             ),
         );
 
@@ -287,7 +289,7 @@ mod test {
             .expect("the note is not owned by another channel")
     }
 
-    fn ledger_view(transfer_threshold: u16, accredited_keys: Keys) -> Channels {
+    fn ledger_view(transfer_threshold: u16, accredited_keys: UnverifiedChannelKeys) -> Channels {
         let mut channels = Channels::new();
         channels.channels.insert_mut(
             CHANNEL_ID,
@@ -305,7 +307,7 @@ mod test {
     ) -> SignedOperation<ChannelTransferOp, Preverified, StandardMode> {
         let operation = ChannelTransferOp {
             channel_id: CHANNEL_ID,
-            inputs: Inputs::new([utxo().id()]),
+            inputs: BoundedInputs::from(utxo().id()).into(),
             outputs,
         };
 
@@ -334,7 +336,7 @@ mod test {
     fn preverify_rejects_a_zero_value_output() {
         let channel_transfer = ChannelTransferOp {
             channel_id: ChannelId::from([0u8; 32]),
-            inputs: Inputs::new([utxo().id()]),
+            inputs: BoundedInputs::from(utxo().id()).into(),
             outputs: Outputs::new([Note::new(0, ZkPublicKey::zero())]),
         };
         let proof = ChannelMultiSigProof::try_new([].into()).unwrap();
@@ -376,7 +378,10 @@ mod test {
         let channels = channel_view();
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -419,7 +424,10 @@ mod test {
 
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -457,7 +465,9 @@ mod test {
 
         let operation = ChannelTransferOp {
             channel_id: CHANNEL_ID,
-            inputs: Inputs::new([first.id(), second.id()]),
+            inputs: BoundedInputs::try_from_iter([first.id(), second.id()])
+                .unwrap()
+                .into(),
             outputs: Outputs::new([Note::new(10_000, ZkPublicKey::from(Fr::from(2u64)))]),
         };
         let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
@@ -472,7 +482,9 @@ mod test {
             CHANNEL_ID,
             make_channel_state(
                 1,
-                Some(Keys::new_unchecked(vec![signing_key().public_key()])),
+                Some(UnverifiedChannelKeys::new_unchecked(vec![
+                    signing_key().public_key().into_unverified(),
+                ])),
             ),
         );
         let channels = channels
@@ -483,7 +495,10 @@ mod test {
 
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(first.id(), first);
@@ -518,7 +533,10 @@ mod test {
         let channels = channel_view();
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -551,12 +569,17 @@ mod test {
             CHANNEL_ID,
             make_channel_state(
                 1,
-                Some(Keys::new_unchecked(vec![signing_key().public_key()])),
+                Some(UnverifiedChannelKeys::new_unchecked(vec![
+                    signing_key().public_key().into_unverified(),
+                ])),
             ),
         );
         let helper = TestOperationVerificationHelper::new(
             channels.clone(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -587,7 +610,10 @@ mod test {
         let channels = channel_view();
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -615,10 +641,18 @@ mod test {
             create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
         );
 
-        let channels = ledger_view(1, Keys::new_unchecked(vec![signing_key().public_key()]));
+        let channels = ledger_view(
+            1,
+            UnverifiedChannelKeys::new_unchecked(vec![
+                signing_key().public_key().into_unverified(),
+            ]),
+        );
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let service_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -646,10 +680,18 @@ mod test {
             create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
         );
 
-        let channels = ledger_view(2, Keys::new_unchecked(vec![signing_key().public_key()]));
+        let channels = ledger_view(
+            2,
+            UnverifiedChannelKeys::new_unchecked(vec![
+                signing_key().public_key().into_unverified(),
+            ]),
+        );
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -683,11 +725,18 @@ mod test {
 
         let channels = ledger_view(
             1,
-            Keys::new_unchecked(vec![Ed25519Key::from_bytes(&[1; 32]).public_key()]),
+            UnverifiedChannelKeys::new_unchecked(vec![
+                Ed25519Key::from_bytes(&[1; 32])
+                    .public_key()
+                    .into_unverified(),
+            ]),
         );
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -715,10 +764,13 @@ mod test {
             create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
         );
 
-        let channels = ledger_view(1, Keys::new_unchecked(vec![]));
+        let channels = ledger_view(1, UnverifiedChannelKeys::new_unchecked(vec![]));
         let helper = TestOperationVerificationHelper::new(
             channel_view(),
-            [((CHANNEL_ID, 0), signing_key().public_key())],
+            [(
+                (CHANNEL_ID, 0),
+                signing_key().public_key().into_unverified(),
+            )],
         );
         let locked_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
@@ -742,7 +794,7 @@ mod test {
         SignedOperation::<_, Unverified, StandardMode>::new(
             ChannelTransferOp {
                 channel_id: CHANNEL_ID,
-                inputs: Inputs::new([utxo().id()]),
+                inputs: BoundedInputs::from(utxo().id()).into(),
                 outputs,
             },
             ChannelMultiSigProof::sample_with_signatures(1),

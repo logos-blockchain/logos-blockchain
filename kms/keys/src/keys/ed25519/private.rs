@@ -24,7 +24,10 @@ impl UnsecuredEd25519Key {
 
     #[must_use]
     pub fn public_key(&self) -> Ed25519PublicKey {
-        self.0.verifying_key().into()
+        self.0
+            .verifying_key()
+            .try_into()
+            .expect("Ed25519 public keys derived from secret keys are always valid.")
     }
 
     pub fn generate<Rng>(rng: &mut Rng) -> Self

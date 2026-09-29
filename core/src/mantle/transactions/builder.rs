@@ -291,17 +291,17 @@ impl MantleTxBuilder {
         self.ops
             .iter()
             .flat_map(|op| {
-                let inputs: &[NoteId] = match op {
-                    Op::Transfer(transfer) => transfer.inputs.as_ref(),
-                    Op::ChannelDeposit(deposit) => deposit.inputs.as_ref(),
-                    _ => &[],
+                let inputs = match op {
+                    Op::Transfer(transfer) => Some(&transfer.inputs),
+                    Op::ChannelDeposit(deposit) => Some(&deposit.inputs),
+                    _ => None,
                 };
                 let locked = match op {
                     Op::SDPDeclare(declare) => Some(declare.service_note_id),
                     Op::SDPWithdraw(withdraw) => Some(withdraw.service_note_id),
                     _ => None,
                 };
-                inputs.iter().copied().chain(locked)
+                inputs.into_iter().flatten().copied().chain(locked)
             })
             .chain(self.ledger_inputs().iter().map(Utxo::id))
     }
@@ -338,6 +338,7 @@ mod tests {
     use crate::{
         mantle::{
             gas::MainnetGasProfile,
+            ledger::BoundedInputs,
             ops::{
                 channel::{
                     deposit::{DepositOp, Metadata},
@@ -362,7 +363,9 @@ mod tests {
                 channel_id: [0; 32].into(),
                 inscription: b"hello".into(),
                 parent: [1; 32].into(),
-                signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+                signer: Ed25519Key::from_bytes(&[0; 32])
+                    .public_key()
+                    .into_unverified(),
             }))
             .unwrap()
             .add_ledger_input(Utxo::new([0u8; 32], 0, Note::new(50, ZkPublicKey::zero())))
@@ -386,7 +389,9 @@ mod tests {
             channel_id: [0; 32].into(),
             inscription: b"hello".into(),
             parent: [1; 32].into(),
-            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+            signer: Ed25519Key::from_bytes(&[0; 32])
+                .public_key()
+                .into_unverified(),
         };
 
         // Init a tx builder
@@ -413,7 +418,7 @@ mod tests {
         // Build an operation
         let op = DepositOp {
             channel_id: [0; 32].into(),
-            inputs: Inputs::new([NoteId(Fr::ZERO)]),
+            inputs: BoundedInputs::from(NoteId(Fr::ZERO)).into(),
             metadata: b"Mint 1 to Alice in Zone".into(),
         };
 
@@ -441,7 +446,7 @@ mod tests {
         // Build an operation
         let op = ChannelWithdrawOp {
             channel_id: [0; 32].into(),
-            inputs: Inputs::new([NoteId(Fr::ZERO)]),
+            inputs: BoundedInputs::from(NoteId(Fr::ZERO)).into(),
         };
 
         // Init a tx builder
@@ -473,7 +478,7 @@ mod tests {
 
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([NoteId(Fr::ZERO)]),
+            inputs: BoundedInputs::from(NoteId(Fr::ZERO)).into(),
         };
 
         let builder = MantleTxBuilder::new()
@@ -576,18 +581,20 @@ mod tests {
                 channel_id,
                 inscription: b"hello".into(),
                 parent: [1; 32].into(),
-                signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+                signer: Ed25519Key::from_bytes(&[0; 32])
+                    .public_key()
+                    .into_unverified(),
             }))
             .unwrap()
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id,
-                inputs: Inputs::new([NoteId(Fr::ZERO)]),
+                inputs: BoundedInputs::from(NoteId(Fr::ZERO)).into(),
                 metadata: b"Mint 10 to Alice in Zone".into(),
             }))
             .unwrap()
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
-                inputs: Inputs::new([NoteId(Fr::ZERO)]),
+                inputs: BoundedInputs::from(NoteId(Fr::ZERO)).into(),
             }))
             .unwrap()
             .push_op(Op::LeaderClaim(LeaderClaimOp {
@@ -633,7 +640,7 @@ mod tests {
         let builder = MantleTxBuilder::new()
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id: [0; 32].into(),
-                inputs: Inputs::new([deposit_input]),
+                inputs: BoundedInputs::from(deposit_input).into(),
                 metadata: Metadata::empty(),
             }))
             .unwrap()

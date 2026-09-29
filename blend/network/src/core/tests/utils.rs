@@ -266,13 +266,12 @@ fn generate_distinct_inputs(epoch: Epoch, nonce: u64) -> Vec<EncapsulationInput>
         .take(NUM_BLEND_LAYERS as usize)
         .map(|recipient_signing_key| {
             let proofs = mock_blend_proof(epoch, nonce);
-            EncapsulationInput::try_new(
+            EncapsulationInput::new(
                 UnsecuredEd25519Key::generate_with_chacha_rng(),
                 &recipient_signing_key.public_key(),
                 proofs.proof_of_quota,
                 proofs.proof_of_selection,
             )
-            .unwrap()
         })
         .collect::<Vec<_>>()
 }

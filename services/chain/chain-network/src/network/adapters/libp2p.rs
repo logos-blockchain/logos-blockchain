@@ -157,6 +157,22 @@ where
         Ok(connected_peers)
     }
 
+    async fn get_chainsync_eligible_peers(
+        relay: &Relay<Libp2p, RuntimeServiceId>,
+    ) -> Result<HashSet<PeerId>, DynError> {
+        let (reply_sender, receiver) = oneshot::channel();
+        if let Err(error) = relay
+            .send(NetworkMsg::Process(Command::ChainSync(
+                ChainSyncCommand::EligiblePeers { reply_sender },
+            )))
+            .await
+        {
+            return Err(Box::new(error));
+        }
+
+        receiver.await.map_err(|e| Box::new(e) as DynError)
+    }
+
     async fn get_discovered_peers(
         relay: &Relay<Libp2p, RuntimeServiceId>,
     ) -> Result<HashSet<PeerId>, DynError> {
@@ -296,6 +312,17 @@ where
                 return Box::new(stream::empty::<GetTipResponse>());
             }
         };
+        let chainsync_peers = match Self::get_chainsync_eligible_peers(&self.network_relay).await {
+            Ok(peers) => peers,
+            Err(e) => {
+                tracing::warn!(target: LOG_TARGET, "tip poll: failed to fetch chainsync-eligible peers: {e}");
+                return Box::new(stream::empty::<GetTipResponse>());
+            }
+        };
+        let connected_peers = connected_peers
+            .intersection(&chainsync_peers)
+            .copied()
+            .collect::<HashSet<_>>();
 
         let sampled: Vec<PeerId> = connected_peers
             .into_iter()
@@ -391,29 +418,41 @@ where
     ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
         let connected_peers = Self::get_connected_peers(&self.network_relay).await?;
 
+        let chainsync_peers = Self::get_chainsync_eligible_peers(&self.network_relay).await?;
+
         // All peers we know about, including those that are not connected.
         let discovered_peers = Self::get_discovered_peers(&self.network_relay).await?;
 
-        let peers_to_request: Vec<_> = choose_peers_to_request_download(
+        // Discovery membership and protocol capability are independent.
+        let peers_to_request = choose_eligible_peers_to_request_download(
             &connected_peers,
-            self.settings.max_connected_peers_to_try_download,
             &discovered_peers,
+            &chainsync_peers,
+            self.settings.max_connected_peers_to_try_download,
             self.settings.max_discovered_peers_to_try_download,
-        )
-        .collect();
+        );
         tracing::debug!(
             target: LOG_TARGET,
-            "Selecting peers for target block {target_block:?} from local tip {local_tip:?} with immutable block {latest_immutable_block:?}; selected_peers={peers_to_request:?}, connected={}, discovered={}, additional_blocks={}",
+            "Selecting peers for target block {target_block:?} from local tip {local_tip:?} with \
+            immutable block {latest_immutable_block:?}; selected_peers={peers_to_request:?}, \
+            connected={}, discovered={}, eligible_connected={}, eligible_discovered={}, \
+            additional_blocks={}",
             connected_peers.len(),
             discovered_peers.len(),
+            connected_peers.intersection(&chainsync_peers).count(),
+            discovered_peers.intersection(&chainsync_peers).count(),
             additional_blocks.len()
         );
 
         if peers_to_request.is_empty() {
             return Err(format!(
-                "no candidate peers available to download orphan ancestors for target block {target_block:?} (connected={}, discovered={})",
+                "no candidate peers available to download orphan ancestors for target block \
+                {target_block:?} (connected={}, discovered={}, eligible_connected={}, \
+                eligible_discovered={})",
                 connected_peers.len(),
-                discovered_peers.len()
+                discovered_peers.len(),
+                connected_peers.intersection(&chainsync_peers).count(),
+                discovered_peers.intersection(&chainsync_peers).count()
             )
             .into());
         }
@@ -476,6 +515,34 @@ where
         .choose_multiple(&mut rng, max_connected_peers);
 
     discovered_selected.into_iter().chain(connected_selected)
+}
+
+fn choose_eligible_peers_to_request_download<PeerId>(
+    connected_peers: &HashSet<PeerId>,
+    discovered_peers: &HashSet<PeerId>,
+    eligible_peers: &HashSet<PeerId>,
+    max_connected_peers: usize,
+    max_discovered_peers: usize,
+) -> Vec<PeerId>
+where
+    PeerId: Eq + Hash + Copy,
+{
+    let connected_peers = connected_peers
+        .intersection(eligible_peers)
+        .copied()
+        .collect::<HashSet<_>>();
+    let discovered_peers = discovered_peers
+        .intersection(eligible_peers)
+        .copied()
+        .collect::<HashSet<_>>();
+
+    choose_peers_to_request_download(
+        &connected_peers,
+        max_connected_peers,
+        &discovered_peers,
+        max_discovered_peers,
+    )
+    .collect()
 }
 
 #[cfg(test)]
@@ -599,5 +666,17 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert!(result.contains(&[4; 32]));
         assert!(result.contains(&[5; 32]));
+    }
+
+    #[test]
+    fn chainsync_filter_is_applied_before_candidate_limits() {
+        let connected: HashSet<[i32; 32]> = HashSet::from_iter(vec![[1; 32], [2; 32]]);
+        let discovered: HashSet<[i32; 32]> = HashSet::from_iter(vec![[3; 32], [4; 32]]);
+        let eligible: HashSet<[i32; 32]> = HashSet::from_iter(vec![[2; 32], [4; 32]]);
+
+        let result =
+            choose_eligible_peers_to_request_download(&connected, &discovered, &eligible, 1, 1);
+
+        assert_eq!(result, vec![[4; 32], [2; 32]]);
     }
 }

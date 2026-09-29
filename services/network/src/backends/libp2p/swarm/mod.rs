@@ -17,12 +17,16 @@ macro_rules! log_error {
     };
 }
 
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use lb_libp2p::{
     Multiaddr, PeerId, Protocol, Swarm, SwarmEvent,
     behaviour::BehaviourEvent,
     libp2p::{
+        StreamProtocol as Libp2pStreamProtocol,
         kad::QueryId,
         swarm::{ConnectionId, DialError},
     },
@@ -52,6 +56,21 @@ use crate::message::ChainSyncEvent;
 
 const LOG_TARGET: &str = network_service::backends::libp2p::ROOT;
 
+#[derive(Debug)]
+struct ProtocolContract {
+    kademlia_protocol: Libp2pStreamProtocol,
+    chain_sync_protocol: Libp2pStreamProtocol,
+}
+
+impl ProtocolContract {
+    fn from_config(config: &lb_libp2p::SwarmConfig) -> Self {
+        Self {
+            kademlia_protocol: config.kad_protocol_name.clone().into_inner(),
+            chain_sync_protocol: config.chain_sync_protocol_name.clone().into_inner(),
+        }
+    }
+}
+
 pub struct SwarmHandler<R: Clone + Send + RngCore + 'static> {
     pub swarm: Swarm<R>,
     pub pending_dials: HashMap<ConnectionId, Dial>,
@@ -62,6 +81,8 @@ pub struct SwarmHandler<R: Clone + Send + RngCore + 'static> {
     pub max_data_size_by_topic: HashMap<TopicHash, usize>,
 
     pending_queries: HashMap<QueryId, PendingQueryData>,
+    protocol_contract: ProtocolContract,
+    peer_advertised_protocols: HashMap<PeerId, HashSet<Libp2pStreamProtocol>>,
 }
 
 // TODO: make this configurable
@@ -83,6 +104,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             max_data_size_by_topic,
             ..
         } = config;
+        let protocol_contract = ProtocolContract::from_config(&inner);
         let swarm = Swarm::build(inner, max_data_size_by_topic.clone(), rng).unwrap();
 
         // Keep the dialing history since swarm.connect doesn't return the result
@@ -98,6 +120,8 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             chainsync_events_tx,
             max_data_size_by_topic,
             pending_queries: HashMap::new(),
+            protocol_contract,
+            peer_advertised_protocols: HashMap::new(),
         }
     }
 
@@ -181,6 +205,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             SwarmEvent::ConnectionClosed {
                 peer_id,
                 connection_id,
+                num_established,
                 cause,
                 ..
             } => {
@@ -188,6 +213,10 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                     target: LOG_TARGET,
                     "connection closed from peer: {peer_id} {connection_id:?} due to {cause:?}"
                 );
+
+                if num_established == 0 {
+                    self.prune_peer_advertised_protocols(peer_id);
+                }
 
                 let swarm = self.swarm.swarm();
                 crate::metrics::consensus_report_connectivity(swarm);
@@ -203,10 +232,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 match error {
                     // A `WrongPeerId` failure is permanent for that exact
                     // `/p2p/<id>@addr`: the node at that address rotated its
-                    // identity key, so retrying can never succeed. Such dials are
-                    // issued by Kademlia periodic bootstrap / Identify / chain sync
-                    // (not our own `connect()`), so they have no `pending_dials`
-                    // entry and would otherwise be re-dialed forever. Evict the
+                    // identity key, so retrying can never succeed. Evict the
                     // stale address from Kademlia immediately instead of retrying.
                     DialError::WrongPeerId { obtained, address } => {
                         let dial_addr = &address;
@@ -257,6 +283,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         };
 
         self.swarm.kademlia_remove_address(peer_id, dial_addr);
+        self.prune_peer_advertised_protocols(peer_id);
     }
 
     fn handle_command(&mut self, command: Command) {
@@ -303,6 +330,42 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         }
     }
 
+    fn chainsync_eligible_peers(&self) -> HashSet<PeerId> {
+        self.peers_supporting_protocol(&self.protocol_contract.chain_sync_protocol)
+    }
+
+    fn peers_supporting_protocol(&self, protocol: &Libp2pStreamProtocol) -> HashSet<PeerId> {
+        self.peer_advertised_protocols
+            .iter()
+            .filter_map(|(peer_id, protocols)| protocols.contains(protocol).then_some(*peer_id))
+            .collect()
+    }
+
+    /// A peer can be disconnected but still remain known through Kademlia and
+    /// therefore appear among discovered peers. We retain its latest
+    /// advertised protocols so we can still filter it for chainsync before
+    /// attempting a new connection. We only prune that information once the
+    /// peer is both disconnected and no longer known through discovery.
+    fn prune_peer_advertised_protocols(&mut self, peer_id: PeerId) {
+        if !self.peer_advertised_protocols.contains_key(&peer_id) {
+            return;
+        }
+
+        let is_connected = self
+            .swarm
+            .swarm()
+            .connected_peers()
+            .any(|connected_peer| *connected_peer == peer_id);
+        let is_in_kademlia = self
+            .swarm
+            .kademlia_discovered_peers()
+            .iter()
+            .any(|peer| peer.peer_id == peer_id);
+        if !is_connected && !is_in_kademlia {
+            self.peer_advertised_protocols.remove(&peer_id);
+        }
+    }
+
     async fn schedule_connect(dial: Dial, commands_tx: mpsc::Sender<Command>) {
         commands_tx
             .send(Command::Network(NetworkCommand::Connect(dial)))
@@ -341,13 +404,13 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     }
 
     // TODO: Consider a common retry module for all use cases
-    fn retry_connect(&mut self, connection_id: ConnectionId, peer_id: Option<PeerId>) {
+    fn retry_connect(&mut self, connection_id: ConnectionId, peer_id: Option<PeerId>) -> bool {
         let Some(mut dial) = self.pending_dials.remove(&connection_id) else {
-            return;
+            return false;
         };
         let Some(new_retry_count) = dial.retry_count.checked_add(1) else {
             tracing::debug!(target: LOG_TARGET, "Retry count overflow.");
-            return;
+            return false;
         };
         if new_retry_count > MAX_RETRY {
             tracing::debug!(
@@ -355,7 +418,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 "Max retry({MAX_RETRY}) has been reached: {dial:?}"
             );
             self.remove_kademlia_address_for_dial(peer_id, &dial.addr);
-            return;
+            return false;
         }
         dial.retry_count = new_retry_count;
 
@@ -367,6 +430,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             tokio::time::sleep(wait).await;
             Self::schedule_connect(dial, commands_tx).await;
         });
+        true
     }
 }
 
@@ -376,7 +440,7 @@ const fn exp_backoff(retry: usize) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, net::Ipv4Addr, sync::Once, time::Instant};
+    use std::{net::Ipv4Addr, sync::Once, time::Instant};
 
     use lb_libp2p::protocol_name::StreamProtocol;
     use lb_utils::net::get_available_udp_port;
@@ -435,6 +499,59 @@ mod tests {
             max_data_size_by_topic: HashMap::new(),
             initial_peers,
         }
+    }
+
+    fn create_handler() -> SwarmHandler<OsRng> {
+        let (tx, rx) = mpsc::channel(10);
+        let (pubsub_events_tx, _) = broadcast::channel(10);
+        let (chainsync_events_tx, _) = broadcast::channel(10);
+        let config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
+
+        SwarmHandler::new(config, tx, rx, pubsub_events_tx, chainsync_events_tx, OsRng)
+    }
+
+    fn create_test_address() -> Multiaddr {
+        format!(
+            "/ip4/127.0.0.1/udp/{}/quic-v1",
+            get_available_udp_port().unwrap()
+        )
+        .parse()
+        .unwrap()
+    }
+
+    fn identify_event(
+        peer_id: PeerId,
+        advertised_protocols: &[&'static str],
+    ) -> lb_libp2p::libp2p::identify::Event {
+        let keypair = lb_libp2p::libp2p::identity::Keypair::generate_ed25519();
+        let address = create_test_address();
+        let protocols = advertised_protocols
+            .iter()
+            .map(|protocol| lb_libp2p::libp2p::StreamProtocol::new(protocol))
+            .collect();
+
+        lb_libp2p::libp2p::identify::Event::Received {
+            connection_id: ConnectionId::new_unchecked(1),
+            peer_id,
+            info: lb_libp2p::libp2p::identify::Info {
+                public_key: keypair.public(),
+                protocol_version: "/identify/test".into(),
+                agent_version: "test".into(),
+                listen_addrs: vec![address],
+                protocols,
+                observed_addr: "/ip4/127.0.0.1/udp/1".parse().unwrap(),
+                signed_peer_record: None,
+            },
+        }
+    }
+
+    fn advertised_protocols(
+        protocols: &[&'static str],
+    ) -> HashSet<lb_libp2p::libp2p::StreamProtocol> {
+        protocols
+            .iter()
+            .map(|protocol| lb_libp2p::libp2p::StreamProtocol::new(protocol))
+            .collect()
     }
 
     fn create_gossipsub_handler(
@@ -678,6 +795,114 @@ mod tests {
     }
 
     const NODE_COUNT: usize = 10;
+
+    #[tokio::test]
+    async fn only_peers_advertising_chainsync_are_eligible() {
+        let mut handler = create_handler();
+        let supported = PeerId::random();
+        let unsupported = PeerId::random();
+        handler
+            .peer_advertised_protocols
+            .insert(supported, advertised_protocols(&["/chainsync/test"]));
+        handler
+            .peer_advertised_protocols
+            .insert(unsupported, advertised_protocols(&["/kademlia/test"]));
+
+        assert_eq!(
+            handler.chainsync_eligible_peers(),
+            HashSet::from([supported])
+        );
+    }
+
+    #[tokio::test]
+    async fn identify_updates_advertised_protocols_without_kademlia_eviction() {
+        let mut handler = create_handler();
+        let peer_id = PeerId::random();
+        let address = create_test_address().with(Protocol::P2p(peer_id));
+        handler.swarm.kademlia_add_address(peer_id, &address);
+
+        handler.handle_identify_event(identify_event(
+            peer_id,
+            &["/kademlia/test", "/chainsync/test"],
+        ));
+        assert_eq!(
+            handler.peer_advertised_protocols.get(&peer_id),
+            Some(&advertised_protocols(&[
+                "/kademlia/test",
+                "/chainsync/test"
+            ]))
+        );
+        assert!(handler.chainsync_eligible_peers().contains(&peer_id));
+
+        handler.handle_identify_event(identify_event(peer_id, &["/kademlia/test"]));
+        assert_eq!(
+            handler.peer_advertised_protocols.get(&peer_id),
+            Some(&advertised_protocols(&["/kademlia/test"]))
+        );
+        assert!(!handler.chainsync_eligible_peers().contains(&peer_id));
+        assert!(
+            handler
+                .swarm
+                .kademlia_discovered_peers()
+                .iter()
+                .any(|peer| peer.peer_id == peer_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn chainsync_support_does_not_require_kademlia_advertisement() {
+        let mut handler = create_handler();
+        let peer_id = PeerId::random();
+
+        handler.handle_identify_event(identify_event(peer_id, &["/chainsync/test"]));
+
+        assert_eq!(
+            handler.peer_advertised_protocols.get(&peer_id),
+            Some(&advertised_protocols(&["/chainsync/test"]))
+        );
+        assert!(handler.chainsync_eligible_peers().contains(&peer_id));
+        assert!(handler.swarm.kademlia_discovered_peers().is_empty());
+    }
+
+    #[tokio::test]
+    async fn advertised_protocols_are_pruned_only_when_peer_is_no_longer_known() {
+        let mut handler = create_handler();
+        let peer_id = PeerId::random();
+        let address = create_test_address();
+
+        handler
+            .peer_advertised_protocols
+            .insert(peer_id, advertised_protocols(&["/chainsync/test"]));
+        handler.prune_peer_advertised_protocols(peer_id);
+        assert!(!handler.peer_advertised_protocols.contains_key(&peer_id));
+
+        handler.swarm.kademlia_add_address(peer_id, &address);
+        handler
+            .peer_advertised_protocols
+            .insert(peer_id, advertised_protocols(&["/chainsync/test"]));
+        handler.prune_peer_advertised_protocols(peer_id);
+        assert_eq!(
+            handler.peer_advertised_protocols.get(&peer_id),
+            Some(&advertised_protocols(&["/chainsync/test"]))
+        );
+    }
+
+    #[tokio::test]
+    async fn removing_last_kademlia_address_prunes_disconnected_peer_protocols() {
+        let mut handler = create_handler();
+        let peer_id = PeerId::random();
+        let address = create_test_address().with(Protocol::P2p(peer_id));
+
+        handler.swarm.kademlia_add_address(peer_id, &address);
+        handler
+            .peer_advertised_protocols
+            .insert(peer_id, advertised_protocols(&["/chainsync/test"]));
+
+        handler.remove_kademlia_address_for_dial(Some(peer_id), &address);
+
+        assert!(handler.swarm.kademlia_discovered_peers().is_empty());
+        assert!(!handler.peer_advertised_protocols.contains_key(&peer_id));
+    }
 
     #[tokio::test]
     #[expect(clippy::too_many_lines, reason = "Should be fixed in a separate PR")]

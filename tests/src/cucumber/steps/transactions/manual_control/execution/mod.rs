@@ -76,7 +76,10 @@ use crate::{
         },
         wallet::{
             best_node::get_best_node_info,
-            checks::wait_for_observed_transaction_hashes,
+            checks::{
+                wait_for_observed_transaction_hashes,
+                wait_for_observed_transaction_hashes_cancellable,
+            },
             submissions::{SignedUserWalletSubmission, validate_fee_horizon_after_wallet_batch},
             sync,
             sync::{WalletSendReadiness, current_available_utxos_for_user_wallets},
@@ -99,6 +102,7 @@ mod wallet_state;
 pub use control::perform_manual_step_control;
 pub use dispatch::{
     execute_coin_splits_all_user_wallets, execute_continuous_next_wallet_user_wallet,
+    execute_continuous_next_wallet_user_wallet_with_cancellation,
     execute_continuous_round_robin_user_wallets, execute_manual_command,
     verify_min_outputs_all_user_wallets,
 };

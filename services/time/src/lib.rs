@@ -34,6 +34,7 @@ pub struct TimeServiceInfo {
     pub genesis_time_unix_ms: i64,
     pub current_slot: Slot,
     pub current_epoch: Epoch,
+    pub slots_per_epoch: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -189,12 +190,17 @@ fn handle_service_message<BackendSettings>(
                 drop(sender.send(Err("genesis time exceeds i64::MAX milliseconds".to_owned())));
                 return;
             };
-            drop(sender.send(Ok(TimeServiceInfo {
-                slot_duration_ms,
-                genesis_time_unix_ms,
-                current_slot: current_slot_tick.slot,
-                current_epoch: current_slot_tick.epoch,
-            })));
+            drop(
+                sender.send(Ok(TimeServiceInfo {
+                    slot_duration_ms,
+                    genesis_time_unix_ms,
+                    current_slot: current_slot_tick.slot,
+                    current_epoch: current_slot_tick.epoch,
+                    slots_per_epoch: settings
+                        .epoch_config
+                        .epoch_length(settings.base_period_length),
+                })),
+            );
         }
         TimeServiceMessage::Subscribe { sender } => {
             let stream = Pin::new(Box::new(WatchStream::from_changes(watch_receiver.clone())));

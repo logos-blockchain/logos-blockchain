@@ -22,7 +22,7 @@ use lb_groth16::{AdditiveGroup as _, fr_to_bytes};
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_log_targets::blend;
 use lb_utils::tokio::{
-    stream::Buffered,
+    stream::BufferedUnordered,
     task::{CancellableHandle, spawn, spawn_blocking},
 };
 use rand::rngs::OsRng;
@@ -123,7 +123,7 @@ fn create_proof_stream(
     // the caller's business: a quota below the number of encapsulations in a
     // message simply means a message spans more than one solution.
     Box::pin(
-        Buffered::new(
+        BufferedUnordered::new(
             stream::repeat_with(move || {
                 spawn_solution_proofs(public_inputs, per_solution_quota, Arc::clone(&thread_pool))
             }),

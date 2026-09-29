@@ -185,6 +185,19 @@ where
             expected_value = fixture.value,
         );
 
+        // Re-encode: the decoded value encodes back to exactly the pinned
+        // bytes. `==` can be coarser than the encoding (a type may leave a
+        // field out of its equality that its encoding keeps), so the check
+        // above cannot see a decoder that changes what `==` ignores. This one
+        // can.
+        let reencoded = decoded.encode();
+        assert!(
+            &*reencoded == expected,
+            "{type_name}: encode(decode(bytes)) differs from the well-known bytes\n  actual   (hex): {actual}\n  expected (hex): {expected_hex}",
+            actual = hex::encode(&*reencoded),
+            expected_hex = hex::encode(expected),
+        );
+
         // Round-trip: encode then decode is the identity (independent of the
         // pinned bytes, so it catches encode/decode asymmetry directly).
         let (rest, round_tripped) = T::decode(&encoded, &context)
@@ -200,4 +213,54 @@ where
             before = fixture.value,
         );
     }
+}
+
+/// Up to `MAX` fixtures of `T` with pairwise distinct bytes, in the order `T`
+/// declares them: what an ordered collection's own fixture is built from.
+///
+/// The collection's fixture needs `MIN` distinct items, and the only source of
+/// items is the item type's own fixtures, so fewer than `MIN` of them is a
+/// panic that says what to add.
+pub(super) fn distinct_fixtures_in_declared_order<
+    Collection,
+    T,
+    const MIN: usize,
+    const MAX: usize,
+>() -> Vec<CodecFixture<T>>
+where
+    T: CodecExamples,
+{
+    let mut fixtures: Vec<CodecFixture<T>> = Vec::new();
+    for fixture in T::fixtures() {
+        if fixtures.len() == MAX {
+            break;
+        }
+        if fixtures.iter().all(|kept| kept.bytes != fixture.bytes) {
+            fixtures.push(fixture);
+        }
+    }
+    assert!(
+        fixtures.len() >= MIN,
+        "{collection}: its fixture needs at least {MIN} distinct fixtures of {item}, but {item} \
+         has {available}; add more to the `codec_fixtures!` of {item}",
+        collection = core::any::type_name::<Collection>(),
+        item = core::any::type_name::<T>(),
+        available = fixtures.len(),
+    );
+    fixtures
+}
+
+/// The fixture of `V` at `index`, cycling through all of `V`'s fixtures.
+///
+/// Gives every entry of a map fixture a value without requiring `V: Clone`.
+pub(super) fn cycled_fixture<V>(index: usize) -> CodecFixture<V>
+where
+    V: CodecExamples,
+{
+    let fixtures = V::fixtures();
+    let position = index % fixtures.len();
+    fixtures
+        .into_iter()
+        .nth(position)
+        .expect("the position is within the fixtures")
 }

@@ -134,8 +134,10 @@ mod tests {
                 .insert_mut(channel_id, make_channel_state(2, None));
             channels
         };
-        let helper =
-            TestOperationVerificationHelper::new(channels, [((channel_id, 0), key0.public_key())]);
+        let helper = TestOperationVerificationHelper::new(
+            channels,
+            [((channel_id, 0), key0.public_key().into_unverified())],
+        );
 
         let result = verify_channel_multi_sig(&channel_id, &proof, tx_hash_bytes, &helper, 0);
 
@@ -192,8 +194,10 @@ mod tests {
                 .insert_mut(channel_id, make_channel_state(1, None));
             channels
         };
-        let helper =
-            TestOperationVerificationHelper::new(channels, [((channel_id, 0), key.public_key())]);
+        let helper = TestOperationVerificationHelper::new(
+            channels,
+            [((channel_id, 0), key.public_key().into_unverified())],
+        );
 
         assert_eq!(
             verify_channel_multi_sig(
@@ -238,7 +242,7 @@ mod tests {
         };
         let helper = TestOperationVerificationHelper::new(
             channels,
-            [((channel_id, 0), expected_key.public_key())],
+            [((channel_id, 0), expected_key.public_key().into_unverified())],
         );
 
         let result = verify_channel_multi_sig(&channel_id, &proof, tx_hash_bytes, &helper, 0);
