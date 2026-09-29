@@ -33,7 +33,9 @@ pub struct DeploymentInfo {
 
 impl DeploymentInfo {
     fn new(deployment: &DeploymentSettings) -> Result<Self, OperationStatus> {
-        let protocol_names = deployment.protocol_names();
+        // Only single-era schedules are supported for now, so the genesis era
+        // is in force.
+        let protocol_names = deployment.genesis_protocol_names();
         Ok(Self {
             chain_id: into_c_string(deployment.chain_id().as_ref())?,
             genesis_time: deployment.genesis_time().unix_timestamp(),
