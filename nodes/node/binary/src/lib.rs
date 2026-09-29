@@ -175,9 +175,10 @@ pub fn run_node_from_config(
     let chain_id = config.deployment.chain_id();
     let genesis_time = config.deployment.genesis_time();
 
-    // Derived from the chain and its fork, and handed to every service that
-    // speaks a protocol or a topic.
-    let protocol_names = config.deployment.protocol_names();
+    // Derived from the chain and the fork of the era in force, and handed to
+    // every service that speaks a protocol or a topic. Only single-era
+    // schedules are supported for now, so the genesis era is in force.
+    let protocol_names = config.deployment.genesis_protocol_names();
 
     let blend_rewards_params = config.deployment.genesis_blend_reward_params();
 
