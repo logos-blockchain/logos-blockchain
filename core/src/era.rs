@@ -69,9 +69,14 @@ codec_fixtures!(EraDigest, Self([0x11u8; 32]) => "111111111111111111111111111111
 #[derive(Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
 pub struct ForkDigest([u8; 32]);
 
+pub const ENCODED_LENGTH: usize = 32;
 const FORK_DIGEST_V1: &[u8] = b"FORK_DIGEST_V1";
 
 impl ForkDigest {
+    pub const fn new_unbound() -> Self {
+        Self([0u8; 32])
+    }
+
     /// `blake2b256(b"FORK_DIGEST_V1" || genesis_id || chain_id || era_0 || … ||
     /// era_n)`, over the canonical encodings of the genesis block ID, of the
     /// chain ID, and of the digest of each activated era, in activation order.
@@ -119,9 +124,10 @@ codec_fixtures!(ForkDigest, Self([0x22u8; 32]) => "22222222222222222222222222222
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::canonical::BinaryEncode as _;
     use lb_cryptarchia_engine::Epoch;
 
-    use super::{EraDigest, ForkDigest};
+    use super::{ENCODED_LENGTH, EraDigest, ForkDigest};
     use crate::{header::HeaderId, mantle::transactions::genesis_tx::ChainId};
 
     fn chain_id(chain_id: &str) -> ChainId {
@@ -211,5 +217,10 @@ mod tests {
             serde_json::from_str::<ForkDigest>(&json).unwrap(),
             ForkDigest::from([0xabu8; 32])
         );
+    }
+
+    #[test]
+    fn fork_digest_encoded_size() {
+        assert_eq!(ForkDigest::new_unbound().encoded_length(), ENCODED_LENGTH);
     }
 }

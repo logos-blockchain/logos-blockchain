@@ -163,6 +163,7 @@ mod tests {
             reason = "Recommended String::push_str does not support chaining"
         )]
         let test_vector = String::new()
+            + "0000000000000000000000000000000000000000000000000000000000000000" // ForkDigest (32Byte, the default)
             + "01"                                                               // OpCount
             + "11"                                                               // OpCode
             + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // ChannelID (32Byte)
@@ -170,8 +171,8 @@ mod tests {
             + "68656c6c6f"                                                       // Inscription
             + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" // Parent (32Byte)
             + "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c" // Signer (32Byte)
-            + "4ec789fc67b7f7bfba02f8cc7f3f671a107225faefbe60ca0b8e9e7e8e43e8db" // Signature (64Byte)
-            + "835075aed539fac37e0fdc03acc2aba873e43eef8a835476c4c6bdaaba866901";
+            + "928fe22e42943c71e8f3f31687628ae53cbc9955daa79cfaaf6966fec6049f29" // Signature (64Byte)
+            + "bc3f1a6e900ea68b9bd18eac42cd6e3fc91da2611d0b7bb54fa58a504dd6ae06";
 
         // ENCODING
         let encoded = hex::encode(signed_tx.encode());

@@ -17,6 +17,7 @@ use crate::mantle::ops::{
 };
 use crate::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
+    era::{ENCODED_LENGTH as FORK_DIGEST_ENCODED_LENGTH, ForkDigest},
     mantle::{
         GasProfile, Op, OpRef, TxHash, Value,
         channel::Channels,
@@ -168,11 +169,15 @@ impl TxGasCalculator for OpRefs<'_> {
     }
 }
 
+/// The fork digest, then the operation column. Transactions are not bound to
+/// a fork yet: they are encoded with the default digest, and the digest a
+/// decoded transaction carries is read and discarded, unchecked.
 impl BinaryEncode for Ops {
     fn encoded_length(&self) -> usize {
-        self.0.encoded_length()
+        FORK_DIGEST_ENCODED_LENGTH + self.0.encoded_length()
     }
     fn encode_into(&self, out: &mut Vec<u8>) {
+        ForkDigest::new_unbound().encode_into(out);
         self.0.encode_into(out);
     }
 }
@@ -184,6 +189,9 @@ impl BinaryDecode for Ops {
         input: &'input [u8],
         context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
+        // We don't run any checks at the moment on the tx fork digest. We will add them
+        // in a follow-up PR.
+        let (input, _) = ForkDigest::decode(input, &())?;
         TxBoundedVec::decode(input, context).map(|(rest, ops)| (rest, Self(ops)))
     }
 }
@@ -347,7 +355,7 @@ mod tests {
 
         assert_eq!(
             ops.by_ref().total_gas_cost::<MainnetGasProfile>(&context),
-            Ok(GasCost::new(643))
+            Ok(GasCost::new(739))
         );
     }
 
@@ -404,17 +412,17 @@ mod tests {
 
         assert_eq!(
             ops.by_ref().storage_gas_cost(&context),
-            Ok(GasCost::new(531))
+            Ok(GasCost::new(627))
         );
     }
 
     #[test]
-    fn storage_gas_consumption_counts_the_length_prefix_of_an_empty_column() {
+    fn storage_gas_consumption_counts_the_fork_digest_and_length_prefix_of_an_empty_column() {
         assert_eq!(
             Ops::empty()
                 .by_ref()
                 .storage_gas_consumption(&OpsGasContext::default()),
-            Ok(Gas::new(1))
+            Ok(Gas::new(32 + 1))
         );
     }
 
@@ -425,7 +433,7 @@ mod tests {
         assert_eq!(
             ops.by_ref()
                 .storage_gas_consumption(&OpsGasContext::default()),
-            Ok(Gas::new(177))
+            Ok(Gas::new(209))
         );
     }
 

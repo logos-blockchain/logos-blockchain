@@ -1,5 +1,6 @@
 use lb_binary_codec::canonical::codec_fixtures;
 
+use super::FORK_DIGEST_HEX;
 use crate::mantle::{
     Op,
     fixtures::ops::op_values::{
@@ -12,12 +13,12 @@ use crate::mantle::{
 
 codec_fixtures!(
     Ops,
-    Self::empty() => EMPTY_COLUMN_HEX,
-    Self::from([Op::Transfer(TRANSFER.clone())]) => TRANSFER_COLUMN_HEX,
+    Self::empty() => &[FORK_DIGEST_HEX, EMPTY_COLUMN_HEX].concat(),
+    Self::from([Op::Transfer(TRANSFER.clone())]) => &[FORK_DIGEST_HEX, TRANSFER_COLUMN_HEX].concat(),
     Self::from([
         Op::Transfer(TRANSFER.clone()),
         Op::ChannelInscribe(INSCRIPTION.clone()),
-    ]) => TRANSFER_AND_INSCRIPTION_COLUMN_HEX,
+    ]) => &[FORK_DIGEST_HEX, TRANSFER_AND_INSCRIPTION_COLUMN_HEX].concat(),
     Self::from([
         Op::Transfer(TRANSFER.clone()),
         Op::ChannelConfig(CHANNEL_CONFIG.clone()),
@@ -30,5 +31,5 @@ codec_fixtures!(
         Op::SDPActive(SDP_ACTIVE.clone()),
         Op::LeaderClaim(LEADER_CLAIM.clone()),
         Op::ClaimPowReward(CLAIM_POW_REWARD.clone()),
-    ]) => ALL_OPS_COLUMN_HEX
+    ]) => &[FORK_DIGEST_HEX, ALL_OPS_COLUMN_HEX].concat()
 );

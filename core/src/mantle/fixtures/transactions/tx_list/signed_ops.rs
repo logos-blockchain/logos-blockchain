@@ -19,6 +19,7 @@ use crate::mantle::{
             CHANNEL_MULTI_SIG, CHANNEL_MULTI_SIG_HEX, ED25519_SIG, ED25519_SIG_HEX, POC, POC_HEX,
             ZK_AND_ED25519_SIGS, ZK_AND_ED25519_SIGS_HEX, ZK_SIG, ZK_SIG_HEX,
         },
+        transactions::tx_list::FORK_DIGEST_HEX,
     },
     ledger::{Outputs, verification_mode::VerificationMode},
     ops::{
@@ -41,6 +42,8 @@ impl<State: VerificationState, Mode: VerificationMode> lb_binary_codec::canonica
 }
 
 const TWO_OPS_HEX: &str = concat!(
+    // Fork digest: the default.
+    "0000000000000000000000000000000000000000000000000000000000000000",
     // Count. One, for both columns.
     "02",
     // Op 0: Transfer.
@@ -90,6 +93,7 @@ fn two_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
 
 fn all_ops_hex() -> String {
     [
+        FORK_DIGEST_HEX,
         ALL_OPS_COLUMN_HEX,
         ZK_SIG_HEX,
         CHANNEL_MULTI_SIG_HEX,
@@ -134,7 +138,7 @@ impl<State: VerificationState, Mode: VerificationMode> lb_binary_codec::canonica
         [
             lb_binary_codec::canonical::CodecFixture {
                 value: Self::empty(),
-                bytes: Cow::Borrowed(&[0x00]),
+                bytes: Cow::Owned(decode_fixture_hex(&[FORK_DIGEST_HEX, "00"].concat())),
             },
             lb_binary_codec::canonical::CodecFixture {
                 value: two_ops(),

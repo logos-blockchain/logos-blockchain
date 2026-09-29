@@ -1433,13 +1433,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            794,
+            826,
             funded_tx_builder
                 .minimum_gas_cost::<Gas>(&context)
                 .unwrap()
                 .into_inner()
         );
-        assert_eq!(794, funded_tx_builder.net_balance());
+        assert_eq!(826, funded_tx_builder.net_balance());
         assert_eq!(
             0,
             funded_tx_builder
@@ -1456,7 +1456,7 @@ mod tests {
             assert_eq!(
                 transfer_op.outputs,
                 Outputs::new([Note {
-                    value: 4206,
+                    value: 4174,
                     pk: alice,
                 }])
             );
@@ -1504,8 +1504,8 @@ mod tests {
             .minimum_gas_cost::<Gas>(&context)
             .unwrap()
             .into_inner();
-        assert_eq!(mandatory_fee_without_change, 754);
-        assert_eq!(mandatory_fee, 794);
+        assert_eq!(mandatory_fee_without_change, 786);
+        assert_eq!(mandatory_fee, 826);
         let priority_fee_amount = (mandatory_fee * priority_fee_percent).div_ceil(100);
         assert_eq!(
             i128::from(mandatory_fee + priority_fee_amount),
@@ -1726,7 +1726,7 @@ mod tests {
 
         // Determine gas cost without change note
         assert_eq!(
-            754,
+            786,
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
@@ -1741,7 +1741,7 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(754, alice))],
+                [Utxo::new(tx_hash(0), 0, Note::new(786, alice))],
                 &ledger_config(),
             ),
         );
@@ -1761,7 +1761,7 @@ mod tests {
 
         // Determine gas cost with change note
         assert_eq!(
-            794,
+            826,
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
@@ -1773,7 +1773,7 @@ mod tests {
                 .into_inner()
         );
 
-        for value in 755..=794 {
+        for value in 787..=826 {
             // this region of note values will fail to fund the tx.
             // We can fund the tx if the note value is exactly the gas cost without change
             // note
@@ -1804,7 +1804,7 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(795, alice))],
+                [Utxo::new(tx_hash(0), 0, Note::new(827, alice))],
                 &ledger_config(),
             ),
         );

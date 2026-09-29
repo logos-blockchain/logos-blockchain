@@ -1,12 +1,15 @@
 use lb_binary_codec::canonical::BinaryEncode;
 use serde::{Serialize, Serializer};
 
-use crate::mantle::{
-    OpRef, TxHash,
-    traits::{Hashable, hashable},
-    transactions::{
-        MANTLE_TX_HASH_V1_BYTES,
-        tx_list::{Ops, common::TxList, hash::tx_hasher},
+use crate::{
+    era::{ENCODED_LENGTH as FORK_DIGEST_ENCODED_LENGTH, ForkDigest},
+    mantle::{
+        OpRef, TxHash,
+        traits::{Hashable, hashable},
+        transactions::{
+            MANTLE_TX_HASH_V1_BYTES,
+            tx_list::{Ops, common::TxList, hash::tx_hasher},
+        },
     },
 };
 
@@ -25,11 +28,14 @@ impl<'a> From<&'a Ops> for OpRefs<'a> {
     }
 }
 
+/// The (unbound, for now) fork digest, then the operation column, as [`Ops`]
+/// encodes.
 impl BinaryEncode for OpRefs<'_> {
     fn encoded_length(&self) -> usize {
-        self.0.encoded_length()
+        FORK_DIGEST_ENCODED_LENGTH + self.0.encoded_length()
     }
     fn encode_into(&self, out: &mut Vec<u8>) {
+        ForkDigest::new_unbound().encode_into(out);
         self.0.encode_into(out);
     }
 }

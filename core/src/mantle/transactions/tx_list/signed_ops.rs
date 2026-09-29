@@ -198,8 +198,9 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOps<State, Mode> {
     }
 }
 
-/// A list of [`SignedOp`] encodes columnar: `[count][ops...][proofs...]`.
-/// The single count covers both columns, so only the list can encode them.
+/// A list of [`SignedOp`] encodes columnar, after the fork digest [`Ops`]
+/// starts with: `[fork digest][count][ops...][proofs...]`. The single count
+/// covers both columns, so only the list can encode them.
 /// [`OpProofs`], [`OpProofRefs`] and [`SignedOp`] deliberately implement
 /// neither codec trait, which is what makes a second count unrepresentable.
 impl<State: VerificationState, Mode: VerificationMode> BinaryEncode
@@ -310,7 +311,7 @@ mod mantle_spec {
     //! them.
     //!
     //! ```text
-    //! [count][ops...][proofs...]
+    //! [fork digest][count][ops...][proofs...]
     //! ```
 
     use lb_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
