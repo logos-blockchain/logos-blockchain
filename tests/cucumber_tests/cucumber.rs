@@ -152,6 +152,10 @@ async fn main() {
                 );
 
                 if let Some(world) = world {
+                    if let Err(error) = world.stop_background_activity().await {
+                        println!("Scenario background cleanup failed: {error}");
+                    }
+
                     let path = world
                         .lifecycle
                         .scenario_base_dir
