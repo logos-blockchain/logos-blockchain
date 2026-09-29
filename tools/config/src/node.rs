@@ -1,21 +1,15 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::net::SocketAddr;
 
-use lb_key_management_system_service::{
-    backend::preload::KeyId,
-    keys::{Key, secured_key::SecuredKey as _},
-};
 use lb_node::{
     UserConfig,
     config::{
         ApiConfig, CryptarchiaConfig, PoWConfig, SdpConfig, StorageConfig, WalletConfig,
-        api::serde::AxumBackendSettings,
-        cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
-        sdp::serde::RequiredValues as SdpConfigRequiredValues, state::Config as StateConfig,
-        wallet::serde::RequiredValues as WalletConfigRequiredValues,
+        api::serde::AxumBackendSettings, kms::serde::KmsBackendSettings,
+        state::Config as StateConfig,
     },
 };
 
-use crate::{GeneralConfig, consensus::GeneralConsensusConfig, kms::key_id_for_preload_backend};
+use crate::GeneralConfig;
 
 /// Builds the node user configuration from generated deployment material.
 ///
@@ -25,18 +19,13 @@ use crate::{GeneralConfig, consensus::GeneralConsensusConfig, kms::key_id_for_pr
 #[must_use]
 pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
     let api_config = create_api_config(&config);
-    let mut cryptarchia_config =
-        CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues {
-            funding_pk: config.consensus_config.funding_pk,
-        });
+    let mut cryptarchia_config = CryptarchiaConfig::default();
     cryptarchia_config
         .service
         .bootstrap
         .prolonged_bootstrap_period = config.consensus_config.prolonged_bootstrap_period;
 
-    let mut sdp_config = SdpConfig::with_required_values(SdpConfigRequiredValues {
-        funding_pk: config.consensus_config.funding_sk.as_public_key(),
-    });
+    let mut sdp_config = SdpConfig::default();
     sdp_config.declaration_id = config.sdp_config.declaration_id;
 
     UserConfig {
@@ -48,7 +37,7 @@ pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
         api: api_config,
         storage: StorageConfig::default(),
         sdp: sdp_config,
-        wallet: create_wallet_config(&config.consensus_config, &config.kms_config.backend.keys),
+        wallet: create_wallet_config(&config.kms_config.backend),
         // Mining defaults, auto-claim off: generated nodes mine and claim on
         // demand, naming the destination key on each claim request.
         pow: PoWConfig::default(),
@@ -71,39 +60,13 @@ fn create_axum_backend_settings(listen_address: SocketAddr) -> AxumBackendSettin
     }
 }
 
-fn create_wallet_config(
-    consensus: &GeneralConsensusConfig,
-    kms_keys: &HashMap<KeyId, Key>,
-) -> WalletConfig {
-    let known_keys = [
-        (
-            key_id_for_preload_backend(&Key::Zk(consensus.known_key.clone())),
-            consensus.known_key.as_public_key(),
-        ),
-        (
-            key_id_for_preload_backend(&Key::Zk(consensus.funding_sk.clone())),
-            consensus.funding_sk.as_public_key(),
-        ),
-    ]
-    .into_iter()
-    .chain(consensus.other_keys.iter().map(|sk| {
-        (
-            key_id_for_preload_backend(&Key::Zk(sk.clone())),
-            sk.as_public_key(),
-        )
-    }))
-    .chain(kms_keys.values().filter_map(|key| match key {
-        Key::Zk(sk) => Some((
-            key_id_for_preload_backend(&Key::Zk(sk.clone())),
-            sk.as_public_key(),
-        )),
-        Key::Ed25519(_) => None,
-    }))
-    .collect();
+fn create_wallet_config(kms: &KmsBackendSettings) -> WalletConfig {
+    // Every key of the KMS, in a stable order.
+    let mut known_keys = kms.keys.keys().cloned().collect::<Vec<_>>();
+    known_keys.sort();
 
-    let mut config = WalletConfig::with_required_values(WalletConfigRequiredValues {
-        voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(consensus.known_key.clone())),
-    });
-    config.known_keys = known_keys;
-    config
+    WalletConfig {
+        known_keys,
+        ..WalletConfig::default()
+    }
 }

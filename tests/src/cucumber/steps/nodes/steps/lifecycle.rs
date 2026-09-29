@@ -1,10 +1,9 @@
 use super::{
-    AutoClaimSettings, AutoClaimTick, ClaimTarget, ConfigOverride, CucumberWorld, Duration,
-    GenesisTokens, HashMap, Instant, Key, ManualClusterKind, ManualClusterSpec,
-    NodesToStartUnordered, NonZeroU64, Step, StepError, StepResult, TARGET, WalletAccount,
-    assert_manual_node_has_peers, connect_manual_node_to_node,
-    ensure_fee_sponsorship_and_fork_groups_are_not_mixed, given, install_local_manual_cluster,
-    key_id_for_preload_backend, non_zero, parse_genesis_wallet_tokens_row,
+    AutoClaimSettings, AutoClaimTick, ConfigOverride, CucumberWorld, Duration, GenesisTokens,
+    HashMap, Instant, ManualClusterKind, ManualClusterSpec, NodesToStartUnordered, NonZeroU64,
+    Step, StepError, StepResult, TARGET, WalletAccount, assert_manual_node_has_peers,
+    connect_manual_node_to_node, ensure_fee_sponsorship_and_fork_groups_are_not_mixed, given,
+    install_local_manual_cluster, non_zero, parse_genesis_wallet_tokens_row,
     parse_mining_wallet_resources_table_row, parse_wallet_resources_table_row, restart_node,
     start_node, start_nodes_order_respecting_dependencies, stop_node, then,
     verify_genesis_wallet_resources_table_indexes,
@@ -153,8 +152,7 @@ async fn step_start_nodes_with_wallet_resources(
 /// The `pow.auto_claim` override staged for `node_name`, if any.
 ///
 /// Node-start steps merge this on top of the scenario-wide overrides, so
-/// auto-claim can be configured per node without leaking a target key onto
-/// nodes whose wallet does not track it (which would abort their startup).
+/// auto-claim can be configured per node.
 fn staged_auto_claim_overrides(world: &CucumberWorld, node_name: &str) -> Vec<ConfigOverride> {
     world
         .auto_claim_overrides
@@ -165,34 +163,18 @@ fn staged_auto_claim_overrides(world: &CucumberWorld, node_name: &str) -> Vec<Co
 
 /// Stages a `pow.auto_claim` configuration for a node that has not started yet.
 ///
-/// Auto-claim is configuration-only — there is no runtime API to add targets —
-/// so it must be in place before the node boots. The target key is derived from
-/// a wallet account index rather than written literally, so the scenario names
-/// the same account it uses elsewhere instead of a 32-byte hex blob. That
-/// account must also be one of the node's wallet resources: the service
-/// validates every target against the wallet's known keys at startup and aborts
-/// if one is untracked.
+/// Auto-claim is configuration-only, so it must be in place before the node
+/// boots.
 ///
-/// `threshold` is the balance, in LGO, the key should reach; auto-claim stops
-/// paying it once its balance is at or above that. `tick_slots` paces the
-/// attempts off the time service's slot clock.
-///
-/// The step also registers the account with the node's KMS and
-/// `wallet.known_keys`. Scenario wallet accounts are otherwise client-side
-/// only — the cucumber scanner tracks them, the node's wallet does not — and
-/// auto-claim refuses to start against a key its wallet cannot see a balance
-/// for.
-#[given(
-    expr = "I configure PoW auto-claim on node {string} paying wallet account {int} up to {int} LGO every {int} slots"
-)]
-#[when(
-    expr = "I configure PoW auto-claim on node {string} paying wallet account {int} up to {int} LGO every {int} slots"
-)]
+/// `threshold` is the spendable balance, in LGO, the wallet of the node should
+/// reach; auto-claim stops once its balance is at or above that. `tick_slots`
+/// paces the attempts off the time service's slot clock.
+#[given(expr = "I configure PoW auto-claim on node {string} up to {int} LGO every {int} slots")]
+#[when(expr = "I configure PoW auto-claim on node {string} up to {int} LGO every {int} slots")]
 fn step_configure_pow_auto_claim(
     world: &mut CucumberWorld,
     step: &Step,
     node_name: String,
-    account_index: u64,
     threshold: u64,
     tick_slots: u64,
 ) -> StepResult {
@@ -201,21 +183,9 @@ fn step_configure_pow_auto_claim(
             message: format!("Step `{}` error: tick_slots must be non-zero", step.value),
         });
     }
-    let account = WalletAccount::deterministic(account_index, 0, true).map_err(|source| {
-        StepError::InvalidArgument {
-            message: format!(
-                "Step `{}` error: failed to derive auto-claim key for account {account_index}: \
-                 {source}",
-                step.value
-            ),
-        }
-    })?;
 
     let value = serde_yaml::to_value(AutoClaimSettings {
-        targets: vec![ClaimTarget {
-            public_key: account.public_key(),
-            threshold,
-        }],
+        threshold: Some(threshold),
         tick: AutoClaimTick::Slots(
             NonZeroU64::new(tick_slots).expect("tick_slots checked to be non-zero above"),
         ),
@@ -227,42 +197,12 @@ fn step_configure_pow_auto_claim(
         ),
     })?;
 
-    // Auto-claim reads its targets' balances through the node's wallet, so the
-    // account has to be one the node holds: preload the secret into the KMS and
-    // list its public key under `wallet.known_keys`, keyed the same way the
-    // preload backend derives ids.
-    let key: Key = account.secret_key.clone().into();
-    let key_id = key_id_for_preload_backend(&key);
-    let key_value = serde_yaml::to_value(&key).map_err(|source| StepError::InvalidArgument {
-        message: format!(
-            "Step `{}` error: failed to serialize auto-claim key: {source}",
-            step.value
-        ),
-    })?;
-
     world.auto_claim_overrides.insert(
         node_name,
-        vec![
-            ConfigOverride {
-                path: "pow.auto_claim".to_owned(),
-                value,
-            },
-            ConfigOverride {
-                path: format!("kms.backend.keys.{key_id}"),
-                value: key_value,
-            },
-            ConfigOverride {
-                path: format!("wallet.known_keys.{key_id}"),
-                value: serde_yaml::to_value(account.public_key()).map_err(|source| {
-                    StepError::InvalidArgument {
-                        message: format!(
-                            "Step `{}` error: failed to serialize auto-claim public key: {source}",
-                            step.value
-                        ),
-                    }
-                })?,
-            },
-        ],
+        vec![ConfigOverride {
+            path: "pow.auto_claim".to_owned(),
+            value,
+        }],
     );
     Ok(())
 }

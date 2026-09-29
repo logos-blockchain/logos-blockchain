@@ -1318,9 +1318,7 @@ pub struct CucumberWorld {
     pub mining_claim_addresses: HashMap<String, ZkPublicKey>,
     /// Manual: Per-node `pow.auto_claim` overrides, staged by the auto-claim
     /// configuration step and applied when that node starts. Auto-claim must be
-    /// configured before the node boots, since it validates its targets against
-    /// the wallet's known keys at startup; the override is per-node because a
-    /// target key a node's wallet does not track aborts that node's startup.
+    /// configured before the node boots.
     pub auto_claim_overrides: HashMap<String, Vec<ConfigOverride>>,
 }
 
@@ -1604,7 +1602,7 @@ pub struct PreparedPriorityFee {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum NodeWalletKeyRole {
     Funding,
-    VoucherMaster,
+    Stake,
     BlendZk,
     General,
 }
@@ -1614,7 +1612,7 @@ impl NodeWalletKeyRole {
     pub const fn priority(self) -> u8 {
         match self {
             Self::Funding => 0,
-            Self::VoucherMaster => 1,
+            Self::Stake => 1,
             Self::BlendZk => 2,
             Self::General => 3,
         }
@@ -2991,7 +2989,7 @@ mod node_wallet_tests {
     #[test]
     fn scanner_tracks_only_the_node_funding_role() {
         assert!(node_wallet(NodeWalletKeyRole::Funding).is_scanner_tracked_wallet());
-        assert!(!node_wallet(NodeWalletKeyRole::VoucherMaster).is_scanner_tracked_wallet());
+        assert!(!node_wallet(NodeWalletKeyRole::Stake).is_scanner_tracked_wallet());
         assert!(!node_wallet(NodeWalletKeyRole::BlendZk).is_scanner_tracked_wallet());
         assert!(!node_wallet(NodeWalletKeyRole::General).is_scanner_tracked_wallet());
     }

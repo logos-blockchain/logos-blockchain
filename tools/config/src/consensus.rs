@@ -18,11 +18,15 @@ use lb_core::{
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
 use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
-use lb_key_management_system_service::keys::{
-    Ed25519Key, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey, ZkSignature,
+use lb_key_management_system_service::{
+    hd::{MasterSeed, Mnemonic, Path},
+    keys::{
+        Ed25519Key, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey, ZkSignature,
+    },
 };
 use lb_node::{Hashable as _, SignedOps};
 use num_bigint::BigUint;
+use rand::{SeedableRng as _, rngs::StdRng};
 
 use crate::unique::unique_test_context;
 
@@ -32,9 +36,7 @@ pub const EMPTY_CHANNEL_ID: [u8; 32] = [0; 32];
 pub const EMPTY_ED25519_PUBLIC_KEY: [u8; 32] = [0; 32];
 const EMPTY_GROTH16_PROOF_BYTES: [u8; 128] = [0u8; 128];
 
-const LEADER_KEY_PREFIX: &[u8] = b"ld";
 const BLEND_KEY_PREFIX: &[u8] = b"bn";
-const SDP_KEY_PREFIX: &[u8] = b"sdp";
 const KEY_MATERIAL_LEN: usize = 16;
 
 const REGULAR_NOTE_VALUE: u64 = 100_000;
@@ -107,8 +109,13 @@ impl ProviderInfo {
 /// be converted into a specific service or services configuration.
 #[derive(Clone, Debug)]
 pub struct GeneralConsensusConfig {
+    /// The mnemonic of the node, which `known_key` and `funding_sk` are
+    /// derived from
+    pub mnemonic: Mnemonic,
+    /// The key at [`stake_path`], which holds the stake
     pub known_key: ZkKey,
     pub blend_note: ServiceNote,
+    /// The key at [`funding_path`], which pays the fees
     pub funding_sk: ZkKey,
     pub funding_pk: ZkPublicKey,
     pub other_keys: Vec<ZkKey>,
@@ -124,7 +131,32 @@ pub struct ServiceNote {
     pub output_index: usize,
 }
 
+/// The path of the key that holds the stake of a node, which is its first
+/// receive address.
+#[must_use]
+pub fn stake_path() -> Path {
+    "m/154'/0'/0'/0'"
+        .parse()
+        .expect("Path of the stake key is valid")
+}
+
+/// The path of the key that a node pays fees with, which is the first receive
+/// address that is not for the stake.
+#[must_use]
+pub fn funding_path() -> Path {
+    "m/154'/0'/0'/1'"
+        .parse()
+        .expect("Path of the funding key is valid")
+}
+
+/// The mnemonic of the node, which is always the same for the same id.
+#[must_use]
+pub fn node_mnemonic(id: [u8; 32]) -> Mnemonic {
+    Mnemonic::generate(&mut StdRng::from_seed(id))
+}
+
 pub struct BaseConsensusMaterial {
+    pub mnemonics: Vec<Mnemonic>,
     pub regular_note_keys: Vec<ZkKey>,
     pub blend_notes: Vec<ServiceNote>,
     pub sdp_notes: Vec<ServiceNote>,
@@ -302,6 +334,7 @@ pub fn create_consensus_configs_with_additional_wallet_outputs_and_sdp_funding_c
                 let blend_note = material.blend_notes[i].clone();
 
                 GeneralConsensusConfig {
+                    mnemonic: material.mnemonics[i].clone(),
                     blend_note,
                     known_key: sk,
                     funding_sk,
@@ -338,11 +371,13 @@ pub fn create_base_consensus_material_with_additional_wallet_outputs_and_sdp_fun
     additional_wallet_outputs: usize,
     sdp_funding_config: SdpFundingConfig,
 ) -> BaseConsensusMaterial {
+    let mut mnemonics = Vec::new();
     let mut regular_note_keys = Vec::new();
     let mut blend_notes = Vec::new();
     let mut sdp_notes = Vec::new();
     let utxos = create_utxos(
         ids,
+        &mut mnemonics,
         &mut regular_note_keys,
         &mut blend_notes,
         &mut sdp_notes,
@@ -351,6 +386,7 @@ pub fn create_base_consensus_material_with_additional_wallet_outputs_and_sdp_fun
     );
 
     BaseConsensusMaterial {
+        mnemonics,
         regular_note_keys,
         blend_notes,
         sdp_notes,
@@ -360,6 +396,7 @@ pub fn create_base_consensus_material_with_additional_wallet_outputs_and_sdp_fun
 
 fn create_utxos(
     ids: &[[u8; 32]],
+    mnemonics: &mut Vec<Mnemonic>,
     regular_note_keys: &mut Vec<ZkKey>,
     blend_notes: &mut Vec<ServiceNote>,
     sdp_notes: &mut Vec<ServiceNote>,
@@ -394,8 +431,11 @@ fn create_utxos(
     let mut output_index = 0;
 
     for &id in ids {
-        let sk_data = derive_key_material(LEADER_KEY_PREFIX, &id);
-        let sk = ZkKey::from(BigUint::from_bytes_le(&sk_data));
+        let mnemonic = node_mnemonic(id);
+        let master = MasterSeed::from_mnemonic(&mnemonic, "").to_key();
+        mnemonics.push(mnemonic);
+
+        let sk = master.derive_key(&stake_path()).to_zk_key();
         let pk = sk.to_public_key();
         regular_note_keys.push(sk);
         utxos.push(Utxo {
@@ -424,8 +464,7 @@ fn create_utxos(
         utxos.push(utxo);
         output_index += 1;
 
-        let sk_sdp_data = derive_key_material(SDP_KEY_PREFIX, &id);
-        let sk_sdp = ZkKey::from(BigUint::from_bytes_le(&sk_sdp_data));
+        let sk_sdp = master.derive_key(&funding_path()).to_zk_key();
         let pk_sdp = sk_sdp.to_public_key();
         for sdp_note_index in 0..sdp_notes_per_node {
             let note_value = base_sdp_note_value + u64::from(sdp_note_index < sdp_value_remainder);

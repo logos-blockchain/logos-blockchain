@@ -107,6 +107,8 @@ fn build_kms_config_for_node(
 
     KmsConfig {
         backend: lb_node::config::kms::serde::KmsBackendSettings {
+            mnemonic: consensus_config.mnemonic.clone(),
+            passphrase: None,
             keys: [
                 (
                     blend_conf.non_ephemeral_signing_key_id.clone(),
@@ -119,14 +121,6 @@ fn build_kms_config_for_node(
                 (
                     key_id_for_preload_backend(&Key::Zk(consensus_config.blend_note.sk.clone())),
                     Key::Zk(consensus_config.blend_note.sk.clone()),
-                ),
-                (
-                    key_id_for_preload_backend(&Key::Zk(consensus_config.known_key.clone())),
-                    Key::Zk(consensus_config.known_key.clone()),
-                ),
-                (
-                    key_id_for_preload_backend(&Key::Zk(consensus_config.funding_sk.clone())),
-                    Key::Zk(consensus_config.funding_sk.clone()),
                 ),
             ]
             .into(),
