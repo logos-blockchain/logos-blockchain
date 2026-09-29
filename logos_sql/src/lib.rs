@@ -1,9 +1,9 @@
 //! `λSQL`: replicated `SQLite` state over Logos Blockchain.
 //!
 //! Applications read through a normal `SQLite` connection and submit replicated
-//! writes through [`LogosSql::execute`]. One runtime task owns the zone
-//! sequencer and database writer, so the SQL effects and pending publication
-//! commit together before the payload is given to `ZoneSDK`.
+//! writes through [`LogosSql::execute`]. One dedicated runtime thread owns the
+//! zone sequencer and database writer, so the SQL effects and pending
+//! publication commit together before the payload is given to `ZoneSDK`.
 //!
 //! Application transactions share a fixed SQLite execution budget across their
 //! statements. Exceeding it rolls back the transaction; channel replay records

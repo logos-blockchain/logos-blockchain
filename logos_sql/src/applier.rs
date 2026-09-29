@@ -1018,7 +1018,7 @@ mod tests {
 
     fn assert_rejected_sql_allows_replay(sql: &str) {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         let rejected = encoded_write(&transaction(sql, vec![]));
         let create = encoded_write(&transaction("CREATE TABLE items(value INTEGER)", vec![]));
         let expected_checkpoint = checkpoint(2, 2);
@@ -1041,7 +1041,7 @@ mod tests {
         );
 
         drop(db);
-        let mut db = Databases::open(dir.path()).unwrap();
+        let mut db = open_databases(dir.path()).unwrap();
 
         // A rebuild replays the retained suffix, including rejected SQL.
         super::rebuild_live_from_suffix(&mut db).unwrap();
@@ -1408,7 +1408,7 @@ mod tests {
     fn different_sql_with_our_id_does_not_restore_our_write() {
         for finalize_foreign in [false, true] {
             let dir = TempDir::new().unwrap();
-            let mut db = Databases::open(dir.path()).unwrap();
+            let mut db = open_databases(dir.path()).unwrap();
             let tx_id = TxId::generate();
             let original = transaction("CREATE TABLE original(value INTEGER)", vec![]);
 
@@ -1432,7 +1432,7 @@ mod tests {
             assert!(!table_exists(db.live_path(), "original"));
 
             drop(db);
-            let mut db = Databases::open(dir.path()).unwrap();
+            let mut db = open_databases(dir.path()).unwrap();
             let foreign = EncodedWrite::new(
                 tx_id,
                 &transaction("CREATE TABLE foreign_write(value INTEGER)", vec![]),

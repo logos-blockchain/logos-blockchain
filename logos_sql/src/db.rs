@@ -26,7 +26,7 @@ use rusqlite::{
 use crate::{
     error::Error,
     functions::FunctionOverrides,
-    protocol::{ChannelInscription, ChannelWrite, EncodedWrite, MAX_BODY_BYTES, Transaction, TxId},
+    protocol::{ChannelWrite, EncodedWrite, MAX_BODY_BYTES, Transaction, TxId},
     status::{Displacement, DisplacementReason, WriteStatus},
 };
 
@@ -986,7 +986,7 @@ fn orphan_write(transaction: &rusqlite::Transaction<'_>, this_msg: &MsgId) -> Re
 
     for (tx_id, payload) in local_writes {
         let tx_id = decode_tx_id(tx_id)?;
-        let content_digest = ChannelInscription::decode(&payload)?.content_digest();
+        let content_digest = ChannelWrite::decode(&payload)?.content_digest();
 
         transaction.execute(
             INSERT_DISPLACED_WRITE,
@@ -1014,7 +1014,7 @@ fn adopt_write(transaction: &rusqlite::Transaction<'_>, write: &SuffixWrite) -> 
     // Another writer can copy our transaction ID. Only matching content means
     // our write returned; different content stays foreign and leaves it displaced.
     let restored_local = if let Some(original_digest) = original_digest {
-        original_digest.as_slice() == ChannelInscription::decode(&write.payload)?.content_digest()
+        original_digest.as_slice() == ChannelWrite::decode(&write.payload)?.content_digest()
     } else {
         false
     };
@@ -1873,7 +1873,7 @@ pub mod tests {
 
         db.mark_displacement_handled(&first_displacement).unwrap();
         drop(db);
-        let mut db = Databases::open(dir.path()).unwrap();
+        let mut db = open_databases(dir.path()).unwrap();
 
         db.apply_history_delta(
             &[],
@@ -2252,7 +2252,7 @@ pub mod tests {
     #[test]
     fn endless_local_sql_rolls_back_and_allows_the_next_write() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         db.live
             .execute("CREATE TABLE items(value TEXT)", [])
             .unwrap();
@@ -2297,7 +2297,7 @@ pub mod tests {
     fn oversized_values_roll_back_and_allow_the_next_write() {
         for function in ["zeroblob", "randomblob"] {
             let dir = TempDir::new().expect("temporary directory should be created");
-            let mut db = Databases::open(dir.path()).expect("databases should open");
+            let mut db = open_databases(dir.path()).expect("databases should open");
             db.live
                 .execute("CREATE TABLE items(value TEXT)", [])
                 .unwrap();
@@ -2336,7 +2336,7 @@ pub mod tests {
     #[test]
     fn short_statements_cannot_bypass_the_execution_budget() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         db.live
             .execute("CREATE TABLE items(value INTEGER)", [])
             .unwrap();
@@ -2360,7 +2360,7 @@ pub mod tests {
     #[test]
     fn statements_share_one_execution_budget() {
         let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let mut db = open_databases(dir.path()).expect("databases should open");
         db.live
             .execute("CREATE TABLE items(value INTEGER)", [])
             .unwrap();
@@ -2375,7 +2375,7 @@ pub mod tests {
             vec![],
         )
         .unwrap();
-        let write = ChannelInscription {
+        let write = ChannelWrite {
             tx_id: TxId::generate(),
             transaction: Transaction::new(vec![statement.clone()]).unwrap(),
             captured_function_calls: CapturedFunctionCalls::empty(),
@@ -2384,7 +2384,7 @@ pub mod tests {
         db.apply_adopted_write(&write)
             .expect("one calculation fits");
 
-        let expensive = ChannelInscription {
+        let expensive = ChannelWrite {
             tx_id: TxId::generate(),
             transaction: Transaction::new(vec![statement.clone(), statement]).unwrap(),
             captured_function_calls: CapturedFunctionCalls::empty(),
