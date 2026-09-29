@@ -155,8 +155,12 @@ pub enum WalletMsg {
     FundTx {
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-        change_pk: ZkPublicKey,
-        funding_pks: Vec<ZkPublicKey>,
+        /// The key that receives the change, which is the next change
+        /// address if not given.
+        change_pk: Option<ZkPublicKey>,
+        /// The keys whose notes are spent, which are the HD keys but the
+        /// ones of the stake addresses if not given.
+        funding_pks: Option<Vec<ZkPublicKey>>,
         /// Percentage of the final mandatory fee reserved as a priority-fee
         /// reserve; only the unused reserve becomes the effective tip.
         priority_fee_percent: u64,
@@ -166,7 +170,6 @@ pub enum WalletMsg {
         tip: HeaderId,
         rewards_root: RewardsRoot,
         reward_amount: Value,
-        funding_pk: ZkPublicKey,
         max_tx_fee: GasCost,
         resp_tx:
             Sender<Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletServiceError>>,
@@ -233,7 +236,6 @@ struct LeaderClaimTxRequest {
     tip: HeaderId,
     rewards_root: RewardsRoot,
     reward_amount: Value,
-    funding_pk: ZkPublicKey,
     max_tx_fee: GasCost,
 }
 
@@ -647,6 +649,12 @@ where
                     }
                 };
 
+                // TODO(hd_wallet_04_wallet): Fund from the HD keys of the wallet
+                // if the keys are not given.
+                let (Some(change_pk), Some(funding_pks)) = (change_pk, funding_pks) else {
+                    todo!()
+                };
+
                 let funded = match state.fund_tx::<MainnetGasProfile>(
                     tip,
                     &tx_builder,
@@ -681,7 +689,6 @@ where
                 tip,
                 rewards_root,
                 reward_amount,
-                funding_pk,
                 max_tx_fee,
                 resp_tx,
             } => {
@@ -696,7 +703,6 @@ where
                     tip,
                     rewards_root,
                     reward_amount,
-                    funding_pk,
                     max_tx_fee,
                 };
                 // Pinned to keep the future off the stack: `LedgerState` is
@@ -1374,17 +1380,21 @@ where
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<(SignedOps<Preverified, StandardMode>, Vec<NoteId>), WalletServiceError> {
         let context = ledger.tx_context();
+        // TODO(hd_wallet_04_wallet): Pay the reward to the next receive address,
+        // and fund from the HD keys of the wallet.
+        let reward_pk: ZkPublicKey = todo!();
+        let funding_pk: ZkPublicKey = todo!();
         let tx_builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(LeaderClaimOp {
             rewards_root: request.rewards_root,
             voucher_nullifier,
-            pk: request.funding_pk,
+            pk: reward_pk,
         }))?;
 
         let funded_tx_builder = state.fund_tx::<MainnetGasProfile>(
             request.tip,
             &tx_builder,
-            request.funding_pk,
-            [request.funding_pk],
+            funding_pk,
+            [funding_pk],
             &context,
             0,
         )?;

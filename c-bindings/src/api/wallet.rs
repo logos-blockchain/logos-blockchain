@@ -827,8 +827,8 @@ pub(crate) fn transfer_funds_sync(
         let signed_tx = api
             .transfer_funds(
                 Some(tip),
-                change_public_key,
-                funding_public_keys,
+                Some(change_public_key),
+                Some(funding_public_keys),
                 recipient_public_key,
                 amount,
             )
@@ -1085,8 +1085,8 @@ pub(crate) fn channel_deposit_with_notes_sync(
             .fund_tx(
                 Some(tip),
                 tx_builder,
-                change_public_key,
-                funding_public_keys,
+                Some(change_public_key),
+                Some(funding_public_keys),
                 0,
             )
             .await
@@ -1580,8 +1580,8 @@ pub(crate) fn wallet_fund_tx_sync(
             .fund_tx(
                 request.tip,
                 request.tx_builder,
-                request.change_public_key,
-                request.funding_public_keys,
+                Some(request.change_public_key),
+                Some(request.funding_public_keys),
                 request.priority_fee_percent,
             )
             .await

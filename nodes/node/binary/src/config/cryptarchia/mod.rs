@@ -157,7 +157,6 @@ impl ServiceConfig {
         let chain_leader_settings = lb_chain_leader_service::LeaderSettings {
             config: ledger_config,
             wallet_config: lb_chain_leader_service::LeaderWalletConfig {
-                funding_pk: self.user.leader.wallet.funding_pk,
                 max_tx_fee: self.user.leader.wallet.max_tx_fee,
             },
         };
