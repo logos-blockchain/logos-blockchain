@@ -15,6 +15,9 @@ const LOG_TARGET: &str = network_service::backends::libp2p::CHAINSYNC;
 type SerialisedBlockStream = BoxedStream<Result<SerialisedBlock, ChainSyncError>>;
 
 pub enum ChainSyncCommand {
+    EligiblePeers {
+        reply_sender: oneshot::Sender<HashSet<PeerId>>,
+    },
     RequestTip {
         peer: PeerId,
         reply_sender: oneshot::Sender<Result<GetTipResponse, ChainSyncError>>,
@@ -32,6 +35,7 @@ pub enum ChainSyncCommand {
 impl Debug for ChainSyncCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::EligiblePeers { .. } => f.debug_struct("EligiblePeers").finish(),
             Self::RequestTip { peer, .. } => {
                 f.debug_struct("RequestTip").field("peer", peer).finish()
             }
@@ -55,8 +59,15 @@ impl Debug for ChainSyncCommand {
 }
 
 impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "The command handler keeps all chainsync command dispatch in one place."
+    )]
     pub(super) fn handle_chainsync_command(&self, command: ChainSyncCommand) {
         match command {
+            ChainSyncCommand::EligiblePeers { reply_sender } => {
+                log_error!(reply_sender.send(self.chainsync_eligible_peers()));
+            }
             ChainSyncCommand::RequestTip { peer, reply_sender } => {
                 if let Err(e) = self.swarm.request_tip(peer, reply_sender) {
                     tracing::error!(target: LOG_TARGET, "failed to request tip: {e:?}");

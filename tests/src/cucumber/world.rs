@@ -982,6 +982,9 @@ pub struct ScenarioLifecycle {
     /// Automated: Whether to perform readiness checks on nodes after starting
     /// them.
     pub readiness_checks: bool,
+    /// Monotonic stop completion times used to enforce a brief grace period
+    /// before Cucumber restarts nodes.
+    pub node_stopped_at: HashMap<String, Instant>,
 }
 
 /// Chain and genesis parameters captured at cluster build time.

@@ -4,8 +4,19 @@ Feature: Logos SQL
 
   Rule: Replicas converge on channel history
 
+    # Invariants covered:
+    # - accepted SQL writes replicate to peer instances in the live view and
+    #   subsequently appear identically in finalized state;
+    # - nondeterministic SQL expressions are evaluated once in accepted history,
+    #   and replicas reproduce the resulting values rather than re-evaluating them;
+    # - foreign channel inscriptions and malformed Logos SQL payloads are ignored
+    #   without blocking later valid SQL writes or replica convergence.
+    #
+    # These phases deliberately share one channel and SQL replica pair: each phase
+    # adds independent accepted history while retaining the assertions that
+    # distinguish the individual invariants.
     @logos_sql_ci
-    Scenario: Replicate and finalize a SQL write
+    Scenario: Replicas preserve accepted SQL results and ignore unrelated channel traffic
       Given the genesis block has the following wallet resources:
         | account_index | token_count | token_amount |
         | 1             | 3           | 100000       |
@@ -39,6 +50,45 @@ Feature: Logos SQL
       And Logos SQL instance "SQL_B" has 1 rows in table "messages" in its live database in 180 seconds
       And Logos SQL instance "SQL_A" has 1 rows in table "messages" in its finalized database in 180 seconds
       And Logos SQL instance "SQL_B" has 1 rows in table "messages" in its finalized database in 180 seconds
+      When Logos SQL instance "SQL_A" executes write "CREATE_OBSERVATIONS":
+        """
+        CREATE TABLE observations (
+            id INTEGER PRIMARY KEY,
+            random_value INTEGER NOT NULL,
+            random_bytes BLOB NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+      Then Logos SQL instance "SQL_B" has 0 rows in table "observations" in its live database in 180 seconds
+      When Logos SQL instance "SQL_A" executes write "ADD_OBSERVATION":
+        """
+        INSERT INTO observations (id, random_value, random_bytes, created_at)
+        VALUES (1, random(), randomblob(16), CURRENT_TIMESTAMP)
+        """
+      Then Logos SQL instance "SQL_B" has 1 rows in table "observations" in its live database in 180 seconds
+      And Logos SQL instances "SQL_A" and "SQL_B" agree on this live query in 30 seconds:
+        """
+        SELECT id, random_value, random_bytes, created_at
+        FROM observations
+        ORDER BY id
+        """
+      When I start zone sequencer "SEQ_A" with indexer
+      And sequencer "SEQ_A" publishes the following zone messages:
+        | alias               | data                                  |
+        | FOREIGN_TRAFFIC     | not-a-logos-sql-protocol-inscription |
+        | MALFORMED_LOGOS_SQL | LOGOS_SQLjunk                        |
+      Then all zone messages are safe in 180 seconds
+      When Logos SQL instance "SQL_A" executes write "ADD_AFTER_MALFORMED":
+        """
+        INSERT INTO messages (id, body) VALUES (2, 'still running')
+        """
+      Then Logos SQL instance "SQL_B" has 2 rows in table "messages" in its live database in 180 seconds
+      And Logos SQL instances "SQL_A" and "SQL_B" agree on this live query in 30 seconds:
+        """
+        SELECT id, body
+        FROM messages
+        ORDER BY id
+        """
       And I stop all nodes
 
     @logos_sql_ci
@@ -134,49 +184,6 @@ Feature: Logos SQL
       And I stop all nodes
 
     @logos_sql_ci
-    Scenario: Replicate nondeterministic SQL results exactly
-      Given the genesis block has the following wallet resources:
-        | account_index | token_count | token_amount |
-        | 1             | 3           | 100000       |
-      And I have a cluster with capacity of 1 nodes
-      And I start nodes with wallet and sequencer resources:
-        | node_name | account_index | wallet_name | connected_to | sequencers   |
-        | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
-      And the following zone sequencers share the signing key of "SEQ_A":
-        | alias |
-        | SEQ_B |
-      When node "NODE_1" is at height 1 in 120 seconds
-      And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
-      And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
-      And I start Logos SQL instances:
-        | alias | sequencer |
-        | SQL_A | SEQ_A     |
-        | SQL_B | SEQ_B     |
-      And Logos SQL instance "SQL_A" executes write "CREATE_OBSERVATIONS":
-        """
-        CREATE TABLE observations (
-            id INTEGER PRIMARY KEY,
-            random_value INTEGER NOT NULL,
-            random_bytes BLOB NOT NULL,
-            created_at TEXT NOT NULL
-        )
-        """
-      Then Logos SQL instance "SQL_B" has 0 rows in table "observations" in its live database in 180 seconds
-      When Logos SQL instance "SQL_A" executes write "ADD_OBSERVATION":
-        """
-        INSERT INTO observations (id, random_value, random_bytes, created_at)
-        VALUES (1, random(), randomblob(16), CURRENT_TIMESTAMP)
-        """
-      Then Logos SQL instance "SQL_B" has 1 rows in table "observations" in its live database in 180 seconds
-      And Logos SQL instances "SQL_A" and "SQL_B" agree on this live query in 30 seconds:
-        """
-        SELECT id, random_value, random_bytes, created_at
-        FROM observations
-        ORDER BY id
-        """
-      And I stop all nodes
-
-    @logos_sql_ci
     Scenario: Concurrent writes converge on accepted channel history
       Given the genesis block has the following wallet resources:
         | account_index | token_count | token_amount |
@@ -267,52 +274,6 @@ Feature: Logos SQL
   Rule: Only valid canonical history changes replicated state
 
     @logos_sql_ci
-    Scenario: Foreign and malformed inscriptions do not block later writes
-      Given the genesis block has the following wallet resources:
-        | account_index | token_count | token_amount |
-        | 1             | 3           | 100000       |
-      And I have a cluster with capacity of 1 nodes
-      And I start nodes with wallet and sequencer resources:
-        | node_name | account_index | wallet_name | connected_to | sequencers   |
-        | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
-      And the following zone sequencers share the signing key of "SEQ_A":
-        | alias |
-        | SEQ_B |
-      When node "NODE_1" is at height 1 in 120 seconds
-      And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
-      And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
-      And I start Logos SQL instances:
-        | alias | sequencer |
-        | SQL_A | SEQ_A     |
-        | SQL_B | SEQ_B     |
-      And Logos SQL instance "SQL_A" executes write "CREATE_MESSAGES":
-        """
-        CREATE TABLE messages (
-            id INTEGER PRIMARY KEY,
-            body TEXT NOT NULL
-        )
-        """
-      Then Logos SQL instance "SQL_B" has 0 rows in table "messages" in its live database in 180 seconds
-      When I start zone sequencer "SEQ_A" with indexer
-      And sequencer "SEQ_A" publishes the following zone messages:
-        | alias                 | data                                  |
-        | FOREIGN_TRAFFIC       | not-a-logos-sql-protocol-inscription |
-        | MALFORMED_LOGOS_SQL   | LOGOS_SQLjunk                         |
-      Then all zone messages are safe in 180 seconds
-      When Logos SQL instance "SQL_A" executes write "ADD_AFTER_MALFORMED":
-        """
-        INSERT INTO messages (id, body) VALUES (1, 'still running')
-        """
-      Then Logos SQL instance "SQL_B" has 1 rows in table "messages" in its live database in 180 seconds
-      And Logos SQL instances "SQL_A" and "SQL_B" agree on this live query in 30 seconds:
-        """
-        SELECT id, body
-        FROM messages
-        ORDER BY id
-        """
-      And I stop all nodes
-
-    @logos_sql_ci
     Scenario: A reorganization removes the write from one abandoned branch
       Given the genesis block has the following wallet resources:
         | account_index | token_count | token_amount |
@@ -356,11 +317,10 @@ Feature: Logos SQL
       Then Logos SQL instance "SQL_OBSERVER" has 1 rows in table "messages" in its live database in 180 seconds
       # Branch A must stop while its write is still provisional so reconnecting
       # the branches can displace it.
-      When I record node "NODE_A" height as "ABANDONED_HEIGHT"
-      And I stop node "NODE_A3"
+      And Logos SQL instance "SQL_A" has 0 rows in table "messages" in its finalized database in 5 seconds
+      When I stop node "NODE_A3"
       And I stop node "NODE_A2"
       And I stop node "NODE_A"
-      Then Logos SQL instance "SQL_A" has 0 rows in table "messages" in its finalized database in 5 seconds
       When I restart node "NODE_B"
       And I start peer node "NODE_B2" connected to node "NODE_B"
       And I start peer node "NODE_B3" connected to node "NODE_B2"
@@ -375,7 +335,12 @@ Feature: Logos SQL
         | alias          | sequencer |
         | SQL_B_OBSERVER | SEQ_B     |
       Then Logos SQL instance "SQL_B_OBSERVER" has 1 rows in table "messages" in its live database in 180 seconds
-      And node "NODE_B" reaches 1 blocks beyond recorded height "ABANDONED_HEIGHT" in 180 seconds
+      And Logos SQL instance "SQL_B" returns text "branch B" from this finalized query in 180 seconds:
+        """
+        SELECT body
+        FROM messages
+        WHERE id = 1
+        """
       When I restart node "NODE_A"
       And I restart node "NODE_A2"
       And I restart node "NODE_A3"
