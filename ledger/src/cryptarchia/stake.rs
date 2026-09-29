@@ -24,6 +24,28 @@ impl StakeInference {
         self.period
     }
 
+    /// [`Self::total_stake_inference`] with a down limit: the estimate falls
+    /// by at most `max_decrease` (a fraction, e.g. `0.2`) of the current
+    /// estimate. `None`: no limit.
+    pub fn total_stake_inference_limited<const PRECISION: u64>(
+        &self,
+        total_stake_estimate: u64,
+        measured_block_density: u64,
+        max_decrease: Option<f64>,
+    ) -> u64 {
+        let new_total_stake_estimate =
+            self.total_stake_inference::<PRECISION>(total_stake_estimate, measured_block_density);
+        max_decrease.map_or(new_total_stake_estimate, |max_decrease| {
+            let max_decrease_with_precision =
+                (f64::trunc(max_decrease * PRECISION as f64) as u64).min(PRECISION);
+            let lowest = u128::from(total_stake_estimate)
+                * u128::from(PRECISION - max_decrease_with_precision)
+                / u128::from(PRECISION);
+            let lowest = u64::try_from(lowest).expect("at most total_stake_estimate");
+            new_total_stake_estimate.max(lowest)
+        })
+    }
+
     pub fn total_stake_inference<const PRECISION: u64>(
         &self,
         total_stake_estimate: u64,
@@ -49,7 +71,6 @@ impl StakeInference {
             / i128::from(PRECISION);
         let new_total_stake_estimate =
             (total_stake_estimate_with_precision - correction) / i128::from(PRECISION);
-
         tracing::trace!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
@@ -165,6 +186,45 @@ mod tests {
         assert!(
             result <= total_stake_estimate,
             "result({result}) must be <= total_stake_estimate({total_stake_estimate})"
+        );
+    }
+
+    #[test]
+    fn test_total_stake_inference_down_limit() {
+        let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
+        let inference = stake_inference_from(&config);
+        let limit = Some(0.2);
+        let total_stake_estimate = 1000u64;
+
+        // Zero density would drive the estimate to the minimum; the limit
+        // stops it at 80 %.
+        let result =
+            inference.total_stake_inference_limited::<PRECISION>(total_stake_estimate, 0, limit);
+        assert_eq!(result, 800);
+
+        // Applied per update: two updates fall to 64 %.
+        let result = inference.total_stake_inference_limited::<PRECISION>(result, 0, limit);
+        assert_eq!(result, 640);
+
+        // A decrease within the limit and any increase are unchanged.
+        for density in [
+            expected_density(&inference) * 9 / 10,
+            expected_density(&inference) * 2,
+        ] {
+            assert_eq!(
+                inference.total_stake_inference_limited::<PRECISION>(
+                    total_stake_estimate,
+                    density,
+                    limit
+                ),
+                inference.total_stake_inference::<PRECISION>(total_stake_estimate, density),
+            );
+        }
+
+        // No limit: unchanged.
+        assert_eq!(
+            inference.total_stake_inference_limited::<PRECISION>(total_stake_estimate, 0, None),
+            1,
         );
     }
 

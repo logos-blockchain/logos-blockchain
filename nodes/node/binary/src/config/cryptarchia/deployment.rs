@@ -27,6 +27,10 @@ pub struct Settings {
     pub learning_rate: NonNegativeF64,
     /// `W`, the uncle reference window in expected block-intervals.
     pub uncle_reference_window_in_block: NonZeroU32,
+    /// The largest fraction by which the total stake estimate may fall in one
+    /// epoch (e.g. `0.2`). Unset: no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stake_inference_max_decrease: Option<NonNegativeF64>,
     pub sdp_config: SdpConfig,
     pub gossipsub_protocol: String,
     pub genesis_block: GenesisBlock,
@@ -89,6 +93,7 @@ impl Settings {
             self.learning_rate,
             self.uncle_reference_window_in_block,
         )
+        .with_stake_inference_max_decrease(self.stake_inference_max_decrease)
     }
 }
 

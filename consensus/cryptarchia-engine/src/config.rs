@@ -19,6 +19,11 @@ pub struct Config {
     /// `W`, the width of the uncle reference window in expected
     /// block-intervals.
     uncle_reference_window_in_block: NonZero<u32>,
+    /// The largest fraction by which the total stake estimate may fall in one
+    /// epoch (e.g. `0.2`). Unset: no limit. It bounds how far an adversary
+    /// that withholds its blocks can push the estimate down, which bounds how
+    /// fast the lottery can run afterwards.
+    stake_inference_max_decrease: Option<NonNegativeF64>,
     /// Lottery approximation constants computed from `slot_activation_coeff`
     #[serde(skip)]
     lottery_constants: LotteryConstants,
@@ -35,6 +40,8 @@ impl<'de> serde::Deserialize<'de> for Config {
             slot_activation_coeff: NonNegativeRatio,
             stake_inference_learning_rate: NonNegativeF64,
             uncle_reference_window_in_block: NonZero<u32>,
+            #[serde(default)]
+            stake_inference_max_decrease: Option<NonNegativeF64>,
         }
 
         let raw = RawConfig::deserialize(deserializer)?;
@@ -44,6 +51,7 @@ impl<'de> serde::Deserialize<'de> for Config {
             slot_activation_coeff: raw.slot_activation_coeff,
             stake_inference_learning_rate: raw.stake_inference_learning_rate,
             uncle_reference_window_in_block: raw.uncle_reference_window_in_block,
+            stake_inference_max_decrease: raw.stake_inference_max_decrease,
             lottery_constants: LotteryConstants::new(raw.slot_activation_coeff),
         })
     }
@@ -62,7 +70,29 @@ impl Config {
             slot_activation_coeff,
             stake_inference_learning_rate,
             uncle_reference_window_in_block,
+            stake_inference_max_decrease: None,
             lottery_constants: LotteryConstants::new(slot_activation_coeff),
+        }
+    }
+
+    /// Sets the largest fraction by which the total stake estimate may fall in
+    /// one epoch (`None`: no limit).
+    #[must_use]
+    pub const fn with_stake_inference_max_decrease(
+        mut self,
+        stake_inference_max_decrease: Option<NonNegativeF64>,
+    ) -> Self {
+        self.stake_inference_max_decrease = stake_inference_max_decrease;
+        self
+    }
+
+    /// The largest fraction by which the total stake estimate may fall in one
+    /// epoch, if limited.
+    #[must_use]
+    pub const fn stake_inference_max_decrease(&self) -> Option<f64> {
+        match self.stake_inference_max_decrease {
+            Some(max_decrease) => Some(max_decrease.get()),
+            None => None,
         }
     }
 

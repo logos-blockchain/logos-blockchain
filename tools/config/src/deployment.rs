@@ -187,6 +187,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
             },
             genesis_block: GenesisBlock::genesis(genesis_tx.clone()),
             learning_rate: LEARNING_RATE.try_into().expect("1 > 0"),
+            stake_inference_max_decrease: None,
             faucet_pk: None,
             pow_config: lb_node::config::cryptarchia::deployment::PoWConfig {
                 blend: lb_node::config::cryptarchia::deployment::BlendPoWConfig {

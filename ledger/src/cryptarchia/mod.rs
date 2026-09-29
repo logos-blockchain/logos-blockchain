@@ -301,10 +301,13 @@ impl LedgerState {
             // case 2)
 
             // infer new total stake
-            let total_stake = self.stake_inference.total_stake_inference::<PRECISION>(
-                self.epoch_state.total_stake,
-                self.block_density.current_block_density(),
-            );
+            let total_stake = self
+                .stake_inference
+                .total_stake_inference_limited::<PRECISION>(
+                    self.epoch_state.total_stake,
+                    self.block_density.current_block_density(),
+                    config.consensus_config.stake_inference_max_decrease(),
+                );
             let (lottery_0, lottery_1) = config
                 .lottery_constants()
                 .compute_lottery_values(total_stake);
@@ -368,15 +371,19 @@ impl LedgerState {
             // case 3)
 
             // First, infer total stake using block density of the current epoch
-            let mut total_stake = self.stake_inference.total_stake_inference::<PRECISION>(
-                self.epoch_state.total_stake,
-                self.block_density.current_block_density(),
-            );
+            let max_decrease = config.consensus_config.stake_inference_max_decrease();
+            let mut total_stake = self
+                .stake_inference
+                .total_stake_inference_limited::<PRECISION>(
+                    self.epoch_state.total_stake,
+                    self.block_density.current_block_density(),
+                    max_decrease,
+                );
             // Adjust total stake with zero block density for skipped epochs
             for _ in u32::from(next_epoch_state.epoch())..u32::from(new_epoch) {
                 total_stake = self
                     .stake_inference
-                    .total_stake_inference::<PRECISION>(total_stake, 0);
+                    .total_stake_inference_limited::<PRECISION>(total_stake, 0, max_decrease);
             }
             let (lottery_0, lottery_1) = config
                 .lottery_constants()
