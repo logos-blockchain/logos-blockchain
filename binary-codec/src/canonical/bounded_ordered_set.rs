@@ -194,13 +194,13 @@ mod tests {
     }
 
     /// Every element of a zero-length type decodes to the same value, so the
-    /// second one is a duplicate. An 8-byte prefix cannot buy `u64::MAX`
+    /// second one is a duplicate. A 4-byte prefix cannot buy `u32::MAX`
     /// iterations.
     #[test]
     fn a_zero_length_element_type_cannot_drive_an_unbounded_loop() {
-        type ZeroLength = BoundedOrderedSet<[u8; 0], 0, { u64::MAX as usize }>;
+        type ZeroLength = BoundedOrderedSet<[u8; 0], 0, { u32::MAX as usize }>;
 
-        let err = ZeroLength::decode(&[0xFF; 8]).unwrap_err();
+        let err = ZeroLength::decode(&[0xFF; 4]).unwrap_err();
 
         assert!(matches!(err, DecodeError::DuplicateItem { index: 1, .. }));
     }
