@@ -1,5 +1,5 @@
 use lb_key_management_system_service::{
-    backend::preload::PreloadKMSBackendSettings,
+    backend::hd::HdKMSBackendSettings,
     hd::{MasterKey, MasterSeed},
 };
 
@@ -11,11 +11,13 @@ pub struct ServiceConfig {
     pub user: Config,
 }
 
-impl From<ServiceConfig> for PreloadKMSBackendSettings {
+impl From<ServiceConfig> for HdKMSBackendSettings {
     fn from(value: ServiceConfig) -> Self {
-        // TODO(hd_wallet_06_kms): The KMS takes the mnemonic to derive keys from.
+        let backend = value.user.backend;
         Self {
-            keys: value.user.backend.keys,
+            mnemonic: backend.mnemonic,
+            passphrase: backend.passphrase,
+            keys: backend.keys,
         }
     }
 }

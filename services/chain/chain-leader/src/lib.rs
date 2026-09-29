@@ -61,7 +61,7 @@ use tx_selection::{TransactionSelection, select_transactions};
 pub use crate::wallet::LeaderWalletConfig;
 use crate::{
     blend::BlendAdapter,
-    kms::PreloadKmsService,
+    kms::HdKmsService,
     leadership::{SlotContext, build_proof_for, fetch_slot_context, search_for_winning_slots},
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::CryptarchiaConsensusRelays,
@@ -338,7 +338,7 @@ where
         + AsServiceId<CryptarchiaService>
         + AsServiceId<ChainNetwork>
         + AsServiceId<Wallet>
-        + AsServiceId<PreloadKmsService<RuntimeServiceId>>,
+        + AsServiceId<HdKmsService<RuntimeServiceId>>,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -388,10 +388,10 @@ where
                 .await?,
         );
 
-        let kms_api = KmsServiceApi::<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>::new(
+        let kms_api = KmsServiceApi::<HdKmsService<RuntimeServiceId>, RuntimeServiceId>::new(
             self.service_resources_handle
                 .overwatch_handle
-                .relay::<PreloadKmsService<_>>()
+                .relay::<HdKmsService<_>>()
                 .await
                 .expect("Relay with KMS service should be available."),
         );
@@ -406,7 +406,7 @@ where
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,
             Wallet,
-            PreloadKmsService<_>
+            HdKmsService<_>
         )
         .await?;
         // Wait for the remaining dependencies to become ready, without timeout
@@ -607,7 +607,7 @@ where
         + Send
         + 'static
         + AsServiceId<Wallet>
-        + AsServiceId<PreloadKmsService<RuntimeServiceId>>,
+        + AsServiceId<HdKmsService<RuntimeServiceId>>,
 {
     #[instrument(
         target = LOG_TARGET,
@@ -732,7 +732,7 @@ where
         msg: LeaderMsg,
         cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
-        kms: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
+        kms: &KmsServiceApi<HdKmsService<RuntimeServiceId>, RuntimeServiceId>,
         time_relay: &OutboundRelay<TimeServiceMessage>,
         ledger_config: &lb_ledger::Config,
         config: &LeaderWalletConfig,

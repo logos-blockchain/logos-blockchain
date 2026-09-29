@@ -7,15 +7,14 @@ use lb_blend::{
 };
 use lb_core::crypto::ZkHash;
 use lb_key_management_system_service::{
-    api::KmsServiceApi, backend::preload::KeyId, keys::KeyOperators,
-    operators::blend::poq::PoQOperator,
+    api::KmsServiceApi, backend::hd::KeyId, keys::KeyOperators, operators::blend::poq::PoQOperator,
 };
 use lb_log_targets::blend;
 use lb_poq::{CorePathAndSelectors, KeyIndex};
 use overwatch::services::AsServiceId;
 use tokio::sync::oneshot;
 
-use crate::kms::PreloadKmsService;
+use crate::kms::HdKmsService;
 
 const LOG_TARGET: &str = blend::service::core::KMS_POQ_GENERATOR;
 
@@ -33,9 +32,9 @@ pub trait KmsPoQAdapter<RuntimeServiceId> {
 
 #[async_trait]
 impl<RuntimeServiceId> KmsPoQAdapter<RuntimeServiceId>
-    for KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>
+    for KmsServiceApi<HdKmsService<RuntimeServiceId>, RuntimeServiceId>
 {
-    type CorePoQGenerator = PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>;
+    type CorePoQGenerator = HdKMSBackendCorePoQGenerator<RuntimeServiceId>;
     type KeyId = KeyId;
 
     fn core_poq_generator(
@@ -47,7 +46,7 @@ impl<RuntimeServiceId> KmsPoQAdapter<RuntimeServiceId>
             target: LOG_TARGET,
             "Creating KMS-based PoQ generator with key ID {key_id:?} and core path and selectors {core_path_and_selectors:?}"
         );
-        PreloadKMSBackendCorePoQGenerator {
+        HdKMSBackendCorePoQGenerator {
             core_path_and_selectors: *core_path_and_selectors,
             kms_api: self.clone(),
             key_id,
@@ -56,17 +55,16 @@ impl<RuntimeServiceId> KmsPoQAdapter<RuntimeServiceId>
 }
 
 #[derive(Clone)]
-pub struct PreloadKMSBackendCorePoQGenerator<RuntimeServiceId> {
+pub struct HdKMSBackendCorePoQGenerator<RuntimeServiceId> {
     core_path_and_selectors: CorePathAndSelectors,
-    kms_api: KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
+    kms_api: KmsServiceApi<HdKmsService<RuntimeServiceId>, RuntimeServiceId>,
     key_id: KeyId,
 }
 
-impl<RuntimeServiceId> CoreProofOfQuotaGenerator
-    for PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>
+impl<RuntimeServiceId> CoreProofOfQuotaGenerator for HdKMSBackendCorePoQGenerator<RuntimeServiceId>
 where
     RuntimeServiceId:
-        AsServiceId<PreloadKmsService<RuntimeServiceId>> + Debug + Display + Send + Sync + 'static,
+        AsServiceId<HdKmsService<RuntimeServiceId>> + Debug + Display + Send + Sync + 'static,
 {
     fn generate_poq(
         &self,
@@ -100,7 +98,7 @@ where
 }
 
 async fn generate_kms_poq<RuntimeServiceId>(
-    kms_api: KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
+    kms_api: KmsServiceApi<HdKmsService<RuntimeServiceId>, RuntimeServiceId>,
     key_id: KeyId,
     public_inputs: &PublicInputs,
     key_index: KeyIndex,
@@ -108,7 +106,7 @@ async fn generate_kms_poq<RuntimeServiceId>(
 ) -> Result<(VerifiedProofOfQuota, ZkHash), quota::Error>
 where
     RuntimeServiceId:
-        AsServiceId<PreloadKmsService<RuntimeServiceId>> + Debug + Display + Send + Sync + 'static,
+        AsServiceId<HdKmsService<RuntimeServiceId>> + Debug + Display + Send + Sync + 'static,
 {
     let (result_sender, result_receiver) = oneshot::channel();
 

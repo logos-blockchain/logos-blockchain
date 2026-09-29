@@ -79,6 +79,13 @@ pub struct HdKMSBackendSettings {
     pub keys: HashMap<preload::KeyId, Key>,
 }
 
+impl HdKMSBackend {
+    /// Derives the key at the path from the master key.
+    fn derive(&self, path: &Path) -> Key {
+        Key::Zk(self.master.derive_key(path).to_zk_key())
+    }
+}
+
 #[async_trait::async_trait]
 impl KMSBackend for HdKMSBackend {
     type KeyId = KeyId;
@@ -88,21 +95,33 @@ impl KMSBackend for HdKMSBackend {
     type Error = HdBackendError;
 
     fn new(settings: Self::Settings) -> Self {
-        // TODO(hd_wallet_06_kms)
-        todo!()
+        let HdKMSBackendSettings {
+            mnemonic,
+            passphrase,
+            keys,
+        } = settings;
+        let passphrase = passphrase.as_deref().unwrap_or_default();
+        Self {
+            preloaded: PreloadKMSBackend::new(PreloadKMSBackendSettings { keys }),
+            master: MasterSeed::from_mnemonic(&mnemonic, passphrase).to_key(),
+        }
     }
 
     fn register(&mut self, key_id: &Self::KeyId, key: Self::Key) -> Result<(), Self::Error> {
-        // TODO(hd_wallet_06_kms)
-        todo!()
+        match key_id {
+            KeyId::Name(name) => Ok(self.preloaded.register(name, key)?),
+            KeyId::Path(path) => Err(HdBackendError::RegisteringDerivedKey(*path)),
+        }
     }
 
     fn public_key(
         &self,
         key_id: &Self::KeyId,
     ) -> Result<<Self::Key as SecuredKey>::PublicKey, Self::Error> {
-        // TODO(hd_wallet_06_kms)
-        todo!()
+        match key_id {
+            KeyId::Name(name) => Ok(self.preloaded.public_key(name)?),
+            KeyId::Path(path) => Ok(self.derive(path).as_public_key()),
+        }
     }
 
     fn sign(
@@ -110,8 +129,10 @@ impl KMSBackend for HdKMSBackend {
         key_id: &Self::KeyId,
         payload: <Self::Key as SecuredKey>::Payload,
     ) -> Result<<Self::Key as SecuredKey>::Signature, Self::Error> {
-        // TODO(hd_wallet_06_kms)
-        todo!()
+        match key_id {
+            KeyId::Name(name) => Ok(self.preloaded.sign(name, payload)?),
+            KeyId::Path(path) => Ok(self.derive(path).sign(&payload)?),
+        }
     }
 
     fn sign_multiple(
@@ -119,8 +140,25 @@ impl KMSBackend for HdKMSBackend {
         key_ids: &[Self::KeyId],
         payload: <Self::Key as SecuredKey>::Payload,
     ) -> Result<<Self::Key as SecuredKey>::Signature, Self::Error> {
-        // TODO(hd_wallet_06_kms)
-        todo!()
+        // Derived first, for the keys to outlive the references to them.
+        let derived = key_ids
+            .iter()
+            .map(|key_id| match key_id {
+                KeyId::Name(_) => None,
+                KeyId::Path(path) => Some(self.derive(path)),
+            })
+            .collect::<Vec<_>>();
+        let keys = key_ids
+            .iter()
+            .zip(&derived)
+            .map(|(key_id, derived)| match (key_id, derived) {
+                (KeyId::Name(name), _) => self.preloaded.key(name),
+                (KeyId::Path(_), Some(key)) => Ok(key),
+                (KeyId::Path(_), None) => unreachable!("Key at a path is derived"),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self::Key::sign_multiple(&keys, &payload)?)
     }
 
     async fn execute(
@@ -128,7 +166,145 @@ impl KMSBackend for HdKMSBackend {
         key_id: &Self::KeyId,
         operator: Self::KeyOperations,
     ) -> Result<(), Self::Error> {
-        // TODO(hd_wallet_06_kms)
-        todo!()
+        match key_id {
+            KeyId::Name(name) => Ok(self.preloaded.execute(name, operator).await?),
+            KeyId::Path(path) => Ok(self.derive(path).execute(operator).await?),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::{
+        Ed25519Key, PayloadEncoding, PublicKeyEncoding, SignatureEncoding, ZkKey, ZkPublicKey,
+    };
+    use num_bigint::BigUint;
+    use rand::rngs::OsRng;
+
+    use super::*;
+
+    const MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    #[test]
+    fn preloaded_key_is_found_by_name() {
+        let key = Key::Ed25519(Ed25519Key::generate(&mut OsRng));
+        let backend = backend([("BlendSigning".to_owned(), key.clone())].into());
+
+        assert_eq!(
+            backend.public_key(&"BlendSigning".into()).unwrap(),
+            key.as_public_key()
+        );
+        assert!(matches!(
+            backend.public_key(&"Unknown".into()),
+            Err(HdBackendError::Preload(
+                PreloadBackendError::NotRegisteredKeyId(_)
+            ))
+        ));
+    }
+
+    #[test]
+    fn key_is_derived_at_path() {
+        let backend = backend(HashMap::new());
+
+        let expected = receive_0_key().as_public_key();
+        assert_eq!(backend.public_key(&receive(0)).unwrap(), expected);
+        assert_ne!(backend.public_key(&receive(1)).unwrap(), expected);
+    }
+
+    #[test]
+    fn passphrase_changes_derived_keys() {
+        let backend = HdKMSBackend::new(HdKMSBackendSettings {
+            mnemonic: MNEMONIC.parse().unwrap(),
+            passphrase: Some("passphrase".into()),
+            keys: HashMap::new(),
+        });
+
+        assert_ne!(
+            backend.public_key(&receive(0)).unwrap(),
+            receive_0_key().as_public_key()
+        );
+    }
+
+    #[test]
+    fn derived_key_cannot_be_registered() {
+        let mut backend = backend(HashMap::new());
+
+        assert!(matches!(
+            backend.register(&receive(0), receive_0_key()),
+            Err(HdBackendError::RegisteringDerivedKey(_))
+        ));
+        backend.register(&"Extra".into(), receive_0_key()).unwrap();
+        assert_eq!(
+            backend.public_key(&"Extra".into()).unwrap(),
+            receive_0_key().as_public_key()
+        );
+    }
+
+    #[test]
+    fn sign_with_derived_key() {
+        let backend = backend(HashMap::new());
+        let data = Fr::from(7u8);
+
+        let signature = backend
+            .sign(&receive(0), PayloadEncoding::Zk(data))
+            .unwrap();
+
+        assert!(verify(&[receive_0_key()], &data, &signature));
+    }
+
+    #[test]
+    fn sign_multiple_with_preloaded_and_derived_keys() {
+        let preloaded = Key::Zk(ZkKey::new(BigUint::from_bytes_le(&[1u8; 32]).into()));
+        let backend = backend([("BlendZk".to_owned(), preloaded.clone())].into());
+        let data = Fr::from(7u8);
+
+        let signature = backend
+            .sign_multiple(&["BlendZk".into(), receive(0)], PayloadEncoding::Zk(data))
+            .unwrap();
+
+        assert!(verify(&[preloaded, receive_0_key()], &data, &signature));
+    }
+
+    #[test]
+    fn key_id_is_displayed_as_name_or_path() {
+        assert_eq!(KeyId::from("BlendZk").to_string(), "BlendZk");
+        assert_eq!(receive(3).to_string(), "m/154'/0'/0'/3'");
+    }
+
+    fn backend(keys: HashMap<preload::KeyId, Key>) -> HdKMSBackend {
+        HdKMSBackend::new(HdKMSBackendSettings {
+            mnemonic: MNEMONIC.parse().unwrap(),
+            passphrase: None,
+            keys,
+        })
+    }
+
+    fn receive(index: u32) -> KeyId {
+        format!("m/154'/0'/0'/{index}'")
+            .parse::<Path>()
+            .unwrap()
+            .into()
+    }
+
+    fn verify(keys: &[Key], data: &Fr, signature: &SignatureEncoding) -> bool {
+        let public_keys: Vec<ZkPublicKey> = keys
+            .iter()
+            .map(|key| match key.as_public_key() {
+                PublicKeyEncoding::Zk(public_key) => public_key,
+                PublicKeyEncoding::Ed25519(_) => panic!("expected a ZK key"),
+            })
+            .collect();
+        let SignatureEncoding::Zk(signature) = signature else {
+            panic!("expected a ZK signature");
+        };
+        ZkPublicKey::verify_multi(&public_keys, data, signature)
+    }
+
+    /// The key at `m/154'/0'/0'/0'`, derived without the backend.
+    fn receive_0_key() -> Key {
+        let master = MasterSeed::from_mnemonic(&MNEMONIC.parse().unwrap(), "").to_key();
+        let path = "m/154'/0'/0'/0'".parse().unwrap();
+        Key::Zk(master.derive_key(&path).to_zk_key())
     }
 }

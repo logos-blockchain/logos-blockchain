@@ -64,7 +64,7 @@ impl ServiceConfig {
             Libp2pBroadcastSettings,
         > {
             common: CommonSettings {
-                non_ephemeral_signing_key_id: self.user.non_ephemeral_signing_key_id,
+                non_ephemeral_signing_key_id: self.user.non_ephemeral_signing_key_id.into(),
                 num_blend_layers: self.deployment.common.num_blend_layers,
                 minimum_network_size: self.deployment.common.minimum_network_size.into(),
                 broadcast: Libp2pBroadcastSettings {
@@ -120,7 +120,7 @@ impl ServiceConfig {
                     },
                 },
                 zk: ZkSettings {
-                    secret_key_kms_id: self.user.core.zk.secret_key_kms_id,
+                    secret_key_kms_id: self.user.core.zk.secret_key_kms_id.into(),
                 },
                 activity_threshold_sensitivity: self.deployment.core.activity_threshold_sensitivity,
             },

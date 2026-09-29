@@ -2,7 +2,7 @@ use core::time::Duration;
 use std::{num::NonZeroU64, sync::Arc};
 
 use lb_core::blend::core_quota;
-use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
+use lb_key_management_system_service::{backend::hd::KeyId, keys::UnsecuredEd25519Key};
 use lb_poq::Quota;
 use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
 use lb_utils::math::PositiveF64;

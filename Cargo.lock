@@ -4767,6 +4767,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-key-management-system-operators",
  "logos-blockchain-log-targets",

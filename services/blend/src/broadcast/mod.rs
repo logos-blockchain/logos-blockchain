@@ -22,7 +22,7 @@ use tracing::{debug, info};
 use crate::{
     broadcast::settings::StartingBlendConfig,
     core::dispatcher::PayloadDispatcher,
-    kms::PreloadKmsService,
+    kms::HdKmsService,
     membership::{self, MembershipInfo, node_id},
     message::{NetworkInfo, ServiceMessage},
     mode::{Mode, ModeMembership},
@@ -70,7 +70,7 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send>,
     RuntimeServiceId: AsServiceId<Self>
-        + AsServiceId<PreloadKmsService<RuntimeServiceId>>
+        + AsServiceId<HdKmsService<RuntimeServiceId>>
         + AsServiceId<ChainService>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
@@ -114,7 +114,7 @@ where
             Some(Duration::from_mins(1)),
             NetworkService<_, _>,
             TimeService<_, _>,
-            PreloadKmsService<_>,
+            HdKmsService<_>,
             ChainService
         )
         .await?;
@@ -135,8 +135,8 @@ where
             settings.network,
         );
 
-        let kms = KmsServiceApi::<PreloadKmsService<_>, RuntimeServiceId>::new(
-            overwatch_handle.relay::<PreloadKmsService<_>>().await?,
+        let kms = KmsServiceApi::<HdKmsService<_>, RuntimeServiceId>::new(
+            overwatch_handle.relay::<HdKmsService<_>>().await?,
         );
         let PublicKeyEncoding::Ed25519(signing_public_key) = kms
             .public_key(settings.non_ephemeral_signing_key_id)

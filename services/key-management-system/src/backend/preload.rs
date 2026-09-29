@@ -25,6 +25,14 @@ pub struct PreloadKMSBackend {
     keys: HashMap<KeyId, Key>,
 }
 
+impl PreloadKMSBackend {
+    pub(crate) fn key(&self, key_id: &KeyId) -> Result<&Key, PreloadBackendError> {
+        self.keys
+            .get(key_id)
+            .ok_or_else(|| PreloadBackendError::NotRegisteredKeyId(key_id.to_owned()))
+    }
+}
+
 /// This setting contains all [`Key`]s to be loaded into the
 /// [`PreloadKMSBackend`]. This implements [`serde::Serialize`] for users to
 /// populate the settings from bytes.
