@@ -65,7 +65,11 @@ async fn start_silent_cluster(
 }
 
 fn config(mut config: RunConfig) -> RunConfig {
-    config.deployment.genesis_era_parameters_mut().time.slot_duration = Duration::from_secs(1);
+    config
+        .deployment
+        .genesis_era_parameters_mut()
+        .time
+        .slot_duration = Duration::from_secs(1);
     config
         .user
         .cryptarchia

@@ -416,7 +416,11 @@ fn channel_deposit_wallet_config(
 }
 
 fn channel_test_config(mut config: RunConfig) -> RunConfig {
-    config.deployment.genesis_era_parameters_mut().time.slot_duration = Duration::from_secs(1);
+    config
+        .deployment
+        .genesis_era_parameters_mut()
+        .time
+        .slot_duration = Duration::from_secs(1);
     config
         .deployment
         .genesis_era_parameters_mut()

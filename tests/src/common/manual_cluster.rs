@@ -187,7 +187,11 @@ pub async fn start_fast_cluster_with_wallet(
 }
 
 fn fast_chain_config(mut config: RunConfig) -> RunConfig {
-    config.deployment.genesis_era_parameters_mut().time.slot_duration = Duration::from_secs(2);
+    config
+        .deployment
+        .genesis_era_parameters_mut()
+        .time
+        .slot_duration = Duration::from_secs(2);
     config
         .deployment
         .genesis_era_parameters_mut()
