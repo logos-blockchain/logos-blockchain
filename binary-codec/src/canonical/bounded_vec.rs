@@ -261,16 +261,15 @@ mod tests {
 
     /// Paired with a bound too large to iterate, a zero-length element type
     /// turns the decode loop into a pure instruction count driven by the
-    /// prefix, which no amount of input truncation bounds. Before this
-    /// combination was refused, this exact call ran for minutes without
-    /// finishing: eight bytes buy `u64::MAX` iterations.
+    /// prefix, which no amount of input truncation bounds: four bytes buy
+    /// `u32::MAX` iterations.
     ///
     /// If it regresses, this test hangs rather than fails.
     #[test]
     fn a_zero_length_element_type_cannot_drive_an_unbounded_loop() {
-        type ZeroLength = BoundedVec<[u8; 0], 0, { u64::MAX as usize }>;
+        type ZeroLength = BoundedVec<[u8; 0], 0, { u32::MAX as usize }>;
 
-        let err = ZeroLength::decode(&[0xFF; 8]).unwrap_err();
+        let err = ZeroLength::decode(&[0xFF; 4]).unwrap_err();
 
         assert!(matches!(err, DecodeError::ZeroLengthElement { .. }));
     }
@@ -345,17 +344,6 @@ mod tests {
         let err = Empty::decode(&[1, 7]).unwrap_err();
         assert!(matches!(err, DecodeError::LengthOutOfBounds { len: 1, .. }));
     }
-
-    #[test]
-    fn eight_byte_length_prefix() {
-        type EightByteBounded = BoundedVec<u8, 1, { u64::MAX as usize }>;
-        let original: EightByteBounded = EightByteBounded::new_unchecked(vec![10]);
-        let bytes = original.encode_to_vec();
-        assert_eq!(bytes, vec![1, 0, 0, 0, 0, 0, 0, 0, 10]); // 8-byte prefix (1) then a single `u8`
-        let (rest, decoded) = EightByteBounded::decode(&bytes).unwrap();
-        assert!(rest.is_empty());
-        assert_eq!(decoded, original);
-    }
 }
 
 #[cfg(test)]
@@ -394,14 +382,14 @@ mod allocation_tests {
         );
     }
 
-    /// A declared length must never be pre-allocated on trust: with a
-    /// `usize::MAX` bound nothing rejects it up front, so reserving it outright
-    /// aborts the process on a 8-byte input instead of returning an error.
+    /// A declared length must never be pre-allocated on trust: with the widest
+    /// bound nothing rejects it up front, so reserving it outright would take
+    /// 4 GiB for a 4-byte input instead of returning an error.
     #[test]
     fn huge_declared_length_does_not_preallocate_from_the_wire() {
-        type Wide = BoundedVec<u8, 1, { u64::MAX as usize }>;
+        type Wide = BoundedVec<u8, 1, { u32::MAX as usize }>;
 
-        let err = Wide::decode(&u64::MAX.to_le_bytes()).unwrap_err();
+        let err = Wide::decode(&u32::MAX.to_le_bytes()).unwrap_err();
 
         assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
     }

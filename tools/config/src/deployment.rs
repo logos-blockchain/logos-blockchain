@@ -9,7 +9,6 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
-use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::{
     blend::deployment::{
         CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
@@ -20,15 +19,11 @@ use lb_node::config::{
         EpochConfig, ServiceParameters, Settings as CryptarchiaDeploymentSettings,
     },
     deployment::{DeploymentSettings, EraParameters, EraSchedule},
-    network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
-use crate::{
-    release::ProtocolIdentity,
-    time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS},
-};
+use crate::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
 /// `T_E`: the rounds an edge node is given to send its message.
 const BLEND_EDGE_NODE_SEND_DEADLINE_IN_ROUNDS: u64 = 1;
@@ -41,17 +36,11 @@ const BLEND_NETWORK_ABSORPTION_IN_ROUNDS: u64 = 2;
 const BLEND_PEERING_DEGREE: NonZeroU32 = NonZeroU32::new(4).unwrap();
 const MINIMUM_BLEND_NETWORK_SIZE: u64 = 2;
 const NUM_BLEND_LAYERS: u64 = 3;
-const BLEND_PROTOCOL_NAME: &str = "/blend/integration-tests";
 const DATA_REPLICATION_FACTOR: u64 = 0;
 
 const COVER_MESSAGE_FREQUENCY_PER_ROUND: f64 = 1.0;
 const MAXIMUM_RELEASE_DELAY_IN_ROUNDS: u64 = 3;
 const ACTIVITY_THRESHOLD_SENSITIVITY: u64 = 1;
-
-const IDENTIFY_PROTOCOL_SUFFIX: &str = "identify/1.0.0";
-const KADEMLIA_PROTOCOL_SUFFIX: &str = "kad/1.0.0";
-const CHAIN_SYNC_PROTOCOL_SUFFIX: &str = "chainsync/1.0.0";
-const GOSSIPSUB_PROTOCOL_SUFFIX: &str = "cryptarchia/proto/1.0.0";
 
 const SECURITY_PARAM: u32 = 20;
 const UNCLE_REFERENCE_WINDOW_IN_BLOCK: u32 = 12;
@@ -86,9 +75,6 @@ const REWARD_POW_SHARE: u64 = 10;
 const REWARD_POW_SHARE_DEN: u64 = 100;
 const REWARD_POW_SLOT_WINDOW: u64 = 100;
 
-const MEMPOOL_TOPIC: &str = "mantle_e2e_tests";
-const DEFAULT_PROTOCOL_NAMESPACE: &str = "integration/logos-blockchain";
-
 #[must_use]
 #[expect(
     clippy::too_many_lines,
@@ -100,8 +86,6 @@ pub fn e2e_deployment_settings_with_genesis_block(
     let genesis_tx = genesis_block.genesis_tx();
     let slot_duration_in_secs = std::env::var(CONSENSUS_SLOT_TIME_VAR)
         .map_or(DEFAULT_SLOT_TIME_IN_SECS, |s| s.parse::<u64>().unwrap());
-
-    let protocol_identity = ProtocolIdentity::from_env(DEFAULT_PROTOCOL_NAMESPACE);
 
     DeploymentSettings {
         eras: EraSchedule::new_genesis(EraParameters {
@@ -216,14 +200,6 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 slot_duration: Duration::from_secs(slot_duration_in_secs),
             },
         }),
-        network: NetworkDeploymentSettings {
-            identify_protocol_name: protocol_identity.stream_protocol(IDENTIFY_PROTOCOL_SUFFIX),
-            kademlia_protocol_name: protocol_identity.stream_protocol(KADEMLIA_PROTOCOL_SUFFIX),
-            chain_sync_protocol_name: protocol_identity.stream_protocol(CHAIN_SYNC_PROTOCOL_SUFFIX),
-            blend_protocol_name: StreamProtocol::new(BLEND_PROTOCOL_NAME),
-            cryptarchia_topic: protocol_identity.protocol_name(GOSSIPSUB_PROTOCOL_SUFFIX),
-            mempool_topic: MEMPOOL_TOPIC.to_owned(),
-        },
         genesis_block: GenesisBlock::genesis(genesis_tx.clone()),
     }
 }
