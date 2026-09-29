@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use lb_groth16::fr_to_bytes;
+use lb_key_management_system_keys::hd::{Mnemonic, Passphrase};
 use lb_key_management_system_service::{
     backend::preload::KeyId,
     keys::{
@@ -12,7 +13,9 @@ use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const WARNING: &str = "Do not share your secret keys";
+use crate::config::kms::serde::KmsBackendSettings;
+
+const WARNING: &str = "Do not share your mnemonic and secret keys";
 
 #[derive(Serialize, Deserialize, Hash, Eq, PartialEq, Clone, Debug)]
 #[serde(transparent)]
@@ -21,22 +24,10 @@ pub struct KeyTitle(pub String);
 impl KeyTitle {
     pub const BLEND_SIGNING: &str = "BlendSigning";
     pub const BLEND_ZK: &str = "BlendZk";
-    pub const LEADER_FUNDING: &str = "LeaderFunding";
     pub const NETWORK_SWARM: &str = "NetworkSwarm";
-    pub const POW_CLAIM: &str = "PoWClaim";
-    pub const SDP_FUNDING: &str = "SdpFunding";
-    pub const VAUCHER_MASTER: &str = "VaucherMaster";
-    pub const STAKE: &str = "Stake";
 
     pub const PREDEFINED_ED25519: [&'static str; 2] = [Self::BLEND_SIGNING, Self::NETWORK_SWARM];
-    pub const PREDEFINED_ZK: [&'static str; 6] = [
-        Self::BLEND_ZK,
-        Self::LEADER_FUNDING,
-        Self::POW_CLAIM,
-        Self::SDP_FUNDING,
-        Self::VAUCHER_MASTER,
-        Self::STAKE,
-    ];
+    pub const PREDEFINED_ZK: [&'static str; 1] = [Self::BLEND_ZK];
 }
 
 impl<S: Into<String>> From<S> for KeyTitle {
@@ -59,39 +50,42 @@ pub enum KeystoreError {
 
 #[derive(Serialize, Deserialize)]
 pub struct Keystore {
-    // Convenience mapping for users to inspect when serialized.
-    public_keys: HashMap<KeyTitle, KeyId>,
-    secret_keys: HashMap<KeyTitle, Key>,
+    /// The BIP-39 mnemonic that the wallet keys are derived from
+    mnemonic: Mnemonic,
+    /// The BIP-39 passphrase of the mnemonic
+    passphrase: Option<Passphrase>,
+
+    /// Secret keys outside of HD tree.
+    static_keys: HashMap<KeyTitle, Key>,
 
     #[serde(rename = "WARNING")]
     warning: String,
 }
 
 impl Keystore {
-    pub fn set(&mut self, name: impl Into<KeyTitle>, key: Key) {
+    pub fn set_static_key(&mut self, name: impl Into<KeyTitle>, key: Key) {
         let key_name = name.into();
-        self.public_keys.insert(key_name.clone(), key_id(&key));
-        self.secret_keys.insert(key_name, key);
+        self.static_keys.insert(key_name, key);
     }
 
     #[must_use]
-    pub fn get(&self, name: impl Into<KeyTitle>) -> Option<(KeyId, &Key)> {
-        self.secret_keys
+    pub fn get_static_key(&self, name: impl Into<KeyTitle>) -> Option<(KeyId, &Key)> {
+        self.static_keys
             .get_key_value(&name.into())
-            .map(|(_, v)| (key_id(v), v))
+            .map(|(title, key)| (title.0.clone(), key))
     }
 
-    pub fn get_all(&self) -> impl Iterator<Item = (KeyId, &Key)> {
-        self.secret_keys.values().map(|key| (key_id(key), key))
+    pub fn get_static_keys(&self) -> impl Iterator<Item = (KeyId, &Key)> {
+        self.static_keys.values().map(|key| (key_id(key), key))
     }
 
-    pub fn get_ed25519(
+    pub fn get_ed25519_static_key(
         &self,
         title: impl Into<KeyTitle>,
     ) -> Result<(KeyId, UnsecuredEd25519Key), KeystoreError> {
         let title = title.into();
         let (key_id, generic_key) = self
-            .get(title.clone())
+            .get_static_key(title.clone())
             .ok_or_else(|| KeystoreError::NotFound(title.clone()))?;
 
         match generic_key {
@@ -100,13 +94,13 @@ impl Keystore {
         }
     }
 
-    pub fn get_zk(
+    pub fn get_zk_static_key(
         &self,
         title: impl Into<KeyTitle>,
     ) -> Result<(KeyId, UnsecuredZkKey), KeystoreError> {
         let title = title.into();
         let (id, generic_key) = self
-            .get(title.clone())
+            .get_static_key(title.clone())
             .ok_or_else(|| KeystoreError::NotFound(title.clone()))?;
 
         match generic_key {
@@ -115,8 +109,8 @@ impl Keystore {
         }
     }
 
-    pub fn get_all_zk(&self) -> impl Iterator<Item = (KeyId, UnsecuredZkKey)> + '_ {
-        self.secret_keys
+    pub fn get_all_zk_static_key(&self) -> impl Iterator<Item = (KeyId, UnsecuredZkKey)> + '_ {
+        self.static_keys
             .values()
             .filter_map(|generic_key| match generic_key {
                 Key::Zk(inner_key) => {
@@ -128,48 +122,63 @@ impl Keystore {
             })
     }
 
-    pub fn generate_ed25519(&mut self, title: impl Into<KeyTitle>) -> (KeyId, UnsecuredEd25519Key) {
+    pub fn generate_ed25519_static_key(
+        &mut self,
+        title: impl Into<KeyTitle>,
+    ) -> (KeyId, UnsecuredEd25519Key) {
         let title = title.into();
         let secure_key = Ed25519Key::generate(&mut OsRng);
         let unsecured = secure_key.clone().into_unsecured();
 
-        self.set(title.clone(), Key::Ed25519(secure_key));
-        (key_id(&self.secret_keys[&title]), unsecured)
+        self.set_static_key(title.clone(), Key::Ed25519(secure_key));
+        (key_id(&self.static_keys[&title]), unsecured)
     }
 
-    pub fn generate_zk(&mut self, title: impl Into<KeyTitle>) -> (KeyId, UnsecuredZkKey) {
+    pub fn generate_zk_static_key(
+        &mut self,
+        title: impl Into<KeyTitle>,
+    ) -> (KeyId, UnsecuredZkKey) {
         let title = title.into();
         let secure_key = generate_zk_key_from_random_bytes();
         let unsecured = secure_key.clone().into_unsecured();
 
-        self.set(title.clone(), Key::Zk(secure_key));
-        (key_id(&self.secret_keys[&title]), unsecured)
+        self.set_static_key(title.clone(), Key::Zk(secure_key));
+        (key_id(&self.static_keys[&title]), unsecured)
     }
 
-    pub fn remove(&mut self, title: impl Into<KeyTitle>) -> Option<(KeyId, Key)> {
+    pub fn remove_static_key(&mut self, title: impl Into<KeyTitle>) -> Option<(KeyId, Key)> {
         let title = title.into();
-        self.public_keys.remove(&title);
-        self.secret_keys.remove(&title).map(|v| (key_id(&v), v))
+        self.static_keys.remove(&title).map(|v| (key_id(&v), v))
     }
-}
 
-impl Default for Keystore {
-    fn default() -> Self {
+    pub fn new(mnemonic: Mnemonic, passphrase: Option<Passphrase>) -> Self {
         let mut keystore = Self {
-            public_keys: HashMap::new(),
-            secret_keys: HashMap::new(),
+            mnemonic,
+            passphrase,
+            static_keys: HashMap::new(),
             warning: WARNING.to_owned(),
         };
 
         for title in KeyTitle::PREDEFINED_ED25519 {
-            keystore.generate_ed25519(title);
+            keystore.generate_ed25519_static_key(title);
         }
 
         for title in KeyTitle::PREDEFINED_ZK {
-            keystore.generate_zk(title);
+            keystore.generate_zk_static_key(title);
         }
 
         keystore
+    }
+
+    pub fn kms_backend_settings(&self) -> KmsBackendSettings {
+        KmsBackendSettings {
+            mnemonic: self.mnemonic.clone(),
+            passphrase: self.passphrase.clone(),
+            static_keys: self
+                .get_static_keys()
+                .map(|(id, key)| (id, key.clone()))
+                .collect(),
+        }
     }
 }
 

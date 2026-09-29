@@ -207,7 +207,7 @@ impl ExtendedSecretKey {
 /// The index of a hardened child key, in the range `[2^31, 2^32)`.
 ///
 /// It is displayed in the BIP-32 notation, e.g. `3'` for the child number 3.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct HardenedIndex(u32);
 
 impl HardenedIndex {

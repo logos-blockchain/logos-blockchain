@@ -14,7 +14,10 @@ use serde::Serialize;
 use super::ParticipateArgs;
 use crate::{
     UserConfig,
-    cli::config::keystore::{KeyTitle, Keystore},
+    cli::config::{
+        init::wallet_pubkeys_from_config,
+        keystore::{KeyTitle, Keystore},
+    },
     config::network::serde::nat,
 };
 
@@ -40,15 +43,10 @@ pub fn run(args: &ParticipateArgs) -> Result<()> {
     let keystore_yaml = std::fs::read_to_string(&args.keystore)?;
     let keystore: Keystore = serde_yaml::from_str(&keystore_yaml)?;
 
-    let (_, stake_key) = keystore.get_zk(KeyTitle::STAKE)?;
-    let (_, leader_funding_key) = keystore.get_zk(KeyTitle::LEADER_FUNDING)?;
-    let (_, sdp_funding_key) = keystore.get_zk(KeyTitle::SDP_FUNDING)?;
-
-    let mut stakeholder_identities = vec![
-        stake_key.to_public_key(),
-        leader_funding_key.to_public_key(),
-        sdp_funding_key.to_public_key(),
-    ];
+    // The stake addresses and the first receive address of the wallet
+    let mut stakeholder_identities = wallet_pubkeys_from_config(&user_config)
+        .map(|path_pubkey| path_pubkey.public_key)
+        .collect::<Vec<_>>();
 
     let blend = build_blend_data(&user_config, &keystore, args.external_address)?;
     if let Some(blend) = &blend {
@@ -85,7 +83,7 @@ fn build_blend_data(
     let nat_config = &user_config.network.backend.swarm.nat;
     let locator_addr = resolve_locator_addr(listen_addr, nat_config, external_address)?;
     let locators = Locators::from(Locator::try_from(locator_addr).map_err(|e| eyre!("{e}"))?);
-    let (_, blend_key) = keystore.get_zk(KeyTitle::BLEND_ZK)?;
+    let (_, blend_key) = keystore.get_zk_static_key(KeyTitle::BLEND_ZK)?;
 
     // Declaration ID is not required when providing participation information for
     // genesis ceremony, but it is still useful to have when configuring the

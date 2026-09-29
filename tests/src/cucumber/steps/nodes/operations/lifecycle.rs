@@ -647,7 +647,7 @@ fn remove_external_scenario_wallet_keys(
 ) {
     remove_external_scenario_wallet_keys_from_maps(
         &mut config.user.wallet.known_keys,
-        &mut config.user.kms.backend.keys,
+        &mut config.user.kms.backend.static_keys,
         scenario_wallet_key_ids,
     );
 }

@@ -4,25 +4,30 @@ use lb_core::{
     mantle::{Value, gas::GasCost},
     sdp::DeclarationId,
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
 pub struct Config {
     /// Declaration ID (if set, full declaration info will be fetched from
     /// ledger on startup).
-    #[serde(default)]
     pub declaration_id: Option<DeclarationId>,
     pub wallet: WalletConfig,
-    #[serde(default)]
     pub active_message_tracker: ActiveMessageTrackerConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct WalletConfig {
-    #[serde(default = "default_max_tx_fee")]
     pub max_tx_fee: GasCost,
-    pub funding_pk: ZkPublicKey,
+}
+
+impl Default for WalletConfig {
+    fn default() -> Self {
+        Self {
+            max_tx_fee: GasCost::new(Value::MAX),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -37,31 +42,5 @@ impl Default for ActiveMessageTrackerConfig {
         Self {
             status_check_interval_in_tip_changes: NonZeroU64::new(3).unwrap(),
         }
-    }
-}
-
-const fn default_max_tx_fee() -> GasCost {
-    GasCost::new(Value::MAX)
-}
-
-pub struct RequiredValues {
-    pub funding_pk: ZkPublicKey,
-}
-
-impl Config {
-    #[must_use]
-    pub fn with_required_values(RequiredValues { funding_pk }: RequiredValues) -> Self {
-        Self {
-            wallet: WalletConfig {
-                funding_pk,
-                max_tx_fee: default_max_tx_fee(),
-            },
-            declaration_id: None,
-            active_message_tracker: ActiveMessageTrackerConfig::default(),
-        }
-    }
-
-    pub const fn set_funding_pk(&mut self, pk: ZkPublicKey) {
-        self.wallet.funding_pk = pk;
     }
 }

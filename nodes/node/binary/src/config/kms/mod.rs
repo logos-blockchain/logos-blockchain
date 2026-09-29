@@ -11,7 +11,9 @@ pub struct ServiceConfig {
 impl From<ServiceConfig> for PreloadKMSBackendSettings {
     fn from(value: ServiceConfig) -> Self {
         Self {
-            keys: value.user.backend.keys,
+            // TODO: pass `value.user.backend.mnemonic` and `value.user.backend.passphrase`
+            // to the new KMS backend settings
+            keys: value.user.backend.static_keys,
         }
     }
 }

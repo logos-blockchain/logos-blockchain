@@ -7,8 +7,8 @@ pub struct Config {
     /// concurrency). Optional: omitting it keeps the defaults.
     #[serde(default)]
     pub mining: PoWMiningSettings,
-    /// Unattended claiming: the keys to pay, the balance each should reach,
-    /// and how often to try. Optional: omitting it leaves auto-claim off, so
+    /// Unattended claiming: the balance the wallet should reach, and how
+    /// often to try. Optional: omitting it leaves auto-claim off, so
     /// rewards are only claimed through the `PoW` claim endpoint.
     #[serde(default)]
     pub auto_claim: AutoClaimSettings,

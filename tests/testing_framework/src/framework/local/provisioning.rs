@@ -642,7 +642,7 @@ fn plan_local_node_config(
         )
         .map_err(|source| -> DynError { source.into() })?;
 
-        let keys = &mut config.kms_config.backend.keys;
+        let keys = &mut config.kms_config.backend.static_keys;
         for account in &descriptors.config().wallet_config.accounts {
             let key = account.secret_key.clone().into();
             let key_id = key_id_for_preload_backend(&key);
@@ -756,7 +756,7 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
                 config
                     .kms_config
                     .backend
-                    .keys
+                    .static_keys
                     .values()
                     .filter_map(|key| match key {
                         Key::Zk(sk) => Some((
@@ -778,8 +778,8 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
             }
         },
         kms: config::kms::serde::Config {
-            backend: config::kms::serde::PreloadKmsBackendSettings {
-                keys: config.kms_config.backend.keys,
+            backend: config::kms::serde::KmsBackendSettings {
+                static_keys: config.kms_config.backend.static_keys,
             },
         },
         // Mining defaults, auto-claim off: provisioned nodes claim on demand,

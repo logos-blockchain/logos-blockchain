@@ -1,32 +1,26 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 
-use lb_key_management_system_service::{backend::preload::KeyId, keys::ZkPublicKey};
+use lb_key_management_system_keys::hd::HardenedIndex;
+use lb_key_management_system_service::backend::preload::KeyId;
 use lb_wallet_service::default_pending_note_expiry_blocks;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct Config {
-    #[serde(default)]
-    pub known_keys: HashMap<KeyId, ZkPublicKey>,
-    pub voucher_master_key_id: KeyId,
-    #[serde(default = "default_pending_note_expiry_blocks")]
+    /// The keys in the KMS that the wallet signs with.
+    pub known_keys: HashSet<KeyId>,
+    /// The first receive index that funding spends from.
+    /// The wallet never spends from index below this value.
+    pub funding_start_index: HardenedIndex,
     pub pending_note_expiry_blocks: u64,
 }
 
-pub struct RequiredValues {
-    pub voucher_master_key_id: KeyId,
-}
-
-impl Config {
-    #[must_use]
-    pub fn with_required_values(
-        RequiredValues {
-            voucher_master_key_id,
-        }: RequiredValues,
-    ) -> Self {
+impl Default for Config {
+    fn default() -> Self {
         Self {
-            known_keys: HashMap::new(),
-            voucher_master_key_id,
+            known_keys: HashSet::new(),
+            funding_start_index: HardenedIndex::new(1u32.try_into().expect("must be u31")),
             pending_note_expiry_blocks: default_pending_note_expiry_blocks(),
         }
     }
