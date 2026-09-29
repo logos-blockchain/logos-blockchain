@@ -20,6 +20,26 @@ use crate::{
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
+/// An era, by its number: its position in its chain's era schedule, counting
+/// from 0 for the era that starts at genesis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Era(u16);
+
+impl Era {
+    /// Era 0, the era that starts at genesis.
+    pub const GENESIS: Self = Self(0);
+
+    #[must_use]
+    pub const fn new(inner: u16) -> Self {
+        Self(inner)
+    }
+
+    #[must_use]
+    pub const fn into_inner(self) -> u16 {
+        self.0
+    }
+}
+
 /// The digest of an era: of the epoch it starts at, and of its parameters.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
 pub struct EraDigest([u8; 32]);
