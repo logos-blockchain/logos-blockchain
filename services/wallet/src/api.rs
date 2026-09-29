@@ -127,6 +127,27 @@ where
         Ok(rx.await??)
     }
 
+    /// The value of the notes that the wallet funds transactions from
+    pub async fn get_spendable_balance(
+        &self,
+        tip: Option<HeaderId>,
+    ) -> Result<TipResponse<Value>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::GetSpendableBalance { tip, resp_tx })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    /// Hands out the next receive address of the wallet.
+    pub async fn next_receive_address(&self) -> Result<ZkPublicKey, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::NextReceiveAddress { resp_tx })
+            .await?;
+        Ok(rx.await??)
+    }
+
     /// Fund a transaction, reserving `priority_fee_percent` percent of its
     /// final mandatory fee as a priority reserve. The mandatory fee includes
     /// execution and storage cost; only the unused reserve becomes an

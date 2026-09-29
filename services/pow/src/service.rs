@@ -119,13 +119,6 @@ pub enum PoWError {
     TimeRelay(#[from] OutboundRelayError<TimeServiceMessage>),
     #[error("the time service dropped the slot-tick subscription response: {0}")]
     SlotTickSubscription(#[from] RecvError),
-    #[error(
-        "PoW auto-claim targets are not tracked by the wallet (add them to `wallet.known_keys`): \
-         {0:?}"
-    )]
-    UntrackedClaimTargets(Vec<ZkPublicKey>),
-    #[error("no claim address given and no auto-claim target is below its threshold")]
-    NoClaimTarget,
     #[error("failed to build signed transaction: {0}")]
     SignedOps(#[from] lb_core::mantle::transactions::tx_list::signed_ops::Error),
 }
@@ -158,21 +151,16 @@ pub struct PoWStatus {
 pub struct AutoClaimStatus {
     pub is_armed: bool,
     pub tick: AutoClaimTick,
-    pub targets: Vec<ClaimTargetStatus>,
-}
-
-/// One auto-claim target alongside its current balance.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ClaimTargetStatus {
-    pub public_key: ZkPublicKey,
-    pub threshold: Value,
-    /// `None` means wallet couldn't be read.
+    /// `None` means auto-claim is not configured.
+    pub threshold: Option<Value>,
+    /// The spendable balance of the wallet. `None` means wallet couldn't be
+    /// read.
     pub balance: Option<Value>,
 }
 
 pub enum PoWServiceMessage {
-    /// Start mining. Auto-claim stops it again once every target has reached
-    /// its threshold.
+    /// Start mining. Auto-claim stops it again once the wallet has reached
+    /// the threshold.
     StartMining,
     StopMining,
     /// Re-arm the auto-claim ticker after it stopped itself (or was stopped).
@@ -180,8 +168,8 @@ pub enum PoWServiceMessage {
     /// Stop the auto-claim ticker. Manual claims keep working.
     StopAutoClaim,
     Claim {
-        /// Key the claimed rewards are paid to. `None` falls back to the key
-        /// auto-claim would pick right now (see [`select_claim_target`]).
+        /// Key the claimed rewards are paid to. `None` falls back to the next
+        /// receive address of the wallet.
         claim_address: Option<ZkPublicKey>,
         response: oneshot::Sender<Result<Option<TxHash>, PoWError>>,
     },
@@ -199,7 +187,7 @@ pub struct PoWServiceSettings {
     /// concurrency).
     #[serde(default)]
     pub mining: PoWMiningSettings,
-    /// Unattended claiming: which keys to pay and how often to try. Omitting
+    /// Unattended claiming: how much to claim and how often to try. Omitting
     /// it leaves auto-claim off, so rewards are only claimed on demand.
     #[serde(default)]
     pub auto_claim: AutoClaimSettings,
@@ -213,18 +201,6 @@ pub struct PoWServiceSettings {
     /// Storage-recovery bookkeeping, populated by the runtime on startup.
     #[serde(skip)]
     pub recovery_data: RecoveryData,
-}
-
-/// One auto-claim destination: a key and the balance we want it to reach.
-#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
-pub struct ClaimTarget {
-    /// Key the rewards are paid to. It must be one of the wallet's
-    /// `known_keys`, or the node refuses to start (see
-    /// [`validate_claim_targets`]).
-    pub public_key: ZkPublicKey,
-    /// Balance, in tokens, this key should reach. Once its on-chain balance is
-    /// at or above this, the target is satisfied and no longer paid.
-    pub threshold: Value,
 }
 
 /// How often the auto-claim ticker fires: on a wall-clock interval, or every
@@ -253,15 +229,16 @@ impl Default for AutoClaimTick {
 
 /// Unattended claiming configuration.
 ///
-/// On every tick the service pays the target holding the least value among
-/// those still below their threshold, draining the ready tickets into it. With
-/// no targets configured there is nothing to pay, so auto-claim stays off.
+/// On every tick the service drains the ready tickets into the next receive
+/// address of the wallet, while the wallet is below the threshold. With no
+/// threshold configured, auto-claim stays off.
 #[derive(Clone, Serialize, Deserialize, Debug, Default)]
 pub struct AutoClaimSettings {
-    /// Keys to pay, each with the balance it should reach. Empty disables
-    /// auto-claim.
+    /// Spendable balance, in tokens, the wallet should reach. Once its
+    /// on-chain balance is at or above this, no more rewards are claimed.
+    /// `None` disables auto-claim.
     #[serde(default)]
-    pub targets: Vec<ClaimTarget>,
+    pub threshold: Option<Value>,
     /// Period between claim attempts.
     #[serde(default = "default_auto_claim_tick")]
     pub tick: AutoClaimTick,
@@ -464,10 +441,9 @@ where
         // Every service this one talks to is awaited, because a relay only
         // connects — it does not guarantee the peer is serving its inbound
         // queue, so a message sent too early is simply never answered. Startup
-        // itself sends two: the auto-claim targets are validated against the
-        // wallet's known keys, and slot pacing subscribes to the time service's
-        // slot clock. Blend is awaited on the same grounds, though it is only
-        // used later, to publish claim transactions.
+        // itself sends one: slot pacing subscribes to the time service's slot
+        // clock. The wallet and Blend are awaited on the same grounds, though
+        // they are only used later, to claim rewards.
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
             None,
@@ -499,8 +475,8 @@ where
                 .expect("Relay connection with BlendService should succeed"),
         );
 
-        // API wrapper over the wallet service relay. Auto-claim reads each
-        // target's balance through it to decide which key to pay next.
+        // API wrapper over the wallet service relay. Auto-claim reads the
+        // spendable balance and gets the addresses to pay through it.
         let wallet_api = WalletApi::<WalletService, RuntimeServiceId>::new(
             service_resources_handle
                 .overwatch_handle
@@ -508,11 +484,6 @@ where
                 .await
                 .expect("Relay connection with WalletService should succeed"),
         );
-
-        // A target the wallet does not track reports no balance, so its
-        // threshold could never be observed as reached and it would absorb
-        // every claim forever. Refuse to start rather than mis-pay.
-        validate_claim_targets(&wallet_api, &settings.auto_claim.targets).await?;
 
         // Dedicated thread pool for the CPU-heavy ticket search, keeping it off
         // Tokio's runtime threads.
@@ -539,14 +510,14 @@ where
         // restarted node does not resume mining automatically.
         let mut is_mining = false;
 
-        // Auto-claim arms itself when the network pays rewards and targets are
-        // configured, and disarms once every target has reached its
-        // threshold, stopping mining along with it: with every target funded
+        // Auto-claim arms itself when the network pays rewards and a threshold
+        // is configured, and disarms once the wallet has reached the
+        // threshold, stopping mining along with it: with the wallet funded
         // there is nothing left to mine for. Like `mining` it is a runtime
-        // flag, so a restart re-arms it and the thresholds are re-evaluated
-        // against fresh balances.
+        // flag, so a restart re-arms it and the threshold is re-evaluated
+        // against a fresh balance.
         let auto_claim = &settings.auto_claim;
-        let mut auto_claiming = settings.rewards_enabled && !auto_claim.targets.is_empty();
+        let mut auto_claiming = settings.rewards_enabled && auto_claim.threshold.is_some();
 
         // One stream for either pacing, so the run loop has a single arm and
         // neither kind needs a guard. Slot pacing rides the time service's own
@@ -582,8 +553,8 @@ where
                         PoWServiceMessage::StartAutoClaim => {
                             if !settings.rewards_enabled {
                                 warn!(target: LOG_TARGET, "PoW auto-claim not started: rewards disabled");
-                            } else if auto_claim.targets.is_empty() {
-                                warn!(target: LOG_TARGET, "PoW auto-claim not started: no claim targets configured");
+                            } else if auto_claim.threshold.is_none() {
+                                warn!(target: LOG_TARGET, "PoW auto-claim not started: no threshold configured");
                             } else {
                                 if !auto_claiming {
                                     info!(target: LOG_TARGET, "PoW auto-claim started");
@@ -603,7 +574,6 @@ where
                                 &blend_api,
                                 &wallet_api,
                                 claim_address,
-                                &auto_claim.targets,
                                 &mut state,
                                 settings.slot_window,
                             )
@@ -651,22 +621,21 @@ where
                 Some(processed_block) = processed_blocks.next() => {
                     retire_settled_claims(&cryptarchia_api, &mut state, &state_updater, processed_block, settings.slot_window).await;
                 }
-                // Auto-claim tick: drain the ready tickets into the neediest
-                // target. Once every target is funded, stop both auto-claim
-                // and mining.
+                // Auto-claim tick: drain the ready tickets into the wallet.
+                // Once the wallet is funded, stop both auto-claim and mining.
                 Some(()) = claim_ticks.next(), if auto_claiming => {
                     auto_claiming = run_auto_claim(
                         &cryptarchia_api,
                         &blend_api,
                         &wallet_api,
-                        &auto_claim.targets,
+                        auto_claim.threshold.unwrap_or_default(),
                         &mut state,
                         &state_updater,
                         settings.slot_window,
                     )
                     .await;
                     if !auto_claiming && is_mining {
-                        info!(target: LOG_TARGET, "Every PoW auto-claim target reached its threshold; stopping mining");
+                        info!(target: LOG_TARGET, "The wallet reached the PoW auto-claim threshold; stopping mining");
                         is_mining = false;
                     }
                 }
@@ -747,87 +716,25 @@ fn slot_period_elapsed(last_claim_slot: Slot, tip_slot: Slot, period: NonZeroU64
     u64::from(tip_slot).saturating_sub(u64::from(last_claim_slot)) >= period.get()
 }
 
-/// Rejects any auto-claim target the wallet does not track.
+/// Reads the balance the wallet can spend right now.
 ///
-/// The wallet only indexes UTXOs for the keys in its `known_keys` setting, so
-/// an unlisted target always reports an empty balance: it would look
-/// permanently furthest below its threshold and swallow every claim. Failing
-/// here aborts node startup, which is the honest outcome for a
-/// misconfiguration that cannot be detected later.
-async fn validate_claim_targets<WalletService, RuntimeServiceId>(
+/// The balance is read from the wallet exactly as it stands, with no allowance
+/// for claims already published but not yet settled.
+async fn spendable_balance<WalletService, RuntimeServiceId>(
     wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
-    targets: &[ClaimTarget],
-) -> Result<(), PoWError>
-where
-    WalletService: WalletServiceData,
-    RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
-{
-    if targets.is_empty() {
-        return Ok(());
-    }
-    let known: HashSet<ZkPublicKey> = wallet_api
-        .get_known_addresses()
-        .await?
-        .into_iter()
-        .collect();
-    let unknown: Vec<ZkPublicKey> = targets
-        .iter()
-        .map(|target| target.public_key)
-        .filter(|pk| !known.contains(pk))
-        .collect();
-    if unknown.is_empty() {
-        return Ok(());
-    }
-    Err(PoWError::UntrackedClaimTargets(unknown))
-}
-
-/// Picks the auto-claim target to pay next: among the targets still below their
-/// threshold, the one holding the least value.
-///
-/// Balances are read from the wallet exactly as they stand, with no allowance
-/// for claims already published but not yet settled. A tick therefore sees the
-/// same balance throughout and pays a single target; the next tick, once those
-/// claims have landed, moves on. Returns `None` when every target has reached
-/// its threshold.
-async fn select_claim_target<WalletService, RuntimeServiceId>(
-    wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
-    targets: &[ClaimTarget],
-) -> Result<Option<ZkPublicKey>, WalletApiError>
-where
-    WalletService: WalletServiceData,
-    RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
-{
-    let mut balances = Vec::with_capacity(targets.len());
-    for target in targets {
-        let balance = target_balance(wallet_api, target.public_key).await?;
-        balances.push((*target, balance));
-    }
-    Ok(neediest_target(balances))
-}
-
-/// Reads the balance an auto-claim target holds right now.
-async fn target_balance<WalletService, RuntimeServiceId>(
-    wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
-    public_key: ZkPublicKey,
 ) -> Result<Value, WalletApiError>
 where
     WalletService: WalletServiceData,
     RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
 {
-    // `None` means the wallet tracks the key but it holds nothing yet;
-    // untracked keys are rejected at startup by `validate_claim_targets`.
-    Ok(wallet_api
-        .get_balance(None, public_key)
-        .await?
-        .response
-        .map_or(0, |balance| balance.balance))
+    Ok(wallet_api.get_spendable_balance(None).await?.response)
 }
 
-/// Reports the auto-claim state, reading each target's balance so a client
-/// can tell which targets are still below their threshold.
+/// Reports the auto-claim state, reading the balance of the wallet so a
+/// client can tell whether it is still below the threshold.
 ///
-/// A failed balance read leaves that target's balance unknown rather than
-/// failing the report: `is_armed` does not depend on the wallet.
+/// A failed balance read leaves the balance unknown rather than failing the
+/// report: `is_armed` does not depend on the wallet.
 async fn auto_claim_status<WalletService, RuntimeServiceId>(
     wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
     settings: &AutoClaimSettings,
@@ -837,63 +744,47 @@ where
     WalletService: WalletServiceData,
     RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
 {
-    let targets =
-        settings.targets.iter().map(async |target| {
-            let balance = target_balance(wallet_api, target.public_key).await.inspect_err(|error| {
-                warn!(target: LOG_TARGET, "Failed to read PoW auto-claim target balance: {error}");
-            }).ok();
-
-            ClaimTargetStatus {
-                public_key: target.public_key,
-                threshold: target.threshold,
-                balance,
-            }
-        });
-
-    let targets = futures::future::join_all(targets).await;
+    let balance = spendable_balance(wallet_api)
+        .await
+        .inspect_err(|error| {
+            warn!(target: LOG_TARGET, "Failed to read the balance of the wallet: {error}");
+        })
+        .ok();
 
     AutoClaimStatus {
         is_armed,
         tick: settings.tick,
-        targets,
+        threshold: settings.threshold,
+        balance,
     }
 }
 
-/// The choice behind [`select_claim_target`], over already-read balances: of
-/// the targets still below their threshold, the one holding the least.
-///
-/// Ties keep the earliest configured target, so the choice is deterministic
-/// across ticks that observe the same balances.
-fn neediest_target(
-    balances: impl IntoIterator<Item = (ClaimTarget, Value)>,
-) -> Option<ZkPublicKey> {
-    balances
-        .into_iter()
-        .filter(|(target, balance)| *balance < target.threshold)
-        .min_by_key(|(_, balance)| *balance)
-        .map(|(target, _)| target.public_key)
+/// Whether the wallet holds enough for auto-claim to stop.
+const fn is_threshold_reached(balance: Value, threshold: Value) -> bool {
+    balance >= threshold
 }
 
 /// Runs one auto-claim tick, returning whether auto-claim should stay armed.
 ///
-/// The tick picks a single target and keeps publishing claim transactions into
-/// it until no ready ticket can be claimed. A batch is capped only by the op
-/// budget and the reward pool, so the target may overshoot its threshold — the
-/// threshold is where we stop *choosing* it, not a cap on a single payment.
+/// The tick gets a single address from the wallet and keeps publishing claim
+/// transactions into it until no ready ticket can be claimed. A batch is capped
+/// only by the op budget and the reward pool, so the wallet may overshoot the
+/// threshold: the threshold is where we stop claiming, not a cap on a single
+/// payment.
 ///
-/// Returns `false` once every target has reached its threshold, which disarms
+/// Returns `false` once the wallet has reached the threshold, which disarms
 /// the ticker and stops mining until an operator re-arms them with
 /// [`PoWServiceMessage::StartAutoClaim`] and
 /// [`PoWServiceMessage::StartMining`].
 ///
-/// The thresholds are checked on every tick, even with no ticket ready: mining
+/// The threshold is checked on every tick, even with no ticket ready: mining
 /// may be paused on the reward pool while earlier claims settle, and the
-/// balances those claims raise are what should stop it.
+/// balance those claims raise is what should stop it.
 async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
     wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
-    targets: &[ClaimTarget],
+    threshold: Value,
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     slot_window: NonZeroU64,
@@ -905,24 +796,31 @@ where
     WalletService: WalletServiceData,
     RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
 {
-    let claim_address = match select_claim_target(wallet_api, targets).await {
-        Ok(Some(claim_address)) => claim_address,
-        Ok(None) => {
+    match spendable_balance(wallet_api).await {
+        Ok(balance) if is_threshold_reached(balance, threshold) => {
             info!(
                 target: LOG_TARGET,
-                "Every PoW auto-claim target reached its threshold; stopping auto-claim"
+                "The wallet reached the PoW auto-claim threshold; stopping auto-claim"
             );
             return false;
         }
+        Ok(_) => {}
         Err(e) => {
-            error!(target: LOG_TARGET, "Failed to pick a PoW auto-claim target: {e}");
+            error!(target: LOG_TARGET, "Failed to read the balance of the wallet: {e}");
             return true;
         }
-    };
+    }
     // Nothing mined since the last tick: no claim to publish.
     if state.ready_to_claim.is_empty() {
         return true;
     }
+    let claim_address = match wallet_api.next_receive_address().await {
+        Ok(claim_address) => claim_address,
+        Err(e) => {
+            error!(target: LOG_TARGET, "Failed to get a PoW claim address from the wallet: {e}");
+            return true;
+        }
+    };
 
     drain_ready_rewards(
         cryptarchia_api,
@@ -1011,14 +909,13 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
 }
 
 /// Serves a [`PoWServiceMessage::Claim`]: one claim transaction paid to
-/// `claim_address`, or to the target auto-claim would pick when the caller did
-/// not name a key.
+/// `claim_address`, or to the next receive address of the wallet when the
+/// caller did not name a key.
 async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
     wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
     claim_address: Option<ZkPublicKey>,
-    targets: &[ClaimTarget],
     state: &mut PoWServiceState,
     slot_window: NonZeroU64,
 ) -> Result<Option<TxHash>, PoWError>
@@ -1035,9 +932,7 @@ where
     }
     let claim_address = match claim_address {
         Some(claim_address) => claim_address,
-        None => select_claim_target(wallet_api, targets)
-            .await?
-            .ok_or(PoWError::NoClaimTarget)?,
+        None => wallet_api.next_receive_address().await?,
     };
     // A one-off claim has no run to accumulate over, so its balance is simply
     // the pool the chain reports right now, and the leftover is discarded.
@@ -1663,11 +1558,11 @@ mod tests {
     use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
 
     use super::{
-        AutoClaimSettings, AutoClaimTick, ClaimTarget, MAX_CLAIMS_BY_PAYLOAD_SIZE,
-        MAX_PAYLOAD_BODY_SIZE, MAX_TRANSFER_INPUTS, PoWError, PoWServiceState,
-        build_reward_claim_tx_inner, change_outputs, claim_tx_size, claimable_rewards_info,
-        estimate_reward_claim_fee, max_claims_by_ops, neediest_target, prune_expired_tickets,
-        push_reward_claim_ops, slot_period_elapsed, transfer_ops,
+        AutoClaimSettings, AutoClaimTick, MAX_CLAIMS_BY_PAYLOAD_SIZE, MAX_PAYLOAD_BODY_SIZE,
+        MAX_TRANSFER_INPUTS, PoWError, PoWServiceState, build_reward_claim_tx_inner,
+        change_outputs, claim_tx_size, claimable_rewards_info, estimate_reward_claim_fee,
+        is_threshold_reached, max_claims_by_ops, prune_expired_tickets, push_reward_claim_ops,
+        slot_period_elapsed, transfer_ops,
     };
     use crate::tickets::WinningTicket;
 
@@ -1731,64 +1626,13 @@ mod tests {
             .expect("built tx should pass stateless structural verification");
     }
 
-    /// A distinct dummy claim target.
-    fn target(seed: u8, threshold: u64) -> ClaimTarget {
-        let mut bytes = [0u8; 32];
-        bytes[0] = seed;
-        ClaimTarget {
-            public_key: ZkPublicKey::new(lb_groth16::fr_from_bytes(&bytes).unwrap()),
-            threshold,
-        }
-    }
-
     #[test]
-    fn neediest_target_picks_the_least_funded_below_its_threshold() {
-        let rich = target(1, 1_000);
-        let poor = target(2, 1_000);
-        let middling = target(3, 1_000);
-        let picked = neediest_target([(rich, 900), (poor, 100), (middling, 500)]);
-        assert_eq!(picked, Some(poor.public_key));
-    }
-
-    #[test]
-    fn neediest_target_ignores_satisfied_targets_however_poor() {
-        // The poorest key has already met its (much lower) threshold, so the
-        // still-hungry one is paid even though it holds more.
-        let satisfied = target(1, 100);
-        let hungry = target(2, 10_000);
-        let picked = neediest_target([(satisfied, 100), (hungry, 500)]);
-        assert_eq!(picked, Some(hungry.public_key));
-    }
-
-    #[test]
-    fn neediest_target_breaks_ties_on_configuration_order() {
-        let first = target(1, 1_000);
-        let second = target(2, 1_000);
-        let picked = neediest_target([(first, 400), (second, 400)]);
-        assert_eq!(picked, Some(first.public_key));
-    }
-
-    #[test]
-    fn neediest_target_is_none_once_every_target_is_satisfied() {
-        // What disarms auto-claim: a target exactly at its threshold counts as
-        // satisfied.
-        let exact = target(1, 1_000);
-        let over = target(2, 1_000);
-        assert_eq!(neediest_target([(exact, 1_000), (over, 5_000)]), None);
-        assert_eq!(neediest_target([]), None);
-    }
-
-    #[test]
-    fn neediest_target_reads_stale_balances_at_face_value() {
-        // Balances are read as they stand, with no allowance for claims already
-        // published but not yet settled: a target that a previous tick just
-        // paid still looks needy and is picked again.
-        let just_paid = target(1, 10_000);
-        let other = target(2, 10_000);
-        assert_eq!(
-            neediest_target([(just_paid, 0), (other, 1)]),
-            Some(just_paid.public_key)
-        );
+    fn threshold_is_reached_at_the_exact_balance() {
+        // What disarms auto-claim: a wallet exactly at the threshold counts as
+        // funded.
+        assert!(!is_threshold_reached(999, 1_000));
+        assert!(is_threshold_reached(1_000, 1_000));
+        assert!(is_threshold_reached(5_000, 1_000));
     }
 
     #[test]
@@ -1809,27 +1653,25 @@ mod tests {
     }
 
     #[test]
-    fn auto_claim_settings_default_to_a_five_minute_tick_and_no_targets() {
+    fn auto_claim_settings_default_to_a_five_minute_tick_and_no_threshold() {
         let settings = AutoClaimSettings::default();
         assert_eq!(
             settings.tick,
             AutoClaimTick::Seconds(NonZeroU64::new(300).unwrap())
         );
-        assert!(settings.targets.is_empty());
+        assert_eq!(settings.threshold, None);
     }
 
     #[test]
     fn auto_claim_settings_deserialize_from_a_partial_configuration() {
         // An omitted `tick` keeps the default, and both tick kinds parse.
-        let only_targets: AutoClaimSettings = serde_json::from_str(
-            r#"{"targets": [{"public_key": "0100000000000000000000000000000000000000000000000000000000000000", "threshold": 42}]}"#,
-        )
-        .unwrap();
+        let only_threshold: AutoClaimSettings =
+            serde_json::from_str(r#"{"threshold": 42}"#).unwrap();
         assert_eq!(
-            only_targets.tick,
+            only_threshold.tick,
             AutoClaimTick::Seconds(NonZeroU64::new(300).unwrap())
         );
-        assert_eq!(only_targets.targets, vec![target(1, 42)]);
+        assert_eq!(only_threshold.threshold, Some(42));
 
         let slot_paced: AutoClaimSettings =
             serde_json::from_str(r#"{"tick": {"unit": "slots", "value": 20}}"#).unwrap();
@@ -1837,7 +1679,7 @@ mod tests {
             slot_paced.tick,
             AutoClaimTick::Slots(NonZeroU64::new(20).unwrap())
         );
-        assert!(slot_paced.targets.is_empty());
+        assert_eq!(slot_paced.threshold, None);
     }
 
     #[test]
