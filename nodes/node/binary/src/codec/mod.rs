@@ -8,10 +8,10 @@
 //! crates encode themselves in their own crates: an integer little-endian at
 //! its width, a non-zero or otherwise range-checked integer as the integer it
 //! wraps, a float as its IEEE 754 bits, a ratio as its numerator then its
-//! denominator, a duration as its whole seconds, and an
-//! optional value as a `0` byte, or a `1` byte and the value, and a map as its
-//! length, then each key and value in ascending key order. So the SDP service
-//! parameters list each service in ascending order of service type.
+//! denominator, a duration as its whole seconds then the nanoseconds past
+//! them, an optional value as a `0` byte, or a `1` byte and the value, and a
+//! map as its length, then each key and value in ascending key order. So the
+//! SDP service parameters list each service in ascending order of service type.
 //!
 //! These encodings are never decoded: the parameters are read from the
 //! deployment settings and encoded only to be hashed. Changing one changes the
