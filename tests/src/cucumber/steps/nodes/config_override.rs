@@ -768,7 +768,11 @@ mod tests {
         };
         assert!(apply_deployment_config_overrides(&mut config, &[override_4, override_5]).is_ok());
         assert_eq!(
-            config.deployment.genesis_era_parameters().time.slot_duration,
+            config
+                .deployment
+                .genesis_era_parameters()
+                .time
+                .slot_duration,
             Duration::from_secs(1)
         );
         assert_eq!(
@@ -836,7 +840,11 @@ mod tests {
             Duration::from_secs(1)
         );
         assert_eq!(
-            config.deployment.genesis_era_parameters().time.slot_duration,
+            config
+                .deployment
+                .genesis_era_parameters()
+                .time
+                .slot_duration,
             Duration::from_secs(1)
         );
     }

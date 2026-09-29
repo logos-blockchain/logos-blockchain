@@ -691,7 +691,10 @@ fn populate_slots_per_epoch_from_deployment(
             ),
         }
     })?;
-    let slots_per_epoch = deployment.genesis_era_parameters().cryptarchia.slots_per_epoch();
+    let slots_per_epoch = deployment
+        .genesis_era_parameters()
+        .cryptarchia
+        .slots_per_epoch();
     let slots_per_epoch = NonZero::new(slots_per_epoch).ok_or_else(|| StepError::LogicalError {
         message: format!(
             "effective deployment config '{}' has zero slots per epoch",
