@@ -12,10 +12,19 @@ pub struct Voucher {
 /// Holds voucher indices for
 /// - generating new vouchers
 /// - looking up existing voucher IDs by commitment or nullifier
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Vouchers<Id> {
     vouchers: HashMap<VoucherCm, Id>,
     voucher_nullifiers: HashMap<VoucherNullifier, VoucherCm>,
+}
+
+impl<Id> Default for Vouchers<Id> {
+    fn default() -> Self {
+        Self {
+            vouchers: HashMap::new(),
+            voucher_nullifiers: HashMap::new(),
+        }
+    }
 }
 
 impl<Id> Vouchers<Id> {

@@ -15,8 +15,11 @@ impl ServiceConfig {
         self,
         recovery_data: RecoveryData,
     ) -> WalletServiceSettings {
-        // TODO(hd_wallet_05_wallet): The wallet takes the ids of its keys and the
-        // first receive index that funding spends from.
-        todo!()
+        WalletServiceSettings {
+            known_keys: self.user.known_keys.into_iter().map(Into::into).collect(),
+            funding_start_index: self.user.funding_start_index,
+            recovery_data,
+            pending_note_expiry_blocks: self.user.pending_note_expiry_blocks,
+        }
     }
 }

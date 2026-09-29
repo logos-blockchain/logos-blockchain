@@ -1,6 +1,7 @@
 use std::{
     borrow::Borrow,
     collections::{HashMap, HashSet},
+    fmt::{Debug, Display},
 };
 
 use lb_core::{
@@ -11,19 +12,77 @@ use lb_core::{
         transactions::{MantleTxBuilder, tx_list::ops::OpsContext},
     },
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::{
+    api::{KmsServiceApi, KmsServiceData},
+    keys::{Ed25519PublicKey, PublicKeyEncoding, ZkPublicKey},
+};
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
 use lb_wallet::{Voucher, Vouchers, WalletBlock, WalletError, WalletState};
-use overwatch::services::state::StateUpdater;
+use overwatch::services::{AsServiceId, state::StateUpdater};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::{KeyId, WalletServiceError, WalletServiceSettings};
+use crate::{
+    KeyId, KmsBackend, WalletServiceError, WalletServiceSettings,
+    hd::{self, HdKeys},
+};
 
 type VoucherIndex = u64;
 type VoucherId = (KeyId, VoucherIndex);
 pub type Wallet = lb_wallet::Wallet<KeyId, VoucherId>;
+
+/// The keys of the KMS that the wallet signs with
+pub struct KnownKeys {
+    /// The ZK keys configured, by public key
+    zk: HashMap<ZkPublicKey, KeyId>,
+    /// The Ed25519 keys configured, by public key
+    ed25519: HashMap<Ed25519PublicKey, KeyId>,
+    hd: HdKeys,
+}
+
+impl KnownKeys {
+    /// Asks the KMS for the public key of each key configured, and of each HD
+    /// key that the wallet has used.
+    pub async fn fetch<Kms, RuntimeServiceId>(
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        settings: &WalletServiceSettings,
+        state: &RecoveryState,
+    ) -> Result<Self, WalletServiceError>
+    where
+        Kms: KmsServiceData<Backend = KmsBackend>,
+        RuntimeServiceId: AsServiceId<Kms> + Debug + Display + Sync,
+    {
+        let hd = HdKeys::fetch(
+            kms,
+            settings.funding_start_index,
+            state.next_receive_index,
+            state.next_change_index,
+        )
+        .await?;
+
+        let mut known_keys = Self {
+            zk: HashMap::new(),
+            ed25519: HashMap::new(),
+            hd,
+        };
+        for key_id in &settings.known_keys {
+            let public_key = kms
+                .public_key(key_id.clone())
+                .await
+                .map_err(WalletServiceError::KmsApi)?;
+            match public_key {
+                PublicKeyEncoding::Zk(public_key) => {
+                    known_keys.zk.insert(public_key, key_id.clone());
+                }
+                PublicKeyEncoding::Ed25519(public_key) => {
+                    known_keys.ed25519.insert(public_key, key_id.clone());
+                }
+            }
+        }
+        Ok(known_keys)
+    }
+}
 
 pub struct ClaimableVouchers {
     pub available: Vec<Voucher>,
@@ -198,6 +257,10 @@ impl PendingNotes {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryState {
+    /// The index of the receive address to hand out next
+    next_receive_index: hd::Index,
+    /// The index of the change address to use next
+    next_change_index: hd::Index,
     next_new_voucher_index: VoucherIndex,
     vouchers: Vouchers<VoucherId>,
     /// [`WalletState`] at the last known LIB.
@@ -215,6 +278,8 @@ impl overwatch::services::state::ServiceState for RecoveryState {
 
     fn from_settings(_settings: &Self::Settings) -> Result<Self, Self::Error> {
         Ok(Self {
+            next_receive_index: 0,
+            next_change_index: 0,
             next_new_voucher_index: 0,
             vouchers: Vouchers::default(),
             lib_wallet_state: None,
@@ -227,6 +292,8 @@ impl overwatch::services::state::ServiceState for RecoveryState {
 pub struct ServiceState<'u> {
     next_new_voucher_index: VoucherIndex,
     wallet: Wallet,
+    ed25519_keys: HashMap<Ed25519PublicKey, KeyId>,
+    hd_keys: HdKeys,
     lib: HeaderId,
     updater: &'u StateUpdater<Option<RecoveryState>>,
     pending_claims: PendingClaims,
@@ -239,6 +306,7 @@ impl<'u> ServiceState<'u> {
     pub fn new(
         state: RecoveryState,
         settings: &WalletServiceSettings,
+        known_keys: KnownKeys,
         lib: HeaderId,
         lib_ledger: &LedgerState,
         updater: &'u StateUpdater<Option<RecoveryState>>,
@@ -249,11 +317,14 @@ impl<'u> ServiceState<'u> {
             vouchers,
             lib_wallet_state,
             pending_claims,
+            ..
         } = state;
-        let known_keys = settings
-            .known_keys
-            .iter()
-            .map(|(key_id, pk)| (*pk, key_id.clone()));
+        let KnownKeys {
+            zk: mut known_keys,
+            ed25519: ed25519_keys,
+            hd: hd_keys,
+        } = known_keys;
+        known_keys.extend(hd_keys.key_ids());
 
         // Initialize [`Wallet`] either from the persisted [`WalletState`]
         // or from the current chain's LIB ledger state.
@@ -271,6 +342,8 @@ impl<'u> ServiceState<'u> {
         Self {
             next_new_voucher_index,
             wallet,
+            ed25519_keys,
+            hd_keys,
             lib: wallet_lib,
             updater,
             pending_claims,
@@ -282,6 +355,34 @@ impl<'u> ServiceState<'u> {
 
     pub const fn lib(&self) -> HeaderId {
         self.lib
+    }
+
+    /// The id of the ZK key of the wallet that has the public key.
+    pub fn zk_key_id(&self, public_key: &ZkPublicKey) -> Option<&KeyId> {
+        self.wallet.known_keys().get(public_key)
+    }
+
+    /// The id of the Ed25519 key of the wallet that has the public key.
+    pub fn ed25519_key_id(&self, public_key: &Ed25519PublicKey) -> Option<&KeyId> {
+        self.ed25519_keys.get(public_key)
+    }
+
+    pub const fn hd_keys(&self) -> &HdKeys {
+        &self.hd_keys
+    }
+
+    /// Tracks the next receive address, whose public key is given.
+    pub fn add_receive_key(&mut self, public_key: ZkPublicKey) {
+        let path = self.hd_keys.add_receive_key(public_key);
+        self.wallet.add_known_key(public_key, KeyId::Path(path));
+        self.update_state();
+    }
+
+    /// Tracks the next change address, whose public key is given.
+    pub fn add_change_key(&mut self, public_key: ZkPublicKey) {
+        let path = self.hd_keys.add_change_key(public_key);
+        self.wallet.add_known_key(public_key, KeyId::Path(path));
+        self.update_state();
     }
 
     pub const fn next_new_voucher_index(&self) -> VoucherIndex {
@@ -413,6 +514,8 @@ impl<'u> ServiceState<'u> {
             .expect("WalletState at LIB must exist");
 
         self.updater.update(Some(RecoveryState {
+            next_receive_index: self.hd_keys.next_receive_index(),
+            next_change_index: self.hd_keys.next_change_index(),
             next_new_voucher_index: self.next_new_voucher_index,
             vouchers: self.wallet.vouchers().clone(),
             lib_wallet_state: Some((self.lib, lib_wallet_state)),
@@ -593,14 +696,16 @@ mod tests {
         use lb_services_utils::overwatch::RecoveryData;
 
         let settings = WalletServiceSettings {
-            known_keys: HashMap::new(),
-            voucher_master_key_id: "voucher-master".into(),
+            known_keys: Vec::new(),
+            funding_start_index: 1,
             recovery_data: RecoveryData::default(),
             pending_note_expiry_blocks: 10,
         };
 
         // Fresh wallet: initialized from the LIB ledger state at genesis.
         let recovery = RecoveryState {
+            next_receive_index: 0,
+            next_change_index: 0,
             next_new_voucher_index: 0,
             vouchers: Vouchers::default(),
             lib_wallet_state: None,
@@ -612,7 +717,19 @@ mod tests {
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
 
-        let mut state = ServiceState::new(recovery, &settings, genesis, &ledger, &updater, 5);
+        let mut state = ServiceState::new(
+            recovery,
+            &settings,
+            KnownKeys {
+                zk: HashMap::new(),
+                ed25519: HashMap::new(),
+                hd: HdKeys::for_tests(1, 0, 0),
+            },
+            genesis,
+            &ledger,
+            &updater,
+            5,
+        );
 
         // The first post-online LibUpdate delivers a new_lib the wallet never
         // applied (the silent bootstrap->online LIB jump outran the wallet).
