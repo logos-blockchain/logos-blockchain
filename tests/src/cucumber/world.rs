@@ -6,7 +6,7 @@ use std::{
     num::NonZero,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, atomic::AtomicUsize},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use cucumber::World;
