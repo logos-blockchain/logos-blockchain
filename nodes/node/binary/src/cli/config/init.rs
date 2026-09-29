@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use color_eyre::eyre::Result;
+use lb_core::mantle::Value;
 use lb_key_management_system_service::hd::Mnemonic;
 use libp2p::{Multiaddr, PeerId};
 use rand::rngs::OsRng;
@@ -191,10 +192,12 @@ fn build_kms_config(keystore: &Keystore) -> KmsConfig {
     }
 }
 
-/// Mining defaults
-// TODO(hd_wallet_04_pow): Claim the mined rewards unattended.
+/// Mining defaults, with auto-claim paying the wallet without a cap, so a
+/// generated node claims its mined rewards unattended once mining is started.
 fn build_pow_config() -> PoWConfig {
-    PoWConfig::default()
+    let mut pow_config = PoWConfig::default();
+    pow_config.auto_claim.threshold = Some(Value::MAX);
+    pow_config
 }
 
 fn build_wallet_config(keystore: &Keystore) -> WalletConfig {

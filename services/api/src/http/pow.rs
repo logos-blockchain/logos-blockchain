@@ -114,7 +114,7 @@ where
 /// Where a claim request pays the rewards.
 ///
 /// The whole body is optional, and so is the key inside it: both omitted mean
-/// "use the node's auto-claim target".
+/// "use the next receive address of the node's wallet".
 #[derive(Serialize, Deserialize, Default, ToSchema)]
 pub struct PoWClaimRequestBody {
     #[serde(default)]

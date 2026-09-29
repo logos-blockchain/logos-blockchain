@@ -1,6 +1,5 @@
 use std::ptr;
 
-use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_node::{PoWService, RuntimeServiceId};
 use lb_pow_service::AutoClaimTick;
@@ -127,8 +126,8 @@ pub unsafe extern "C" fn pow_stop_mining(node: *const LogosBlockchainNode) -> Op
 ///
 /// This is a synchronous wrapper around the asynchronous
 /// [`start_auto_claim`](lb_api_service::http::pow::start_auto_claim) function.
-/// It has no effect when the node has no `auto_claim` targets configured, and
-/// the service stops itself again once every target reaches its threshold.
+/// It has no effect when the node has no `auto_claim` threshold configured,
+/// and the service stops itself again once the wallet reaches the threshold.
 ///
 /// # Arguments
 ///
@@ -283,8 +282,8 @@ pub type FfiPoWClaimResult = FfiStatusResult<Hash>;
 ///
 /// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance.
 /// - `claim_address`: A pointer to the 32-byte little-endian public key the
-///   rewards are paid to, or null to pay whichever auto-claim target is
-///   currently furthest below its threshold.
+///   rewards are paid to, or null to pay the next receive address of the
+///   wallet.
 ///
 /// # Returns
 ///
@@ -452,15 +451,6 @@ pub enum PoWAutoClaimTickUnit {
     Slots,
 }
 
-#[repr(C)]
-pub struct PoWClaimTargetStatus {
-    /// The target's public key, as 32 little-endian bytes.
-    pub public_key: [u8; 32],
-    pub threshold: Value,
-    /// `None` means the wallet couldn't be read.
-    pub balance: FfiOption<Value>,
-}
-
 /// The runtime state of unattended claiming.
 ///
 /// Mirrors [`lb_pow_service::AutoClaimStatus`], except for the tick:
@@ -471,11 +461,11 @@ pub struct PoWAutoClaimStatus {
     pub is_armed: bool,
     pub tick: u64,
     pub tick_unit: PoWAutoClaimTickUnit,
-    /// The configured claim targets. Points to `targets_len` contiguous
-    /// [`PoWClaimTargetStatus`] values.
-    pub targets: *mut PoWClaimTargetStatus,
-    /// Number of entries in `targets`.
-    pub targets_len: usize,
+    /// `None` means auto-claim is not configured.
+    pub threshold: FfiOption<Value>,
+    /// The spendable balance of the wallet. `None` means the wallet couldn't
+    /// be read.
+    pub balance: FfiOption<Value>,
 }
 
 impl Default for PoWAutoClaimStatus {
@@ -484,8 +474,8 @@ impl Default for PoWAutoClaimStatus {
             is_armed: false,
             tick: 0,
             tick_unit: PoWAutoClaimTickUnit::Seconds,
-            targets: ptr::null_mut(),
-            targets_len: 0,
+            threshold: None.into(),
+            balance: None.into(),
         }
     }
 }
@@ -547,12 +537,6 @@ pub type FfiPoWStatusResult = FfiStatusResult<PoWStatus>;
 /// This function is unsafe because it dereferences a raw pointer.
 /// The caller must ensure that `node` is non-null and points to a valid
 /// [`LogosBlockchainNode`] instance.
-///
-/// # Memory Management
-///
-/// This function allocates memory for the `auto_claim.targets` list.
-/// The caller must free the returned value using the [`free_pow_status`]
-/// function.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pow_status(node: *const LogosBlockchainNode) -> FfiPoWStatusResult {
     return_error_if_null_pointer!(node);
@@ -565,20 +549,6 @@ pub unsafe extern "C" fn pow_status(node: *const LogosBlockchainNode) -> FfiPoWS
         AutoClaimTick::Slots(slots) => (slots.get(), PoWAutoClaimTickUnit::Slots),
     };
 
-    let targets: Vec<PoWClaimTargetStatus> = status
-        .auto_claim
-        .targets
-        .into_iter()
-        .map(|target| PoWClaimTargetStatus {
-            public_key: fr_to_bytes(target.public_key.as_fr()),
-            threshold: target.threshold,
-            balance: target.balance.into(),
-        })
-        .collect();
-
-    let len = targets.len();
-    let targets_ptr = Box::leak(targets.into_boxed_slice()).as_mut_ptr();
-
     FfiPoWStatusResult::ok(PoWStatus {
         is_mining: status.is_mining,
         are_rewards_enabled: status.are_rewards_enabled,
@@ -586,38 +556,8 @@ pub unsafe extern "C" fn pow_status(node: *const LogosBlockchainNode) -> FfiPoWS
             is_armed: status.auto_claim.is_armed,
             tick,
             tick_unit,
-            targets: targets_ptr,
-            targets_len: len,
+            threshold: status.auto_claim.threshold.into(),
+            balance: status.auto_claim.balance.into(),
         },
     })
-}
-
-/// Frees the memory allocated for a [`PoWStatus`] structure.
-///
-/// # Arguments
-///
-/// - `status`: A [`PoWStatus`] structure previously returned by [`pow_status`].
-///
-/// # Safety
-///
-/// This function is unsafe because it reconstructs a boxed slice from a raw
-/// pointer.
-/// The caller must only pass values returned by [`pow_status`] and must call
-/// this exactly once per result.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_pow_status(status: PoWStatus) -> OperationStatus {
-    // A null list means nothing was allocated — as after an error — so there is
-    // nothing to free and the caller did nothing wrong.
-    if status.auto_claim.targets.is_null() {
-        return OperationStatus::OK;
-    }
-    let targets = unsafe {
-        Box::from_raw(ptr::slice_from_raw_parts_mut(
-            status.auto_claim.targets,
-            status.auto_claim.targets_len,
-        ))
-    };
-
-    drop(targets);
-    OperationStatus::OK
 }

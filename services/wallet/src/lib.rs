@@ -206,6 +206,15 @@ pub enum WalletMsg {
         tip: Option<HeaderId>,
         resp_tx: Sender<Result<TipResponse<ClaimableVouchersInfo>, WalletServiceError>>,
     },
+    /// The value of the notes that funding spends from
+    GetSpendableBalance {
+        tip: Option<HeaderId>,
+        resp_tx: Sender<Result<TipResponse<Value>, WalletServiceError>>,
+    },
+    /// Hands out the next receive address.
+    NextReceiveAddress {
+        resp_tx: Sender<Result<ZkPublicKey, WalletServiceError>>,
+    },
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
     },
@@ -342,6 +351,7 @@ impl WalletMsg {
     pub const fn tip(&self) -> Option<HeaderId> {
         match self {
             Self::GetBalance { tip, .. }
+            | Self::GetSpendableBalance { tip, .. }
             | Self::FundTx { tip, .. }
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
@@ -352,6 +362,7 @@ impl WalletMsg {
             Self::SignTxWithEd25519 { .. }
             | Self::SignTxWithZk { .. }
             | Self::GenerateNewVoucherSecret { .. }
+            | Self::NextReceiveAddress { .. }
             | Self::GetKnownAddresses { .. } => None,
         }
     }
@@ -833,6 +844,11 @@ where
             WalletMsg::GetClaimableVouchers { tip, resp_tx } => {
                 Self::get_claimable_vouchers(tip, resp_tx, state, cryptarchia).await;
             }
+            // TODO(hd_wallet_05_wallet): Sum the notes of the keys that funding
+            // spends from.
+            WalletMsg::GetSpendableBalance { .. } => todo!(),
+            // TODO(hd_wallet_05_wallet): Derive the next receive address.
+            WalletMsg::NextReceiveAddress { .. } => todo!(),
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
             }

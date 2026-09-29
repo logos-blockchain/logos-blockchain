@@ -17,7 +17,7 @@ impl ServiceConfig {
     /// the cryptarchia deployment configuration so the mining service and the
     /// ledger agree on a single value.
     #[must_use]
-    pub fn into_pow_service_settings(
+    pub const fn into_pow_service_settings(
         self,
         recovery_data: RecoveryData,
         slot_window: NonZeroU64,
