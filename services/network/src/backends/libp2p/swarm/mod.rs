@@ -443,8 +443,8 @@ mod tests {
     use std::{net::Ipv4Addr, sync::Once, time::Instant};
 
     use lb_libp2p::protocol_name::StreamProtocol;
-    use lb_utils::net::get_available_udp_port;
     use rand::rngs::OsRng;
+    use testing_framework_tools::net::get_available_udp_port;
     use tracing_subscriber::EnvFilter;
 
     use super::*;

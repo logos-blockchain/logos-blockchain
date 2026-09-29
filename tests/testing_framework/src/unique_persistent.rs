@@ -4,7 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use lb_utils::net::ReservedPortBlock;
+use testing_framework_tools::net::ReservedPortBlock;
 
 /// One allocator slot per process.
 ///
