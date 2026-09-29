@@ -1,8 +1,8 @@
 use core::{fmt, time::Duration};
+use std::collections::BTreeMap;
 
 use lb_cryptarchia_engine::Epoch;
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
-use lb_utils::ordered_map::OrderedMap;
 use serde::{
     Deserialize, Deserializer, Serialize,
     de::{Error as _, MapAccess, Visitor},
@@ -19,14 +19,16 @@ const GENESIS_EPOCH: Epoch = Epoch::new(0);
 /// The eras of a chain, each keyed by the epoch it starts at. An era's
 /// parameters are in force from that epoch until the next era starts.
 ///
-/// A schedule is (de)serialized as a map from first epochs to era parameters.
-/// Construction and deserialization both require the first epochs to start at
-/// genesis and to strictly increase, which also rules out a repeated epoch.
+/// A schedule is (de)serialized as a map from first epochs to era parameters,
+/// and built from a `BTreeMap`, which keeps first epochs unique and ordered.
+/// The first era must start at genesis. Deserialization also requires the eras
+/// to be listed by strictly increasing first epoch, which rules out a repeated
+/// epoch too.
 ///
 /// Only a single era is supported for now, so a schedule of more than one era
 /// is rejected, and the schedule holds that one era directly.
 #[derive(Serialize, Debug, Clone)]
-#[serde(into = "OrderedMap<Epoch, EraParameters>")]
+#[serde(into = "BTreeMap<Epoch, EraParameters>")]
 pub struct EraSchedule {
     // Right now we support a single era starting at genesis, so from the input map we only store
     // the genesis era parameters.
@@ -59,11 +61,9 @@ impl EraSchedule {
     }
 }
 
-impl From<EraSchedule> for OrderedMap<Epoch, EraParameters> {
+impl From<EraSchedule> for BTreeMap<Epoch, EraParameters> {
     fn from(schedule: EraSchedule) -> Self {
-        let mut eras = Self::default();
-        eras.insert(GENESIS_EPOCH, schedule.genesis_era);
-        eras
+        Self::from([(GENESIS_EPOCH, schedule.genesis_era)])
     }
 }
 
@@ -83,17 +83,24 @@ pub enum EraScheduleError {
     MultipleEras(usize),
 }
 
-impl TryFrom<OrderedMap<Epoch, EraParameters>> for EraSchedule {
+impl TryFrom<BTreeMap<Epoch, EraParameters>> for EraSchedule {
     type Error = EraScheduleError;
 
-    /// Builds a schedule from eras keyed by their first epoch, which must be
-    /// sorted: starting at genesis and strictly increasing.
-    fn try_from(eras: OrderedMap<Epoch, EraParameters>) -> Result<Self, Self::Error> {
-        let mut builder = EraScheduleBuilder::default();
-        for (first_epoch, parameters) in eras {
-            builder.try_push(first_epoch, parameters)?;
+    /// Builds a schedule from eras keyed by their first epoch. The map keeps
+    /// them unique and ordered, so only the first one needs checking: it must
+    /// start at genesis.
+    fn try_from(mut eras: BTreeMap<Epoch, EraParameters>) -> Result<Self, Self::Error> {
+        let Some((first_epoch, genesis_era)) = eras.pop_first() else {
+            return Err(EraScheduleError::Empty);
+        };
+        if first_epoch != GENESIS_EPOCH {
+            return Err(EraScheduleError::FirstEraAfterGenesis(first_epoch));
         }
-        builder.build()
+        // Check remaining entries in the map.
+        if !eras.is_empty() {
+            return Err(EraScheduleError::MultipleEras(eras.len() + 1));
+        }
+        Ok(Self { genesis_era })
     }
 }
 
@@ -106,73 +113,36 @@ impl<'de> Deserialize<'de> for EraSchedule {
     }
 }
 
-/// Collects eras in activation order, refusing an era whose first epoch does
-/// not follow the previous era's. The single path by which a schedule is
-/// constructed or deserialized.
-#[derive(Default)]
-struct EraScheduleBuilder(OrderedMap<Epoch, EraParameters>);
-
-impl EraScheduleBuilder {
-    /// Checks that an era starting at `next` may follow the eras collected so
-    /// far: the first era starts at genesis, and every later one strictly after
-    /// the previous one.
-    fn check_next(&self, next: Epoch) -> Result<(), EraScheduleError> {
-        match self.0.last().map(|(previous, _)| *previous) {
-            None if next != GENESIS_EPOCH => Err(EraScheduleError::FirstEraAfterGenesis(next)),
-            Some(previous) if next <= previous => {
-                Err(EraScheduleError::OutOfOrder { previous, next })
-            }
-            _ => Ok(()),
-        }
-    }
-
-    fn try_push(
-        &mut self,
-        first_epoch: Epoch,
-        parameters: EraParameters,
-    ) -> Result<(), EraScheduleError> {
-        self.check_next(first_epoch)?;
-        self.0.insert(first_epoch, parameters);
-        Ok(())
-    }
-
-    fn build(self) -> Result<EraSchedule, EraScheduleError> {
-        let mut eras = self.0.into_iter();
-        match eras.len() {
-            0 => Err(EraScheduleError::Empty),
-            1 => Ok(EraSchedule {
-                genesis_era: eras.next().unwrap().1,
-            }),
-            eras_count => Err(EraScheduleError::MultipleEras(eras_count)),
-        }
-    }
-}
-
-/// Reads an era schedule, checking each first epoch as it is read, so an era
-/// out of order is refused before its parameters are decoded.
+/// Reads an era schedule, refusing an era whose first epoch does not strictly
+/// follow the previous era's, before decoding its parameters. Read straight
+/// into a map, such eras would instead be sorted, or a repeated epoch would
+/// keep only its last era.
 struct EraScheduleVisitor;
 
 impl<'de> Visitor<'de> for EraScheduleVisitor {
     type Value = EraSchedule;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(
-            "a map from first epochs, strictly increasing from epoch {GENESIS_EPOCH}, to era parameters",
-        )
+        formatter.write_str("a map from strictly increasing first epochs to era parameters")
     }
 
     fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
     where
         A: MapAccess<'de>,
     {
-        let mut builder = EraScheduleBuilder::default();
-        while let Some(first_epoch) = map.next_key::<Epoch>()? {
-            builder.check_next(first_epoch).map_err(A::Error::custom)?;
-            builder
-                .try_push(first_epoch, map.next_value()?)
-                .map_err(A::Error::custom)?;
+        let mut eras = BTreeMap::new();
+        while let Some(next) = map.next_key::<Epoch>()? {
+            if let Some((&previous, _)) = eras.last_key_value()
+                && next <= previous
+            {
+                return Err(A::Error::custom(EraScheduleError::OutOfOrder {
+                    previous,
+                    next,
+                }));
+            }
+            eras.insert(next, map.next_value()?);
         }
-        builder.build().map_err(A::Error::custom)
+        EraSchedule::try_from(eras).map_err(A::Error::custom)
     }
 }
 
@@ -200,9 +170,9 @@ impl EraParameters {
 #[cfg(test)]
 mod tests {
     use core::fmt::Write as _;
+    use std::collections::BTreeMap;
 
     use lb_cryptarchia_engine::Epoch;
-    use lb_utils::ordered_map::OrderedMap;
 
     use super::{EraParameters, EraSchedule, EraScheduleError};
     use crate::config::DeploymentSettings;
@@ -233,17 +203,17 @@ mod tests {
     }
 
     fn first_epochs(schedule: &EraSchedule) -> Vec<Epoch> {
-        OrderedMap::from(schedule.clone()).keys().copied().collect()
+        BTreeMap::from(schedule.clone()).keys().copied().collect()
     }
 
-    /// Constructs a schedule from a map with one era per first epoch, in the
-    /// given order.
+    /// Constructs a schedule from a map with one era per first epoch.
     fn construct(first_epochs: &[u32]) -> Result<EraSchedule, EraScheduleError> {
-        let mut eras = OrderedMap::default();
-        for first_epoch in first_epochs {
-            eras.insert(Epoch::new(*first_epoch), parameters());
-        }
-        EraSchedule::try_from(eras)
+        EraSchedule::try_from(
+            first_epochs
+                .iter()
+                .map(|first_epoch| (Epoch::new(*first_epoch), parameters()))
+                .collect::<BTreeMap<_, _>>(),
+        )
     }
 
     #[test]
@@ -287,9 +257,6 @@ mod tests {
             next: Epoch::new(5),
         };
         assert!(rejection(&[0, 10, 5]).contains(&expected.to_string()));
-        // A map keeps its entries in insertion order, so construction from one
-        // must check the order just as deserialization does.
-        assert_eq!(construct(&[0, 10, 5]).unwrap_err(), expected);
     }
 
     #[test]
