@@ -29,6 +29,9 @@ use super::tx_builder::sign_prepared;
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
+/// Long enough that a merely slow tx is not rebuilt: a valid tx the node
+/// holds lands within a few blocks, so one unmined this long is stuck.
+const DEFAULT_STALE_REFUND_SLOTS: u64 = 30;
 
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
@@ -57,6 +60,11 @@ pub struct SequencerCheckpoint {
     /// (matching the old reset-to-root behavior).
     #[serde(default = "MsgId::root")]
     pub finalized_config: MsgId,
+    /// The channel ops of the sequencer's own pending txs before funding,
+    /// keyed by tx hash: what a stale-refund re-funds. Empty for checkpoints
+    /// written before re-funding existed; those entries are never rebuilt.
+    #[serde(default)]
+    pub pre_fund_ops: Vec<(TxHash, lb_core::mantle::transactions::MantleTxBuilder)>,
 }
 
 /// Result of a publish operation.
@@ -314,6 +322,13 @@ pub struct SequencerConfig {
     pub publish_channel_capacity: usize,
     pub min_slots_remaining_in_turn: u64,
     pub max_pending_publish_depth: usize,
+    /// LIB slots an own pending tx may stay unmined on the branch before it
+    /// is treated as stuck: its fee note may have been spent from under it
+    /// once the node wallet's reservation lapsed, and re-posting the same
+    /// bytes can never land it. A tx the sequencer built itself is then
+    /// re-funded and re-signed under a new hash; anything else it posts is
+    /// shed and reported orphaned. `0` disables both.
+    pub stale_refund_slots: u64,
     /// Fund transactions from the node's wallet before signing.
     pub funding: FundingConfig,
 }
@@ -328,6 +343,7 @@ impl SequencerConfig {
             publish_channel_capacity: DEFAULT_PUBLISH_CHANNEL_CAPACITY,
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: 10,
+            stale_refund_slots: DEFAULT_STALE_REFUND_SLOTS,
             funding,
         }
     }
@@ -490,9 +506,11 @@ pub enum ChannelUpdate {
         /// only after it was reported orphaned.
         adopted: Vec<ChannelUpdateTx>,
         /// Entries that left the view: ones that were on chain, plus our own
-        /// pending that can no longer land. Revert from state and treat as
-        /// republish candidates; see [`ChannelUpdateTx`] for how to republish
-        /// each variant.
+        /// pending that can no longer land, plus pending txs the sequencer
+        /// posted that stayed unmined past
+        /// [`SequencerConfig::stale_refund_slots`] and could not rebuild
+        /// itself. Revert from state and treat as republish candidates; see
+        /// [`ChannelUpdateTx`] for how to republish each variant.
         orphaned: Vec<ChannelUpdateTx>,
     },
 }

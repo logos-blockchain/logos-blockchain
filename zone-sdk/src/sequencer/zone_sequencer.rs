@@ -267,6 +267,7 @@ where
                 lib_slot,
                 channel_notes,
                 finalized_config,
+                pre_fund_ops,
             } = cp;
             let finalized_msg =
                 restored_pending_channel_tip(&pending_txs, channel_id).unwrap_or(last_msg_id);
@@ -278,6 +279,7 @@ where
                     warn!(target: TARGET, "Dropping checkpointed tx {hash:?}: {taken}");
                 }
             }
+            tx_state.attach_pre_funds(pre_fund_ops);
             (Some(tx_state), lib_slot, last_msg_id, false)
         } else {
             info!(target: TARGET, "Starting fresh (no checkpoint)");
@@ -542,6 +544,7 @@ where
                 None
             }
             _ = self.resubmit_interval.tick(), if self.current_tip.is_some() => {
+                self.refund_stale_pending().await;
                 self.resubmit_pending();
                 None
             }
@@ -725,7 +728,7 @@ where
         self.ensure_fundable()?;
 
         let parent = self.compute_publish_parent();
-        let (signed_tx, new_msg_id) = create_inscribe_tx(
+        let (signed_tx, new_msg_id, pre_fund) = create_inscribe_tx(
             &self.node,
             &self.config.funding,
             self.channel_id,
@@ -755,6 +758,7 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         state.submit_inscription(signed_tx.clone(), parent, new_msg_id, data)?;
+        state.attach_pre_fund(&id, pre_fund);
         self.last_msg_id = new_msg_id;
 
         if self.can_publish_inscription_now() {
@@ -850,7 +854,8 @@ where
             Op::ChannelWithdraw(withdraw_op.clone()),
         ];
 
-        let (tx, transfer_proof) = fund_ops(&self.node, &self.config.funding, ops).await?;
+        let (tx, transfer_proof, pre_fund) =
+            fund_ops(&self.node, &self.config.funding, ops).await?;
         let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
         let ops_proofs =
             build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
@@ -889,6 +894,7 @@ where
             withdraw_infos.clone(),
             outputs.clone(),
         )?;
+        state.attach_pre_fund(&tx_hash, pre_fund);
         self.last_msg_id = msg_id;
 
         if self.can_publish_inscription_now() {
@@ -1034,7 +1040,8 @@ where
             Op::ChannelTransfer(transfer_op),
         ];
 
-        let (tx, transfer_proof) = fund_ops(&self.node, &self.config.funding, ops).await?;
+        let (tx, transfer_proof, pre_fund) =
+            fund_ops(&self.node, &self.config.funding, ops).await?;
         let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
         let ops_proofs =
             build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
@@ -1062,6 +1069,7 @@ where
             inscribe.clone(),
             consumed_inputs.clone(),
         )?;
+        state.attach_pre_fund(&tx_hash, pre_fund);
         self.last_msg_id = msg_id;
 
         if self.can_publish_inscription_now() {
@@ -1269,6 +1277,14 @@ where
             (Some(state), Some(tip)) => state.config_tip_at(tip),
             _ => MsgId::root(),
         };
+
+        // Refuse early, before signatures are collected over it, if a config
+        // already pends on this parent; expiry frees the position.
+        if let Some(state) = self.state.as_ref()
+            && let Some(by) = state.pending_config_child(parent)
+        {
+            return Err(ParentTaken { parent, by }.into());
+        }
 
         let (tx, transfer_proof) = build_and_fund_config(
             &self.node,
@@ -1515,6 +1531,7 @@ pub(super) fn build_checkpoint(
         lib_slot,
         channel_notes: state.channel_notes_base(),
         finalized_config: state.finalized_config(),
+        pre_fund_ops: state.pre_fund_builders(),
     }
 }
 

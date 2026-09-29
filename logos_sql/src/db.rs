@@ -1292,6 +1292,7 @@ mod tests {
             lib_slot: Slot::from(slot),
             channel_notes: Vec::new(),
             finalized_config: MsgId::root(),
+            pre_fund_ops: Vec::new(),
         }
     }
 
