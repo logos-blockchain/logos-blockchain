@@ -327,6 +327,11 @@ pub struct PoWMiningSettings {
     /// the reward pool can still pay, net of the tickets already held.
     #[serde(default = "default_max_tickets_per_block")]
     pub max_tickets_per_block: NonZeroUsize,
+    /// Start mining automatically as soon as the chain reaches `Online`, as if
+    /// `StartMining` had been received. Defaults to `false` (current
+    /// behaviour). `PUT /pow/mining/stop` and `start` keep working at runtime.
+    #[serde(default)]
+    pub start_on_boot: bool,
 }
 
 impl Default for PoWMiningSettings {
@@ -334,6 +339,7 @@ impl Default for PoWMiningSettings {
         Self {
             max_threads: default_max_threads(),
             max_tickets_per_block: default_max_tickets_per_block(),
+            start_on_boot: false,
         }
     }
 }
@@ -585,9 +591,13 @@ where
         let mut inbound_relay = service_resources_handle.inbound_relay;
         // Persists the claimable/pending tickets so they survive restarts.
         let state_updater = service_resources_handle.state_updater;
-        // Mining is off until explicitly started and is not persisted: a
-        // restarted node does not resume mining automatically.
-        let mut is_mining = false;
+        // Mining is off until explicitly started and is not persisted — unless
+        // `mining.start_on_boot` is set, in which case it arms as soon as the
+        // chain is `Online`, equivalent to an immediate `StartMining` request.
+        let mut is_mining = settings.mining.start_on_boot;
+        if is_mining {
+            info!(target: LOG_TARGET, "PoW mining started automatically (start_on_boot = true)");
+        }
 
         // Auto-claim arms itself when targets are configured, and disarms once
         // every target has reached its threshold, stopping mining along with
