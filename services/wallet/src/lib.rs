@@ -65,6 +65,7 @@ use tokio::{
 };
 use tracing::{debug, error, info, trace, warn};
 
+pub use crate::states::upgrade::upgrade_recovery_state;
 use crate::states::{KnownKeys, RecoveryState, ServiceState, Wallet};
 
 pub(crate) type KmsBackend = HdKMSBackend;

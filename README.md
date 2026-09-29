@@ -169,6 +169,34 @@ Visit our [GitHub releases page][github-releases-page] to get instructions on ho
 
 You can visit the [Devnet dashboard][devnet-dashboard] to get more info about the current devnet deployment.
 
+### Upgrade a node to the HD wallet
+
+A node that was set up before the HD wallet lists every key that it uses. To give it a mnemonic, stop the node, back up its database, and run:
+
+```bash
+target/release/logos-blockchain-node upgrade-to-hd --user-config user_config.yaml --keystore keystore.yaml
+```
+
+The command rewrites the user config, the keystore and the state of the wallet in the database. The previous files are kept with the `.bak` extension. The mnemonic is written to the keystore: back it up.
+
+The keys of the node are kept under their titles. The node still leads with the notes of `Stake`, and claims the rewards of the blocks that it has proposed with `VoucherMaster`.
+
+The wallet pays fees from the addresses that are derived from the mnemonic, which hold nothing yet. Once the node runs, transfer the funds of `LeaderFunding`, `SdpFunding` and `PoWClaim` to the receive address that the command has printed:
+
+```bash
+curl -X POST http://127.0.0.1:8080/wallet/transactions/transfer-funds \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "tip": null,
+    "funding_public_keys": ["<public key of LeaderFunding>"],
+    "recipient_public_key": "<receive address>",
+    "change_public_key": "<receive address>",
+    "amount": <amount>
+  }'
+```
+
+The public keys of the keys are in `public_keys` of the keystore that is backed up.
+
 ### Generating Documentation
 
 ```bash

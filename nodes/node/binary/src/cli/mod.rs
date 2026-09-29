@@ -3,6 +3,7 @@ pub mod config;
 pub mod get_peer_id;
 pub mod keys;
 pub mod participate;
+pub mod upgrade;
 
 use std::{
     net::{Ipv4Addr, SocketAddr},
@@ -16,7 +17,10 @@ use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use libp2p::Multiaddr;
 
 use crate::{
-    cli::keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
+    cli::{
+        keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
+        upgrade::UpgradeArgs,
+    },
     config::{
         ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, LogArgs,
         NetworkArgs, RunConfig, StateArgs, UserConfig, api::serde::AxumBackendSettings,
@@ -103,6 +107,10 @@ pub enum Command {
     Participate(ParticipateArgs),
     /// Print the libp2p `PeerId` derived from the node key in a user config
     GetPeerId(GetPeerIdArgs),
+    /// Upgrade the user config, keystore and database of a node that has no
+    /// HD wallet
+    #[command(name = "upgrade-to-hd")]
+    UpgradeToHd(Box<UpgradeArgs>),
 }
 
 #[derive(Parser, Debug)]

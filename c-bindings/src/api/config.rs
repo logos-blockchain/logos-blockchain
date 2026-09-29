@@ -8,7 +8,8 @@ use std::{
 
 use lb_key_management_system_keys::hd::{InvalidMnemonicError, Mnemonic, Passphrase};
 use lb_node::cli::{
-    EmbeddedInitArgs, InitArgs, MigrateArgs, ParticipateArgs, UpdateArgs, config::merge::MergeFlags,
+    EmbeddedInitArgs, InitArgs, MigrateArgs, ParticipateArgs, UpdateArgs,
+    config::merge::MergeFlags, upgrade::UpgradeArgs,
 };
 use multiaddr::Multiaddr;
 use tokio::runtime::Runtime;
@@ -293,6 +294,65 @@ pub unsafe extern "C" fn migrate_user_config(
         Err(error) => OperationStatus::error(
             OperationStatusCode::ConfigurationError,
             format!("Error migrating config: {error:?}"),
+        ),
+    }
+}
+
+/// Upgrades the user config, keystore and database of a node that has no HD
+/// wallet, equivalent to the `upgrade-to-hd` CLI command.
+///
+/// The node has to be stopped. Nothing is done if the node has an HD wallet
+/// already.
+///
+/// # Arguments
+///
+/// - `user_config_path`: Path to the user config YAML file.
+/// - `keystore_path`: Path to the keystore YAML file.
+/// - `mnemonic`: Optional (nullable) BIP-39 mnemonic to derive the wallet keys
+///   from. When null, a mnemonic is generated.
+/// - `mnemonic_passphrase`: Optional (nullable) BIP-39 passphrase of the
+///   mnemonic.
+///
+/// # Returns
+///
+/// An [`OperationStatus`] indicating the result of the operation.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. The caller
+/// must ensure that all non-null pointers are valid NUL-terminated C strings.
+#[must_use]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn upgrade_to_hd(
+    user_config_path: *const c_char,
+    keystore_path: *const c_char,
+    mnemonic: *const c_char,
+    mnemonic_passphrase: *const c_char,
+) -> OperationStatus {
+    return_error_if_null_pointer!(user_config_path);
+    return_error_if_null_pointer!(keystore_path);
+
+    let mnemonic = match unsafe { optional_mnemonic(mnemonic) } {
+        Ok(mnemonic) => mnemonic,
+        Err(error) => {
+            return OperationStatus::error(
+                OperationStatusCode::ConfigurationError,
+                format!("Error upgrading to the HD wallet: {error}"),
+            );
+        }
+    };
+    let args = UpgradeArgs::new(
+        unsafe { cstr_to_path(user_config_path) },
+        unsafe { cstr_to_path(keystore_path) },
+        mnemonic,
+        unsafe { optional_passphrase(mnemonic_passphrase) },
+    );
+
+    match lb_node::cli::upgrade::run(args) {
+        Ok(()) => OperationStatus::OK,
+        Err(error) => OperationStatus::error(
+            OperationStatusCode::ConfigurationError,
+            format!("Error upgrading to the HD wallet: {error:?}"),
         ),
     }
 }

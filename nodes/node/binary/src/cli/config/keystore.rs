@@ -63,16 +63,22 @@ pub struct Keystore {
 }
 
 impl Keystore {
-    /// Creates a keystore with the mnemonic and newly generated predefined
-    /// keys.
+    /// Creates a keystore with the mnemonic and no key.
     #[must_use]
-    pub fn new(mnemonic: Mnemonic, passphrase: Option<Passphrase>) -> Self {
-        let mut keystore = Self {
+    pub fn empty(mnemonic: Mnemonic, passphrase: Option<Passphrase>) -> Self {
+        Self {
             mnemonic,
             passphrase,
             secret_keys: HashMap::new(),
             warning: WARNING.to_owned(),
-        };
+        }
+    }
+
+    /// Creates a keystore with the mnemonic and newly generated predefined
+    /// keys.
+    #[must_use]
+    pub fn new(mnemonic: Mnemonic, passphrase: Option<Passphrase>) -> Self {
+        let mut keystore = Self::empty(mnemonic, passphrase);
 
         for title in KeyTitle::PREDEFINED_ED25519 {
             keystore.generate_ed25519(title);

@@ -74,4 +74,17 @@ impl<Id> Vouchers<Id> {
     pub fn count(&self) -> usize {
         self.vouchers.len()
     }
+
+    /// The same vouchers, under the ids that `map` turns theirs into.
+    #[must_use]
+    pub fn map_ids<NewId>(self, mut map: impl FnMut(Id) -> NewId) -> Vouchers<NewId> {
+        Vouchers {
+            vouchers: self
+                .vouchers
+                .into_iter()
+                .map(|(cm, id)| (cm, map(id)))
+                .collect(),
+            voucher_nullifiers: self.voucher_nullifiers,
+        }
+    }
 }

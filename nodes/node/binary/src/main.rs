@@ -41,6 +41,9 @@ async fn main() -> Result<()> {
             Command::GetPeerId(get_peer_id_args) => {
                 return logos_blockchain_node::cli::get_peer_id::run(&get_peer_id_args);
             }
+            Command::UpgradeToHd(upgrade_args) => {
+                return logos_blockchain_node::cli::upgrade::run(*upgrade_args);
+            }
         }
     }
 

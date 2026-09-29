@@ -28,6 +28,8 @@ use crate::{
     hd::{self, HdKeys},
 };
 
+pub mod upgrade;
+
 type VoucherIndex = u64;
 type VoucherId = (KeyId, VoucherIndex);
 pub type Wallet = lb_wallet::Wallet<KeyId, VoucherId>;
