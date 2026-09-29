@@ -1,5 +1,6 @@
 use clap::Parser as _;
 use color_eyre::eyre::{Result, eyre};
+use lb_log_targets::node;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use logos_blockchain_node::{
     UserConfig,
@@ -85,6 +86,10 @@ async fn main() -> Result<()> {
         })?;
         build_run_config(user_config, cli_args)?
     };
+    let chain_id = run_config.deployment.chain_id();
+    // Only single-era schedules are supported for now, so the node follows the
+    // fork of the genesis era.
+    let fork_digest = run_config.deployment.genesis_fork_digest();
 
     let app = run_node_from_config(run_config, None)
         .map_err(|e| eyre!("{e}"))
@@ -102,6 +107,10 @@ async fn main() -> Result<()> {
         .inspect_err(|e| {
             eprintln!("\nExiting... {e}.\n");
         })?;
+    tracing::info!(
+        target: node::ROOT,
+        "Running chain {chain_id} on fork {fork_digest}."
+    );
 
     app.wait_finished().await;
     Ok(())

@@ -13,6 +13,7 @@ use lb_blend_service::{
     },
     settings::{CommonSettings, CoreSettings, EdgeSettings, Settings as BlendSettings},
 };
+use lb_libp2p::protocol_name::StreamProtocol;
 use lb_services_utils::overwatch::RecoveryData;
 
 use crate::config::{
@@ -53,6 +54,8 @@ impl ServiceConfig {
         recovery_data: RecoveryData,
         time_deployment: &TimeDeploymentSettings,
         cryptarchia_deployment: &CryptarchiaDeploymentSettings,
+        protocol_name: StreamProtocol,
+        broadcast_topic: String,
     ) -> BlendServicesSettings {
         let slots_per_epoch = cryptarchia_deployment.slots_per_epoch();
         let slots_per_block = cryptarchia_deployment.average_slots_per_block();
@@ -68,7 +71,7 @@ impl ServiceConfig {
                 num_blend_layers: self.deployment.common.num_blend_layers,
                 minimum_network_size: self.deployment.common.minimum_network_size.into(),
                 broadcast: Libp2pBroadcastSettings {
-                    topic: cryptarchia_deployment.gossipsub_protocol.clone(),
+                    topic: broadcast_topic,
                 },
                 abstain_on_failure: self.user.abstain_on_failure,
                 recovery_data,
@@ -94,7 +97,7 @@ impl ServiceConfig {
                     accepted_edge_connections_per_round: self
                         .deployment
                         .accepted_edge_connections_per_round(),
-                    protocol_name: self.deployment.common.protocol_name.clone(),
+                    protocol_name: protocol_name.clone(),
                     peering_degree_check_interval: self
                         .user
                         .core
@@ -131,7 +134,7 @@ impl ServiceConfig {
                         .edge
                         .backend
                         .max_dial_attempts_per_peer_per_message,
-                    protocol_name: self.deployment.common.protocol_name,
+                    protocol_name,
                     replication_factor: self.user.edge.backend.replication_factor,
                 },
             },

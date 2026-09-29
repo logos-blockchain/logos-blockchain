@@ -21,6 +21,7 @@ futures                          = { workspace = true }
 hex                              = { workspace = true }
 http                             = { workspace = true }
 lb-api-service                   = { workspace = true }
+lb-binary-codec                  = { workspace = true }
 lb-blend                         = { workspace = true }
 lb-blend-service                 = { workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
@@ -53,6 +54,7 @@ libp2p                           = { features = ["autonat", "gossipsub", "identi
 num-bigint                       = { workspace = true }
 nutype                           = { features = ["serde"], workspace = true }
 overwatch                        = { workspace = true }
+percent-encoding                 = { workspace = true }
 rand                             = { workspace = true }
 serde                            = { workspace = true }
 serde_json                       = { workspace = true }

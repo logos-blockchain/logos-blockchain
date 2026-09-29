@@ -1,6 +1,7 @@
 use core::num::NonZeroU32;
 use std::num::{NonZero, NonZeroU64, NonZeroU128};
 
+use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 use lb_core::mantle::{Value, ops::pow::PowReward};
 use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_groth16::ModulusShift;
@@ -367,6 +368,92 @@ impl RewardPoWConfig {
         Value::try_from(share).expect("share cannot exceed collected_fees")
     }
 }
+
+// The reward parameters: every field in declaration order. A node's era digest
+// commits to them through this encoding.
+impl BinaryEncode for RewardPoWConfig {
+    fn encoded_length(&self) -> usize {
+        // We destructure (in declaration order) so we know we are not forgetting to
+        // encode new fields.
+        let Self {
+            reward_pool_genesis,
+            epoch_reward_genesis,
+            minimum_difficulty,
+            ema_smoothing_factor,
+            ema_smoothing_precision,
+            target_claims_per_block,
+            rate_num,
+            rate_den,
+            target_claim_per_block,
+            pow_share,
+            share_den,
+            slot_window,
+        } = self;
+        reward_pool_genesis.encoded_length()
+            + epoch_reward_genesis.encoded_length()
+            + minimum_difficulty.encoded_length()
+            + ema_smoothing_factor.encoded_length()
+            + ema_smoothing_precision.encoded_length()
+            + target_claims_per_block.encoded_length()
+            + rate_num.encoded_length()
+            + rate_den.encoded_length()
+            + target_claim_per_block.encoded_length()
+            + pow_share.encoded_length()
+            + share_den.encoded_length()
+            + slot_window.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let Self {
+            reward_pool_genesis,
+            epoch_reward_genesis,
+            minimum_difficulty,
+            ema_smoothing_factor,
+            ema_smoothing_precision,
+            target_claims_per_block,
+            rate_num,
+            rate_den,
+            target_claim_per_block,
+            pow_share,
+            share_den,
+            slot_window,
+        } = self;
+        reward_pool_genesis.encode_into(out);
+        epoch_reward_genesis.encode_into(out);
+        minimum_difficulty.encode_into(out);
+        ema_smoothing_factor.encode_into(out);
+        ema_smoothing_precision.encode_into(out);
+        target_claims_per_block.encode_into(out);
+        rate_num.encode_into(out);
+        rate_den.encode_into(out);
+        target_claim_per_block.encode_into(out);
+        pow_share.encode_into(out);
+        share_den.encode_into(out);
+        slot_window.encode_into(out);
+    }
+}
+
+/// The encoding of the fixture below, one field per group.
+const REWARD_POW_CONFIG_HEX: &str = "1e00000000000000 1f00000000000000 20000000 2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000 2600000000000000 2700000000000000 2800000000000000 2900000000000000";
+
+codec_fixtures!(
+    RewardPoWConfig,
+    encode_only,
+    RewardPoWConfig {
+        reward_pool_genesis: 30,
+        epoch_reward_genesis: 31,
+        minimum_difficulty: ModulusShift::new::<32>(),
+        ema_smoothing_factor: 33,
+        ema_smoothing_precision: NonZeroU64::new(34).unwrap(),
+        target_claims_per_block: 35,
+        rate_num: 36,
+        rate_den: NonZeroU64::new(37).unwrap(),
+        target_claim_per_block: NonZeroU64::new(38).unwrap(),
+        pow_share: 39,
+        share_den: NonZeroU64::new(40).unwrap(),
+        slot_window: NonZeroU64::new(41).unwrap(),
+    } => REWARD_POW_CONFIG_HEX
+);
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct BlendPoWConfig {

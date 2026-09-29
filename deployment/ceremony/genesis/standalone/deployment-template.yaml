@@ -3,7 +3,6 @@ blend:
     num_blend_layers: 1
     minimum_network_size: 2
     network_absorption_in_rounds: 2
-    protocol_name: /logos-blockchain-standalone-local/blend/1.0.0
     data_replication_factor: 0
   core:
     scheduler:
@@ -16,10 +15,6 @@ blend:
     edge_node_send_deadline_in_rounds: 1
     core_handshake_deadline_in_rounds: 2
     activity_threshold_sensitivity: 1
-network:
-  kademlia_protocol_name: /logos-blockchain-standalone-local/kad/1.0.0
-  identify_protocol_name: /logos-blockchain-standalone-local/identify/1.0.0
-  chain_sync_protocol_name: /logos-blockchain-standalone-local/chainsync/1.0.0
 cryptarchia:
   epoch_config:
     epoch_stake_distribution_stabilization: 3
@@ -90,22 +85,5 @@ cryptarchia:
     min_stake:
       threshold: 1000000000
       timestamp: 0
-  gossipsub_protocol: /logos-blockchain-standalone-local/cryptarchia/1.0.0
-  genesis_block:
-    header:
-      slot: 0
-      parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
-      body_root: 273a6e9869625d85c45e53afff1d3100aec613d403be494c173030e6a05e4c9c
-      proof_of_leadership:
-        proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
-        entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
-        leader_key: '0000000000000000000000000000000000000000000000000000000000000000'
-        voucher_cm: '0000000000000000000000000000000000000000000000000000000000000000'
-    signature: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
-    uncle_headers: []
-    transactions: []
-  faucet_pk: 3c3a1f25710bada106a953289964ac1ed66299b85f880f2868e3d3fca99d3718
 time:
   slot_duration: '1.000000000'
-mempool:
-  pubsub_topic: /logos-blockchain-standalone-local/mempool/1.0.0

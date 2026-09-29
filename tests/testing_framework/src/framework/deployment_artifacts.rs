@@ -187,16 +187,38 @@ mod tests {
         let artifact = deployment_settings(&topology, &["node-0".to_owned()])
             .expect("artifact config should build");
 
-        assert_eq!(local.deployment.cryptarchia.security_param.get(), 5);
-        assert_eq!(artifact.cryptarchia.security_param.get(), 5);
+        assert_eq!(
+            local
+                .deployment
+                .genesis_era_parameters()
+                .cryptarchia
+                .security_param
+                .get(),
+            5
+        );
+        assert_eq!(
+            artifact
+                .genesis_era_parameters()
+                .cryptarchia
+                .security_param
+                .get(),
+            5
+        );
         let expected_coefficient =
             NonNegativeRatio::new(1, NonZeroU32::new(2).expect("two is non-zero"));
         assert_eq!(
-            local.deployment.cryptarchia.slot_activation_coeff,
+            local
+                .deployment
+                .genesis_era_parameters()
+                .cryptarchia
+                .slot_activation_coeff,
             expected_coefficient
         );
         assert_eq!(
-            artifact.cryptarchia.slot_activation_coeff,
+            artifact
+                .genesis_era_parameters()
+                .cryptarchia
+                .slot_activation_coeff,
             expected_coefficient
         );
     }
