@@ -799,19 +799,29 @@ mod tests {
 
     #[test]
     fn endless_channel_sql_is_rejected_and_replay_continues() {
-        let dir = TempDir::new().expect("temporary directory should be created");
-        let mut db = Databases::open(dir.path()).expect("databases should open");
-        let endless = encoded_write(&transaction(
+        assert_rejected_sql_allows_replay(
             "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c)
              SELECT x FROM c WHERE x < 0",
-            vec![],
-        ));
+        );
+    }
+
+    #[test]
+    fn oversized_channel_values_are_rejected_and_replay_continues() {
+        assert_rejected_sql_allows_replay(
+            "CREATE TABLE oversized AS SELECT zeroblob(100000000) AS value",
+        );
+    }
+
+    fn assert_rejected_sql_allows_replay(sql: &str) {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let rejected = encoded_write(&transaction(sql, vec![]));
         let create = encoded_write(&transaction("CREATE TABLE items(value INTEGER)", vec![]));
         let expected_checkpoint = checkpoint(2, 2);
         let event = blocks_processed(
             expected_checkpoint.clone(),
             vec![
-                ChannelUpdateTx::Inscription(inscription(&endless.payload, 1)),
+                ChannelUpdateTx::Inscription(inscription(&rejected.payload, 1)),
                 ChannelUpdateTx::Inscription(inscription(&create.payload, 2)),
             ],
             vec![],
@@ -838,7 +848,7 @@ mod tests {
             vec![],
             vec![],
             vec![
-                finalized(&endless.payload, 1),
+                finalized(&rejected.payload, 1),
                 finalized(&create.payload, 2),
             ],
         );

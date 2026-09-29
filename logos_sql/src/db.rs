@@ -17,6 +17,7 @@ use rusqlite::{
     Connection, ErrorCode as SqliteErrorCode, OpenFlags, OptionalExtension as _, Row,
     backup::Backup,
     hooks::{AuthAction, AuthContext, Authorization},
+    limits::Limit,
     params, params_from_iter,
     types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef},
 };
@@ -24,7 +25,7 @@ use rusqlite::{
 use crate::{
     error::Error,
     functions::FunctionOverrides,
-    protocol::{ChannelInscription, EncodedWrite, Transaction, TxId},
+    protocol::{ChannelInscription, EncodedWrite, MAX_BODY_BYTES, Transaction, TxId},
     status::{Displacement, DisplacementReason, WriteStatus},
 };
 
@@ -38,6 +39,11 @@ const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 // limit or the SQLite execution engine require coordinated upgrades.
 const MAX_SQL_STEPS: u64 = 10_000_000;
 const SQL_PROGRESS_INTERVAL: i32 = 1_000;
+
+// SQL-generated values and complete rows must fit the same 64 MiB allowance
+// as an uncompressed write. A step budget alone cannot bound a large blob
+// operation. These limits do not cap the total data written by a transaction.
+const MAX_SQL_BYTES: i32 = MAX_BODY_BYTES as i32;
 
 const LIB_DATABASE_FILE: &str = "LIB.db";
 const LIVE_DATABASE_FILE: &str = "LIVE.db";
@@ -1170,6 +1176,10 @@ fn apply_statements(
     db_transaction: &rusqlite::Transaction<'_>,
     transaction: &Transaction,
 ) -> Result<(), Error> {
+    let previous_length = db_transaction.set_limit(Limit::SQLITE_LIMIT_LENGTH, MAX_SQL_BYTES)?;
+    let previous_sql_length =
+        db_transaction.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, MAX_SQL_BYTES)?;
+
     db_transaction.authorizer(Some(authorize_application_sql));
 
     let work = Arc::new(AtomicU64::new(0));
@@ -1196,6 +1206,11 @@ fn apply_statements(
     db_transaction.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
     // Bookkeeping and rollback must not inherit the application's spent budget.
     db_transaction.progress_handler(0, None::<fn() -> bool>);
+
+    // Internal rows also contain replication metadata and encoded payloads;
+    // they are not application rows and must not inherit these size limits.
+    db_transaction.set_limit(Limit::SQLITE_LIMIT_LENGTH, previous_length)?;
+    db_transaction.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, previous_sql_length)?;
 
     if work.load(Ordering::Relaxed) > MAX_SQL_STEPS {
         return Err(Error::ExecutionBudgetExceeded);
@@ -2046,6 +2061,46 @@ mod tests {
             .query_row("SELECT count(*) FROM items", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn oversized_values_roll_back_and_allow_the_next_write() {
+        for function in ["zeroblob", "randomblob"] {
+            let dir = TempDir::new().expect("temporary directory should be created");
+            let mut db = Databases::open(dir.path()).expect("databases should open");
+            db.live
+                .execute("CREATE TABLE items(value TEXT)", [])
+                .unwrap();
+
+            let write = Transaction::new(vec![
+                Statement::new(
+                    "INSERT INTO items VALUES ('rolled back')".to_owned(),
+                    vec![],
+                )
+                .unwrap(),
+                Statement::new(
+                    format!("INSERT INTO items VALUES ({function}(?1))"),
+                    vec![Value::Integer(i64::from(super::MAX_SQL_BYTES) + 1)],
+                )
+                .unwrap(),
+            ])
+            .unwrap();
+
+            let error = db.commit_local_write(TxId::generate(), &write).unwrap_err();
+            assert!(
+                matches!(error, Error::Database(ref error)
+                if super::is_deterministic_sql_error(error)),
+                "{function}: {error:?}"
+            );
+            assert!(db.pending_publish().unwrap().is_none());
+
+            db.commit_local_write(TxId::generate(), &insert("next write"))
+                .expect("oversized values must not block later writes");
+            assert_eq!(
+                row_values(&db.live, "items"),
+                vec![Value::Text("next write".into())]
+            );
+        }
     }
 
     #[test]
