@@ -3,6 +3,8 @@ pub mod hash;
 pub mod op_proof_refs;
 pub mod op_proofs;
 pub mod op_refs;
+#[cfg(feature = "openapi")]
+mod openapi;
 pub mod ops;
 pub mod signed_ops;
 

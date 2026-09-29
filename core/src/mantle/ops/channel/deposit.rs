@@ -30,10 +30,22 @@ use crate::{
 pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
 pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
 
+#[cfg(feature = "openapi")]
+pub(crate) fn metadata_schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+    crate::openapi::byte_values(
+        0,
+        MAX_METADATA_SIZE,
+        "Deposit metadata: arbitrary bytes, serialized as an array of byte values (not as a hex \
+         string).",
+    )
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct DepositOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
+    #[cfg_attr(feature = "openapi", schema(schema_with = metadata_schema))]
     pub metadata: Metadata,
 }
 

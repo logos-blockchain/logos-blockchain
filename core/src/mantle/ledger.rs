@@ -129,6 +129,23 @@ pub enum LedgerError {
 #[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
 pub struct Outputs(BoundedOutputs);
 
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for Outputs {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::schema::ArrayBuilder::new()
+            .items(crate::openapi::reference::<Note>())
+            .max_items(Some(MAX_TRANSACTION_OUTPUTS))
+            .into()
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for Outputs {
+    fn schemas(schemas: &mut crate::openapi::Schemas) {
+        crate::openapi::collect::<Note>(schemas);
+    }
+}
+
 impl Outputs {
     pub fn try_new(
         notes: impl TryInto<BoundedOutputs, Error = BoundedError>,
@@ -247,6 +264,23 @@ impl<'output> IntoIterator for &'output Outputs {
 
 #[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct Inputs(BoundedInputs);
+
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for Inputs {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::schema::ArrayBuilder::new()
+            .items(crate::openapi::reference::<NoteId>())
+            .max_items(Some(MAX_TRANSACTION_INPUTS))
+            .into()
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for Inputs {
+    fn schemas(schemas: &mut crate::openapi::Schemas) {
+        crate::openapi::collect::<NoteId>(schemas);
+    }
+}
 
 impl Inputs {
     #[must_use]
@@ -475,7 +509,9 @@ impl From<Fr> for NoteId {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Note {
+    #[cfg_attr(feature = "openapi", schema(value_type = u64))]
     pub value: Value,
     pub pk: ZkPublicKey,
 }
@@ -488,7 +524,9 @@ impl Note {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Utxo {
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::hash_byte_values))]
     pub op_id: Hash,
     pub output_index: usize,
     pub note: Note,

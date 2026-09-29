@@ -28,7 +28,11 @@ impl utoipa::PartialSchema for PublicKey {
 }
 
 #[cfg(feature = "openapi")]
-impl utoipa::ToSchema for PublicKey {}
+impl utoipa::ToSchema for PublicKey {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ZkPublicKey")
+    }
+}
 
 impl PublicKey {
     #[must_use]

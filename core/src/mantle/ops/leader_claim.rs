@@ -54,11 +54,15 @@ pub struct VoucherNullifier(#[serde(with = "serde_fr")] ZkHash);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize, BinaryCodec)]
 pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
 
+#[cfg(feature = "openapi")]
+crate::openapi::fr_newtype_schema!(RewardsRoot, VoucherSecret, VoucherNullifier, VoucherCm);
+
 impl BoundedSerializeOp for VoucherCm {
     type Bytes = [u8; FR_BYTES_SIZE];
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct LeaderClaimOp {
     pub rewards_root: RewardsRoot,
     pub voucher_nullifier: VoucherNullifier,

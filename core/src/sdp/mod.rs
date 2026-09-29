@@ -271,6 +271,7 @@ impl BinaryDecode for Locator {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, EnumIter)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum ServiceType {
     #[serde(rename = "BN")]
     BlendNetwork,
@@ -347,6 +348,7 @@ mod service_type_tests {
 pub type Nonce = u64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ProviderId(pub Ed25519PublicKey);
 
 impl AsRef<[u8; 32]> for ProviderId {
@@ -402,13 +404,19 @@ impl BoundedSerializeOp for DeclarationId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Declaration {
     pub service_type: ServiceType,
     pub provider_id: ProviderId,
     pub service_note_id: NoteId,
+    #[cfg_attr(
+        feature = "openapi",
+        schema(value_type = Vec<Locator>, min_items = 1, max_items = 8)
+    )]
     pub locators: Locators,
     pub zk_id: ZkPublicKey,
     /// The epoch of the block that contained the declaration
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::epoch))]
     pub created: Epoch,
     /// The latest epoch for which the active message was sent.
     ///
@@ -417,9 +425,12 @@ pub struct Declaration {
     /// Idle->Active transition must be handled by the `EpochState`
     /// snapshot logic.
     // TODO: Use Option<Epoch> with a better name.
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::epoch))]
     pub active: Epoch,
     /// The epoch at which the declaration is scheduled to be withdrawn.
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::optional_epoch))]
     pub withdraw_at: Option<Epoch>,
+    #[cfg_attr(feature = "openapi", schema(value_type = u64))]
     pub nonce: Nonce,
 }
 
@@ -501,8 +512,13 @@ pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
 pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct DeclarationMessage {
     pub service_type: ServiceType,
+    #[cfg_attr(
+        feature = "openapi",
+        schema(value_type = Vec<Locator>, min_items = 1, max_items = 8)
+    )]
     pub locators: Locators,
     pub provider_id: ProviderId,
     pub zk_id: ZkPublicKey,
@@ -561,21 +577,26 @@ impl DeclarationMessage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
+    #[cfg_attr(feature = "openapi", schema(value_type = u64))]
     pub nonce: Nonce,
     pub service_note_id: NoteId,
 }
 
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ActiveMessage {
     pub declaration_id: DeclarationId,
+    #[cfg_attr(feature = "openapi", schema(value_type = u64))]
     pub nonce: Nonce,
     pub metadata: ActivityMetadata,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum ActivityMetadata {
     Blend(Box<ActivityProof>),
 }

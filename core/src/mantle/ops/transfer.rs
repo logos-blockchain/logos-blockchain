@@ -30,6 +30,7 @@ use crate::{
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TransferOp {
     pub inputs: Inputs,
     pub outputs: Outputs,

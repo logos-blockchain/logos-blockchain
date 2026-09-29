@@ -1,3 +1,9 @@
+#![expect(
+    single_use_lifetimes,
+    reason = "The `ToSchema` derives name a borrowed struct's lifetime only in `Self` when \
+              every borrowed field overrides its schema."
+)]
+
 use lb_api_service::http::mantle::BlockWithChainState;
 use lb_chain_service::Slot;
 use lb_core::{
@@ -14,9 +20,11 @@ use serde::Serialize;
 
 use crate::api::serializers::transactions::ApiSignedTransaction;
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
+#[schema(as = ApiBlock)]
 pub struct ApiBlock<'block> {
     #[serde(with = "ApiHeaderSerializer")]
+    #[schema(value_type = ApiHeaderSerializer)]
     header: &'block Header,
     uncle_headers: Vec<ApiSignedHeader<'block>>,
     transactions: Vec<ApiSignedTransaction<'block>>,
@@ -52,9 +60,11 @@ impl<'block, State: VerificationState, Mode: VerificationMode>
 }
 
 /// The signed header of an uncle a block references.
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
+#[schema(as = ApiSignedHeader)]
 pub struct ApiSignedHeader<'block> {
     #[serde(with = "ApiHeaderSerializer")]
+    #[schema(value_type = ApiHeaderSerializer)]
     header: &'block Header,
     signature: &'block Ed25519Signature,
 }
@@ -83,8 +93,11 @@ impl<State: VerificationState, Mode: VerificationMode> From<Block<SignedOps<Stat
     }
 }
 
-#[derive(Serialize)]
+/// A block header as the API presents it: with its id, and without the
+/// fields only consensus needs.
+#[derive(Serialize, utoipa::ToSchema)]
 #[serde(remote = "Header")]
+#[schema(as = ApiHeader)]
 pub struct ApiHeaderSerializer {
     #[serde(getter = "Header::id")]
     id: HeaderId,
@@ -105,10 +118,12 @@ pub struct ApiHeaderSerializer {
 /// current state. In this case, `block.header.id` can equal `tip` and does not
 /// represent a newly processed block. Clients should handle events
 /// idempotently.
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
+#[schema(as = ApiProcessedBlockEvent, bound = "")]
 pub struct ApiProcessedBlockEvent<'block, State: VerificationState, Mode: VerificationMode> {
     /// The processed block.
     #[serde(with = "ApiBlock")]
+    #[schema(value_type = ApiBlock)]
     pub block: &'block Block<SignedOps<State, Mode>>,
     /// The current canonical tip after processing this block.
     pub tip: &'block HeaderId,

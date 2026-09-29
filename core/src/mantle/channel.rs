@@ -23,6 +23,7 @@ use crate::{
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SlotTimeframe(u32);
 
 impl From<u32> for SlotTimeframe {
@@ -38,6 +39,7 @@ impl From<SlotTimeframe> for u32 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SlotTimeout(u32);
 
 impl From<u32> for SlotTimeout {
@@ -106,15 +108,21 @@ pub struct Channels {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ChannelState {
     // We cannot use verified Ed25519 public keys here because genesis creates a channel with a key
     // of all `0`s, which would otherwise fail to deserialize here.
     // Channel Configuration
+    #[cfg_attr(
+        feature = "openapi",
+        schema(value_type = Vec<lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey>, min_items = 1, max_items = 65535)
+    )]
     pub accredited_keys: Arc<UnverifiedChannelKeys>, // keys.len() <= ChannelKeyIndex::MAX
-    pub configuration_threshold: u16,                /* indicating how many keys are required to
-                                                      * update
-                                                      * the
-                                                      * configuration */
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::u16_value))]
+    pub configuration_threshold: u16, /* indicating how many keys are required to
+                                       * update
+                                       * the
+                                       * configuration */
 
     // Message Ordering
     pub tip_message: MsgId,     // last message of the channel
@@ -122,6 +130,7 @@ pub struct ChannelState {
 
     // Decentralized Sequencing
     pub tip_slot: Slot,
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::u16_value))]
     pub tip_sequencer: u16, /* indicating the actual sequencer position in the list of
                              * accredited keys */
     pub tip_sequencer_starting_slot: Slot,
@@ -129,6 +138,7 @@ pub struct ChannelState {
     pub posting_timeout: SlotTimeout,     // number of slots (0 = no timeout)
 
     // Bridging
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::u16_value))]
     pub transfer_threshold: ChannelKeyIndex, /* indicating how many keys are required to
                                               * transfer or withdraw funds from the
                                               * channel */

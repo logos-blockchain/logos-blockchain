@@ -15,8 +15,12 @@ const LOG_TARGET: &str = node::api::TRACING;
 #[utoipa::path(
     put,
     path = paths::admin::TRACING_FILTER,
+    tag = "Node",
+    summary = "Replace the log filter",
+    description = "Operator endpoint. Replaces the per-target tracing levels of the running node.",
+    request_body = crate::api::openapi::schema::EnvFilterConfig,
     responses(
-        (status = 200, description = "Tracing filter reloaded"),
+        (status = 200, description = "Tracing filter reloaded", body = crate::api::openapi::schema::Null),
         (status = 500, description = "Internal server error", body = crate::api::errors::ErrorBody),
     )
 )]

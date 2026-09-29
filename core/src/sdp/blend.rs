@@ -25,10 +25,14 @@ pub struct PolEpochStateSource {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ActivityProof {
+    #[cfg_attr(feature = "openapi", schema(schema_with = crate::openapi::epoch))]
     pub epoch: Epoch,
     pub signing_key: Ed25519PublicKey,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::openapi::ProofOfQuota))]
     pub proof_of_quota: ProofOfQuota,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::openapi::ProofOfSelection))]
     pub proof_of_selection: ProofOfSelection,
 }
 

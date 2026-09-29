@@ -98,6 +98,23 @@ impl TryFrom<u8> for Version {
     }
 }
 
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for Version {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::schema::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::Type::String)
+            .pattern(Some("^[Bb][Ee][Dd][Rr][Oo][Cc][Kk]$"))
+            .description(Some(
+                "Protocol version. Serialized as `Bedrock`; matched case-insensitively on input.",
+            ))
+            .examples(["Bedrock"])
+            .into()
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for Version {}
+
 impl TryFrom<&str> for Version {
     type Error = std::io::Error;
 
@@ -164,6 +181,7 @@ impl BinaryDecode for Version {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Header {
     version: Version,
     parent_block: HeaderId,

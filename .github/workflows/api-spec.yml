@@ -1,0 +1,188 @@
+name: API spec
+
+# Reports changes to the node HTTP API specification.
+#
+# The OpenAPI document is generated from the handler annotations, and the
+# NODE-HTTP-API LIP publishes a copy of it. This workflow generates the
+# document on both sides of a pull request and, when they differ, posts the
+# diff as a PR comment and labels the PR `api-change`, so the author knows the
+# LIP needs a matching update. It never fails because of a difference.
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}@${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SPEC_URL: https://lip.logos.co/blockchain/raw/node-http-api.html
+  SPEC_SOURCE: https://github.com/logos-co/logos-lips/tree/master/docs/blockchain/raw
+  MARKER: "<!-- api-spec-diff -->"
+
+jobs:
+  diff:
+    name: Diff the OpenAPI document
+    # Using self-hosted runners because building the node runs out of memory
+    # on GitHub-hosted runners.
+    runs-on: [ self-hosted, Linux ]
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+      report: ${{ steps.report.outputs.report }}
+    steps:
+      - name: Disable rustup override
+        run: rustup override unset || true
+
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Prune disk space (cache-aware, self-hosted)
+        uses: ./.github/actions/prune-disk-space
+
+      - name: Generate the document at the PR head
+        run: |
+          OPENAPI_OUT="$RUNNER_TEMP/head.json" cargo test --locked -p logos-blockchain-node \
+            --lib api::openapi::dump_openapi -- --ignored --exact
+
+      # Compare against the merge base rather than the base branch tip, so API
+      # changes merged to the base branch in the meantime are not reported.
+      - name: Generate the document at the merge base
+        run: |
+          base=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
+          git worktree add --detach "$RUNNER_TEMP/base" "$base"
+          cd "$RUNNER_TEMP/base"
+          # Share the target directory so the base build is mostly cached.
+          # Bases that predate `dump_openapi` run no test and write nothing.
+          OPENAPI_OUT="$RUNNER_TEMP/base.json" CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" \
+            cargo test --locked -p logos-blockchain-node \
+            --lib api::openapi::dump_openapi -- --ignored --exact
+
+      - name: Diff
+        id: diff
+        run: |
+          if [ ! -f "$RUNNER_TEMP/base.json" ]; then
+            echo "The merge base cannot generate the document; nothing to compare against." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if diff -u --label base --label head "$RUNNER_TEMP/base.json" "$RUNNER_TEMP/head.json" \
+            > "$RUNNER_TEMP/spec.diff"; then
+            echo "No changes to the node HTTP API specification." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write the report
+        id: report
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          report="$RUNNER_TEMP/report.md"
+          {
+            echo "$MARKER"
+            echo "### This PR changes the node HTTP API specification"
+            echo
+            echo "The OpenAPI document generated from the handler annotations differs from the merge base."
+            echo "The published specification, [NODE-HTTP-API]($SPEC_URL), needs a matching update:"
+            echo
+            echo "1. Generate the document:"
+            echo '   `OPENAPI_OUT=openapi.json cargo test -p logos-blockchain-node --lib api::openapi::dump_openapi -- --ignored --exact`'
+            echo "   (or download the \`openapi-spec\` artifact of this run)."
+            echo "2. Open a pull request against [logos-lips]($SPEC_SOURCE) that copies it to"
+            echo '   `node-http-api/openapi.json` and updates `node-http-api.md` to match.'
+            echo "3. Link that pull request here."
+            echo
+            echo "<details><summary>Diff</summary>"
+            echo
+            echo '```diff'
+            # Keep the comment under GitHub's 65536-character limit.
+            head -c 60000 "$RUNNER_TEMP/spec.diff"
+            if [ "$(wc -c < "$RUNNER_TEMP/spec.diff")" -gt 60000 ]; then
+              echo
+              echo "... truncated; see the job summary for the full diff."
+            fi
+            echo '```'
+            echo
+            echo "</details>"
+          } > "$report"
+          {
+            cat "$report"
+            echo
+            echo '<details><summary>Full diff</summary>'
+            echo
+            echo '```diff'
+            cat "$RUNNER_TEMP/spec.diff"
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "report<<REPORT_EOF"
+            cat "$report"
+            echo "REPORT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload the documents
+        if: steps.diff.outputs.changed == 'true'
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
+        with:
+          name: openapi-spec
+          path: |
+            ${{ runner.temp }}/head.json
+            ${{ runner.temp }}/base.json
+            ${{ runner.temp }}/spec.diff
+
+      - name: Remove the base worktree
+        if: always()
+        run: git worktree remove --force "$RUNNER_TEMP/base" 2>/dev/null || true
+
+  # Runs on a GitHub-hosted runner, which has `gh`, and keeps the write-scoped
+  # token off the self-hosted runner that builds the PR's code.
+  notify:
+    name: Notify the author
+    needs: diff
+    # Pull requests from forks get a read-only token, so they only get the job
+    # summary.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write         # create the `api-change` label
+      pull-requests: write  # comment on and label the PR
+    steps:
+      - name: Comment and label
+        # Notifying is best effort and never fails the check.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          CHANGED: ${{ needs.diff.outputs.changed }}
+          REPORT: ${{ needs.diff.outputs.report }}
+        run: |
+          existing=$(gh api "repos/$GH_REPO/issues/$PR/comments" --paginate \
+            --jq "[.[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$MARKER\")))][0].id // empty")
+
+          if [ "$CHANGED" = "true" ]; then
+            printf '%s\n' "$REPORT" > report.md
+            if [ -n "$existing" ]; then
+              gh api -X PATCH "repos/$GH_REPO/issues/comments/$existing" -F body=@report.md > /dev/null
+            else
+              gh pr comment "$PR" --body-file report.md
+            fi
+            gh label create api-change --color d93f0b \
+              --description "Changes the node HTTP API specification" 2>/dev/null || true
+            gh pr edit "$PR" --add-label api-change
+          else
+            if [ -n "$existing" ]; then
+              printf '%s\n%s\n' "$MARKER" \
+                "The node HTTP API specification no longer differs from the merge base." > report.md
+              gh api -X PATCH "repos/$GH_REPO/issues/comments/$existing" -F body=@report.md > /dev/null
+            fi
+            gh pr edit "$PR" --remove-label api-change 2>/dev/null || true
+          fi

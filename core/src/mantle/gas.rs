@@ -11,6 +11,7 @@ use crate::mantle::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema), schema(value_type = u64))]
 pub struct Gas(Value);
 
 impl Gas {
@@ -40,6 +41,7 @@ impl From<Value> for Gas {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema), schema(value_type = u64))]
 pub struct GasPrice(Value);
 
 impl GasPrice {
@@ -69,6 +71,7 @@ impl From<Value> for GasPrice {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema), schema(value_type = u64))]
 pub struct GasCost(Value);
 
 impl GasCost {

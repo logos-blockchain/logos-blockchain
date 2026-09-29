@@ -21,3 +21,8 @@ overwatch      = { workspace = true }
 serde          = { features = ["derive"], workspace = true }
 tokio          = { workspace = true }
 tracing        = { workspace = true }
+utoipa         = { features = ["macros"], optional = true, workspace = true }
+
+[features]
+# Derives `utoipa` schemas for the types the node HTTP API serves.
+openapi = ["dep:utoipa", "lb-core/openapi"]

@@ -35,6 +35,7 @@ lb-utils                      = { features = ["tokio"], workspace = true }
 lb-wallet-service             = { workspace = true }
 lb-zksign                     = { workspace = true }
 overwatch                     = { workspace = true }
+utoipa                        = { features = ["macros"], optional = true, workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
@@ -42,3 +43,7 @@ tokio      = { features = ["macros", "rt"], workspace = true }
 
 [lints]
 workspace = true
+
+[features]
+# Derives `utoipa` schemas for the types the node HTTP API serves.
+openapi = ["dep:utoipa", "lb-chain-service/openapi", "lb-core/openapi", "lb-key-management-system-keys/openapi"]

@@ -364,8 +364,10 @@ macro_rules! make_request_and_return_response {
 #[utoipa::path(
     get,
     path = paths::MANTLE_METRICS,
+    tag = "Mempool",
+    summary = "Mempool size and activity",
     responses(
-        (status = 200, description = "Get the mempool metrics of the cl service", body = inline(schema::MempoolMetrics)),
+        (status = 200, description = "Get the mempool metrics of the cl service", body = lb_tx_service::MempoolMetrics),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -417,8 +419,11 @@ where
 #[utoipa::path(
     post,
     path = paths::MANTLE_STATUS,
+    tag = "Mempool",
+    summary = "Mempool status of transactions",
+    request_body = Vec<TxHash>,
     responses(
-        (status = 200, description = "Query the mempool status of the cl service", body = Vec<TxHash>),
+        (status = 200, description = "Mempool status of each requested transaction, in request order", body = Vec<lb_tx_service::backend::Status>),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -471,6 +476,8 @@ where
 #[utoipa::path(
     get,
     path = paths::NODE_VERSION,
+    tag = "Node",
+    summary = "Node version and build provenance",
     responses(
         (status = 200, description = "Version and build provenance of the running node", body = BuildVersionInfo),
     )
@@ -479,29 +486,38 @@ pub async fn version() -> Response {
     Json(lb_version::build_version_info()).into_response()
 }
 
-/// The chain ID is fixed by the deployment the node was built with, so it is
-/// handed to the API backend in its settings and served straight from the
-/// request extensions. There is no failure path.
+// The chain ID is fixed by the deployment the node was built with, so it is
+// handed to the API backend in its settings and served straight from the
+// request extensions. There is no failure path.
 #[utoipa::path(
     get,
     path = paths::CHAIN_ID,
+    tag = "Node",
+    summary = "Identifier of the chain this node follows",
+    description = "Fixed by the deployment; constant for the lifetime of the node.",
     responses(
-        (status = 200, description = "The chain this node runs on", body = String),
+        (status = 200, description = "The chain this node runs on", body = ChainIdResponseBody),
     )
 )]
 pub async fn chain_id(Extension(chain_id): Extension<ChainId>) -> Response {
     Json(ChainIdResponseBody { chain_id }).into_response()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct CryptarchiaInfoQuery {
+    /// Header to start walking back from. Defaults to the tip.
     from: Option<HeaderId>,
+    /// Ancestor to stop at (inclusive). Defaults to the LIB.
     to: Option<HeaderId>,
 }
 
 #[utoipa::path(
     get,
     path = paths::CRYPTARCHIA_INFO,
+    tag = "Chain",
+    summary = "Chain status",
+    description = "Tip, last irreversible block (LIB), height, and the consensus state and phase of the node.",
     responses(
         (status = 200, description = "Query consensus information", body = ChainServiceInfo),
         (status = 500, description = "Internal server error", body = ErrorBody),
@@ -520,6 +536,9 @@ where
 #[utoipa::path(
     get,
     path = paths::TIME_INFO,
+    tag = "Node",
+    summary = "Slot clock",
+    description = "Slot duration, genesis time, and the current slot and epoch as the node's clock sees them.",
     responses(
         (status = 200, description = "Query time service information", body = TimeInfo),
         (status = 500, description = "Internal server error", body = ErrorBody),
@@ -560,6 +579,10 @@ where
 #[utoipa::path(
     get,
     path = paths::CRYPTARCHIA_HEADERS,
+    tag = "Chain",
+    summary = "Header ids along the canonical chain",
+    description = "Walks back from `from` (default: tip) towards `to` (default: LIB), returning at most 512 header ids, newest first.",
+    params(CryptarchiaInfoQuery),
     responses(
         (status = 200, description = "Query header ids", body = Vec<HeaderId>),
         (status = 500, description = "Internal server error", body = ErrorBody),
@@ -582,8 +605,11 @@ where
 #[utoipa::path(
     get,
     path = paths::CRYPTARCHIA_LIB_STREAM,
+    tag = "Chain",
+    summary = "Subscribe to finalized blocks",
+    description = "Streams a value every time a block becomes irreversible. The stream stays open until the client disconnects.",
     responses(
-        (status = 200, description = "Request a stream for lib blocks"),
+        (status = 200, description = "Stream of blocks as they become final (the LIB advances), one JSON object per line", body = lb_chain_broadcast_service::BlockInfo, content_type = "application/x-ndjson"),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -604,6 +630,8 @@ where
 #[utoipa::path(
     get,
     path = paths::NETWORK_INFO,
+    tag = "Network",
+    summary = "Peer-to-peer network status",
     responses(
         (status = 200, description = "Query the network information", body = lb_network_service::backends::libp2p::Libp2pInfo),
         (status = 500, description = "Internal server error", body = ErrorBody),
@@ -625,9 +653,12 @@ where
 #[utoipa::path(
     post,
     path = paths::DIAL_PEER,
+    tag = "Network",
+    summary = "Connect to a peer",
+    description = "Operator endpoint. Dials the given multiaddress and returns the peer id of the connected peer.",
     request_body = DialPeerRequestBody,
     responses(
-        (status = 200, description = "Dial a network peer", body = String),
+        (status = 200, description = "Peer id of the dialled peer", body = String, content_type = "application/json"),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -652,6 +683,9 @@ where
 #[utoipa::path(
     get,
     path = paths::BLEND_NETWORK_INFO,
+    tag = "Blend",
+    summary = "Blend network membership",
+    description = "`null` if the node does not take part in the blend network.",
     responses(
         (status = 200, description = "Query the blend network information", body = Option<Object>),
         (status = 500, description = "Internal server error", body = ErrorBody),
@@ -672,6 +706,9 @@ where
 #[utoipa::path(
     post,
     path = paths::BLEND_JOIN_NETWORK,
+    tag = "Blend",
+    summary = "Join the blend network as a core node",
+    description = "Operator endpoint. Declares the node as a blend core node through SDP; returns the declaration id, or `null` if the node is already declared.",
     request_body = JoinBlendRequestBody,
     responses(
         (status = 200, description = "Join the blend network", body = Option<lb_core::sdp::DeclarationId>),
@@ -698,6 +735,8 @@ where
 #[utoipa::path(
     get,
     path = paths::BLEND_PENDING_TRANSACTIONS,
+    tag = "Blend",
+    summary = "Hashes of transactions waiting to be blended",
     responses(
         (status = 200, description = "Ids of the transactions waiting for a PoW solution before they can be blended", body = Vec<TxHash>),
         (status = 500, description = "Internal server error", body = ErrorBody),
@@ -723,6 +762,10 @@ where
 #[utoipa::path(
     post,
     path = paths::BLEND_DISPERSE_TRANSACTION,
+    tag = "Blend",
+    summary = "Submit a transaction through the blend network",
+    description = "Sends the transaction to peers through the blend network, for sender anonymity, instead of adding it to this node's mempool.",
+    request_body = schema::SignedTx,
     responses(
         (status = 200, description = "Id of the transaction accepted for blending, which was not added to this node's mempool", body = TxHash),
         (status = 500, description = "Internal server error", body = ErrorBody),
@@ -749,8 +792,12 @@ where
 #[utoipa::path(
     post,
     path = paths::MEMPOOL_ADD_TX,
+    tag = "Mempool",
+    summary = "Submit a signed transaction",
+    description = "Adds the transaction to the node's mempool and gossips it to peers.",
+    request_body = schema::SignedTx,
     responses(
-        (status = 200, description = "Add transaction to the mempool"),
+        (status = 200, description = "Add transaction to the mempool", body = schema::Null),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -811,6 +858,9 @@ where
 #[utoipa::path(
     get,
     path = paths::MEMPOOL_VIEW,
+    tag = "Mempool",
+    summary = "Hashes of pending transactions",
+    description = "Transactions in the mempool that are valid on top of the current tip.",
     responses(
         (status = 200, description = "Get current tip mempool transaction hashes", body = Vec<TxHash>),
         (status = 500, description = "Internal server error", body = ErrorBody),
@@ -986,8 +1036,12 @@ where
 #[utoipa::path(
     get,
     path = paths::CHANNEL,
+    tag = "Channels",
+    summary = "Channel state",
+    description = "State of a channel in the ledger at the tip.",
+    params(("id" = ChannelId, Path, description = "Channel id")),
     responses(
-        (status = 200, description = "Channel state"),
+        (status = 200, description = "Channel state", body = ChannelState),
         (status = 404, description = "Channel not found", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
@@ -1014,8 +1068,12 @@ fn channel_response(result: Result<Option<ChannelState>, DynError>) -> Response 
 #[utoipa::path(
     post,
     path = paths::CHANNEL_DEPOSIT,
+    tag = "Channels",
+    summary = "Deposit funds into a channel",
+    description = "Operator endpoint. Funds the deposit from the node wallet, signs it, and submits it to the mempool.",
+    request_body = ChannelDepositRequestBody,
     responses(
-        (status = 200, description = "Submit a channel deposit"),
+        (status = 200, description = "Submit a channel deposit", body = ChannelDepositResponseBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1109,6 +1167,10 @@ where
 #[utoipa::path(
     post,
     path = paths::SDP_POST_DECLARATION,
+    tag = "Service declarations",
+    summary = "Declare a service",
+    description = "Operator endpoint. Submits an SDP declaration signed by the node and returns its id.",
+    request_body = lb_core::sdp::DeclarationMessage,
     responses(
         (status = 200, description = "Post declaration to SDP service", body = lb_core::sdp::DeclarationId),
         (status = 500, description = "Internal server error", body = ErrorBody),
@@ -1157,8 +1219,12 @@ where
 #[utoipa::path(
     post,
     path = paths::SDP_POST_ACTIVITY,
+    tag = "Service declarations",
+    summary = "Submit an activity proof",
+    description = "Operator endpoint.",
+    request_body = lb_core::sdp::ActivityMetadata,
     responses(
-        (status = 200, description = "Post activity to SDP service"),
+        (status = 200, description = "Post activity to SDP service", body = schema::Null),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1205,8 +1271,12 @@ where
 #[utoipa::path(
     post,
     path = paths::SDP_POST_WITHDRAWAL,
+    tag = "Service declarations",
+    summary = "Withdraw a declaration",
+    description = "Operator endpoint.",
+    request_body = lb_core::sdp::DeclarationId,
     responses(
-        (status = 200, description = "Post withdrawal to SDP service"),
+        (status = 200, description = "Post withdrawal to SDP service", body = schema::Null),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1253,8 +1323,12 @@ where
 #[utoipa::path(
     post,
     path = paths::SDP_POST_SET_DECLARATION_ID,
+    tag = "Service declarations",
+    summary = "Set the node's current declaration",
+    description = "Operator endpoint. Selects the declaration the node acts under, or clears it with `null`.",
+    request_body(content = Option<lb_core::sdp::DeclarationId>, description = "Declaration to use as this node's current one, or `null` to clear it"),
     responses(
-        (status = 200, description = "Post declaration to SDP service to be set as current", body = lb_core::sdp::DeclarationId),
+        (status = 200, description = "Current declaration updated", body = schema::Null),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1303,6 +1377,9 @@ where
 #[utoipa::path(
     get,
     path = paths::MANTLE_SDP_DECLARATIONS,
+    tag = "Mantle",
+    summary = "Current SDP declarations",
+    description = "All service declarations in the ledger state at the tip, keyed by declaration id.",
     responses(
         (status = 200, description = "Get current SDP declarations keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
         (status = 500, description = "Internal server error", body = ErrorBody),
@@ -1321,6 +1398,9 @@ where
 #[utoipa::path(
     get,
     path = paths::MANTLE_SDP_SNAPSHOT,
+    tag = "Mantle",
+    summary = "SDP snapshot for the current epoch",
+    description = "The frozen set of service declarations in effect for the current epoch, keyed by declaration id.",
     responses(
         (status = 200, description = "Get the SDP snapshot for the current epoch keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
         (status = 500, description = "Internal server error", body = ErrorBody),
@@ -1339,6 +1419,9 @@ where
 #[utoipa::path(
     post,
     path = paths::LEADER_CLAIM,
+    tag = "Leadership",
+    summary = "Claim leader rewards",
+    description = "Operator endpoint. Builds, signs, and submits a transaction claiming the rewards of blocks this node proposed.",
     responses(
         (status = 200, description = "Leader claim transaction submitted", body = LeaderClaimResponseBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
@@ -1357,8 +1440,11 @@ where
 #[utoipa::path(
     put,
     path = paths::POW_START_MINING,
+    tag = "Proof of work",
+    summary = "Start mining",
+    description = "Operator endpoint.",
     responses(
-        (status = 200, description = "PoW mining started"),
+        (status = 200, description = "PoW mining started", body = schema::Null),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1375,8 +1461,11 @@ where
 #[utoipa::path(
     put,
     path = paths::POW_STOP_MINING,
+    tag = "Proof of work",
+    summary = "Stop mining",
+    description = "Operator endpoint.",
     responses(
-        (status = 200, description = "PoW mining stopped"),
+        (status = 200, description = "PoW mining stopped", body = schema::Null),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1393,8 +1482,11 @@ where
 #[utoipa::path(
     put,
     path = paths::POW_START_AUTO_CLAIM,
+    tag = "Proof of work",
+    summary = "Start claiming mined rewards automatically",
+    description = "Operator endpoint.",
     responses(
-        (status = 200, description = "PoW auto-claim started"),
+        (status = 200, description = "PoW auto-claim started", body = schema::Null),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1411,8 +1503,11 @@ where
 #[utoipa::path(
     put,
     path = paths::POW_STOP_AUTO_CLAIM,
+    tag = "Proof of work",
+    summary = "Stop claiming mined rewards automatically",
+    description = "Operator endpoint.",
     responses(
-        (status = 200, description = "PoW auto-claim stopped"),
+        (status = 200, description = "PoW auto-claim stopped", body = schema::Null),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1429,6 +1524,9 @@ where
 #[utoipa::path(
     post,
     path = paths::POW_CLAIM,
+    tag = "Proof of work",
+    summary = "Claim mined rewards",
+    description = "Operator endpoint. Submits a transaction claiming the rewards of mined tickets, paid to `claim_address` if given. Returns `null` in `tx_hash` when there is nothing to claim.",
     request_body = Option<pow::PoWClaimRequestBody>,
     responses(
         (status = 200, description = "PoW reward-claim transactions submitted", body = pow::PoWClaimResponseBody),
@@ -1452,8 +1550,10 @@ where
 #[utoipa::path(
     get,
     path = paths::POW_CLAIMABLE_REWARDS,
+    tag = "Proof of work",
+    summary = "Mined rewards that can be claimed",
     responses(
-        (status = 200, description = "PoW rewards this node can currently claim"),
+        (status = 200, description = "PoW rewards this node can currently claim", body = lb_pow_service::ClaimableRewardsInfo),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1470,8 +1570,10 @@ where
 #[utoipa::path(
     get,
     path = paths::POW_STATUS,
+    tag = "Proof of work",
+    summary = "Mining and auto-claim state",
     responses(
-        (status = 200, description = "PoW mining and auto-claim state as the running node holds it"),
+        (status = 200, description = "PoW mining and auto-claim state as the running node holds it", body = lb_pow_service::PoWStatus),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1488,9 +1590,12 @@ where
 #[utoipa::path(
     get,
     path = paths::BLOCKS,
+    tag = "Chain",
+    summary = "Immutable blocks in a slot range",
+    description = "Blocks at or below the LIB whose slot lies in `[slot_from, slot_to]`, in ascending slot order.",
     params(BlockRangeQuery),
     responses(
-        (status = 200, description = "Get blocks"),
+        (status = 200, description = "Get blocks", body = Vec<ApiBlock>),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1526,8 +1631,11 @@ where
 #[utoipa::path(
     get,
     path = paths::BLOCKS_DETAIL,
+    tag = "Chain",
+    summary = "Block by header id",
+    params(("id" = HeaderId, Path, description = "Header id of the block")),
     responses(
-        (status = 200, description = "Block found"),
+        (status = 200, description = "Block found", body = ApiBlock),
         (status = 404, description = "Block not found", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
@@ -1560,8 +1668,11 @@ where
 #[utoipa::path(
     get,
     path = paths::BLOCK_EVENTS,
+    tag = "Chain",
+    summary = "Events emitted by a block's transactions",
+    params(("id" = HeaderId, Path, description = "Header id of the block")),
     responses(
-        (status = 200, description = "Block events", body = Object),
+        (status = 200, description = "Block events", body = lb_core::events::Events),
         (status = 404, description = "Block not found", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
@@ -1585,16 +1696,23 @@ where
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct GasPricesQuery {
+    /// Block whose ledger state to read. Defaults to the tip.
     tip: Option<HeaderId>,
 }
 
 #[utoipa::path(
     get,
     path = paths::MANTLE_GAS_PRICES,
+    tag = "Mantle",
+    summary = "Current gas prices",
+    description = "Gas prices from the ledger state at `tip` (default: the node's tip).",
+    params(GasPricesQuery),
     responses(
-        (status = 200, description = "Get the gas prices from the ledger state at the tip"),
+        (status = 200, description = "Get the gas prices from the ledger state at the tip", body = GasPricesResponseBody),
+        (status = 404, description = "No ledger state is known for the requested tip", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1638,8 +1756,11 @@ where
 #[utoipa::path(
     get,
     path = paths::BLOCKS_STREAM,
+    tag = "Chain",
+    summary = "Subscribe to new blocks",
+    description = "Streams every block the node applies, together with the tip and LIB after applying it. The stream stays open until the client disconnects.",
     responses(
-        (status = 200, description = "Stream of processed blocks with chain state"),
+        (status = 200, description = "Stream of processed blocks with chain state", body = schema::BlockEvent, content_type = "application/x-ndjson"),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1667,11 +1788,14 @@ where
 #[utoipa::path(
     get,
     path = paths::BLOCKS_RANGE_STREAM,
+    tag = "Chain",
+    summary = "Stream blocks in a slot range",
+    description = "Streams blocks of the canonical chain in a slot range, optionally restricted to immutable blocks. The stream ends when the range or `blocks_limit` is exhausted.",
     params(BlocksStreamQuery),
     responses(
         (status = 200, description = "Stream of processed blocks with chain state in slot order. \
             When immutable_only=true and slot_to is omitted, the stream anchors at LIB slot by \
-            default."),
+            default.", body = schema::BlockEvent, content_type = "application/x-ndjson"),
         (status = 400, description = "Invalid request parameters", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
@@ -1751,8 +1875,12 @@ where
 #[utoipa::path(
     get,
     path = paths::TRANSACTION,
+    tag = "Chain",
+    summary = "Transaction by hash",
+    description = "A transaction included in a block stored by the node.",
+    params(("id" = TxHash, Path, description = "Hash of the transaction")),
     responses(
-        (status = 200, description = "Transaction found"),
+        (status = 200, description = "Transaction found", body = ApiSignedTransaction),
         (status = 404, description = "Transaction not found", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
@@ -1804,16 +1932,22 @@ pub mod wallet {
 
     use super::*;
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, utoipa::IntoParams)]
+    #[into_params(parameter_in = Query)]
     pub struct TipQuery {
+        /// Block whose ledger state to read. Defaults to the tip.
         tip: Option<HeaderId>,
     }
 
     #[utoipa::path(
     get,
     path = paths::wallet::BALANCE,
+    tag = "Wallet",
+    summary = "Balance of a public key",
+    description = "Sum and list of the unspent notes owned by the key in the ledger at `tip` (default: the node's tip).",
+    params(("public_key" = ZkPublicKey, Path, description = "Public key whose notes to sum"), TipQuery),
     responses(
-        (status = 200, description = "Get wallet balance"),
+        (status = 200, description = "Get wallet balance", body = WalletBalanceResponseBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
     )]
@@ -1857,8 +1991,12 @@ pub mod wallet {
     #[utoipa::path(
     get,
     path = paths::LEADER_AGED_NOTES,
+    tag = "Leadership",
+    summary = "Wallet notes eligible for leader election",
+    description = "Notes old enough to take part in the leadership lottery.",
+    params(TipQuery),
     responses(
-        (status = 200, description = "Get the wallet notes eligible to lead"),
+        (status = 200, description = "Get the wallet notes eligible to lead", body = LeaderAgedNotesResponseBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
     )]
@@ -1904,8 +2042,11 @@ pub mod wallet {
     #[utoipa::path(
     get,
     path = paths::LEADER_CLAIM_VOUCHERS,
+    tag = "Leadership",
+    summary = "Leader reward vouchers that can be claimed",
+    params(TipQuery),
     responses(
-        (status = 200, description = "Get claimable wallet vouchers"),
+        (status = 200, description = "Get claimable wallet vouchers", body = WalletClaimableVouchersResponseBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
     )]
@@ -1949,8 +2090,12 @@ pub mod wallet {
     #[utoipa::path(
     post,
     path = paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
+    tag = "Wallet",
+    summary = "Transfer funds",
+    description = "Operator endpoint. Builds, funds, signs, and submits a transfer from the node wallet.",
+    request_body = WalletTransferFundsRequestBody,
     responses(
-        (status = 200, description = "Make transfer"),
+        (status = 201, description = "Make transfer", body = WalletTransferFundsResponseBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
     )]
@@ -2046,8 +2191,12 @@ pub mod wallet {
     #[utoipa::path(
         post,
         path = paths::wallet::SIGN_TX_ED25519,
+        tag = "Wallet",
+        summary = "Sign a transaction hash with an Ed25519 key",
+        description = "Operator endpoint. The key must be held by the node.",
+        request_body = WalletSignTxEd25519RequestBody,
         responses(
-            (status = 200, description = "Signed transaction"),
+            (status = 200, description = "Signed transaction", body = WalletSignTxEd25519ResponseBody),
             (status = 500, description = "Internal server error", body = ErrorBody),
         )
     )]
@@ -2106,8 +2255,12 @@ pub mod wallet {
     #[utoipa::path(
         post,
         path = paths::wallet::SIGN_TX_ZK,
+        tag = "Wallet",
+        summary = "Sign a transaction hash with ZK keys",
+        description = "Operator endpoint. The keys must be held by the node.",
+        request_body = WalletSignTxZkRequestBody,
         responses(
-            (status = 200, description = "Signed transaction"),
+            (status = 200, description = "Signed transaction", body = WalletSignTxZkResponseBody),
             (status = 500, description = "Internal server error", body = ErrorBody),
         )
     )]
@@ -2166,8 +2319,12 @@ pub mod wallet {
     #[utoipa::path(
         post,
         path = paths::wallet::FUND,
+        tag = "Wallet",
+        summary = "Fund a transaction",
+        description = "Operator endpoint. Adds inputs and change from the node wallet to cover the fee of the given transaction builder, and proves the added inputs.",
+        request_body = WalletFundRequestBody,
         responses(
-            (status = 200, description = "Funded transaction with fee transfer proof"),
+            (status = 200, description = "Funded transaction with fee transfer proof", body = WalletFundResponseBody),
             (status = 500, description = "Internal server error", body = ErrorBody),
         )
     )]

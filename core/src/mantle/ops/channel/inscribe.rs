@@ -35,6 +35,14 @@ use crate::{
 pub const MAX_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 
+#[cfg(feature = "openapi")]
+fn inscription_schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+    crate::openapi::hex_blob(
+        MAX_BYTES,
+        "Inscription payload: arbitrary bytes, hex encoded (serialized unprefixed).",
+    )
+}
+
 mod serde_inscription {
     use serde::{Deserializer, Serializer};
 
@@ -58,10 +66,12 @@ mod serde_inscription {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
     #[serde(with = "serde_inscription")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = inscription_schema))]
     pub inscription: Inscription,
     /// Enforce that this inscription comes after this tx
     pub parent: MsgId,

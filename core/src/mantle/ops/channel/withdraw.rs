@@ -35,6 +35,7 @@ use crate::{
 
 // ChannelWithdraw = ChannelId Inputs — plain field-order concat.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
