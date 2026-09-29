@@ -73,6 +73,7 @@ pub const ENCODED_LENGTH: usize = 32;
 const FORK_DIGEST_V1: &[u8] = b"FORK_DIGEST_V1";
 
 impl ForkDigest {
+    #[must_use]
     pub const fn new_unbound() -> Self {
         Self([0u8; 32])
     }
