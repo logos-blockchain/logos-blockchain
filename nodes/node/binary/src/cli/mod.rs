@@ -1,3 +1,4 @@
+pub mod addresses;
 pub mod config;
 pub mod get_peer_id;
 pub mod keys;
@@ -10,20 +11,17 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
+use lb_key_management_system_service::hd::{Mnemonic, Passphrase};
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use libp2p::Multiaddr;
 
 use crate::{
-    cli::{
-        config::migrate_0_1_2,
-        keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
-    },
+    cli::keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
     config::{
         ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, LogArgs,
-        NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig, api::serde::AxumBackendSettings,
+        NetworkArgs, RunConfig, StateArgs, UserConfig, api::serde::AxumBackendSettings,
         blend::serde::core::BackendConfig as BlendCoreConfig, network::serde::SwarmConfig,
-        update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
-        update_tracing,
+        update_api, update_blend, update_network, update_state, update_tracing,
     },
 };
 
@@ -59,9 +57,6 @@ pub struct CliArgs {
     /// Overrides cryptarchia config.
     #[clap(flatten)]
     cryptarchia: CryptarchiaArgs,
-    /// Overrides sdp config.
-    #[clap(flatten)]
-    sdp: SdpArgs,
     /// Overrides http config.
     #[clap(flatten)]
     api: ApiArgs,
@@ -98,9 +93,6 @@ pub enum Command {
     UpdateConfig(Box<UpdateArgs>),
     /// Migrates a new user config with generated keys
     MigrateConfig(Box<MigrateArgs>),
-    /// Migrates 0.1.2 config to a new user config
-    #[command(name = "migrate-from-0.1.2")]
-    Migrate0_1_2(Box<migrate_0_1_2::MigrateArgs>),
     /// Generate a new key of type.
     GenerateKey(Box<GenerateKeyArgs>),
     /// Add a key of type to a keystore.
@@ -128,6 +120,15 @@ pub struct InitArgs {
     #[arg(long, default_value_t = false)]
     pub overwrite: bool,
 
+    /// BIP-39 mnemonic to derive the wallet keys from.
+    /// A new 12-word mnemonic is generated if not given.
+    #[clap(long = "mnemonic", env = "MNEMONIC")]
+    pub mnemonic: Option<Mnemonic>,
+
+    /// BIP-39 passphrase of the mnemonic, which is empty if not given.
+    #[clap(long = "mnemonic-passphrase", env = "MNEMONIC_PASSPHRASE")]
+    pub mnemonic_passphrase: Option<Passphrase>,
+
     #[clap(flatten)]
     pub log: LogArgs,
 
@@ -139,9 +140,6 @@ pub struct InitArgs {
 
     #[clap(flatten)]
     pub cryptarchia: CryptarchiaArgs,
-
-    #[clap(flatten)]
-    pub sdp: SdpArgs,
 
     #[clap(flatten)]
     pub api: ApiArgs,
@@ -193,6 +191,13 @@ pub struct EmbeddedInitArgs {
     /// Path for the generated KMS keys YAML file.
     /// Defaults to 'kms.yaml' in the same directory as --output.
     pub kms_file: Option<PathBuf>,
+
+    /// BIP-39 mnemonic to derive the wallet keys from.
+    /// A new 12-word mnemonic is generated if not given.
+    pub mnemonic: Option<Mnemonic>,
+
+    /// BIP-39 passphrase of the mnemonic, which is empty if not given.
+    pub mnemonic_passphrase: Option<Passphrase>,
 }
 
 impl From<EmbeddedInitArgs> for InitArgs {
@@ -200,6 +205,8 @@ impl From<EmbeddedInitArgs> for InitArgs {
         let mut init_args = Self {
             output: args.output.clone(),
             keystore: args.kms_file.clone(),
+            mnemonic: args.mnemonic.clone(),
+            mnemonic_passphrase: args.mnemonic_passphrase.clone(),
             ..Default::default()
         };
 
@@ -241,6 +248,8 @@ impl Default for EmbeddedInitArgs {
             skip_ibd: false,
             log_filter: None,
             kms_file: None,
+            mnemonic: None,
+            mnemonic_passphrase: None,
         }
     }
 }
@@ -270,9 +279,6 @@ pub struct UpdateArgs {
 
     #[clap(flatten)]
     cryptarchia: CryptarchiaArgs,
-
-    #[clap(flatten)]
-    sdp: SdpArgs,
 
     #[clap(flatten)]
     api: ApiArgs,
@@ -307,7 +313,6 @@ impl Default for UpdateArgs {
             network: NetworkArgs::default(),
             blend: BlendArgs::default(),
             cryptarchia: CryptarchiaArgs::default(),
-            sdp: SdpArgs::default(),
             api: ApiArgs::default(),
             state: StateArgs::default(),
         }
@@ -337,9 +342,6 @@ pub struct MigrateArgs {
     cryptarchia: CryptarchiaArgs,
 
     #[clap(flatten)]
-    sdp: SdpArgs,
-
-    #[clap(flatten)]
     api: ApiArgs,
 
     #[clap(flatten)]
@@ -362,7 +364,6 @@ impl MigrateArgs {
             network: NetworkArgs::default(),
             blend: BlendArgs::default(),
             cryptarchia: CryptarchiaArgs::default(),
-            sdp: SdpArgs::default(),
             api: ApiArgs::default(),
             state: StateArgs::default(),
             storage_path: None,
@@ -379,11 +380,12 @@ impl From<MigrateArgs> for InitArgs {
             network: migrate.network,
             blend: migrate.blend,
             cryptarchia: migrate.cryptarchia,
-            sdp: migrate.sdp,
             api: migrate.api,
             state: migrate.state,
             storage_path: migrate.storage_path,
             overwrite: false,
+            mnemonic: None,
+            mnemonic_passphrase: None,
         }
     }
 }
@@ -426,8 +428,6 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
         api: api_args,
         network: network_args,
         blend: blend_args,
-        cryptarchia: cryptarchia_args,
-        sdp: sdp_args,
         deployment: deployment_args,
         state: state_args,
         ..
@@ -435,8 +435,6 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
     update_tracing(&mut user_config.tracing, log_args)?;
     update_network(&mut user_config.network, network_args)?;
     update_blend(&mut user_config.blend, blend_args);
-    update_cryptarchia(&mut user_config.cryptarchia, cryptarchia_args);
-    update_sdp(&mut user_config.sdp, sdp_args);
     update_api(&mut user_config.api, api_args);
     update_state(&mut user_config.state, state_args);
 
@@ -469,4 +467,34 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
 pub fn build_run_config_from_env(user_config: UserConfig) -> Result<RunConfig> {
     let cli_args = CliArgs::try_parse_from(["lb-node"])?;
     build_run_config(user_config, cli_args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Test vector of the spec
+    const MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    #[test]
+    fn mnemonic_and_passphrase_are_not_shown() {
+        let args = InitArgs::parse_from([
+            "",
+            "--mnemonic",
+            MNEMONIC,
+            "--mnemonic-passphrase",
+            "passphrase",
+        ]);
+
+        assert_eq!(args.mnemonic, Some(MNEMONIC.parse().unwrap()));
+        assert_eq!(args.mnemonic_passphrase, Some("passphrase".into()));
+        let shown = format!("{args:?}");
+        assert!(!shown.contains("abandon"));
+        assert!(!shown.contains("\"passphrase\""));
+    }
+
+    #[test]
+    fn invalid_mnemonic_is_rejected() {
+        assert!(InitArgs::try_parse_from(["", "--mnemonic", "abandon abandon about"]).is_err());
+    }
 }

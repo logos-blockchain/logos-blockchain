@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 
-use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::{
     backend::preload::KeyId,
-    keys::{
-        Ed25519Key, Key, UnsecuredEd25519Key, UnsecuredZkKey, ZkKey, secured_key::SecuredKey as _,
-    },
+    hd::{MasterKey, MasterSeed, Mnemonic, Passphrase},
+    keys::{Ed25519Key, Key, UnsecuredEd25519Key, UnsecuredZkKey, ZkKey},
 };
 use num_bigint::BigUint;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const WARNING: &str = "Do not share your secret keys";
+use crate::config::kms::serde::KmsBackendSettings;
+
+const WARNING: &str = "Do not share your mnemonic and secret keys";
 
 #[derive(Serialize, Deserialize, Hash, Eq, PartialEq, Clone, Debug)]
 #[serde(transparent)]
@@ -21,22 +21,10 @@ pub struct KeyTitle(pub String);
 impl KeyTitle {
     pub const BLEND_SIGNING: &str = "BlendSigning";
     pub const BLEND_ZK: &str = "BlendZk";
-    pub const LEADER_FUNDING: &str = "LeaderFunding";
     pub const NETWORK_SWARM: &str = "NetworkSwarm";
-    pub const POW_CLAIM: &str = "PoWClaim";
-    pub const SDP_FUNDING: &str = "SdpFunding";
-    pub const VAUCHER_MASTER: &str = "VaucherMaster";
-    pub const STAKE: &str = "Stake";
 
     pub const PREDEFINED_ED25519: [&'static str; 2] = [Self::BLEND_SIGNING, Self::NETWORK_SWARM];
-    pub const PREDEFINED_ZK: [&'static str; 6] = [
-        Self::BLEND_ZK,
-        Self::LEADER_FUNDING,
-        Self::POW_CLAIM,
-        Self::SDP_FUNDING,
-        Self::VAUCHER_MASTER,
-        Self::STAKE,
-    ];
+    pub const PREDEFINED_ZK: [&'static str; 1] = [Self::BLEND_ZK];
 }
 
 impl<S: Into<String>> From<S> for KeyTitle {
@@ -57,10 +45,17 @@ pub enum KeystoreError {
     ZkExpected(KeyTitle),
 }
 
+/// The secrets of a node: the mnemonic that its wallet keys are derived
+/// from, and the keys that are not derived from it.
+///
+/// The id of a key in the KMS is its title.
 #[derive(Serialize, Deserialize)]
 pub struct Keystore {
-    // Convenience mapping for users to inspect when serialized.
-    public_keys: HashMap<KeyTitle, KeyId>,
+    /// The BIP-39 mnemonic that the wallet keys are derived from
+    mnemonic: Mnemonic,
+    /// The BIP-39 passphrase of the mnemonic, which is empty if not set
+    #[serde(default)]
+    passphrase: Option<Passphrase>,
     secret_keys: HashMap<KeyTitle, Key>,
 
     #[serde(rename = "WARNING")]
@@ -68,95 +63,13 @@ pub struct Keystore {
 }
 
 impl Keystore {
-    pub fn set(&mut self, name: impl Into<KeyTitle>, key: Key) {
-        let key_name = name.into();
-        self.public_keys.insert(key_name.clone(), key_id(&key));
-        self.secret_keys.insert(key_name, key);
-    }
-
+    /// Creates a keystore with the mnemonic and newly generated predefined
+    /// keys.
     #[must_use]
-    pub fn get(&self, name: impl Into<KeyTitle>) -> Option<(KeyId, &Key)> {
-        self.secret_keys
-            .get_key_value(&name.into())
-            .map(|(_, v)| (key_id(v), v))
-    }
-
-    pub fn get_all(&self) -> impl Iterator<Item = (KeyId, &Key)> {
-        self.secret_keys.values().map(|key| (key_id(key), key))
-    }
-
-    pub fn get_ed25519(
-        &self,
-        title: impl Into<KeyTitle>,
-    ) -> Result<(KeyId, UnsecuredEd25519Key), KeystoreError> {
-        let title = title.into();
-        let (key_id, generic_key) = self
-            .get(title.clone())
-            .ok_or_else(|| KeystoreError::NotFound(title.clone()))?;
-
-        match generic_key {
-            Key::Ed25519(inner_key) => Ok((key_id, inner_key.clone().into_unsecured())),
-            Key::Zk(_) => Err(KeystoreError::Ed25519Expected(title)),
-        }
-    }
-
-    pub fn get_zk(
-        &self,
-        title: impl Into<KeyTitle>,
-    ) -> Result<(KeyId, UnsecuredZkKey), KeystoreError> {
-        let title = title.into();
-        let (id, generic_key) = self
-            .get(title.clone())
-            .ok_or_else(|| KeystoreError::NotFound(title.clone()))?;
-
-        match generic_key {
-            Key::Zk(inner_key) => Ok((id, inner_key.clone().into_unsecured())),
-            Key::Ed25519(_) => Err(KeystoreError::ZkExpected(title)),
-        }
-    }
-
-    pub fn get_all_zk(&self) -> impl Iterator<Item = (KeyId, UnsecuredZkKey)> + '_ {
-        self.secret_keys
-            .values()
-            .filter_map(|generic_key| match generic_key {
-                Key::Zk(inner_key) => {
-                    let id = key_id(generic_key);
-                    let unsecured = inner_key.clone().into_unsecured();
-                    Some((id, unsecured))
-                }
-                Key::Ed25519(_) => None,
-            })
-    }
-
-    pub fn generate_ed25519(&mut self, title: impl Into<KeyTitle>) -> (KeyId, UnsecuredEd25519Key) {
-        let title = title.into();
-        let secure_key = Ed25519Key::generate(&mut OsRng);
-        let unsecured = secure_key.clone().into_unsecured();
-
-        self.set(title.clone(), Key::Ed25519(secure_key));
-        (key_id(&self.secret_keys[&title]), unsecured)
-    }
-
-    pub fn generate_zk(&mut self, title: impl Into<KeyTitle>) -> (KeyId, UnsecuredZkKey) {
-        let title = title.into();
-        let secure_key = generate_zk_key_from_random_bytes();
-        let unsecured = secure_key.clone().into_unsecured();
-
-        self.set(title.clone(), Key::Zk(secure_key));
-        (key_id(&self.secret_keys[&title]), unsecured)
-    }
-
-    pub fn remove(&mut self, title: impl Into<KeyTitle>) -> Option<(KeyId, Key)> {
-        let title = title.into();
-        self.public_keys.remove(&title);
-        self.secret_keys.remove(&title).map(|v| (key_id(&v), v))
-    }
-}
-
-impl Default for Keystore {
-    fn default() -> Self {
+    pub fn new(mnemonic: Mnemonic, passphrase: Option<Passphrase>) -> Self {
         let mut keystore = Self {
-            public_keys: HashMap::new(),
+            mnemonic,
+            passphrase,
             secret_keys: HashMap::new(),
             warning: WARNING.to_owned(),
         };
@@ -171,18 +84,192 @@ impl Default for Keystore {
 
         keystore
     }
+
+    pub fn set(&mut self, name: impl Into<KeyTitle>, key: impl Into<Key>) {
+        self.secret_keys.insert(name.into(), key.into());
+    }
+
+    #[must_use]
+    pub fn get(&self, name: impl Into<KeyTitle>) -> Option<(KeyId, Key)> {
+        let title = name.into();
+        let key = self.secret_keys.get(&title)?;
+        Some((title.0, key.clone()))
+    }
+
+    /// The ids of the keys that the wallet signs with, in a stable order.
+    /// They are all the keys but the one of the network.
+    #[must_use]
+    pub fn wallet_key_ids(&self) -> Vec<KeyId> {
+        let mut key_ids = self
+            .secret_keys
+            .keys()
+            .filter(|title| title.0 != KeyTitle::NETWORK_SWARM)
+            .map(|title| title.0.clone())
+            .collect::<Vec<_>>();
+        key_ids.sort();
+        key_ids
+    }
+
+    /// The KMS settings that load every key of the keystore.
+    #[must_use]
+    pub fn kms_backend_settings(&self) -> KmsBackendSettings {
+        KmsBackendSettings {
+            mnemonic: self.mnemonic.clone(),
+            passphrase: self.passphrase.clone(),
+            keys: self
+                .secret_keys
+                .iter()
+                .map(|(title, key)| (title.0.clone(), key.clone()))
+                .collect(),
+        }
+    }
+
+    /// The master key that the wallet keys are derived from
+    #[must_use]
+    pub fn master_key(&self) -> MasterKey {
+        let passphrase = self.passphrase.as_deref().unwrap_or_default();
+        MasterSeed::from_mnemonic(&self.mnemonic, passphrase).to_key()
+    }
+
+    pub fn get_ed25519(
+        &self,
+        title: impl Into<KeyTitle>,
+    ) -> Result<(KeyId, UnsecuredEd25519Key), KeystoreError> {
+        let title = title.into();
+        let (key_id, key) = self
+            .get(title.clone())
+            .ok_or_else(|| KeystoreError::NotFound(title.clone()))?;
+
+        match &key {
+            Key::Ed25519(inner_key) => Ok((key_id, inner_key.clone().into_unsecured())),
+            Key::Zk(_) => Err(KeystoreError::Ed25519Expected(title)),
+        }
+    }
+
+    pub fn get_zk(
+        &self,
+        title: impl Into<KeyTitle>,
+    ) -> Result<(KeyId, UnsecuredZkKey), KeystoreError> {
+        let title = title.into();
+        let (id, key) = self
+            .get(title.clone())
+            .ok_or_else(|| KeystoreError::NotFound(title.clone()))?;
+
+        match &key {
+            Key::Zk(inner_key) => Ok((id, inner_key.clone().into_unsecured())),
+            Key::Ed25519(_) => Err(KeystoreError::ZkExpected(title)),
+        }
+    }
+
+    pub fn generate_ed25519(&mut self, title: impl Into<KeyTitle>) -> (KeyId, UnsecuredEd25519Key) {
+        let title = title.into();
+        let secure_key = Ed25519Key::generate(&mut OsRng);
+        let unsecured = secure_key.clone().into_unsecured();
+
+        self.set(title.clone(), Key::Ed25519(secure_key));
+        (title.0, unsecured)
+    }
+
+    pub fn generate_zk(&mut self, title: impl Into<KeyTitle>) -> (KeyId, UnsecuredZkKey) {
+        let title = title.into();
+        let secure_key = generate_zk_key_from_random_bytes();
+        let unsecured = secure_key.clone().into_unsecured();
+
+        self.set(title.clone(), Key::Zk(secure_key));
+        (title.0, unsecured)
+    }
+
+    pub fn remove(&mut self, title: impl Into<KeyTitle>) -> Option<(KeyId, Key)> {
+        let title = title.into();
+        let key = self.secret_keys.remove(&title)?;
+        Some((title.0, key))
+    }
 }
 
-fn key_id(key: &Key) -> KeyId {
-    let key_id_bytes = match key {
-        Key::Ed25519(ed25519_secret_key) => ed25519_secret_key.as_public_key().to_bytes(),
-        Key::Zk(zk_secret_key) => fr_to_bytes(zk_secret_key.as_public_key().as_fr()),
-    };
-    hex::encode(key_id_bytes)
+impl Default for Keystore {
+    /// Creates a keystore from a newly generated mnemonic.
+    fn default() -> Self {
+        Self::new(Mnemonic::generate(&mut OsRng), None)
+    }
 }
 
 fn generate_zk_key_from_random_bytes() -> ZkKey {
     let mut bytes = [0u8; 32];
     rand::RngCore::fill_bytes(&mut OsRng, &mut bytes);
     ZkKey::from(BigUint::from_bytes_le(&bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::fr_to_bytes;
+
+    use super::*;
+
+    // Test vectors of the spec
+    const MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    // The ZK key at m/154'/0'/0'/0'
+    const RECEIVE_0_ZK_KEY: &str =
+        "5e09bf4ce6b3f42970104a6f5940104407f98da0eb946104c13fb4f94c011f16";
+
+    #[test]
+    fn wallet_keys_are_derived_from_mnemonic() {
+        let keystore = Keystore::new(MNEMONIC.parse().unwrap(), None);
+        assert_eq!(receive_0_key(&keystore), RECEIVE_0_ZK_KEY);
+    }
+
+    #[test]
+    fn passphrase_changes_wallet_keys() {
+        let keystore = Keystore::new(MNEMONIC.parse().unwrap(), Some("passphrase".into()));
+        assert_ne!(receive_0_key(&keystore), RECEIVE_0_ZK_KEY);
+    }
+
+    #[test]
+    fn keys_are_identified_by_their_titles() {
+        let keystore = Keystore::default();
+        let (key_id, _) = keystore.get(KeyTitle::BLEND_ZK).unwrap();
+        assert_eq!(key_id, KeyTitle::BLEND_ZK);
+    }
+
+    #[test]
+    fn wallet_does_not_sign_with_the_network_key() {
+        let keystore = Keystore::default();
+        assert!(keystore.get(KeyTitle::NETWORK_SWARM).is_some());
+        assert_eq!(
+            keystore.wallet_key_ids(),
+            [KeyTitle::BLEND_SIGNING, KeyTitle::BLEND_ZK]
+        );
+    }
+
+    #[test]
+    fn default_generates_a_new_mnemonic() {
+        assert_ne!(Keystore::default().mnemonic, Keystore::default().mnemonic);
+    }
+
+    #[test]
+    fn serde_from_yaml() {
+        let keystore = Keystore::new(MNEMONIC.parse().unwrap(), None);
+        let yaml = serde_yaml::to_string(&keystore).unwrap();
+        let deserialized: Keystore = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(deserialized.mnemonic, keystore.mnemonic);
+        assert_eq!(deserialized.secret_keys, keystore.secret_keys);
+    }
+
+    #[test]
+    fn kms_backend_settings_load_every_key() {
+        let keystore = Keystore::new(MNEMONIC.parse().unwrap(), Some("passphrase".into()));
+        let settings = keystore.kms_backend_settings();
+        assert_eq!(settings.keys.len(), keystore.secret_keys.len());
+        for title in keystore.secret_keys.keys() {
+            let (key_id, key) = keystore.get(title.clone()).unwrap();
+            assert_eq!(settings.keys.get(&key_id), Some(&key));
+        }
+    }
+
+    fn receive_0_key(keystore: &Keystore) -> String {
+        let key = keystore
+            .master_key()
+            .derive_key(&"m/154'/0'/0'/0'".parse().unwrap())
+            .to_zk_key();
+        hex::encode(fr_to_bytes(key.as_fr()))
+    }
 }

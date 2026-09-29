@@ -1,27 +1,24 @@
 use std::path::Path;
 
 use color_eyre::eyre::Result;
-use lb_core::mantle::Value;
-use lb_pow_service::ClaimTarget;
+use lb_key_management_system_service::hd::Mnemonic;
 use libp2p::{Multiaddr, PeerId};
+use rand::rngs::OsRng;
 use thiserror::Error;
 
 use crate::{
     NetworkArgs, UserConfig,
     cli::{
         InitArgs,
+        addresses::addresses_from_config,
         config::keystore::{KeyTitle, Keystore, KeystoreError},
     },
     config::{
-        ApiConfig, BlendArgs, CryptarchiaArgs, CryptarchiaConfig, KmsConfig, PoWConfig, SdpArgs,
-        SdpConfig, StateConfig, StorageConfig, TimeConfig, TracingConfig, WalletConfig,
+        ApiConfig, BlendArgs, CryptarchiaArgs, CryptarchiaConfig, KmsConfig, PoWConfig, SdpConfig,
+        StateConfig, StorageConfig, TimeConfig, TracingConfig, WalletConfig,
         blend::serde::{Config as BlendConfig, RequiredValues as BlendConfigRequiredValues},
-        cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
         network::serde::Config as NetworkConfig,
-        sdp::serde::RequiredValues as SdpConfigRequiredValues,
-        update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
-        update_tracing,
-        wallet::serde::RequiredValues as WalletConfigRequiredValues,
+        update_api, update_blend, update_network, update_state, update_tracing,
     },
 };
 
@@ -51,7 +48,11 @@ pub fn run(args: InitArgs) -> Result<()> {
         return Err(InitError::KeystoreFileExists.into());
     }
 
-    let keystore = Keystore::default();
+    let mnemonic = args
+        .mnemonic
+        .clone()
+        .unwrap_or_else(|| Mnemonic::generate(&mut OsRng));
+    let keystore = Keystore::new(mnemonic, args.mnemonic_passphrase.clone());
     let user_config = build_user_config(&keystore, args)?;
 
     let user_config_yaml = serde_yaml::to_string(&user_config)?;
@@ -59,6 +60,10 @@ pub fn run(args: InitArgs) -> Result<()> {
 
     let keystore_yaml = serde_yaml::to_string(&keystore)?;
     std::fs::write(&keystore_path, &keystore_yaml)?;
+
+    for address in addresses_from_config(&user_config) {
+        println!("{address}");
+    }
 
     Ok(())
 }
@@ -73,7 +78,6 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> Result<UserConf
         network: network_args,
         blend: blend_args,
         cryptarchia: cryptarchia_args,
-        sdp: sdp_args,
         api: api_args,
         state: state_args,
         storage_path: storage_args,
@@ -101,22 +105,20 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> Result<UserConf
 
     let blend_config = build_blend_config(keystore, blend_args)?;
 
-    let cryptarchia_config = build_cryptarchia_config(keystore, initial_peers, cryptarchia_args)?;
+    let cryptarchia_config = build_cryptarchia_config(initial_peers, cryptarchia_args);
 
-    let sdp_config = build_sdp_config(keystore, sdp_args)?;
-
-    let wallet_config = build_wallet_config(keystore)?;
+    let wallet_config = build_wallet_config(keystore);
 
     let kms_config = build_kms_config(keystore);
 
-    let pow_config = build_pow_config(keystore)?;
+    let pow_config = build_pow_config();
 
     Ok(UserConfig {
         network: network_config,
         blend: blend_config,
         cryptarchia: cryptarchia_config,
         time: time_config,
-        sdp: sdp_config,
+        sdp: SdpConfig::default(),
         api: api_config,
         storage: storage_config,
         kms: kms_config,
@@ -164,15 +166,10 @@ fn build_blend_config(
 }
 
 fn build_cryptarchia_config(
-    keystore: &Keystore,
     initial_peers: Option<Vec<Multiaddr>>,
     cryptarchia_args: CryptarchiaArgs,
-) -> Result<CryptarchiaConfig, KeystoreError> {
-    let (_, cryptarchia_funding_key) = keystore.get_zk(KeyTitle::LEADER_FUNDING)?;
-    let mut cryptarchia_config =
-        CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues {
-            funding_pk: cryptarchia_funding_key.to_public_key(),
-        });
+) -> CryptarchiaConfig {
+    let mut cryptarchia_config = CryptarchiaConfig::default();
     if !cryptarchia_args.skip_ibd
         && let Some(initial_peers) = initial_peers
     {
@@ -184,58 +181,25 @@ fn build_cryptarchia_config(
             })
             .collect();
     }
-    update_cryptarchia(&mut cryptarchia_config, cryptarchia_args);
 
-    Ok(cryptarchia_config)
-}
-
-fn build_sdp_config(keystore: &Keystore, sdp_args: SdpArgs) -> Result<SdpConfig, KeystoreError> {
-    let (_, sdp_funding_key) = keystore.get_zk(KeyTitle::SDP_FUNDING)?;
-    let mut sdp_config = SdpConfig::with_required_values(SdpConfigRequiredValues {
-        funding_pk: sdp_funding_key.to_public_key(),
-    });
-    update_sdp(&mut sdp_config, sdp_args);
-
-    Ok(sdp_config)
+    cryptarchia_config
 }
 
 fn build_kms_config(keystore: &Keystore) -> KmsConfig {
-    let mut kms_config = KmsConfig::default();
-    kms_config.backend.keys = keystore
-        .get_all()
-        .map(|(id, key)| (id, key.clone()))
-        .collect();
-
-    kms_config
+    KmsConfig {
+        backend: keystore.kms_backend_settings(),
+    }
 }
 
-/// Mining defaults, with auto-claim paying the `PoWClaim` key without a cap,
-/// so a generated node claims its mined rewards unattended once mining is
-/// started.
-fn build_pow_config(keystore: &Keystore) -> Result<PoWConfig, KeystoreError> {
-    let (_, pow_claim_key) = keystore.get_zk(KeyTitle::POW_CLAIM)?;
-
-    let mut pow_config = PoWConfig::default();
-    pow_config.auto_claim.targets = vec![ClaimTarget {
-        public_key: pow_claim_key.to_public_key(),
-        threshold: Value::MAX,
-    }];
-
-    Ok(pow_config)
+/// Mining defaults
+// TODO(hd_wallet_04_pow): Claim the mined rewards unattended.
+fn build_pow_config() -> PoWConfig {
+    PoWConfig::default()
 }
 
-fn build_wallet_config(keystore: &Keystore) -> Result<WalletConfig, KeystoreError> {
-    let (voucher_master_key_id, _) = keystore
-        .get(KeyTitle::VAUCHER_MASTER)
-        .ok_or_else(|| KeystoreError::NotFound(KeyTitle::VAUCHER_MASTER.into()))?;
-
-    let mut wallet_config = WalletConfig::with_required_values(WalletConfigRequiredValues {
-        voucher_master_key_id,
-    });
-    wallet_config.known_keys = keystore
-        .get_all_zk()
-        .map(|(id, key)| (id, key.to_public_key()))
-        .collect();
-
-    Ok(wallet_config)
+fn build_wallet_config(keystore: &Keystore) -> WalletConfig {
+    WalletConfig {
+        known_keys: keystore.wallet_key_ids(),
+        ..WalletConfig::default()
+    }
 }
