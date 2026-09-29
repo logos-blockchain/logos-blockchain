@@ -111,7 +111,7 @@ mod tests {
             leader_claim_proof::Groth16LeaderClaimProof,
         },
         sdp::{
-            ActivityMetadata, DeclarationId, Locator, MAX_LOCATOR_BYTE_SIZE, ProviderId,
+            ActivityMetadata, DeclarationId, Locator, MAX_LOCATOR_BYTE_SIZE, Nonce, ProviderId,
             ServiceType, blend::ActivityProof,
         },
     };
@@ -447,12 +447,9 @@ mod tests {
 
     #[test]
     fn test_minimum_signed_mantle_tx_size_with_sdp_withdraw() {
-        let service_note_id = NoteId(BigUint::from(123u64).into());
-
         let sdp_withdraw_op = SDPWithdrawOp {
             declaration_id: DeclarationId([0x11; 32]),
-            nonce: 42,
-            service_note_id,
+            nonce: Nonce::new(0.into(), 42),
         };
 
         let mantle_tx = Ops::new_unchecked(vec![Op::SDPWithdraw(sdp_withdraw_op)]);
@@ -489,7 +486,7 @@ mod tests {
 
         let sdp_active_op = SDPActiveOp {
             declaration_id: DeclarationId([0x22; 32]),
-            nonce: 99,
+            nonce: Nonce::new(0.into(), 99),
             metadata,
         };
 
@@ -541,7 +538,7 @@ mod tests {
 
         let sdp_active_op = SDPActiveOp {
             declaration_id: DeclarationId([0x33; 32]),
-            nonce: 55,
+            nonce: Nonce::new(0.into(), 55),
             metadata: ActivityMetadata::Blend(Box::new(blend_proof)),
         };
 

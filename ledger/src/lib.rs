@@ -2546,7 +2546,7 @@ mod tests {
             new_utxo_2,
             declare.id(),
             &zk_key,
-            1,
+            Nonce::new(Epoch::new(3), 1),
         );
 
         // Advance to epoch 7. The snapshot for epoch 7 was built at the 5→6

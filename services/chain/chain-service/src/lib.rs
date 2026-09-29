@@ -186,6 +186,16 @@ pub enum Query {
     GetSdpDeclarations {
         reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
     },
+    /// Returns one declaration from the finalized registry (the LIB state).
+    GetFinalizedSdpDeclaration {
+        declaration_id: DeclarationId,
+        reply_channel: oneshot::Sender<Option<Declaration>>,
+    },
+    /// Returns every declaration for one service from the finalized registry.
+    GetFinalizedSdpDeclarations {
+        service_type: lb_core::sdp::ServiceType,
+        reply_channel: oneshot::Sender<Option<HashMap<DeclarationId, Declaration>>>,
+    },
     /// Returns the frozen SDP snapshot for the current epoch
     GetSdpSnapshot {
         reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,

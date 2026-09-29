@@ -270,16 +270,23 @@ impl BinaryDecode for Locator {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, EnumIter)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, EnumIter,
+)]
 pub enum ServiceType {
     #[serde(rename = "BN")]
     BlendNetwork,
+    #[cfg(any(test, feature = "test-utils"))]
+    #[serde(rename = "TEST")]
+    Test,
 }
 
 impl AsRef<str> for ServiceType {
     fn as_ref(&self) -> &str {
         match self {
             Self::BlendNetwork => "BN",
+            #[cfg(any(test, feature = "test-utils"))]
+            Self::Test => "TEST",
         }
     }
 }
@@ -290,6 +297,8 @@ impl TryFrom<u8> for ServiceType {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::BlendNetwork),
+            #[cfg(any(test, feature = "test-utils"))]
+            1 => Ok(Self::Test),
             _ => Err(()),
         }
     }
@@ -299,6 +308,8 @@ impl AsRef<u8> for ServiceType {
     fn as_ref(&self) -> &u8 {
         match self {
             Self::BlendNetwork => &0,
+            #[cfg(any(test, feature = "test-utils"))]
+            Self::Test => &1,
         }
     }
 }
@@ -344,7 +355,46 @@ mod service_type_tests {
     }
 }
 
-pub type Nonce = u64;
+/// The nonce committed to by an SDP operation.
+///
+/// The wire value is still one little-endian `u64`: the declaration creation
+/// epoch occupies the high 32 bits and the sequence occupies the low 32 bits.
+/// Since the nonce is encoded in the operation payload, it participates in the
+/// Mantle transaction hash covered by the operation's ZK authorization.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[serde(transparent)]
+pub struct Nonce(u64);
+
+impl Nonce {
+    const SEQUENCE_BITS: u32 = 32;
+
+    #[must_use]
+    pub const fn new(lifecycle_epoch: Epoch, sequence: u32) -> Self {
+        Self(((lifecycle_epoch.into_inner() as u64) << Self::SEQUENCE_BITS) | sequence as u64)
+    }
+
+    #[must_use]
+    pub const fn lifecycle_epoch(self) -> Epoch {
+        Epoch::new((self.0 >> Self::SEQUENCE_BITS) as u32)
+    }
+
+    #[must_use]
+    pub const fn sequence(self) -> u32 {
+        self.0 as u32
+    }
+
+    /// Return the next sequence in this lifecycle, without wrapping into the
+    /// lifecycle epoch bits.
+    #[must_use]
+    pub const fn checked_next(self) -> Option<Self> {
+        let sequence = self.sequence();
+        if sequence == u32::MAX {
+            None
+        } else {
+            Some(Self::new(self.lifecycle_epoch(), sequence + 1))
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ProviderId(pub Ed25519PublicKey);
@@ -401,6 +451,20 @@ impl BoundedSerializeOp for DeclarationId {
     type Bytes = [u8; 32];
 }
 
+fn declaration_id_preimage(service_type: ServiceType, zk_id: ZkPublicKey) -> [u8; 33] {
+    let mut preimage = [0; 33];
+    preimage[0] = *service_type.as_ref();
+    preimage[1..].copy_from_slice(&fr_to_bytes(zk_id.as_fr()));
+    preimage
+}
+
+fn declaration_id(service_type: ServiceType, zk_id: ZkPublicKey) -> DeclarationId {
+    let mut hasher = Blake2b::new();
+    hasher.update(declaration_id_preimage(service_type, zk_id));
+
+    DeclarationId(hasher.finalize().into())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Declaration {
     pub service_type: ServiceType,
@@ -433,6 +497,11 @@ pub const SNAPSHOT_FINALIZATION_DELAY: Epoch = Epoch::new(2);
 
 impl Declaration {
     #[must_use]
+    pub fn id(&self) -> DeclarationId {
+        declaration_id(self.service_type, self.zk_id)
+    }
+
+    #[must_use]
     pub fn new(epoch: Epoch, declaration_msg: &DeclarationMessage) -> Self {
         Self {
             service_type: declaration_msg.service_type,
@@ -443,7 +512,7 @@ impl Declaration {
             created: epoch,
             active: epoch.strict_add(SNAPSHOT_FINALIZATION_DELAY),
             withdraw_at: None,
-            nonce: 0,
+            nonce: Nonce::new(epoch, 0),
         }
     }
 }
@@ -512,22 +581,7 @@ pub struct DeclarationMessage {
 impl DeclarationMessage {
     #[must_use]
     pub fn id(&self) -> DeclarationId {
-        let mut hasher = Blake2b::new();
-        let service = match self.service_type {
-            ServiceType::BlendNetwork => "BN",
-        };
-
-        // From the
-        // [spec](https://lip.logos.co/blockchain/raw/bedrock-service-declaration-protocol.html#declaration-storage):
-        // declaration_id = Hash(service||provider_id||zk_id||locators)
-        hasher.update(service.as_bytes());
-        hasher.update(self.provider_id.as_ref());
-        hasher.update(fr_to_bytes(self.zk_id.as_fr()));
-        // The locators go in through the wire encoding, which prefixes the list
-        // with its count and every locator with its byte length.
-        hasher.update(self.locators.encode());
-
-        DeclarationId(hasher.finalize().into())
+        declaration_id(self.service_type, self.zk_id)
     }
 
     pub(crate) fn preverify(
@@ -564,7 +618,6 @@ impl DeclarationMessage {
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
-    pub service_note_id: NoteId,
 }
 
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
@@ -645,8 +698,10 @@ mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
     use multiaddr::Multiaddr;
 
+    use super::declaration_id_preimage;
     use crate::sdp::{
-        Declaration, DeclarationId, DeclarationMessage, Locator, Locators, ProviderId, ServiceType,
+        Declaration, DeclarationId, DeclarationMessage, Locator, Locators, Nonce, ProviderId,
+        ServiceType,
     };
 
     #[test]
@@ -734,7 +789,9 @@ mod tests {
         assert_eq!(declaration.created, Epoch::new(10));
         assert_eq!(declaration.active, Epoch::new(12)); // created + SNAPSHOT_FINALIZATION_DELAY
         assert_eq!(declaration.withdraw_at, None);
-        assert_eq!(declaration.nonce, 0);
+        assert_eq!(declaration.nonce, Nonce::new(declaration.created, 0));
+        assert_eq!(declaration.nonce.lifecycle_epoch(), declaration.created);
+        assert_eq!(declaration.nonce.sequence(), 0);
     }
 
     fn declaration_message(locators: Vec<Locator>) -> DeclarationMessage {
@@ -747,26 +804,63 @@ mod tests {
         }
     }
 
-    // The byte form of a multiaddr is self-describing, so `[A/B]` and `[A, B]`
-    // concatenate to the same bytes. The id has to tell them apart anyway.
     #[test]
-    fn declaration_id_binds_the_locator_split() {
-        let concatenated = |message: &DeclarationMessage| {
-            message
-                .locators
-                .iter()
-                .flat_map(|locator| <Locator as AsRef<[u8]>>::as_ref(locator).to_vec())
-                .collect::<Vec<u8>>()
+    fn declaration_id_matches_rfc_407_vector() {
+        let message = DeclarationMessage {
+            service_type: ServiceType::BlendNetwork,
+            zk_id: ZkPublicKey::new(Fr::from(25u64)),
+            ..declaration_message(vec!["/ip4/203.0.113.10/tcp/4001".parse().unwrap()])
         };
 
-        let joined = declaration_message(vec!["/ip4/203.0.113.10/tcp/4001".parse().unwrap()]);
-        let split = declaration_message(vec![
-            "/ip4/203.0.113.10".parse().unwrap(),
-            "/tcp/4001".parse().unwrap(),
-        ]);
+        let preimage = declaration_id_preimage(message.service_type, message.zk_id);
+        let mut expected_preimage = [0; 33];
+        expected_preimage[1] = 0x19;
+        assert_eq!(preimage.len(), 33);
+        assert_eq!(preimage, expected_preimage);
 
-        assert_eq!(concatenated(&joined), concatenated(&split));
-        assert_ne!(joined.id(), split.id());
+        assert_eq!(
+            message.id().0,
+            [
+                0x67, 0xfa, 0x7d, 0x1f, 0xe7, 0xf1, 0x39, 0x11, 0x95, 0xfd, 0xd4, 0x79, 0xbb, 0xa3,
+                0x0d, 0xd9, 0x7c, 0x9e, 0x6d, 0x2e, 0x15, 0x25, 0x43, 0x6a, 0xc2, 0x42, 0x7f, 0x2b,
+                0xf8, 0x56, 0x7a, 0x0d,
+            ]
+        );
+        assert_eq!(Declaration::new(Epoch::new(0), &message).id(), message.id());
+    }
+
+    /// Declaration identity depends only on its service and `zk_id`.
+    #[test]
+    fn declaration_id_ignores_provider_locators_and_service_note() {
+        let original = declaration_message(vec!["/ip4/203.0.113.10/tcp/4001".parse().unwrap()]);
+        let different_provider = DeclarationMessage {
+            provider_id: Ed25519Key::from_bytes(&[2; 32]).public_key().into(),
+            ..original.clone()
+        };
+        let different_locators =
+            declaration_message(vec!["/ip4/203.0.113.11/tcp/4002".parse().unwrap()]);
+        let different_note = DeclarationMessage {
+            service_note_id: Fr::from(99u64).into(),
+            ..original.clone()
+        };
+
+        assert_eq!(original.id(), different_provider.id());
+        assert_eq!(original.id(), different_locators.id());
+        assert_eq!(original.id(), different_note.id());
+    }
+
+    /// Reusing a `zk_id` under another service produces a distinct identity.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[test]
+    fn declaration_id_is_service_scoped() {
+        let blend = declaration_message(vec!["/ip4/203.0.113.10/tcp/4001".parse().unwrap()]);
+        let other_service = DeclarationMessage {
+            service_type: ServiceType::Test,
+            ..blend.clone()
+        };
+
+        assert_eq!(blend.zk_id, other_service.zk_id);
+        assert_ne!(blend.id(), other_service.id());
     }
 
     #[test]
@@ -794,14 +888,58 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod nonce_tests {
+    use lb_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
+    use lb_cryptarchia_engine::Epoch;
+
+    use crate::sdp::Nonce;
+
+    #[test]
+    fn pack_unpack_roundtrips_boundary_values() {
+        for (epoch, sequence) in [(0, 0), (0, 1), (1, 0), (u32::MAX, u32::MAX)] {
+            let nonce = Nonce::new(Epoch::new(epoch), sequence);
+            assert_eq!(nonce.lifecycle_epoch(), Epoch::new(epoch));
+            assert_eq!(nonce.sequence(), sequence);
+        }
+    }
+
+    #[test]
+    fn canonical_encoding_is_the_same_little_endian_u64() {
+        let nonce = Nonce::new(Epoch::new(0x0102_0304), 0x0506_0708);
+
+        assert_eq!(nonce.encoded_length(), 8);
+        assert_eq!(nonce.encode_to_vec(), [8, 7, 6, 5, 4, 3, 2, 1]);
+        assert_eq!(Nonce::decode_all(&nonce.encode_to_vec()).unwrap(), nonce);
+    }
+
+    #[test]
+    fn serde_keeps_nonce_as_a_scalar_integer() {
+        let nonce = Nonce::new(Epoch::new(1), 2);
+        let json = serde_json::to_string(&nonce).unwrap();
+
+        assert_eq!(json, "4294967298");
+        assert_eq!(serde_json::from_str::<Nonce>(&json).unwrap(), nonce);
+    }
+
+    #[test]
+    fn checked_next_does_not_wrap_sequence_overflow() {
+        let last = Nonce::new(Epoch::new(10), u32::MAX);
+        assert_eq!(last.checked_next(), None);
+
+        let next = Nonce::new(Epoch::new(10), 4).checked_next().unwrap();
+        assert_eq!(next.lifecycle_epoch(), Epoch::new(10));
+        assert_eq!(next.sequence(), 5);
+    }
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 impl WithdrawMessage {
     #[must_use]
-    pub fn sample() -> Self {
+    pub const fn sample() -> Self {
         Self {
             declaration_id: DeclarationId([27u8; 32]),
-            service_note_id: NoteId(Fr::from(28u64)),
-            nonce: 29,
+            nonce: Nonce::new(Epoch::new(0), 29),
         }
     }
 }
@@ -823,7 +961,7 @@ impl ActiveMessage {
 
         Self {
             declaration_id: DeclarationId([30u8; 32]),
-            nonce: 31,
+            nonce: Nonce::new(Epoch::new(0), 31),
             metadata: ActivityMetadata::Blend(Box::new(activity)),
         }
     }

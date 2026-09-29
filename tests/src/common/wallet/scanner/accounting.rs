@@ -1,11 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry};
 
 use lb_common_http_client::ApiBlock;
-use lb_core::mantle::{
-    NoteId, SignedOps, TxHash, Utxo, ledger::verification_mode::StandardMode, ops::OpRef,
-    traits::Hashable as _, transactions::states::Unverified,
+use lb_core::{
+    events::{Event, Events, HeaderEvent},
+    mantle::{
+        NoteId, SignedOps, TxHash, Utxo, ledger::verification_mode::StandardMode, ops::OpRef,
+        traits::Hashable as _, transactions::states::Unverified,
+    },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
+use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 use crate::common::wallet::TrackedWallets;
@@ -19,6 +23,57 @@ pub struct ScannerAccounting {
     wallet_utxos: BTreeMap<WalletId, BTreeMap<NoteId, Utxo>>,
     service_note_ids: HashSet<NoteId>,
     observed_transaction_hashes: BTreeSet<TxHash>,
+}
+
+/// Scanner seed state needed to resume wallet accounting without losing
+/// service-locked UTXOs across a persisted snapshot.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ScannerAccountingSnapshot {
+    /// All unspent tracked-wallet UTXOs, including service-locked ones.
+    pub wallet_utxos: WalletUtxos,
+    /// Notes held by at least one live service declaration at this checkpoint.
+    #[serde(default)]
+    pub locked_service_note_ids: HashSet<NoteId>,
+}
+
+impl ScannerAccountingSnapshot {
+    /// Keep only UTXOs belonging to the requested wallets.
+    #[must_use]
+    pub fn filtered_for_wallets(&self, wallet_ids: &HashSet<WalletId>) -> Self {
+        let wallet_utxos = self
+            .wallet_utxos
+            .iter()
+            .filter(|(wallet_id, _)| wallet_ids.contains(*wallet_id))
+            .map(|(wallet_id, utxos)| (wallet_id.clone(), utxos.clone()))
+            .collect::<WalletUtxos>();
+        let known_note_ids = wallet_utxos
+            .values()
+            .flatten()
+            .map(Utxo::id)
+            .collect::<HashSet<_>>();
+
+        Self {
+            wallet_utxos,
+            locked_service_note_ids: self
+                .locked_service_note_ids
+                .intersection(&known_note_ids)
+                .copied()
+                .collect(),
+        }
+    }
+
+    /// Combine the disjoint wallet slices stored by nodes in one scanner
+    /// group.
+    pub fn extend(&mut self, other: Self) {
+        for (wallet_id, utxos) in other.wallet_utxos {
+            self.wallet_utxos
+                .entry(wallet_id)
+                .or_default()
+                .extend(utxos);
+        }
+        self.locked_service_note_ids
+            .extend(other.locked_service_note_ids);
+    }
 }
 
 impl ScannerAccounting {
@@ -48,6 +103,41 @@ impl ScannerAccounting {
         }
 
         Ok(accounting)
+    }
+
+    /// Restore scanner accounting, including service-lock state, from a
+    /// persisted scanner snapshot.
+    pub fn from_snapshot(
+        tracked_wallets: Vec<TrackedWalletKeys>,
+        snapshot: ScannerAccountingSnapshot,
+    ) -> Result<Self, crate::common::wallet::TrackedWalletKeysError> {
+        let mut accounting = Self::from_wallet_utxos(tracked_wallets, snapshot.wallet_utxos)?;
+        let known_note_ids = accounting
+            .wallet_utxos
+            .values()
+            .flat_map(BTreeMap::keys)
+            .copied()
+            .collect::<HashSet<_>>();
+        accounting.service_note_ids = snapshot
+            .locked_service_note_ids
+            .intersection(&known_note_ids)
+            .copied()
+            .collect();
+        Ok(accounting)
+    }
+
+    /// Capture all wallet UTXOs and their current service-lock state for a
+    /// scanner checkpoint or persisted snapshot.
+    #[must_use]
+    pub fn snapshot(&self) -> ScannerAccountingSnapshot {
+        ScannerAccountingSnapshot {
+            wallet_utxos: self
+                .wallet_utxos
+                .iter()
+                .map(|(wallet_id, utxos)| (wallet_id.clone(), utxos.values().copied().collect()))
+                .collect(),
+            locked_service_note_ids: self.service_note_ids.clone(),
+        }
     }
 
     fn empty(
@@ -94,7 +184,20 @@ impl ScannerAccounting {
 
     /// Apply one block's transactions to tracked wallet state.
     pub fn apply_block(&mut self, block: &ApiBlock) {
+        self.apply_block_with_events(block, &Events::new());
+    }
+
+    /// Apply one block's transactions and header events to tracked wallet
+    /// state.
+    pub fn apply_block_with_events(&mut self, block: &ApiBlock, events: &Events) {
         self.observe_block_transactions(block);
+
+        // Header effects are applied before block transactions by the ledger.
+        for event in events.iter() {
+            if let Event::Header(HeaderEvent::SdpNoteUnlocked { note_id, .. }) = event {
+                self.unlock_note(*note_id);
+            }
+        }
 
         for tx in &block.transactions {
             self.apply_transaction(tx);
@@ -167,13 +270,13 @@ impl ScannerAccounting {
                 OpRef::SDPDeclare(declaration) => {
                     self.lock_note(declaration.service_note_id);
                 }
-                OpRef::SDPWithdraw(withdrawal) => {
-                    self.unlock_note(withdrawal.service_note_id);
-                }
-                // `ChannelWithdraw` and `ChannelTransfer` only move notes in and
-                // out of a channel's ownership, which the wallet doesn't track.
+                // Withdrawal itself does not release an SDP note; finalization
+                // is observed through the block's `SdpNoteUnlocked` event.
+                // Channel operations only move notes in and out of channel
+                // ownership, which the wallet doesn't track.
                 // TODO: observe released notes once channel notes are tracked.
-                OpRef::ChannelWithdraw(_)
+                OpRef::SDPWithdraw(_)
+                | OpRef::ChannelWithdraw(_)
                 | OpRef::ChannelTransfer(_)
                 | OpRef::ChannelConfig(_)
                 | OpRef::ChannelInscribe(_)
@@ -220,6 +323,7 @@ impl ScannerAccounting {
 mod tests {
     use lb_common_http_client::{ApiBlock, ApiHeader, Slot};
     use lb_core::{
+        events::{Event, Events, HeaderEvent},
         header::{ContentId, HeaderId},
         mantle::{
             Note, SignedOps, Utxo,
@@ -233,7 +337,7 @@ mod tests {
             transactions::{Ops, states::Unverified},
         },
         proofs::leader_proof::Groth16LeaderProof,
-        sdp::{DeclarationMessage, Locator, ProviderId, ServiceType, WithdrawMessage},
+        sdp::{DeclarationMessage, Locator, Nonce, ProviderId, ServiceType, WithdrawMessage},
     };
     use lb_key_management_system_service::keys::Ed25519Key;
 
@@ -278,14 +382,17 @@ mod tests {
         SignedOps::from_ops_with_sample_proofs(ops)
     }
 
-    fn sdp_declaration(service_note_id: lb_core::mantle::NoteId) -> DeclarationMessage {
+    fn sdp_declaration(
+        service_note_id: lb_core::mantle::NoteId,
+        service_type: ServiceType,
+    ) -> DeclarationMessage {
         let provider_key = Ed25519Key::from_bytes(&[42; 32]).public_key();
         let locator: Locator = "/ip4/127.0.0.1/tcp/9100"
             .parse()
             .expect("locator should be valid");
 
         DeclarationMessage {
-            service_type: ServiceType::BlendNetwork,
+            service_type,
             locators: locator.into(),
             provider_id: ProviderId::from(provider_key),
             zk_id: pk(9),
@@ -369,15 +476,14 @@ mod tests {
     }
 
     #[test]
-    fn sdp_declare_hides_and_withdraw_restores_locked_utxo() {
+    fn withdrawal_restores_locked_utxo_only_after_final_unlock_event() {
         let locked = utxo(10, 0, pk(1));
-        let declaration = sdp_declaration(locked.id());
+        let declaration = sdp_declaration(locked.id(), ServiceType::BlendNetwork);
         let declare_ops = Ops::from([Op::SDPDeclare(declaration.clone())]);
         let declare_tx = SignedOps::from_ops_with_sample_proofs(declare_ops);
         let withdraw_ops = Ops::from([Op::SDPWithdraw(WithdrawMessage {
             declaration_id: declaration.id(),
-            service_note_id: locked.id(),
-            nonce: 0,
+            nonce: Nonce::new(0.into(), 0),
         })]);
         let withdraw_tx = SignedOps::from_ops_with_sample_proofs(withdraw_ops);
         let mut accounting =
@@ -388,7 +494,108 @@ mod tests {
         assert!(accounting.wallet_utxos()["alice"].is_empty());
 
         accounting.apply_block(&block(2, vec![withdraw_tx]));
+        assert!(
+            accounting.wallet_utxos()["alice"].is_empty(),
+            "including withdrawal must not release collateral immediately"
+        );
+
+        let unlock_events = Events::from(Event::Header(HeaderEvent::SdpNoteUnlocked {
+            note_id: locked.id(),
+            service_type: ServiceType::BlendNetwork,
+            declaration_id: declaration.id(),
+        }));
+        accounting.apply_block_with_events(&block(3, vec![]), &unlock_events);
         assert_eq!(accounting.wallet_utxos()["alice"][0].note.value, 10);
+    }
+
+    /// A persisted scanner checkpoint must retain both the collateral UTXO
+    /// and its lock marker so a post-restore finalization event can unlock it.
+    #[test]
+    fn restored_snapshot_keeps_locked_collateral_until_final_unlock() {
+        let locked = utxo(10, 0, pk(1));
+        let declaration = sdp_declaration(locked.id(), ServiceType::BlendNetwork);
+        let declare_tx = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::SDPDeclare(
+            declaration.clone(),
+        )]));
+        let mut accounting =
+            ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[locked])
+                .expect("accounting should build");
+
+        accounting.apply_block(&block(1, vec![declare_tx]));
+        assert!(accounting.wallet_utxos()["alice"].is_empty());
+
+        let serialized = serde_json::to_vec(&accounting.snapshot())
+            .expect("scanner accounting snapshot should serialize");
+        let snapshot = serde_json::from_slice(&serialized)
+            .expect("scanner accounting snapshot should deserialize");
+        let mut restored = ScannerAccounting::from_snapshot(
+            vec![TrackedWalletKeys::new("alice", [pk(1)])],
+            snapshot,
+        )
+        .expect("restored accounting should build");
+
+        let withdraw_tx =
+            SignedOps::from_ops_with_sample_proofs(Ops::from([Op::SDPWithdraw(WithdrawMessage {
+                declaration_id: declaration.id(),
+                nonce: Nonce::new(0.into(), 1),
+            })]));
+        restored.apply_block(&block(2, vec![withdraw_tx]));
+        assert!(restored.wallet_utxos()["alice"].is_empty());
+
+        let unlock_events = Events::from(Event::Header(HeaderEvent::SdpNoteUnlocked {
+            note_id: locked.id(),
+            service_type: ServiceType::BlendNetwork,
+            declaration_id: declaration.id(),
+        }));
+        restored.apply_block_with_events(&block(3, vec![]), &unlock_events);
+        restored.apply_block_with_events(&block(4, vec![]), &unlock_events);
+        assert_eq!(restored.wallet_utxos()["alice"], vec![locked]);
+    }
+
+    /// A note shared across services remains unavailable when only one
+    /// declaration is removed; duplicate final-release events are idempotent.
+    #[test]
+    fn shared_service_note_unlocks_only_after_last_service_release() {
+        let locked = utxo(10, 0, pk(1));
+        let declaration_a = sdp_declaration(locked.id(), ServiceType::BlendNetwork);
+        let declaration_b = sdp_declaration(locked.id(), ServiceType::Test);
+        let declare_a = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::SDPDeclare(
+            declaration_a.clone(),
+        )]));
+        let declare_b = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::SDPDeclare(
+            declaration_b.clone(),
+        )]));
+        let mut accounting =
+            ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[locked])
+                .expect("accounting should build");
+
+        accounting.apply_block(&block(1, vec![declare_a, declare_b]));
+        let withdrawals = SignedOps::from_ops_with_sample_proofs(Ops::from([
+            Op::SDPWithdraw(WithdrawMessage {
+                declaration_id: declaration_a.id(),
+                nonce: Nonce::new(0.into(), 1),
+            }),
+            Op::SDPWithdraw(WithdrawMessage {
+                declaration_id: declaration_b.id(),
+                nonce: Nonce::new(0.into(), 1),
+            }),
+        ]));
+        accounting.apply_block(&block(2, vec![withdrawals]));
+        assert!(accounting.wallet_utxos()["alice"].is_empty());
+
+        // Ledger emits no final unlock event when A is removed because B still
+        // owns this note.
+        accounting.apply_block_with_events(&block(3, vec![]), &Events::new());
+        assert!(accounting.wallet_utxos()["alice"].is_empty());
+
+        let final_release = Events::from(Event::Header(HeaderEvent::SdpNoteUnlocked {
+            note_id: locked.id(),
+            service_type: ServiceType::Test,
+            declaration_id: declaration_b.id(),
+        }));
+        accounting.apply_block_with_events(&block(4, vec![]), &final_release);
+        accounting.apply_block_with_events(&block(5, vec![]), &final_release);
+        assert_eq!(accounting.wallet_utxos()["alice"], vec![locked]);
     }
 
     #[test]

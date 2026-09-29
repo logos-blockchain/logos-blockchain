@@ -37,6 +37,7 @@ use lb_core::{
             states::{Preverified, Unverified},
         },
     },
+    sdp::ServiceType,
 };
 use lb_http_api_common::{
     TimeInfo,
@@ -1334,6 +1335,96 @@ where
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
     make_request_and_return_response!(mantle::get_sdp_snapshot::<RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_SDP_FINALIZED_DECLARATION,
+    params(
+        ("declaration_id" = String, Path, description = "Declaration ID as 64 hex digits, optionally prefixed with 0x")
+    ),
+    responses(
+        (status = 200, description = "Declaration from finalized SDP state", body = Object),
+        (status = 400, description = "Invalid declaration ID", body = ErrorBody),
+        (status = 404, description = "Declaration not found in finalized state", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn get_finalized_sdp_declaration<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(declaration_id): Path<String>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let declaration_id = match parse_declaration_id(&declaration_id) {
+        Ok(id) => id,
+        Err(error) => return ApiError::BadRequest(error).into_response(),
+    };
+
+    match mantle::get_finalized_sdp_declaration::<RuntimeServiceId>(&handle, declaration_id).await {
+        Ok(Some(declaration)) => (StatusCode::OK, Json(declaration)).into_response(),
+        Ok(None) => {
+            ApiError::NotFound("Declaration not found in finalized state".into()).into_response()
+        }
+        Err(error) => ApiError::Internal(error).into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_SDP_FINALIZED_DECLARATIONS,
+    params(
+        ("service_type" = u8, Path, description = "Canonical one-byte ServiceType discriminant")
+    ),
+    responses(
+        (status = 200, description = "Declarations of the service from finalized SDP state", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
+        (status = 400, description = "Unknown service type", body = ErrorBody),
+        (status = 404, description = "Service is absent from finalized state", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn get_finalized_sdp_declarations<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(service_discriminant): Path<u8>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let Ok(service_type) = ServiceType::try_from(service_discriminant) else {
+        return ApiError::BadRequest("Unknown service type".into()).into_response();
+    };
+
+    match mantle::get_finalized_sdp_declarations::<RuntimeServiceId>(&handle, service_type).await {
+        Ok(Some(declarations)) => (StatusCode::OK, Json(declarations)).into_response(),
+        Ok(None) => {
+            ApiError::NotFound("Service absent from finalized state".into()).into_response()
+        }
+        Err(error) => ApiError::Internal(error).into_response(),
+    }
+}
+
+fn parse_declaration_id(encoded: &str) -> Result<lb_core::sdp::DeclarationId, String> {
+    let encoded = encoded.strip_prefix("0x").unwrap_or(encoded);
+    if encoded.len() != 64 {
+        return Err("Declaration ID must contain exactly 32 bytes of hex".into());
+    }
+
+    let mut bytes = [0; 32];
+    let (hex_pairs, _) = encoded.as_bytes().as_chunks::<2>();
+    for (byte, pair) in bytes.iter_mut().zip(hex_pairs) {
+        let high = (pair[0] as char)
+            .to_digit(16)
+            .ok_or_else(|| "Declaration ID contains invalid hex".to_owned())?;
+        let low = (pair[1] as char)
+            .to_digit(16)
+            .ok_or_else(|| "Declaration ID contains invalid hex".to_owned())?;
+        *byte = ((high << 4) | low) as u8;
+    }
+
+    Ok(lb_core::sdp::DeclarationId(bytes))
 }
 
 #[utoipa::path(

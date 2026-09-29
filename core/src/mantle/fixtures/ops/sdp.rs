@@ -10,8 +10,8 @@ use crate::{
         SDP_WITHDRAW_PAYLOAD_HEX,
     },
     sdp::{
-        ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator, ProviderId,
-        ServiceType, WithdrawMessage, blend::ActivityProof,
+        ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator, Nonce,
+        ProviderId, ServiceType, WithdrawMessage, blend::ActivityProof,
     },
 };
 
@@ -22,6 +22,11 @@ codec_fixtures!(
 codec_fixtures!(ServiceType, Self::BlendNetwork => "00");
 codec_fixtures!(ProviderId, Self(Ed25519PublicKey::from_bytes(&[1u8; _]).unwrap()) => "0101010101010101010101010101010101010101010101010101010101010101");
 codec_fixtures!(DeclarationId, Self([0u8; _]) => "0000000000000000000000000000000000000000000000000000000000000000");
+codec_fixtures!(
+    Nonce,
+    Self::new(Epoch::new(0), 0x1d) => "1d00000000000000",
+    Self::new(Epoch::new(0x0102_0304), 0x0506_0708) => "0807060504030201",
+);
 codec_fixtures!(
     DeclarationMessage,
     Self {
@@ -37,16 +42,15 @@ codec_fixtures!(
     WithdrawMessage,
     Self {
         declaration_id: DeclarationId([0u8; _]),
-        service_note_id: Fr::from(1u64).into(),
-        nonce: 2u64
-    } => "000000000000000000000000000000000000000000000000000000000000000002000000000000000100000000000000000000000000000000000000000000000000000000000000",
+        nonce: Nonce::new(Epoch::new(0), 2)
+    } => "00000000000000000000000000000000000000000000000000000000000000000200000000000000",
     *SDP_WITHDRAW => SDP_WITHDRAW_PAYLOAD_HEX,
 );
 codec_fixtures!(
     ActiveMessage,
     Self {
         declaration_id: DeclarationId([0u8; _]),
-        nonce: 0u64,
+        nonce: Nonce::new(Epoch::new(0), 0),
         metadata: ActivityMetadata::Blend(Box::new(ActivityProof {
             epoch: Epoch::new(10),
             signing_key: Ed25519PublicKey::from_bytes(&[1u8; _]).unwrap(),

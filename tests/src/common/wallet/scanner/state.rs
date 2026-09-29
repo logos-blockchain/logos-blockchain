@@ -5,6 +5,7 @@ use std::{
 
 use lb_core::header::HeaderId;
 
+use super::accounting::ScannerAccountingSnapshot;
 use crate::common::wallet::WalletUtxos;
 
 /// Shared scanner status snapshot across scanner tasks and cucumber waits.
@@ -25,6 +26,8 @@ pub struct ScannerStateCheckpoint {
     pub slot: u64,
     /// Wallet UTXOs as observed through this checkpoint's tip.
     pub wallet_utxos: WalletUtxos,
+    /// Full accounting seed, including UTXOs locked by SDP declarations.
+    pub accounting: ScannerAccountingSnapshot,
 }
 
 #[derive(Debug, Default)]
