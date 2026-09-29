@@ -87,10 +87,3 @@ cryptarchia:
       timestamp: 0
 time:
   slot_duration: '1.000000000'
-network:
-  kademlia_protocol_name: /logos-blockchain-standalone-local/kad/1.0.0
-  identify_protocol_name: /logos-blockchain-standalone-local/identify/1.0.0
-  chain_sync_protocol_name: /logos-blockchain-standalone-local/chainsync/1.0.0
-  blend_protocol_name: /logos-blockchain-standalone-local/blend/1.0.0
-  cryptarchia_topic: /logos-blockchain-standalone-local/cryptarchia/1.0.0
-  mempool_topic: /logos-blockchain-standalone-local/mempool/1.0.0

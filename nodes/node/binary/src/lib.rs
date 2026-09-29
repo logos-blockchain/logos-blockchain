@@ -175,9 +175,9 @@ pub fn run_node_from_config(
     let chain_id = config.deployment.chain_id();
     let genesis_time = config.deployment.genesis_time();
 
-    let transaction_topic = config.deployment.network.mempool_topic.clone();
-    let proposal_topic = config.deployment.network.cryptarchia_topic.clone();
-    let blend_protocol_name = config.deployment.network.blend_protocol_name.clone();
+    // Derived from the chain and its fork, and handed to every service that
+    // speaks a protocol or a topic.
+    let protocol_names = config.deployment.protocol_names();
 
     let blend_rewards_params = config.deployment.genesis_blend_reward_params();
 
@@ -195,7 +195,6 @@ pub fn run_node_from_config(
 
     let DeploymentSettings {
         eras,
-        network: network_deployment,
         genesis_block,
     } = config.deployment;
     let EraParameters {
@@ -219,8 +218,8 @@ pub fn run_node_from_config(
         recovery_data.clone(),
         &time_deployment,
         &cryptarchia_deployment,
-        blend_protocol_name,
-        proposal_topic.clone(),
+        protocol_names.blend.clone(),
+        protocol_names.cryptarchia_topic.clone(),
     );
 
     let time_service_config = TimeConfig {
@@ -236,20 +235,25 @@ pub fn run_node_from_config(
     .into_cryptarchia_services_settings(
         genesis_block,
         blend_rewards_params,
-        proposal_topic.clone(),
+        protocol_names.cryptarchia_topic.clone(),
         recovery_data.clone(),
     );
 
     let mempool_service_config = MempoolConfig {
         user: config.user.mempool,
     }
-    .into_mempool_service_settings(transaction_topic.clone(), recovery_data.clone());
+    .into_mempool_service_settings(protocol_names.mempool_topic.clone(), recovery_data.clone());
 
     let network_service_config = NetworkConfig {
         user: config.user.network,
-        deployment: network_deployment,
     }
-    .into_network_config(max_data_size_by_topic(&transaction_topic, &proposal_topic));
+    .into_network_config(
+        &protocol_names,
+        max_data_size_by_topic(
+            &protocol_names.mempool_topic,
+            &protocol_names.cryptarchia_topic,
+        ),
+    );
 
     let wallet_config = WalletConfig {
         user: config.user.wallet,

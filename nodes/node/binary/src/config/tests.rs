@@ -223,7 +223,7 @@ fn service_settings_receive_recovery_data() {
     };
 
     let deployment_settings = DeploymentSettings::default();
-    let network_deployment = deployment_settings.network.clone();
+    let protocol_names = deployment_settings.protocol_names();
     let genesis_parameters = deployment_settings.eras.into_genesis_era_parameters();
 
     let (blend_service_settings, _, _) = BlendServiceConfig {
@@ -234,8 +234,8 @@ fn service_settings_receive_recovery_data() {
         recovery_data.clone(),
         &genesis_parameters.time,
         &genesis_parameters.cryptarchia,
-        network_deployment.blend_protocol_name,
-        network_deployment.cryptarchia_topic,
+        protocol_names.blend,
+        protocol_names.cryptarchia_topic,
     );
     assert_eq!(
         blend_service_settings
@@ -261,7 +261,7 @@ fn service_settings_receive_recovery_data() {
     let mempool_service_settings = MempoolServiceConfig {
         user: user_config.mempool.clone(),
     }
-    .into_mempool_service_settings(network_deployment.mempool_topic, recovery_data.clone());
+    .into_mempool_service_settings(protocol_names.mempool_topic, recovery_data.clone());
     assert_eq!(
         mempool_service_settings
             .recovery_data

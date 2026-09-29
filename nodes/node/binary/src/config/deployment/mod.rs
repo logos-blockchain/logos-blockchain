@@ -13,10 +13,10 @@ use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
 
-use crate::config::network::deployment::Settings as NetworkDeploymentSettings;
-
 mod era;
 pub use era::{EraParameters, EraSchedule, EraScheduleError};
+mod protocols;
+pub use protocols::ProtocolNames;
 
 pub const SERIALIZED_DEPLOYMENT: &[u8] = include_bytes!("settings.yaml");
 
@@ -25,9 +25,6 @@ pub const SERIALIZED_DEPLOYMENT: &[u8] = include_bytes!("settings.yaml");
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DeploymentSettings {
     pub eras: EraSchedule,
-    // TODO: These will be removed from the deployment settings and derived from the era
-    // definitions instead, per era. To be done in a follow-up PR.
-    pub network: NetworkDeploymentSettings,
     pub genesis_block: GenesisBlock,
 }
 
@@ -67,6 +64,12 @@ impl DeploymentSettings {
             .iter()
             .map(|(first_epoch, parameters)| EraDigest::compute(first_epoch, parameters));
         ForkDigest::compute(self.genesis_id(), &self.chain_id(), era_digests)
+    }
+
+    /// The protocol and topic names of this deployment's chain and fork.
+    #[must_use]
+    pub fn protocol_names(&self) -> ProtocolNames {
+        ProtocolNames::derive(&self.chain_id(), self.fork_digest())
     }
 
     #[must_use]
