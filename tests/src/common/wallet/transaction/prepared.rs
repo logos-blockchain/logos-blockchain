@@ -16,6 +16,7 @@ pub struct PreparedWalletTransaction {
     context: OpsContext,
     tx_hash: TxHash,
     transfer_proofs: OpProofs,
+    leading_op_proofs: OpProofs,
     reserved_inputs: WalletReservedInputs,
 }
 
@@ -26,6 +27,7 @@ impl PreparedWalletTransaction {
         context: OpsContext,
         tx_hash: TxHash,
         transfer_proofs: OpProofs,
+        leading_op_proofs: OpProofs,
         reserved_inputs: WalletReservedInputs,
     ) -> Self {
         Self {
@@ -33,6 +35,7 @@ impl PreparedWalletTransaction {
             context,
             tx_hash,
             transfer_proofs,
+            leading_op_proofs,
             reserved_inputs,
         }
     }
@@ -51,8 +54,12 @@ impl PreparedWalletTransaction {
             context,
             tx_hash,
             transfer_proofs,
+            leading_op_proofs: stored_leading_op_proofs,
             reserved_inputs,
         } = self;
+
+        let mut all_leading_proofs = stored_leading_op_proofs.into_inner().into_inner();
+        all_leading_proofs.extend(leading_op_proofs.into_inner().into_inner());
 
         sign_prepared_wallet_transaction(
             funded_builder,
@@ -60,7 +67,7 @@ impl PreparedWalletTransaction {
             tx_hash,
             transfer_proofs,
             reserved_inputs,
-            leading_op_proofs,
+            OpProofs::try_from(all_leading_proofs)?,
         )
     }
 }

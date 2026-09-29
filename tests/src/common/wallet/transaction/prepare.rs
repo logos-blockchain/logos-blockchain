@@ -8,14 +8,14 @@ use lb_core::mantle::{
     traits::{Hashable as _, MantleTx},
     transactions::{MantleTxBuilder, hash::TxHash, tx_list::ops::OpsContext},
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 
 use super::{
     builder_funding::fund_wallet_transaction,
     error::WalletTransactionError,
     intent::WalletTransactionIntent,
     prepared::PreparedWalletTransaction,
-    signing::{WalletTransferSigners, build_transfer_proofs},
+    signing::{WalletTransferSigners, build_leading_inscription_proofs, build_transfer_proofs},
 };
 use crate::common::wallet::{WalletFundingResources, WalletFundingSource, WalletReservedInputs};
 
@@ -30,6 +30,7 @@ pub struct PreparedWalletTransactionWorkItem {
     tx_hash: TxHash,
     ops: Vec<Op>,
     transfer_signers: WalletTransferSigners,
+    leading_inscription_signers: Vec<Ed25519Key>,
     reserved_inputs: WalletReservedInputs,
 }
 
@@ -67,7 +68,7 @@ pub fn prepare_wallet_transaction_work_item(
     let transfer_signers = transfer_signers_for_funding(&resources);
     let input_utxos_by_note_id = input_utxos_by_note_id(&resources);
 
-    let (funded_builder, context) =
+    let (funded_builder, context, leading_inscription_signers) =
         fund_wallet_transaction(intent, resources, priority_fee_percent)?;
     let mantle_tx = funded_builder.clone().build()?;
     let tx_hash = mantle_tx.hash();
@@ -85,6 +86,7 @@ pub fn prepare_wallet_transaction_work_item(
         tx_hash,
         ops,
         transfer_signers,
+        leading_inscription_signers,
         reserved_inputs,
     })
 }
@@ -99,15 +101,19 @@ pub fn finalize_prepared_wallet_transaction(
         tx_hash,
         ops,
         transfer_signers,
+        leading_inscription_signers,
         reserved_inputs,
     } = work_item;
     let transfer_proofs = build_transfer_proofs(&ops, &tx_hash, &transfer_signers)?;
+    let leading_op_proofs =
+        build_leading_inscription_proofs(&ops, &tx_hash, &leading_inscription_signers)?;
 
     Ok(PreparedWalletTransaction::new(
         funded_builder,
         context,
         tx_hash,
         transfer_proofs,
+        leading_op_proofs,
         reserved_inputs,
     ))
 }

@@ -1,11 +1,14 @@
 use lb_testing_framework::NodeHttpClient;
 
 use super::{
-    CONTINUOUS_NEXT_WALLET_LOAD_TASK, ContinuousTransactionLoadProgress, CucumberWorld, Duration,
-    ManualCommand, Step, StepError, StepResult, TARGET, execute_coin_splits_all_user_wallets,
+    CONTINUOUS_NEXT_WALLET_LOAD_TASK, ContinuousTransactionLoadProgress, CucumberWorld,
+    DependentTransactionLoadState, Duration, ManualCommand, Step, StepError, StepResult, TARGET,
+    execute_coin_splits_all_user_wallets,
+    execute_continuous_dependent_next_wallet_user_wallet_with_cancellation,
     execute_continuous_next_wallet_user_wallet,
     execute_continuous_next_wallet_user_wallet_with_cancellation,
-    execute_continuous_round_robin_user_wallets, info, parse_wallet_output_state,
+    execute_continuous_round_robin_user_wallets, execute_mempool_diagnostic_coin_splits,
+    execute_mempool_next_wallet_user_wallet, info, parse_wallet_output_state,
     perform_manual_step_control, then, timeout, verify_min_outputs_all_user_wallets, warn, when,
 };
 use crate::cucumber::steps::nodes::diagnostics::BlendDiagnosticEventLogger;
@@ -164,6 +167,92 @@ async fn step_coin_split_transactions_for_each_user_wallet(
     Ok(())
 }
 
+#[when(
+    expr = "I split available funds in each user wallet into {int} approximately equal outputs with {int} epochs fee headroom"
+)]
+async fn step_mempool_diagnostic_split_available_funds(
+    world: &mut CucumberWorld,
+    step: &Step,
+    outputs_per_wallet: usize,
+    epochs_headroom: u32,
+) -> StepResult {
+    execute_mempool_diagnostic_coin_splits(world, &step.value, outputs_per_wallet, epochs_headroom)
+        .await
+        .inspect_err(|error| {
+            warn!(target: TARGET, "Step `{}` error: {error}", step.value);
+        })
+}
+
+#[when(
+    expr = "I perform {int} independent next-wallet rounds with {int} transactions per wallet at {int} LGO each and {int} epochs fee headroom"
+)]
+async fn step_independent_mempool_next_wallet_rounds(
+    world: &mut CucumberWorld,
+    step: &Step,
+    rounds: usize,
+    transactions_per_wallet: usize,
+    value: u64,
+    epochs_headroom: u32,
+) -> StepResult {
+    step_mempool_next_wallet_rounds(
+        world,
+        step,
+        rounds,
+        transactions_per_wallet,
+        value,
+        epochs_headroom,
+        false,
+    )
+    .await
+}
+
+#[when(
+    expr = "I perform {int} dependent next-wallet rounds with {int} transactions per wallet at {int} LGO each and {int} epochs fee headroom"
+)]
+async fn step_dependent_mempool_next_wallet_rounds(
+    world: &mut CucumberWorld,
+    step: &Step,
+    rounds: usize,
+    transactions_per_wallet: usize,
+    value: u64,
+    epochs_headroom: u32,
+) -> StepResult {
+    step_mempool_next_wallet_rounds(
+        world,
+        step,
+        rounds,
+        transactions_per_wallet,
+        value,
+        epochs_headroom,
+        true,
+    )
+    .await
+}
+
+async fn step_mempool_next_wallet_rounds(
+    world: &mut CucumberWorld,
+    step: &Step,
+    rounds: usize,
+    transactions_per_wallet: usize,
+    value: u64,
+    epochs_headroom: u32,
+    dependent_mode: bool,
+) -> StepResult {
+    execute_mempool_next_wallet_user_wallet(
+        world,
+        &step.value,
+        rounds,
+        transactions_per_wallet,
+        value,
+        epochs_headroom,
+        dependent_mode,
+    )
+    .await
+    .inspect_err(|error| {
+        warn!(target: TARGET, "Step `{}` error: {error}", step.value);
+    })
+}
+
 #[when(expr = "I verify each wallet has minimum {int} outputs {string} in {int} seconds")]
 async fn step_verify_each_wallet_minimum_outputs(
     world: &mut CucumberWorld,
@@ -225,16 +314,40 @@ async fn step_perform_stress_continuous_cycles_next_user_wallet(
 #[when(
     expr = "I start continuous next-wallet transaction load with {int} transactions of {int} LGO and {int} epochs headroom"
 )]
-#[expect(
-    clippy::too_many_lines,
-    reason = "The Cucumber step owns one workload setup and its background lifecycle"
-)]
 fn step_start_continuous_next_wallet_load(
     world: &mut CucumberWorld,
     step: &Step,
     num_transactions: usize,
     value: u64,
     epochs_headroom: u32,
+) -> StepResult {
+    start_continuous_next_wallet_load(world, step, num_transactions, value, epochs_headroom, false)
+}
+
+#[when(
+    expr = "I start continuous dependent next-wallet transaction load with {int} transactions of {int} LGO and {int} epochs headroom"
+)]
+fn step_start_continuous_dependent_next_wallet_load(
+    world: &mut CucumberWorld,
+    step: &Step,
+    num_transactions: usize,
+    value: u64,
+    epochs_headroom: u32,
+) -> StepResult {
+    start_continuous_next_wallet_load(world, step, num_transactions, value, epochs_headroom, true)
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "The Cucumber step owns one workload setup and its background lifecycle"
+)]
+fn start_continuous_next_wallet_load(
+    world: &mut CucumberWorld,
+    step: &Step,
+    num_transactions: usize,
+    value: u64,
+    epochs_headroom: u32,
+    dependent_mode: bool,
 ) -> StepResult {
     let load_nodes = ["NODE_9", "NODE_10", "NODE_11", "NODE_12"]
         .into_iter()
@@ -264,6 +377,7 @@ fn step_start_continuous_next_wallet_load(
         epochs_headroom,
     };
     let transactions_per_round = wallet_count * num_transactions;
+    let dependent_state = dependent_mode.then(DependentTransactionLoadState::new);
     let event_logger = BlendDiagnosticEventLogger::from_world(world);
     let reference_time_client = world
         .resolve_node_http_client(CONTINUOUS_LOAD_REFERENCE_NODE)
@@ -273,6 +387,7 @@ fn step_start_continuous_next_wallet_load(
     });
     info!(
         target: TARGET,
+        workload_mode = if dependent_mode { "dependent" } else { "independent" },
         "Starting background next-wallet transaction load across NODE_9..NODE_12: {num_transactions} transaction(s) per wallet per batch, {value} LGO each, {epochs_headroom} epochs headroom"
     );
 
@@ -281,6 +396,7 @@ fn step_start_continuous_next_wallet_load(
     let task_event_logger = event_logger.clone();
     let task_wallet_nodes = load_nodes.clone();
     let task_reference_time_client = reference_time_client;
+    let task_dependent_state = dependent_state;
     world.continuous_transaction_load_progress = Some(progress);
     let spawn_result = world.spawn_background_task(
         CONTINUOUS_NEXT_WALLET_LOAD_TASK,
@@ -291,11 +407,13 @@ fn step_start_continuous_next_wallet_load(
                 "continuous_transaction_load_started",
                 &serde_json::json!({
                     "wallet_nodes": task_wallet_nodes,
+                    "workload_mode": if dependent_mode { "dependent" } else { "independent" },
                     "wallet_count": wallet_count,
                     "transactions_per_wallet_per_round": num_transactions,
                     "transactions_per_round": transactions_per_round,
                     "value": value,
                     "epochs_headroom": epochs_headroom,
+                    "initial_shuffle_seed": dependent_mode.then_some(42),
                 }),
             );
 
@@ -311,19 +429,32 @@ fn step_start_continuous_next_wallet_load(
                     "continuous_transaction_load_round_started",
                     &serde_json::json!({
                         "round": round,
+                        "workload_mode": if dependent_mode { "dependent" } else { "independent" },
                         "transactions_per_round": transactions_per_round,
                         "completed_verified_transactions": completed_verified_transactions,
                     }),
                 );
 
-                if let Err(error) = execute_continuous_next_wallet_user_wallet_with_cancellation(
-                    &mut workload_world,
-                    &workload_step,
-                    &command,
-                    &mut cancellation,
-                )
-                .await
-                {
+                let round_execution = if let Some(dependent_state) = &task_dependent_state {
+                    execute_continuous_dependent_next_wallet_user_wallet_with_cancellation(
+                        &mut workload_world,
+                        &workload_step,
+                        &command,
+                        &mut cancellation,
+                        dependent_state,
+                        round,
+                    )
+                    .await
+                } else {
+                    execute_continuous_next_wallet_user_wallet_with_cancellation(
+                        &mut workload_world,
+                        &workload_step,
+                        &command,
+                        &mut cancellation,
+                    )
+                    .await
+                };
+                if let Err(error) = round_execution {
                     if matches!(&error, StepError::BackgroundTaskCancelled) {
                         return Ok(());
                     }
@@ -335,9 +466,12 @@ fn step_start_continuous_next_wallet_load(
                         &serde_json::json!({
                             "failure_stage": "round_execution",
                             "round": completed_rounds.saturating_add(1),
+                            "workload_mode": if dependent_mode { "dependent" } else { "independent" },
                             "transactions_per_round": transactions_per_round,
                             "completed_rounds": completed_rounds,
                             "completed_verified_transactions": completed_verified_transactions,
+                            "dependent_burst": task_dependent_state.as_ref()
+                                .and_then(DependentTransactionLoadState::last_burst_diagnostics),
                             "error": error.to_string(),
                         }),
                     );
@@ -356,12 +490,15 @@ fn step_start_continuous_next_wallet_load(
                     "continuous_transaction_load_round_completed",
                     &serde_json::json!({
                         "round": completed_rounds,
+                        "workload_mode": if dependent_mode { "dependent" } else { "independent" },
                         "transactions_per_round": transactions_per_round,
                         "completed_verified_transactions": completed_verified_transactions,
                         "reference_node": CONTINUOUS_LOAD_REFERENCE_NODE,
                         "clock_epoch": clock_epoch,
                         "clock_slot": clock_slot,
                         "clock_query_error": clock_query_error,
+                        "dependent_burst": task_dependent_state.as_ref()
+                            .and_then(DependentTransactionLoadState::last_burst_diagnostics),
                     }),
                 );
             }
@@ -374,6 +511,7 @@ fn step_start_continuous_next_wallet_load(
             "continuous_transaction_load_failed",
             &serde_json::json!({
                 "failure_stage": "task_spawn",
+                "workload_mode": if dependent_mode { "dependent" } else { "independent" },
                 "wallet_nodes": load_nodes,
                 "wallet_count": wallet_count,
                 "transactions_per_wallet_per_round": num_transactions,

@@ -14,6 +14,8 @@ pub enum WalletTransactionError {
     MissingFundingInput { note_id: NoteId },
     #[error("missing signing key for transfer input {note_id:?}")]
     MissingSigningKey { note_id: NoteId },
+    #[error("leading inscription operation does not match its transaction signing key")]
+    InvalidLeadingInscriptionSigner,
     #[error(transparent)]
     Signing(#[from] ZkSignError),
     #[error(transparent)]
