@@ -4957,6 +4957,7 @@ dependencies = [
  "num-bigint",
  "nutype",
  "overwatch",
+ "percent-encoding",
  "rand 0.8.6",
  "serde",
  "serde_json",

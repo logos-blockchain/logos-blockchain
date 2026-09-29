@@ -54,7 +54,7 @@
   And I have user config override "network.backend.swarm.gossipsub.gossip_factor" as "0.5"
 
   # Strings
-  And I have deployment config override "network.mempool_topic" as "my-custom-topic"
+  And I have user config override "network.backend.swarm.identify.agent_version" as "my-custom-agent"
 
   # Complex string (parsed later into Multiaddr etc.)
   And I have user config override "blend.core.backend.listening_address" as "/ip4/127.0.0.1/udp/20128/quic-v1"
@@ -642,7 +642,6 @@ mod tests {
     use lb_libp2p::Multiaddr;
 
     use super::*;
-    use crate::add_strings;
 
     fn test_run_config(test_context: &str) -> RunConfig {
         let genesis_time = GenesisTime::try_from(OffsetDateTime::now_utc())
@@ -756,15 +755,19 @@ mod tests {
             Duration::ZERO
         );
 
-        let pubsub_topic = config.deployment.network.mempool_topic.clone();
+        let security_param = config
+            .deployment
+            .genesis_era_parameters()
+            .cryptarchia
+            .security_param
+            .get();
         let override_4 = ConfigOverride {
             path: "eras.0.time.slot_duration".to_owned(),
             value: serde_yaml::to_value(TimeDuration::new(1, 0)).expect("yaml value"),
         };
         let override_5 = ConfigOverride {
-            path: "network.mempool_topic".to_owned(),
-            value: serde_yaml::to_value(add_strings!(&[&pubsub_topic, "_test_1234"]))
-                .expect("yaml value"),
+            path: "eras.0.cryptarchia.security_param".to_owned(),
+            value: serde_yaml::to_value(security_param + 1).expect("yaml value"),
         };
         assert!(apply_deployment_config_overrides(&mut config, &[override_4, override_5]).is_ok());
         assert_eq!(
@@ -776,8 +779,13 @@ mod tests {
             Duration::from_secs(1)
         );
         assert_eq!(
-            config.deployment.network.mempool_topic,
-            add_strings!(&[&pubsub_topic, "_test_1234"])
+            config
+                .deployment
+                .genesis_era_parameters()
+                .cryptarchia
+                .security_param
+                .get(),
+            security_param + 1
         );
     }
 
@@ -882,11 +890,11 @@ mod tests {
             "0.5",
         )
         .expect("f64 override");
-        set_deployment_config_override(
+        set_user_config_override(
             &mut world,
             "test-step",
-            "network.mempool_topic",
-            "my-custom-topic",
+            "network.backend.swarm.identify.agent_version",
+            "my-custom-agent",
         )
         .expect("string override");
         set_user_config_override(
@@ -933,7 +941,17 @@ mod tests {
             5
         );
         assert!((config.user.network.backend.swarm.gossipsub.gossip_factor - 0.5f64).abs() < 1e-9);
-        assert_eq!(config.deployment.network.mempool_topic, "my-custom-topic");
+        assert_eq!(
+            config
+                .user
+                .network
+                .backend
+                .swarm
+                .identify
+                .agent_version
+                .as_deref(),
+            Some("my-custom-agent")
+        );
         assert_eq!(
             config.user.blend.core.backend.listening_address,
             "/ip4/127.0.0.1/udp/20128/quic-v1"

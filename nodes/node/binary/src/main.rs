@@ -87,7 +87,9 @@ async fn main() -> Result<()> {
         build_run_config(user_config, cli_args)?
     };
     let chain_id = run_config.deployment.chain_id();
-    let fork_digest = run_config.deployment.fork_digest();
+    // Only single-era schedules are supported for now, so the node follows the
+    // fork of the genesis era.
+    let fork_digest = run_config.deployment.genesis_fork_digest();
 
     let app = run_node_from_config(run_config, None)
         .map_err(|e| eyre!("{e}"))
