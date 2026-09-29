@@ -94,7 +94,8 @@ const CONTROL_SCHEMA: &str = "
 
     CREATE TABLE IF NOT EXISTS __logos_sql_displaced_writes (
         tx_id BLOB PRIMARY KEY CHECK (length(tx_id) = 32),
-        this_msg BLOB NOT NULL UNIQUE CHECK (length(this_msg) = 32)
+        this_msg BLOB NOT NULL UNIQUE CHECK (length(this_msg) = 32),
+        content_digest BLOB NOT NULL CHECK (length(content_digest) = 32)
     ) STRICT;
 
     CREATE TABLE IF NOT EXISTS __logos_sql_write_statuses (
@@ -230,9 +231,10 @@ const UPSERT_WRITE_STATUS: &str = "
 ";
 
 const INSERT_DISPLACED_WRITE: &str = "
-    INSERT INTO __logos_sql_displaced_writes (tx_id, this_msg)
-    VALUES (?1, ?2)
-    ON CONFLICT (tx_id) DO UPDATE SET this_msg = excluded.this_msg
+    INSERT INTO __logos_sql_displaced_writes (tx_id, this_msg, content_digest)
+    VALUES (?1, ?2, ?3)
+    ON CONFLICT (tx_id) DO UPDATE SET
+        this_msg = excluded.this_msg, content_digest = excluded.content_digest
 ";
 
 const DELETE_DISPLACED_WRITE: &str = "
@@ -258,11 +260,9 @@ const SELECT_DISPLACED_WRITE_AT_POSITION: &str = "
 ";
 
 const SELECT_DISPLACED_WRITE_BY_TX: &str = "
-    SELECT EXISTS(
-        SELECT 1
-        FROM __logos_sql_displaced_writes
-        WHERE tx_id = ?1
-    )
+    SELECT content_digest
+    FROM __logos_sql_displaced_writes
+    WHERE tx_id = ?1
 ";
 
 const SELECT_APPLIED_WRITE: &str = "
@@ -868,10 +868,11 @@ fn orphan_write(transaction: &rusqlite::Transaction<'_>, this_msg: &MsgId) -> Re
 
     if let Some((tx_id, payload)) = local_write {
         let tx_id = decode_tx_id(tx_id)?;
+        let content_digest = ChannelInscription::decode(&payload)?.content_digest();
 
         transaction.execute(
             INSERT_DISPLACED_WRITE,
-            params![tx_id.as_ref(), this_msg.as_ref()],
+            params![tx_id.as_ref(), this_msg.as_ref(), content_digest],
         )?;
 
         record_displacement(transaction, tx_id, "orphaned", &payload)?;
@@ -900,11 +901,21 @@ fn adopt_write(transaction: &rusqlite::Transaction<'_>, write: &SuffixWrite) -> 
         ));
     }
 
-    let restored_local = transaction.query_row(
-        SELECT_DISPLACED_WRITE_BY_TX,
-        [write.tx_id.as_ref()],
-        |row| row.get::<_, bool>(0),
-    )?;
+    let original_digest = transaction
+        .query_row(
+            SELECT_DISPLACED_WRITE_BY_TX,
+            [write.tx_id.as_ref()],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()?;
+
+    // Another writer can copy our transaction ID. Only matching content means
+    // our write returned; different content stays foreign and leaves it displaced.
+    let restored_local = if let Some(original_digest) = original_digest {
+        original_digest.as_slice() == ChannelInscription::decode(&write.payload)?.content_digest()
+    } else {
+        false
+    };
 
     if restored_local {
         set_write_status(transaction, write.tx_id, WriteStatus::Live)?;
@@ -1615,6 +1626,10 @@ mod tests {
             crate::DisplacementReason::Orphaned
         );
 
+        db.mark_displacement_handled(&first_displacement).unwrap();
+        drop(db);
+        let mut db = Databases::open(dir.path()).unwrap();
+
         db.apply_history_delta(
             &[],
             &[],
@@ -1625,7 +1640,7 @@ mod tests {
                 local: false,
             }],
         )
-        .expect("different channel position should be retained as a foreign write");
+        .expect("the same content at a new channel position should restore our write");
 
         assert_eq!(
             db.write_status(tx_id).expect("write status should load"),

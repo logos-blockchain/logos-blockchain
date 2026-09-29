@@ -1191,6 +1191,88 @@ mod tests {
     }
 
     #[test]
+    fn different_sql_with_our_id_does_not_restore_our_write() {
+        for finalize_foreign in [false, true] {
+            let dir = TempDir::new().unwrap();
+            let mut db = Databases::open(dir.path()).unwrap();
+            let tx_id = TxId::generate();
+            let original = transaction("CREATE TABLE original(value INTEGER)", vec![]);
+
+            db.commit_local_write(tx_id, &original).unwrap();
+            let pending = db.pending_publish().unwrap().unwrap();
+            db.complete_publish(&checkpoint(1, 1), MsgId::from([1; 32]), &pending)
+                .unwrap();
+
+            let orphan = blocks_processed(
+                checkpoint(2, 2),
+                vec![],
+                vec![ChannelUpdateTx::Inscription(inscription(
+                    &pending.payload,
+                    1,
+                ))],
+                vec![],
+            );
+            on_event(&mut db, &orphan, ChannelId::from(CHANNEL_ID)).unwrap();
+            let displacements = db.unhandled_displacements().unwrap();
+            assert_eq!(displacements.len(), 1);
+            assert!(!table_exists(db.live_path(), "original"));
+
+            drop(db);
+            let mut db = Databases::open(dir.path()).unwrap();
+            let foreign = EncodedWrite::new(
+                tx_id,
+                &transaction("CREATE TABLE foreign_write(value INTEGER)", vec![]),
+                CapturedFunctionCalls::empty(),
+            )
+            .unwrap();
+            let adopt = blocks_processed(
+                checkpoint(3, 3),
+                vec![ChannelUpdateTx::Inscription(inscription(
+                    &foreign.payload,
+                    2,
+                ))],
+                vec![],
+                vec![],
+            );
+            on_event(&mut db, &adopt, ChannelId::from(CHANNEL_ID)).unwrap();
+
+            assert!(table_exists(db.live_path(), "foreign_write"));
+            assert_status(&db, tx_id, Some(WriteStatus::Displaced));
+            assert_eq!(db.unhandled_displacements().unwrap(), displacements);
+            assert!(!db.live_suffix().unwrap()[0].local);
+
+            let next = if finalize_foreign {
+                blocks_processed(
+                    checkpoint(4, 4),
+                    vec![],
+                    vec![],
+                    vec![finalized(&foreign.payload, 2)],
+                )
+            } else {
+                blocks_processed(
+                    checkpoint(4, 4),
+                    vec![],
+                    vec![ChannelUpdateTx::Inscription(inscription(
+                        &foreign.payload,
+                        2,
+                    ))],
+                    vec![],
+                )
+            };
+            on_event(&mut db, &next, ChannelId::from(CHANNEL_ID)).unwrap();
+
+            // Neither finalizing nor orphaning the foreign write can replace
+            // the original SQL offered to the application for review.
+            assert_status(&db, tx_id, Some(WriteStatus::Displaced));
+            assert_eq!(db.unhandled_displacements().unwrap(), displacements);
+            assert_eq!(
+                db.unhandled_displacements().unwrap()[0].transaction,
+                original
+            );
+        }
+    }
+
+    #[test]
     fn branch_change_preserves_the_unchanged_live_suffix() {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = Databases::open(dir.path()).expect("databases should open");
