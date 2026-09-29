@@ -1,4 +1,5 @@
 pub mod api;
+pub mod hd;
 mod states;
 
 use std::{collections::HashMap, num::NonZeroU64, time::Duration};
@@ -366,6 +367,11 @@ pub struct WalletServiceSettings {
     /// blocks have passed since the reservation.
     #[serde(default = "default_pending_note_expiry_blocks")]
     pub pending_note_expiry_blocks: u64,
+}
+
+#[must_use]
+pub const fn default_funding_start_index() -> hd::Index {
+    1
 }
 
 #[must_use]

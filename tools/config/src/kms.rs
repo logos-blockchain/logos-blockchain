@@ -3,7 +3,7 @@ use lb_key_management_system_service::{
     backend::preload::KeyId,
     keys::{Key, secured_key::SecuredKey as _},
 };
-use lb_node::config::{KmsConfig, kms::serde::PreloadKmsBackendSettings};
+use lb_node::config::{KmsConfig, kms::serde::KmsBackendSettings};
 
 use crate::{blend::GeneralBlendConfig, consensus::GeneralConsensusConfig};
 
@@ -26,7 +26,7 @@ pub fn create_kms_configs(
         .iter()
         .enumerate()
         .map(|(i, (blend_conf, private_key, zk_secret_key))| KmsConfig {
-            backend: PreloadKmsBackendSettings {
+            backend: KmsBackendSettings {
                 keys: [
                     (
                         blend_conf.non_ephemeral_signing_key_id.clone(),

@@ -15,7 +15,8 @@ impl ServiceConfig {
         SdpSettings {
             declaration_id: self.user.declaration_id,
             wallet_config: SdpWalletConfig {
-                funding_pk: self.user.wallet.funding_pk,
+                // TODO(hd_wallet_03_leader_sdp): SDP has no funding key.
+                funding_pk: todo!(),
                 max_tx_fee: self.user.wallet.max_tx_fee,
             },
             active_message_tracker: ActiveMessageTrackerConfig {

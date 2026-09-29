@@ -778,7 +778,7 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
             }
         },
         kms: config::kms::serde::Config {
-            backend: config::kms::serde::PreloadKmsBackendSettings {
+            backend: config::kms::serde::KmsBackendSettings {
                 keys: config.kms_config.backend.keys,
             },
         },

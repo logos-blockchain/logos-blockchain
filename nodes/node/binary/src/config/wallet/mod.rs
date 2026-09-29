@@ -15,11 +15,8 @@ impl ServiceConfig {
         self,
         recovery_data: RecoveryData,
     ) -> WalletServiceSettings {
-        WalletServiceSettings {
-            known_keys: self.user.known_keys,
-            voucher_master_key_id: self.user.voucher_master_key_id,
-            recovery_data,
-            pending_note_expiry_blocks: self.user.pending_note_expiry_blocks,
-        }
+        // TODO(hd_wallet_05_wallet): The wallet takes the ids of its keys and the
+        // first receive index that funding spends from.
+        todo!()
     }
 }
