@@ -16,6 +16,7 @@ use crate::{
                 manual_control::{
                     execute_coin_splits_all_user_wallets,
                     execute_continuous_next_wallet_user_wallet,
+                    execute_continuous_next_wallet_user_wallet_with_cancellation,
                     execute_continuous_round_robin_user_wallets, log_wallet_balances,
                     parsing::ManualCommand, perform_manual_step_control,
                     verify_min_outputs_all_user_wallets,

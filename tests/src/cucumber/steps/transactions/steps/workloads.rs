@@ -3,9 +3,10 @@ use lb_testing_framework::NodeHttpClient;
 use super::{
     CONTINUOUS_NEXT_WALLET_LOAD_TASK, ContinuousTransactionLoadProgress, CucumberWorld, Duration,
     ManualCommand, Step, StepError, StepResult, TARGET, execute_coin_splits_all_user_wallets,
-    execute_continuous_next_wallet_user_wallet, execute_continuous_round_robin_user_wallets, info,
-    parse_wallet_output_state, perform_manual_step_control, then, timeout,
-    verify_min_outputs_all_user_wallets, warn, when,
+    execute_continuous_next_wallet_user_wallet,
+    execute_continuous_next_wallet_user_wallet_with_cancellation,
+    execute_continuous_round_robin_user_wallets, info, parse_wallet_output_state,
+    perform_manual_step_control, then, timeout, verify_min_outputs_all_user_wallets, warn, when,
 };
 use crate::cucumber::steps::nodes::diagnostics::BlendDiagnosticEventLogger;
 
@@ -283,7 +284,7 @@ fn step_start_continuous_next_wallet_load(
     world.continuous_transaction_load_progress = Some(progress);
     let spawn_result = world.spawn_background_task(
         CONTINUOUS_NEXT_WALLET_LOAD_TASK,
-        async move |cancellation| {
+        async move |mut cancellation| {
             workload_world.background_best_node_selection.cancellation = Some(cancellation.clone());
             log_continuous_load_timeline_event(
                 &task_event_logger,
@@ -315,10 +316,11 @@ fn step_start_continuous_next_wallet_load(
                     }),
                 );
 
-                if let Err(error) = execute_continuous_next_wallet_user_wallet(
+                if let Err(error) = execute_continuous_next_wallet_user_wallet_with_cancellation(
                     &mut workload_world,
                     &workload_step,
                     &command,
+                    &mut cancellation,
                 )
                 .await
                 {
