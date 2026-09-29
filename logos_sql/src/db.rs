@@ -5,6 +5,10 @@ use std::{
     num::NonZeroUsize,
     ops::Deref,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -26,6 +30,16 @@ use crate::{
 };
 
 const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+// One allowance for all statements in an application transaction. Charge 1,000
+// steps per statement plus each progress callback, so many short statements
+// cannot avoid the limit. Count work rather than elapsed time so slower
+// replicas do not reject more writes.
+// This is a replication rule, not a per-node tuning option. Changes to this
+// limit or the SQLite execution engine require coordinated upgrades.
+const MAX_SQL_STEPS: u64 = 10_000_000;
+const SQL_PROGRESS_INTERVAL: i32 = 1_000;
+
 const LIB_DATABASE_FILE: &str = "LIB.db";
 const LIVE_DATABASE_FILE: &str = "LIVE.db";
 const CONTROL_DATABASE_FILE: &str = "control.db";
@@ -1243,13 +1257,34 @@ fn apply_statements(
 ) -> Result<(), Error> {
     db_transaction.authorizer(Some(authorize_application_sql));
 
+    let work = Arc::new(AtomicU64::new(0));
+    let progress_work = Arc::clone(&work);
+
+    db_transaction.progress_handler(
+        SQL_PROGRESS_INTERVAL,
+        Some(move || {
+            progress_work.fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed)
+                >= MAX_SQL_STEPS
+        }),
+    );
+
     let result = transaction.statements().iter().try_for_each(|statement| {
+        if work.fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed) >= MAX_SQL_STEPS {
+            return Err(Error::ExecutionBudgetExceeded);
+        }
+
         db_transaction.execute(statement.sql(), params_from_iter(statement.params()))?;
 
         Ok::<_, Error>(())
     });
 
     db_transaction.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    // Bookkeeping and rollback must not inherit the application's spent budget.
+    db_transaction.progress_handler(0, None::<fn() -> bool>);
+
+    if work.load(Ordering::Relaxed) > MAX_SQL_STEPS {
+        return Err(Error::ExecutionBudgetExceeded);
+    }
 
     result
 }
@@ -2182,6 +2217,118 @@ pub mod tests {
                 .expect("row count should be readable"),
             0
         );
+    }
+
+    #[test]
+    fn endless_local_sql_rolls_back_and_allows_the_next_write() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = Databases::open(dir.path()).expect("databases should open");
+        db.live
+            .execute("CREATE TABLE items(value TEXT)", [])
+            .unwrap();
+
+        let write = Transaction::new(vec![
+            Statement::new(
+                "INSERT INTO items VALUES ('rolled back')".to_owned(),
+                vec![],
+            )
+            .unwrap(),
+            Statement::new(
+                "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c)
+                 SELECT x FROM c WHERE x < 0"
+                    .to_owned(),
+                vec![],
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            db.commit_local_write(TxId::generate(), &write),
+            Err(Error::ExecutionBudgetExceeded)
+        ));
+        assert!(db.pending_publish().unwrap().is_none());
+
+        db.commit_local_write(TxId::generate(), &insert("next write"))
+            .expect("a rejected transaction must not block later writes");
+
+        assert_eq!(
+            row_values(&db.live, "items"),
+            vec![Value::Text("next write".into())]
+        );
+        let count: i64 = db
+            .live
+            .query_row("SELECT count(*) FROM items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn short_statements_cannot_bypass_the_execution_budget() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = Databases::open(dir.path()).expect("databases should open");
+        db.live
+            .execute("CREATE TABLE items(value INTEGER)", [])
+            .unwrap();
+
+        let count = (super::MAX_SQL_STEPS / super::SQL_PROGRESS_INTERVAL as u64 + 1) as usize;
+        let statement = Statement::new("INSERT INTO items VALUES (1)".to_owned(), vec![]).unwrap();
+        let write = Transaction::new(vec![statement; count]).unwrap();
+
+        assert!(matches!(
+            db.commit_local_write(TxId::generate(), &write),
+            Err(Error::ExecutionBudgetExceeded)
+        ));
+        let count: i64 = db
+            .live
+            .query_row("SELECT count(*) FROM items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+        assert!(db.pending_publish().unwrap().is_none());
+    }
+
+    #[test]
+    fn statements_share_one_execution_budget() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = Databases::open(dir.path()).expect("databases should open");
+        db.live
+            .execute("CREATE TABLE items(value INTEGER)", [])
+            .unwrap();
+
+        // One bounded calculation fits, but two in one transaction exceed the
+        // allowance. Splitting expensive work into statements must not evade it.
+        let statement = Statement::new(
+            "WITH RECURSIVE c(x) AS (
+                 SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 300000
+             ) INSERT INTO items SELECT sum(x) FROM c"
+                .to_owned(),
+            vec![],
+        )
+        .unwrap();
+        let write = ChannelInscription {
+            tx_id: TxId::generate(),
+            transaction: Transaction::new(vec![statement.clone()]).unwrap(),
+            captured_function_calls: CapturedFunctionCalls::empty(),
+        };
+
+        db.apply_adopted_write(&write)
+            .expect("one calculation fits");
+
+        let expensive = ChannelInscription {
+            tx_id: TxId::generate(),
+            transaction: Transaction::new(vec![statement.clone(), statement]).unwrap(),
+            captured_function_calls: CapturedFunctionCalls::empty(),
+        };
+        assert!(matches!(
+            db.apply_adopted_write(&expensive),
+            Err(Error::ExecutionBudgetExceeded)
+        ));
+
+        let count: i64 = db
+            .live
+            .query_row("SELECT count(*) FROM items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "neither statement of the rejected write commits");
     }
 
     #[test]

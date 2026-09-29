@@ -427,7 +427,10 @@ fn record_rejection(
 }
 
 const fn is_rejected_write(error: &Error) -> bool {
-    matches!(error, Error::InvalidPayload(_) | Error::RejectedSql(_))
+    matches!(
+        error,
+        Error::InvalidPayload(_) | Error::RejectedSql(_) | Error::ExecutionBudgetExceeded
+    )
 }
 
 fn is_logos_sql_inscription(inscription: &InscriptionInfo) -> bool {
@@ -996,6 +999,61 @@ mod tests {
             insert_tx_id
         );
         assert_status(&db, create_tx_id, Some(WriteStatus::Finalized));
+    }
+
+    #[test]
+    fn endless_channel_sql_is_rejected_and_replay_continues() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let endless = encoded_write(&transaction(
+            "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c)
+             SELECT x FROM c WHERE x < 0",
+            vec![],
+        ));
+        let create = encoded_write(&transaction("CREATE TABLE items(value INTEGER)", vec![]));
+        let expected_checkpoint = checkpoint(2, 2);
+        let event = blocks_processed(
+            expected_checkpoint.clone(),
+            vec![
+                ChannelUpdateTx::Inscription(inscription(&endless.payload, 1)),
+                ChannelUpdateTx::Inscription(inscription(&create.payload, 2)),
+            ],
+            vec![],
+            vec![],
+        );
+
+        on_event(&mut db, &event, ChannelId::from(CHANNEL_ID)).unwrap();
+        assert!(table_exists(db.live_path(), "items"));
+        assert_eq!(db.rejected_write_count().unwrap(), 1);
+        assert_eq!(
+            db.load_checkpoint().unwrap().unwrap().lib,
+            expected_checkpoint.lib
+        );
+
+        drop(db);
+        let mut db = Databases::open(dir.path()).unwrap();
+
+        // A rebuild replays the retained suffix, including rejected SQL.
+        super::rebuild_live_from_suffix(&mut db).unwrap();
+        assert!(table_exists(db.live_path(), "items"));
+
+        let event = blocks_processed(
+            checkpoint(3, 3),
+            vec![],
+            vec![],
+            vec![
+                finalized(&endless.payload, 1),
+                finalized(&create.payload, 2),
+            ],
+        );
+        on_event(&mut db, &event, ChannelId::from(CHANNEL_ID)).unwrap();
+
+        assert!(table_exists(db.lib_path(), "items"));
+        assert_eq!(db.rejected_write_count().unwrap(), 1);
+        assert_eq!(
+            db.load_checkpoint().unwrap().unwrap().lib,
+            checkpoint(3, 3).lib
+        );
     }
 
     #[test]
