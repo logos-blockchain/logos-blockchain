@@ -18,12 +18,6 @@ use serde::{Deserialize, Serialize};
 /// and so do equality, hashing and ordering. Two ordered sets are equal exactly
 /// when they hold the same elements in the same order, which is exactly when
 /// they encode to the same bytes.
-///
-/// The comparisons are all this wrapper changes. The rest, serde included, is
-/// the inner [`IndexSet`]'s, so deserializing merges a repeated element into
-/// its first occurrence, as [`IndexSet::insert`] does. The checks live in
-/// [`BoundedOrderedSet`](crate::bounded::BoundedOrderedSet), which enforces a
-/// bound and rejects a repeated element instead.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(
     bound(

@@ -18,12 +18,6 @@ use serde::{Deserialize, Serialize};
 /// and so do equality, hashing and ordering. Two ordered maps are equal exactly
 /// when they hold the same entries in the same order, which is exactly when
 /// they encode to the same bytes.
-///
-/// The comparisons are all this wrapper changes. The rest, serde included, is
-/// the inner [`IndexMap`]'s, so deserializing a repeated key keeps its first
-/// position and takes its last value, as [`IndexMap::insert`] does. The checks
-/// live in [`BoundedOrderedMap`](crate::bounded::BoundedOrderedMap), which
-/// enforces a bound and rejects a repeated key instead.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(
     bound(

@@ -199,7 +199,7 @@ const fn fixture_epoch_config() -> EpochConfig {
 
 fn fixture_sdp_config() -> SdpConfig {
     SdpConfig {
-        service_params: [(ServiceType::BlendNetwork, fixture_service_parameters())].into(),
+        service_params: (ServiceType::BlendNetwork, fixture_service_parameters()).into(),
         min_stake: MinStake {
             threshold: 22,
             timestamp: 23,
