@@ -5,7 +5,7 @@ eras:
         num_blend_layers: 1
         minimum_network_size: 2
         network_absorption_in_rounds: 2
-        data_replication_factor: 0
+        data_replication_factor: 1
       core:
         scheduler:
           cover:
@@ -22,62 +22,31 @@ eras:
         epoch_stake_distribution_stabilization: 3
         epoch_period_nonce_buffer: 3
         epoch_period_nonce_stabilization: 4
-      security_param: 30
+      security_param: 120
       slot_activation_coeff:
         numerator: 1
-        denominator: 20
-      learning_rate: 0.5
+        denominator: 30
+      learning_rate: 1.0
       uncle_reference_window_in_block: 12
       pow_config:
         blend:
-          # BLEND_DIFFICULTY_BASE, as the exponent n in p / 2^n: the Blend PoW
-          # threshold at the reference load. Fixed by the EmPoWering
-          # specification from a measurement on the target hardware itself
-          # (Raspberry Pi 5, one core), at which one solution is around fifty
-          # seconds of work.
           base_difficulty: 19
-          # The reference load the threshold is calibrated at, so it has to be the
-          # load the network actually carries: two transactions per block. A
-          # theoretical capacity here would pin the threshold off its calibrated
-          # point.
           target_transactions_per_block: 2
           max_step: 2
           damping_num: 1
           damping_den_offset: 1
         reward:
-          # Token-reward PoW parameters, sized for the target network of ~200
-          # mining nodes over the two-week epoch schedule.
-          #
-          # Pool sized to put 200 nodes over the minimum stake, with margin for
-          # mining being spread unevenly across them.
           reward_pool_genesis: 300000000000
-          # Forced by the pool and the payout rate:
-          # W0 * rate_num / (rate_den * target_claim_per_block *
-          # expected_blocks_per_epoch) = 3e11 / (10 * 1 * 300).
-          # `expected_blocks_per_epoch` is not a config value: the ledger derives
-          # it from the consensus schedule as `10k`, which is 300 at
-          # `security_param: 30`.
-          epoch_reward_genesis: 100000000
-          # Genesis `d_reward`, as the exponent n in p / 2^n — the same form as
-          # the Blend `base_difficulty` above. Fixed by the specification.
-          # Also the minimum difficulty: the retarget never eases past it.
+          epoch_reward_genesis: 25000000
           minimum_difficulty: 19
           ema_smoothing_factor: 9
           ema_smoothing_precision: 10
-          # One claim per block: claims are transactions, and the per-block
-          # transaction budget is 2. Must track `target_claim_per_block` below.
           target_claims_per_block: 1
-          # rho = rate_num / rate_den = 1/10 of the pool per epoch, which
-          # distributes 97% of it across the two weeks.
           rate_num: 1
           rate_den: 10
           target_claim_per_block: 1
-          # `pow_share / share_den` of the fees each block collects is
-          # diverted to the pow reward pool at the epoch boundary.
           pow_share: 10
           share_den: 100
-          # Acceptance window in slots; must match the mining service. Ten
-          # block-intervals of tolerance for a claim to reach a block.
           slot_window: 300
       sdp_config:
         service_params:
@@ -85,16 +54,16 @@ eras:
             inactivity_period: 2
             epoch: 0
         min_stake:
-          threshold: 1
+          threshold: 1000000000
           timestamp: 0
-      faucet_pk: '0000000000000000000000000000000000000000000000000000000000000000'
+      faucet_pk: c2a6a4a0981d5bdcf8ddeb8d7934fd8c5510efeb1053f613b45871670b6f7b19
     time:
       slot_duration: '1.000000000'
 genesis_block:
   header:
     slot: 0
     parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
-    body_root: '7c1ff6ffdb0a1baffdf50aab3f15043cfd4d9f522ba909d1dfde0105789358d9'
+    body_root: b1748beba640d06850bdd74a46c0304e62f5cf94caec126beecc576440c661fd
     proof_of_leadership:
       proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
       entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
@@ -105,19 +74,351 @@ genesis_block:
   transactions:
   - mantle_tx:
       ops:
-        - opcode: 0
-          payload:
-            inputs: []
-            outputs: []
-        - opcode: 17
-          payload:
-            channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
-            inscription: '107374616e64616c6f6e652d6c6f63616c9169fe692d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a'
-            parent: '0000000000000000000000000000000000000000000000000000000000000000'
-            signer: '0000000000000000000000000000000000000000000000000000000000000000'
+      - opcode: 0
+        payload:
+          inputs: []
+          outputs:
+          - value: 100000000000000
+            pk: 376ee6dc1fdb8ee8ae315aa1046c636121bd1133e83adf0de3c2fafa41b4ac1c
+          - value: 200000000000000
+            pk: 859d98b2eb9f6253bf908ca2b1fc445b517b7cb5e7b6280e2c1da4f19304c71d
+          - value: 200000000000000
+            pk: 17f531bfab29cef706b1c6ca26d23ad9aa8906f7965237312a36ca502761241b
+          - value: 1000000000
+            pk: 6b2bcd3029fba573cff0c332dc4de7430faf5e261383d693d8dbb5b97665660a
+          - value: 100000000000000
+            pk: b1c7d3eff60e03588e9f9a4a21a15faecd0406b21f81d3c90a50a42d2253cc0d
+          - value: 200000000000000
+            pk: 7215983b8b7440c7bc61a8252f1d6cb5f6cd2c8e098b9dc17a43145af93d1900
+          - value: 200000000000000
+            pk: 3738bd8f382d7227b7f6339e49ebb65d1a046188361216e60d17a256fac1dc00
+          - value: 1000000000
+            pk: ae9a47f76c9a2c00c40310cc82a1da9f5292af9ee223b898c38478c85fd39515
+          - value: 100000000000000
+            pk: dc3d17f010bf7742e5df5257df434a6e5f8dcbb95549ea6fe571c27cd75c4901
+          - value: 200000000000000
+            pk: 670b1a36742173c0310ec3ffb352afe8430d938619334ce57a8fb2bcd24dca1e
+          - value: 200000000000000
+            pk: e03ad89b26f2321916f78c3e02abc693879341dcf0427cde62f0793f7944c20c
+          - value: 1000000000
+            pk: 4114009ea9da81c5fcb680eca33129fb3fe166af733d25a23ac2da567ee84c19
+          - value: 100000000000000
+            pk: 9e14d1a30241297fb0133e3f3ffd72dce7363b4b680ce7953849dec5b46aac15
+          - value: 200000000000000
+            pk: 605199d3e793d342f1f0457c0ada288efc61d455e3b576e70af14b1651a08c06
+          - value: 200000000000000
+            pk: 2cf55928c4bfe673b2395100c377c70aa716791233b680ba7775e9b589311b0b
+          - value: 1000000000
+            pk: 4d705c711b7c99fc041576c0c5412934cd86f3369d88c9f451e786c0e396fb1c
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 8000000000000
+            pk: 5eae3b5cbd9eaf070b54158b6a670aaa1abb52d65ccaa0436c2a2137282ade04
+          - value: 18446744073709551615
+            pk: c2a6a4a0981d5bdcf8ddeb8d7934fd8c5510efeb1053f613b45871670b6f7b19
+      - opcode: 17
+        payload:
+          channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
+          inscription: 05302e332e3090cfbc6a2d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a
+          parent: '0000000000000000000000000000000000000000000000000000000000000000'
+          signer: '0000000000000000000000000000000000000000000000000000000000000000'
+      - opcode: 32
+        payload:
+          service_type: BN
+          locators:
+          - /ip4/65.109.51.37/udp/3400/quic-v1
+          provider_id: 59c662860b737f4e2515599adb3434856db8070b373a449ff66955ad3da6b473
+          zk_id: 6b2bcd3029fba573cff0c332dc4de7430faf5e261383d693d8dbb5b97665660a
+          service_note_id: 44e03d8e7c4e4df2ccbbc2ec06862688610b558a7ef5466ad7ce8b656341d826
+      - opcode: 32
+        payload:
+          service_type: BN
+          locators:
+          - /ip4/65.109.51.37/udp/3401/quic-v1
+          provider_id: 7fce82aa171b349a40f2a98ce9a05b5db62415adfd3ab4ffea6f214443d5909d
+          zk_id: ae9a47f76c9a2c00c40310cc82a1da9f5292af9ee223b898c38478c85fd39515
+          service_note_id: 4f992361ddeee887907e5ec3ef3105bbfc04665519342ce4618a04c07a9bab14
+      - opcode: 32
+        payload:
+          service_type: BN
+          locators:
+          - /ip4/65.109.51.37/udp/3402/quic-v1
+          provider_id: da8060ee71506bcbf1ac50973ad6dedc3a6cae69139b9d12bfd9c80c4785f6b0
+          zk_id: 4114009ea9da81c5fcb680eca33129fb3fe166af733d25a23ac2da567ee84c19
+          service_note_id: da256d2a4934ad2d87bc16e44750af8fa257bdc00d92f2866f027b41bf580e1e
+      - opcode: 32
+        payload:
+          service_type: BN
+          locators:
+          - /ip4/65.109.51.37/udp/50002/quic-v1
+          provider_id: f6807fc50fbd4ef5f7fe1aaef037ee78d23233e60de802da36bfbb64215800fe
+          zk_id: 4d705c711b7c99fc041576c0c5412934cd86f3369d88c9f451e786c0e396fb1c
+          service_note_id: 3727cd76de980d961911a4926bd5b0d42b67327fa06920cb96f47fe2b54a1d01
     ops_proofs:
-      - !ZkSig
+    - !ZkSig
+      pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+      pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+    - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+    - !ZkAndEd25519Sigs
+      zk_sig:
         pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
         pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
         pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
-      - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+    - !ZkAndEd25519Sigs
+      zk_sig:
+        pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+        pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+        pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+      ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+    - !ZkAndEd25519Sigs
+      zk_sig:
+        pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+        pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+        pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+      ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+    - !ZkAndEd25519Sigs
+      zk_sig:
+        pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+        pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+        pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+      ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
