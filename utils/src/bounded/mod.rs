@@ -14,16 +14,23 @@
 //! [`Bounded::check_len_against_bounds`] and
 //! [`Bounded::new_unchecked`].
 //!
-//! [`BoundedOrderedSet`] and [`BoundedOrderedMap`] add a second invariant on
-//! top of the bound: every checked construction path rejects a repeated
-//! element or key instead of silently merging it, so the number of items read
-//! is always the number of items held.
+//! The bounded sets and maps ([`BoundedOrderedSet`], [`BoundedOrderedMap`],
+//! [`BoundedBTreeSet`] and [`BoundedBTreeMap`]) enforce the bound and
+//! otherwise behave as the collection they wrap. Deserialization reads at most
+//! `MAX` items, repeats included, so its work stays bounded, and merges a
+//! repeated element or key exactly as the wrapped collection does; `MIN`
+//! applies to the items held. Construction is stricter: it rejects a repeat
+//! instead of merging it, so the items given are always the items held.
 
 use core::fmt::{self, Display, Formatter};
 
 use serde::{Serialize, Serializer};
 use thiserror::Error;
 
+pub mod btree_map;
+pub use btree_map::{BoundedBTreeMap, NonEmptyBoundedBTreeMap, UpperBoundedBTreeMap};
+pub mod btree_set;
+pub use btree_set::{BoundedBTreeSet, NonEmptyBoundedBTreeSet, UpperBoundedBTreeSet};
 pub mod multiaddr;
 pub mod ordered_map;
 pub use ordered_map::{BoundedOrderedMap, NonEmptyBoundedOrderedMap, UpperBoundedOrderedMap};
@@ -55,8 +62,9 @@ pub enum BoundedError {
         max: usize,
         capacity: usize,
     },
-    /// Raised by [`BoundedOrderedSet`] and [`BoundedOrderedMap`]: the item at
-    /// `index` (0-based, in input order) repeats an earlier element or key.
+    /// Raised when constructing a bounded set or map: the item at `index`
+    /// (0-based, in input order) repeats an earlier element or key.
+    /// Deserialization merges a repeat instead, as the wrapped collection does.
     #[error("Item at index {index} is a duplicate of an earlier item")]
     DuplicateItem { index: usize },
 }

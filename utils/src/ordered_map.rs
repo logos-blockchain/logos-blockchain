@@ -1,13 +1,13 @@
 use core::{
     cmp::Ordering,
     fmt::{self, Debug, Formatter},
-    hash::{Hash, Hasher},
+    hash::{BuildHasher, Hash, Hasher},
     ops::{Deref, DerefMut},
 };
 use std::hash::RandomState;
 
 use indexmap::{IndexMap, map};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A map that keeps its entries in the order they were inserted and compares
 /// as the sequence it holds.
@@ -18,8 +18,20 @@ use serde::Serialize;
 /// and so do equality, hashing and ordering. Two ordered maps are equal exactly
 /// when they hold the same entries in the same order, which is exactly when
 /// they encode to the same bytes.
-#[derive(Clone, Serialize)]
-#[serde(bound(serialize = "K: Serialize, V: Serialize"), transparent)]
+///
+/// The comparisons are all this wrapper changes. The rest, serde included, is
+/// the inner [`IndexMap`]'s, so deserializing a repeated key keeps its first
+/// position and takes its last value, as [`IndexMap::insert`] does. The checks
+/// live in [`BoundedOrderedMap`](crate::bounded::BoundedOrderedMap), which
+/// enforces a bound and rejects a repeated key instead.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(
+    bound(
+        serialize = "K: Serialize, V: Serialize",
+        deserialize = "K: Deserialize<'de> + Eq + Hash, V: Deserialize<'de>, S: BuildHasher + Default"
+    ),
+    transparent
+)]
 pub struct OrderedMap<K, V, S = RandomState>(IndexMap<K, V, S>);
 
 impl<K, V, S> Debug for OrderedMap<K, V, S>
@@ -124,5 +136,25 @@ impl<K, V, S> IntoIterator for OrderedMap<K, V, S> {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OrderedMap;
+
+    /// Serde is the inner map's: the order is kept, and a repeated key keeps
+    /// its first position and takes its last value.
+    #[test]
+    fn deserializes_as_the_inner_index_map() {
+        let map: OrderedMap<u8, u16> = serde_json::from_str(r#"{"3":30,"1":10,"3":99}"#).unwrap();
+
+        assert_eq!(
+            map.iter()
+                .map(|(key, value)| (*key, *value))
+                .collect::<Vec<_>>(),
+            [(3, 99), (1, 10)]
+        );
+        assert_eq!(serde_json::to_string(&map).unwrap(), r#"{"3":99,"1":10}"#);
     }
 }
