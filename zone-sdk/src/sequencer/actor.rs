@@ -436,6 +436,7 @@ where
             return;
         };
         let candidates = state.refund_candidates(tip, self.lib_slot, window);
+        let mut changed = false;
         for candidate in candidates {
             if self.posting.contains(&candidate.tx_hash) {
                 continue;
@@ -459,6 +460,12 @@ where
                     }
                 }
             }
+            changed = true;
+        }
+        // The pending set moved outside a block event: keep the published
+        // checkpoint in step with it.
+        if changed {
+            self.publish_checkpoint();
         }
     }
 
@@ -1049,9 +1056,13 @@ mod tests {
 
     /// Drive a sequencer with `stale_refund_slots = window` through a
     /// publish and two LIB advances; returns how many fund calls the node
-    /// saw within `for_at_most`. Posts are no signal: the resubmit pass
-    /// re-posts every unmined entry on each tick regardless.
-    async fn drive_stale_publish(window: u64, for_at_most: std::time::Duration) -> usize {
+    /// saw within `for_at_most` and the checkpoint published last. Posts
+    /// are no signal: the resubmit pass re-posts every unmined entry on each
+    /// tick regardless.
+    async fn drive_stale_publish(
+        window: u64,
+        for_at_most: std::time::Duration,
+    ) -> (usize, SequencerCheckpoint) {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
         let (up_tx, up_rx) = watch::channel(true);
@@ -1126,15 +1137,29 @@ mod tests {
             1,
             "a rebuild replaces the entry, it never duplicates it"
         );
-        fund_calls
+        let checkpoint = sequencer
+            .subscribe_checkpoint()
+            .borrow()
+            .clone()
+            .expect("a checkpoint was published");
+        (fund_calls, checkpoint)
     }
 
     /// An own publish unmined past the window is re-funded once the LIB has
-    /// moved past it; with the window disabled it is never re-funded.
+    /// moved past it, and the checkpoint published right after carries the
+    /// rebuilt entry: its funding stamp is the LIB slot of the re-fund, not
+    /// of the publish.
     #[tokio::test]
     async fn stale_publish_is_refunded() {
-        let fund_calls = drive_stale_publish(1, std::time::Duration::from_secs(5)).await;
+        let (fund_calls, checkpoint) =
+            drive_stale_publish(1, std::time::Duration::from_secs(5)).await;
         assert_eq!(fund_calls, 2, "the publish's funding, then the rebuild's");
+        assert_eq!(checkpoint.funding.len(), 1);
+        assert_eq!(
+            checkpoint.funding[0].funded_at,
+            Slot::from(8),
+            "the checkpoint was republished after the re-fund"
+        );
     }
 
     /// The pre-funding ops of a publish survive a checkpoint round trip
@@ -1194,8 +1219,10 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_refund_window_never_refunds() {
-        let fund_calls = drive_stale_publish(0, std::time::Duration::from_secs(1)).await;
+        let (fund_calls, checkpoint) =
+            drive_stale_publish(0, std::time::Duration::from_secs(1)).await;
         assert_eq!(fund_calls, 1);
+        assert_eq!(checkpoint.funding[0].funded_at, Slot::from(0));
     }
 
     #[tokio::test]

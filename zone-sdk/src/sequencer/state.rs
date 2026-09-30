@@ -766,14 +766,24 @@ impl TxState {
         self.pending_other.get(&tx_hash)?.last_msg
     }
 
-    /// Remove `head` and everything pending chained after it, queuing them
-    /// for orphan reporting.
+    /// The config a pending opaque tx leaves as the config tip, if any.
+    fn pending_config_tip_of(&self, tx_hash: TxHash) -> Option<MsgId> {
+        self.pending_other.get(&tx_hash)?.last_config
+    }
+
+    /// Remove `head` and everything pending chained after it on either
+    /// lineage, queuing them parent-first for orphan reporting.
     fn displace_chain(&mut self, head: TxHash) {
-        let mut next = Some(head);
-        while let Some(tx_hash) = next {
-            next = self
-                .pending_tip_of(tx_hash)
-                .and_then(|tip| self.pending_child(tip));
+        let mut queue = std::collections::VecDeque::from([head]);
+        while let Some(tx_hash) = queue.pop_front() {
+            queue.extend(
+                self.pending_tip_of(tx_hash)
+                    .and_then(|tip| self.pending_child(tip)),
+            );
+            queue.extend(
+                self.pending_config_tip_of(tx_hash)
+                    .and_then(|tip| self.pending_config_child(tip)),
+            );
             if let Some(entry) = self.pending_tx_of(&tx_hash) {
                 self.displaced.push(entry);
                 self.remove_pending(&tx_hash);
@@ -2680,6 +2690,62 @@ mod tests {
         assert_eq!(state.pending_publish_count(), 0);
         assert!(!state.is_tracked(&grandchild_hash));
         assert_eq!(state.publish_parent(tip), MsgId::root());
+    }
+
+    /// A pure config chained on an expired config goes with it: the config
+    /// lineage is followed like the message lineage, parent first.
+    #[test]
+    fn expired_config_chain_is_shed_parent_first() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
+        let (a, a_id) = pure_config_tx(MsgId::root(), 1);
+        let (b, _) = pure_config_tx(a_id, 2);
+        let (a_hash, b_hash) = (a.hash(), b.hash());
+        state.submit_other(a, channel_id).unwrap();
+        state.stamp_funding(&a_hash, Slot::from(1));
+        state.submit_other(b, channel_id).unwrap();
+        state.stamp_funding(&b_hash, Slot::from(9));
+
+        let (shed, shed_other) = state.shed_expired(tip, Slot::from(10), 3);
+
+        assert!(shed.is_empty());
+        assert_eq!(
+            shed_other.iter().map(SignedOps::hash).collect::<Vec<_>>(),
+            vec![a_hash, b_hash],
+            "the config chained on the expired one is orphaned with it"
+        );
+        assert!(!state.is_tracked(&b_hash));
+    }
+
+    /// A pure config tx on `config_parent` for the zero channel, keyed by
+    /// `seed` so each is distinct: the tx and its config id.
+    fn pure_config_tx(
+        config_parent: MsgId,
+        seed: u8,
+    ) -> (SignedOps<Unverified, StandardMode>, MsgId) {
+        use lb_core::mantle::{
+            channel::{SlotTimeframe, SlotTimeout},
+            ops::channel::{VerifiedChannelKeys, config::ChannelConfigOp},
+        };
+        let config = ChannelConfigOp {
+            channel: [0u8; 32].into(),
+            parent: config_parent,
+            keys: VerifiedChannelKeys::try_from(vec![
+                lb_key_management_system_service::keys::Ed25519Key::from_bytes(&[seed; 32])
+                    .public_key(),
+            ])
+            .unwrap(),
+            posting_timeframe: SlotTimeframe::from(0u32),
+            posting_timeout: SlotTimeout::from(0u32),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let id = config.id();
+        let tx = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelConfig(config)]));
+        (tx, id)
     }
 
     /// A whole expired chain is reported parent first whatever the hash

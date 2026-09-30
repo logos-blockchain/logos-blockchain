@@ -280,7 +280,7 @@ Channel txs built outside the publish API are classified by shape, not by how th
 
 ### Stuck transactions: re-funding and expiry
 
-A pending tx that stays unmined on the branch for longer than `SequencerConfig::stale_refund_slots` LIB slots (default 30, `0` disables) is treated as stuck, typically because its fee note was spent from under it. What happens next depends on who can sign it:
+A pending tx that stays unmined on the branch for longer than `SequencerConfig::stale_refund_slots` LIB slots (default 30, `0` disables) is eligible for stale recovery. The timeout alone does not establish whether the node still holds the tx or whether its fee inputs remain spendable. What happens next depends on who can sign it:
 
 - **Single-signer publishes** — `publish`, `publish_atomic_withdraw`, `publish_pin_deposit` — are re-funded and re-signed by the SDK, then posted again. The message id and parent are unchanged, only the tx hash is: a tx hash is not a stable identity for a published message, the message id is. Nothing is reported, and entries chained on it keep chaining.
 - **Multi-sig and custom txs** — anything submitted through `submit_channel_config` / `submit_signed_tx` — are shed and reported in `orphaned` on the next `BlocksProcessed`, together with everything chained on them. Re-prepare, collect signatures again, submit again. A config position holds one pending continuation, so `prepare_channel_config` refuses a second config on a parent that already has one pending until it lands or expires.
