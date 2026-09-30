@@ -1,8 +1,6 @@
 name: Publish Logos Blockchain Node Docker Image
 
 on:
-  release:
-    types: [published, created]
   workflow_dispatch:
     inputs:
       lc_core_version:

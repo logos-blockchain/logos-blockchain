@@ -67,14 +67,14 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Re-generate the `flake.lock` file using the command `nix flake lock`
 - [ ] Commit the changes and tag them with `X.Y.Z-rc.N`
 - [ ] Push the commit and the tag
-- [ ] Enter the [blockchain-modules-release] repository locally. If you just cloned the repository, run `git submodule update --init --recursive`
+- [ ] Enter the [blockchain-modules-release] repository locally and run `git submodule update --init --recursive`
 - [ ] Branch out from the latest `master` commit with a release branch named `blockchain-module-X.Y.Z-rc.N`
 - [ ] Navigate to the `submodules/logos-blockchain-module` directory and checkout the `X.Y.Z-rc.N` tag
 - [ ] Commit the changes to the [blockchain-modules-release] repository
 - [ ] Manually trigger the [logos-blockchain-module-workflow] workflow with the `Force build` option selected from the `blockchain-module-X.Y.Z-rc.N` branch
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow to complete before moving on to the next step
-- [ ] Manually trigger the [node-docker-build-workflow] from the `X.Y.Z-rc.N` tag. Use latest (A.B.C) Logos Core relase for `LC Core Version` and `X.Y.Z-rc.N` for `LB Node Version`.
+- [ ] Manually trigger the [node Docker image build workflow][node-docker-build-workflow] from the `X.Y.Z-rc.N` tag. Use latest (A.B.C) Logos Core release for `LC Core Version` and `X.Y.Z-rc.N` for `LB Node Version`.
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow to complete before moving on to the next section
 
@@ -84,14 +84,14 @@ Most of the template content is the same or very similar to what is in `release.
 
 - [ ] Checkout and hard reset the `devnet` branch to point to the latest commit of the current release branch
 - [ ] Symlink the environment file to the repo root with `ln -sf deployment/.env.devnet .env.devnet`
-- [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -sf compose.setup.yml compose.static.yml`
+- [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -sf deployment/compose.setup.yml compose.static.yml`
 - [ ] Commit and push to `devnet` branch to trigger the cleanup
 - [ ] Wait around 1 minute for the previous deployment to be cleaned. Visit the [Devnet web UI][devnet-web-ui] and make sure it's in setup mode.
 
 ### Released version deployment
 
 - [ ] Verify the Logos Blockchain tools Docker image was properly built and pushed to the [GitHub container registry][logos-tools-image-container-registry]
-- [ ] Wait for the new Docker image to be built after the release is published. It must have the `X.Y.Z-rc.N` tag.
+- [ ] Wait for the new node Docker image to be built after triggering the workflow. It must have the `X.Y.Z-rc.N` tag.
 - [ ] Checkout `devnet` branch again and change the `compose.static.yml` symlink to now point to `deployment/compose.run.yml` with `ln -sf deployment/compose.run.yml compose.static.yml`. If this release included previous state cleanup, the new symlink should replace the previous `deployment/compose.setup.yml`, otherwise this should be a no-op.
 - [ ] Update `deployment/.env.devnet` file to contain `NODE_IMAGE_LABEL=X.Y.Z-rc.N` set to version being released
 - [ ] Commit and push the changes to trigger environment re-deployment
