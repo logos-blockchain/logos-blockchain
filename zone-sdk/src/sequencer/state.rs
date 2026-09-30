@@ -34,7 +34,7 @@ use super::{
     channel_wallet::{ChannelWallet, NoteOp},
     types::{
         AtomicWithdrawInfo, ChannelNote, ChannelUpdateTx, ChannelWalletView, Error,
-        InscriptionInfo, PendingTx, PinDepositInfo, WithdrawInfo,
+        InscriptionInfo, PendingFunding, PendingTx, PinDepositInfo, WithdrawInfo,
     },
 };
 
@@ -76,13 +76,10 @@ struct PendingOtherTx {
     last_config: Option<MsgId>,
     /// Submission order, for checkpoint serialization.
     seq: u64,
-    /// Submitted by this sequencer, as opposed to mirrored from a block.
-    /// Only local entries expire: a mirrored one is another sequencer's to
-    /// rebuild.
-    local: bool,
-    /// The LIB slot this entry was first seen unmined on the branch at;
-    /// `None` while it is mined there. See [`TxState::age_pending`].
-    stale_since: Option<Slot>,
+    /// The LIB slot this tx was funded at, for entries this sequencer
+    /// submitted; `None` for one mirrored from a block, which never expires
+    /// here since it is another sequencer's to rebuild.
+    funded_at: Option<Slot>,
 }
 
 /// Where an opaque tx sits in the two lineages, see [`PendingOtherTx`].
@@ -190,9 +187,10 @@ pub struct PendingInscription {
     /// with fresh fee inputs. `None` for entries the sequencer did not fund
     /// itself, which are shed when stale instead.
     pub pre_fund: Option<MantleTxBuilder>,
-    /// The LIB slot this entry was first seen unmined on the branch at;
-    /// `None` while it is mined there. See [`TxState::age_pending`].
-    pub stale_since: Option<Slot>,
+    /// The LIB slot the entry's tx was funded at, refreshed on every re-fund
+    /// attempt; expiry is measured from it. `None` for a mirrored entry,
+    /// which never expires here.
+    pub funded_at: Option<Slot>,
 }
 
 /// An own pending tx that stayed unmined past the refund window, with the
@@ -488,41 +486,85 @@ impl TxState {
                 bundle,
                 posted: false,
                 pre_fund: None,
-                stale_since: None,
+                funded_at: None,
             },
         );
         Ok(())
     }
 
     /// Keep the pre-funding channel ops of an own pending inscription so it
-    /// can be re-funded when stale. No-op for a hash that is not pending.
-    pub fn attach_pre_fund(&mut self, tx_hash: &TxHash, pre_fund: MantleTxBuilder) {
+    /// can be re-funded when stale, and stamp when it was funded. No-op for
+    /// a hash that is not pending.
+    pub fn attach_pre_fund(
+        &mut self,
+        tx_hash: &TxHash,
+        pre_fund: MantleTxBuilder,
+        funded_at: Slot,
+    ) {
         if let Some(pending) = self.pending.get_mut(tx_hash) {
             pending.pre_fund = Some(pre_fund);
+            pending.funded_at = Some(funded_at);
         }
     }
 
-    /// [`Self::attach_pre_fund`] for every entry of a restored checkpoint.
-    pub fn attach_pre_funds(
+    /// Stamp when a pending tx was funded, or last re-funded; expiry counts
+    /// from it. No-op for a hash that is not pending.
+    pub fn stamp_funding(&mut self, tx_hash: &TxHash, funded_at: Slot) {
+        if let Some(pending) = self.pending.get_mut(tx_hash) {
+            pending.funded_at = Some(funded_at);
+        } else if let Some(entry) = self.pending_other.get_mut(tx_hash) {
+            entry.funded_at = Some(funded_at);
+        }
+    }
+
+    /// Restore a checkpoint's funding records. Every restored entry was
+    /// submitted here, so one the checkpoint has no record for counts expiry
+    /// from `restored_at`.
+    pub fn restore_fundings(
         &mut self,
-        builders: impl IntoIterator<Item = (TxHash, MantleTxBuilder)>,
+        records: impl IntoIterator<Item = PendingFunding>,
+        restored_at: Slot,
     ) {
-        for (hash, pre_fund) in builders {
-            self.attach_pre_fund(&hash, pre_fund);
+        for pending in self.pending.values_mut() {
+            pending.funded_at = Some(restored_at);
+        }
+        for entry in self.pending_other.values_mut() {
+            entry.funded_at = Some(restored_at);
+        }
+        for record in records {
+            self.stamp_funding(&record.tx_hash, record.funded_at);
+            if let (Some(pre_fund), Some(pending)) =
+                (record.pre_fund, self.pending.get_mut(&record.tx_hash))
+            {
+                pending.pre_fund = Some(pre_fund);
+            }
         }
     }
 
-    /// The pre-funding ops of every own pending inscription that has them,
-    /// for the checkpoint.
+    /// The funding record of every pending tx this sequencer submitted, for
+    /// the checkpoint.
     #[must_use]
-    pub fn pre_fund_builders(&self) -> Vec<(TxHash, MantleTxBuilder)> {
-        let mut builders: Vec<_> = self
+    pub fn funding_records(&self) -> Vec<PendingFunding> {
+        let mut records: Vec<_> = self
             .pending
             .iter()
-            .filter_map(|(hash, p)| p.pre_fund.clone().map(|b| (*hash, b)))
+            .filter_map(|(hash, p)| {
+                p.funded_at.map(|funded_at| PendingFunding {
+                    tx_hash: *hash,
+                    funded_at,
+                    pre_fund: p.pre_fund.clone(),
+                })
+            })
+            .chain(self.pending_other.iter().filter_map(|(hash, entry)| {
+                entry.funded_at.map(|funded_at| PendingFunding {
+                    tx_hash: *hash,
+                    funded_at,
+                    pre_fund: None,
+                })
+            }))
             .collect();
-        builders.sort_unstable_by_key(|(hash, _)| hash.0);
-        builders
+        records.sort_unstable_by_key(|record| record.tx_hash.0);
+        records
     }
 
     /// The pending tx chaining from config `parent`, if any.
@@ -535,35 +577,29 @@ impl TxState {
             .min_by_key(|hash| hash.0)
     }
 
-    /// Advance the expiry clock for the branch at `tip`: an entry not mined
-    /// there is stale from the first LIB slot it was seen unmined at, one
-    /// mined there is not stale at all. Mirrored opaque txs never age.
-    pub fn age_pending(&mut self, tip: HeaderId, lib_slot: Slot) {
-        let safe = self.safe_at(tip);
-        for (hash, pending) in &mut self.pending {
-            pending.stale_since =
-                (!safe.contains(hash)).then(|| pending.stale_since.unwrap_or(lib_slot));
-        }
-        for (hash, entry) in &mut self.pending_other {
-            entry.stale_since = (entry.local && !safe.contains(hash))
-                .then(|| entry.stale_since.unwrap_or(lib_slot));
-        }
-    }
-
-    fn expired(stale_since: Option<Slot>, lib_slot: Slot, window: u64) -> bool {
+    fn expired(funded_at: Option<Slot>, lib_slot: Slot, window: u64) -> bool {
         window > 0
-            && stale_since
-                .is_some_and(|since| u64::from(lib_slot).saturating_sub(u64::from(since)) > window)
+            && funded_at
+                .is_some_and(|at| u64::from(lib_slot).saturating_sub(u64::from(at)) > window)
     }
 
-    /// Own pending inscriptions unmined past `window` that carry their
-    /// pre-funding ops: what a stale-refund rebuilds.
+    /// Own pending inscriptions not mined on `tip`'s branch and funded more
+    /// than `window` LIB slots ago that carry their pre-funding ops: what a
+    /// stale-refund rebuilds.
     #[must_use]
-    pub fn refund_candidates(&self, lib_slot: Slot, window: u64) -> Vec<RefundCandidate> {
+    pub fn refund_candidates(
+        &self,
+        tip: HeaderId,
+        lib_slot: Slot,
+        window: u64,
+    ) -> Vec<RefundCandidate> {
+        let safe = self.safe_at(tip);
         let mut candidates: Vec<RefundCandidate> = self
             .pending
             .iter()
-            .filter(|(_, p)| Self::expired(p.stale_since, lib_slot, window))
+            .filter(|(hash, p)| {
+                !safe.contains(hash) && Self::expired(p.funded_at, lib_slot, window)
+            })
             .filter_map(|(hash, p)| {
                 p.pre_fund.clone().map(|pre_fund| RefundCandidate {
                     tx_hash: *hash,
@@ -576,39 +612,55 @@ impl TxState {
         candidates
     }
 
-    /// Shed what stayed unmined past `window` and cannot be rebuilt here:
-    /// own inscriptions without pre-funding ops and locally submitted opaque
-    /// txs, each with everything chained on it, since the message they
-    /// chain on will not land. Returned parent-first for orphan reporting.
+    /// Shed what is not mined on `tip`'s branch, was funded more than
+    /// `window` LIB slots ago, and cannot be rebuilt here: own inscriptions
+    /// without pre-funding ops and locally submitted opaque txs, each with
+    /// everything chained on it, since the message they chain on will not
+    /// land. Returned parent-first for orphan reporting.
     pub fn shed_expired(
         &mut self,
+        tip: HeaderId,
         lib_slot: Slot,
         window: u64,
     ) -> (Vec<PendingTx>, Vec<SignedOps<Unverified, StandardMode>>) {
-        let mut expired: Vec<TxHash> = self
+        let safe = self.safe_at(tip);
+        // `(hash, parent message)` of every expired entry.
+        let expired: Vec<(TxHash, Option<MsgId>)> = self
             .pending
             .iter()
-            .filter(|(_, p)| p.pre_fund.is_none() && Self::expired(p.stale_since, lib_slot, window))
-            .map(|(hash, _)| *hash)
+            .filter(|(hash, p)| {
+                p.pre_fund.is_none()
+                    && !safe.contains(hash)
+                    && Self::expired(p.funded_at, lib_slot, window)
+            })
+            .map(|(hash, p)| (*hash, Some(p.parent_msg)))
             .chain(
                 self.pending_other
                     .iter()
-                    .filter(|(_, entry)| {
-                        entry.local && Self::expired(entry.stale_since, lib_slot, window)
+                    .filter(|(hash, entry)| {
+                        !safe.contains(hash) && Self::expired(entry.funded_at, lib_slot, window)
                     })
-                    .map(|(hash, _)| *hash),
+                    .map(|(hash, entry)| (*hash, entry.first_parent)),
             )
             .collect();
-        // Sort for determinism across `HashMap` iteration order; a chain's
-        // head is displaced with its children whichever is visited first.
-        expired.sort_unstable_by_key(|hash| hash.0);
+        // Displace from each chain's head: an expired entry chained on
+        // another expired entry goes with it, parent first. Heads sorted for
+        // determinism across `HashMap` iteration order.
+        let expired_tips: HashSet<MsgId> = expired
+            .iter()
+            .filter_map(|(hash, _)| self.pending_tip_of(*hash))
+            .collect();
+        let mut heads: Vec<TxHash> = expired
+            .into_iter()
+            .filter(|(_, parent)| parent.is_none_or(|parent| !expired_tips.contains(&parent)))
+            .map(|(hash, _)| hash)
+            .collect();
+        heads.sort_unstable_by_key(|hash| hash.0);
         // Only what this pass displaces: anything already waiting in the
         // displaced lists belongs to the off-branch report.
         let (from, from_other) = (self.displaced.len(), self.displaced_other.len());
-        for hash in expired {
-            if self.is_tracked(&hash) {
-                self.displace_chain(hash);
-            }
+        for hash in heads {
+            self.displace_chain(hash);
         }
         (
             self.displaced.split_off(from),
@@ -617,13 +669,14 @@ impl TxState {
     }
 
     /// Swap a re-funded own inscription in under its new hash: same parent,
-    /// message id, payload and bundle, fresh expiry clock, not yet posted.
+    /// message id, payload and bundle, funded at `funded_at`, not yet posted.
     /// Returns the new hash, or `None` when `old` is not pending.
     pub fn replace_pending(
         &mut self,
         old: &TxHash,
         signed_tx: SignedOps<Unverified, StandardMode>,
         pre_fund: MantleTxBuilder,
+        funded_at: Slot,
     ) -> Option<TxHash> {
         let mut entry = self.pending.remove(old)?;
         if self.pending_by_parent.get(&entry.parent_msg) == Some(old) {
@@ -634,7 +687,7 @@ impl TxState {
         entry.signed_tx = signed_tx;
         entry.posted = false;
         entry.pre_fund = Some(pre_fund);
-        entry.stale_since = None;
+        entry.funded_at = Some(funded_at);
         if let PendingBundle::Withdraw { withdraws, .. } = &mut entry.bundle {
             for withdraw in withdraws {
                 withdraw.tx_hash = new_hash;
@@ -694,17 +747,9 @@ impl TxState {
                 bundle,
                 posted: true,
                 pre_fund: None,
-                stale_since: None,
+                funded_at: None,
             },
         );
-    }
-
-    /// Restart an entry's expiry clock at `lib_slot`, so a failed re-fund is
-    /// retried after another full window rather than on every tick.
-    pub fn restart_stale_clock(&mut self, tx_hash: &TxHash, lib_slot: Slot) {
-        if let Some(pending) = self.pending.get_mut(tx_hash) {
-            pending.stale_since = Some(lib_slot);
-        }
     }
 
     /// The pending tx chaining from `parent`, if any.
@@ -799,7 +844,7 @@ impl TxState {
         {
             return Err(ParentTaken { parent, by });
         }
-        Ok(self.insert_other(signed_tx, channel_id, lineage, true))
+        Ok(self.insert_other(signed_tx, channel_id, lineage))
     }
 
     /// Track an opaque tx observed on the canonical channel, the counterpart
@@ -820,7 +865,7 @@ impl TxState {
         {
             self.displace_chain(sibling);
         }
-        self.insert_other(signed_tx, channel_id, lineage, false);
+        self.insert_other(signed_tx, channel_id, lineage);
     }
 
     fn insert_other(
@@ -828,7 +873,6 @@ impl TxState {
         signed_tx: SignedOps<Unverified, StandardMode>,
         channel_id: ChannelId,
         lineage: OpaqueLineage,
-        local: bool,
     ) -> Option<MsgId> {
         let tx_hash = signed_tx.hash();
         let OpaqueLineage {
@@ -857,8 +901,7 @@ impl TxState {
                 config_parent,
                 last_config,
                 seq,
-                local,
-                stale_since: None,
+                funded_at: None,
             },
         );
         last_msg
@@ -2457,9 +2500,9 @@ mod tests {
         (hash, msg)
     }
 
-    /// Expiry: an own inscription unmined on the branch ages from the LIB
-    /// slot it was first seen at; past the window it is a refund candidate
-    /// when it carries its pre-funding ops and is shed otherwise.
+    /// Expiry counts from the funding stamp of an entry not mined on the
+    /// branch; past the window it is a refund candidate when it carries its
+    /// pre-funding ops and is shed otherwise.
     #[test]
     fn expired_own_inscription_is_refunded_or_shed_by_pre_fund() {
         let genesis = header_id(0);
@@ -2467,24 +2510,24 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
         let (funded, funded_msg) = submit_own(&mut state, MsgId::root(), 1);
-        state.attach_pre_fund(&funded, MantleTxBuilder::new());
+        state.attach_pre_fund(&funded, MantleTxBuilder::new(), Slot::from(10));
         let (unfunded, _) = submit_own(&mut state, funded_msg, 2);
+        state.stamp_funding(&unfunded, Slot::from(10));
 
-        state.age_pending(tip, Slot::from(10));
         assert!(
-            state.refund_candidates(Slot::from(12), 3).is_empty(),
+            state.refund_candidates(tip, Slot::from(12), 3).is_empty(),
             "inside the window nothing expires"
         );
-        assert!(state.shed_expired(Slot::from(12), 3).0.is_empty());
+        assert!(state.shed_expired(tip, Slot::from(12), 3).0.is_empty());
 
-        let candidates = state.refund_candidates(Slot::from(14), 3);
+        let candidates = state.refund_candidates(tip, Slot::from(14), 3);
         assert_eq!(
             candidates.iter().map(|c| c.tx_hash).collect::<Vec<_>>(),
             vec![funded],
             "only the entry with pre-funding ops is rebuilt"
         );
         assert!(!candidates[0].bundle);
-        let (shed, shed_other) = state.shed_expired(Slot::from(14), 3);
+        let (shed, shed_other) = state.shed_expired(tip, Slot::from(14), 3);
         assert_eq!(
             shed.iter().map(PendingTx::tx_hash).collect::<Vec<_>>(),
             vec![unfunded],
@@ -2502,43 +2545,45 @@ mod tests {
         let tip = header_id(1);
         let mut state = TxState::new(genesis, MsgId::root());
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
-        submit_own(&mut state, MsgId::root(), 1);
+        let (hash, _) = submit_own(&mut state, MsgId::root(), 1);
+        state.stamp_funding(&hash, Slot::from(1));
 
-        state.age_pending(tip, Slot::from(1));
-        assert!(state.refund_candidates(Slot::from(1_000), 0).is_empty());
-        assert!(state.shed_expired(Slot::from(1_000), 0).0.is_empty());
+        assert!(
+            state
+                .refund_candidates(tip, Slot::from(1_000), 0)
+                .is_empty()
+        );
+        assert!(state.shed_expired(tip, Slot::from(1_000), 0).0.is_empty());
     }
 
-    /// The clock only runs while the entry is unmined on the branch: mined on
-    /// the tip it is never stale, and a switch to a branch without it starts
-    /// the clock afresh.
+    /// A mined entry never expires, however old its funding; an entry the
+    /// branch does not carry expires from its stamp, so a switch that
+    /// un-mines an old entry makes it a candidate at once.
     #[test]
-    fn expiry_clock_resets_while_mined_on_the_branch() {
+    fn only_entries_unmined_on_the_branch_expire() {
         let genesis = header_id(0);
         let a1 = header_id(1);
         let b1 = header_id(2);
         let mut state = TxState::new(genesis, MsgId::root());
         let (hash, _) = submit_own(&mut state, MsgId::root(), 1);
-        state.attach_pre_fund(&hash, MantleTxBuilder::new());
+        state.attach_pre_fund(&hash, MantleTxBuilder::new(), Slot::from(1));
         state.process_block(a1, genesis, genesis, vec![hash], vec![], Vec::new());
         state.process_block(b1, genesis, genesis, vec![], vec![], Vec::new());
 
-        state.age_pending(a1, Slot::from(1));
         assert!(
-            state.refund_candidates(Slot::from(100), 3).is_empty(),
-            "mined on the branch: not stale"
+            state.refund_candidates(a1, Slot::from(100), 3).is_empty(),
+            "mined on the branch"
         );
-        state.age_pending(b1, Slot::from(50));
-        assert!(
-            state.refund_candidates(Slot::from(52), 3).is_empty(),
-            "the clock started at the switch, not at submission"
+        assert_eq!(
+            state.refund_candidates(b1, Slot::from(100), 3).len(),
+            1,
+            "not mined on this branch"
         );
-        assert_eq!(state.refund_candidates(Slot::from(54), 3).len(), 1);
     }
 
     /// Re-funding swaps the entry in under its new hash with the lineage
-    /// intact: same parent and message id, chaining pointer moved, clock and
-    /// posted flag reset.
+    /// intact: same parent and message id, chaining pointer moved, funding
+    /// stamp refreshed, posted flag reset.
     #[test]
     fn replace_pending_keeps_the_lineage_under_the_new_hash() {
         let genesis = header_id(0);
@@ -2547,11 +2592,10 @@ mod tests {
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
         let (old, old_msg) = submit_own(&mut state, MsgId::root(), 1);
         assert!(state.mark_pending_inscription_posted(&old));
-        state.age_pending(tip, Slot::from(1));
 
         let rebuilt = make_dummy_tx(9);
         let new = state
-            .replace_pending(&old, rebuilt.clone(), MantleTxBuilder::new())
+            .replace_pending(&old, rebuilt.clone(), MantleTxBuilder::new(), Slot::from(5))
             .expect("the old hash was pending");
 
         assert_eq!(new, rebuilt.hash());
@@ -2560,12 +2604,17 @@ mod tests {
         assert_eq!(entry.this_msg, old_msg);
         assert_eq!(entry.parent_msg, MsgId::root());
         assert!(!entry.posted);
-        assert!(entry.stale_since.is_none());
+        assert_eq!(entry.funded_at, Some(Slot::from(5)));
         assert!(entry.pre_fund.is_some());
         assert_eq!(state.pending_child(MsgId::root()), Some(new));
         assert!(
             state
-                .replace_pending(&old, make_dummy_tx(8), MantleTxBuilder::new())
+                .replace_pending(
+                    &old,
+                    make_dummy_tx(8),
+                    MantleTxBuilder::new(),
+                    Slot::from(6)
+                )
                 .is_none(),
             "a hash that is not pending is not replaced"
         );
@@ -2600,7 +2649,7 @@ mod tests {
 
     /// An expired entry takes its whole chain with it: the children chain on
     /// a message that will not land, so they are reported orphaned with it,
-    /// parent first, even when they could have been rebuilt on their own.
+    /// parent first, even when they are younger or could be rebuilt.
     #[test]
     fn expired_entry_is_shed_with_its_children() {
         let genesis = header_id(0);
@@ -2609,16 +2658,15 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
         let (head, head_msg) = submit_own(&mut state, MsgId::root(), 1);
+        state.stamp_funding(&head, Slot::from(1));
         let (child, child_msg) = submit_own(&mut state, head_msg, 2);
-        state.attach_pre_fund(&child, MantleTxBuilder::new());
+        state.attach_pre_fund(&child, MantleTxBuilder::new(), Slot::from(9));
         let (grandchild, _, _) = bundle_tx(child_msg, 3);
         let grandchild_hash = grandchild.hash();
         state.submit_other(grandchild, channel_id).unwrap();
+        state.stamp_funding(&grandchild_hash, Slot::from(9));
 
-        state.age_pending(tip, Slot::from(1));
-        // Only the head is old enough; the child is younger than the window.
-        state.restart_stale_clock(&child, Slot::from(9));
-        let (shed, shed_other) = state.shed_expired(Slot::from(10), 3);
+        let (shed, shed_other) = state.shed_expired(tip, Slot::from(10), 3);
 
         assert_eq!(
             shed.iter().map(PendingTx::tx_hash).collect::<Vec<_>>(),
@@ -2632,6 +2680,32 @@ mod tests {
         assert_eq!(state.pending_publish_count(), 0);
         assert!(!state.is_tracked(&grandchild_hash));
         assert_eq!(state.publish_parent(tip), MsgId::root());
+    }
+
+    /// A whole expired chain is reported parent first whatever the hash
+    /// order of its entries.
+    #[test]
+    fn expired_chain_is_shed_parent_first() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
+        let mut parent = MsgId::root();
+        let mut chain = Vec::new();
+        for data in 1..=6u8 {
+            let (hash, msg) = submit_own(&mut state, parent, data);
+            state.stamp_funding(&hash, Slot::from(1));
+            chain.push(hash);
+            parent = msg;
+        }
+
+        let (shed, _) = state.shed_expired(tip, Slot::from(10), 3);
+
+        assert_eq!(
+            shed.iter().map(PendingTx::tx_hash).collect::<Vec<_>>(),
+            chain
+        );
+        assert_eq!(state.pending_publish_count(), 0);
     }
 
     /// The original of a re-funded publish can still win: it is the same
@@ -2682,8 +2756,8 @@ mod tests {
         );
     }
 
-    /// Only locally submitted opaque txs expire; a mirrored one is another
-    /// sequencer's to rebuild.
+    /// Only txs this sequencer submitted carry a funding stamp and expire; a
+    /// mirrored one is another sequencer's to rebuild.
     #[test]
     fn expired_local_opaque_tx_is_shed_but_a_mirrored_one_is_not() {
         let genesis = header_id(0);
@@ -2694,13 +2768,13 @@ mod tests {
         let (local, _, _) = bundle_tx(MsgId::root(), 1);
         let local_hash = local.hash();
         state.submit_other(local, channel_id).unwrap();
+        state.stamp_funding(&local_hash, Slot::from(1));
         // Mirrored on its own position, so it is not the local entry's child.
         let mirrored = make_dummy_tx_on(msg_id(50), 2);
         let mirrored_hash = mirrored.hash();
         state.observe_other_tx(mirrored, channel_id);
 
-        state.age_pending(tip, Slot::from(1));
-        let (shed, shed_other) = state.shed_expired(Slot::from(10), 3);
+        let (shed, shed_other) = state.shed_expired(tip, Slot::from(10), 3);
 
         assert!(shed.is_empty());
         assert_eq!(

@@ -18,7 +18,7 @@ use lb_core::{
             },
         },
         traits::Hashable as _,
-        transactions::{Ops, TxHash, states::Unverified},
+        transactions::{MantleTxBuilder, Ops, TxHash, states::Unverified},
     },
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
@@ -60,11 +60,23 @@ pub struct SequencerCheckpoint {
     /// (matching the old reset-to-root behavior).
     #[serde(default = "MsgId::root")]
     pub finalized_config: MsgId,
-    /// The channel ops of the sequencer's own pending txs before funding,
-    /// keyed by tx hash: what a stale-refund re-funds. Empty for checkpoints
-    /// written before re-funding existed; those entries are never rebuilt.
+    /// Funding record of each pending tx this sequencer submitted.
     #[serde(default)]
-    pub pre_fund_ops: Vec<(TxHash, lb_core::mantle::transactions::MantleTxBuilder)>,
+    pub funding: Vec<PendingFunding>,
+}
+
+/// How a pending tx was funded: when, and with which channel ops, so a stale
+/// one can be re-funded.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PendingFunding {
+    pub tx_hash: TxHash,
+    /// The LIB slot the tx was funded, or last re-funded, at; expiry counts
+    /// from it.
+    pub funded_at: Slot,
+    /// The channel ops before funding, for a tx the sequencer built and
+    /// signed itself; `None` for one it only submitted, which is shed when
+    /// stale instead of rebuilt.
+    pub pre_fund: Option<MantleTxBuilder>,
 }
 
 /// Result of a publish operation.

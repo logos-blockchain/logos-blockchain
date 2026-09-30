@@ -432,10 +432,10 @@ where
         if window == 0 || !self.connected {
             return;
         }
-        let candidates = match self.state.as_ref() {
-            Some(state) => state.refund_candidates(self.lib_slot, window),
-            None => return,
+        let (Some(state), Some(tip)) = (self.state.as_ref(), self.current_tip) else {
+            return;
         };
+        let candidates = state.refund_candidates(tip, self.lib_slot, window);
         for candidate in candidates {
             if self.posting.contains(&candidate.tx_hash) {
                 continue;
@@ -455,7 +455,7 @@ where
                         hex::encode(old_hash.0)
                     );
                     if let Some(state) = self.state.as_mut() {
-                        state.restart_stale_clock(&old_hash, self.lib_slot);
+                        state.stamp_funding(&old_hash, self.lib_slot);
                     }
                 }
             }
@@ -476,9 +476,12 @@ where
         let (tx, transfer_proof) =
             fund_builder(&self.node, &self.config.funding, candidate.pre_fund.clone()).await?;
         let signed = sign_own_tx(tx, transfer_proof, &self.signing_key, own_key_index)?;
+        let funded_at = self.lib_slot;
         self.state
             .as_mut()
-            .and_then(|state| state.replace_pending(&candidate.tx_hash, signed, candidate.pre_fund))
+            .and_then(|state| {
+                state.replace_pending(&candidate.tx_hash, signed, candidate.pre_fund, funded_at)
+            })
             .ok_or_else(|| Error::Network("no longer pending".into()))
     }
 
@@ -649,10 +652,9 @@ where
         (channel_update, deposits, finalized_items)
     }
 
-    /// Age the pending set against the current block, then shed what stayed
-    /// unmined past the refund window and cannot be rebuilt here into
-    /// `orphaned`; own entries with pre-funding ops wait for the resubmit
-    /// tick instead.
+    /// Shed into `orphaned` what is not mined on the current branch, was
+    /// funded longer ago than the refund window and cannot be rebuilt here;
+    /// own entries with pre-funding ops wait for the resubmit tick instead.
     fn shed_expired_into(
         &mut self,
         orphaned: &mut Vec<ChannelUpdateTx>,
@@ -661,10 +663,9 @@ where
         let (Some(state), Some(tip)) = (self.state.as_mut(), self.current_tip) else {
             return;
         };
-        state.age_pending(tip, self.lib_slot);
         let (expired, expired_other) =
-            state.shed_expired(self.lib_slot, self.config.stale_refund_slots);
-        let expired_any = !expired.is_empty();
+            state.shed_expired(tip, self.lib_slot, self.config.stale_refund_slots);
+        let expired_any = !expired.is_empty() || !expired_other.is_empty();
         let shed = expired.into_iter().map(orphan_from_shed).chain(
             expired_other
                 .into_iter()
@@ -1163,14 +1164,9 @@ mod tests {
             () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
         };
         let tx_hash = result.inscription_id();
-        assert_eq!(
-            checkpoint
-                .pre_fund_ops
-                .iter()
-                .map(|(hash, _)| *hash)
-                .collect::<Vec<_>>(),
-            vec![tx_hash]
-        );
+        assert_eq!(checkpoint.funding.len(), 1);
+        assert_eq!(checkpoint.funding[0].tx_hash, tx_hash);
+        assert!(checkpoint.funding[0].pre_fund.is_some());
 
         let json = serde_json::to_string(&checkpoint).expect("checkpoint serializes");
         let restored_checkpoint: SequencerCheckpoint =
@@ -1184,15 +1180,15 @@ mod tests {
         );
 
         let state = restored.state.as_ref().expect("restored state");
-        assert!(state.pending_inscription(&tx_hash).is_some());
-        assert_eq!(
-            state
-                .pre_fund_builders()
-                .iter()
-                .map(|(hash, _)| *hash)
-                .collect::<Vec<_>>(),
-            vec![tx_hash],
+        let entry = state.pending_inscription(&tx_hash).expect("restored");
+        assert!(
+            entry.pre_fund.is_some(),
             "the restored entry keeps its pre-funding ops"
+        );
+        assert_eq!(
+            entry.funded_at,
+            Some(checkpoint.funding[0].funded_at),
+            "and its stamp"
         );
     }
 

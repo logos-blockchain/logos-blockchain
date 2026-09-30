@@ -902,9 +902,6 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
-  # A node restart wipes the wallet's fee-note reservations, so the next
-  # publish can spend the note a still-pending publish was funded with. The
-  # wedged inscription can only land via the sequencer's stale-refund rebuild.
   Scenario: Zone sequencer re-funds a double-handed inscription after node restart
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -951,5 +948,6 @@ Feature: Zone SDK
     When I save current checkpoint of sequencer "SEQ_A" as "REFUND_CHECKPOINT"
     And I restart zone sequencer "SEQ_A" from checkpoint "REFUND_CHECKPOINT"
     Then the zone indexer returns all zone messages exactly once in any order in 600 seconds
+    And zone message "MSG_2" finalized under a different tx hash than submitted
     Then the channel view contract holds for all zone sequencers
     And I stop all nodes

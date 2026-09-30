@@ -519,6 +519,14 @@ impl ZoneState {
             .collect()
     }
 
+    pub fn published_message(&self, alias: &str) -> Result<&ZonePublishedMessage, StepError> {
+        self.published_messages
+            .get(alias)
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("Zone message alias '{alias}' is not tracked"),
+            })
+    }
+
     pub fn message_tx_hashes_for_aliases(
         &self,
         aliases: &[String],

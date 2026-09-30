@@ -226,7 +226,7 @@ pub(super) fn sign_own_tx(
         None => attach_transfer_proof(&tx, [OpProof::Ed25519Sig(own_sig)].into(), transfer_proof)?,
     };
     SignedOps::from_parts(tx, ops_proofs)
-        .map_err(|error| Error::Network(format!("failed to assemble re-funded tx: {error:?}")))
+        .map_err(|error| Error::Network(format!("failed to assemble signed tx: {error:?}")))
 }
 
 /// Build and fund a `ChannelConfig` transaction, returning the funded raw
