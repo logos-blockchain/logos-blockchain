@@ -20,16 +20,17 @@ services:
     ports:
       - "13800:8000/tcp"
 
-  faucet:
-    container_name: faucet
-    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
-    volumes:
-      - node-data:/node-data
-      - ./deployment:/etc/logos-blockchain
-    environment:
-      - FAUCET_PORT=18090
-      - NODE_API_ADDR=http://logos_blockchain_node_0:${NODE0_API_PORT}
-    entrypoint: /etc/logos-blockchain/scripts/run_faucet.sh
+  # Faucet disabled; uncomment (and the nginx depends_on entry) to re-enable.
+  # faucet:
+  #   container_name: faucet
+  #   image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
+  #   volumes:
+  #     - node-data:/node-data
+  #     - ./deployment:/etc/logos-blockchain
+  #   environment:
+  #     - FAUCET_PORT=18090
+  #     - NODE_API_ADDR=http://logos_blockchain_node_0:${NODE0_API_PORT}
+  #   entrypoint: /etc/logos-blockchain/scripts/run_faucet.sh
 
   logos-blockchain-node-0:
     container_name: logos_blockchain_node_0
@@ -139,7 +140,7 @@ services:
       - "13001:13001"
     depends_on:
       - explorer
-      - faucet
+      # - faucet
     environment:
       - ENV_TITLE_STRING=${ENV_TITLE_STRING}
     volumes:

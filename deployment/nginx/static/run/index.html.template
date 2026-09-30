@@ -10,6 +10,8 @@
     <title>Logos Devnet</title>
 </head>
 <body>
+    <div class="hero-bg" aria-hidden="true"></div>
+    <main class="card">
     <a class="logo" href="./"><img class="icon-svg" src="./assets/logos.svg" /></a>
     <h1>Logos Blockchain Info Page</h1>
 
@@ -73,12 +75,11 @@
         <li>
             <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/web/explorer/" target="_blank">Explorer</a>
         </li>
-        <li>
-            <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/web/cfgsync/deployment-settings" target="_blank">Deployment Settings</a>
-        </li>
+        <!-- Faucet disabled; re-enable together with the faucet service in compose.run.yml.
         <li>
             <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/web/faucet/" target="_blank">Faucet</a>
         </li>
+        -->
         <li>
             <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/internal/node-data/" target="_blank">Node Data</a>
         </li>
@@ -86,6 +87,9 @@
 
     <h2>External</h2>
     <ul>
+        <li>
+            <a href="https://docs.logos.co/run-a-node" target="_blank">Run a Node</a>
+        </li>
         <li>
             <a href="https://www.notion.so/nomos-tech/Joining-the-Devnet-313261aa09df80d2b894d1c32abb6954" target="_blank">Notion</a>
         </li>
@@ -103,5 +107,6 @@
             <a href="https://docs.google.com/document/d/1qQ-eupBjqNnU0EfSWgCwiP164BmXsKWvMHJYyJqOUh8/edit?usp=sharing" target="_blank">Logos Blockchain Testnet Privacy Policy</a>
         </li>
     </ul>
+    </main>
 </body>
 </html>
