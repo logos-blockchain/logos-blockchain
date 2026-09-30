@@ -168,8 +168,8 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: nextest
-          # - We don't test benches as they take 6h+, leading to a timeout
-          # - We also do not test end-to-end integration tests here as those are run in a dedicated step below
+          # - Benchmarks take more than six hours and would exceed the job timeout.
+          # - End-to-end integration tests run separately in their dedicated workflow.
           args: >-
             run --workspace --locked --lib --bins --examples --tests --retries 2
             --all-features --no-fail-fast --exclude logos-blockchain-tests
