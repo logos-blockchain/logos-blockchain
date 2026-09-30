@@ -6,7 +6,7 @@ use lb_core::{
         ops::channel::{MsgId, VerifiedChannelKeys, inscribe::Inscription},
         transactions::{Ops, states::Unverified},
     },
-    proofs::channel_multi_sig_proof::IndexedSignature,
+    proofs::channel_multi_sig_proof::IndexedSignatures,
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
 
@@ -200,14 +200,15 @@ where
     /// signatures.
     ///
     /// `signatures` must be indexed against
-    /// [`PreparedChannelConfig::accredited_keys`] and strictly ascending by
-    /// index. Assembles the fully-signed config tx and enqueues it for posting
+    /// [`PreparedChannelConfig::accredited_keys`], with at most one signature
+    /// per index. Assembles the fully-signed config tx and
+    /// enqueues it for posting
     /// on the drive loop's in-flight pool — the returned [`PublishReceipt`]
     /// reflects the queued state, not a network acknowledgement.
     pub fn submit_channel_config(
         &mut self,
         prepared: PreparedChannelConfig,
-        signatures: Vec<IndexedSignature>,
+        signatures: IndexedSignatures,
     ) -> Result<PublishReceipt, Error> {
         self.sequencer
             .do_submit_channel_config(prepared, signatures)

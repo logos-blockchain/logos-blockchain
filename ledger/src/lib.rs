@@ -1017,7 +1017,7 @@ mod tests {
             },
         },
         proofs::{
-            channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+            channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
             leader_claim_proof::Groth16LeaderClaimProof,
         },
         sdp::{ActivityMetadata, DeclarationId, Nonce},
@@ -1181,7 +1181,7 @@ mod tests {
     ) -> SignedOps<Preverified, StandardMode> {
         create_signed_tx(
             Op::ChannelConfig(config_op),
-            &Key::MultiSequencer(ChannelMultiSigProof::try_new([].into()).unwrap()),
+            &Key::MultiSequencer(ChannelMultiSigProof::empty()),
         )
     }
 
@@ -1191,14 +1191,10 @@ mod tests {
     ) -> SignedOps<Preverified, StandardMode> {
         let ops = Ops::from([Op::ChannelConfig(config_op.clone())]);
         let config_tx_hash = ops.hash();
-        let config_proof = ChannelMultiSigProof::try_new(
-            [IndexedSignature::new(
-                0,
-                signing_key.sign_payload(config_tx_hash.as_signing_bytes()),
-            )]
-            .into(),
-        )
-        .unwrap();
+        let config_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
+            0,
+            signing_key.sign_payload(config_tx_hash.as_signing_bytes()),
+        )));
 
         create_signed_tx(
             Op::ChannelConfig(config_op),
@@ -1791,14 +1787,10 @@ mod tests {
         };
         let withdraw_tx = Ops::from([Op::ChannelWithdraw(withdraw)]);
         let withdraw_tx_hash = withdraw_tx.hash();
-        let withdraw_proof = ChannelMultiSigProof::try_new(
-            [IndexedSignature::new(
-                0,
-                signing_key.sign_payload(withdraw_tx_hash.as_signing_bytes()),
-            )]
-            .into(),
-        )
-        .unwrap();
+        let withdraw_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
+            0,
+            signing_key.sign_payload(withdraw_tx_hash.as_signing_bytes()),
+        )));
 
         let signed_tx = create_multi_signed_tx(
             withdraw_tx.to_vec(),
@@ -1863,18 +1855,11 @@ mod tests {
         ];
 
         let tx_hash = Ops::new_unchecked(ops.clone()).hash();
-        let genesis_key = Key::MultiSequencer(ChannelMultiSigProof::try_new([].into()).unwrap());
+        let genesis_key = Key::MultiSequencer(ChannelMultiSigProof::empty());
         let deposit_key = Key::Zk(sk);
-        let withdraw_key = Key::MultiSequencer(
-            ChannelMultiSigProof::try_new(
-                [IndexedSignature::new(
-                    0,
-                    signing_key.sign_payload(tx_hash.as_signing_bytes()),
-                )]
-                .into(),
-            )
-            .unwrap(),
-        );
+        let withdraw_key = Key::MultiSequencer(ChannelMultiSigProof::new(IndexedSignatures::from(
+            (0, signing_key.sign_payload(tx_hash.as_signing_bytes())),
+        )));
         let tx = create_multi_signed_tx(ops, vec![&genesis_key, &deposit_key, &withdraw_key]);
 
         // The estimator only sees the state before the transaction, where the
@@ -1934,16 +1919,10 @@ mod tests {
 
         let tx_hash = Ops::new_unchecked(ops.clone()).hash();
         let inscribe_key = Key::Ed25519(signing_key.clone());
-        let config_key = Key::MultiSequencer(
-            ChannelMultiSigProof::try_new(
-                [IndexedSignature::new(
-                    0,
-                    signing_key.sign_payload(tx_hash.as_signing_bytes()),
-                )]
-                .into(),
-            )
-            .unwrap(),
-        );
+        let config_key = Key::MultiSequencer(ChannelMultiSigProof::new(IndexedSignatures::from((
+            0,
+            signing_key.sign_payload(tx_hash.as_signing_bytes()),
+        ))));
         let tx = create_multi_signed_tx(ops, vec![&inscribe_key, &config_key]);
 
         let prices = GasPrices::default();
@@ -2006,16 +1985,9 @@ mod tests {
         let tx_hash = Ops::new_unchecked(ops.clone()).hash();
         let inscribe_key = Key::Ed25519(signing_key.clone());
         let deposit_key = Key::Zk(sk);
-        let withdraw_key = Key::MultiSequencer(
-            ChannelMultiSigProof::try_new(
-                [IndexedSignature::new(
-                    0,
-                    signing_key.sign_payload(tx_hash.as_signing_bytes()),
-                )]
-                .into(),
-            )
-            .unwrap(),
-        );
+        let withdraw_key = Key::MultiSequencer(ChannelMultiSigProof::new(IndexedSignatures::from(
+            (0, signing_key.sign_payload(tx_hash.as_signing_bytes())),
+        )));
         let tx = create_multi_signed_tx(ops, vec![&inscribe_key, &deposit_key, &withdraw_key]);
 
         let prices = GasPrices::default();
@@ -2076,16 +2048,9 @@ mod tests {
         let tx_hash = Ops::new_unchecked(ops.clone()).hash();
         let inscribe_key = Key::Ed25519(signing_key.clone());
         let deposit_key = Key::Zk(sk);
-        let transfer_key = Key::MultiSequencer(
-            ChannelMultiSigProof::try_new(
-                [IndexedSignature::new(
-                    0,
-                    signing_key.sign_payload(tx_hash.as_signing_bytes()),
-                )]
-                .into(),
-            )
-            .unwrap(),
-        );
+        let transfer_key = Key::MultiSequencer(ChannelMultiSigProof::new(IndexedSignatures::from(
+            (0, signing_key.sign_payload(tx_hash.as_signing_bytes())),
+        )));
         let tx = create_multi_signed_tx(ops, vec![&inscribe_key, &deposit_key, &transfer_key]);
 
         let prices = GasPrices::default();
@@ -2149,14 +2114,10 @@ mod tests {
             channel_id,
             inputs: BoundedInputs::from(deposited).into(),
         })]);
-        let withdraw_proof = ChannelMultiSigProof::try_new(
-            [IndexedSignature::new(
-                0,
-                signing_key.sign_payload(withdraw_tx.hash().as_signing_bytes()),
-            )]
-            .into(),
-        )
-        .unwrap();
+        let withdraw_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
+            0,
+            signing_key.sign_payload(withdraw_tx.hash().as_signing_bytes()),
+        )));
         let signed_withdraw = create_multi_signed_tx(
             withdraw_tx.to_vec(),
             vec![&Key::MultiSequencer(withdraw_proof)],
@@ -2222,14 +2183,10 @@ mod tests {
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
         let withdraw_tx = Ops::from([Op::ChannelWithdraw(withdraw)]);
         let withdraw_tx_hash = withdraw_tx.hash();
-        let invalid_proof = ChannelMultiSigProof::try_new(
-            [IndexedSignature::new(
-                0,
-                wrong_key.sign_payload(withdraw_tx_hash.as_signing_bytes()),
-            )]
-            .into(),
-        )
-        .unwrap();
+        let invalid_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
+            0,
+            wrong_key.sign_payload(withdraw_tx_hash.as_signing_bytes()),
+        )));
 
         let signed_tx = create_multi_signed_tx(
             withdraw_tx.to_vec(),
@@ -2436,14 +2393,10 @@ mod tests {
         ];
         let config_tx = Ops::new_unchecked(ops.clone());
         let config_tx_hash = config_tx.hash();
-        let config_proof = ChannelMultiSigProof::try_new(
-            [IndexedSignature::new(
-                0,
-                sk1.sign_payload(config_tx_hash.as_signing_bytes()),
-            )]
-            .into(),
-        )
-        .unwrap();
+        let config_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
+            0,
+            sk1.sign_payload(config_tx_hash.as_signing_bytes()),
+        )));
 
         let tx = create_multi_signed_tx(
             ops,

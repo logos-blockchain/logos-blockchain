@@ -345,16 +345,10 @@ async fn channel_withdraw_updates_wallet_balance() {
         HashMap::from([(channel_id, 1)]),
         Op::ChannelWithdraw(withdraw.clone()),
         |tx_hash| {
-            OpProof::ChannelMultiSigProof(
-                ChannelMultiSigProof::try_new(
-                    [IndexedSignature::new(
-                        0,
-                        channel_signing_key.sign_payload(tx_hash.as_signing_bytes()),
-                    )]
-                    .into(),
-                )
-                .expect("withdraw proof should be valid"),
-            )
+            OpProof::ChannelMultiSigProof(ChannelMultiSigProof::new(IndexedSignatures::from((
+                0,
+                channel_signing_key.sign_payload(tx_hash.as_signing_bytes()),
+            ))))
         },
     )
     .await;

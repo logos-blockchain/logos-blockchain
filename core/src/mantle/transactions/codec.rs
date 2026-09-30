@@ -107,7 +107,7 @@ mod tests {
             transactions::{GasPrices, OpProofs, SignedOps, tx_list::Ops},
         },
         proofs::{
-            channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+            channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
             leader_claim_proof::Groth16LeaderClaimProof,
         },
         sdp::{
@@ -212,7 +212,7 @@ mod tests {
 
         // ChannelConfig creates the channel just-in-time, so no signatures are
         // required for validation — empty proof is well-formed.
-        let config_proof = ChannelMultiSigProof::try_new([].into()).unwrap();
+        let config_proof = ChannelMultiSigProof::empty();
 
         // Encode and decode roundtrip test (no hardcoded test vector since signatures
         // are deterministic)
@@ -388,7 +388,7 @@ mod tests {
 
         // Create a signed tx and encode it to get the actual size.
         // New channel → empty proof (no signatures required for just-in-time create).
-        let config_proof = ChannelMultiSigProof::try_new([].into()).unwrap();
+        let config_proof = ChannelMultiSigProof::empty();
         let op_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(config_proof)]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
         let encoded = signed_tx.encode();
@@ -560,7 +560,7 @@ mod tests {
         let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
         // Create a signed tx and encode it to get the actual size.
         // ChannelConfig creates the channel here, so its proof has no signatures.
-        let config_proof = ChannelMultiSigProof::try_new([].into()).unwrap();
+        let config_proof = ChannelMultiSigProof::empty();
         let op_proofs = OpProofs::from([
             OpProof::Ed25519Sig(op_sig),
             OpProof::ChannelMultiSigProof(config_proof),
@@ -665,7 +665,7 @@ mod tests {
         // ChannelConfig creates the channel here, so its proof has no signatures.
         let tx_hash = mantle_tx.hash();
         let op_ed25519_sig = signing_key1.sign_payload(tx_hash.as_signing_bytes());
-        let config_proof = ChannelMultiSigProof::try_new([].into()).unwrap();
+        let config_proof = ChannelMultiSigProof::empty();
         let zk_and_ed25519_proof = ZkAndEd25519Proof {
             zk_sig: ZkKey::multi_sign(&[service_note_sk, zk_sk], &tx_hash.to_fr()).unwrap(),
             ed25519_sig: op_ed25519_sig,
@@ -737,14 +737,10 @@ mod tests {
             .into(),
         })]);
         let tx_hash = mantle_tx.hash();
-        let proof = ChannelMultiSigProof::try_new(
-            [IndexedSignature::new(
-                0,
-                signing_key.sign_payload(tx_hash.as_signing_bytes()),
-            )]
-            .into(),
-        )
-        .unwrap();
+        let proof = ChannelMultiSigProof::new(IndexedSignatures::from((
+            0,
+            signing_key.sign_payload(tx_hash.as_signing_bytes()),
+        )));
         let op_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(proof)]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
 

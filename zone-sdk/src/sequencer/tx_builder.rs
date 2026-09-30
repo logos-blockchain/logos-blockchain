@@ -14,7 +14,7 @@ use lb_core::{
         traits::{Hashable as _, MantleTx},
         transactions::{MantleTxBuilder, OpProofs, Ops, states::Unverified},
     },
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature, IndexedSignatures},
 };
 use lb_http_api_common::bodies::wallet::fund::WalletFundRequestBody;
 use lb_key_management_system_service::keys::{
@@ -104,8 +104,7 @@ pub(super) fn build_atomic_bundle_ops_proofs(
     transfer_proof: Option<&OpProof>,
 ) -> Result<OpProofs, Error> {
     let channel_proof =
-        ChannelMultiSigProof::try_new([IndexedSignature::new(own_key_index, own_sig)].into())
-            .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
+        ChannelMultiSigProof::new(IndexedSignatures::from((own_key_index, own_sig)));
     let mut ops_proofs = OpProofs::empty();
     for op in tx.op_refs() {
         match op {
@@ -237,19 +236,16 @@ where
 /// fee-transfer proof, and the collected accredited-key signatures.
 ///
 /// `signatures` must be indexed against the channel's *current* (pre-update)
-/// `accredited_keys` — the list the ledger verifies against — and strictly
-/// ascending by index. Pass an empty vec to configure an unclaimed channel,
-/// whose configuration requires no signatures (the empty multi-sig proof).
+/// `accredited_keys` — the list the ledger verifies against — with at most one
+/// signature per index, in any order. Pass an empty vec to configure an
+/// unclaimed channel, whose configuration requires no signatures (the empty
+/// multi-sig proof).
 pub(super) fn assemble_channel_config_tx(
     config_tx: Ops,
     transfer_proof: Option<OpProof>,
-    signatures: Vec<IndexedSignature>,
+    signatures: IndexedSignatures,
 ) -> Result<SignedOps<Unverified, StandardMode>, Error> {
-    let signatures = signatures
-        .try_into()
-        .map_err(|e| Error::Network(format!("too many channel-config signatures: {e:?}")))?;
-    let proof = ChannelMultiSigProof::try_new(signatures)
-        .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
+    let proof = ChannelMultiSigProof::new(signatures);
     let ops_proofs = attach_transfer_proof(
         &config_tx,
         [OpProof::ChannelMultiSigProof(proof)].into(),
@@ -302,10 +298,9 @@ where
     )
     .await?;
 
-    let signatures = signer
-        .map(|(index, key)| IndexedSignature::new(index, sign_tx(config_tx.hash(), key)))
-        .into_iter()
-        .collect::<Vec<_>>();
+    let signatures = signer.map_or(IndexedSignatures::empty(), |(index, key)| {
+        (index, sign_tx(config_tx.hash(), key)).into()
+    });
 
     assemble_channel_config_tx(config_tx, transfer_proof, signatures)
 }

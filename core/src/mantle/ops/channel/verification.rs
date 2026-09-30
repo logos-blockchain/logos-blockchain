@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::{
     mantle::{
         VerificationError, ops::channel::ChannelId, transactions::OperationVerificationHelper,
@@ -26,22 +24,12 @@ pub fn verify_channel_multi_sig(
         });
     }
 
-    let indices_set = signatures
-        .iter()
-        .map(|signature| signature.channel_key_index)
-        .collect::<HashSet<_>>();
-    let indices_set_len = indices_set.len();
-    if indices_set_len != signatures_len {
-        return Err(VerificationError::ChannelMultiSigProofDuplicateIndices { op_index });
-    }
-
-    for (i, signature) in signatures.iter().enumerate() {
-        let public_key =
-            helper.get_key_from_channel_at_index(channel_id, &signature.channel_key_index)?;
-        if let Err(_error) = public_key.verify(tx_hash_bytes, &signature.signature) {
+    for (entry_index, (key_index, signature)) in signatures.iter().enumerate() {
+        let public_key = helper.get_key_from_channel_at_index(channel_id, key_index)?;
+        if let Err(_error) = public_key.verify(tx_hash_bytes, signature) {
             return Err(VerificationError::ChannelMultiSigProofInvalidSignature {
                 op_index,
-                signature_index: i,
+                signature_index: entry_index,
             });
         }
     }
@@ -55,9 +43,7 @@ pub mod test_utils {
 
     use crate::{
         mantle::{TxHash, ops::channel::ChannelKeyIndex},
-        proofs::channel_multi_sig_proof::{
-            ChannelMultiSigProof, IndexedSignature, IndexedSignatures,
-        },
+        proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
     };
 
     #[must_use]
@@ -65,25 +51,22 @@ pub mod test_utils {
         tx_hash: &TxHash,
         signing_keys: &[&Ed25519Key],
     ) -> ChannelMultiSigProof {
-        let signatures: IndexedSignatures = signing_keys
-            .iter()
-            .enumerate()
-            .map(|(index, key)| {
-                IndexedSignature::new(
+        let signatures = IndexedSignatures::try_from_iter(signing_keys.iter().enumerate().map(
+            |(index, key)| {
+                (
                     index as ChannelKeyIndex,
                     key.sign_payload(tx_hash.as_signing_bytes()),
                 )
-            })
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        ChannelMultiSigProof::try_new(signatures).unwrap()
+            },
+        ))
+        .unwrap();
+        ChannelMultiSigProof::new(signatures)
     }
 }
 
 // `verify_channel_multi_sig` is the responsible of the distinction between
-// `NotEnoughSignatures`, `DuplicateIndices`, and `InvalidSignature` errors.
-// Callers (e.g. `ChannelWithdrawOp::validate`) currently collapse all three
+// `NotEnoughSignatures` and `InvalidSignature` errors.
+// Callers (e.g. `ChannelWithdrawOp::validate`) currently collapse both
 // into `Error::InvalidSignature`, so this is the only place that can still
 // assert the precise reason a proof was rejected.
 #[cfg(test)]

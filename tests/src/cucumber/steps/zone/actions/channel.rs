@@ -161,10 +161,9 @@ pub(in super::super) async fn submit_prepared_zone_channel_config(
 ) -> StepResult {
     let client = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
     let prepared = log_step_error(step, world.zone.prepared_config(&transaction_alias))?.clone();
-    // Collected in arbitrary signer order; the proof requires strictly
-    // ascending index order, so canonicalize before submitting.
-    let mut signatures = world.zone.prepared_config_signatures(&transaction_alias);
-    signatures.sort_unstable();
+    // Collected in arbitrary signer order, which the proof's binary tree-based map
+    // puts in index order.
+    let signatures = world.zone.prepared_config_signatures(&transaction_alias);
 
     let mut checkpoint_rx = world
         .zone
