@@ -354,7 +354,7 @@ mod tests {
         let map = BTreeMap::try_from([(2u8, 20u8), (1u8, 10u8)]).unwrap();
         assert_eq!(map.encode_to_vec(), [2, 0, 0, 0, 1, 10, 2, 20]);
 
-        let set = BTreeSet::from(2u8);
+        let set = BTreeSet::<u8>::try_from([2, 1]).unwrap();
         assert_eq!(set.encode_to_vec(), [2, 0, 0, 0, 1, 2]);
     }
 
