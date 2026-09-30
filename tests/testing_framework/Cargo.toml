@@ -52,6 +52,7 @@ testing-framework-core           = { workspace = true }
 testing-framework-runner-compose = { workspace = true }
 testing-framework-runner-k8s     = { workspace = true }
 testing-framework-runner-local   = { workspace = true }
+testing-framework-tools          = { workspace = true }
 thiserror                        = { workspace = true }
 time                             = { workspace = true }
 tokio                            = { features = ["macros", "process", "rt-multi-thread", "time"], workspace = true }

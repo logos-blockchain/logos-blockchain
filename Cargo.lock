@@ -4544,6 +4544,7 @@ dependencies = [
  "logos-blockchain-utils",
  "num-bigint",
  "rand 0.8.6",
+ "testing-framework-tools",
  "time",
 ]
 
@@ -4902,6 +4903,7 @@ dependencies = [
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "serde",
+ "testing-framework-tools",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -8370,6 +8372,7 @@ dependencies = [
  "testing-framework-runner-compose",
  "testing-framework-runner-k8s",
  "testing-framework-runner-local",
+ "testing-framework-tools",
  "thiserror 2.0.18",
  "time",
  "tokio",
@@ -8464,6 +8467,11 @@ dependencies = [
  "tokio-retry",
  "tracing",
 ]
+
+[[package]]
+name = "testing-framework-tools"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=8d87f69108685c6685857a8206d9bb9532b24f47#8d87f69108685c6685857a8206d9bb9532b24f47"
 
 [[package]]
 name = "textwrap"

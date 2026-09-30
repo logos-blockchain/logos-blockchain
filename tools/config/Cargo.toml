@@ -29,4 +29,5 @@ lb-tracing                       = { workspace = true }
 lb-utils                         = { workspace = true }
 num-bigint                       = { workspace = true }
 rand                             = { workspace = true }
+testing-framework-tools          = { workspace = true }
 time                             = { workspace = true }

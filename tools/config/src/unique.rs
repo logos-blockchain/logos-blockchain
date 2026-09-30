@@ -5,7 +5,7 @@ use std::{
 };
 
 use lb_core::mantle::transactions::genesis_tx::ChainId;
-use lb_utils::net::ReservedPortBlock;
+use testing_framework_tools::net::ReservedPortBlock;
 
 static TEST_PORT_ALLOCATOR: OnceLock<Mutex<Option<ReservedPortBlock>>> = OnceLock::new();
 static PROCESS_START_NONCE: OnceLock<String> = OnceLock::new();

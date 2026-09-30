@@ -31,9 +31,10 @@ tracing             = { workspace = true }
 utoipa              = { features = ["macros"], optional = true, workspace = true }
 
 [dev-dependencies]
-chrono             = { features = ["now"], workspace = true }
-lb-utils           = { workspace = true }
-tracing-subscriber = { features = ["env-filter", "fmt", "std"], workspace = true }
+chrono                  = { features = ["now"], workspace = true }
+lb-utils                = { workspace = true }
+testing-framework-tools = { workspace = true }
+tracing-subscriber      = { features = ["env-filter", "fmt", "std"], workspace = true }
 
 [features]
 default          = []
