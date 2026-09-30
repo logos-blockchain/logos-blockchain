@@ -708,85 +708,84 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
     let mut tracing = config.tracing_config.tracing_settings;
     tracing.level = Level::INFO;
 
-    let user_config = UserConfig {
-        network: config.network_config,
-        blend: config.blend_config.0,
-        time: config.time_config,
-        cryptarchia: build_cryptarchia_user_config(&config.consensus_config),
-        tracing,
-        api: api::serde::Config {
-            backend: api::serde::AxumBackendSettings {
-                listen_address: config.api_config.address,
-                max_concurrent_requests: 1000,
-                ..Default::default()
+    let user_config =
+        UserConfig {
+            network: config.network_config,
+            blend: config.blend_config.0,
+            time: config.time_config,
+            cryptarchia: build_cryptarchia_user_config(&config.consensus_config),
+            tracing,
+            api: api::serde::Config {
+                backend: api::serde::AxumBackendSettings {
+                    listen_address: config.api_config.address,
+                    max_concurrent_requests: 1000,
+                    ..Default::default()
+                },
             },
-        },
-        storage: storage::serde::Config::default(),
-        sdp: sdp::serde::Config {
-            declaration_id: config.sdp_config.declaration_id,
-            wallet: sdp::serde::WalletConfig {
-                max_tx_fee: mantle::Value::MAX.into(),
-                funding_pk: config.consensus_config.funding_sk.as_public_key(),
+            storage: storage::serde::Config::default(),
+            sdp: sdp::serde::Config {
+                declaration_id: config.sdp_config.declaration_id,
+                wallet: sdp::serde::WalletConfig {
+                    max_tx_fee: mantle::Value::MAX.into(),
+                    funding_pk: config.consensus_config.funding_sk.as_public_key(),
+                },
+                active_message_tracker: ActiveMessageTrackerConfig {
+                    status_check_interval_in_tip_changes: NonZeroU64::new(3).unwrap(),
+                },
             },
-            active_message_tracker: ActiveMessageTrackerConfig {
-                status_check_interval_in_tip_changes: NonZeroU64::new(3).unwrap(),
-            },
-        },
-        wallet: {
-            let known_keys: HashMap<_, _> = [
-                (
-                    key_id_for_preload_backend(&Key::Zk(config.consensus_config.known_key.clone())),
-                    config.consensus_config.known_key.as_public_key(),
-                ),
-                (
-                    key_id_for_preload_backend(&Key::Zk(
-                        config.consensus_config.funding_sk.clone(),
-                    )),
-                    config.consensus_config.funding_sk.as_public_key(),
-                ),
-            ]
-            .into_iter()
-            .chain(config.consensus_config.other_keys.iter().map(|sk| {
-                (
-                    key_id_for_preload_backend(&sk.clone().into()),
-                    sk.as_public_key(),
-                )
-            }))
-            .chain(
-                config
-                    .kms_config
-                    .backend
-                    .static_keys
-                    .values()
-                    .filter_map(|key| match key {
-                        Key::Zk(sk) => Some((
-                            key_id_for_preload_backend(&Key::Zk(sk.clone())),
+            wallet: {
+                let known_keys: HashMap<_, _> =
+                    [
+                        (
+                            key_id_for_preload_backend(&Key::Zk(
+                                config.consensus_config.known_key.clone(),
+                            )),
+                            config.consensus_config.known_key.as_public_key(),
+                        ),
+                        (
+                            key_id_for_preload_backend(&Key::Zk(
+                                config.consensus_config.funding_sk.clone(),
+                            )),
+                            config.consensus_config.funding_sk.as_public_key(),
+                        ),
+                    ]
+                    .into_iter()
+                    .chain(config.consensus_config.other_keys.iter().map(|sk| {
+                        (
+                            key_id_for_preload_backend(&sk.clone().into()),
                             sk.as_public_key(),
-                        )),
-                        Key::Ed25519(_) => None,
-                    }),
-            )
-            .collect();
+                        )
+                    }))
+                    .chain(config.kms_config.backend.static_keys.values().filter_map(
+                        |key| match key {
+                            Key::Zk(sk) => Some((
+                                key_id_for_preload_backend(&Key::Zk(sk.clone())),
+                                sk.as_public_key(),
+                            )),
+                            Key::Ed25519(_) => None,
+                        },
+                    ))
+                    .collect();
 
-            wallet::serde::Config {
-                known_keys,
-                ..wallet::serde::Config::with_required_values(wallet::serde::RequiredValues {
-                    voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(
-                        config.consensus_config.known_key.clone(),
-                    )),
-                })
-            }
-        },
-        kms: config::kms::serde::Config {
-            backend: config::kms::serde::KmsBackendSettings {
-                static_keys: config.kms_config.backend.static_keys,
+                wallet::serde::Config {
+                    known_keys,
+                    ..wallet::serde::Config::with_required_values(wallet::serde::RequiredValues {
+                        voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(
+                            config.consensus_config.known_key.clone(),
+                        )),
+                    })
+                }
             },
-        },
-        // Mining defaults, auto-claim off: provisioned nodes claim on demand,
-        // naming the destination key on each claim request.
-        pow: config::pow::serde::Config::default(),
-        state: state::Config::default(),
-    };
+            kms: config::kms::serde::Config {
+                backend: config::kms::serde::KmsBackendSettings {
+                    static_keys: config.kms_config.backend.static_keys,
+                },
+            },
+            // Mining defaults, auto-claim off: provisioned nodes claim on demand,
+            // naming the destination key on each claim request.
+            pow: config::pow::serde::Config::default(),
+            state: state::Config::default(),
+        };
 
     RunConfig {
         deployment: deployment_settings.clone(),

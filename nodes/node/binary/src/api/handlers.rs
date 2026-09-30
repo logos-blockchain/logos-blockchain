@@ -1076,8 +1076,8 @@ where
             .fund_tx(
                 None,
                 tx_builder,
-                req.change_public_key,
-                req.funding_public_keys,
+                Some(req.change_public_key),
+                Some(req.funding_public_keys),
                 0,
             )
             .await?;
@@ -2007,8 +2007,8 @@ pub mod wallet {
         let transfer_funds = wallet_api
             .transfer_funds(
                 body.tip,
-                body.change_public_key,
-                body.funding_public_keys,
+                Some(body.change_public_key),
+                Some(body.funding_public_keys),
                 body.recipient_public_key,
                 body.amount,
             )
@@ -2225,8 +2225,8 @@ pub mod wallet {
                 .fund_tx(
                     req.tip,
                     req.tx_builder,
-                    req.change_public_key,
-                    req.funding_public_keys,
+                    Some(req.change_public_key),
+                    Some(req.funding_public_keys),
                     req.priority_fee_percent,
                 )
                 .await?;

@@ -155,8 +155,12 @@ pub enum WalletMsg {
     FundTx {
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-        change_pk: ZkPublicKey,
-        funding_pks: Vec<ZkPublicKey>,
+        /// If `None`, the wallet derives a next change key from HD KMS.
+        // TODO: remove this after test update and migration
+        change_pk: Option<ZkPublicKey>,
+        /// If `None`, the wallet picks available keys.
+        // TODO: remove this after test update and migration
+        funding_pks: Option<Vec<ZkPublicKey>>,
         /// Percentage of the final mandatory fee reserved as a priority-fee
         /// reserve; only the unused reserve becomes the effective tip.
         priority_fee_percent: u64,
@@ -166,7 +170,6 @@ pub enum WalletMsg {
         tip: HeaderId,
         rewards_root: RewardsRoot,
         reward_amount: Value,
-        funding_pk: ZkPublicKey,
         max_tx_fee: GasCost,
         resp_tx:
             Sender<Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletServiceError>>,
@@ -233,7 +236,6 @@ struct LeaderClaimTxRequest {
     tip: HeaderId,
     rewards_root: RewardsRoot,
     reward_amount: Value,
-    funding_pk: ZkPublicKey,
     max_tx_fee: GasCost,
 }
 
@@ -647,6 +649,10 @@ where
                     }
                 };
 
+                let (Some(change_pk), Some(funding_pks)) = (change_pk, funding_pks) else {
+                    todo!("pick funding keys and derive a next change key")
+                };
+
                 let funded = match state.fund_tx::<MainnetGasProfile>(
                     tip,
                     &tx_builder,
@@ -681,7 +687,6 @@ where
                 tip,
                 rewards_root,
                 reward_amount,
-                funding_pk,
                 max_tx_fee,
                 resp_tx,
             } => {
@@ -696,7 +701,6 @@ where
                     tip,
                     rewards_root,
                     reward_amount,
-                    funding_pk,
                     max_tx_fee,
                 };
                 // Pinned to keep the future off the stack: `LedgerState` is
@@ -1373,18 +1377,21 @@ where
         state: &mut ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<(SignedOps<Preverified, StandardMode>, Vec<NoteId>), WalletServiceError> {
+        let reward_pk: ZkPublicKey = todo!("derive a new receive key from HD");
+        let funding_pk: ZkPublicKey = todo!("pick a funding key from wallet");
+
         let context = ledger.tx_context();
         let tx_builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(LeaderClaimOp {
             rewards_root: request.rewards_root,
             voucher_nullifier,
-            pk: request.funding_pk,
+            pk: reward_pk,
         }))?;
 
         let funded_tx_builder = state.fund_tx::<MainnetGasProfile>(
             request.tip,
             &tx_builder,
-            request.funding_pk,
-            [request.funding_pk],
+            reward_pk, // receive change as well
+            [funding_pk],
             &context,
             0,
         )?;
