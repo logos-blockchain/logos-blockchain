@@ -27,6 +27,14 @@ pub struct Settings {
     pub learning_rate: NonNegativeF64,
     /// `W`, the uncle reference window in expected block-intervals.
     pub uncle_reference_window_in_block: NonZeroU32,
+    /// `L_w`, the time-based finality window in slots. Set: time-based
+    /// finality only (`k` is used by the bootstrap rule alone). Unset: k-deep
+    /// finality.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_finality_window: Option<NonZeroU64>,
+    /// The unit of the epoch phases in slots. Unset: `⌊k/f⌋`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch_base_period_length: Option<NonZeroU64>,
     pub sdp_config: SdpConfig,
     pub gossipsub_protocol: String,
     pub genesis_block: GenesisBlock,
@@ -60,7 +68,10 @@ impl Settings {
             self.epoch_config.epoch_stake_distribution_stabilization,
             self.epoch_config.epoch_period_nonce_buffer,
             self.epoch_config.epoch_period_nonce_stabilization,
-            base_period_length(self.security_param, self.slot_activation_coeff),
+            match self.epoch_base_period_length {
+                Some(length) => length,
+                None => base_period_length(self.security_param, self.slot_activation_coeff),
+            },
         )
     }
 
@@ -89,6 +100,8 @@ impl Settings {
             self.learning_rate,
             self.uncle_reference_window_in_block,
         )
+        .with_time_finality_window(self.time_finality_window)
+        .with_epoch_base_period_length(self.epoch_base_period_length)
     }
 }
 
@@ -96,7 +109,8 @@ impl Settings {
 pub struct EpochConfig {
     // The stake distribution is always taken at the beginning of the previous epoch.
     // This parameters controls how many slots to wait for it to be stabilized
-    // The value is computed as epoch_stake_distribution_stabilization * int(floor(k / f))
+    // The value is computed as epoch_stake_distribution_stabilization * the base period
+    // length (`epoch_base_period_length`, by default int(floor(k / f)))
     pub epoch_stake_distribution_stabilization: NonZero<u8>,
     // This parameter controls how many slots we wait after the stake distribution
     // snapshot has stabilized to take the nonce snapshot.

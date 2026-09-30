@@ -550,6 +550,15 @@ impl Cryptarchia {
         log_pruned_ledger_states(pruned_states_count);
     }
 
+    /// Record the current slot and update the LIB, which advances with time
+    /// under time-based finality. Prunes the ledger states of the pruned
+    /// blocks, and returns them.
+    pub(crate) fn update_slot(&mut self, slot: Slot) -> PrunedBlocks<HeaderId> {
+        let pruned_blocks = self.consensus.update_slot(slot);
+        self.prune_ledger_states(pruned_blocks.all());
+        pruned_blocks
+    }
+
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
         let (consensus, pruned_blocks) = self.consensus.online();
         let mut cryptarchia = Self {

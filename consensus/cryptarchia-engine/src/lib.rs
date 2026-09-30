@@ -51,7 +51,13 @@ impl State {
                 maxvalid_bg(&cryptarchia.local_chain, &cryptarchia.branches, k, s_gen)
             }
             Self::Online => {
-                let k = cryptarchia.config.security_param().get().into();
+                // With time-based finality the online rule has no depth bound:
+                // forks that would revert the LIB are pruned instead.
+                let k = if cryptarchia.config.time_finality_window().is_some() {
+                    u64::MAX
+                } else {
+                    cryptarchia.config.security_param().get().into()
+                };
                 maxvalid_mc(&cryptarchia.local_chain, &cryptarchia.branches, k)
             }
         }
@@ -63,13 +69,7 @@ impl State {
     {
         match cryptarchia.state {
             Self::Bootstrapping => cryptarchia.branches.lib,
-            Self::Online => cryptarchia
-                .branches
-                .nth_ancestor(
-                    &cryptarchia.local_chain,
-                    cryptarchia.config.security_param().get().into(),
-                )
-                .id(),
+            Self::Online => cryptarchia.online_lib(),
         }
     }
 }
@@ -149,6 +149,10 @@ where
     branches: Branches<Id>,
     config: Config,
     state: State,
+    /// The latest slot reported by [`Cryptarchia::update_slot`].
+    current_slot: Slot,
+    /// The slot since which the node has been online without interruption.
+    online_since: Option<Slot>,
 }
 
 #[derive(Clone, Debug)]
@@ -410,6 +414,42 @@ pub struct ForkDivergenceInfo<Id> {
 
 impl<Id> Cryptarchia<Id>
 where
+    Id: Eq + Hash + Copy,
+{
+    /// The LIB in the Online state.
+    ///
+    /// Without time-based finality, the k-deep block. With it, the latest block
+    /// of the local chain at least `L_w` slots old, or the current LIB if that
+    /// is higher: the LIB never moves down. It advances only once the node has
+    /// been online for `L_w` slots.
+    fn online_lib(&self) -> Id {
+        let Some(window) = self.config.time_finality_window() else {
+            return self
+                .branches
+                .nth_ancestor(&self.local_chain, self.config.security_param().get().into())
+                .id;
+        };
+        let lib = &self.branches.branches[&self.branches.lib];
+        let Some(online_since) = self.online_since else {
+            return lib.id;
+        };
+        let now = u64::from(self.current_slot);
+        if now.saturating_sub(online_since.into()) < window.get() {
+            return lib.id;
+        }
+        let time_final = self
+            .branches
+            .walk_back_before(&self.local_chain, Slot::from(now - window.get()));
+        if time_final.length > lib.length {
+            time_final.id
+        } else {
+            lib.id
+        }
+    }
+}
+
+impl<Id> Cryptarchia<Id>
+where
     Id: Eq + Hash + Copy + Debug,
 {
     pub fn from_lib(
@@ -431,7 +471,26 @@ where
             },
             config,
             state,
+            current_slot: slot,
+            online_since: None,
         }
+    }
+
+    /// Record the current slot and update the LIB, which advances with time
+    /// under time-based finality. The first call while online starts the `L_w`
+    /// slots the node must be online for.
+    ///
+    /// If the LIB is updated, returns the pruned blocks, as
+    /// [`Self::receive_block`] does.
+    #[must_use = "Returns the blocks pruned by the LIB update"]
+    pub fn update_slot(&mut self, slot: Slot) -> PrunedBlocks<Id> {
+        if slot > self.current_slot {
+            self.current_slot = slot;
+        }
+        if self.state.is_online() && self.online_since.is_none() {
+            self.online_since = Some(self.current_slot);
+        }
+        self.update_lib()
     }
 
     /// Apply the given block.
@@ -1939,5 +1998,135 @@ mod uncle_tests {
             engine.receive_block(id, parent, slot, uncle_slots).unwrap();
         }
         engine
+    }
+}
+
+#[cfg(test)]
+mod time_finality_tests {
+    use std::num::NonZero;
+
+    use super::{Cryptarchia, State, UncleSlots, tests::config_with};
+
+    const LW: u64 = 5;
+
+    fn id(i: u64) -> [u8; 32] {
+        let mut res = [0; 32];
+        res[..8].copy_from_slice(&i.to_le_bytes());
+        res[31] = 1;
+        res
+    }
+
+    fn engine(k: u32, time_finality: bool, state: State) -> Cryptarchia<[u8; 32]> {
+        let window = time_finality.then(|| NonZero::new(LW).unwrap());
+        Cryptarchia::from_lib(
+            id(0),
+            config_with(k).with_time_finality_window(window),
+            state,
+            0.into(),
+            0,
+            UncleSlots::default(),
+        )
+    }
+
+    /// Extend the local chain with blocks `id(i)` at `slots[i - 1]`, updating
+    /// the current slot to each block's slot first.
+    fn extend(engine: &mut Cryptarchia<[u8; 32]>, first: u64, slots: &[u64]) {
+        for (i, &slot) in (first..).zip(slots) {
+            let _pruned = engine.update_slot(slot.into());
+            let _pruned = engine
+                .receive_block(id(i), id(i - 1), slot.into(), UncleSlots::default())
+                .unwrap();
+        }
+    }
+
+    fn slots(from: u64, to: u64) -> Vec<u64> {
+        (from..=to).collect()
+    }
+
+    #[test]
+    fn disabled_keeps_k_deep_lib() {
+        let mut engine = engine(10, false, State::Online);
+        let _pruned = engine.update_slot(0.into());
+        extend(&mut engine, 1, &slots(1, 20));
+        let _pruned = engine.update_slot(100.into());
+        assert_eq!(engine.lib(), id(10));
+    }
+
+    #[test]
+    fn lib_is_time_final_block_and_advances_with_time() {
+        let mut engine = engine(10, true, State::Online);
+        let _pruned = engine.update_slot(0.into());
+        extend(&mut engine, 1, &slots(1, 20));
+        // Current slot 20: the latest block at slot <= 15.
+        assert_eq!(engine.lib(), id(15));
+        // Without new blocks.
+        let _pruned = engine.update_slot(23.into());
+        assert_eq!(engine.lib(), id(18));
+    }
+
+    #[test]
+    fn k_bounds_neither_lib_nor_fork_choice() {
+        // k = 1 and current slot 41: the LIB is the time-final block at slot 30
+        // (height 3), not the k-deep block at height 4.
+        let mut engine = engine(1, true, State::Online);
+        let _pruned = engine.update_slot(0.into());
+        extend(&mut engine, 1, &[10, 20, 30, 40, 41]);
+        assert_eq!(engine.lib(), id(3));
+
+        // A longer fork diverging at the LIB, 2 blocks deep (> k), is adopted.
+        let _pruned = engine.update_slot(42.into());
+        let _pruned = engine
+            .receive_block(id(100), id(3), 36.into(), UncleSlots::default())
+            .unwrap();
+        let _pruned = engine
+            .receive_block(id(101), id(100), 37.into(), UncleSlots::default())
+            .unwrap();
+        let _pruned = engine
+            .receive_block(id(102), id(101), 42.into(), UncleSlots::default())
+            .unwrap();
+        assert_eq!(engine.tip(), id(102));
+        // Current slot 42: the time-final block of the new chain is at slot 37.
+        assert_eq!(engine.lib(), id(101));
+    }
+
+    #[test]
+    fn time_rule_waits_for_l_w_slots_online() {
+        // Started online at slot 100, e.g. on restart.
+        let mut engine = engine(10, true, State::Online);
+        let _pruned = engine.update_slot(100.into());
+        extend(&mut engine, 1, &slots(101, 104));
+        assert_eq!(engine.lib(), id(0));
+        extend(&mut engine, 5, &slots(105, 120));
+        assert_eq!(engine.lib(), id(15));
+    }
+
+    #[test]
+    fn switching_online_restarts_the_online_period() {
+        let mut engine = engine(10, true, State::Bootstrapping);
+        let _pruned = engine.update_slot(0.into());
+        extend(&mut engine, 1, &slots(1, 20));
+        assert_eq!(engine.lib(), id(0));
+
+        // The LIB holds until the node has been online for `L_w` slots.
+        let (mut engine, _pruned) = engine.online();
+        assert_eq!(engine.lib(), id(0));
+        let _pruned = engine.update_slot(22.into());
+        assert_eq!(engine.lib(), id(0));
+        let _pruned = engine.update_slot(27.into());
+        assert_eq!(engine.lib(), id(20));
+    }
+
+    #[test]
+    fn forks_below_the_lib_are_pruned() {
+        let mut engine = engine(10, true, State::Online);
+        let _pruned = engine.update_slot(0.into());
+        extend(&mut engine, 1, &slots(1, 12));
+        let fork = id(1000);
+        let _pruned = engine
+            .receive_block(fork, id(12), 13.into(), UncleSlots::default())
+            .unwrap();
+        extend(&mut engine, 13, &slots(13, 20));
+        assert_eq!(engine.lib(), id(15));
+        assert!(engine.branches().get(&fork).is_none());
     }
 }

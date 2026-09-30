@@ -19,6 +19,18 @@ pub struct Config {
     /// `W`, the width of the uncle reference window in expected
     /// block-intervals.
     uncle_reference_window_in_block: NonZero<u32>,
+    /// `L_w`, the time-based finality window in slots. When set, finality is
+    /// time-based only: the LIB is the latest block of the local chain at
+    /// least `L_w` slots old (it advances once the node has been online for
+    /// `L_w` slots, and never moves down), and the online fork choice is the
+    /// longest chain with no depth bound, forks through the LIB being pruned.
+    /// `k` is then used only by the bootstrap rule. Unset: k-deep finality.
+    time_finality_window: Option<NonZero<u64>>,
+    /// The unit of the epoch phases in slots. Unset: `⌊k/f⌋`. With
+    /// time-based finality the schedule no longer needs to follow `k`: the
+    /// stake inference period (the first two phases) must cover `PERIOD`, and
+    /// the last phase the time for the nonce snapshot to become final.
+    epoch_base_period_length: Option<NonZero<u64>>,
     /// Lottery approximation constants computed from `slot_activation_coeff`
     #[serde(skip)]
     lottery_constants: LotteryConstants,
@@ -35,6 +47,10 @@ impl<'de> serde::Deserialize<'de> for Config {
             slot_activation_coeff: NonNegativeRatio,
             stake_inference_learning_rate: NonNegativeF64,
             uncle_reference_window_in_block: NonZero<u32>,
+            #[serde(default)]
+            time_finality_window: Option<NonZero<u64>>,
+            #[serde(default)]
+            epoch_base_period_length: Option<NonZero<u64>>,
         }
 
         let raw = RawConfig::deserialize(deserializer)?;
@@ -44,6 +60,8 @@ impl<'de> serde::Deserialize<'de> for Config {
             slot_activation_coeff: raw.slot_activation_coeff,
             stake_inference_learning_rate: raw.stake_inference_learning_rate,
             uncle_reference_window_in_block: raw.uncle_reference_window_in_block,
+            time_finality_window: raw.time_finality_window,
+            epoch_base_period_length: raw.epoch_base_period_length,
             lottery_constants: LotteryConstants::new(raw.slot_activation_coeff),
         })
     }
@@ -62,8 +80,36 @@ impl Config {
             slot_activation_coeff,
             stake_inference_learning_rate,
             uncle_reference_window_in_block,
+            time_finality_window: None,
+            epoch_base_period_length: None,
             lottery_constants: LotteryConstants::new(slot_activation_coeff),
         }
+    }
+
+    /// Sets the time-based finality window `L_w` in slots (`None`: disabled).
+    #[must_use]
+    pub const fn with_time_finality_window(
+        mut self,
+        time_finality_window: Option<NonZero<u64>>,
+    ) -> Self {
+        self.time_finality_window = time_finality_window;
+        self
+    }
+
+    /// Sets the unit of the epoch phases in slots (`None`: `⌊k/f⌋`).
+    #[must_use]
+    pub const fn with_epoch_base_period_length(
+        mut self,
+        epoch_base_period_length: Option<NonZero<u64>>,
+    ) -> Self {
+        self.epoch_base_period_length = epoch_base_period_length;
+        self
+    }
+
+    /// `L_w`, the time-based finality window in slots, if enabled.
+    #[must_use]
+    pub const fn time_finality_window(&self) -> Option<NonZero<u64>> {
+        self.time_finality_window
     }
 
     /// `W * f^-1`, the maximum number of slots by which the parent of a
@@ -93,7 +139,10 @@ impl Config {
 
     #[must_use]
     pub const fn base_period_length(&self) -> NonZero<u64> {
-        base_period_length(self.security_param, self.slot_activation_coeff)
+        match self.epoch_base_period_length {
+            Some(length) => length,
+            None => base_period_length(self.security_param, self.slot_activation_coeff),
+        }
     }
 
     #[must_use]
@@ -188,6 +237,21 @@ mod tests {
             config.stake_inference_learning_rate().mul(10.0).floor() as u64,
             1,
         );
+    }
+
+    #[test]
+    fn epoch_base_period_length_overrides_k_over_f() {
+        let config = Config::new(
+            NonZero::new(10).unwrap(),
+            NonNegativeRatio::new(1, 5.try_into().unwrap()),
+            0.1.try_into().unwrap(),
+            NonZero::new(12).unwrap(),
+        );
+        assert_eq!(config.base_period_length(), NonZero::new(50).unwrap());
+        let config = config.with_epoch_base_period_length(Some(NonZero::new(7).unwrap()));
+        assert_eq!(config.base_period_length(), NonZero::new(7).unwrap());
+        // `k` still sets the bootstrap density window.
+        assert_eq!(config.s_gen(), NonZero::new(12).unwrap());
     }
 
     #[test]
