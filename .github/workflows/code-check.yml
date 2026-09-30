@@ -2,8 +2,6 @@ on:
   pull_request:
   merge_group:
     types: [ checks_requested ]
-  push:
-    branches: [ master ]
 
 name: Code checks
 
@@ -14,6 +12,7 @@ concurrency:
 jobs:
   formatting:
     name: Check formatting
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -40,6 +39,7 @@ jobs:
 
   cargo-deny:
     name: Check cargo-deny rules
+    if: ${{ github.event_name == 'pull_request' }}
     # `cargo-deny` action is only supported on Linux
     runs-on: ubuntu-latest
 
@@ -61,6 +61,7 @@ jobs:
 
   workspace-deps:
     name: Check for correctly declared dependencies in the workspace
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -70,6 +71,7 @@ jobs:
 
   unused-deps:
     name: Check for unused dependencies
+    if: ${{ github.event_name == 'pull_request' }}
     strategy:
       fail-fast: false
       matrix:
@@ -186,8 +188,8 @@ jobs:
 
   # Stable required check for nextest unit tests.
   #
-  # On pull requests and pushes to master, this job succeeds only when both
-  # self-hosted nextest unit tests matrix jobs succeeded.
+  # On pull requests, this job succeeds only when both self-hosted nextest unit
+  # test matrix jobs succeeded.
   #
   # On merge_group, the real nextest unit tests matrix is skipped and this lightweight
   # check succeeds because nextest unit tests was already required before queue admission.
