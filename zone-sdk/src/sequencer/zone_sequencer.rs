@@ -758,7 +758,7 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         state.submit_inscription(signed_tx.clone(), parent, new_msg_id, data)?;
-        state.attach_pre_fund(&id, pre_fund, self.lib_slot);
+        state.stamp_funding(&id, self.lib_slot, Some(pre_fund));
         self.last_msg_id = new_msg_id;
 
         if self.can_publish_inscription_now() {
@@ -886,7 +886,7 @@ where
             withdraw_infos.clone(),
             outputs.clone(),
         )?;
-        state.attach_pre_fund(&tx_hash, pre_fund, self.lib_slot);
+        state.stamp_funding(&tx_hash, self.lib_slot, Some(pre_fund));
         self.last_msg_id = msg_id;
 
         if self.can_publish_inscription_now() {
@@ -1056,7 +1056,7 @@ where
             inscribe.clone(),
             consumed_inputs.clone(),
         )?;
-        state.attach_pre_fund(&tx_hash, pre_fund, self.lib_slot);
+        state.stamp_funding(&tx_hash, self.lib_slot, Some(pre_fund));
         self.last_msg_id = msg_id;
 
         if self.can_publish_inscription_now() {
@@ -1197,7 +1197,7 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         state.submit_other(signed_tx.clone(), self.channel_id)?;
-        state.stamp_funding(&tx_hash, self.lib_slot);
+        state.stamp_funding(&tx_hash, self.lib_slot, None);
 
         info!(target: TARGET, "Submitted channel_config transaction {}", hex::encode(tx_hash.0));
 
@@ -1347,7 +1347,7 @@ where
         let state = self.state.as_mut().unwrap();
         let id = tx.hash();
         let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id)?;
-        state.stamp_funding(&id, self.lib_slot);
+        state.stamp_funding(&id, self.lib_slot, None);
         let parent_msg = self.last_msg_id;
         // The tip the tx leaves behind is defined by its inscriptions (the
         // last one); a tx without any — e.g. a pure config — leaves the tip

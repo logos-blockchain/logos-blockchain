@@ -456,7 +456,7 @@ where
                         hex::encode(old_hash.0)
                     );
                     if let Some(state) = self.state.as_mut() {
-                        state.stamp_funding(&old_hash, self.lib_slot);
+                        state.stamp_funding(&old_hash, self.lib_slot, None);
                     }
                 }
             }
@@ -672,7 +672,11 @@ where
         };
         let (expired, expired_other) =
             state.shed_expired(tip, self.lib_slot, self.config.stale_refund_slots);
-        let expired_any = !expired.is_empty() || !expired_other.is_empty();
+        if expired.is_empty() && expired_other.is_empty() {
+            return;
+        }
+        // The pending tail may have been cut: re-home the next publish.
+        self.last_msg_id = state.publish_parent(tip);
         let shed = expired.into_iter().map(orphan_from_shed).chain(
             expired_other
                 .into_iter()
@@ -683,9 +687,6 @@ where
                 warn!(target: TARGET, "Pending tx {} expired unmined; orphaned", hex::encode(tx.tx_hash().0));
                 orphaned.push(tx);
             }
-        }
-        if expired_any && let (Some(state), Some(tip)) = (self.state.as_ref(), self.current_tip) {
-            self.last_msg_id = state.publish_parent(tip);
         }
     }
 

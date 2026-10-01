@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use lb_common_http_client::Slot;
 use lb_core::{
@@ -492,26 +492,20 @@ impl TxState {
         Ok(())
     }
 
-    /// Keep the pre-funding channel ops of an own pending inscription so it
-    /// can be re-funded when stale, and stamp when it was funded. No-op for
-    /// a hash that is not pending.
-    pub fn attach_pre_fund(
+    /// Record how a pending tx was funded: when, and with which channel ops
+    /// if the sequencer built it itself and can re-fund it. Expiry counts
+    /// from `funded_at`. No-op for a hash that is not pending.
+    pub fn stamp_funding(
         &mut self,
         tx_hash: &TxHash,
-        pre_fund: MantleTxBuilder,
         funded_at: Slot,
+        pre_fund: Option<MantleTxBuilder>,
     ) {
         if let Some(pending) = self.pending.get_mut(tx_hash) {
-            pending.pre_fund = Some(pre_fund);
             pending.funded_at = Some(funded_at);
-        }
-    }
-
-    /// Stamp when a pending tx was funded, or last re-funded; expiry counts
-    /// from it. No-op for a hash that is not pending.
-    pub fn stamp_funding(&mut self, tx_hash: &TxHash, funded_at: Slot) {
-        if let Some(pending) = self.pending.get_mut(tx_hash) {
-            pending.funded_at = Some(funded_at);
+            if pre_fund.is_some() {
+                pending.pre_fund = pre_fund;
+            }
         } else if let Some(entry) = self.pending_other.get_mut(tx_hash) {
             entry.funded_at = Some(funded_at);
         }
@@ -525,19 +519,14 @@ impl TxState {
         records: impl IntoIterator<Item = PendingFunding>,
         restored_at: Slot,
     ) {
+        for record in records {
+            self.stamp_funding(&record.tx_hash, record.funded_at, record.pre_fund);
+        }
         for pending in self.pending.values_mut() {
-            pending.funded_at = Some(restored_at);
+            pending.funded_at.get_or_insert(restored_at);
         }
         for entry in self.pending_other.values_mut() {
-            entry.funded_at = Some(restored_at);
-        }
-        for record in records {
-            self.stamp_funding(&record.tx_hash, record.funded_at);
-            if let (Some(pre_fund), Some(pending)) =
-                (record.pre_fund, self.pending.get_mut(&record.tx_hash))
-            {
-                pending.pre_fund = Some(pre_fund);
-            }
+            entry.funded_at.get_or_insert(restored_at);
         }
     }
 
@@ -774,7 +763,7 @@ impl TxState {
     /// Remove `head` and everything pending chained after it on either
     /// lineage, queuing them parent-first for orphan reporting.
     fn displace_chain(&mut self, head: TxHash) {
-        let mut queue = std::collections::VecDeque::from([head]);
+        let mut queue = VecDeque::from([head]);
         while let Some(tx_hash) = queue.pop_front() {
             queue.extend(
                 self.pending_tip_of(tx_hash)
@@ -2520,9 +2509,9 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
         let (funded, funded_msg) = submit_own(&mut state, MsgId::root(), 1);
-        state.attach_pre_fund(&funded, MantleTxBuilder::new(), Slot::from(10));
+        state.stamp_funding(&funded, Slot::from(10), Some(MantleTxBuilder::new()));
         let (unfunded, _) = submit_own(&mut state, funded_msg, 2);
-        state.stamp_funding(&unfunded, Slot::from(10));
+        state.stamp_funding(&unfunded, Slot::from(10), None);
 
         assert!(
             state.refund_candidates(tip, Slot::from(12), 3).is_empty(),
@@ -2556,7 +2545,7 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
         let (hash, _) = submit_own(&mut state, MsgId::root(), 1);
-        state.stamp_funding(&hash, Slot::from(1));
+        state.stamp_funding(&hash, Slot::from(1), None);
 
         assert!(
             state
@@ -2576,7 +2565,7 @@ mod tests {
         let b1 = header_id(2);
         let mut state = TxState::new(genesis, MsgId::root());
         let (hash, _) = submit_own(&mut state, MsgId::root(), 1);
-        state.attach_pre_fund(&hash, MantleTxBuilder::new(), Slot::from(1));
+        state.stamp_funding(&hash, Slot::from(1), Some(MantleTxBuilder::new()));
         state.process_block(a1, genesis, genesis, vec![hash], vec![], Vec::new());
         state.process_block(b1, genesis, genesis, vec![], vec![], Vec::new());
 
@@ -2668,13 +2657,13 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
         let (head, head_msg) = submit_own(&mut state, MsgId::root(), 1);
-        state.stamp_funding(&head, Slot::from(1));
+        state.stamp_funding(&head, Slot::from(1), None);
         let (child, child_msg) = submit_own(&mut state, head_msg, 2);
-        state.attach_pre_fund(&child, MantleTxBuilder::new(), Slot::from(9));
+        state.stamp_funding(&child, Slot::from(9), Some(MantleTxBuilder::new()));
         let (grandchild, _, _) = bundle_tx(child_msg, 3);
         let grandchild_hash = grandchild.hash();
         state.submit_other(grandchild, channel_id).unwrap();
-        state.stamp_funding(&grandchild_hash, Slot::from(9));
+        state.stamp_funding(&grandchild_hash, Slot::from(9), None);
 
         let (shed, shed_other) = state.shed_expired(tip, Slot::from(10), 3);
 
@@ -2705,9 +2694,9 @@ mod tests {
         let (b, _) = pure_config_tx(a_id, 2);
         let (a_hash, b_hash) = (a.hash(), b.hash());
         state.submit_other(a, channel_id).unwrap();
-        state.stamp_funding(&a_hash, Slot::from(1));
+        state.stamp_funding(&a_hash, Slot::from(1), None);
         state.submit_other(b, channel_id).unwrap();
-        state.stamp_funding(&b_hash, Slot::from(9));
+        state.stamp_funding(&b_hash, Slot::from(9), None);
 
         let (shed, shed_other) = state.shed_expired(tip, Slot::from(10), 3);
 
@@ -2760,7 +2749,7 @@ mod tests {
         let mut chain = Vec::new();
         for data in 1..=6u8 {
             let (hash, msg) = submit_own(&mut state, parent, data);
-            state.stamp_funding(&hash, Slot::from(1));
+            state.stamp_funding(&hash, Slot::from(1), None);
             chain.push(hash);
             parent = msg;
         }
@@ -2834,7 +2823,7 @@ mod tests {
         let (local, _, _) = bundle_tx(MsgId::root(), 1);
         let local_hash = local.hash();
         state.submit_other(local, channel_id).unwrap();
-        state.stamp_funding(&local_hash, Slot::from(1));
+        state.stamp_funding(&local_hash, Slot::from(1), None);
         // Mirrored on its own position, so it is not the local entry's child.
         let mirrored = make_dummy_tx_on(msg_id(50), 2);
         let mirrored_hash = mirrored.hash();
