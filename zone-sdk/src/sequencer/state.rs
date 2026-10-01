@@ -695,11 +695,11 @@ impl TxState {
     ///
     /// A pending continuation already sitting on the same parent lost the
     /// position to this mined entry: it and everything chained on it are
-    /// displaced, to be reported orphaned by the next shed pass. Unless it
-    /// is the same message landing under another hash — a re-funded own
-    /// publish whose original won after all — in which case it simply
-    /// landed: the entry is retired unreported and its children still chain
-    /// on the mined message.
+    /// displaced, to be reported orphaned by the next shed pass. Unless the
+    /// mined entry carries the sibling's own message id — the same
+    /// inscription under another tx hash, such as the original of a
+    /// re-funded publish — in which case the message simply landed: the
+    /// entry is retired unreported and its children still chain on it.
     ///
     /// `bundle` classifies the tx (plain inscription, atomic withdraw, or
     /// pin deposit), matching the `submit_*` classification.
