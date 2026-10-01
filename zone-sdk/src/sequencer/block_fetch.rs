@@ -281,19 +281,9 @@ fn apply_prepared_block_event(
 
     // Remove our pending txs that were finalized in the backfilled LIB blocks.
     // `finalized_items` already carries the typed payloads (built before
-    // pending was mutated) so we just need to clean up state here.
-    for tx_hash in &finalized_batch.our_tx_hashes {
-        s.remove_pending(tx_hash);
-    }
-
-    *current_tip = Some(tip);
-
-    mirror_branch_from_store(s, tip, channel_id);
-
-    // Detect channel changes by diffing the channel view on every block. On
-    // the first event there is no old tip: what restored pending chains on
-    // was the view before the restart, and the rest of the channel is new
-    // (a clean start on an existing channel).
+    // pending was mutated) so we just need to clean up state here. A
+    // finalized message also retires a pending entry carrying it under
+    // another hash: a re-funded publish whose original landed.
     let finalized_now: HashSet<MsgId> = finalized_batch
         .items
         .iter()
@@ -303,7 +293,19 @@ fn apply_prepared_block_event(
             _ => None,
         })
         .collect();
+    for tx_hash in &finalized_batch.our_tx_hashes {
+        s.remove_pending(tx_hash);
+    }
+    s.retire_landed(&finalized_now);
 
+    *current_tip = Some(tip);
+
+    mirror_branch_from_store(s, tip, channel_id);
+
+    // Detect channel changes by diffing the channel view on every block. On
+    // the first event there is no old tip: what restored pending chains on
+    // was the view before the restart, and the rest of the channel is new
+    // (a clean start on an existing channel).
     let old_lineage = old_lineage.unwrap_or_else(|| s.lineage_under(tip, &tracked_before));
     let channel_update = s.detect_channel_update(&old_lineage, tip, &finalized_now);
 
@@ -2824,6 +2826,66 @@ mod tests {
         assert_eq!(prefix, vec![cfg_hash]);
         let u = r[0].result.channel_update.as_ref().expect("M1, M2 adopted");
         assert_eq!(msg_ids(&u.adopted), vec![m1_id, m2_id]);
+    }
+
+    /// A restored pending P whose message finalized under another hash while
+    /// the sequencer was down — the original of a re-funded publish won — is
+    /// retired by the LIB backfill, not shed as off-branch and orphaned.
+    #[tokio::test]
+    async fn restored_pending_finalized_under_another_hash_is_retired_not_orphaned() {
+        // G(0) <- B1 (original carrying M, finalized, never seen live) <- B2 (live)
+        let ch = ChannelId::from([0u8; 32]);
+        let m = inscribe_op(ch, MsgId::root(), b"m");
+        let m_id = m.id();
+        let original = unverified_tx_with_ops(vec![
+            Op::ChannelInscribe(m.clone()),
+            Op::ChannelConfig(channel_config(ch, MsgId::root())),
+        ]);
+        let rebuilt = unverified_tx_with_ops(vec![Op::ChannelInscribe(m)]);
+        assert_ne!(original.hash(), rebuilt.hash());
+        let mut restored = TxState::new(header_id(0), MsgId::root());
+        restored
+            .submit_inscription(
+                rebuilt,
+                MsgId::root(),
+                m_id,
+                Inscription::new_unchecked(b"m".to_vec()),
+            )
+            .unwrap();
+        let b1 = api_block(1, 0, 1, vec![original]);
+        let b2 = api_block(2, 1, 2, Vec::new());
+        let node = MockNode {
+            immutable: vec![b1],
+            ..MockNode::default()
+        };
+        let event = ProcessedBlockEvent {
+            block: b2,
+            tip: header_id(2),
+            tip_slot: Slot::from(2),
+            lib: header_id(1),
+            lib_slot: Slot::from(1),
+        };
+
+        let r = drive_with(&node, &mut Some(restored), ch, &[event]).await;
+
+        assert!(
+            r[0].shed.is_empty(),
+            "the message landed: nothing to orphan"
+        );
+        assert!(
+            r[0].result
+                .channel_update
+                .as_ref()
+                .is_none_or(|u| u.orphaned.is_empty())
+        );
+        assert!(
+            r[0].result
+                .finalized_items
+                .iter()
+                .flat_map(|tx| tx.ops.iter())
+                .any(|op| matches!(op, FinalizedOp::Inscription(i) if i.this_msg == m_id)),
+            "M is reported finalized"
+        );
     }
 
     /// After a restore, a pending P whose unfinalized parent M is rediscovered

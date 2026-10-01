@@ -334,12 +334,8 @@ pub struct SequencerConfig {
     pub publish_channel_capacity: usize,
     pub min_slots_remaining_in_turn: u64,
     pub max_pending_publish_depth: usize,
-    /// LIB slots an own pending tx may stay unmined on the branch before it
-    /// is treated as stuck: its fee note may have been spent from under it
-    /// once the node wallet's reservation lapsed, and re-posting the same
-    /// bytes can never land it. A tx the sequencer built itself is then
-    /// re-funded and re-signed under a new hash; anything else it posts is
-    /// shed and reported orphaned. `0` disables both.
+    /// LIB slots a pending tx may stay unmined before it is re-funded or
+    /// orphaned; `0` disables.
     pub stale_refund_slots: u64,
     /// Fund transactions from the node's wallet before signing.
     pub funding: FundingConfig,
@@ -518,10 +514,8 @@ pub enum ChannelUpdate {
         /// only after it was reported orphaned.
         adopted: Vec<ChannelUpdateTx>,
         /// Entries that left the view: ones that were on chain, plus our own
-        /// pending that can no longer land, plus pending txs the sequencer
-        /// posted that stayed unmined past
-        /// [`SequencerConfig::stale_refund_slots`] and could not rebuild
-        /// itself. Revert from state and treat as republish candidates; see
+        /// pending that can no longer land, plus stale multi-sig and custom
+        /// txs. Revert from state and treat as republish candidates; see
         /// [`ChannelUpdateTx`] for how to republish each variant.
         orphaned: Vec<ChannelUpdateTx>,
     },

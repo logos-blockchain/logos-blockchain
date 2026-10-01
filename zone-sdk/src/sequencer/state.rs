@@ -556,6 +556,26 @@ impl TxState {
         records
     }
 
+    /// Retire pending entries whose message is in `landed`: the message is
+    /// on chain, so the entry is done whatever tx hash carried it there. A
+    /// re-funded publish whose original finalized is the case this covers;
+    /// nothing is reported, the message simply landed.
+    pub fn retire_landed(&mut self, landed: &HashSet<MsgId>) {
+        let done: Vec<TxHash> = self
+            .pending
+            .keys()
+            .chain(self.pending_other.keys())
+            .copied()
+            .filter(|hash| {
+                self.pending_tip_of(*hash)
+                    .is_some_and(|tip| landed.contains(&tip))
+            })
+            .collect();
+        for hash in done {
+            self.remove_pending(&hash);
+        }
+    }
+
     /// The pending tx chaining from config `parent`, if any.
     #[must_use]
     pub fn pending_config_child(&self, parent: MsgId) -> Option<TxHash> {
@@ -2679,6 +2699,22 @@ mod tests {
         assert_eq!(state.pending_publish_count(), 0);
         assert!(!state.is_tracked(&grandchild_hash));
         assert_eq!(state.publish_parent(tip), MsgId::root());
+    }
+
+    /// A finalized message retires a pending entry carrying it under another
+    /// hash, with no orphan report; a child of that message keeps chaining.
+    #[test]
+    fn finalized_message_retires_the_pending_entry_under_another_hash() {
+        let genesis = header_id(0);
+        let mut state = TxState::new(genesis, MsgId::root());
+        let (rebuilt, msg) = submit_own(&mut state, MsgId::root(), 1);
+        let (child, _) = submit_own(&mut state, msg, 2);
+
+        state.retire_landed(&HashSet::from([msg]));
+
+        assert!(state.pending_inscription(&rebuilt).is_none());
+        assert!(state.pending_inscription(&child).is_some());
+        assert!(state.pending_child(MsgId::root()).is_none());
     }
 
     /// A pure config chained on an expired config goes with it: the config

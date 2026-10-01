@@ -424,12 +424,14 @@ where
     /// Rebuild own pending txs that stayed unmined past
     /// `stale_refund_slots`: re-fund the stored channel ops and re-sign, so
     /// the entry keeps its message id under a new tx hash and the following
-    /// `resubmit_pending` posts it. Needs a connected node for funding. A
-    /// rebuild of a merely slow tx is harmless: both claim the same lineage
-    /// slot, so whichever lands first kills the other.
+    /// `resubmit_pending` posts it. Runs only when a post could follow, on
+    /// our turn with a connected node: a rebuild that then waits for the
+    /// turn would only age its fresh fee note. A rebuild of a merely slow tx
+    /// is harmless: both claim the same lineage slot, so whichever lands
+    /// first kills the other.
     pub(super) async fn refund_stale_pending(&mut self) {
         let window = self.config.stale_refund_slots;
-        if window == 0 || !self.connected {
+        if window == 0 || !self.connected || !self.can_publish_inscription_now() {
             return;
         }
         let (Some(state), Some(tip)) = (self.state.as_ref(), self.current_tip) else {
