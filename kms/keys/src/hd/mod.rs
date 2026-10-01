@@ -99,7 +99,7 @@ impl Debug for Mnemonic {
 pub struct InvalidMnemonicError(#[from] bip39::Error);
 
 /// A BIP-39 passphrase
-#[derive(Clone, PartialEq, Eq, Deserialize, ZeroizeOnDrop)]
+#[derive(Clone, Deserialize, ZeroizeOnDrop)]
 pub struct Passphrase(String);
 
 impl From<String> for Passphrase {
