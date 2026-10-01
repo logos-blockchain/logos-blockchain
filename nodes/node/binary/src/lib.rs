@@ -188,9 +188,8 @@ pub fn run_node_from_config(
         genesis_block,
     } = config.deployment;
     let EraParameters::V1(v1::Parameters {
-        blend: blend_deployment,
         cryptarchia: cryptarchia_deployment,
-        time: time_deployment,
+        ..
     }) = schedule.into_genesis();
 
     let storage_config = StorageConfig {
@@ -202,15 +201,8 @@ pub fn run_node_from_config(
 
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
         user: config.user.blend,
-        deployment: blend_deployment,
     }
-    .into_blend_services_settings(
-        recovery_data.clone(),
-        &time_deployment,
-        &cryptarchia_deployment,
-        protocol_names.blend.clone(),
-        protocol_names.cryptarchia_topic.clone(),
-    );
+    .into_blend_services_settings(era, recovery_data.clone());
 
     let time_service_config = TimeConfig {
         user: config.user.time,

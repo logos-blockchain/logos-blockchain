@@ -1,6 +1,9 @@
 use std::path::Path;
 
 use color_eyre::eyre::Result;
+use lb_blend_service::settings::user::{
+    Config as BlendConfig, RequiredValues as BlendConfigRequiredValues,
+};
 use lb_core::mantle::Value;
 use lb_pow_service::ClaimTarget;
 use libp2p::{Multiaddr, PeerId};
@@ -15,13 +18,10 @@ use crate::{
     config::{
         ApiConfig, BlendArgs, CryptarchiaArgs, CryptarchiaConfig, KmsConfig, MempoolConfig,
         PoWConfig, SdpArgs, SdpConfig, StateConfig, StorageConfig, TimeConfig, TracingConfig,
-        WalletConfig,
-        blend::serde::{Config as BlendConfig, RequiredValues as BlendConfigRequiredValues},
-        cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
+        WalletConfig, cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
         network::serde::Config as NetworkConfig,
-        sdp::serde::RequiredValues as SdpConfigRequiredValues,
-        update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
-        update_tracing,
+        sdp::serde::RequiredValues as SdpConfigRequiredValues, update_api, update_blend,
+        update_cryptarchia, update_network, update_sdp, update_state, update_tracing,
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };

@@ -1,32 +1,17 @@
-use core::time::Duration;
-
 use lb_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
         dispatcher::libp2p::Libp2pBroadcastSettings,
-        settings::{
-            CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings,
-            StartingBlendConfig as BlendCoreSettings, ZkSettings,
-        },
+        settings::StartingBlendConfig as BlendCoreSettings,
     },
     edge::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pEdgeBlendBackendSettings,
         settings::StartingBlendConfig as BlendEdgeSettings,
     },
-    settings::{
-        CommonSettings, CoreSettings, EdgeSettings, Settings as BlendSettings, TimingSettings,
-    },
+    settings::{Settings as BlendSettings, user::Config},
 };
-use lb_era_parameters::v1::{
-    blend::Settings as DeploymentSettings, cryptarchia::Settings as CryptarchiaDeploymentSettings,
-    time::Settings as TimeDeploymentSettings,
-};
-use lb_libp2p::protocol_name::StreamProtocol;
+use lb_era_parameters::EraDefinition;
 use lb_services_utils::overwatch::RecoveryData;
-
-use crate::config::blend::serde::Config;
-
-pub mod serde;
 
 /// The three settings a Blend deployment produces: the proxy's, which picks
 /// between the two, and one for each of the services it can start.
@@ -40,109 +25,20 @@ type BlendServicesSettings = (
     BlendEdgeSettings<Libp2pEdgeBlendBackendSettings, Libp2pBroadcastSettings>,
 );
 
-/// Blend service config which combines user-provided configuration with
-/// deployment-specific settings.
-///
-/// Deployment-specific settings can refer to either a well-known deployment
-/// (e.g., Logos blockchain Mainnet), or to custom values.
+/// Blend service config: the user-provided configuration, completed with the
+/// era in force.
 pub struct ServiceConfig {
     pub user: Config,
-    pub deployment: DeploymentSettings,
 }
 
 impl ServiceConfig {
     #[must_use]
     pub fn into_blend_services_settings(
         self,
+        era: &EraDefinition,
         recovery_data: RecoveryData,
-        time_deployment: &TimeDeploymentSettings,
-        cryptarchia_deployment: &CryptarchiaDeploymentSettings,
-        protocol_name: StreamProtocol,
-        broadcast_topic: String,
     ) -> BlendServicesSettings {
-        let slots_per_epoch = cryptarchia_deployment.slots_per_epoch();
-        let slots_per_block = cryptarchia_deployment.average_slots_per_block();
-        let slot_duration = time_deployment.slot_duration;
-
-        let blend_service_settings = BlendSettings::<
-            Libp2pCoreBlendBackendSettings,
-            Libp2pEdgeBlendBackendSettings,
-            Libp2pBroadcastSettings,
-        > {
-            common: CommonSettings {
-                non_ephemeral_signing_key_id: self.user.non_ephemeral_signing_key_id,
-                num_blend_layers: self.deployment.common.num_blend_layers,
-                minimum_network_size: self.deployment.common.minimum_network_size.into(),
-                broadcast: Libp2pBroadcastSettings {
-                    topic: broadcast_topic,
-                },
-                abstain_on_failure: self.user.abstain_on_failure,
-                recovery_data,
-                time: timing_settings(
-                    &self.deployment,
-                    slots_per_epoch,
-                    slots_per_block,
-                    &slot_duration,
-                ),
-                data_replication_factor: self.deployment.common.data_replication_factor,
-            },
-            core: CoreSettings {
-                backend: Libp2pCoreBlendBackendSettings {
-                    target_peering_degree: self.deployment.core.target_peering_degree,
-                    connection_share_per_round: self.deployment.connection_share_per_round(),
-                    listening_address: self.user.core.backend.listening_address,
-                    edge_node_connection_timeout: self
-                        .deployment
-                        .edge_node_connection_timeout(&slot_duration),
-                    max_dial_attempts_per_peer: self.user.core.backend.max_dial_attempts_per_peer,
-                    max_edge_node_incoming_connections: self
-                        .deployment
-                        .maximum_concurrent_edge_connections(),
-                    accepted_edge_connections_per_round: self
-                        .deployment
-                        .accepted_edge_connections_per_round(),
-                    protocol_name: protocol_name.clone(),
-                    peering_degree_check_interval: self
-                        .user
-                        .core
-                        .backend
-                        .peering_degree_check_interval,
-                },
-                scheduler: SchedulerSettings {
-                    cover: CoverTrafficSettings {
-                        message_frequency_per_round: self
-                            .deployment
-                            .core
-                            .scheduler
-                            .cover
-                            .message_frequency_per_round,
-                    },
-                    delayer: MessageDelayerSettings {
-                        maximum_release_delay_in_rounds: self
-                            .deployment
-                            .core
-                            .scheduler
-                            .delayer
-                            .maximum_release_delay_in_rounds,
-                    },
-                },
-                zk: ZkSettings {
-                    secret_key_kms_id: self.user.core.zk.secret_key_kms_id,
-                },
-                activity_threshold_sensitivity: self.deployment.core.activity_threshold_sensitivity,
-            },
-            edge: EdgeSettings::<Libp2pEdgeBlendBackendSettings> {
-                backend: Libp2pEdgeBlendBackendSettings {
-                    max_dial_attempts_per_peer_per_message: self
-                        .user
-                        .edge
-                        .backend
-                        .max_dial_attempts_per_peer_per_message,
-                    protocol_name,
-                    replication_factor: self.user.edge.backend.replication_factor,
-                },
-            },
-        };
+        let blend_service_settings = BlendSettings::from_era(self.user, era, recovery_data);
         let blend_core_settings: BlendCoreSettings<_, _> = blend_service_settings.clone().into();
         let blend_edge_settings: BlendEdgeSettings<_, _> = blend_service_settings.clone().into();
         (
@@ -150,25 +46,5 @@ impl ServiceConfig {
             blend_core_settings,
             blend_edge_settings,
         )
-    }
-}
-
-fn timing_settings(
-    deployment: &DeploymentSettings,
-    slots_per_epoch: u64,
-    slots_per_block: u64,
-    slot_duration: &Duration,
-) -> TimingSettings {
-    TimingSettings {
-        epoch_transition_period: deployment.epoch_transition(slots_per_block, slot_duration),
-        round_duration_in_seconds: deployment
-            .round_duration(slot_duration)
-            .as_secs()
-            .try_into()
-            .expect("Round duration must be greater than `0` seconds."),
-        rounds_per_observation_window: deployment.rounds_per_observation_window(),
-        network_absorption_in_rounds: deployment.common.network_absorption_in_rounds,
-        core_handshake_deadline_in_rounds: deployment.core.core_handshake_deadline_in_rounds,
-        rounds_per_epoch: deployment.rounds_per_epoch(slots_per_epoch, slot_duration),
     }
 }

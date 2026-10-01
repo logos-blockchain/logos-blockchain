@@ -5,7 +5,9 @@ use std::{
 };
 
 use bytes::Bytes;
-use lb_era_parameters::EraParameters;
+use lb_blend_service::settings::user::{
+    Config as BlendConfig, RequiredValues as BlendRequiredValues,
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_services_utils::overwatch::RecoveryData;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
@@ -16,10 +18,7 @@ use crate::{
     cli::{CliArgs, build_run_config_from_env},
     config::{
         DeploymentSettings, RequiredValues as ConfigRequiredValues,
-        blend::{
-            ServiceConfig as BlendServiceConfig,
-            serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
-        },
+        blend::ServiceConfig as BlendServiceConfig,
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues,
         },
@@ -225,19 +224,12 @@ fn service_settings_receive_recovery_data() {
 
     let deployment_settings = DeploymentSettings::default();
     let protocol_names = deployment_settings.genesis_protocol_names();
-    let EraParameters::V1(genesis_parameters) = deployment_settings.eras.into_genesis();
+    let eras = deployment_settings.runnable_eras().unwrap();
 
     let (blend_service_settings, _, _) = BlendServiceConfig {
         user: user_config.blend.clone(),
-        deployment: genesis_parameters.blend,
     }
-    .into_blend_services_settings(
-        recovery_data.clone(),
-        &genesis_parameters.time,
-        &genesis_parameters.cryptarchia,
-        protocol_names.blend,
-        protocol_names.cryptarchia_topic,
-    );
+    .into_blend_services_settings(&eras.genesis().entry.parameters, recovery_data.clone());
     assert_eq!(
         blend_service_settings
             .common

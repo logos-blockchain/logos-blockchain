@@ -15,6 +15,8 @@ mod edge;
 pub use self::edge::EdgeSettings;
 mod timing;
 pub use self::timing::TimingSettings;
+mod era;
+pub mod user;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Settings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings> {

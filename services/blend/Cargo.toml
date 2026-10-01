@@ -23,6 +23,7 @@ lb-chain-network-service         = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
+lb-era-parameters                = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
@@ -36,7 +37,7 @@ lb-storage-service               = { workspace = true }
 lb-time-service                  = { workspace = true }
 lb-tracing                       = { workspace = true }
 lb-tx-service                    = { workspace = true }
-lb-utils                         = { workspace = true }
+lb-utils                         = { features = ["time"], workspace = true }
 libp2p                           = { features = ["dns"], workspace = true }
 libp2p-stream                    = { workspace = true }
 overwatch                        = { workspace = true }

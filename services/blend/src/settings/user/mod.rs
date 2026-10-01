@@ -1,8 +1,11 @@
+//! What a node operator configures about Blend, as opposed to what the era in
+//! force defines.
+
 use lb_key_management_system_service::backend::preload::KeyId;
 use lb_libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
 
-use crate::config::blend::serde::{
+use self::{
     core::{BackendConfig, Config as CoreConfig, ZkSettings},
     edge::Config as EdgeConfig,
 };
@@ -10,7 +13,7 @@ use crate::config::blend::serde::{
 pub mod core;
 pub mod edge;
 
-/// Config object that is part of the global config file.
+/// The Blend section of a node's user config file.
 ///
 /// This includes all values that are not strictly related to any specific
 /// deployment and that users have to specify when starting up the node.

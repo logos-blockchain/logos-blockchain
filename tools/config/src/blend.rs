@@ -1,8 +1,8 @@
 use std::str::FromStr as _;
 
+use lb_blend_service::settings::user as blend;
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
 use lb_libp2p::Multiaddr;
-use lb_node::config::blend::serde as blend;
 use num_bigint::BigUint;
 
 use crate::kms::key_id_for_preload_backend;
