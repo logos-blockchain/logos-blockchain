@@ -4,6 +4,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         GasProfile,
+        batch::{DeferrableProof, DeferredZkpVerifications},
         gas::{Gas, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
@@ -103,18 +104,35 @@ pub type VerifyError<T, Mode> = (
 
 impl<T: ProvableOperation, Mode: VerificationMode> SignedOperation<T, Preverified, Mode>
 where
-    Self: VerifiableOperation<Mode>,
+    Self: VerifiableOperation<Mode, DeferredProof: DeferrableProof>,
+{
+    pub fn into_verified_deferred(
+        self,
+        context: &<Self as VerifiableOperation<Mode>>::Context<'_>,
+        deferred_proofs: &mut DeferredZkpVerifications,
+    ) -> Result<SignedOperation<T, Verified, Mode>, VerifyError<T, Mode>> {
+        let verify_result = self.verify(context);
+        match verify_result {
+            Ok(deferred_proof) => {
+                deferred_proof.defer_into(deferred_proofs);
+                Ok(self.into_state())
+            }
+            Err(error) => Err((self, error)),
+        }
+    }
+}
+
+impl<T: ProvableOperation, Mode: VerificationMode> SignedOperation<T, Preverified, Mode>
+where
+    Self: VerifiableOperation<Mode, DeferredProof = ()>,
 {
     pub fn into_verified(
         self,
         context: &<Self as VerifiableOperation<Mode>>::Context<'_>,
-    ) -> Result<VerifiedSignedOperation<T, Mode>, VerifyError<T, Mode>> {
+    ) -> Result<SignedOperation<T, Verified, Mode>, VerifyError<T, Mode>> {
         let verify_result = self.verify(context);
         match verify_result {
-            Ok(deferred_proof) => Ok(VerifiedSignedOperation {
-                signed_operation: self.into_state(),
-                deferred_proof,
-            }),
+            Ok(()) => Ok(self.into_state()),
             Err(error) => Err((self, error)),
         }
     }
@@ -151,43 +169,6 @@ where
     const GAS_COST: Gas = T::GAS_COST;
 }
 
-pub type DeferredProofOf<T, Mode> =
-    <SignedOperation<T, Preverified, Mode> as VerifiableOperation<Mode>>::DeferredProof;
-
-pub type VerifiedSignedOperationParts<T, Mode> =
-    (SignedOperation<T, Verified, Mode>, DeferredProofOf<T, Mode>);
-
-pub struct VerifiedSignedOperation<T, Mode>
-where
-    T: ProvableOperation,
-    Mode: VerificationMode,
-    SignedOperation<T, Preverified, Mode>: VerifiableOperation<Mode>,
-{
-    signed_operation: SignedOperation<T, Verified, Mode>,
-    deferred_proof: DeferredProofOf<T, Mode>,
-}
-
-impl<T, Mode> VerifiedSignedOperation<T, Mode>
-where
-    T: ProvableOperation,
-    Mode: VerificationMode,
-    SignedOperation<T, Preverified, Mode>: VerifiableOperation<Mode>,
-{
-    #[must_use]
-    pub const fn signed_operation(&self) -> &SignedOperation<T, Verified, Mode> {
-        &self.signed_operation
-    }
-
-    #[must_use]
-    pub const fn deferred_proof(&self) -> &DeferredProofOf<T, Mode> {
-        &self.deferred_proof
-    }
-
-    pub fn into_parts(self) -> VerifiedSignedOperationParts<T, Mode> {
-        (self.signed_operation, self.deferred_proof)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use lb_cryptarchia_engine::Slot;
@@ -200,7 +181,6 @@ mod tests {
     use crate::{
         mantle::{
             Note, NoteId, TxHash, Utxo,
-            batch::DeferredZkpVerification,
             channel::{Channels, Error},
             channel_notes,
             gas::MainnetGasProfile,
@@ -303,8 +283,8 @@ mod tests {
             })
             .expect("an inscription rooted at the genesis message opens a new channel");
 
-        assert_eq!(verified.signed_operation().operation(), &operation);
-        assert_eq!(verified.signed_operation().proof(), &proof);
+        assert_eq!(verified.operation(), &operation);
+        assert_eq!(verified.proof(), &proof);
     }
 
     #[test]
@@ -359,14 +339,14 @@ mod tests {
             utxos: &utxos,
             tx_hash_view: &tx_hash_view(),
         };
-        let verified = signed_operation
-            .into_verified(&context)
+
+        let mut deferred_proofs = DeferredZkpVerifications::new();
+        signed_operation
+            .into_verified_deferred(&context, &mut deferred_proofs)
             .expect("the input is a ledger note no channel owns");
 
-        assert!(matches!(
-            verified.deferred_proof(),
-            DeferredZkpVerification::ZkSig(..)
-        ));
+        assert_eq!(deferred_proofs.zk_sigs().len(), 1);
+        assert!(deferred_proofs.leader_claims().is_empty());
     }
 
     #[test]

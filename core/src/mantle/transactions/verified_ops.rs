@@ -2,11 +2,18 @@ use std::{iter::Enumerate, vec::IntoIter};
 
 use crate::mantle::{
     VerificationError,
+    batch::DeferredZkpVerifications,
     ledger::verification_mode::StandardMode,
-    ops::{SignedOp, signed_op::VerifiedSignedOp},
+    ops::SignedOp,
     traits::Hashable as _,
-    transactions::{OperationVerificationHelper, SignedOps, hash::TxHashView, states::Preverified},
+    transactions::{
+        OperationVerificationHelper, SignedOps,
+        hash::TxHashView,
+        states::{Preverified, Verified},
+    },
 };
+
+pub type VerifiedOperationStep = (VerifiedOperations, SignedOp<Verified, StandardMode>);
 
 pub struct VerifiedOperations {
     signed_ops: Enumerate<IntoIter<SignedOp<Preverified, StandardMode>>>,
@@ -34,10 +41,17 @@ impl VerifiedOperations {
     /// sequence by construction: there is no way to verify an operation
     /// against a state its predecessor never contributed to.
     ///
+    /// # Parameters
+    ///
+    /// - `helper`: Provider of verification context. It must reflect every
+    ///   preceding operation in this transaction.
+    /// - `deferred_proofs`: Batch that receives the operation's deferred proof,
+    ///   if it has one. Only updated on verification success.
+    ///
     /// # Returns
     ///
-    /// - `Some(Ok((Self, VerifiedSignedOp<StandardMode>)))` if the next
-    ///   operation is successfully verified.
+    /// - `Some(Ok(VerifiedOperationStep))` if the next operation is
+    ///   successfully verified.
     /// - `Some(Err(error))` if the next operation fails verification.
     /// - `None` if there are no more operations to verify.
     ///
@@ -48,9 +62,11 @@ impl VerifiedOperations {
     pub fn next(
         mut self,
         helper: &impl OperationVerificationHelper,
-    ) -> Option<Result<(Self, VerifiedSignedOp<StandardMode>), VerificationError>> {
+        deferred_proofs: &mut DeferredZkpVerifications,
+    ) -> Option<Result<VerifiedOperationStep, VerificationError>> {
         let (index, signed_op) = self.signed_ops.next()?;
-        let verify_result = signed_op.into_verified(index, &self.tx_hash_view, helper);
+        let verify_result =
+            signed_op.into_verified(index, &self.tx_hash_view, helper, deferred_proofs);
 
         Some(
             verify_result
@@ -78,6 +94,7 @@ mod tests {
 
     use crate::mantle::{
         Note, Utxo, VerificationError,
+        batch::DeferredZkpVerifications,
         channel::{Channels, Error},
         ledger::{Inputs, verification_mode::StandardMode},
         ops::channel::ChannelId,
@@ -139,9 +156,10 @@ mod tests {
     fn helper_backed_verification_accepts_valid_channel_withdraw() {
         let (signed_tx, helper) = valid_withdraw();
 
+        let mut batch = DeferredZkpVerifications::new();
         signed_tx
             .into_verified()
-            .next(&helper)
+            .next(&helper, &mut batch)
             .expect("Cursor should yield the WithdrawOp")
             .expect("WithdrawOp should verify");
     }
@@ -158,7 +176,8 @@ mod tests {
 
         let helper = TestOperationVerificationHelper::new(Channels::new(), []);
 
-        let verification_result = signed_tx.into_verified().next(&helper).unwrap();
+        let mut batch = DeferredZkpVerifications::new();
+        let verification_result = signed_tx.into_verified().next(&helper, &mut batch).unwrap();
         assert_eq!(
             verification_result.err().unwrap(),
             VerificationError::ChannelVerificationError(Error::InvalidSignature)
@@ -170,12 +189,13 @@ mod tests {
         let (signed_tx, helper) = valid_withdraw();
         let verified_ops = signed_tx.into_verified();
 
+        let mut batch = DeferredZkpVerifications::new();
         let (verified_ops, _) = verified_ops
-            .next(&helper)
+            .next(&helper, &mut batch)
             .expect("Cursor should yield the WithdrawOp")
             .expect("WithdrawOp should verify");
 
-        assert!(verified_ops.next(&helper).is_none());
+        assert!(verified_ops.next(&helper, &mut batch).is_none());
     }
 
     #[test]

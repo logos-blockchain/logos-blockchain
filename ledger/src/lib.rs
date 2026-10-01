@@ -947,17 +947,14 @@ impl LedgerState {
                 config,
             );
 
-            let Some((remaining_verified_operations, (signed_op, deferred_zkp))) =
-                verified_operations.next(&helper).transpose()?
+            let Some((remaining_verified_operations, signed_op)) = verified_operations
+                .next(&helper, &mut deferred_zkps)
+                .transpose()?
             else {
                 // All operations have been processed, exit the loop.
                 break;
             };
             verified_operations = remaining_verified_operations;
-
-            if let Some(deferred) = deferred_zkp {
-                deferred_zkps.push(deferred);
-            }
 
             // Price the operation against the state it was just verified
             // against, before executing it.
