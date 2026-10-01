@@ -92,11 +92,11 @@ impl PublishResult {
 /// [`submit_channel_config`](super::SequencerClient::submit_channel_config).
 /// The caller collects a signature from each key holder over
 /// [`Self::sign_payload`], gathers them in any order into
-/// [`IndexedSignatures`], which internally sorts them by channel index, and
-/// submits it alongside the (unchanged) prepared value. The funded transaction
-/// and its fee-transfer proof are readable via [`Self::tx`] /
-/// [`Self::transfer_proof`] so signers can inspect exactly what they authorize;
-/// they carry straight back into submission unmodified.
+/// [`IndexedSignatures`](super::IndexedSignatures), which internally sorts
+/// them by channel index, and submits it alongside the (unchanged) prepared
+/// value. The funded transaction and its fee-transfer proof are readable via
+/// [`Self::tx`] / [`Self::transfer_proof`] so signers can inspect exactly what
+/// they authorize; they carry straight back into submission unmodified.
 #[derive(Debug, Clone)]
 pub struct PreparedChannelConfig {
     pub(crate) tx: Ops,
