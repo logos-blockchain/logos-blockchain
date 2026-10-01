@@ -178,7 +178,8 @@ pub fn run_node_from_config(
     // chain and its fork, go to every service that speaks a protocol or a
     // topic.
     let eras = config.deployment.runnable_eras()?;
-    let protocol_names = eras.genesis().entry.parameters.protocol_names.clone();
+    let era = &eras.genesis().entry.parameters;
+    let protocol_names = era.protocol_names.clone();
 
     let blend_rewards_params = config.deployment.genesis_blend_reward_params();
 
@@ -225,9 +226,8 @@ pub fn run_node_from_config(
 
     let time_service_config = TimeConfig {
         user: config.user.time,
-        deployment: time_deployment,
     }
-    .into_time_service_settings(&cryptarchia_deployment, genesis_time);
+    .into_time_service_settings(era, genesis_time);
 
     let (chain_service_config, chain_network_config, chain_leader_config) = CryptarchiaConfig {
         user: config.user.cryptarchia,

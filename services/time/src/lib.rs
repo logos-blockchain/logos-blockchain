@@ -6,6 +6,7 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_cryptarchia_engine::{Epoch, EpochConfig, Slot, time::SlotConfig};
+use lb_era_parameters::{EraDefinition, EraParameters};
 use lb_log_targets::time as log_targets_time;
 use log::error;
 use overwatch::{
@@ -15,6 +16,7 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
+use time::OffsetDateTime;
 use tokio::sync::{oneshot, watch};
 use tokio_stream::wrappers::WatchStream;
 
@@ -76,6 +78,37 @@ pub struct TimeServiceSettings<BackendSettings> {
     /// Base period length related to epochs, used to compute epochs as well
     pub base_period_length: NonZero<u64>,
     pub backend: BackendSettings,
+}
+
+impl<BackendSettings> TimeServiceSettings<BackendSettings> {
+    /// The settings of the time service while `era` is in force, on the chain
+    /// that started at `genesis_time`, with `backend` as the clock.
+    #[must_use]
+    pub fn from_era(
+        era: &EraDefinition,
+        genesis_time: OffsetDateTime,
+        backend: BackendSettings,
+    ) -> Self {
+        let EraParameters::V1(parameters) = &era.parameters;
+        let epoch_config = &parameters.cryptarchia.epoch_config;
+        Self {
+            slot_config: SlotConfig {
+                slot_duration: parameters.time.slot_duration,
+                genesis_time,
+            },
+            epoch_config: EpochConfig {
+                epoch_stake_distribution_stabilization: epoch_config
+                    .epoch_stake_distribution_stabilization,
+                epoch_period_nonce_buffer: epoch_config.epoch_period_nonce_buffer,
+                epoch_period_nonce_stabilization: epoch_config.epoch_period_nonce_stabilization,
+            },
+            base_period_length: parameters
+                .cryptarchia
+                .consensus_config()
+                .base_period_length(),
+            backend,
+        }
+    }
 }
 
 pub struct TimeService<Backend, RuntimeServiceId>
