@@ -10,12 +10,12 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-async-trait = { workspace = true }
-bytes       = { workspace = true }
-futures     = { workspace = true }
-hex         = { workspace = true }
-serde       = { features = ["derive"], workspace = true }
-thiserror   = { workspace = true }
+async-trait  = { workspace = true }
+bytes        = { workspace = true }
+futures      = { workspace = true }
+hex          = { workspace = true }
+serde        = { features = ["derive"], workspace = true }
+thiserror    = { workspace = true }
 tokio        = { features = ["sync"], workspace = true }
 tokio-stream = { features = ["sync"], workspace = true }
 tracing      = { workspace = true }
