@@ -621,14 +621,8 @@ impl StorageRecoverySettings for CryptarchiaSettings {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub enum StartingState {
-    Genesis {
-        genesis_block: Box<GenesisBlock>,
-    },
-    Lib {
-        lib_id: HeaderId,
-        lib_ledger_state: Box<LedgerState>,
-        genesis_id: HeaderId,
-    },
+    Genesis { genesis_block: Box<GenesisBlock> },
+    // TODO: add `Checkpoint` when implementing fast bootstrapping
 }
 
 impl From<GenesisBlock> for StartingState {
