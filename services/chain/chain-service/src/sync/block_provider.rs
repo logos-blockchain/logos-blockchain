@@ -1105,6 +1105,7 @@ mod tests {
         ) -> lb_cryptarchia_engine::Cryptarchia<HeaderId> {
             <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib,
+                lib,
                 Config::new(
                     NonZero::new(1).unwrap(),
                     slot_activation_coeff,

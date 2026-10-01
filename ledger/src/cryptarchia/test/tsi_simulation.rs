@@ -142,14 +142,8 @@ fn simulate(scenario: Scenario) -> Outcome {
     let config = simulation_config();
     let utxo = leader_utxo();
     let mut ledger = genesis_ledger(&config, utxo);
-    let mut engine = Cryptarchia::from_lib(
-        GENESIS,
-        config.consensus_config.clone(),
-        State::Online,
-        0.into(),
-        0,
-        UncleSlots::default(),
-    );
+    let mut engine =
+        Cryptarchia::from_genesis(GENESIS, config.consensus_config.clone(), State::Online);
     let mut rng = StdRng::seed_from_u64(scenario.seed);
     let mut total_blocks = 0;
     let mut blocks_on_forks = 0;

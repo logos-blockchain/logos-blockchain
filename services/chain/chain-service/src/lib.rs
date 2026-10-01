@@ -332,6 +332,27 @@ pub(crate) struct TryApplyBlockOutcome {
 }
 
 impl Cryptarchia {
+    /// Creates the chain with the genesis block as its only block.
+    #[must_use]
+    pub fn from_genesis(
+        genesis_id: HeaderId,
+        genesis_ledger_state: LedgerState,
+        ledger_config: lb_ledger::Config,
+        state: State,
+    ) -> Self {
+        Self::from_lib(
+            genesis_id,
+            genesis_id,
+            genesis_ledger_state,
+            genesis_id,
+            ledger_config,
+            state,
+            Slot::genesis(),
+            0,
+            UncleSlots::default(),
+        )
+    }
+
     /// Initialize a new [`Cryptarchia`] instance.
     #[must_use]
     #[expect(
@@ -340,6 +361,7 @@ impl Cryptarchia {
     )]
     pub fn from_lib(
         lib_id: HeaderId,
+        lib_parent: HeaderId,
         lib_ledger_state: LedgerState,
         genesis_id: HeaderId,
         ledger_config: lb_ledger::Config,
@@ -351,6 +373,7 @@ impl Cryptarchia {
         Self {
             consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib_id,
+                lib_parent,
                 ledger_config.consensus_config.clone(),
                 state,
                 lib_slot,
@@ -949,6 +972,9 @@ where
     ///
     /// # Errors
     ///
+    /// Returns an error if the parent of a non-genesis LIB is not found in
+    /// storage.
+    ///
     /// Returns an error if any stored block fails to be replayed, without
     /// continuing with a partially recovered chain. Otherwise, the remaining
     /// blocks are downloaded from peers, and their uncles can't be verified if
@@ -979,16 +1005,14 @@ where
             bootstrap_config,
             recovery_state.last_engine_state.as_ref(),
         );
-        let mut cryptarchia = Cryptarchia::from_lib(
-            lib_id,
-            recovery_state.lib_ledger_state.clone(),
-            genesis_id,
+
+        let mut cryptarchia = Self::cryptarchia_from_recovered_lib(
+            recovery_state,
             ledger_config,
             state,
-            recovery_state.lib_block_slot,
-            recovery_state.lib_block_length,
-            recovery_state.lib_block_uncle_slots.clone(),
-        );
+            relays.storage(),
+        )
+        .await?;
 
         // Stream the already applied state.
         let init_tip = cryptarchia.tip_branch();
@@ -1059,6 +1083,49 @@ where
             pruned_blocks,
             fell_back_to_lib,
         })
+    }
+
+    /// Creates [`Cryptarchia`] with the recovered LIB as its only block.
+    ///
+    /// A non-genesis LIB gets its parent from storage, so that header
+    /// traversals can continue from storage past LIB.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the parent of a non-genesis LIB is not found in
+    /// storage.
+    async fn cryptarchia_from_recovered_lib(
+        recovery_state: &CryptarchiaConsensusState,
+        ledger_config: lb_ledger::Config,
+        state: State,
+        storage: &StorageApi<Tx>,
+    ) -> Result<Cryptarchia, Error> {
+        let lib_id = recovery_state.lib;
+        let genesis_id = recovery_state.genesis_id;
+        if lib_id == genesis_id {
+            return Ok(Cryptarchia::from_genesis(
+                genesis_id,
+                recovery_state.lib_ledger_state.clone(),
+                ledger_config,
+                state,
+            ));
+        }
+
+        let lib_parent = storage
+            .get_block_parent(&lib_id)
+            .await
+            .ok_or(Error::ParentIdNotFound(lib_id))?;
+        Ok(Cryptarchia::from_lib(
+            lib_id,
+            lib_parent,
+            recovery_state.lib_ledger_state.clone(),
+            genesis_id,
+            ledger_config,
+            state,
+            recovery_state.lib_block_slot,
+            recovery_state.lib_block_length,
+            recovery_state.lib_block_uncle_slots.clone(),
+        ))
     }
 }
 

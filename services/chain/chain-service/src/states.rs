@@ -220,13 +220,10 @@ mod tests {
         let (cryptarchia_engine, pruned_blocks) = {
             // Boostrapping mode since we are pursposefully adding old forks to test the
             // recovery mechanism.
-            let mut cryptarchia = lb_cryptarchia_engine::Cryptarchia::<_>::from_lib(
+            let mut cryptarchia = lb_cryptarchia_engine::Cryptarchia::<_>::from_genesis(
                 genesis_header_id,
                 cryptarchia_engine_config,
                 Bootstrapping,
-                0.into(),
-                0,
-                UncleSlots::default(),
             );
 
             //      b4 - b5
@@ -403,13 +400,10 @@ mod tests {
 
         // Build a chain: b0 (genesis) - b1 - b2 - b3 - b4 - b5
         // With security_param=2, going online will advance LIB.
-        let mut engine = lb_cryptarchia_engine::Cryptarchia::<HeaderId>::from_lib(
+        let mut engine = lb_cryptarchia_engine::Cryptarchia::<HeaderId>::from_genesis(
             genesis_header_id,
             cryptarchia_engine_config,
             Bootstrapping,
-            0.into(),
-            0,
-            UncleSlots::default(),
         );
         let block_ids: Vec<HeaderId> = (1..=5u8).map(|i| [i; 32].into()).collect();
         let mut parent = genesis_header_id;
@@ -456,6 +450,7 @@ mod tests {
         // Create a new Cryptarchia from the saved LIB with its slot and length.
         let mut restored = Cryptarchia::from_lib(
             saved_state.lib,
+            engine.lib_branch().parent(),
             saved_state.lib_ledger_state.clone(),
             saved_state.genesis_id,
             ledger_config,
@@ -469,6 +464,7 @@ mod tests {
         let restored_lib = restored.consensus.lib_branch();
         let original_lib = engine.lib_branch();
         assert_eq!(restored_lib.id(), original_lib.id());
+        assert_eq!(restored_lib.parent(), original_lib.parent());
         assert_eq!(restored_lib.slot(), original_lib.slot());
         assert_eq!(restored_lib.length(), original_lib.length());
         assert_eq!(restored_lib.uncle_slots(), original_lib.uncle_slots());
