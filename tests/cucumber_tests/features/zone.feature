@@ -357,7 +357,7 @@ Feature: Zone SDK
       | own_key_index | turn_to_write | pending_transactions | time_out |
       | 1             | NOT_OUR_TURN  | 3                    | 120      |
     # The first turn submits only the configured active depth, so two txs are posted but remain pending until finalized
-    And sequencer "SEQ_B" emits published events for queued zone messages on its turn in 180 seconds:
+    And zone messages queued by sequencer "SEQ_B" are included after its turn in 180 seconds:
       | alias  |
       | MSG_B1 |
       | MSG_B2 |
@@ -409,7 +409,7 @@ Feature: Zone SDK
     Then sequencer "SEQ_B" reaches sequencing state:
       | own_key_index | turn_to_write | pending_transactions | time_out |
       | 1             | NOT_OUR_TURN  | 3                    | 120      |
-    And sequencer "SEQ_B" emits published events for queued zone messages on its turn in 180 seconds:
+    And zone messages queued by sequencer "SEQ_B" are included after its turn in 180 seconds:
       | alias  |
       | MSG_C1 |
       | MSG_C2 |
@@ -501,7 +501,7 @@ Feature: Zone SDK
     And sequencer "SEQ_B" is notified it is their turn to write in 120 seconds
     And sequencer "SEQ_A" is notified it is their turn to write in 120 seconds
     When I submit zone message "MSG_A1" to sequencer "SEQ_A" with data "decentralized-immediate-publish" immediately
-    Then sequencer "SEQ_A" publishes "MSG_A1" immediately while in turn in 120 seconds
+    Then zone message "MSG_A1" published by sequencer "SEQ_A" is included while in turn in 120 seconds
     And the zone indexer returns messages in any order in 360 seconds:
       | alias  |
       | MSG_A1 |

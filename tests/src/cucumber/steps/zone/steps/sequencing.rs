@@ -137,13 +137,13 @@ async fn step_sequencer_notified_turn_to_write(
 }
 
 #[cucumber::then(
-    expr = "sequencer {string} emits published events for queued zone messages on its turn in {int} seconds:"
+    expr = "zone messages queued by sequencer {string} are included after its turn in {int} seconds:"
 )]
 #[expect(
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require `&mut World` as the first parameter"
 )]
-async fn step_sequencer_emits_published_events_for_queued_zone_messages_on_turn(
+async fn step_queued_zone_messages_are_included_after_turn(
     world: &mut CucumberWorld,
     step: &Step,
     sequencer_alias: String,
@@ -199,17 +199,17 @@ async fn step_sequencer_has_pending_publish_txs(
 }
 
 #[cucumber::then(
-    expr = "sequencer {string} publishes {string} immediately while in turn in {int} seconds"
+    expr = "zone message {string} published by sequencer {string} is included while in turn in {int} seconds"
 )]
 #[expect(
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require `&mut World` as the first parameter"
 )]
-async fn step_sequencer_publishes_immediately_while_in_turn(
+async fn step_published_zone_message_is_included_while_in_turn(
     world: &mut CucumberWorld,
     step: &Step,
-    sequencer_alias: String,
     message_alias: String,
+    sequencer_alias: String,
     timeout_seconds: u64,
 ) -> StepResult {
     // The message was remembered when submitted; wait until the node has it
