@@ -267,6 +267,10 @@ where
             Ok(stream) => {
                 debug!(target: TARGET, "ensure_connected: blocks stream connected");
                 self.blocks_stream = Some(stream);
+                // A back-off that was cancelled before it elapsed must not
+                // carry over to the next disconnect as an already-past
+                // deadline.
+                self.reconnect_until = None;
                 true
             }
             Err(e) => {
