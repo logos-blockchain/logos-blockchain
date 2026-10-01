@@ -6,10 +6,10 @@ use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 use lb_core::sdp::{InactivityPeriod, MinStake, ServiceType};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{Fr, ModulusShift};
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
-use crate::config::deployment::era::parameters::v1::cryptarchia::{
+use crate::v1::cryptarchia::{
     BlendPoWConfig, EpochConfig, PoWConfig, RewardPoWConfig, SdpConfig, ServiceParameters, Settings,
 };
 

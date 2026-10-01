@@ -17,6 +17,7 @@ pub use lb_core::{
     header::HeaderId,
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };
+use lb_era_parameters::{EraParameters, v1};
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 use lb_storage_service::recovery::load_recovery_data;
 pub use lb_storage_service::{
@@ -46,19 +47,12 @@ use tokio::runtime;
 use crate::{
     api::backend::AxumBackend,
     config::{
-        DeploymentSettings, RunConfig,
-        api::ServiceConfig as ApiConfig,
-        blend::ServiceConfig as BlendConfig,
-        cryptarchia::ServiceConfig as CryptarchiaConfig,
-        deployment::{EraParameters, era::parameters::v1},
-        kms::ServiceConfig as KmsConfig,
-        mempool::ServiceConfig as MempoolConfig,
-        network::ServiceConfig as NetworkConfig,
-        pow::ServiceConfig as PoWConfig,
-        sdp::ServiceConfig as SdpConfig,
-        storage::ServiceConfig as StorageConfig,
-        time::ServiceConfig as TimeConfig,
-        wallet::ServiceConfig as WalletConfig,
+        DeploymentSettings, RunConfig, api::ServiceConfig as ApiConfig,
+        blend::ServiceConfig as BlendConfig, cryptarchia::ServiceConfig as CryptarchiaConfig,
+        kms::ServiceConfig as KmsConfig, mempool::ServiceConfig as MempoolConfig,
+        network::ServiceConfig as NetworkConfig, pow::ServiceConfig as PoWConfig,
+        sdp::ServiceConfig as SdpConfig, storage::ServiceConfig as StorageConfig,
+        time::ServiceConfig as TimeConfig, wallet::ServiceConfig as WalletConfig,
     },
     generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
     panic::log_and_exit_hook,

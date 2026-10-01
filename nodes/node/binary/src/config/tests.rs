@@ -5,6 +5,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use lb_era_parameters::EraParameters;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_services_utils::overwatch::RecoveryData;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
@@ -22,7 +23,6 @@ use crate::{
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues,
         },
-        deployment::EraParameters,
         mempool::ServiceConfig as MempoolServiceConfig,
         parse_log_filter_layer,
         sdp::{

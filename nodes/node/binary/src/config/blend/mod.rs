@@ -1,3 +1,5 @@
+use core::time::Duration;
+
 use lb_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
@@ -11,19 +13,18 @@ use lb_blend_service::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pEdgeBlendBackendSettings,
         settings::StartingBlendConfig as BlendEdgeSettings,
     },
-    settings::{CommonSettings, CoreSettings, EdgeSettings, Settings as BlendSettings},
+    settings::{
+        CommonSettings, CoreSettings, EdgeSettings, Settings as BlendSettings, TimingSettings,
+    },
+};
+use lb_era_parameters::v1::{
+    blend::Settings as DeploymentSettings, cryptarchia::Settings as CryptarchiaDeploymentSettings,
+    time::Settings as TimeDeploymentSettings,
 };
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_services_utils::overwatch::RecoveryData;
 
-use crate::config::{
-    blend::serde::Config,
-    deployment::era::parameters::v1::{
-        blend::Settings as DeploymentSettings,
-        cryptarchia::Settings as CryptarchiaDeploymentSettings,
-        time::Settings as TimeDeploymentSettings,
-    },
-};
+use crate::config::blend::serde::Config;
 
 pub mod serde;
 
@@ -77,7 +78,8 @@ impl ServiceConfig {
                 },
                 abstain_on_failure: self.user.abstain_on_failure,
                 recovery_data,
-                time: self.deployment.timing_settings(
+                time: timing_settings(
+                    &self.deployment,
                     slots_per_epoch,
                     slots_per_block,
                     &slot_duration,
@@ -148,5 +150,25 @@ impl ServiceConfig {
             blend_core_settings,
             blend_edge_settings,
         )
+    }
+}
+
+fn timing_settings(
+    deployment: &DeploymentSettings,
+    slots_per_epoch: u64,
+    slots_per_block: u64,
+    slot_duration: &Duration,
+) -> TimingSettings {
+    TimingSettings {
+        epoch_transition_period: deployment.epoch_transition(slots_per_block, slot_duration),
+        round_duration_in_seconds: deployment
+            .round_duration(slot_duration)
+            .as_secs()
+            .try_into()
+            .expect("Round duration must be greater than `0` seconds."),
+        rounds_per_observation_window: deployment.rounds_per_observation_window(),
+        network_absorption_in_rounds: deployment.common.network_absorption_in_rounds,
+        core_handshake_deadline_in_rounds: deployment.core.core_handshake_deadline_in_rounds,
+        rounds_per_epoch: deployment.rounds_per_epoch(slots_per_epoch, slot_duration),
     }
 }

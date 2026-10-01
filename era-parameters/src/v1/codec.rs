@@ -1,6 +1,6 @@
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 
-use crate::config::deployment::era::parameters::v1::{Parameters, blend, cryptarchia, time};
+use crate::v1::{Parameters, blend, cryptarchia, time};
 
 /// Version 1's layout: the Blend, cryptarchia and time parameters, in that
 /// order.

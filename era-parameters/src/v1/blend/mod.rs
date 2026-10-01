@@ -3,13 +3,12 @@ use core::{
     time::Duration,
 };
 
-use lb_blend_service::settings::TimingSettings;
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::math::PositiveF64;
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
 
-use crate::config::deployment::era::parameters::v1::{
+use crate::v1::{
     cryptarchia::Settings as CryptarchiaDeploymentSettings,
     time::Settings as TimeDeploymentSettings,
 };
@@ -103,27 +102,6 @@ impl Settings {
                     .expect("`T_E` must fit in a `u32` number of rounds."),
             )
             .expect("The edge connection timeout overflowed a `Duration`.")
-    }
-
-    #[must_use]
-    pub fn timing_settings(
-        &self,
-        slots_per_epoch: u64,
-        slots_per_block: u64,
-        slot_duration: &Duration,
-    ) -> TimingSettings {
-        TimingSettings {
-            epoch_transition_period: self.epoch_transition(slots_per_block, slot_duration),
-            round_duration_in_seconds: self
-                .round_duration(slot_duration)
-                .as_secs()
-                .try_into()
-                .expect("Round duration must be greater than `0` seconds."),
-            rounds_per_observation_window: self.rounds_per_observation_window(),
-            network_absorption_in_rounds: self.common.network_absorption_in_rounds,
-            core_handshake_deadline_in_rounds: self.core.core_handshake_deadline_in_rounds,
-            rounds_per_epoch: self.rounds_per_epoch(slots_per_epoch, slot_duration),
-        }
     }
 
     /// Duration of the epoch transition period.

@@ -45,6 +45,7 @@ members = [
   "consensus/cryptarchia-sync",
   "core",
   "deployment/faucet",
+  "era-parameters",
   "kms/keys",
   "kms/macros",
   "kms/operators",
@@ -132,6 +133,7 @@ lb-core                            = { default-features = false, package = "logo
 lb-cryptarchia-engine              = { default-features = false, package = "logos-blockchain-cryptarchia-engine", path = "./consensus/cryptarchia-engine" }
 lb-cryptarchia-sync                = { default-features = false, package = "logos-blockchain-cryptarchia-sync", path = "./consensus/cryptarchia-sync" }
 lb-dynamic-merkle                  = { default-features = false, package = "logos-blockchain-dynamic-merkle", path = "merkle/dynamic-merkle" }
+lb-era-parameters                  = { default-features = false, package = "logos-blockchain-era-parameters", path = "./era-parameters" }
 lb-faucet                          = { default-features = false, package = "logos-blockchain-faucet", path = "./deployment/faucet" }
 lb-groth16                         = { default-features = false, package = "logos-blockchain-groth16", path = "./zk/groth16" }
 lb-http-api-common                 = { default-features = false, package = "logos-blockchain-http-api-common", path = "./nodes/api-common" }

@@ -3,14 +3,12 @@ use std::sync::Arc;
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
 use lb_core::{block::genesis::GenesisBlock, sdp::ServiceParameters};
 use lb_cryptarchia_engine::EpochConfig;
+use lb_era_parameters::v1::cryptarchia::Settings as DeploymentSettings;
 use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 use lb_libp2p::PeerId;
 use lb_services_utils::overwatch::RecoveryData;
 
-use crate::config::{
-    cryptarchia::serde::Config,
-    deployment::era::parameters::v1::cryptarchia::Settings as DeploymentSettings,
-};
+use crate::config::cryptarchia::serde::Config;
 
 pub mod serde;
 

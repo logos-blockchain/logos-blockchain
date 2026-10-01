@@ -4536,6 +4536,7 @@ dependencies = [
  "logos-blockchain-binary-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
+ "logos-blockchain-era-parameters",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-libp2p",
@@ -4638,6 +4639,25 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "logos-blockchain-era-parameters"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "logos-blockchain-binary-codec",
+ "logos-blockchain-core",
+ "logos-blockchain-cryptarchia-engine",
+ "logos-blockchain-groth16",
+ "logos-blockchain-key-management-system-keys",
+ "logos-blockchain-ledger",
+ "logos-blockchain-libp2p",
+ "logos-blockchain-utils",
+ "nutype",
+ "percent-encoding",
+ "serde",
+ "serde_with",
 ]
 
 [[package]]
@@ -4926,7 +4946,6 @@ dependencies = [
  "http",
  "libp2p",
  "logos-blockchain-api-service",
- "logos-blockchain-binary-codec",
  "logos-blockchain-blend",
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-broadcast-service",
@@ -4935,6 +4954,7 @@ dependencies = [
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
+ "logos-blockchain-era-parameters",
  "logos-blockchain-groth16",
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
@@ -4956,9 +4976,7 @@ dependencies = [
  "logos-blockchain-version",
  "logos-blockchain-wallet-service",
  "num-bigint",
- "nutype",
  "overwatch",
- "percent-encoding",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -5182,6 +5200,7 @@ dependencies = [
  "logos-blockchain-common-http-client",
  "logos-blockchain-config",
  "logos-blockchain-core",
+ "logos-blockchain-era-parameters",
  "logos-blockchain-faucet",
  "logos-blockchain-groth16",
  "logos-blockchain-http-api-common",

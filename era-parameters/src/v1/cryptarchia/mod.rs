@@ -1,14 +1,13 @@
 use core::num::{NonZero, NonZeroU32, NonZeroU64};
 
 use lb_binary_codec::canonical::BTreeMap;
-use lb_chain_service::Epoch;
 use lb_core::sdp::{InactivityPeriod, MinStake, ServiceType};
 use lb_cryptarchia_engine::{
-    Config as ConsensusConfig, average_slots_for_blocks, base_period_length,
+    Config as ConsensusConfig, Epoch, average_slots_for_blocks, base_period_length,
     expected_blocks_per_epoch, time::epoch_length,
 };
 use lb_groth16::ModulusShift;
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use serde::{Deserialize, Serialize};
 

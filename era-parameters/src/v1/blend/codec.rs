@@ -5,7 +5,7 @@ use core::num::{NonZeroU32, NonZeroU64, NonZeroU128};
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 use lb_utils::math::PositiveF64;
 
-use crate::config::deployment::era::parameters::v1::blend::{
+use crate::v1::blend::{
     CommonSettings, CoreSettings, CoverTrafficSettings, MessageDelayerSettings, MinimumNetworkSize,
     SchedulerSettings, Settings,
 };

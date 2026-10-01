@@ -3,11 +3,12 @@ use std::collections::BTreeMap;
 
 use ::serde::{Deserialize, Deserializer, Serialize};
 use lb_cryptarchia_engine::Epoch;
+use lb_era_parameters::EraParameters;
 
-pub mod parameters;
-use parameters::EraParameters;
 mod serde;
 use serde::EraScheduleVisitor;
+#[cfg(test)]
+mod tests;
 
 const GENESIS_EPOCH: Epoch = Epoch::new(0);
 

@@ -63,7 +63,7 @@ fn gossipsub_name(scope: &str, protocol: &str) -> String {
 }
 
 fn stream_protocol(scope: &str, protocol: &str) -> StreamProtocol {
-    libp2p::StreamProtocol::try_from_owned(format!(
+    lb_libp2p::libp2p::StreamProtocol::try_from_owned(format!(
         "{}/{scope}/{protocol}",
         ProtocolNames::NAMESPACE
     ))

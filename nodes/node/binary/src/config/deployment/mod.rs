@@ -13,16 +13,13 @@ use lb_cryptarchia_engine::{
     Epoch,
     era::{EraEntry, Eras, ErasError},
 };
+use lb_era_parameters::{EraDefinition, EraParameters, ProtocolNames, v1};
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
 
 pub mod era;
-pub use era::{EraSchedule, EraScheduleError, parameters::EraParameters};
-mod protocols;
-pub use protocols::ProtocolNames;
-
-use crate::config::deployment::era::parameters::v1;
+pub use era::{EraSchedule, EraScheduleError};
 
 pub const SERIALIZED_DEPLOYMENT: &[u8] = include_bytes!("settings.yaml");
 
@@ -162,17 +159,6 @@ impl DeploymentSettings {
     }
 }
 
-/// An era as the node runs it: its parameters, its digest, and the fork digest
-/// and protocol names in force while it is.
-#[derive(Clone, Debug)]
-pub struct EraDefinition {
-    pub parameters: EraParameters,
-    pub digest: EraDigest,
-    /// The digest of the eras up to this one, in activation order.
-    pub fork_digest: ForkDigest,
-    pub protocol_names: ProtocolNames,
-}
-
 /// Why this release cannot run a deployment.
 #[derive(Debug, thiserror::Error)]
 pub enum UnrunnableDeployment {
@@ -220,10 +206,11 @@ mod tests {
 
     use lb_core::era::Era;
     use lb_cryptarchia_engine::{Epoch, era::EraVersion};
+    use lb_era_parameters::EraParameters;
 
     use crate::config::{
         DeploymentSettings,
-        deployment::{EraParameters, EraSchedule, UnrunnableDeployment, fork_digest_at_era},
+        deployment::{EraSchedule, UnrunnableDeployment, fork_digest_at_era},
     };
 
     #[test]

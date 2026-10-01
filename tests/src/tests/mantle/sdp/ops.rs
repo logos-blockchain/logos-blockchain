@@ -22,11 +22,9 @@ use lb_core::{
         WithdrawMessage,
     },
 };
+use lb_era_parameters::v1::{blend::MinimumNetworkSize, cryptarchia::EpochConfig};
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
-use lb_node::config::{
-    RunConfig,
-    deployment::era::parameters::v1::{blend::MinimumNetworkSize, cryptarchia::EpochConfig},
-};
+use lb_node::config::RunConfig;
 use lb_testing_framework::{
     DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::wallet::{WalletAccount, WalletConfig},

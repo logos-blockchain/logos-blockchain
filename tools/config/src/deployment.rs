@@ -8,10 +8,9 @@ use lb_core::{
     sdp::{NumberOfEpochs, ServiceType},
 };
 use lb_cryptarchia_engine::Epoch;
-use lb_groth16::ModulusShift;
-use lb_node::config::deployment::{
-    DeploymentSettings, EraParameters, EraSchedule,
-    era::parameters::v1::{
+use lb_era_parameters::{
+    EraParameters,
+    v1::{
         self,
         blend::{
             CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
@@ -25,6 +24,8 @@ use lb_node::config::deployment::{
         time::Settings as TimeDeploymentSettings,
     },
 };
+use lb_groth16::ModulusShift;
+use lb_node::config::deployment::{DeploymentSettings, EraSchedule};
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
 use crate::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};

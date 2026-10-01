@@ -1,17 +1,14 @@
 use lb_core::mantle::GenesisTime;
 use lb_cryptarchia_engine::{EpochConfig, time::SlotConfig};
+use lb_era_parameters::v1::{
+    cryptarchia::Settings as CryptarchiaDeploymentSettings, time::Settings as DeploymentSettings,
+};
 use lb_time_service::{
     TimeServiceSettings,
     backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings},
 };
 
-use crate::config::{
-    deployment::era::parameters::v1::{
-        cryptarchia::Settings as CryptarchiaDeploymentSettings,
-        time::Settings as DeploymentSettings,
-    },
-    time::serde::Config,
-};
+use crate::config::time::serde::Config;
 
 pub mod serde;
 
