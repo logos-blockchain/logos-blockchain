@@ -177,6 +177,22 @@ fn hardened_index_adds_offset() {
 }
 
 #[test]
+fn hardened_index_has_a_next_index_until_the_last_one() {
+    assert_eq!(index(3).checked_next(), Some(index(4)));
+    assert_eq!(index(HardenedIndex::OFFSET - 1).checked_next(), None);
+}
+
+#[test]
+fn hardened_index_is_serialized_as_child_number() {
+    assert_eq!(serde_json::to_string(&index(3)).unwrap(), "3");
+    assert_eq!(
+        serde_json::from_str::<HardenedIndex>("3").unwrap(),
+        index(3)
+    );
+    assert!(serde_json::from_str::<HardenedIndex>(&HardenedIndex::OFFSET.to_string()).is_err());
+}
+
+#[test]
 fn hardened_index_serializes_big_endian() {
     assert_eq!(index(0).to_be_bytes(), [0x80, 0x00, 0x00, 0x00]);
 }

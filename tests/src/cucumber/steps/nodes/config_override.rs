@@ -868,14 +868,6 @@ mod tests {
         set_user_config_override(
             &mut world,
             "test-step",
-            "cryptarchia.leader.wallet.funding_pk",
-            "hex(0000000000000000000000000000000000000000000000000000000000000000)",
-        )
-        .expect("zkpk hex string override");
-
-        set_user_config_override(
-            &mut world,
-            "test-step",
             "network.backend.swarm.node_key",
             "hex(0101010101010101010101010101010101010101010101010101010101010101)",
         )
@@ -907,10 +899,6 @@ mod tests {
             "/ip4/127.0.0.1/udp/20128/quic-v1"
                 .parse::<Multiaddr>()
                 .expect("multiaddr"),
-        );
-        assert_eq!(
-            config.user.cryptarchia.leader.wallet.funding_pk,
-            lb_key_management_system_service::keys::ZkPublicKey::zero(),
         );
     }
 

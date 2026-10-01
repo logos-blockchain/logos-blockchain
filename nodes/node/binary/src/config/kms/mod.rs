@@ -1,4 +1,4 @@
-use lb_key_management_system_service::backend::preload::PreloadKMSBackendSettings;
+use lb_key_management_system_service::backend::hd_and_preload::HdAndPreloadKMSBackendSettings;
 
 use crate::config::kms::serde::Config;
 
@@ -8,10 +8,13 @@ pub struct ServiceConfig {
     pub user: Config,
 }
 
-impl From<ServiceConfig> for PreloadKMSBackendSettings {
+impl From<ServiceConfig> for HdAndPreloadKMSBackendSettings {
     fn from(value: ServiceConfig) -> Self {
+        let backend = value.user.backend;
         Self {
-            keys: value.user.backend.keys,
+            mnemonic: backend.mnemonic,
+            passphrase: backend.passphrase,
+            static_keys: backend.static_keys,
         }
     }
 }

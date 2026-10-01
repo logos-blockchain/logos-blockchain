@@ -145,6 +145,9 @@ name = "arbitrary-int"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ab387a0c4143b4fd3804e193946e78c8ab16cf26c5fde2048e4ac3d618c3b64"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "archery"
@@ -4542,6 +4545,7 @@ dependencies = [
  "logos-blockchain-node",
  "logos-blockchain-tracing",
  "logos-blockchain-utils",
+ "logos-blockchain-wallet-service",
  "num-bigint",
  "rand 0.8.6",
  "time",
@@ -4767,6 +4771,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-key-management-system-operators",
  "logos-blockchain-log-targets",
@@ -4935,6 +4940,7 @@ dependencies = [
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-http-api-common",
+ "logos-blockchain-key-management-system-keys",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-ledger",
  "logos-blockchain-libp2p",
@@ -5428,6 +5434,7 @@ dependencies = [
  "bytes",
  "futures",
  "hex",
+ "logos-blockchain-binary-codec",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",

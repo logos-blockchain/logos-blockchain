@@ -31,6 +31,7 @@ lb-core                          = { features = ["openapi"], workspace = true }
 lb-cryptarchia-engine            = { features = ["openapi"], workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
+lb-key-management-system-keys    = { features = ["unsafe"], workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
 lb-libp2p                        = { workspace = true }

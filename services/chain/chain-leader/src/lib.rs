@@ -61,7 +61,7 @@ use tx_selection::{TransactionSelection, select_transactions};
 pub use crate::wallet::LeaderWalletConfig;
 use crate::{
     blend::BlendAdapter,
-    kms::PreloadKmsService,
+    kms::HdAndPreloadKmsService,
     leadership::{SlotContext, build_proof_for, fetch_slot_context, search_for_winning_slots},
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::CryptarchiaConsensusRelays,
@@ -338,7 +338,7 @@ where
         + AsServiceId<CryptarchiaService>
         + AsServiceId<ChainNetwork>
         + AsServiceId<Wallet>
-        + AsServiceId<PreloadKmsService<RuntimeServiceId>>,
+        + AsServiceId<HdAndPreloadKmsService<RuntimeServiceId>>,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -388,13 +388,14 @@ where
                 .await?,
         );
 
-        let kms_api = KmsServiceApi::<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>::new(
-            self.service_resources_handle
-                .overwatch_handle
-                .relay::<PreloadKmsService<_>>()
-                .await
-                .expect("Relay with KMS service should be available."),
-        );
+        let kms_api =
+            KmsServiceApi::<HdAndPreloadKmsService<RuntimeServiceId>, RuntimeServiceId>::new(
+                self.service_resources_handle
+                    .overwatch_handle
+                    .relay::<HdAndPreloadKmsService<_>>()
+                    .await
+                    .expect("Relay with KMS service should be available."),
+            );
 
         let blend_adapter = BlendAdapter::<BlendService>::new(relays.blend_relay().clone());
 
@@ -406,7 +407,7 @@ where
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,
             Wallet,
-            PreloadKmsService<_>
+            HdAndPreloadKmsService<_>
         )
         .await?;
         // Wait for the remaining dependencies to become ready, without timeout
@@ -607,7 +608,7 @@ where
         + Send
         + 'static
         + AsServiceId<Wallet>
-        + AsServiceId<PreloadKmsService<RuntimeServiceId>>,
+        + AsServiceId<HdAndPreloadKmsService<RuntimeServiceId>>,
 {
     #[instrument(
         target = LOG_TARGET,
@@ -732,7 +733,7 @@ where
         msg: LeaderMsg,
         cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
-        kms: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
+        kms: &KmsServiceApi<HdAndPreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
         time_relay: &OutboundRelay<TimeServiceMessage>,
         ledger_config: &lb_ledger::Config,
         config: &LeaderWalletConfig,
@@ -795,7 +796,6 @@ where
                 tip,
                 *ledger_state.mantle_ledger().vouchers_snapshot_root(),
                 reward_amount,
-                config.funding_pk,
                 config.max_tx_fee,
             )
             .await?

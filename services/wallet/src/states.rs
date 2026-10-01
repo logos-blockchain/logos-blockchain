@@ -11,7 +11,7 @@ use lb_core::{
         transactions::{MantleTxBuilder, tx_list::ops::OpsContext},
     },
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::{hd::HardenedIndex, keys::ZkPublicKey};
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
 use lb_wallet::{Voucher, Vouchers, WalletBlock, WalletError, WalletState};
@@ -19,9 +19,12 @@ use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::{KeyId, WalletServiceError, WalletServiceSettings};
+use crate::{
+    KeyId, WalletServiceError, WalletServiceSettings,
+    hd::{self, HdKeys},
+};
 
-type VoucherIndex = u64;
+pub type VoucherIndex = u64;
 type VoucherId = (KeyId, VoucherIndex);
 pub type Wallet = lb_wallet::Wallet<KeyId, VoucherId>;
 
@@ -36,7 +39,7 @@ struct PendingClaim {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct PendingClaims {
+pub struct PendingClaims {
     claims: HashMap<VoucherNullifier, PendingClaim>,
 }
 
@@ -207,6 +210,43 @@ pub struct RecoveryState {
     /// but have not reached LIB yet. Stale reservations are bounded by
     /// LIB-progress expiry after recovery.
     pending_claims: PendingClaims,
+    /// The index of the receive address to hand out next
+    next_receive_index: HardenedIndex,
+    /// The index of the change address to use next
+    next_change_index: HardenedIndex,
+}
+
+impl RecoveryState {
+    pub(crate) const fn new(
+        next_new_voucher_index: VoucherIndex,
+        vouchers: Vouchers<VoucherId>,
+        lib_wallet_state: Option<(HeaderId, WalletState)>,
+        pending_claims: PendingClaims,
+        next_receive_index: HardenedIndex,
+        next_change_index: HardenedIndex,
+    ) -> Self {
+        Self {
+            next_new_voucher_index,
+            vouchers,
+            lib_wallet_state,
+            pending_claims,
+            next_receive_index,
+            next_change_index,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn vouchers(&self) -> &Vouchers<VoucherId> {
+        &self.vouchers
+    }
+
+    pub const fn next_receive_index(&self) -> HardenedIndex {
+        self.next_receive_index
+    }
+
+    pub const fn next_change_index(&self) -> HardenedIndex {
+        self.next_change_index
+    }
 }
 
 impl overwatch::services::state::ServiceState for RecoveryState {
@@ -219,6 +259,8 @@ impl overwatch::services::state::ServiceState for RecoveryState {
             vouchers: Vouchers::default(),
             lib_wallet_state: None,
             pending_claims: PendingClaims::default(),
+            next_receive_index: hd::INITIAL_NEXT_RECEIVE_INDEX,
+            next_change_index: hd::INITIAL_NEXT_CHANGE_INDEX,
         })
     }
 }
@@ -227,6 +269,10 @@ impl overwatch::services::state::ServiceState for RecoveryState {
 pub struct ServiceState<'u> {
     next_new_voucher_index: VoucherIndex,
     wallet: Wallet,
+    hd_keys: HdKeys,
+    /// The keys whose notes are not spent unless the caller names the keys to
+    /// fund from
+    unspendable_keys: HashSet<ZkPublicKey>,
     lib: HeaderId,
     updater: &'u StateUpdater<Option<RecoveryState>>,
     pending_claims: PendingClaims,
@@ -239,6 +285,7 @@ impl<'u> ServiceState<'u> {
     pub fn new(
         state: RecoveryState,
         settings: &WalletServiceSettings,
+        hd_keys: HdKeys,
         lib: HeaderId,
         lib_ledger: &LedgerState,
         updater: &'u StateUpdater<Option<RecoveryState>>,
@@ -249,11 +296,13 @@ impl<'u> ServiceState<'u> {
             vouchers,
             lib_wallet_state,
             pending_claims,
+            ..
         } = state;
         let known_keys = settings
-            .known_keys
+            .static_keys
             .iter()
-            .map(|(key_id, pk)| (*pk, key_id.clone()));
+            .map(|(key_id, pk)| (*pk, KeyId::Static(key_id.clone())))
+            .chain(hd_keys.key_ids());
 
         // Initialize [`Wallet`] either from the persisted [`WalletState`]
         // or from the current chain's LIB ledger state.
@@ -271,6 +320,8 @@ impl<'u> ServiceState<'u> {
         Self {
             next_new_voucher_index,
             wallet,
+            hd_keys,
+            unspendable_keys: settings.unspendable_keys.clone(),
             lib: wallet_lib,
             updater,
             pending_claims,
@@ -282,6 +333,59 @@ impl<'u> ServiceState<'u> {
 
     pub const fn lib(&self) -> HeaderId {
         self.lib
+    }
+
+    pub const fn hd_keys(&self) -> &HdKeys {
+        &self.hd_keys
+    }
+
+    /// The keys whose notes fund a transaction when the caller names no key:
+    /// every key of the wallet but the unspendable ones.
+    pub fn spendable_keys(&self) -> Vec<ZkPublicKey> {
+        self.wallet
+            .known_keys()
+            .keys()
+            .filter(|pk| !self.unspendable_keys.contains(pk))
+            .copied()
+            .collect()
+    }
+
+    /// Tracks the receive address at the index, whose public key is given.
+    ///
+    /// The address is tracked before the transaction that pays it is in a
+    /// block, for the wallet to find the note when it is.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the index is not the next receive index.
+    pub fn track_next_receive_key(
+        &mut self,
+        index: HardenedIndex,
+        public_key: ZkPublicKey,
+    ) -> Result<(), WalletServiceError> {
+        let path = self.hd_keys.track_receive_key(index, public_key)?;
+        self.wallet.add_known_key(public_key, KeyId::Hd(path));
+        self.update_state();
+        Ok(())
+    }
+
+    /// Tracks the change address at the index, whose public key is given.
+    ///
+    /// The address is tracked before the transaction that pays it is in a
+    /// block, for the wallet to find the note when it is.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the index is not the next change index.
+    pub fn track_next_change_key(
+        &mut self,
+        index: HardenedIndex,
+        public_key: ZkPublicKey,
+    ) -> Result<(), WalletServiceError> {
+        let path = self.hd_keys.track_change_key(index, public_key)?;
+        self.wallet.add_known_key(public_key, KeyId::Hd(path));
+        self.update_state();
+        Ok(())
     }
 
     pub const fn next_new_voucher_index(&self) -> VoucherIndex {
@@ -417,6 +521,8 @@ impl<'u> ServiceState<'u> {
             vouchers: self.wallet.vouchers().clone(),
             lib_wallet_state: Some((self.lib, lib_wallet_state)),
             pending_claims: self.pending_claims.clone(),
+            next_receive_index: self.hd_keys.next_receive_index(),
+            next_change_index: self.hd_keys.next_change_index(),
         }));
     }
 }
@@ -588,31 +694,19 @@ mod tests {
     /// "`WalletState` at LIB must exist: `UnknownBlock(...)`".
     #[test]
     fn lib_update_for_unapplied_block_skips_advance() {
-        use std::sync::Arc;
-
-        use lb_services_utils::overwatch::RecoveryData;
-
-        let settings = WalletServiceSettings {
-            known_keys: HashMap::new(),
-            voucher_master_key_id: "voucher-master".into(),
-            recovery_data: RecoveryData::default(),
-            pending_note_expiry_blocks: 10,
-        };
-
-        // Fresh wallet: initialized from the LIB ledger state at genesis.
-        let recovery = RecoveryState {
-            next_new_voucher_index: 0,
-            vouchers: Vouchers::default(),
-            lib_wallet_state: None,
-            pending_claims: PendingClaims::default(),
-        };
-
+        let settings = settings([], []);
         let genesis = HeaderId::from([0; 32]);
         let ledger = LedgerState::from_utxos([], &ledger_config());
-        let (sender, _receiver) = tokio::sync::watch::channel(None);
-        let updater = StateUpdater::new(Arc::new(sender));
-
-        let mut state = ServiceState::new(recovery, &settings, genesis, &ledger, &updater, 5);
+        let (updater, _receiver) = updater();
+        let mut state = ServiceState::new(
+            fresh_recovery_state(&settings),
+            &settings,
+            HdKeys::for_tests(hd::index(2), hd::index(0)),
+            genesis,
+            &ledger,
+            &updater,
+            5,
+        );
 
         // The first post-online LibUpdate delivers a new_lib the wallet never
         // applied (the silent bootstrap->online LIB jump outran the wallet).
@@ -627,5 +721,166 @@ mod tests {
         // No panic: the advance is skipped and the LIB stays at a block whose
         // WalletState exists.
         assert_eq!(state.lib(), genesis);
+    }
+
+    #[test]
+    fn new_wallet_starts_with_the_initial_receive_keys() {
+        let recovery = fresh_recovery_state(&settings([], []));
+
+        assert_eq!(
+            recovery.next_receive_index(),
+            hd::INITIAL_NEXT_RECEIVE_INDEX
+        );
+        assert_eq!(recovery.next_change_index(), hd::INITIAL_NEXT_CHANGE_INDEX);
+    }
+
+    #[test]
+    fn static_and_hd_keys_are_spendable_unless_configured_otherwise() {
+        let static_key = ZkPublicKey::new(500u32.into());
+        let stake_key = ZkPublicKey::new(501u32.into());
+        let receive_0 = ZkPublicKey::new(0u32.into());
+        let receive_1 = ZkPublicKey::new(1u32.into());
+        let change_0 = ZkPublicKey::new(1000u32.into());
+
+        let settings = settings(
+            [("static", static_key), ("stake", stake_key)],
+            [stake_key, receive_0],
+        );
+        let ledger = LedgerState::from_utxos([], &ledger_config());
+        let (updater, _receiver) = updater();
+        let state = ServiceState::new(
+            fresh_recovery_state(&settings),
+            &settings,
+            HdKeys::for_tests(hd::index(2), hd::index(1)),
+            HeaderId::from([0; 32]),
+            &ledger,
+            &updater,
+            5,
+        );
+
+        let spendable: HashSet<_> = state.spendable_keys().into_iter().collect();
+        assert_eq!(spendable, [static_key, receive_1, change_0].into());
+
+        let known_keys = state.wallet().known_keys();
+        assert_eq!(known_keys[&static_key], KeyId::from("static"));
+        assert_eq!(known_keys[&stake_key], KeyId::from("stake"));
+        assert_eq!(
+            known_keys[&receive_0],
+            KeyId::Hd(hd::receive_path(hd::index(0)))
+        );
+        assert_eq!(
+            known_keys[&change_0],
+            KeyId::Hd(hd::change_path(hd::index(0)))
+        );
+    }
+
+    #[test]
+    fn added_hd_keys_are_tracked_and_persisted() {
+        let settings = settings([], []);
+        let ledger = LedgerState::from_utxos([], &ledger_config());
+        let (updater, receiver) = updater();
+        let mut state = ServiceState::new(
+            fresh_recovery_state(&settings),
+            &settings,
+            HdKeys::for_tests(hd::index(2), hd::index(0)),
+            HeaderId::from([0; 32]),
+            &ledger,
+            &updater,
+            5,
+        );
+
+        let receive_2 = ZkPublicKey::new(2u32.into());
+        state
+            .track_next_receive_key(hd::index(2), receive_2)
+            .unwrap();
+        let recovery = receiver.borrow().clone().expect("State is persisted");
+        assert_eq!(recovery.next_receive_index(), hd::index(3));
+        assert_eq!(recovery.next_change_index(), hd::index(0));
+
+        let change_0 = ZkPublicKey::new(1000u32.into());
+        state.track_next_change_key(hd::index(0), change_0).unwrap();
+
+        let known_keys = state.wallet().known_keys();
+        assert_eq!(
+            known_keys[&receive_2],
+            KeyId::Hd(hd::receive_path(hd::index(2)))
+        );
+        assert_eq!(
+            known_keys[&change_0],
+            KeyId::Hd(hd::change_path(hd::index(0)))
+        );
+        assert!(state.spendable_keys().contains(&receive_2));
+
+        let recovery = receiver.borrow().clone().expect("State is persisted");
+        assert_eq!(recovery.next_receive_index(), hd::index(3));
+        assert_eq!(recovery.next_change_index(), hd::index(1));
+    }
+
+    #[test]
+    fn only_the_next_hd_key_can_be_added_for_tracking() {
+        let settings = settings([], []);
+        let ledger = LedgerState::from_utxos([], &ledger_config());
+        let (updater, receiver) = updater();
+        let mut state = ServiceState::new(
+            fresh_recovery_state(&settings),
+            &settings,
+            HdKeys::for_tests(hd::index(2), hd::index(1)),
+            HeaderId::from([0; 32]),
+            &ledger,
+            &updater,
+            5,
+        );
+        let public_key = ZkPublicKey::new(500u32.into());
+
+        for index in [1, 3].map(hd::index) {
+            assert!(matches!(
+                state.track_next_receive_key(index, public_key),
+                Err(WalletServiceError::UnexpectedHdKeyIndex { expected, actual })
+                    if expected == hd::index(2) && actual == index
+            ));
+        }
+        for index in [0, 2].map(hd::index) {
+            assert!(matches!(
+                state.track_next_change_key(index, public_key),
+                Err(WalletServiceError::UnexpectedHdKeyIndex { expected, actual })
+                    if expected == hd::index(1) && actual == index
+            ));
+        }
+
+        assert!(!state.wallet().known_keys().contains_key(&public_key));
+        assert_eq!(state.hd_keys().next_receive_index(), hd::index(2));
+        assert_eq!(state.hd_keys().next_change_index(), hd::index(1));
+        assert!(receiver.borrow().is_none());
+    }
+
+    fn settings<const S: usize, const U: usize>(
+        static_keys: [(&str, ZkPublicKey); S],
+        unspendable_keys: [ZkPublicKey; U],
+    ) -> WalletServiceSettings {
+        use lb_services_utils::overwatch::RecoveryData;
+
+        WalletServiceSettings {
+            static_keys: static_keys
+                .into_iter()
+                .map(|(key_id, pk)| (key_id.to_owned(), pk))
+                .collect(),
+            unspendable_keys: unspendable_keys.into(),
+            recovery_data: RecoveryData::default(),
+            pending_note_expiry_blocks: 10,
+        }
+    }
+
+    fn fresh_recovery_state(settings: &WalletServiceSettings) -> RecoveryState {
+        use overwatch::services::state::ServiceState as _;
+
+        RecoveryState::from_settings(settings).unwrap()
+    }
+
+    fn updater() -> (
+        StateUpdater<Option<RecoveryState>>,
+        tokio::sync::watch::Receiver<Option<RecoveryState>>,
+    ) {
+        let (sender, receiver) = tokio::sync::watch::channel(None);
+        (StateUpdater::new(std::sync::Arc::new(sender)), receiver)
     }
 }

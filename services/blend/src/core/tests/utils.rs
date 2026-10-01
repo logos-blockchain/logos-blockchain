@@ -34,7 +34,10 @@ use lb_blend::{
 use lb_chain_service::Epoch;
 use lb_core::crypto::ZkHash;
 use lb_groth16::{AdditiveGroup as _, Fr, fr_from_bytes_unchecked, fr_to_bytes};
-use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+use lb_key_management_system_service::{
+    backend::hd_and_preload::KeyId,
+    keys::{Ed25519PublicKey, UnsecuredEd25519Key},
+};
 use lb_network_service::{NetworkService, backends::NetworkBackend};
 use lb_poq::{CorePathAndSelectors, KeyIndex};
 use lb_sdp_service::SdpMessage;
@@ -104,7 +107,7 @@ pub fn settings<BackendSettings>(
         },
         time: timing_settings(),
         zk: ZkSettings {
-            secret_key_kms_id: "test-key".to_owned(),
+            secret_key_kms_id: "test-key".into(),
         },
         non_ephemeral_signing_key: local_private_key,
         num_blend_layers: NonZeroU64::try_from(1).unwrap(),
@@ -601,7 +604,7 @@ pub struct MockKmsAdapter;
 impl<RuntimeServiceId> KmsPoQAdapter<RuntimeServiceId> for MockKmsAdapter {
     type CorePoQGenerator = ();
     // Required by the Blend core service.
-    type KeyId = String;
+    type KeyId = KeyId;
 
     fn core_poq_generator(
         &self,

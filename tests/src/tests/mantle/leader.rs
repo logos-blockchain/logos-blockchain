@@ -56,7 +56,7 @@ async fn leader_claim() {
     wait_for_tx_inclusion(&mut block_stream, tx_hash).await;
 }
 
-fn test_config(mut config: RunConfig, leader_funding_pk: ZkPublicKey) -> RunConfig {
+fn test_config(mut config: RunConfig) -> RunConfig {
     config.deployment.time.slot_duration = Duration::from_secs(1);
     config.deployment.cryptarchia.epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -66,7 +66,6 @@ fn test_config(mut config: RunConfig, leader_funding_pk: ZkPublicKey) -> RunConf
     config.deployment.cryptarchia.security_param = NonZero::new(2).unwrap();
     config.deployment.cryptarchia.slot_activation_coeff =
         NonNegativeRatio::new(1, 2.try_into().unwrap());
-    config.user.cryptarchia.leader.wallet.funding_pk = leader_funding_pk;
 
     config
 }
@@ -199,7 +198,7 @@ async fn setup_test_nodes(
         .with_wallet_config(wallet_config),
         NODE_COUNT,
         ManualNodeLayout::SelectNodeSeed(0),
-        move |config| Ok::<_, DynError>(test_config(config, leader_funding_pk)),
+        |config| Ok::<_, DynError>(test_config(config)),
         Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     )
     .await;

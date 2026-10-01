@@ -19,7 +19,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_service::{
-    api::KmsServiceApi, backend::preload::KeyId, keys::Ed25519Key,
+    api::KmsServiceApi, backend::hd_and_preload::KeyId, keys::Ed25519Key,
     operators::zk::leader::BuildPrivateInputsWithLeaderKey,
 };
 use lb_ledger::{EpochState, UtxoTree};
@@ -41,7 +41,7 @@ use tokio::{
 
 use crate::{
     WinningPolEpochSlots, WinningPolSlotStream, WinningSlotFuture,
-    kms::{KmsAdapter, PreloadKmsService},
+    kms::{HdAndPreloadKmsService, KmsAdapter},
     metrics,
 };
 
@@ -284,7 +284,7 @@ pub struct SlotContext {
 pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeServiceId>(
     cryptarchia_api: CryptarchiaServiceApi<CryptarchiaService>,
     wallet_api: WalletApi<Wallet, RuntimeServiceId>,
-    kms: KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
+    kms: KmsServiceApi<HdAndPreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
     time_relay: OutboundRelay<TimeServiceMessage>,
     ledger_config: lb_ledger::Config,
     epoch_handoff_sender: mpsc::Sender<WinningPolEpochSlots>,
@@ -292,7 +292,7 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     Wallet: WalletServiceData,
     RuntimeServiceId: AsServiceId<Wallet>
-        + AsServiceId<PreloadKmsService<RuntimeServiceId>>
+        + AsServiceId<HdAndPreloadKmsService<RuntimeServiceId>>
         + Debug
         + Display
         + Send

@@ -12,14 +12,23 @@ pub struct Voucher {
 /// Holds voucher indices for
 /// - generating new vouchers
 /// - looking up existing voucher IDs by commitment or nullifier
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Vouchers<Id> {
     vouchers: HashMap<VoucherCm, Id>,
     voucher_nullifiers: HashMap<VoucherNullifier, VoucherCm>,
 }
 
+impl<Id> Default for Vouchers<Id> {
+    fn default() -> Self {
+        Self {
+            vouchers: HashMap::new(),
+            voucher_nullifiers: HashMap::new(),
+        }
+    }
+}
+
 impl<Id> Vouchers<Id> {
-    #[cfg(test)]
+    #[must_use]
     pub fn new(vouchers: impl IntoIterator<Item = (VoucherCm, VoucherNullifier, Id)>) -> Self {
         let (vouchers, voucher_nullifiers) = vouchers.into_iter().fold(
             (HashMap::new(), HashMap::new()),
@@ -34,6 +43,7 @@ impl<Id> Vouchers<Id> {
             voucher_nullifiers,
         }
     }
+
     pub(crate) fn insert(&mut self, cm: VoucherCm, nf: VoucherNullifier, id: Id) {
         self.vouchers.insert(cm, id);
         self.voucher_nullifiers.insert(nf, cm);
@@ -64,5 +74,45 @@ impl<Id> Vouchers<Id> {
     #[must_use]
     pub fn count(&self) -> usize {
         self.vouchers.len()
+    }
+}
+
+impl<Id> IntoIterator for Vouchers<Id> {
+    type Item = (VoucherCm, VoucherNullifier, Id);
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let Self {
+            mut vouchers,
+            voucher_nullifiers,
+        } = self;
+        voucher_nullifiers
+            .into_iter()
+            .filter_map(|(nf, cm)| Some((cm, nf, vouchers.remove(&cm)?)))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::Fr;
+
+    use super::*;
+
+    #[test]
+    fn vouchers_are_iterated_as_they_are_given() {
+        let entries = [1u8, 2].map(|seed| {
+            (
+                VoucherCm::from(Fr::from(seed)),
+                VoucherNullifier::from(Fr::from(seed + 10)),
+                u64::from(seed),
+            )
+        });
+
+        let mut iterated = Vouchers::new(entries).into_iter().collect::<Vec<_>>();
+        iterated.sort_by_key(|(_, _, id)| *id);
+
+        assert_eq!(iterated, entries);
     }
 }

@@ -10,7 +10,7 @@ use lb_core::{
         transactions::{hash::TxHash, states::Preverified},
     },
 };
-use lb_key_management_system_service::backend::preload::PreloadKMSBackend;
+use lb_key_management_system_service::backend::hd_and_preload::HdAndPreloadKMSBackend;
 use lb_sdp_service::{SdpSettings, state::SdpState};
 use lb_storage_service::recovery::StorageRecoveryBackend;
 use lb_time_service::backends::NtpTimeBackend;
@@ -81,7 +81,7 @@ pub type ChainNetworkService<RuntimeServiceId> = lb_chain_network_service::Chain
 >;
 
 pub type KeyManagementService<RuntimeServiceId> =
-    lb_key_management_system_service::KMSService<PreloadKMSBackend, RuntimeServiceId>;
+    lb_key_management_system_service::KMSService<HdAndPreloadKMSBackend, RuntimeServiceId>;
 
 pub type WalletService<Cryptarchia, RuntimeServiceId> = lb_wallet_service::WalletService<
     KeyManagementService<RuntimeServiceId>,

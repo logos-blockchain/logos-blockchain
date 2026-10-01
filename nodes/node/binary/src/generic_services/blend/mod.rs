@@ -8,7 +8,7 @@ use lb_blend::{
         leader_and_pow::RealLeaderAndPowProofsGenerator,
     },
 };
-use lb_blend_service::{RealProofsVerifier, core::kms::PreloadKMSBackendCorePoQGenerator};
+use lb_blend_service::{RealProofsVerifier, core::kms::HdAndPreloadKMSBackendCorePoQGenerator};
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_storage_service::recovery::StorageRecoveryBackend;
 use lb_time_service::backends::NtpTimeBackend;
@@ -48,7 +48,7 @@ pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendServi
     PeerId,
     BlendPayloadDispatcher<RuntimeServiceId>,
     SdpService<RuntimeServiceId>,
-    RealCoreLeaderAndPowProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
+    RealCoreLeaderAndPowProofsGenerator<HdAndPreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
     RealProofsVerifier,
     NtpTimeBackend,
     CryptarchiaService<RuntimeServiceId>,

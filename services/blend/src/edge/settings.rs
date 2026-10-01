@@ -1,7 +1,7 @@
 use core::num::NonZeroU64;
 use std::sync::Arc;
 
-use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
+use lb_key_management_system_service::{backend::hd_and_preload::KeyId, keys::UnsecuredEd25519Key};
 use lb_poq::Quota;
 use rayon::ThreadPool;
 

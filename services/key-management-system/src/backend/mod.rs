@@ -1,5 +1,6 @@
 use lb_key_management_system_keys::keys::secured_key::{SecureKeyOperator, SecuredKey};
 
+pub mod hd_and_preload;
 pub mod preload;
 
 #[async_trait::async_trait]

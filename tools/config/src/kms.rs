@@ -3,7 +3,7 @@ use lb_key_management_system_service::{
     backend::preload::KeyId,
     keys::{Key, secured_key::SecuredKey as _},
 };
-use lb_node::config::{KmsConfig, kms::serde::PreloadKmsBackendSettings};
+use lb_node::config::{KmsConfig, kms::serde::KmsBackendSettings};
 
 use crate::{blend::GeneralBlendConfig, consensus::GeneralConsensusConfig};
 
@@ -25,15 +25,17 @@ pub fn create_kms_configs(
     let mut kms_configs: Vec<KmsConfig> = blend_configs
         .iter()
         .enumerate()
-        .map(|(i, (blend_conf, private_key, zk_secret_key))| KmsConfig {
-            backend: PreloadKmsBackendSettings {
-                keys: [
+        .map(|(i, (_, private_key, zk_secret_key))| KmsConfig {
+            backend: KmsBackendSettings {
+                mnemonic: consensus_configs[i].mnemonic.clone(),
+                passphrase: None,
+                static_keys: [
                     (
-                        blend_conf.non_ephemeral_signing_key_id.clone(),
+                        key_id_for_preload_backend(&private_key.clone().into()),
                         private_key.clone().into(),
                     ),
                     (
-                        blend_conf.core.zk.secret_key_kms_id.clone(),
+                        key_id_for_preload_backend(&zk_secret_key.clone().into()),
                         zk_secret_key.clone().into(),
                     ),
                     (
@@ -41,14 +43,6 @@ pub fn create_kms_configs(
                             &consensus_configs[i].blend_note.sk.clone().into(),
                         ),
                         consensus_configs[i].blend_note.sk.clone().into(),
-                    ),
-                    (
-                        key_id_for_preload_backend(&consensus_configs[i].known_key.clone().into()),
-                        consensus_configs[i].known_key.clone().into(),
-                    ),
-                    (
-                        key_id_for_preload_backend(&consensus_configs[i].funding_sk.clone().into()),
-                        consensus_configs[i].funding_sk.clone().into(),
                     ),
                 ]
                 .into(),
@@ -60,7 +54,7 @@ pub fn create_kms_configs(
         for key in shared_keys {
             let key_id = key_id_for_preload_backend(key);
             for kms in &mut kms_configs {
-                kms.backend.keys.insert(key_id.clone(), key.clone());
+                kms.backend.static_keys.insert(key_id.clone(), key.clone());
             }
         }
     }

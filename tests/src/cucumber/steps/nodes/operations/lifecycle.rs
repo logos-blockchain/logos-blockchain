@@ -646,8 +646,8 @@ fn remove_external_scenario_wallet_keys(
     scenario_wallet_key_ids: &HashSet<KeyId>,
 ) {
     remove_external_scenario_wallet_keys_from_maps(
-        &mut config.user.wallet.known_keys,
-        &mut config.user.kms.backend.keys,
+        &mut config.user.wallet.static_keys,
+        &mut config.user.kms.backend.static_keys,
         scenario_wallet_key_ids,
     );
 }
@@ -1021,7 +1021,7 @@ pub(super) fn node_wallet_name(
 ) -> String {
     let role = match key.role {
         NodeWalletKeyRole::Funding => "FUNDING".to_owned(),
-        NodeWalletKeyRole::VoucherMaster => "VOUCHER_MASTER".to_owned(),
+        NodeWalletKeyRole::Stake => "STAKE".to_owned(),
         NodeWalletKeyRole::BlendZk => "BLEND_ZK".to_owned(),
         NodeWalletKeyRole::General => {
             *generic_key_index += 1;

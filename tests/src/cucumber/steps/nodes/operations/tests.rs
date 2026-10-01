@@ -24,10 +24,10 @@ mod wallet_name_tests {
         assert_eq!(
             node_wallet_name(
                 "NODE_1",
-                &node_wallet_key(NodeWalletKeyRole::VoucherMaster),
+                &node_wallet_key(NodeWalletKeyRole::Stake),
                 &mut generic_key_index
             ),
-            "NODE_1_WALLET_VOUCHER_MASTER"
+            "NODE_1_WALLET_STAKE"
         );
         assert_eq!(
             node_wallet_name(

@@ -47,7 +47,7 @@ use crate::{
     delivery::{FailureDetector, broadcast_undelivered_messages, next_undelivered_messages},
     edge::{current_epoch::CurrentEpoch, handlers::Error, settings::RunningBlendConfig},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
-    kms::PreloadKmsService,
+    kms::HdAndPreloadKmsService,
     membership::{self, chain::BlendEpoch, node_id},
     message::{DataPayload, NetworkInfo, ServiceMessage},
     pending::{EncapsulationResult, LocalEncapsulation, MessageKind, PendingTransactions},
@@ -145,7 +145,7 @@ where
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<ChainService>
-        + AsServiceId<PreloadKmsService<RuntimeServiceId>>
+        + AsServiceId<HdAndPreloadKmsService<RuntimeServiceId>>
         + AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
         + AsServiceId<Dispatcher::MempoolService>
         + AsServiceId<Dispatcher::ChainNetworkService>
@@ -190,7 +190,7 @@ where
             &overwatch_handle,
             Some(Duration::from_mins(1)),
             TimeService<_, _>,
-            PreloadKmsService<_>,
+            HdAndPreloadKmsService<_>,
             NetworkService<Dispatcher::Backend, _>
         )
         .await?;
@@ -216,8 +216,10 @@ where
             )
         };
 
-        let kms = KmsServiceApi::<PreloadKmsService<_>, RuntimeServiceId>::new(
-            overwatch_handle.relay::<PreloadKmsService<_>>().await?,
+        let kms = KmsServiceApi::<HdAndPreloadKmsService<_>, RuntimeServiceId>::new(
+            overwatch_handle
+                .relay::<HdAndPreloadKmsService<_>>()
+                .await?,
         );
 
         // TODO: This will go once we do not need to pass the secret key anymore, i.e.,

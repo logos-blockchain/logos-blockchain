@@ -1,32 +1,26 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use lb_key_management_system_service::{backend::preload::KeyId, keys::ZkPublicKey};
+use lb_key_management_system_service::{backend::preload, keys::ZkPublicKey};
 use lb_wallet_service::default_pending_note_expiry_blocks;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct Config {
-    #[serde(default)]
-    pub known_keys: HashMap<KeyId, ZkPublicKey>,
-    pub voucher_master_key_id: KeyId,
-    #[serde(default = "default_pending_note_expiry_blocks")]
+    /// The ZK keys preloaded in the KMS whose notes the wallet tracks, by
+    /// their id in the KMS. The HD keys are tracked without being listed.
+    pub static_keys: HashMap<preload::KeyId, ZkPublicKey>,
+    /// The keys whose notes are not spent unless the keys to fund from are
+    /// named, e.g. the keys that hold the stake to preserve aging.
+    pub unspendable_keys: HashSet<ZkPublicKey>,
     pub pending_note_expiry_blocks: u64,
 }
 
-pub struct RequiredValues {
-    pub voucher_master_key_id: KeyId,
-}
-
-impl Config {
-    #[must_use]
-    pub fn with_required_values(
-        RequiredValues {
-            voucher_master_key_id,
-        }: RequiredValues,
-    ) -> Self {
+impl Default for Config {
+    fn default() -> Self {
         Self {
-            known_keys: HashMap::new(),
-            voucher_master_key_id,
+            static_keys: HashMap::new(),
+            unspendable_keys: HashSet::new(),
             pending_note_expiry_blocks: default_pending_note_expiry_blocks(),
         }
     }

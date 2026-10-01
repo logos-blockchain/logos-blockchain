@@ -7,7 +7,7 @@ use lb_core::{
 use lb_key_management_system_service::{
     KMSService,
     api::KmsServiceApi,
-    backend::preload::{KeyId, PreloadKMSBackend},
+    backend::hd_and_preload::{HdAndPreloadKMSBackend, KeyId},
     keys::{Ed25519Key, KeyOperators},
     operators::zk::leader::CheckLotteryWinning,
 };
@@ -19,7 +19,8 @@ use crate::leadership::{
     PrivateInputsError, operator_for_private_inputs_arguments_for_winning_utxo_and_slot,
 };
 
-pub type PreloadKmsService<RuntimeServiceId> = KMSService<PreloadKMSBackend, RuntimeServiceId>;
+pub type HdAndPreloadKmsService<RuntimeServiceId> =
+    KMSService<HdAndPreloadKMSBackend, RuntimeServiceId>;
 
 #[async_trait::async_trait]
 pub trait KmsAdapter<RuntimeServiceId> {
@@ -44,10 +45,14 @@ pub trait KmsAdapter<RuntimeServiceId> {
 
 #[async_trait::async_trait]
 impl<RuntimeServiceId> KmsAdapter<RuntimeServiceId>
-    for KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>
+    for KmsServiceApi<HdAndPreloadKmsService<RuntimeServiceId>, RuntimeServiceId>
 where
-    RuntimeServiceId:
-        AsServiceId<PreloadKmsService<RuntimeServiceId>> + Debug + Display + Send + Sync + 'static,
+    RuntimeServiceId: AsServiceId<HdAndPreloadKmsService<RuntimeServiceId>>
+        + Debug
+        + Display
+        + Send
+        + Sync
+        + 'static,
 {
     type KeyId = KeyId;
 

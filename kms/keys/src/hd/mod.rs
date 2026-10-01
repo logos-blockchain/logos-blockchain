@@ -21,9 +21,9 @@ use blake2::{
 use lb_groth16::{Fr, fr_from_bytes_unchecked};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use rand_core::{CryptoRng, RngCore};
-use serde::Deserialize;
 #[cfg(feature = "unsafe")]
-use serde::{Serialize, Serializer};
+use serde::Serializer;
+use serde::{Deserialize, Serialize};
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::keys::ZkKey;
@@ -206,8 +206,10 @@ impl ExtendedSecretKey {
 
 /// The index of a hardened child key, in the range `[2^31, 2^32)`.
 ///
-/// It is displayed in the BIP-32 notation, e.g. `3'` for the child number 3.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// It is displayed in the BIP-32 notation, e.g. `3'` for the child number 3,
+/// and serialized as the child number, e.g. `3`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(from = "u31", into = "u31")]
 pub struct HardenedIndex(u32);
 
 impl HardenedIndex {
@@ -232,8 +234,31 @@ impl HardenedIndex {
         u31::new(self.0 - Self::OFFSET)
     }
 
+    /// The index of the next child number, or `None` if this is the last
+    /// hardened index.
+    #[must_use]
+    pub const fn checked_next(self) -> Option<Self> {
+        if self.0 == u32::MAX {
+            None
+        } else {
+            Some(Self(self.0 + 1))
+        }
+    }
+
     const fn to_be_bytes(self) -> [u8; 4] {
         self.0.to_be_bytes()
+    }
+}
+
+impl From<u31> for HardenedIndex {
+    fn from(child_number: u31) -> Self {
+        Self::new(child_number)
+    }
+}
+
+impl From<HardenedIndex> for u31 {
+    fn from(index: HardenedIndex) -> Self {
+        index.child_number()
     }
 }
 

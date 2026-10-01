@@ -1,6 +1,6 @@
 use core::num::NonZeroU64;
 
-use lb_key_management_system_service::backend::preload::KeyId;
+use lb_key_management_system_service::backend::hd_and_preload::KeyId;
 use lb_services_utils::overwatch::RecoveryData;
 use serde::{Deserialize, Serialize};
 

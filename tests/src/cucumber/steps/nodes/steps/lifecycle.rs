@@ -178,7 +178,7 @@ fn staged_auto_claim_overrides(world: &CucumberWorld, node_name: &str) -> Vec<Co
 /// attempts off the time service's slot clock.
 ///
 /// The step also registers the account with the node's KMS and
-/// `wallet.known_keys`. Scenario wallet accounts are otherwise client-side
+/// `wallet.static_keys`. Scenario wallet accounts are otherwise client-side
 /// only — the cucumber scanner tracks them, the node's wallet does not — and
 /// auto-claim refuses to start against a key its wallet cannot see a balance
 /// for.
@@ -229,7 +229,7 @@ fn step_configure_pow_auto_claim(
 
     // Auto-claim reads its targets' balances through the node's wallet, so the
     // account has to be one the node holds: preload the secret into the KMS and
-    // list its public key under `wallet.known_keys`, keyed the same way the
+    // list its public key under `wallet.static_keys`, keyed the same way the
     // preload backend derives ids.
     let key: Key = account.secret_key.clone().into();
     let key_id = key_id_for_preload_backend(&key);
@@ -248,11 +248,11 @@ fn step_configure_pow_auto_claim(
                 value,
             },
             ConfigOverride {
-                path: format!("kms.backend.keys.{key_id}"),
+                path: format!("kms.backend.static_keys.{key_id}"),
                 value: key_value,
             },
             ConfigOverride {
-                path: format!("wallet.known_keys.{key_id}"),
+                path: format!("wallet.static_keys.{key_id}"),
                 value: serde_yaml::to_value(account.public_key()).map_err(|source| {
                     StepError::InvalidArgument {
                         message: format!(

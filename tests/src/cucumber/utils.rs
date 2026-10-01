@@ -7,11 +7,12 @@ use std::{
 
 use hex::ToHex as _;
 use lb_binary_codec::bincode::SerializeOp as _;
+use lb_config::consensus::{funding_path, stake_path};
 use lb_core::{
     mantle::{GenesisTime, TxHash},
     sdp::Locator,
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::{backend::hd_and_preload::KeyId, keys::ZkPublicKey};
 use lb_libp2p::{PeerId, identity, identity::ed25519};
 use lb_node::UserConfig;
 use lb_testing_framework::{CoreBuilderExt as _, ScenarioBuilder};
@@ -198,23 +199,39 @@ pub(crate) fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, Step
 /// points to it.
 pub fn node_wallet_keys_from_node_yaml(path: &Path) -> Result<Vec<NodeWalletKey>, StepError> {
     let config = user_config_from_node_yaml(path)?;
-    let cryptarchia_funding_pk = config.cryptarchia.leader.wallet.funding_pk;
-    let sdp_funding_pk = config.sdp.wallet.funding_pk;
-    let voucher_master_key_id = config.wallet.voucher_master_key_id.clone();
     let blend_zk_key_id = config.blend.core.zk.secret_key_kms_id.clone();
     let mut keys_by_public_key = BTreeMap::<String, NodeWalletKey>::new();
 
-    for (key_id, public_key) in &config.wallet.known_keys {
+    // The HD keys that are funded at genesis
+    let hd_keys = [
+        (stake_path(), NodeWalletKeyRole::Stake),
+        (funding_path(), NodeWalletKeyRole::Funding),
+    ]
+    .map(|(path, role)| {
+        let public_key = config
+            .kms
+            .backend
+            .derive_key(&path)
+            .to_zk_key()
+            .to_public_key();
+        (public_key, role)
+    });
+
+    let static_keys = config
+        .wallet
+        .static_keys
+        .iter()
+        .map(|(key_id, public_key)| {
+            let role = if KeyId::Static(key_id.clone()) == blend_zk_key_id {
+                NodeWalletKeyRole::BlendZk
+            } else {
+                NodeWalletKeyRole::General
+            };
+            (*public_key, role)
+        });
+
+    for (public_key, role) in hd_keys.into_iter().chain(static_keys) {
         let wallet_pk = public_key.to_bytes()?.encode_hex::<String>();
-        let role = if *public_key == cryptarchia_funding_pk || *public_key == sdp_funding_pk {
-            NodeWalletKeyRole::Funding
-        } else if key_id == &voucher_master_key_id {
-            NodeWalletKeyRole::VoucherMaster
-        } else if key_id == &blend_zk_key_id {
-            NodeWalletKeyRole::BlendZk
-        } else {
-            NodeWalletKeyRole::General
-        };
 
         match keys_by_public_key.entry(wallet_pk.clone()) {
             std::collections::btree_map::Entry::Vacant(entry) => {
@@ -244,7 +261,7 @@ pub fn node_wallet_keys_from_node_yaml(path: &Path) -> Result<Vec<NodeWalletKey>
     let mut node_wallet_keys = keys_by_public_key.into_values().collect::<Vec<_>>();
     for role in [
         NodeWalletKeyRole::Funding,
-        NodeWalletKeyRole::VoucherMaster,
+        NodeWalletKeyRole::Stake,
         NodeWalletKeyRole::BlendZk,
     ] {
         let count = node_wallet_keys
@@ -274,8 +291,8 @@ pub fn node_wallet_keys_from_node_yaml(path: &Path) -> Result<Vec<NodeWalletKey>
 /// ZK wallet public key.
 pub fn blend_core_zk_pk_from_node_yaml(path: &Path) -> Result<String, StepError> {
     let config = user_config_from_node_yaml(path)?;
-    let (zk_key_id, _) = config.blend_zk_key().map_err(StepError::UserConfigError)?;
-    Ok(zk_key_id)
+    let (_, zk_public_key) = config.blend_zk_key().map_err(StepError::UserConfigError)?;
+    Ok(hex::encode(lb_groth16::fr_to_bytes(zk_public_key.as_fr())))
 }
 
 /// Reads a node YAML user config file and extracts the configured Blend core

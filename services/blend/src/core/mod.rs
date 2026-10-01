@@ -55,6 +55,7 @@ use lb_chain_service::{Epoch, api::CryptarchiaServiceData};
 use lb_core::sdp::ActivityMetadata;
 use lb_key_management_system_service::{
     api::KmsServiceApi,
+    backend::hd_and_preload::KeyId,
     keys::{KeyOperators, PublicKeyEncoding},
     operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
 };
@@ -93,7 +94,7 @@ use crate::{
             },
             transitioning::TransitioningEpoch,
         },
-        kms::{KmsPoQAdapter, PreloadKMSBackendCorePoQGenerator},
+        kms::{HdAndPreloadKMSBackendCorePoQGenerator, KmsPoQAdapter},
         processor::{
             CoreCryptographicProcessor as CurrentEpochCryptographicProcessor,
             ReceiverCryptographicProcessor,
@@ -105,7 +106,7 @@ use crate::{
     delivery::{broadcast_undelivered_messages, next_undelivered_messages},
     epoch::{CoreEpochInfo, CoreEpochPublicInfo, CoreEpochStateInfo, MismatchedZkId},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
-    kms::PreloadKmsService,
+    kms::HdAndPreloadKmsService,
     membership::{
         self,
         chain::{BlendEpoch, BlendEpochState},
@@ -253,8 +254,8 @@ where
     Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
     NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
-    ProofsGenerator:
-        CoreLeaderAndPowProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<HdAndPreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>
+        + Send,
     SdpService: ServiceData<Message = SdpMessage> + Send,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
@@ -271,7 +272,7 @@ where
         + AsServiceId<SdpService>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<ChainService>
-        + AsServiceId<PreloadKmsService<RuntimeServiceId>>
+        + AsServiceId<HdAndPreloadKmsService<RuntimeServiceId>>
         + AsServiceId<Self>
         + Clone
         + Debug
@@ -332,7 +333,7 @@ where
             NetworkService<_, _>,
             TimeService<_, _>,
             SdpService,
-            PreloadKmsService<_>
+            HdAndPreloadKmsService<_>
         )
         .await?;
 
@@ -360,7 +361,7 @@ where
 
         let kms_api = async {
             let kms_outbound_relay = overwatch_handle
-                .relay::<PreloadKmsService<_>>()
+                .relay::<HdAndPreloadKmsService<_>>()
                 .await
                 .expect("Relay with KMS service should be available.");
 
@@ -435,7 +436,7 @@ where
             Dispatcher,
             ProofsGenerator,
             ProofsVerifier,
-            KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
+            KmsServiceApi<HdAndPreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
             RuntimeServiceId,
         >(
             running_blend_config.clone(),
@@ -569,8 +570,8 @@ where
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<KmsAdapter::CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     // To avoid bubbling up generics everywhere in the configs (current Overwatch limitation), we
-    // know the final key ID type is a `String`, so we constraint the trait impl here instead.
-    KmsAdapter: KmsPoQAdapter<RuntimeServiceId, KeyId = String, CorePoQGenerator: Clone + Send + Sync>
+    // know the final key ID type is a `KeyId`, so we constraint the trait impl here instead.
+    KmsAdapter: KmsPoQAdapter<RuntimeServiceId, KeyId = KeyId, CorePoQGenerator: Clone + Send + Sync>
         + Send
         + 'static,
     RuntimeServiceId: Clone + Send + Sync + 'static,

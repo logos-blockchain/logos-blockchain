@@ -164,11 +164,6 @@ async fn validate_config_values(
     config: &UserConfig,
     service_note_id: NoteId,
 ) -> Result<()> {
-    let sdp_wallet_funding_pk = config.sdp.wallet.funding_pk;
-    verify_sdp_wallet_funding_pk_balance(client, node_address.clone(), sdp_wallet_funding_pk)
-        .await
-        .context("Failed to verify balance for SDP wallet funding key")?;
-
     let zk_id = extract_blend_zk_key(config)?;
 
     verify_service_note_id_value(client, node_address, zk_id, service_note_id).await?;
@@ -181,36 +176,17 @@ fn extract_blend_zk_key(config: &UserConfig) -> Result<ZkPublicKey> {
         .blend_zk_key()
         .map_err(|e| anyhow!(e))
         .with_context(|| "Failed to extract zk ID from provided config.")?;
-    let Some(wallet_key) = config.wallet.known_keys.get(&zk_public_key_id) else {
+    if !config
+        .wallet
+        .static_keys
+        .values()
+        .any(|pk| *pk == zk_public_key)
+    {
         bail!(
-            "ZK ID '{zk_public_key_id}' extracted from config was not found in wallet known keys"
-        );
-    };
-    if wallet_key != &zk_public_key {
-        bail!(
-            "ZK ID '{zk_public_key_id}' extracted from config does not match the corresponding public key in wallet known keys"
+            "ZK ID '{zk_public_key_id}' extracted from config was not found in wallet static keys"
         );
     }
     Ok(zk_public_key)
-}
-
-async fn verify_sdp_wallet_funding_pk_balance(
-    client: &CommonHttpClient,
-    node_address: Url,
-    funding_pk: ZkPublicKey,
-) -> Result<()> {
-    let WalletBalanceResponseBody { balance, .. } = client
-        .get_wallet_balance(node_address, funding_pk, None)
-        .await
-        .context("Failed to fetch wallet balance for SDP wallet funding pk.")?;
-
-    // TODO: Strengthen this preflight check to verify fee sufficiency, not only
-    // non-zero balance.
-    if balance == 0 {
-        bail!("The provided SDP wallet funding key does not have any balance");
-    }
-
-    Ok(())
 }
 
 async fn verify_service_note_id_value(

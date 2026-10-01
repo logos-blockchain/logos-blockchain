@@ -16,8 +16,8 @@ impl ServiceConfig {
         recovery_data: RecoveryData,
     ) -> WalletServiceSettings {
         WalletServiceSettings {
-            known_keys: self.user.known_keys,
-            voucher_master_key_id: self.user.voucher_master_key_id,
+            static_keys: self.user.static_keys,
+            unspendable_keys: self.user.unspendable_keys,
             recovery_data,
             pending_note_expiry_blocks: self.user.pending_note_expiry_blocks,
         }

@@ -43,7 +43,7 @@ use crate::{
         },
     },
     edge::service_components::ServiceComponents as EdgeServiceComponents,
-    kms::PreloadKmsService,
+    kms::HdAndPreloadKmsService,
     membership::node_id,
     message::{ProxyServiceMessage, ServiceMessage},
     mode::ModeMembership,
@@ -140,7 +140,7 @@ where
         + AsServiceId<<EdgeService as EdgeServiceComponents>::ChainService>
         + AsServiceId<
             TimeService<<EdgeService as EdgeServiceComponents>::TimeBackend, RuntimeServiceId>,
-        > + AsServiceId<PreloadKmsService<RuntimeServiceId>>
+        > + AsServiceId<HdAndPreloadKmsService<RuntimeServiceId>>
         + AsServiceId<
             NetworkService<
                 NetworkBackendOfService<CoreService, RuntimeServiceId>,
@@ -186,7 +186,7 @@ where
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
-            PreloadKmsService<_>,
+            HdAndPreloadKmsService<_>,
             SdpService,
             <EdgeService as EdgeServiceComponents>::ChainService
         )
@@ -195,8 +195,10 @@ where
         let sdp_service_api =
             SdpServiceApi::<SdpService>::from_overwatch_handle(overwatch_handle).await;
 
-        let kms = KmsServiceApi::<PreloadKmsService<_>, RuntimeServiceId>::new(
-            overwatch_handle.relay::<PreloadKmsService<_>>().await?,
+        let kms = KmsServiceApi::<HdAndPreloadKmsService<_>, RuntimeServiceId>::new(
+            overwatch_handle
+                .relay::<HdAndPreloadKmsService<_>>()
+                .await?,
         );
 
         let PublicKeyEncoding::Zk(zk_public_key) = kms

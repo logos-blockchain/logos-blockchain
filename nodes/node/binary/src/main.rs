@@ -26,8 +26,8 @@ async fn main() -> Result<()> {
             Command::MigrateConfig(migrate_args) => {
                 return logos_blockchain_node::cli::config::migrate::run(*migrate_args);
             }
-            Command::Migrate0_1_2(migrate_args) => {
-                return logos_blockchain_node::cli::config::migrate_0_1_2::run(*migrate_args);
+            Command::Migrate0_3_0(migrate_args) => {
+                return logos_blockchain_node::cli::config::migrate_0_3_0::run(*migrate_args).await;
             }
             Command::GenerateKey(generate_args) => {
                 return logos_blockchain_node::cli::keys::run_generate_key(*generate_args);

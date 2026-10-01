@@ -6,6 +6,7 @@ use std::{
     str::FromStr as _,
 };
 
+use lb_key_management_system_keys::hd::InvalidMnemonicError;
 use lb_node::cli::{
     EmbeddedInitArgs, InitArgs, MigrateArgs, ParticipateArgs, UpdateArgs, config::merge::MergeFlags,
 };
@@ -44,10 +45,14 @@ pub struct GenerateConfigArgs {
     pub skip_ibd: *const bool,
     pub log_filter: *const c_char,
     pub kms_file: *const c_char,
+    pub mnemonic: *const c_char,
+    pub mnemonic_passphrase: *const c_char,
 }
 
-impl From<GenerateConfigArgs> for EmbeddedInitArgs {
-    fn from(value: GenerateConfigArgs) -> Self {
+impl TryFrom<GenerateConfigArgs> for EmbeddedInitArgs {
+    type Error = InvalidMnemonicError;
+
+    fn try_from(value: GenerateConfigArgs) -> Result<Self, Self::Error> {
         let mut init_args = Self::default();
 
         // ---- initial_peers ----
@@ -138,7 +143,33 @@ impl From<GenerateConfigArgs> for EmbeddedInitArgs {
             init_args.kms_file = Some(kms_file.to_string_lossy().to_string().into());
         }
 
-        init_args
+        // ---- mnemonic ----
+        init_args.mnemonic = {
+            if value.mnemonic.is_null() {
+                Ok(None)
+            } else {
+                unsafe { CStr::from_ptr(value.mnemonic) }
+                    .to_string_lossy()
+                    .parse()
+                    .map(Some)
+            }
+        }?;
+
+        // ---- mnemonic_passphrase ----
+        init_args.mnemonic_passphrase = {
+            if value.mnemonic_passphrase.is_null() {
+                None
+            } else {
+                Some(
+                    unsafe { CStr::from_ptr(value.mnemonic_passphrase) }
+                        .to_string_lossy()
+                        .as_ref()
+                        .into(),
+                )
+            }
+        };
+
+        Ok(init_args)
     }
 }
 
@@ -174,8 +205,13 @@ pub fn generate_config_sync(args: EmbeddedInitArgs) -> OperationStatus {
 #[must_use]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn generate_user_config(args: GenerateConfigArgs) -> OperationStatus {
-    let init_args = EmbeddedInitArgs::from(args);
-    generate_config_sync(init_args)
+    match EmbeddedInitArgs::try_from(args) {
+        Ok(init_args) => generate_config_sync(init_args),
+        Err(e) => OperationStatus::error(
+            OperationStatusCode::ConfigurationError,
+            format!("Error generating config: {e}"),
+        ),
+    }
 }
 
 /// Updates an existing user config file with keys from a keystore file,
@@ -258,16 +294,20 @@ pub unsafe extern "C" fn migrate_user_config(
     }
 }
 
-/// Migrates a 0.1.2 config file to a new user config and keystore, equivalent
-/// to the `migrate-from-0.1.2` CLI command.
+/// Migrates the user config, the keystore and the DB of a node of v0.3.0 to
+/// the HD wallet, equivalent to the `migrate-from-0.3.0` CLI command.
+///
+/// Runs non-interactively. The files of v0.3.0 are kept with the `.v0.3.0`
+/// extension.
 ///
 /// # Arguments
 ///
-/// - `new_config_path`: Output path for the generated user config YAML file.
-///   Must not exist yet.
-/// - `old_config_path`: Path to the existing 0.1.2 config YAML file.
-/// - `keystore_path`: Output path for the generated keystore YAML file. Must
-///   not exist yet.
+/// - `user_config_path`: Path to the user config YAML file of v0.3.0.
+/// - `keystore_path`: Path to the keystore YAML file of v0.3.0.
+/// - `mnemonic`: BIP-39 mnemonic to derive the new wallet keys from. A new one
+///   is generated if null.
+/// - `mnemonic_passphrase`: BIP-39 passphrase of the mnemonic, which is empty
+///   if null.
 ///
 /// # Returns
 ///
@@ -276,25 +316,54 @@ pub unsafe extern "C" fn migrate_user_config(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers. The caller
-/// must ensure that all pointers are valid NUL-terminated C strings.
+/// must ensure that all non-null pointers are valid NUL-terminated C strings.
 #[must_use]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn migrate_user_config_0_1_2(
-    new_config_path: *const c_char,
-    old_config_path: *const c_char,
+pub unsafe extern "C" fn migrate_user_config_0_3_0(
+    user_config_path: *const c_char,
     keystore_path: *const c_char,
+    mnemonic: *const c_char,
+    mnemonic_passphrase: *const c_char,
 ) -> OperationStatus {
-    return_error_if_null_pointer!(new_config_path);
-    return_error_if_null_pointer!(old_config_path);
+    return_error_if_null_pointer!(user_config_path);
     return_error_if_null_pointer!(keystore_path);
 
-    let args = lb_node::cli::config::migrate_0_1_2::MigrateArgs::new(
-        unsafe { cstr_to_path(new_config_path) },
-        unsafe { cstr_to_path(old_config_path) },
-        unsafe { cstr_to_path(keystore_path) },
-    );
+    let mnemonic = if mnemonic.is_null() {
+        None
+    } else {
+        match unsafe { CStr::from_ptr(mnemonic) }
+            .to_string_lossy()
+            .parse()
+        {
+            Ok(mnemonic) => Some(mnemonic),
+            Err(error) => {
+                return OperationStatus::error(
+                    OperationStatusCode::ConfigurationError,
+                    format!("Error migrating config: {error}"),
+                );
+            }
+        }
+    };
+    let mnemonic_passphrase = if mnemonic_passphrase.is_null() {
+        None
+    } else {
+        Some(
+            unsafe { CStr::from_ptr(mnemonic_passphrase) }
+                .to_string_lossy()
+                .as_ref()
+                .into(),
+        )
+    };
+    let args = lb_node::cli::config::migrate_0_3_0::MigrateArgs {
+        user_config: unsafe { cstr_to_path(user_config_path) },
+        keystore: unsafe { cstr_to_path(keystore_path) },
+        mnemonic,
+        mnemonic_passphrase,
+        auto_approve: true,
+    };
 
-    match lb_node::cli::config::migrate_0_1_2::run(args) {
+    let runtime = Runtime::new().expect("Failed to create Tokio runtime.");
+    match runtime.block_on(lb_node::cli::config::migrate_0_3_0::run(args)) {
         Ok(()) => OperationStatus::OK,
         Err(error) => OperationStatus::error(
             OperationStatusCode::ConfigurationError,

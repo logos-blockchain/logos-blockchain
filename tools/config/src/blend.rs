@@ -31,8 +31,9 @@ pub fn create_blend_configs_with_listening_host(
             let mut base_config = blend::Config::with_required_values(blend::RequiredValues {
                 non_ephemeral_signing_key_id: key_id_for_preload_backend(
                     &private_key.clone().into(),
-                ),
-                secret_key_kms_id: key_id_for_preload_backend(&secret_zk_key.clone().into()),
+                )
+                .into(),
+                secret_key_kms_id: key_id_for_preload_backend(&secret_zk_key.clone().into()).into(),
             });
             base_config.core.backend.listening_address =
                 Multiaddr::from_str(&format!("/ip4/{host}/udp/{port}/quic-v1")).unwrap();

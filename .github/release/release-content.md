@@ -72,21 +72,16 @@ For testnet, you can check the [Logos testnet dashboard][testnet-dashboard].
 
 ## 💰 Getting Funds
 
-**1. 🔑 Find your wallet key**
+**1. 🔑 Find your wallet address**
 
-```bash
-grep -A3 known_keys user_config.yaml
+`init-config` prints two addresses of your wallet. For example:
+
+```
+Stake address, which the node never spends from: ce562a751eed5181fc6679bb8b9d87a219591cd91e1c1daa947e7880231de62d
+Address that pays the transaction fees and receives the PoW rewards: 937888953090c19753e32497a426d37a97aef226a675fbe2bc6d8d24d2ab082f
 ```
 
-Copy any of the listed key IDs. For example:
-
-```yaml
-known_keys:
-    af391a0d7v29e5f7ca28281eca974146689f8f1c9b712380c07089dabcb60a8c: ...
-    de3233cec107e6589f83d4f3094caa65c633b5b33601211353779dc01972ca14: ...
-```
-
-Either key can be used.
+Use the stake address to receive the funds you stake, and the other one to receive the funds that pay the fees of your node.
 
 **2. 🚰 Request funds from the faucet**
 

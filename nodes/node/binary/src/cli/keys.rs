@@ -236,11 +236,11 @@ fn generate_key_into_keystore(
 ) -> (KeyId, Key) {
     match key_type {
         KeyType::Ed25519 => {
-            let (id, secret_key) = keystore.generate_ed25519(key_title);
+            let (id, secret_key) = keystore.generate_ed25519_static_key(key_title);
             (id, Ed25519Key::from(secret_key).into())
         }
         KeyType::Zk => {
-            let (id, secret_key) = keystore.generate_zk(key_title);
+            let (id, secret_key) = keystore.generate_zk_static_key(key_title);
             (id, ZkKey::from(secret_key).into())
         }
     }
@@ -317,7 +317,7 @@ pub fn run_add_key(args: AddKeyArgs) -> Result<()> {
         .as_ref()
         .map_or_else(|| next_user_key_title(&keystore), Clone::clone);
 
-    keystore.set(user_key_title.clone(), key);
+    keystore.set_static_key(user_key_title.clone(), key);
 
     if auto_approve || confirm_overwrite(&format!("Add key '{user_key_title}' to keystore?"))? {
         persist_user_config_and_keystore(
@@ -348,7 +348,7 @@ pub fn run_remove_key(args: RemoveKeyArgs) -> Result<()> {
 
     let title_key = KeyTitle::from(key_title.clone());
 
-    if keystore.get(title_key.clone()).is_none() {
+    if keystore.get_static_key(title_key.clone()).is_none() {
         return Err(crate::cli::config::keystore::KeystoreError::NotFound(title_key).into());
     }
 
@@ -357,7 +357,7 @@ pub fn run_remove_key(args: RemoveKeyArgs) -> Result<()> {
             "Are you sure you want to remove the key '{key_title}'?"
         ))?
     {
-        keystore.remove(title_key);
+        keystore.remove_static_key(title_key);
 
         persist_user_config_and_keystore(
             &mut user_config,
@@ -379,7 +379,7 @@ fn next_user_key_title(keystore: &Keystore) -> String {
     loop {
         let candidate = format!("UserKey{counter}");
         let candidate_title = KeyTitle::from(candidate.clone());
-        if keystore.get(candidate_title).is_none() {
+        if keystore.get_static_key(candidate_title).is_none() {
             break candidate;
         }
         counter += 1;

@@ -131,12 +131,17 @@ where
     /// final mandatory fee as a priority reserve. The mandatory fee includes
     /// execution and storage cost; only the unused reserve becomes an
     /// effective priority tip. The percentage is not capped at 100.
+    ///
+    /// The notes of all the keys in the wallet (except the unspendable ones)
+    /// can be used to fund the transaction, unless `funding_pks` is given.
+    /// The change is paid to the next change address of the wallet, unless
+    /// `change_pk` is given.
     pub async fn fund_tx(
         &self,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-        change_pk: ZkPublicKey,
-        funding_pks: Vec<ZkPublicKey>,
+        change_pk: Option<ZkPublicKey>,
+        funding_pks: Option<Vec<ZkPublicKey>>,
         priority_fee_percent: u64,
     ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
@@ -160,7 +165,6 @@ where
         tip: HeaderId,
         rewards_root: RewardsRoot,
         reward_amount: Value,
-        funding_pk: ZkPublicKey,
         max_tx_fee: GasCost,
     ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
@@ -170,7 +174,6 @@ where
                 tip,
                 rewards_root,
                 reward_amount,
-                funding_pk,
                 max_tx_fee,
                 resp_tx,
             })
@@ -193,8 +196,8 @@ where
     pub async fn transfer_funds(
         &self,
         tip: Option<HeaderId>,
-        change_pk: ZkPublicKey,
-        funding_pks: Vec<ZkPublicKey>,
+        change_pk: Option<ZkPublicKey>,
+        funding_pks: Option<Vec<ZkPublicKey>>,
         recipient_pk: ZkPublicKey,
         amount: Value,
     ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {

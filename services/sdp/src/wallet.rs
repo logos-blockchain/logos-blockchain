@@ -7,7 +7,6 @@ use lb_core::{
     },
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
@@ -29,10 +28,6 @@ pub enum SdpWalletError {
 pub struct SdpWalletConfig {
     // Hard cap on the transaction fee initiated by SDP.
     pub max_tx_fee: GasCost,
-
-    // The key to use for paying SDP transaction fees.
-    // Change notes will be returned to this same funding pk.
-    pub funding_pk: ZkPublicKey,
 }
 
 #[async_trait::async_trait]

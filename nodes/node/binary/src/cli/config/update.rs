@@ -8,13 +8,13 @@ use crate::{
         UpdateArgs,
         config::{
             confirm_overwrite,
+            init::static_zk_public_keys,
             keystore::{KeyTitle, Keystore},
         },
     },
     config::{
         BlendArgs, BlendConfig, CryptarchiaArgs, CryptarchiaConfig, KmsConfig, NetworkConfig,
-        SdpArgs, SdpConfig, WalletConfig, update_api, update_blend, update_cryptarchia,
-        update_network, update_sdp, update_state, update_tracing,
+        WalletConfig, update_api, update_blend, update_network, update_state, update_tracing,
     },
 };
 
@@ -66,7 +66,6 @@ pub fn update_user_config(user_config: &mut UserConfig, keystore: &Keystore, arg
         network: network_args,
         blend: blend_args,
         cryptarchia: cryptarchia_args,
-        sdp: sdp_args,
         api: api_args,
         state: state_args,
         ..
@@ -84,13 +83,10 @@ pub fn update_user_config(user_config: &mut UserConfig, keystore: &Keystore, arg
     update_blend_config(keystore, &mut user_config.blend, blend_args);
 
     update_cryptarchia_config(
-        keystore,
         initial_peers,
         &mut user_config.cryptarchia,
         cryptarchia_args,
     );
-
-    update_sdp_config(keystore, &mut user_config.sdp, sdp_args);
 
     update_kms_config(keystore, &mut user_config.kms);
 
@@ -103,7 +99,7 @@ fn update_network_config(
     network_args: NetworkArgs,
 ) {
     let unsecured_key = keystore
-        .get_ed25519(KeyTitle::NETWORK_SWARM)
+        .get_ed25519_static_key(KeyTitle::NETWORK_SWARM)
         .map(|(_, key)| key)
         .expect("Network key set by default");
     let mut network_secret_key_bytes: [u8; 32] = *unsecured_key.as_bytes();
@@ -117,29 +113,23 @@ fn update_network_config(
 
 fn update_blend_config(keystore: &Keystore, blend_config: &mut BlendConfig, blend_args: BlendArgs) {
     let (blend_signing_key_id, _) = keystore
-        .get(KeyTitle::BLEND_SIGNING)
+        .get_static_key(KeyTitle::BLEND_SIGNING)
         .expect("Blend signing key set by default");
     let (blend_zk_key_id, _) = keystore
-        .get(KeyTitle::BLEND_ZK)
+        .get_static_key(KeyTitle::BLEND_ZK)
         .expect("Blend zk key set by default");
 
-    blend_config.set_non_ephemeral_signing_key_id(blend_signing_key_id);
-    blend_config.set_secret_zk_key_id(blend_zk_key_id);
+    blend_config.set_non_ephemeral_signing_key_id(blend_signing_key_id.into());
+    blend_config.set_secret_zk_key_id(blend_zk_key_id.into());
 
     update_blend(blend_config, blend_args);
 }
 
 fn update_cryptarchia_config(
-    keystore: &Keystore,
     initial_peers: Option<Vec<Multiaddr>>,
     cryptarchia_config: &mut CryptarchiaConfig,
     cryptarchia_args: CryptarchiaArgs,
 ) {
-    let (_, cryptarchia_funding_key) = keystore
-        .get_zk(KeyTitle::LEADER_FUNDING)
-        .expect("Cryptarchia funding key set by default");
-    cryptarchia_config.set_funding_pk(cryptarchia_funding_key.to_public_key());
-
     if !cryptarchia_args.skip_ibd
         && let Some(initial_peers) = initial_peers
     {
@@ -151,34 +141,12 @@ fn update_cryptarchia_config(
             })
             .collect();
     }
-
-    update_cryptarchia(cryptarchia_config, cryptarchia_args);
-}
-
-fn update_sdp_config(keystore: &Keystore, sdp_config: &mut SdpConfig, sdp_args: SdpArgs) {
-    let (_, sdp_funding_key) = keystore
-        .get_zk(KeyTitle::SDP_FUNDING)
-        .expect("Sdp funding key set by default");
-    sdp_config.set_funding_pk(sdp_funding_key.to_public_key());
-
-    update_sdp(sdp_config, sdp_args);
 }
 
 fn update_kms_config(keystore: &Keystore, kms_config: &mut KmsConfig) {
-    kms_config.backend.keys = keystore
-        .get_all()
-        .map(|(id, key)| (id, key.clone()))
-        .collect();
+    kms_config.backend = keystore.kms_backend_settings();
 }
 
 fn update_wallet_config(keystore: &Keystore, wallet_config: &mut WalletConfig) {
-    let (voucher_master_key_id, _) = keystore
-        .get(KeyTitle::VAUCHER_MASTER)
-        .expect("Vaucher master key set by default");
-
-    wallet_config.voucher_master_key_id = voucher_master_key_id;
-    wallet_config.known_keys = keystore
-        .get_all_zk()
-        .map(|(id, key)| (id, key.to_public_key()))
-        .collect();
+    wallet_config.static_keys = static_zk_public_keys(keystore);
 }

@@ -26,6 +26,7 @@ tracing                            = { workspace = true }
 
 [dev-dependencies]
 bytes                         = { workspace = true }
+lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { features = ["unsafe"], workspace = true }
 num-bigint                    = { workspace = true }
 rand                          = { features = ["getrandom"], workspace = true }
