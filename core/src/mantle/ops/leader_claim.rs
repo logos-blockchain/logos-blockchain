@@ -316,7 +316,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            batch::{Error as BatchError, test_utils::batch_verify},
+            batch::{DeferredZkpVerifications, Error as BatchError, test_utils::batch_verify},
             gas::test_utils::FixedThresholds,
         },
         proofs::leader_claim_proof::LeaderClaimPrivate,
@@ -608,13 +608,14 @@ mod tests {
         let preverified_signed_operation = unverified_signed_operation
             .into_preverified(&preverify_context)
             .expect("preverify should accept a valid proof");
+
+        let mut batch = DeferredZkpVerifications::new();
         let verified_signed_operation = preverified_signed_operation
-            .into_verified(&verify_context)
+            .into_verified_deferred(&verify_context, &mut batch)
             .expect("verify should accept a valid claim");
-        let operation = verified_signed_operation.signed_operation().operation();
+        let operation = verified_signed_operation.operation().clone();
 
         let (context, events) = verified_signed_operation
-            .signed_operation()
             .execute(LeaderClaimExecutionContext {
                 nullifiers: rpds::HashTrieSetSync::new_sync(),
                 reward_amount,

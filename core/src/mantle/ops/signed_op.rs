@@ -1,10 +1,7 @@
 use crate::mantle::{
     VerificationError,
-    batch::DeferredZkpVerification,
-    ledger::{
-        ProvableOperation, VerifiableOperation,
-        verification_mode::{StandardMode, VerificationMode},
-    },
+    batch::DeferredZkpVerifications,
+    ledger::verification_mode::{StandardMode, VerificationMode},
     ops::{
         OpProofRef, OpRef, SignedOperation,
         channel::{
@@ -24,7 +21,6 @@ use crate::mantle::{
             SDPActiveOp, SDPActiveValidationContext, SDPDeclareOp, SDPDeclareVerificationContext,
             SDPWithdrawOp, SDPWithdrawValidationContext, declare::SDPDeclarePreverificationContext,
         },
-        signed_operation::VerifiedSignedOperation,
         transfer::{TransferOp, TransferValidationContext},
     },
     transactions::{
@@ -33,8 +29,6 @@ use crate::mantle::{
         states::{Preverified, Unverified, VerificationState, Verified},
     },
 };
-
-pub type VerifiedSignedOp<Mode> = (SignedOp<Verified, Mode>, Option<DeferredZkpVerification>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignedOp<State: VerificationState, Mode: VerificationMode> {
@@ -186,32 +180,6 @@ where
     (signed_operation.into(), error.into())
 }
 
-fn map_verify_success_without_proof<T>(
-    verified_signed_operation: VerifiedSignedOperation<T, StandardMode>,
-) -> VerifiedSignedOp<StandardMode>
-where
-    T: ProvableOperation,
-    SignedOp<Verified, StandardMode>: From<SignedOperation<T, Verified, StandardMode>>,
-    SignedOperation<T, Preverified, StandardMode>:
-        VerifiableOperation<StandardMode, DeferredProof = ()>,
-{
-    let (signed_operation, ()) = verified_signed_operation.into_parts();
-    (signed_operation.into(), None)
-}
-
-fn map_verify_success_with_proof<T>(
-    verified_signed_operation: VerifiedSignedOperation<T, StandardMode>,
-) -> VerifiedSignedOp<StandardMode>
-where
-    T: ProvableOperation,
-    SignedOp<Verified, StandardMode>: From<SignedOperation<T, Verified, StandardMode>>,
-    SignedOperation<T, Preverified, StandardMode>:
-        VerifiableOperation<StandardMode, DeferredProof = DeferredZkpVerification>,
-{
-    let (signed_operation, deferred_proof) = verified_signed_operation.into_parts();
-    (signed_operation.into(), Some(deferred_proof))
-}
-
 impl SignedOp<Preverified, StandardMode> {
     #[expect(
         clippy::result_large_err,
@@ -226,7 +194,8 @@ impl SignedOp<Preverified, StandardMode> {
         op_index: usize,
         tx_hash_view: &TxHashView,
         helper: &impl OperationVerificationHelper,
-    ) -> Result<VerifiedSignedOp<StandardMode>, (Self, VerificationError)> {
+        deferred_proofs: &mut DeferredZkpVerifications,
+    ) -> Result<SignedOp<Verified, StandardMode>, (Self, VerificationError)> {
         match self {
             Self::ChannelInscribe(op) => {
                 let channel_inscribe_context = InscriptionValidationContext {
@@ -234,7 +203,7 @@ impl SignedOp<Preverified, StandardMode> {
                     block_slot: helper.get_block_slot(),
                 };
                 op.into_verified(&channel_inscribe_context)
-                    .map(map_verify_success_without_proof)
+                    .map(Into::into)
                     .map_err(map_verify_failure)
             }
             Self::ChannelConfig(op) => {
@@ -243,7 +212,7 @@ impl SignedOp<Preverified, StandardMode> {
                     tx_hash_view,
                 };
                 op.into_verified(&channel_config_context)
-                    .map(map_verify_success_without_proof)
+                    .map(Into::into)
                     .map_err(map_verify_failure)
             }
             Self::ChannelDeposit(op) => {
@@ -253,8 +222,8 @@ impl SignedOp<Preverified, StandardMode> {
                     utxos: helper.get_utxos(),
                     tx_hash_view,
                 };
-                op.into_verified(&channel_deposit_context)
-                    .map(map_verify_success_with_proof)
+                op.into_verified_deferred(&channel_deposit_context, deferred_proofs)
+                    .map(Into::into)
                     .map_err(map_verify_failure)
             }
             Self::ChannelWithdraw(op) => {
@@ -267,7 +236,7 @@ impl SignedOp<Preverified, StandardMode> {
                     op_index,
                 };
                 op.into_verified(&channel_withdraw_context)
-                    .map(map_verify_success_without_proof)
+                    .map(Into::into)
                     .map_err(map_verify_failure)
             }
             Self::ChannelTransfer(op) => {
@@ -280,7 +249,7 @@ impl SignedOp<Preverified, StandardMode> {
                     helper,
                 };
                 op.into_verified(&context)
-                    .map(map_verify_success_without_proof)
+                    .map(Into::into)
                     .map_err(map_verify_failure)
             }
             Self::SDPDeclare(op) => {
@@ -297,8 +266,8 @@ impl SignedOp<Preverified, StandardMode> {
                     declarations,
                     min_stake: helper.get_min_stake(),
                 };
-                op.into_verified(&context)
-                    .map(map_verify_success_with_proof)
+                op.into_verified_deferred(&context, deferred_proofs)
+                    .map(Into::into)
                     .map_err(map_verify_failure)
             }
             Self::SDPWithdraw(op) => {
@@ -313,8 +282,8 @@ impl SignedOp<Preverified, StandardMode> {
                     service_notes: helper.get_service_notes(),
                     tx_hash_view,
                 };
-                op.into_verified(&context)
-                    .map(map_verify_success_with_proof)
+                op.into_verified_deferred(&context, deferred_proofs)
+                    .map(Into::into)
                     .map_err(map_verify_failure)
             }
             Self::SDPActive(op) => {
@@ -328,8 +297,8 @@ impl SignedOp<Preverified, StandardMode> {
                     tx_hash_view,
                     epoch: helper.get_epoch(),
                 };
-                op.into_verified(&context)
-                    .map(map_verify_success_with_proof)
+                op.into_verified_deferred(&context, deferred_proofs)
+                    .map(Into::into)
                     .map_err(map_verify_failure)
             }
             Self::LeaderClaim(op) => {
@@ -338,8 +307,8 @@ impl SignedOp<Preverified, StandardMode> {
                     claimable_vouchers_root: helper.get_claimable_vouchers_root(),
                     tx_hash_view,
                 };
-                op.into_verified(&context)
-                    .map(map_verify_success_with_proof)
+                op.into_verified_deferred(&context, deferred_proofs)
+                    .map(Into::into)
                     .map_err(map_verify_failure)
             }
             Self::Transfer(op) => {
@@ -349,8 +318,8 @@ impl SignedOp<Preverified, StandardMode> {
                     utxos: helper.get_utxos(),
                     tx_hash_view,
                 };
-                op.into_verified(&context)
-                    .map(map_verify_success_with_proof)
+                op.into_verified_deferred(&context, deferred_proofs)
+                    .map(Into::into)
                     .map_err(map_verify_failure)
             }
             Self::ClaimPowReward(op) => {
@@ -366,7 +335,7 @@ impl SignedOp<Preverified, StandardMode> {
                     slot_window: helper.get_pow_slot_window(),
                 };
                 op.into_verified(&context)
-                    .map(map_verify_success_without_proof)
+                    .map(Into::into)
                     .map_err(map_verify_failure)
             }
         }
