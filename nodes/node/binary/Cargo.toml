@@ -33,7 +33,6 @@ lb-era-parameters                = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
-lb-ledger                        = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-log-targets                   = { workspace = true }
 lb-network-service               = { workspace = true }

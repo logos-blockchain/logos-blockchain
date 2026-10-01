@@ -17,7 +17,6 @@ pub use lb_core::{
     header::HeaderId,
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };
-use lb_era_parameters::{EraParameters, v1};
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 use lb_storage_service::recovery::load_recovery_data;
 pub use lb_storage_service::{
@@ -47,12 +46,12 @@ use tokio::runtime;
 use crate::{
     api::backend::AxumBackend,
     config::{
-        DeploymentSettings, RunConfig, api::ServiceConfig as ApiConfig,
-        blend::ServiceConfig as BlendConfig, cryptarchia::ServiceConfig as CryptarchiaConfig,
-        kms::ServiceConfig as KmsConfig, mempool::ServiceConfig as MempoolConfig,
-        network::ServiceConfig as NetworkConfig, pow::ServiceConfig as PoWConfig,
-        sdp::ServiceConfig as SdpConfig, storage::ServiceConfig as StorageConfig,
-        time::ServiceConfig as TimeConfig, wallet::ServiceConfig as WalletConfig,
+        RunConfig, api::ServiceConfig as ApiConfig, blend::ServiceConfig as BlendConfig,
+        cryptarchia::ServiceConfig as CryptarchiaConfig, kms::ServiceConfig as KmsConfig,
+        mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
+        pow::ServiceConfig as PoWConfig, sdp::ServiceConfig as SdpConfig,
+        storage::ServiceConfig as StorageConfig, time::ServiceConfig as TimeConfig,
+        wallet::ServiceConfig as WalletConfig,
     },
     generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
     panic::log_and_exit_hook,
@@ -159,10 +158,6 @@ pub struct LogosBlockchain {
     tracing: TracingService,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "TODO: Address this in a later refactor."
-)]
 pub fn run_node_from_config(
     config: RunConfig,
     handle: Option<runtime::Handle>,
@@ -181,16 +176,7 @@ pub fn run_node_from_config(
     let era = &eras.genesis().entry.parameters;
     let protocol_names = era.protocol_names.clone();
 
-    let blend_rewards_params = config.deployment.genesis_blend_reward_params();
-
-    let DeploymentSettings {
-        eras: schedule,
-        genesis_block,
-    } = config.deployment;
-    let EraParameters::V1(v1::Parameters {
-        cryptarchia: cryptarchia_deployment,
-        ..
-    }) = schedule.into_genesis();
+    let genesis_block = config.deployment.genesis_block;
 
     let storage_config = StorageConfig {
         user: config.user.storage,
@@ -211,14 +197,8 @@ pub fn run_node_from_config(
 
     let (chain_service_config, chain_network_config, chain_leader_config) = CryptarchiaConfig {
         user: config.user.cryptarchia,
-        deployment: cryptarchia_deployment,
     }
-    .into_cryptarchia_services_settings(
-        genesis_block,
-        blend_rewards_params,
-        protocol_names.cryptarchia_topic.clone(),
-        recovery_data.clone(),
-    );
+    .into_cryptarchia_services_settings(era, genesis_block, recovery_data.clone());
 
     let mempool_service_config = MempoolConfig {
         user: config.user.mempool,

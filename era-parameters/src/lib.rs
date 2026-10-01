@@ -32,6 +32,14 @@ impl EraParameters {
     const fn tag(&self) -> u16 {
         self.version().tag()
     }
+
+    /// The ledger's configuration while the era is in force.
+    #[must_use]
+    pub fn ledger_config(&self) -> lb_ledger::Config {
+        match self {
+            Self::V1(parameters) => parameters.ledger_config(),
+        }
+    }
 }
 
 /// An era as the node runs it: its parameters, its digest, and the fork digest

@@ -14,7 +14,6 @@ use lb_cryptarchia_engine::{
     era::{EraEntry, Eras, ErasError},
 };
 use lb_era_parameters::{EraDefinition, EraParameters, ProtocolNames, v1};
-use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
 
@@ -107,11 +106,6 @@ impl DeploymentSettings {
     #[must_use]
     pub const fn genesis_blend_round_duration(&self) -> Duration {
         self.genesis_era_parameters().blend_round_duration()
-    }
-
-    #[must_use]
-    pub fn genesis_blend_reward_params(&self) -> RewardsParameters {
-        self.genesis_era_parameters().blend_reward_params()
     }
 
     /// The schedule resolved: each era with its number, its slot duration and

@@ -1,10 +1,6 @@
-use std::sync::Arc;
-
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
-use lb_core::{block::genesis::GenesisBlock, sdp::ServiceParameters};
-use lb_cryptarchia_engine::EpochConfig;
-use lb_era_parameters::v1::cryptarchia::Settings as DeploymentSettings;
-use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
+use lb_core::block::genesis::GenesisBlock;
+use lb_era_parameters::EraDefinition;
 use lb_libp2p::PeerId;
 use lb_services_utils::overwatch::RecoveryData;
 
@@ -14,79 +10,21 @@ pub mod serde;
 
 pub struct ServiceConfig {
     pub user: Config,
-    pub deployment: DeploymentSettings,
 }
 
 impl ServiceConfig {
     #[must_use]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Conversion. Useful to have in a single place."
-    )]
     pub fn into_cryptarchia_services_settings(
         self,
+        era: &EraDefinition,
         genesis_block: GenesisBlock,
-        blend_rewards_params: RewardsParameters,
-        proposal_topic: String,
         recovery_data: RecoveryData,
     ) -> (
         lb_chain_service::CryptarchiaSettings,
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
         lb_chain_leader_service::LeaderSettings,
     ) {
-        let ledger_config = lb_ledger::Config {
-            consensus_config: self.deployment.consensus_config(),
-            epoch_config: EpochConfig {
-                epoch_period_nonce_buffer: self.deployment.epoch_config.epoch_period_nonce_buffer,
-                epoch_period_nonce_stabilization: self
-                    .deployment
-                    .epoch_config
-                    .epoch_period_nonce_stabilization,
-                epoch_stake_distribution_stabilization: self
-                    .deployment
-                    .epoch_config
-                    .epoch_stake_distribution_stabilization,
-            },
-            faucet_pk: self.deployment.faucet_pk,
-            sdp_config: lb_ledger::mantle::sdp::Config {
-                min_stake: self.deployment.sdp_config.min_stake,
-                service_params: Arc::new(
-                    self.deployment
-                        .sdp_config
-                        .service_params
-                        .into_iter()
-                        .map(|(service_type, service_params)| {
-                            (
-                                service_type,
-                                ServiceParameters {
-                                    inactivity_period: service_params.inactivity_period,
-                                    epoch: service_params.epoch,
-                                },
-                            )
-                        })
-                        .collect(),
-                ),
-                service_rewards_params: ServiceRewardsParameters {
-                    blend: blend_rewards_params,
-                },
-            },
-            pow_config: lb_ledger::config::PoWConfig {
-                blend: lb_ledger::config::BlendPoWConfig {
-                    base_difficulty: self.deployment.pow_config.blend.base_difficulty,
-                    damping_den_offset: self.deployment.pow_config.blend.damping_den_offset,
-                    damping_num: self.deployment.pow_config.blend.damping_num,
-                    max_step: self.deployment.pow_config.blend.max_step,
-                    target_transactions_per_block: self
-                        .deployment
-                        .pow_config
-                        .blend
-                        .target_transactions_per_block,
-                },
-                // Reused verbatim: the deployment mirror already holds the
-                // validated ledger type.
-                reward: self.deployment.pow_config.reward.clone(),
-            },
-        };
+        let ledger_config = era.parameters.ledger_config();
 
         let chain_service_settings = lb_chain_service::CryptarchiaSettings {
             bootstrap: lb_chain_service::BootstrapConfig {
@@ -132,7 +70,7 @@ impl ServiceConfig {
                 },
             },
             network: LibP2pAdapterSettings {
-                topic: proposal_topic,
+                topic: era.protocol_names.cryptarchia_topic.clone(),
                 max_connected_peers_to_try_download: self
                     .user
                     .network
