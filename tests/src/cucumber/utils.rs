@@ -192,12 +192,13 @@ pub(crate) fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, Step
     Ok(config)
 }
 
-/// Reads and classifies the node-owned wallet keys in deterministic order.
+/// Classifies the node-owned wallet keys in deterministic order.
 ///
 /// Every public key is returned once even if more than one configured key id
 /// points to it.
-pub fn node_wallet_keys_from_node_yaml(path: &Path) -> Result<Vec<NodeWalletKey>, StepError> {
-    let config = user_config_from_node_yaml(path)?;
+pub(crate) fn node_wallet_keys_from_config(
+    config: &UserConfig,
+) -> Result<Vec<NodeWalletKey>, StepError> {
     let cryptarchia_funding_pk = config.cryptarchia.leader.wallet.funding_pk;
     let sdp_funding_pk = config.sdp.wallet.funding_pk;
     let voucher_master_key_id = config.wallet.voucher_master_key_id.clone();
@@ -231,10 +232,8 @@ pub fn node_wallet_keys_from_node_yaml(path: &Path) -> Result<Vec<NodeWalletKey>
                 }
                 return Err(StepError::LogicalError {
                     message: format!(
-                        "Node wallet public key '{}' has conflicting roles {:?} and {role:?} in '{}'",
-                        existing.wallet_pk,
-                        existing.role,
-                        path.display(),
+                        "Node wallet public key '{}' has conflicting roles {:?} and {role:?}",
+                        existing.wallet_pk, existing.role,
                     ),
                 });
             }
@@ -253,10 +252,7 @@ pub fn node_wallet_keys_from_node_yaml(path: &Path) -> Result<Vec<NodeWalletKey>
             .count();
         if count != 1 {
             return Err(StepError::LogicalError {
-                message: format!(
-                    "Expected exactly one {role:?} node wallet key in '{}', found {count}",
-                    path.display(),
-                ),
+                message: format!("Expected exactly one {role:?} node wallet key, found {count}"),
             });
         }
     }

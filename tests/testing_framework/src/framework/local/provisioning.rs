@@ -30,9 +30,9 @@ use rand::Rng as _;
 use testing_framework_core::scenario::{Application, DynError, PeerSelection, StartNodeOptions};
 use testing_framework_runner_local::{
     BinaryProviderRef, BuildBinaryProvider, BuildCommand, DownloadBinaryProvider, DownloadChecksum,
-    DownloadUrl, EnvBinaryProvider, FallbackBinaryProvider, LaunchEnvVar, LaunchFile,
-    LocalBuildContext, LocalDeployerEnv, LocalPeerNode, NodeEndpointPort, NodeEndpoints,
-    PathBinaryProvider, PreparedNode, ProcessSpawnError, env::Node, process::LaunchSpec,
+    DownloadUrl, LaunchEnvVar, LaunchFile, LocalBuildContext, LocalDeployerEnv, LocalPeerNode,
+    NodeEndpointPort, NodeEndpoints, PathBinaryProvider, PreparedNode, ProcessSpawnError,
+    env::Node, process::LaunchSpec,
 };
 use tracing::debug;
 
@@ -256,31 +256,44 @@ async fn build_node_launch_spec(
     user_yaml: String,
     deployment_yaml: String,
 ) -> Result<LaunchSpec, DynError> {
+    let node_binary_profile =
+        NodeBinaryProfile::from_string(&env::var("NODE_BINARY_PROFILE").unwrap_or_default());
+    let provider = node_binary_provider(&node_binary_profile)?;
+    let current = if node_binary_profile == NodeBinaryProfile::TokioConsole {
+        replace_default_env("RUSTFLAGS", &rustflags_with_tokio_unstable())
+    } else {
+        None
+    };
+    let resolve_result = provider.resolve().await;
+    if node_binary_profile == NodeBinaryProfile::TokioConsole {
+        if let Some(val) = current {
+            let _unused = replace_default_env("RUSTFLAGS", &val);
+        } else {
+            remove_default_env("RUSTFLAGS");
+        }
+    }
+
+    Ok(node_launch_spec(
+        resolve_result?,
+        dir,
+        user_yaml,
+        deployment_yaml,
+    ))
+}
+
+pub(super) fn node_launch_spec(
+    binary: PathBuf,
+    dir: &Path,
+    user_yaml: String,
+    deployment_yaml: String,
+) -> LaunchSpec {
     let config_path = dir.join(USER_CONFIG_FILE);
     let deployment_path = dir.join(DEPLOYMENT_CONFIG_FILE);
     let time_backend =
         env::var("LOGOS_BLOCKCHAIN_TIME_BACKEND").unwrap_or_else(|_| "monotonic".to_owned());
-    let node_binary_profile =
-        NodeBinaryProfile::from_string(&env::var("NODE_BINARY_PROFILE").unwrap_or_default());
 
-    Ok(LaunchSpec {
-        binary: {
-            let provider = node_binary_provider(&node_binary_profile)?;
-            let current = if node_binary_profile == NodeBinaryProfile::TokioConsole {
-                replace_default_env("RUSTFLAGS", &rustflags_with_tokio_unstable())
-            } else {
-                None
-            };
-            let resolve_result = provider.resolve().await;
-            if node_binary_profile == NodeBinaryProfile::TokioConsole {
-                if let Some(val) = current {
-                    let _unused = replace_default_env("RUSTFLAGS", &val);
-                } else {
-                    remove_default_env("RUSTFLAGS");
-                }
-            }
-            resolve_result?
-        },
+    LaunchSpec {
+        binary,
         files: vec![
             launch_file(USER_CONFIG_FILE, user_yaml.into_bytes()),
             launch_file(DEPLOYMENT_CONFIG_FILE, deployment_yaml.into_bytes()),
@@ -294,7 +307,7 @@ async fn build_node_launch_spec(
             "LOGOS_BLOCKCHAIN_TIME_BACKEND",
             time_backend,
         )],
-    })
+    }
 }
 
 fn rustflags_with_tokio_unstable() -> String {
@@ -331,22 +344,44 @@ fn node_binary_provider(
 ) -> Result<BinaryProviderRef, DynError> {
     let release_download_requested =
         env::var_os(LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL).is_some_and(|url| !url.is_empty());
+
+    select_node_binary_provider(
+        node_binary_profile,
+        env::var_os("LOGOS_BLOCKCHAIN_NODE_BIN").map(PathBuf::from),
+        release_download_requested,
+    )
+}
+
+fn select_node_binary_provider(
+    node_binary_profile: &NodeBinaryProfile,
+    binary_path: Option<PathBuf>,
+    release_download_requested: bool,
+) -> Result<BinaryProviderRef, DynError> {
     validate_node_binary_selection(node_binary_profile, release_download_requested)?;
 
-    let mut providers: Vec<BinaryProviderRef> = vec![Arc::new(EnvBinaryProvider::new(
-        "LOGOS_BLOCKCHAIN_NODE_BIN",
-    ))];
+    if let Some(path) = binary_path {
+        if !path.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "LOGOS_BLOCKCHAIN_NODE_BIN does not point to a file: '{}'",
+                    path.display()
+                ),
+            )
+            .into());
+        }
 
-    if release_download_requested {
-        providers.push(Arc::new(release_binary_provider()));
+        return Ok(Arc::new(PathBinaryProvider::new(path.canonicalize()?)));
     }
 
-    providers.push(match node_binary_profile {
+    if release_download_requested {
+        return Ok(Arc::new(release_binary_provider()));
+    }
+
+    Ok(match node_binary_profile {
         NodeBinaryProfile::Normal => default_node_binary_provider(),
         NodeBinaryProfile::TokioConsole => tokio_console_node_binary_provider(),
-    });
-
-    Ok(Arc::new(FallbackBinaryProvider::new(providers)))
+    })
 }
 
 fn validate_node_binary_selection(
@@ -898,6 +933,38 @@ mod tests {
 
     use super::*;
     use crate::node::configs::deployment::DeploymentBuilder;
+
+    #[test]
+    fn invalid_explicit_binary_does_not_fall_back() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        for path in [
+            temp_dir.path().join("missing-node"),
+            temp_dir.path().to_path_buf(),
+            PathBuf::new(),
+        ] {
+            let error = select_node_binary_provider(&NodeBinaryProfile::Normal, Some(path), true)
+                .err()
+                .expect("invalid explicit paths must fail before downloading or building");
+
+            assert!(error.to_string().contains("LOGOS_BLOCKCHAIN_NODE_BIN"));
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_binary_takes_precedence_over_release_download() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let binary = temp_dir.path().join("node");
+        fs::write(&binary, b"selected binary").unwrap();
+
+        let provider =
+            select_node_binary_provider(&NodeBinaryProfile::Normal, Some(binary.clone()), true)
+                .unwrap();
+
+        assert_eq!(
+            provider.resolve().await.unwrap(),
+            binary.canonicalize().unwrap()
+        );
+    }
 
     #[test]
     fn release_download_rejects_tokio_console_profile() {

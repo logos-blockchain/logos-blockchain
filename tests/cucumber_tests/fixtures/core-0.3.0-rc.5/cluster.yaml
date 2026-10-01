@@ -1,0 +1,16 @@
+# Native configuration for logos-blockchain-node 0.3.0-rc.5 (2c652646).
+# Two funded leaders, no Blend providers or scenario wallets. A one-node
+# scenario uses the first node; the remaining stake stays offline.
+# Runtime ports, peers and state paths are supplied by TF through the node CLI.
+deployment: deployment.yaml
+nodes:
+  - node-1.yaml
+  - node-2.yaml
+slots_per_epoch: 2000
+# These scenarios have suitable initial state here; passing still depends on the binary.
+supported_scenarios:
+  - One node happy path
+  - Two nodes happy path
+  - Two nodes connect at runtime
+  - Invalid transaction is not retained in mempool
+  - Local snapshot restore after shutdown

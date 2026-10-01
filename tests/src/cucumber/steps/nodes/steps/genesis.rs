@@ -49,6 +49,9 @@ async fn step_chain_starts_from_now(
     step: &Step,
     seconds: i64,
 ) -> StepResult {
+    world
+        .cluster
+        .require_generated_config("changing the genesis time")?;
     let node_binary_profile = if world.tokio_console_profile_enabled() {
         NodeBinaryProfile::TokioConsole
     } else {

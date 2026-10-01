@@ -183,7 +183,6 @@ async fn collect_pending_mempool_hashes(
     node_info: &NodeInfo,
 ) -> Result<BTreeSet<TxHash>, StepError> {
     Ok(node_info
-        .started_node
         .client
         .test_mempool_view()
         .await?

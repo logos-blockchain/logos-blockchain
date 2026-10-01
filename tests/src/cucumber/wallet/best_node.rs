@@ -182,7 +182,7 @@ pub async fn determine_best_node(
             world
                 .nodes_info
                 .get(node_name)
-                .map(|node| (node_name.clone(), node.started_node.client.clone()))
+                .map(|node| (node_name.clone(), node.client.clone()))
         })
         .collect::<BTreeMap<_, _>>();
 
@@ -274,18 +274,18 @@ async fn resolve_selected_best_node<'a>(
             ),
         })?;
 
-    let consensus = node_info
-        .started_node
-        .client
-        .consensus_info()
-        .await
-        .map_err(|_| StepError::LogicalError {
-            message: "No available nodes to query for UTXOs".to_owned(),
-        })?;
+    let consensus =
+        node_info
+            .client
+            .consensus_info()
+            .await
+            .map_err(|_| StepError::LogicalError {
+                message: "No available nodes to query for UTXOs".to_owned(),
+            })?;
 
     Ok((
         selected.node_name.clone(),
-        &node_info.started_node.client,
+        &node_info.client,
         consensus.cryptarchia_info,
     ))
 }
@@ -303,14 +303,14 @@ async fn resolve_cached_best_node<'a>(
         });
     };
 
-    let consensus = node_info
-        .started_node
-        .client
-        .consensus_info()
-        .await
-        .map_err(|_| StepError::LogicalError {
-            message: "No available nodes to query for UTXOs".to_owned(),
-        })?;
+    let consensus =
+        node_info
+            .client
+            .consensus_info()
+            .await
+            .map_err(|_| StepError::LogicalError {
+                message: "No available nodes to query for UTXOs".to_owned(),
+            })?;
 
     let selected_tip = normalize_header_id_str(&selected.tip);
     let live_tip = consensus.cryptarchia_info.tip.encode_hex::<String>();
@@ -323,7 +323,7 @@ async fn resolve_cached_best_node<'a>(
 
     Ok(Some((
         selected.node_name.clone(),
-        &node_info.started_node.client,
+        &node_info.client,
         consensus.cryptarchia_info,
     )))
 }
