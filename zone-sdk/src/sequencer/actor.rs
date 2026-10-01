@@ -1169,7 +1169,7 @@ mod tests {
     /// through serde and a restore, so a restored sequencer can still re-fund
     /// what it restored.
     #[tokio::test]
-    async fn pre_fund_ops_survive_a_checkpoint_round_trip() {
+    async fn funding_record_survives_a_checkpoint_round_trip() {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
         let config = SequencerConfig::new(funding_config());

@@ -943,8 +943,8 @@ Feature: Zone SDK
     And sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
       | alias | data      |
       | MSG_2 | message 2 |
-    # The rebuild must work from a restored checkpoint too: the stored
-    # pre-funding ops travel with it
+    # The rebuild must work from a restored checkpoint too: the funding
+    # record travels with it
     When I save current checkpoint of sequencer "SEQ_A" as "REFUND_CHECKPOINT"
     And I restart zone sequencer "SEQ_A" from checkpoint "REFUND_CHECKPOINT"
     Then the zone indexer returns all zone messages exactly once in any order in 600 seconds
