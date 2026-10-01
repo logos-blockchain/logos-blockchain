@@ -349,7 +349,7 @@ async fn start_sdp_manual_cluster(
     let node0 = cluster_harness
         .cluster()
         .start_node_with(
-            "0",
+            "node-0",
             StartNodeOptions::default()
                 .with_persist_dir(node0_persist_dir)
                 .create_patch({

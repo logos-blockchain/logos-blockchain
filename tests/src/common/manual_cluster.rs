@@ -224,7 +224,7 @@ where
         nodes.push(
             Box::pin(
                 cluster.start_node_with(
-                    &node_index.to_string(),
+                    &format!("node-{node_index}"),
                     StartNodeOptions::default()
                         .with_peers(peers)
                         .with_persist_dir(scenario_base_dir.join(format!("node-{node_index}")))
