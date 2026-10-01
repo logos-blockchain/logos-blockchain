@@ -144,6 +144,10 @@ mod tests {
         Ed25519Signature::from_bytes(&[byte; 64])
     }
 
+    fn signature_json(byte: u8) -> String {
+        serde_json::to_string(&sig(byte)).unwrap()
+    }
+
     /// Encodes `entries` as a proof would, keeping their order and repeats,
     /// so the bytes can describe a proof that cannot be built.
     fn encode_entries(entries: &[(ChannelKeyIndex, u8)]) -> Vec<u8> {
@@ -194,7 +198,6 @@ mod tests {
         let proof = ChannelMultiSigProof::new(
             IndexedSignatures::try_from([(0, sig(1)), (7, sig(2))]).unwrap(),
         );
-        let signature_json = |byte| serde_json::to_string(&sig(byte)).unwrap();
 
         let reversed = format!(
             "{{\"signatures\":{{\"7\":{},\"0\":{}}}}}",
@@ -212,6 +215,27 @@ mod tests {
                 signature_json(1),
                 signature_json(2)
             )
+        );
+    }
+
+    /// A key counts at most once towards a threshold, however a proof read
+    /// through serde lists it: index 0 given twice reads back as a single
+    /// signature, the later one, as a `BTreeMap` keeps it. One key holder
+    /// therefore cannot meet a threshold of 2 alone by repeating their index.
+    #[test]
+    fn deserialize_keeps_one_signature_per_index() {
+        let repeated = format!(
+            "{{\"signatures\":{{\"0\":{},\"0\":{}}}}}",
+            signature_json(1),
+            signature_json(2)
+        );
+
+        let proof = serde_json::from_str::<ChannelMultiSigProof>(&repeated).unwrap();
+
+        assert_eq!(proof.signatures().len(), 1);
+        assert_eq!(
+            proof,
+            ChannelMultiSigProof::new(IndexedSignatures::from((0, sig(2))))
         );
     }
 }
