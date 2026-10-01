@@ -79,7 +79,7 @@ use overwatch::{
 use rand::{RngCore, SeedableRng as _, seq::SliceRandom as _};
 use rand_chacha::ChaCha20Rng;
 use tokio::sync::oneshot;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     core::{
@@ -1646,8 +1646,8 @@ async fn retire<
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
+    let epoch = retiring_epoch.epoch();
     loop {
-        let epoch = retiring_epoch.epoch();
         tokio::select! {
             Some(incoming_message) = blend_messages.next() => {
                 let (crypto_processor, message_scheduler, blending_token_collector) = retiring_epoch.split_mut();
@@ -1659,25 +1659,50 @@ async fn retire<
             Some(undelivered) = next_undelivered_messages(failure_detector.as_mut()) => {
                 broadcast_undelivered_messages(undelivered.into_iter(), &payload_dispatcher).await;
             }
-            Some(EpochEvent::TransitionPeriodExpired) = remaining_epoch_stream.next() => {
-                // Its scheduler is about to go, so whatever that epoch
-                // encapsulated and never released can no longer be sent
-                // and is nothing left to wait on.
-                if let Some(failure_detector) = failure_detector.as_mut() {
-                    failure_detector.drop_unreleased_payloads_for_epoch(epoch);
+            // Matched in full on purpose: a `select!` pattern that only named
+            // the expiry would consume and drop anything else the stream
+            // yields without a trace. Only the expiry ends the window; the
+            // other cases are logged and the wait goes on.
+            epoch_event = remaining_epoch_stream.next() => {
+                if retirement_window_closed(epoch_event.as_ref()) {
+                    break;
                 }
-                handle_epoch_transition_expired(&mut backend, retiring_epoch.into_tokens(), &sdp_relay).await;
-                // Now the core service is no longer needed for the current (new) epoch,
-                // and the remaining epoch transition has been completed,
-                // so finishing the retirement process — bar the deadlines this
-                // epoch's own releases are still owed.
-                if let Some(failure_detector) = failure_detector {
-                    failure_detector
-                        .drain_pending_message_queue(&payload_dispatcher)
-                        .await;
-                }
-                return;
             }
+        }
+    }
+
+    // Its scheduler is about to go, so whatever that epoch encapsulated and
+    // never released can no longer be sent and is nothing left to wait on.
+    if let Some(failure_detector) = failure_detector.as_mut() {
+        failure_detector.drop_unreleased_payloads_for_epoch(epoch);
+    }
+    handle_epoch_transition_expired(&mut backend, retiring_epoch.into_tokens(), &sdp_relay).await;
+    // Now the core service is no longer needed for the current (new) epoch,
+    // and the remaining epoch transition has been completed, so finishing the
+    // retirement process — bar the deadlines this epoch's own releases are
+    // still owed.
+    if let Some(failure_detector) = failure_detector {
+        failure_detector
+            .drain_pending_message_queue(&payload_dispatcher)
+            .await;
+    }
+}
+
+/// Whether an epoch event ends the retirement window. Only the transition
+/// period expiry does. A new epoch arriving first means the stream replaced
+/// this epoch's timer with the new epoch's, so the expiry that comes next is
+/// later than planned; an ended stream means no expiry will come at all. Both
+/// are logged so the delay is visible, and the wait goes on.
+fn retirement_window_closed<Info>(epoch_event: Option<&EpochEvent<Info>>) -> bool {
+    match epoch_event {
+        Some(EpochEvent::TransitionPeriodExpired) => true,
+        Some(EpochEvent::NewEpoch(_)) => {
+            warn!(target: LOG_TARGET, "New epoch started before the retiring epoch's transition period expired; retirement now ends with the new epoch's transition period.");
+            false
+        }
+        None => {
+            warn!(target: LOG_TARGET, "Epoch stream ended during retirement; no transition period expiry will arrive.");
+            false
         }
     }
 }
