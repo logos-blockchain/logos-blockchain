@@ -1,4 +1,4 @@
-use core::time::Duration;
+use core::{num::NonZero, time::Duration};
 
 use lb_core::{
     block::genesis::GenesisBlock,
@@ -9,15 +9,20 @@ use lb_core::{
         transactions::genesis_tx::{ChainId, GenesisTime},
     },
 };
-use lb_cryptarchia_engine::Epoch;
+use lb_cryptarchia_engine::{
+    Epoch,
+    era::{EraEntry, Eras, ErasError},
+};
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
 
-mod era;
-pub use era::{EraParameters, EraSchedule, EraScheduleError};
+pub mod era;
+pub use era::{EraSchedule, EraScheduleError, parameters::EraParameters};
 mod protocols;
 pub use protocols::ProtocolNames;
+
+use crate::config::deployment::era::parameters::v1;
 
 pub const SERIALIZED_DEPLOYMENT: &[u8] = include_bytes!("settings.yaml");
 
@@ -86,13 +91,20 @@ impl DeploymentSettings {
             .expect("every era schedule has a genesis era")
     }
 
+    /// The parameters of the genesis era, in version 1's layout, the only one
+    /// there is.
     #[must_use]
-    pub const fn genesis_era_parameters(&self) -> &EraParameters {
-        self.eras.genesis_era_parameters()
+    pub const fn genesis_era_parameters(&self) -> &v1::Parameters {
+        match self.eras.genesis() {
+            EraParameters::V1(parameters) => parameters,
+        }
     }
 
-    pub const fn genesis_era_parameters_mut(&mut self) -> &mut EraParameters {
-        self.eras.genesis_era_parameters_mut()
+    /// See [`Self::genesis_era_parameters`].
+    pub const fn genesis_era_parameters_mut(&mut self) -> &mut v1::Parameters {
+        match self.eras.genesis_mut() {
+            EraParameters::V1(parameters) => parameters,
+        }
     }
 
     #[must_use]
@@ -104,6 +116,70 @@ impl DeploymentSettings {
     pub fn genesis_blend_reward_params(&self) -> RewardsParameters {
         self.genesis_era_parameters().blend_reward_params()
     }
+
+    /// The schedule resolved: each era with its number, its slot duration and
+    /// epoch length, and its definition, its parameters and the digests and
+    /// protocol names in force while it is.
+    pub fn eras(&self) -> Result<Eras<EraDefinition>, ErasError> {
+        let (genesis_id, chain_id) = (self.genesis_id(), self.chain_id());
+        let mut era_digests = Vec::with_capacity(self.eras.iter().len());
+        let mut entries = Vec::with_capacity(self.eras.iter().len());
+        for (first_epoch, parameters) in self.eras.iter() {
+            let digest = EraDigest::compute(first_epoch, parameters);
+            era_digests.push(digest);
+            let fork_digest =
+                ForkDigest::compute(genesis_id, &chain_id, era_digests.iter().copied());
+            let EraParameters::V1(layout) = parameters;
+            entries.push(EraEntry {
+                first_epoch,
+                version: parameters.version(),
+                slot_duration: layout.time.slot_duration,
+                epoch_length: NonZero::new(layout.cryptarchia.slots_per_epoch()).expect(
+                    "an epoch has at least one slot: its phases and base period are not zero",
+                ),
+                parameters: EraDefinition {
+                    parameters: parameters.clone(),
+                    digest,
+                    fork_digest,
+                    protocol_names: ProtocolNames::derive(&chain_id, fork_digest),
+                },
+            });
+        }
+        Eras::new(entries)
+    }
+
+    /// The schedule resolved, if this release can run it.
+    ///
+    /// Switching eras while running is not implemented yet, so a schedule of
+    /// more than one era is refused: a node would otherwise keep running the
+    /// first era past the second one's start, and fork off the chain.
+    pub fn runnable_eras(&self) -> Result<Eras<EraDefinition>, UnrunnableDeployment> {
+        let scheduled = self.eras.iter().len();
+        if scheduled > 1 {
+            return Err(UnrunnableDeployment::MultipleEras(scheduled));
+        }
+        Ok(self.eras()?)
+    }
+}
+
+/// An era as the node runs it: its parameters, its digest, and the fork digest
+/// and protocol names in force while it is.
+#[derive(Clone, Debug)]
+pub struct EraDefinition {
+    pub parameters: EraParameters,
+    pub digest: EraDigest,
+    /// The digest of the eras up to this one, in activation order.
+    pub fork_digest: ForkDigest,
+    pub protocol_names: ProtocolNames,
+}
+
+/// Why this release cannot run a deployment.
+#[derive(Debug, thiserror::Error)]
+pub enum UnrunnableDeployment {
+    #[error(transparent)]
+    Schedule(#[from] ErasError),
+    #[error("this release runs single-era schedules only, but the deployment schedules {0} eras")]
+    MultipleEras(usize),
 }
 
 impl Default for DeploymentSettings {
@@ -140,12 +216,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use lb_core::era::Era;
-    use lb_cryptarchia_engine::Epoch;
+    use lb_cryptarchia_engine::{Epoch, era::EraVersion};
 
     use crate::config::{
         DeploymentSettings,
-        deployment::{EraParameters, fork_digest_at_era},
+        deployment::{EraParameters, EraSchedule, UnrunnableDeployment, fork_digest_at_era},
     };
 
     #[test]
@@ -205,7 +283,7 @@ mod tests {
         // from the chain ID and the fork digest alone.
         let settings = DeploymentSettings::default();
         let (genesis_id, chain_id) = (settings.genesis_id(), settings.chain_id());
-        let parameters = settings.genesis_era_parameters();
+        let parameters = settings.eras.genesis();
         let one_era = [(Epoch::new(0), parameters)];
         let two_eras = [(Epoch::new(0), parameters), (Epoch::new(100), parameters)];
         let fork_digest = |eras: &[(Epoch, &EraParameters)], era| {
@@ -221,6 +299,54 @@ mod tests {
         assert_ne!(second_fork, Some(first_fork));
         assert_eq!(fork_digest(&one_era, second_era), None);
         assert!(settings.protocol_names_at_era(second_era).is_none());
+    }
+
+    /// The default deployment with a second era, running the same parameters,
+    /// from epoch 100.
+    fn two_era_settings() -> DeploymentSettings {
+        let mut settings = DeploymentSettings::default();
+        let genesis = settings.eras.genesis().clone();
+        let second = genesis.clone();
+        settings.eras = EraSchedule::try_from(BTreeMap::from([
+            (Epoch::new(0), genesis),
+            (Epoch::new(100), second),
+        ]))
+        .unwrap();
+        settings
+    }
+
+    #[test]
+    fn the_resolved_schedule_starts_at_genesis_on_the_genesis_fork() {
+        // A second era moves neither the start of the genesis era nor the fork
+        // it follows.
+        let settings = two_era_settings();
+        let eras = settings.eras().unwrap();
+        let genesis = eras.genesis();
+        assert_eq!(genesis.entry.version, EraVersion::V1);
+        assert_eq!(
+            genesis.entry.parameters.fork_digest,
+            DeploymentSettings::default().genesis_fork_digest()
+        );
+    }
+
+    #[test]
+    fn only_single_era_schedules_run() {
+        let settings = DeploymentSettings::default();
+        let eras = settings.runnable_eras().unwrap();
+        assert_eq!(
+            eras.genesis()
+                .entry
+                .parameters
+                .protocol_names
+                .blend
+                .as_ref(),
+            settings.genesis_protocol_names().blend.as_ref()
+        );
+
+        assert!(matches!(
+            two_era_settings().runnable_eras(),
+            Err(UnrunnableDeployment::MultipleEras(2))
+        ));
     }
 
     #[test]

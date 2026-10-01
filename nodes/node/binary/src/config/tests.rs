@@ -22,6 +22,7 @@ use crate::{
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues,
         },
+        deployment::EraParameters,
         mempool::ServiceConfig as MempoolServiceConfig,
         parse_log_filter_layer,
         sdp::{
@@ -224,7 +225,7 @@ fn service_settings_receive_recovery_data() {
 
     let deployment_settings = DeploymentSettings::default();
     let protocol_names = deployment_settings.genesis_protocol_names();
-    let genesis_parameters = deployment_settings.eras.into_genesis_era_parameters();
+    let EraParameters::V1(genesis_parameters) = deployment_settings.eras.into_genesis();
 
     let (blend_service_settings, _, _) = BlendServiceConfig {
         user: user_config.blend.clone(),

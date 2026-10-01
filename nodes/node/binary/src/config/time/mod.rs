@@ -6,11 +6,13 @@ use lb_time_service::{
 };
 
 use crate::config::{
-    cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
-    time::{deployment::Settings as DeploymentSettings, serde::Config},
+    deployment::era::parameters::v1::{
+        cryptarchia::Settings as CryptarchiaDeploymentSettings,
+        time::Settings as DeploymentSettings,
+    },
+    time::serde::Config,
 };
 
-pub mod deployment;
 pub mod serde;
 
 pub struct ServiceConfig {

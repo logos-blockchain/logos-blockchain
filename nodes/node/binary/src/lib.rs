@@ -5,8 +5,6 @@ pub mod generic_services;
 pub mod global_allocators;
 pub mod panic;
 
-mod codec;
-
 use std::{collections::HashMap, panic::set_hook};
 
 use color_eyre::eyre::{Result, eyre};
@@ -48,12 +46,18 @@ use tokio::runtime;
 use crate::{
     api::backend::AxumBackend,
     config::{
-        DeploymentSettings, RunConfig, api::ServiceConfig as ApiConfig,
-        blend::ServiceConfig as BlendConfig, cryptarchia::ServiceConfig as CryptarchiaConfig,
-        deployment::EraParameters, kms::ServiceConfig as KmsConfig,
-        mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
-        pow::ServiceConfig as PoWConfig, sdp::ServiceConfig as SdpConfig,
-        storage::ServiceConfig as StorageConfig, time::ServiceConfig as TimeConfig,
+        DeploymentSettings, RunConfig,
+        api::ServiceConfig as ApiConfig,
+        blend::ServiceConfig as BlendConfig,
+        cryptarchia::ServiceConfig as CryptarchiaConfig,
+        deployment::{EraParameters, era::parameters::v1},
+        kms::ServiceConfig as KmsConfig,
+        mempool::ServiceConfig as MempoolConfig,
+        network::ServiceConfig as NetworkConfig,
+        pow::ServiceConfig as PoWConfig,
+        sdp::ServiceConfig as SdpConfig,
+        storage::ServiceConfig as StorageConfig,
+        time::ServiceConfig as TimeConfig,
         wallet::ServiceConfig as WalletConfig,
     },
     generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
@@ -175,10 +179,12 @@ pub fn run_node_from_config(
     let chain_id = config.deployment.chain_id();
     let genesis_time = config.deployment.genesis_time();
 
-    // Derived from the chain and the fork of the era in force, and handed to
-    // every service that speaks a protocol or a topic. Only single-era
-    // schedules are supported for now, so the genesis era is in force.
-    let protocol_names = config.deployment.genesis_protocol_names();
+    // The schedule, resolved. This release runs single-era schedules only, so
+    // the genesis era is in force, and its protocol names, derived from the
+    // chain and its fork, go to every service that speaks a protocol or a
+    // topic.
+    let eras = config.deployment.runnable_eras()?;
+    let protocol_names = eras.genesis().entry.parameters.protocol_names.clone();
 
     let blend_rewards_params = config.deployment.genesis_blend_reward_params();
 
@@ -195,14 +201,14 @@ pub fn run_node_from_config(
     let pow_rewards_enabled = pow_reward_config.rate_num > 0;
 
     let DeploymentSettings {
-        eras,
+        eras: schedule,
         genesis_block,
     } = config.deployment;
-    let EraParameters {
+    let EraParameters::V1(v1::Parameters {
         blend: blend_deployment,
         cryptarchia: cryptarchia_deployment,
         time: time_deployment,
-    } = eras.into_genesis_era_parameters();
+    }) = schedule.into_genesis();
 
     let storage_config = StorageConfig {
         user: config.user.storage,

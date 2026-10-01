@@ -317,6 +317,10 @@ fn load_base_config(path: Option<&PathBuf>) -> Result<Value> {
 /// Load a genesis template, and assemble from it the deployment config the
 /// ceremony completes: the template's era definition becomes era zero.
 ///
+/// A template is an era's parameters tagged with their version, such as
+/// `!V1`, so the template, not the tool, decides which version the chain
+/// starts at.
+///
 /// If `path` is `None`, returns the default deployment config, whose genesis
 /// block the ceremony replaces.
 fn load_genesis_template(path: Option<&PathBuf>) -> Result<Value> {
@@ -326,14 +330,17 @@ fn load_genesis_template(path: Option<&PathBuf>) -> Result<Value> {
 
     let content = fs::read_to_string(path)
         .with_context(|| format!("cannot read genesis template '{}'", path.display()))?;
-    let template: Value = serde_yaml::from_str(&content)
+    let era: Value = serde_yaml::from_str(&content)
         .with_context(|| format!("cannot parse YAML from '{}'", path.display()))?;
-    let Value::Mapping(era) = template else {
-        bail!("genesis template '{}' is not a mapping", path.display());
-    };
+    if !matches!(era, Value::Tagged(_)) {
+        bail!(
+            "genesis template '{}' must be tagged with the version of its parameters, such as `!V1`",
+            path.display()
+        );
+    }
 
     let mut eras = serde_yaml::Mapping::new();
-    eras.insert(Value::from(0u64), Value::Mapping(era));
+    eras.insert(Value::from(0u64), era);
     let mut config = serde_yaml::Mapping::new();
     config.insert(Value::from("eras"), Value::Mapping(eras));
     Ok(Value::Mapping(config))

@@ -7,9 +7,11 @@ use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsPa
 use lb_libp2p::PeerId;
 use lb_services_utils::overwatch::RecoveryData;
 
-use crate::config::cryptarchia::{deployment::Settings as DeploymentSettings, serde::Config};
+use crate::config::{
+    cryptarchia::serde::Config,
+    deployment::era::parameters::v1::cryptarchia::Settings as DeploymentSettings,
+};
 
-pub mod deployment;
 pub mod serde;
 
 pub struct ServiceConfig {

@@ -1,11 +1,11 @@
-//! The canonical encoding of the Blend era parameters.
+//! The canonical encoding of the Blend v1 era parameters.
 
 use core::num::{NonZeroU32, NonZeroU64, NonZeroU128};
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 use lb_utils::math::PositiveF64;
 
-use crate::config::blend::deployment::{
+use crate::config::deployment::era::parameters::v1::blend::{
     CommonSettings, CoreSettings, CoverTrafficSettings, MessageDelayerSettings, MinimumNetworkSize,
     SchedulerSettings, Settings,
 };
@@ -148,7 +148,7 @@ impl BinaryEncode for MessageDelayerSettings {
     }
 }
 
-pub(super) fn fixture_settings() -> Settings {
+pub fn fixture_settings() -> Settings {
     Settings {
         common: fixture_common_settings(),
         core: fixture_core_settings(),
@@ -198,7 +198,7 @@ const fn message_delayer_settings() -> MessageDelayerSettings {
     }
 }
 
-pub(super) const SETTINGS_HEX: &str = "
+pub const SETTINGS_HEX: &str = "
     0100000000000000 0200000000000000 0300000000000000 0400000000000000 0000000000001440
     0600000000000000 07000000 08000000 0900000000000000 0a000000000000000000000000000000
     0b00000000000000

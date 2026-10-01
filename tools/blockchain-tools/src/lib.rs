@@ -3,6 +3,11 @@ use serde_yaml::Value;
 
 /// Deep-merge `overwrite` into `input`. Mappings are merged recursively;
 /// any other type is replaced wholesale by the overwrite value.
+///
+/// A tagged value, such as an era's parameters tagged with their version
+/// (`!V1`), merges like the mapping it tags: an untagged mapping, or a value
+/// with the same tag, merges into it and keeps its tag, while a value with
+/// another tag replaces it.
 #[must_use]
 pub fn overwrite_yaml(input: Value, overwrite: Value) -> Value {
     match (input, overwrite) {
@@ -17,6 +22,14 @@ pub fn overwrite_yaml(input: Value, overwrite: Value) -> Value {
             }
             Value::Mapping(input_map)
         }
+        (Value::Tagged(mut input), overwrite @ Value::Mapping(_)) => {
+            input.value = overwrite_yaml(core::mem::take(&mut input.value), overwrite);
+            Value::Tagged(input)
+        }
+        (Value::Tagged(mut input), Value::Tagged(overwrite)) if input.tag == overwrite.tag => {
+            input.value = overwrite_yaml(core::mem::take(&mut input.value), overwrite.value);
+            Value::Tagged(input)
+        }
         (_, overwrite) => overwrite,
     }
 }
@@ -27,6 +40,8 @@ pub fn overwrite_yaml(input: Value, overwrite: Value) -> Value {
 /// the segment as an index, a mapping as a key. A segment spelling out one of
 /// a mapping's integer keys names that key, as `0` does in `eras.0.time`,
 /// where eras are keyed by first epoch; any other segment is a string key.
+/// A tag, such as the version an era's parameters carry (`eras.0` is
+/// `!V1 {...}`), is stepped through: the next segment reads the value it tags.
 /// Missing mapping keys, and any parents they need, are created.
 ///
 /// # Errors
@@ -39,6 +54,7 @@ pub fn set_at_path(root: &mut Value, path: &str, value: Value) -> Result<(), Str
         if segment.is_empty() {
             return Err(format!("empty segment in path '{path}'"));
         }
+        current = untagged(current);
         if current.is_null() {
             *current = Value::Mapping(serde_yaml::Mapping::new());
         }
@@ -65,6 +81,15 @@ pub fn set_at_path(root: &mut Value, path: &str, value: Value) -> Result<(), Str
     }
     *current = value;
     Ok(())
+}
+
+/// The value `value` tags, through any number of tags, or `value` itself when
+/// it carries none.
+fn untagged(mut value: &mut Value) -> &mut Value {
+    while let Value::Tagged(tagged) = value {
+        value = &mut tagged.value;
+    }
+    value
 }
 
 /// The key `segment` names in `mapping`: the integer key it spells out when
@@ -139,6 +164,31 @@ mod tests {
         let mut root = yaml("eras:\n  0:\n    k: 1\n    f: 2");
         apply_dotted_kv(&mut root, "eras.0.k=30").unwrap();
         assert_eq!(root, yaml("eras:\n  0:\n    k: 30\n    f: 2"));
+    }
+
+    #[test]
+    fn a_path_steps_through_a_tag() {
+        let mut root = yaml("eras:\n  0: !V1\n    k: 1\n    f: 2");
+        apply_dotted_kv(&mut root, "eras.0.k=30").unwrap();
+        assert_eq!(root, yaml("eras:\n  0: !V1\n    k: 30\n    f: 2"));
+    }
+
+    #[test]
+    fn a_mapping_merges_into_a_tagged_value_and_keeps_its_tag() {
+        let base = yaml("eras:\n  0: !V1\n    k: 1\n    f: 2");
+        assert_eq!(
+            overwrite_yaml(base.clone(), yaml("eras:\n  0:\n    k: 30")),
+            yaml("eras:\n  0: !V1\n    k: 30\n    f: 2")
+        );
+        assert_eq!(
+            overwrite_yaml(base.clone(), yaml("eras:\n  0: !V1\n    f: 3")),
+            yaml("eras:\n  0: !V1\n    k: 1\n    f: 3")
+        );
+        // Another tag is another variant: it replaces the value whole.
+        assert_eq!(
+            overwrite_yaml(base, yaml("eras:\n  0: !V2\n    f: 3")),
+            yaml("eras:\n  0: !V2\n    f: 3")
+        );
     }
 
     #[test]

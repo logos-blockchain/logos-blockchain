@@ -58,12 +58,16 @@ async fn main() -> Result<()> {
             cli_args.user_config_path(),
             OnUnknownKeys::Fail,
         )?);
-        // If custom, check deployment config.
+        // If custom, check deployment config, and that this release can run
+        // its schedule.
         if let Some(custom_deployment_path) = cli_args.deployment_config_path() {
-            drop(deserialize_value_at_path::<DeploymentSettings>(
-                custom_deployment_path,
-                OnUnknownKeys::Fail,
-            )?);
+            drop(
+                deserialize_value_at_path::<DeploymentSettings>(
+                    custom_deployment_path,
+                    OnUnknownKeys::Fail,
+                )?
+                .runnable_eras()?,
+            );
         }
         #[expect(
             clippy::non_ascii_literal,

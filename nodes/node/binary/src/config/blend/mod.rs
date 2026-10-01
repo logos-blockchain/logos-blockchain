@@ -17,12 +17,14 @@ use lb_libp2p::protocol_name::StreamProtocol;
 use lb_services_utils::overwatch::RecoveryData;
 
 use crate::config::{
-    blend::{deployment::Settings as DeploymentSettings, serde::Config},
-    cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
-    time::deployment::Settings as TimeDeploymentSettings,
+    blend::serde::Config,
+    deployment::era::parameters::v1::{
+        blend::Settings as DeploymentSettings,
+        cryptarchia::Settings as CryptarchiaDeploymentSettings,
+        time::Settings as TimeDeploymentSettings,
+    },
 };
 
-pub mod deployment;
 pub mod serde;
 
 /// The three settings a Blend deployment produces: the proxy's, which picks

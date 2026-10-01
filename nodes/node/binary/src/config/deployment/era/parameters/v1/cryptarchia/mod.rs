@@ -12,6 +12,8 @@ use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use serde::{Deserialize, Serialize};
 
+pub(super) mod codec;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Settings {
     pub epoch_config: EpochConfig,

@@ -1,10 +1,10 @@
-//! The canonical encoding of the time era parameters.
+//! The canonical encoding of the time v1 era parameters.
 
 use core::time::Duration;
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 
-use crate::config::time::deployment::Settings;
+use crate::config::deployment::era::parameters::v1::time::Settings;
 
 impl BinaryEncode for Settings {
     fn encoded_length(&self) -> usize {
@@ -20,12 +20,12 @@ impl BinaryEncode for Settings {
     }
 }
 
-pub(super) const fn fixture_settings() -> Settings {
+pub const fn fixture_settings() -> Settings {
     Settings {
         slot_duration: Duration::from_secs(42),
     }
 }
 
-pub(super) const SETTINGS_HEX: &str = "2a00000000000000 00000000";
+pub const SETTINGS_HEX: &str = "2a00000000000000 00000000";
 
 codec_fixtures!(Settings, encode_only, fixture_settings() => SETTINGS_HEX);
