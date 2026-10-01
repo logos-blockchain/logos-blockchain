@@ -40,6 +40,7 @@ use lb_core::{
         },
     },
 };
+use lb_era_parameters::{EraDefinition, EraParameters};
 use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_key_management_system_keys::keys::{
     MAX_ZK_SIGNING_KEYS, UnsecuredZkKey, ZkPublicKey, ZkSignature,
@@ -213,6 +214,30 @@ pub struct PoWServiceSettings {
     /// Storage-recovery bookkeeping, populated by the runtime on startup.
     #[serde(skip)]
     pub recovery_data: RecoveryData,
+}
+
+impl PoWServiceSettings {
+    /// The settings of the `PoW` service while `era` is in force. The window a
+    /// ticket stays claimable for, and whether rewards are paid at all, are
+    /// the era's consensus values, so the mining service and the ledger agree
+    /// on them.
+    #[must_use]
+    pub const fn from_era(
+        era: &EraDefinition,
+        mining: PoWMiningSettings,
+        auto_claim: AutoClaimSettings,
+        recovery_data: RecoveryData,
+    ) -> Self {
+        let EraParameters::V1(parameters) = &era.parameters;
+        let reward = &parameters.cryptarchia.pow_config.reward;
+        Self {
+            mining,
+            auto_claim,
+            slot_window: reward.slot_window,
+            rewards_enabled: reward.rate_num > 0,
+            recovery_data,
+        }
+    }
 }
 
 /// One auto-claim destination: a key and the balance we want it to reach.

@@ -5075,6 +5075,7 @@ dependencies = [
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
+ "logos-blockchain-era-parameters",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-ledger",

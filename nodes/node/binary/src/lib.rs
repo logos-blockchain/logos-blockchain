@@ -183,18 +183,6 @@ pub fn run_node_from_config(
 
     let blend_rewards_params = config.deployment.genesis_blend_reward_params();
 
-    // The PoW mining service must use the same acceptance window as consensus;
-    // read it from the cryptarchia parameters before they are moved into the
-    // cryptarchia service settings below.
-    let pow_reward_config = &config
-        .deployment
-        .genesis_era_parameters()
-        .cryptarchia
-        .pow_config
-        .reward;
-    let pow_slot_window = pow_reward_config.slot_window;
-    let pow_rewards_enabled = pow_reward_config.rate_num > 0;
-
     let DeploymentSettings {
         eras: schedule,
         genesis_block,
@@ -274,7 +262,7 @@ pub fn run_node_from_config(
     let pow_config = PoWConfig {
         user: config.user.pow,
     }
-    .into_pow_service_settings(recovery_data, pow_slot_window, pow_rewards_enabled);
+    .into_pow_service_settings(era, recovery_data);
 
     let tracing_config = config::tracing::ServiceConfig {
         user: config.user.tracing,
