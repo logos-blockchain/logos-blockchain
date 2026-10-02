@@ -633,8 +633,8 @@ impl TxState {
         window: u64,
     ) -> (Vec<PendingTx>, Vec<SignedOps<Unverified, StandardMode>>) {
         let safe = self.safe_at(tip);
-        // `(hash, parent message)` of every expired entry.
-        let expired: Vec<(TxHash, Option<MsgId>)> = self
+        // `(hash, message parent, config parent)` of every expired entry.
+        let expired: Vec<(TxHash, Option<MsgId>, Option<MsgId>)> = self
             .pending
             .iter()
             .filter(|(hash, p)| {
@@ -642,27 +642,35 @@ impl TxState {
                     && !safe.contains(hash)
                     && Self::expired(p.funded_at, lib_slot, window)
             })
-            .map(|(hash, p)| (*hash, Some(p.parent_msg)))
+            .map(|(hash, p)| (*hash, Some(p.parent_msg), None))
             .chain(
                 self.pending_other
                     .iter()
                     .filter(|(hash, entry)| {
                         !safe.contains(hash) && Self::expired(entry.funded_at, lib_slot, window)
                     })
-                    .map(|(hash, entry)| (*hash, entry.first_parent)),
+                    .map(|(hash, entry)| (*hash, entry.first_parent, entry.config_parent)),
             )
             .collect();
         // Displace from each chain's head: an expired entry chained on
-        // another expired entry goes with it, parent first. Heads sorted for
-        // determinism across `HashMap` iteration order.
+        // another expired entry, on either lineage, goes with it, parent
+        // first. Heads sorted for determinism across `HashMap` iteration
+        // order.
         let expired_tips: HashSet<MsgId> = expired
             .iter()
-            .filter_map(|(hash, _)| self.pending_tip_of(*hash))
+            .flat_map(|(hash, _, _)| {
+                self.pending_tip_of(*hash)
+                    .into_iter()
+                    .chain(self.pending_config_tip_of(*hash))
+            })
             .collect();
         let mut heads: Vec<TxHash> = expired
             .into_iter()
-            .filter(|(_, parent)| parent.is_none_or(|parent| !expired_tips.contains(&parent)))
-            .map(|(hash, _)| hash)
+            .filter(|(_, parent, config_parent)| {
+                parent.is_none_or(|parent| !expired_tips.contains(&parent))
+                    && config_parent.is_none_or(|parent| !expired_tips.contains(&parent))
+            })
+            .map(|(hash, _, _)| hash)
             .collect();
         heads.sort_unstable_by_key(|hash| hash.0);
         // Only what this pass displaces: anything already waiting in the
@@ -883,6 +891,18 @@ impl TxState {
             && let Some(sibling) = self.pending_child(parent)
         {
             self.displace_chain(sibling);
+        }
+        // The config position is contested the same way: a pending config on
+        // the mined one's parent lost it, unless it is the same config under
+        // another hash, which simply landed.
+        if let Some(parent) = lineage.config_parent
+            && let Some(sibling) = self.pending_config_child(parent)
+        {
+            if self.pending_config_tip_of(sibling) == lineage.last_config {
+                self.remove_pending(&sibling);
+            } else {
+                self.displace_chain(sibling);
+            }
         }
         self.insert_other(signed_tx, channel_id, lineage);
     }
@@ -2727,7 +2747,12 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
         let (a, a_id) = pure_config_tx(MsgId::root(), 1);
-        let (b, _) = pure_config_tx(a_id, 2);
+        // A child whose hash sorts before its parent's, so order cannot come
+        // from the hash order by accident.
+        let (b, _) = (2..=u8::MAX)
+            .map(|seed| pure_config_tx(a_id, seed))
+            .find(|(b, _)| b.hash().0 < a.hash().0)
+            .expect("some seed sorts before the parent");
         let (a_hash, b_hash) = (a.hash(), b.hash());
         state.submit_other(a, channel_id).unwrap();
         state.stamp_funding(&a_hash, Slot::from(1), None);
@@ -2751,11 +2776,22 @@ mod tests {
         config_parent: MsgId,
         seed: u8,
     ) -> (SignedOps<Unverified, StandardMode>, MsgId) {
+        let config = config_op(config_parent, seed);
+        let id = config.id();
+        let tx = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelConfig(config)]));
+        (tx, id)
+    }
+
+    /// A config op on `config_parent` for the zero channel, keyed by `seed`.
+    fn config_op(
+        config_parent: MsgId,
+        seed: u8,
+    ) -> lb_core::mantle::ops::channel::config::ChannelConfigOp {
         use lb_core::mantle::{
             channel::{SlotTimeframe, SlotTimeout},
             ops::channel::{VerifiedChannelKeys, config::ChannelConfigOp},
         };
-        let config = ChannelConfigOp {
+        ChannelConfigOp {
             channel: [0u8; 32].into(),
             parent: config_parent,
             keys: VerifiedChannelKeys::try_from(vec![
@@ -2767,10 +2803,7 @@ mod tests {
             posting_timeout: SlotTimeout::from(0u32),
             configuration_threshold: 1,
             transfer_threshold: 1,
-        };
-        let id = config.id();
-        let tx = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelConfig(config)]));
-        (tx, id)
+        }
     }
 
     /// A whole expired chain is reported parent first whatever the hash
@@ -2790,6 +2823,11 @@ mod tests {
             parent = msg;
         }
 
+        assert!(
+            chain.windows(2).any(|pair| pair[1].0 < pair[0].0),
+            "fixture must contain a child whose hash sorts before its parent"
+        );
+
         let (shed, _) = state.shed_expired(tip, Slot::from(10), 3);
 
         assert_eq!(
@@ -2797,6 +2835,63 @@ mod tests {
             chain
         );
         assert_eq!(state.pending_publish_count(), 0);
+    }
+
+    /// A mined config takes its position: a pending config on the same
+    /// config parent is displaced with its children, like a message race;
+    /// the same config under another hash is retired silently instead.
+    #[test]
+    fn mined_config_displaces_the_pending_config_on_its_parent() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
+        let (ours, ours_id) = pure_config_tx(MsgId::root(), 1);
+        let (child, _) = pure_config_tx(ours_id, 2);
+        let (rival, _) = pure_config_tx(MsgId::root(), 3);
+        let (ours_hash, child_hash) = (ours.hash(), child.hash());
+        state.submit_other(ours, channel_id).unwrap();
+        state.submit_other(child, channel_id).unwrap();
+
+        state.observe_other_tx(rival, channel_id);
+        let shed = state.shed_off_branch_pending_other(tip);
+
+        assert_eq!(
+            shed.iter().map(SignedOps::hash).collect::<Vec<_>>(),
+            vec![ours_hash, child_hash],
+            "the losing config and the one chained on it, parent first"
+        );
+    }
+
+    /// The same config mined inside another tx is the pending config
+    /// landing: retired silently, nothing shed.
+    #[test]
+    fn mined_config_under_another_hash_retires_the_pending_config() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
+        let again_op = config_op(MsgId::root(), 4);
+        let again = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelConfig(
+            again_op.clone(),
+        )]));
+        let again_hash = again.hash();
+        state.submit_other(again, channel_id).unwrap();
+        let same_config_other_tx = SignedOps::from_ops_with_sample_proofs(Ops::from([
+            Op::ChannelInscribe(crate::test_support::inscribe_op(
+                channel_id,
+                MsgId::root(),
+                b"beside the config",
+            )),
+            Op::ChannelConfig(again_op),
+        ]));
+        assert_ne!(same_config_other_tx.hash(), again_hash);
+        state.observe_other_tx(same_config_other_tx, channel_id);
+
+        assert!(!state.is_tracked(&again_hash), "retired");
+        assert!(state.shed_off_branch_pending_other(tip).is_empty());
     }
 
     /// The original of a re-funded publish can still win: it is the same

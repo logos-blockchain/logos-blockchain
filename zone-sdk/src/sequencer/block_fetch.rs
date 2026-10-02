@@ -2746,14 +2746,6 @@ mod tests {
             r[3].result.channel_update.is_none(),
             "bare un-mine is silent"
         );
-        let s = state.as_ref().unwrap();
-        assert!(s.is_tracked(&cfg_hash));
-        assert!(
-            s.pending_txs(bz.header.id)
-                .iter()
-                .any(|(h, _)| *h == cfg_hash),
-            "un-mined, it is re-posted"
-        );
         let u = r[4]
             .result
             .channel_update
@@ -2761,8 +2753,16 @@ mod tests {
             .expect("cfg' supersedes cfg");
         let orphaned: Vec<TxHash> = u.orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
         let adopted: Vec<TxHash> = u.adopted.iter().map(ChannelUpdateTx::tx_hash).collect();
-        assert_eq!(orphaned, vec![cfg_hash]);
+        assert_eq!(
+            orphaned,
+            vec![cfg_hash],
+            "still in the view until the rival"
+        );
         assert_eq!(adopted, vec![rival_hash]);
+        // The rival takes the config position: cfg is displaced with it.
+        let shed: Vec<TxHash> = r[4].shed_other.iter().map(SignedOps::hash).collect();
+        assert_eq!(shed, vec![cfg_hash]);
+        assert!(!state.as_ref().unwrap().is_tracked(&cfg_hash));
     }
 
     /// After a checkpoint restore the first event's view carries the restored
