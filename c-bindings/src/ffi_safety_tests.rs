@@ -900,6 +900,33 @@ mod with_node {
         drop(paths);
     }
 
+    /// Starting a node must leave the host's panic hook in place: the node
+    /// binary's own hook exits the process, which would end this test.
+    #[test]
+    #[serial]
+    fn start_keeps_the_host_panic_hook() {
+        static HOST_HOOK_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {
+            HOST_HOOK_CALLS.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        let paths = TestConfigPaths::new();
+        let node = paths.start();
+        let while_running = std::thread::spawn(|| panic!("host panic while the node runs")).join();
+        std::thread::sleep(Duration::from_secs(2));
+        let shutdown = consume(unsafe { shutdown_node(node) });
+        let after_shutdown = std::thread::spawn(|| panic!("host panic after shutdown")).join();
+
+        std::panic::set_hook(previous);
+
+        assert!(while_running.is_err());
+        assert!(after_shutdown.is_err());
+        assert_eq!(HOST_HOOK_CALLS.load(Ordering::SeqCst), 2);
+        assert_eq!(shutdown.0, OperationStatusCode::Ok, "{}", shutdown.1);
+    }
+
     /// Start/stop cycles must not accumulate memory or leave the state
     /// directory locked.
     #[test]
