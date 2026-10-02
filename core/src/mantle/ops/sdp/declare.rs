@@ -198,7 +198,7 @@ impl VerifiableOperation<StandardMode>
             return Err(SdpError::InexistingNote(operation.service_note_id));
         };
 
-        // Defer the ZKP verification, so that the caller can batch it.
+        // Defer the proof verification, so that the caller can batch it.
         // Ed25519 verification is done by `preverify`.
         // Ensure service note exists and ownership over the service note and `zk_id`.
         let note = utxo.note;

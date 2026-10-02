@@ -102,7 +102,8 @@ const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
 pub type Balance = i128;
 
 // What applying one transaction yields: the new state, the transaction balance,
-// the execution gas its operations consumed, the events and the deferred ZKPs.
+// the execution gas its operations consumed, the events and the deferred
+// proofs.
 type AppliedTxOutcome = (LedgerState, Balance, Gas, Vec<TxEvent>, DeferredProofs);
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]

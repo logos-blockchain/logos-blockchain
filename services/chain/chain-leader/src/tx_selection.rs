@@ -110,7 +110,7 @@ pub fn select_transactions(
                             target: LOG_TARGET,
                             tx = ?tx.hash(),
                             %err,
-                            "deferred ZKP verification failed during block assembly",
+                            "deferred proof verification failed during block assembly",
                         );
                         still_pending.push(tx);
                     }
