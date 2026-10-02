@@ -10,7 +10,7 @@ use crate::mantle::NoteId;
 use crate::{
     events::{DepositNote, DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
-        batch::DeferredProof,
+        batch::DeferredZkSig,
         channel::{Channels, Error},
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
@@ -109,7 +109,7 @@ impl PreverifiableOperation<StandardMode> for SignedOperation<DepositOp, Unverif
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<DepositOp, Preverified, StandardMode> {
-    type DeferredProof = DeferredProof;
+    type DeferredProof = DeferredZkSig;
     type Context<'a> = DepositValidationContext<'a>;
     type Error = Error;
 
@@ -138,7 +138,7 @@ impl VerifiableOperation<StandardMode> for SignedOperation<DepositOp, Preverifie
         let public_keys = operation.inputs.get_pk(context.utxos)?;
         let inputs = public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &public_keys)
             .map_err(|_| Error::InvalidSignature)?;
-        Ok(DeferredProof::ZkSig(*self.proof().as_proof(), inputs))
+        Ok(DeferredZkSig::new(*self.proof().as_proof(), inputs))
     }
 }
 
@@ -492,7 +492,7 @@ mod test {
         ZkKey::from(BigUint::from(7u8))
     }
 
-    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredProof {
+    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredZkSig {
         let input_utxo = Utxo {
             op_id: [1u8; 32],
             output_index: 0,
