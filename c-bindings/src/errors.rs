@@ -38,8 +38,11 @@ impl OperationStatus {
     };
 
     pub(crate) fn error(code: OperationStatusCode, message: impl Into<String>) -> Self {
-        let message = CString::new(message.into())
-            .expect("Message contained an interior NUL byte.")
+        // A C string cannot hold a NUL byte, but an error message is free to
+        // carry one: many of them echo input the caller or a file supplied.
+        // Escaping keeps the message readable and this function infallible.
+        let message = CString::new(message.into().replace('\0', "\\0"))
+            .unwrap_or_default()
             .into_raw();
         Self { code, message }
     }
