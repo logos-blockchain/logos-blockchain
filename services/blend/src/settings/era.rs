@@ -1,22 +1,56 @@
+use std::sync::Arc;
+
 use ::core::time::Duration;
 use lb_cryptarchia_engine::era::Eras;
 use lb_era_parameters::{EraDefinition, EraParameters, v1::blend::Settings as BlendParameters};
 
 use crate::{
+    broadcast::settings::StartingBlendConfig as BroadcastConfig,
     core::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pCoreBackendSettings,
         dispatcher::libp2p::Libp2pBroadcastSettings,
-        settings::{CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings, ZkSettings},
+        settings::{
+            CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings,
+            StartingBlendConfig as CoreConfig, ZkSettings,
+        },
     },
-    edge::backends::libp2p::Libp2pBlendBackendSettings as Libp2pEdgeBackendSettings,
+    edge::{
+        backends::libp2p::Libp2pBlendBackendSettings as Libp2pEdgeBackendSettings,
+        settings::StartingBlendConfig as EdgeConfig,
+    },
     settings::{CommonSettings, CoreSettings, EdgeSettings, Settings, TimingSettings, user},
 };
 
-impl Settings<Libp2pCoreBackendSettings, Libp2pEdgeBackendSettings, Libp2pBroadcastSettings> {
-    /// The settings of the Blend services while `era` is in force, on a chain
-    /// whose eras are `eras`, for a node configured with `user`.
+/// What the node hands a Blend service: the Blend section of its
+/// configuration and the chain's eras, from which the service builds its
+/// settings for every era when it starts.
+#[derive(Clone, Debug)]
+pub struct ServiceSettings {
+    pub user: user::Config,
+    pub eras: Arc<Eras<EraDefinition>>,
+}
+
+impl ServiceSettings {
+    /// The service's settings in every era of the chain.
     #[must_use]
-    pub fn from_era(user: user::Config, era: &EraDefinition, eras: &Eras<EraDefinition>) -> Self {
+    pub fn in_every_era<EraSettings: FromEra>(&self) -> Eras<EraSettings> {
+        self.eras
+            .map(|era| EraSettings::from_era(&self.user, &era.entry.parameters, &self.eras))
+    }
+}
+
+/// Settings a Blend service runs an era under, built from the node's
+/// configuration, the era, and the chain's other eras.
+pub trait FromEra {
+    fn from_era(user: &user::Config, era: &EraDefinition, eras: &Eras<EraDefinition>) -> Self;
+}
+
+/// The settings of the Blend services, on the libp2p backends.
+type Libp2pSettings =
+    Settings<Libp2pCoreBackendSettings, Libp2pEdgeBackendSettings, Libp2pBroadcastSettings>;
+
+impl FromEra for Libp2pSettings {
+    fn from_era(user: &user::Config, era: &EraDefinition, eras: &Eras<EraDefinition>) -> Self {
         let EraParameters::V1(parameters) = &era.parameters;
         let blend = &parameters.blend;
         let slots_per_epoch = parameters.cryptarchia.slots_per_epoch();
@@ -26,7 +60,7 @@ impl Settings<Libp2pCoreBackendSettings, Libp2pEdgeBackendSettings, Libp2pBroadc
 
         Self {
             common: CommonSettings {
-                non_ephemeral_signing_key_id: user.non_ephemeral_signing_key_id,
+                non_ephemeral_signing_key_id: user.non_ephemeral_signing_key_id.clone(),
                 num_blend_layers: blend.common.num_blend_layers,
                 minimum_network_size: blend.common.minimum_network_size.into(),
                 // A proposal goes out on the topic of its own era, which is
@@ -48,7 +82,7 @@ impl Settings<Libp2pCoreBackendSettings, Libp2pEdgeBackendSettings, Libp2pBroadc
                 backend: Libp2pCoreBackendSettings {
                     target_peering_degree: blend.core.target_peering_degree,
                     connection_share_per_round: blend.connection_share_per_round(),
-                    listening_address: user.core.backend.listening_address,
+                    listening_address: user.core.backend.listening_address.clone(),
                     edge_node_connection_timeout: blend
                         .edge_node_connection_timeout(&slot_duration),
                     max_dial_attempts_per_peer: user.core.backend.max_dial_attempts_per_peer,
@@ -75,7 +109,7 @@ impl Settings<Libp2pCoreBackendSettings, Libp2pEdgeBackendSettings, Libp2pBroadc
                     },
                 },
                 zk: ZkSettings {
-                    secret_key_kms_id: user.core.zk.secret_key_kms_id,
+                    secret_key_kms_id: user.core.zk.secret_key_kms_id.clone(),
                 },
                 activity_threshold_sensitivity: blend.core.activity_threshold_sensitivity,
             },
@@ -90,6 +124,24 @@ impl Settings<Libp2pCoreBackendSettings, Libp2pEdgeBackendSettings, Libp2pBroadc
                 },
             },
         }
+    }
+}
+
+impl FromEra for CoreConfig<Libp2pCoreBackendSettings, Libp2pBroadcastSettings> {
+    fn from_era(user: &user::Config, era: &EraDefinition, eras: &Eras<EraDefinition>) -> Self {
+        Libp2pSettings::from_era(user, era, eras).into()
+    }
+}
+
+impl FromEra for EdgeConfig<Libp2pEdgeBackendSettings, Libp2pBroadcastSettings> {
+    fn from_era(user: &user::Config, era: &EraDefinition, eras: &Eras<EraDefinition>) -> Self {
+        Libp2pSettings::from_era(user, era, eras).into()
+    }
+}
+
+impl FromEra for BroadcastConfig<Libp2pBroadcastSettings> {
+    fn from_era(user: &user::Config, era: &EraDefinition, eras: &Eras<EraDefinition>) -> Self {
+        Libp2pSettings::from_era(user, era, eras).into()
     }
 }
 

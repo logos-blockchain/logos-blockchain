@@ -194,7 +194,7 @@ pub fn run_node_from_config(
         Arc::new(eras.map(|era| era.entry.parameters.fork_digest)),
     )?;
 
-    let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
+    let (blend_config, blend_core_config) = BlendConfig {
         user: config.user.blend,
     }
     .into_blend_services_settings(&eras, recovery_data.clone());
@@ -261,8 +261,8 @@ pub fn run_node_from_config(
             network: network_service_config,
             blend: blend_config.clone(),
             blend_core: blend_core_config,
-            blend_edge: blend_edge_config,
-            blend_broadcast: blend_config.map(|era| era.entry.parameters.clone().into()),
+            blend_edge: blend_config.clone(),
+            blend_broadcast: blend_config,
             block_broadcast: (),
             mempool: mempool_service_config,
             cryptarchia: chain_service_config,

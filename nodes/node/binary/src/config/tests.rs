@@ -230,7 +230,7 @@ fn service_settings_receive_recovery_data() {
         base_config
     };
 
-    let (_, blend_core_settings, _) = BlendServiceConfig {
+    let (_, blend_core_settings) = BlendServiceConfig {
         user: user_config.blend.clone(),
     }
     .into_blend_services_settings(&eras, recovery_data.clone());

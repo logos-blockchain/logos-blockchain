@@ -54,6 +54,7 @@ use crate::{
     membership::{self, chain::BlendEpoch, node_id},
     message::{DataPayload, NetworkInfo, ServiceMessage},
     pending::{EncapsulationResult, LocalEncapsulation, MessageKind, PendingTransactions},
+    settings::{FromEra, ServiceSettings},
 };
 
 const LOG_TARGET: &str = blend::service::EDGE;
@@ -110,7 +111,7 @@ where
     NodeId: Clone,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
-    type Settings = Eras<StartingBlendConfig<Backend::Settings, Dispatcher::Settings>>;
+    type Settings = ServiceSettings;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = ServiceMessage<NodeId>;
@@ -142,6 +143,7 @@ where
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
     ProofsGenerator: LeaderAndPowProofsGenerator + Send,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    StartingBlendConfig<Backend::Settings, Dispatcher::Settings>: FromEra,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
@@ -187,7 +189,12 @@ where
             ..
         } = self;
 
-        let settings_in_every_era = settings_handle.notifier().get_updated_settings();
+        let settings_in_every_era: Eras<
+            StartingBlendConfig<Backend::Settings, Dispatcher::Settings>,
+        > = settings_handle
+            .notifier()
+            .get_updated_settings()
+            .in_every_era();
         // What the node is configured with, the same in every era.
         let settings = settings_in_every_era.genesis().entry.parameters.clone();
 
