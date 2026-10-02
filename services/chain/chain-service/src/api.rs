@@ -21,8 +21,8 @@ use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
 use crate::{
-    ChainServiceInfo, ConsensusMsg, CryptarchiaInfo, EpochStateQueryResult, LibUpdate,
-    ProcessedBlockEvent, Query,
+    AppliedBlock, ChainServiceInfo, ConsensusMsg, CryptarchiaInfo, EpochStateQueryResult,
+    LibUpdate, ProcessedBlockEvent, Query,
 };
 
 pub trait CryptarchiaServiceData:
@@ -369,11 +369,11 @@ where
     }
 
     /// Apply a block through the chain service,
-    /// and return the tip and reorged txs if successful.
+    /// and return how the canonical chain changed if successful.
     pub async fn apply_block(
         &self,
         block: Block<Cryptarchia::Tx>,
-    ) -> Result<(HeaderId, Vec<Cryptarchia::Tx>), ApiError> {
+    ) -> Result<AppliedBlock<Cryptarchia::Tx>, ApiError> {
         let (reply_channel, rx) = oneshot::channel();
 
         let boxed_block = Box::new(block);

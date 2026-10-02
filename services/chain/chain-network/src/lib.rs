@@ -15,7 +15,10 @@ use std::{
 
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::{StreamExt as _, future::join_all};
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_chain_service::{
+    AppliedBlock,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+};
 use lb_core::{
     block::{Block, BlockTransactions, Proposal, verify_header_alone, verify_header_signature},
     header::HeaderId,
@@ -1035,13 +1038,13 @@ where
 #[instrument(
     target = LOG_TARGET,
     level = "debug",
-    skip(block, cryptarchia, mempool_adapter),
+    skip(block, cryptarchia, mempool),
     fields(block_id = %block.header().id(), tx_count = block.transactions().len())
 )]
 async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool>(
     block: Block<Cryptarchia::Tx>,
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
-    mempool_adapter: &MempoolAdapter<Mempool::Item>,
+    mempool: &MempoolAdapter<Mempool::Item>,
 ) -> Result<(), Error>
 where
     Cryptarchia: CryptarchiaServiceData,
@@ -1051,45 +1054,28 @@ where
 {
     trace!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
 
-    let (tip, reorged_txs) = cryptarchia.apply_block(block.clone()).await?;
-    let reorged_tx_count = reorged_txs.len();
-    let included_tx_count = block.transactions_iter().len();
+    let block_id = block.header().id();
+    let AppliedBlock {
+        tip,
+        newly_canonical_txs,
+        reorged_txs,
+    } = cryptarchia.apply_block(block).await?;
+    debug!(
+        target: LOG_TARGET, ?block_id, ?tip,
+        retired_txs = newly_canonical_txs.len(), reinserted_txs = reorged_txs.len(),
+        "block applied; reconciling mempool"
+    );
 
-    // Remove included content from mempool if the block was applied to the honest
-    // chain. Otherwise, we keep them in mempool, so they can be included to the
-    // honest chain later when this node proposes blocks.
-    if tip == block.header().id() {
-        debug!(
-            target: LOG_TARGET,
-            "Applied block {:?} to the canonical chain; included {} transactions and will reinsert {} reorged transactions",
-            block.header().id(),
-            included_tx_count,
-            reorged_tx_count
-        );
-        mempool_adapter
-            .remove_transactions(
-                &block
-                    .transactions_iter()
-                    .map(Hashable::hash)
-                    .collect::<Vec<_>>(),
-            )
-            .await
-            .unwrap_or_else(
-                |e| error!(target: LOG_TARGET, "Could not mark transactions in block: {e}"),
-            );
-    } else {
-        debug!(
-            target: LOG_TARGET,
-            "Applied block {:?} off the canonical chain; keeping {} included transactions in mempool because the current tip is {:?}",
-            block.header().id(),
-            included_tx_count,
-            tip
-        );
+    // Remove txs of every block that entered the canonical chain.
+    // Do this even when there is no tx to remove because this also triggers mempool
+    // TTL eviction.
+    if let Err(err) = mempool.remove_transactions(&newly_canonical_txs).await {
+        error!(target: LOG_TARGET, err, "could not remove transactions from mempool");
     }
 
     // Re-insert reorged txs back into the mempool.
     join_all(reorged_txs.into_iter().map(|tx| {
-        let mempool_adapter = mempool_adapter.clone();
+        let mempool_adapter = mempool.clone();
         async move {
             if let Err(e) = mempool_adapter.add_transaction(tx).await {
                 error!(target: LOG_TARGET, "Could not reinsert a reorged tx into mempool: {e:?}");

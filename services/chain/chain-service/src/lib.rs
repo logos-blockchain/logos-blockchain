@@ -26,6 +26,7 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
+        TxHash,
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
@@ -139,10 +140,10 @@ pub enum ConsensusMsg<Tx> {
     /// These are served in every service phase.
     Query(Query),
     /// Apply a block to the chain,
-    /// and return the tip and reorged txs if successful.
+    /// and return how the canonical chain changed if successful.
     ApplyBlock {
         block: Box<Block<Tx>>,
-        reply_channel: oneshot::Sender<Result<(HeaderId, Vec<Tx>), Error>>,
+        reply_channel: oneshot::Sender<Result<AppliedBlock<Tx>, Error>>,
     },
     /// Forward chain sync events from the network to chain-service.
     /// Chain-service will handle these directly and respond via the embedded
@@ -277,6 +278,19 @@ pub struct LibUpdate {
 pub struct PrunedBlocksInfo {
     pub stale_blocks: Vec<HeaderId>,
     pub immutable_blocks: BTreeMap<Slot, HeaderId>,
+}
+
+/// How the canonical chain changed when a block was applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedBlock<Tx> {
+    /// The canonical tip after applying the block.
+    pub tip: HeaderId,
+    /// Hashes of the transactions carried by the blocks that entered the
+    /// canonical chain, including blocks applied earlier while their branch
+    /// was not canonical.
+    pub newly_canonical_txs: Vec<TxHash>,
+    /// Transactions carried by the blocks that left the canonical chain.
+    pub reorged_txs: Vec<Tx>,
 }
 
 /// Event emitted when a block is processed by cryptarchia.
