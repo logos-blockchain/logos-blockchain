@@ -30,7 +30,7 @@ use crate::{
 /// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
 /// success.
 pub(crate) fn pow_start_mining_sync(node: &LogosBlockchainNode) -> StatusResult<()> {
-    node.get_runtime_handle().block_on(async {
+    node.get_runtime_handle()?.block_on(async {
         lb_api_service::http::pow::start_mining::<PoWService, RuntimeServiceId>(
             node.get_overwatch_handle(),
         )
@@ -85,7 +85,7 @@ pub unsafe extern "C" fn pow_start_mining(node: *const LogosBlockchainNode) -> O
 /// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
 /// success.
 pub(crate) fn pow_stop_mining_sync(node: &LogosBlockchainNode) -> StatusResult<()> {
-    node.get_runtime_handle().block_on(async {
+    node.get_runtime_handle()?.block_on(async {
         lb_api_service::http::pow::stop_mining::<PoWService, RuntimeServiceId>(
             node.get_overwatch_handle(),
         )
@@ -142,7 +142,7 @@ pub unsafe extern "C" fn pow_stop_mining(node: *const LogosBlockchainNode) -> Op
 /// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
 /// success.
 pub(crate) fn pow_start_auto_claim_sync(node: &LogosBlockchainNode) -> StatusResult<()> {
-    node.get_runtime_handle().block_on(async {
+    node.get_runtime_handle()?.block_on(async {
         lb_api_service::http::pow::start_auto_claim::<PoWService, RuntimeServiceId>(
             node.get_overwatch_handle(),
         )
@@ -197,7 +197,7 @@ pub unsafe extern "C" fn pow_start_auto_claim(node: *const LogosBlockchainNode) 
 /// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
 /// success.
 pub(crate) fn pow_stop_auto_claim_sync(node: &LogosBlockchainNode) -> StatusResult<()> {
-    node.get_runtime_handle().block_on(async {
+    node.get_runtime_handle()?.block_on(async {
         lb_api_service::http::pow::stop_auto_claim::<PoWService, RuntimeServiceId>(
             node.get_overwatch_handle(),
         )
@@ -257,7 +257,7 @@ pub(crate) fn pow_claim_sync(
     node: &LogosBlockchainNode,
     claim_address: Option<ZkPublicKey>,
 ) -> StatusResult<lb_core::mantle::TxHash> {
-    let tx_hash = node.get_runtime_handle().block_on(async {
+    let tx_hash = node.get_runtime_handle()?.block_on(async {
         lb_api_service::http::pow::claim::<PoWService, RuntimeServiceId>(
             node.get_overwatch_handle(),
             claim_address,
@@ -365,7 +365,7 @@ impl Default for PoWClaimableRewards {
 pub(crate) fn pow_claimable_rewards_sync(
     node: &LogosBlockchainNode,
 ) -> StatusResult<lb_pow_service::ClaimableRewardsInfo> {
-    node.get_runtime_handle().block_on(async {
+    node.get_runtime_handle()?.block_on(async {
         lb_api_service::http::pow::claimable_rewards::<PoWService, RuntimeServiceId>(
             node.get_overwatch_handle(),
         )
@@ -523,7 +523,7 @@ pub struct PoWStatus {
 pub(crate) fn pow_status_sync(
     node: &LogosBlockchainNode,
 ) -> StatusResult<lb_pow_service::PoWStatus> {
-    node.get_runtime_handle().block_on(async {
+    node.get_runtime_handle()?.block_on(async {
         lb_api_service::http::pow::status::<PoWService, RuntimeServiceId>(
             node.get_overwatch_handle(),
         )

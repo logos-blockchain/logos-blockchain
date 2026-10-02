@@ -13,8 +13,9 @@ use tokio::runtime::Runtime;
 use crate::{
     LogosBlockchainNode, OperationStatus,
     errors::OperationStatusCode,
+    node::ensure_blocking_allowed,
     result::{FfiStatusResult, StatusResult},
-    return_error_if_null_pointer,
+    return_error_if_null_pointer, unwrap_or_return_error,
 };
 
 pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlockchainNode>;
@@ -222,6 +223,10 @@ fn get_deployment_config(
 ///
 /// An [`OperationStatus`] indicating success or failure.
 ///
+/// Calling this from inside a subscription callback fails with
+/// [`OperationStatusCode::RuntimeError`]. In that one case the node keeps
+/// running and `node` stays valid.
+///
 /// # Safety
 ///
 /// The caller must ensure that:
@@ -232,6 +237,9 @@ fn get_deployment_config(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn shutdown_node(node: *mut LogosBlockchainNode) -> OperationStatus {
     return_error_if_null_pointer!(node);
+    // Checked before taking ownership: on this error the node keeps running
+    // and the pointer stays valid.
+    unwrap_or_return_error!(ensure_blocking_allowed());
     let node = unsafe { Box::from_raw(node) };
     node.shutdown()
 }

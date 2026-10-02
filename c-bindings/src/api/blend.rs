@@ -93,7 +93,8 @@ pub unsafe extern "C" fn blend_join_as_core_node(
 
     let node = unsafe { &*node };
 
-    let result: StatusResult<sdp::DeclarationId> = node.get_runtime_handle().block_on(async {
+    let runtime_handle = unwrap_or_return_error!(node.get_runtime_handle());
+    let result: StatusResult<sdp::DeclarationId> = runtime_handle.block_on(async {
         lb_api_service::http::blend::blend_join_network::<
             BlendService<RuntimeServiceId>,
             RuntimeServiceId,
@@ -127,7 +128,7 @@ pub unsafe extern "C" fn blend_join_as_core_node(
 pub(crate) fn blend_info_sync(
     node: &LogosBlockchainNode,
 ) -> StatusResult<Option<NetworkInfo<PeerId>>> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     let overwatch_handle = node.get_overwatch_handle();
 
     runtime_handle

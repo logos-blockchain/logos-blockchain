@@ -4,21 +4,21 @@
 //! be run under valgrind as well as natively:
 //!
 //! ```text
-//! cargo valgrind test -p logos-blockchain-c -- --test-threads=1 ffi_audit
+//! cargo valgrind test -p logos-blockchain-c -- --test-threads=1 ffi_safety_tests
 //! ```
 //!
 //! Every allocation handed out by the API is released through the matching
 //! `free_*` function, so anything valgrind reports as definitely lost is a
 //! leak in the bindings rather than in the tests.
-//!
-//! The tests in [`crashers`] are `#[ignore]`d: each one demonstrates a way to
-//! take the host process down and has to be run on its own.
 
 use std::{
     ffi::{CStr, CString, c_char},
     path::{Path, PathBuf},
     ptr,
-    sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicPtr, AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -1063,6 +1063,55 @@ mod with_node {
         assert_eq!(shutdown.0, OperationStatusCode::Ok, "{}", shutdown.1);
     }
 
+    static CALLBACK_NODE: AtomicPtr<LogosBlockchainNode> = AtomicPtr::new(ptr::null_mut());
+    static CALLBACK_RESULTS: Mutex<Vec<(OperationStatusCode, String)>> = Mutex::new(Vec::new());
+
+    unsafe extern "C" fn calls_back_into_the_node(data: *const c_char) {
+        let node = CALLBACK_NODE.load(Ordering::SeqCst);
+        let mut results = CALLBACK_RESULTS.lock().unwrap();
+        if data.is_null() || node.is_null() || !results.is_empty() {
+            return;
+        }
+        let result = unsafe { get_time_info(node) };
+        assert!(result.value.is_null());
+        results.push(consume(result));
+        results.push(consume(unsafe { get_known_addresses(node) }));
+        results.push(consume(unsafe { subscribe_to_lib_blocks(node, on_lib) }));
+        results.push(consume(unsafe { shutdown_node(node) }));
+    }
+
+    /// Callbacks run on a runtime worker, where the node functions cannot
+    /// block. Calling them from there must fail cleanly, and a refused
+    /// `shutdown_node` must leave the node usable.
+    #[test]
+    #[serial]
+    fn node_calls_from_a_callback_are_refused() {
+        let paths = TestConfigPaths::new();
+        let node = paths.start();
+        CALLBACK_NODE.store(node, Ordering::SeqCst);
+        assert!(unsafe { subscribe_to_processed_blocks(node, calls_back_into_the_node) }.is_ok());
+
+        let deadline = Instant::now() + Duration::from_secs(wait_secs().max(180));
+        while Instant::now() < deadline && CALLBACK_RESULTS.lock().unwrap().len() < 4 {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        CALLBACK_NODE.store(ptr::null_mut(), Ordering::SeqCst);
+
+        let results = std::mem::take(&mut *CALLBACK_RESULTS.lock().unwrap());
+        assert_eq!(results.len(), 4, "No block arrived in time");
+        for (code, message) in results {
+            assert_eq!(code, OperationStatusCode::RuntimeError);
+            assert!(message.contains("subscription callback"), "{message}");
+        }
+
+        // The refused shutdown left the node running.
+        let result = unsafe { get_time_info(node) };
+        assert!(result.is_ok());
+        assert!(free_time_info(result.value).is_ok());
+        let (status, message) = consume(unsafe { shutdown_node(node) });
+        assert_eq!(status, OperationStatusCode::Ok, "{message}");
+    }
+
     /// Start/stop cycles must not accumulate memory or leave the state
     /// directory locked.
     #[test]
@@ -1079,43 +1128,5 @@ mod with_node {
             assert_eq!(status, OperationStatusCode::Ok, "{message}");
         }
         let _ = paths.temp_dir.path();
-    }
-}
-
-/// Each of these takes the process down. Run one at a time:
-///
-/// ```text
-/// cargo test -p logos-blockchain-c -- --ignored --exact ffi_safety_tests::crashers::<name>
-/// ```
-mod crashers {
-    use super::*;
-
-    static NODE: AtomicPtr<LogosBlockchainNode> = AtomicPtr::new(ptr::null_mut());
-    static CALLS: AtomicUsize = AtomicUsize::new(0);
-
-    unsafe extern "C" fn reentrant(data: *const c_char) {
-        if data.is_null() {
-            return;
-        }
-        CALLS.fetch_add(1, Ordering::SeqCst);
-        let result = unsafe { get_time_info(NODE.load(Ordering::SeqCst)) };
-        eprintln!("AUDIT survived re-entrant call: ok={}", result.is_ok());
-    }
-
-    /// Callbacks run on a runtime worker; every node API uses `block_on`,
-    /// which panics there.
-    #[test]
-    #[ignore = "aborts: calling the API from a subscription callback"]
-    fn api_call_from_callback() {
-        let paths = TestConfigPaths::new();
-        let node = paths.start();
-        NODE.store(node, Ordering::SeqCst);
-        assert!(unsafe { subscribe_to_processed_blocks(node, reentrant) }.is_ok());
-        let deadline = Instant::now() + Duration::from_secs(180);
-        while Instant::now() < deadline && CALLS.load(Ordering::SeqCst) == 0 {
-            std::thread::sleep(Duration::from_millis(250));
-        }
-        eprintln!("AUDIT callback calls: {}", CALLS.load(Ordering::SeqCst));
-        let _status = consume(unsafe { shutdown_node(node) });
     }
 }

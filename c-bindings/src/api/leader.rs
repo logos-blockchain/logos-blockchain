@@ -37,7 +37,7 @@ type LeaderService = CryptarchiaLeaderService<
 pub(crate) fn leader_claim_sync(
     node: &LogosBlockchainNode,
 ) -> StatusResult<lb_core::mantle::TxHash> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
 
     runtime_handle.block_on(async {
         let relay = node
