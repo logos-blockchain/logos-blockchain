@@ -64,17 +64,20 @@ fn step_cluster_has_wallet_resources(world: &mut CucumberWorld, step: &Step) -> 
         })?;
 
     verify_genesis_wallet_resources_table_indexes(table, &step.value)?;
-    world.chain.genesis_tokens.clear();
+    let mut genesis_tokens = Vec::new();
     for row in table.rows.iter().skip(1) {
         let (account_index, token_count, token_amount) =
             parse_genesis_wallet_tokens_row(&step.value, row)?;
 
-        world.chain.genesis_tokens.push(GenesisTokens {
+        genesis_tokens.push(GenesisTokens {
             account_index,
             token_count,
             token_amount,
         });
     }
+
+    world.cluster.validate_genesis_wallets(&genesis_tokens)?;
+    world.chain.genesis_tokens = genesis_tokens;
 
     Ok(())
 }
@@ -87,6 +90,9 @@ fn step_sponsored_genesis_fee_account(
     token_count: usize,
     token_value: u64,
 ) -> StepResult {
+    world
+        .cluster
+        .require_generated_config("a sponsored genesis fee account")?;
     ensure_fee_sponsorship_and_fork_groups_are_not_mixed(world, step.value.as_str())?;
 
     let token_count = non_zero!("genesis fee token count", token_count)?;
@@ -571,4 +577,43 @@ async fn step_stop_node(world: &mut CucumberWorld, step: &Step, node_name: Strin
         world.blend_diagnostics.stopped_nodes.insert(node_name);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod prepared_config_tests {
+    use std::path::Path;
+
+    use cucumber::gherkin::{Feature, GherkinEnv};
+
+    use super::{
+        CucumberWorld, ManualClusterKind, ManualClusterSpec, step_cluster_has_wallet_resources,
+    };
+
+    #[test]
+    fn saved_configuration_rejects_funding_added_after_cluster_setup() {
+        let feature = Feature::parse(
+            "Feature: Saved configuration\n\
+             Scenario: Late funding request\n\
+             Given the genesis block has the following wallet resources:\n\
+               | account_index | token_count | token_amount |\n\
+               | 1             | 1           | 1000         |\n",
+            GherkinEnv::default(),
+        )
+        .expect("valid feature");
+        let mut world = CucumberWorld::default();
+        world.cluster.prepared_config = Some(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("cucumber_tests/fixtures/core-0.3.0-rc.5/cluster.yaml"),
+        );
+        world.cluster.manual_cluster_spec = Some(ManualClusterSpec {
+            kind: ManualClusterKind::Generated,
+            capacity: 1,
+        });
+
+        let error = step_cluster_has_wallet_resources(&mut world, &feature.scenarios[0].steps[0])
+            .expect_err("saved genesis must not silently ignore requested funding");
+
+        assert!(error.to_string().contains("no wallet account 1"));
+        assert!(world.chain.genesis_tokens.is_empty());
+    }
 }

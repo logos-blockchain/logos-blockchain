@@ -269,13 +269,14 @@ async fn step_wait_all_nodes_responsive(
     step: &Step,
     time_out_seconds: u64,
 ) -> StepResult {
-    let cluster = world
+    let app = world
         .cluster
-        .local_cluster()
+        .local_app
+        .as_ref()
         .ok_or(StepError::LogicalError {
-            message: "No local cluster available".into(),
+            message: "No local app available".into(),
         })?;
-    if let Err(e) = wait_all_nodes_responive(cluster, Duration::from_secs(time_out_seconds)).await {
+    if let Err(e) = wait_all_nodes_responive(app, Duration::from_secs(time_out_seconds)).await {
         return Err(StepError::StepFail {
             message: format!("Step `{}` error: {e}", step.value),
         });
@@ -286,9 +287,9 @@ async fn step_wait_all_nodes_responsive(
         .values()
         .map(|node| {
             let fut = verify_reponsive_and_network_ready_with_timeout(
-                &node.started_node.client,
+                &node.client,
                 &node.name,
-                &node.started_node.name,
+                &node.runtime_name,
                 Duration::from_secs(time_out_seconds),
             );
             let step_value = step.value.clone();

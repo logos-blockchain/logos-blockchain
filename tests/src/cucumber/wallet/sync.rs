@@ -75,7 +75,7 @@ pub async fn current_wallet_output_balance(
                         wallet.node_name, wallet.wallet_name
                     ),
                 })?;
-        let client = node.started_node.client.clone();
+        let client = node.client.clone();
         let balance_response = client.wallet_balance(wallet.public_key()?, None).await;
 
         return Ok(match balance_response {

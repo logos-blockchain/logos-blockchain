@@ -1061,7 +1061,7 @@ async fn log_epoch_checkpoint(
         .nodes_info
         .iter()
         .filter(|(node_name, _)| !world.blend_diagnostics.stopped_nodes.contains(*node_name))
-        .map(|(node_name, node_info)| (node_name.clone(), node_info.started_node.client.clone()))
+        .map(|(node_name, node_info)| (node_name.clone(), node_info.client.clone()))
         .collect::<Vec<_>>();
     nodes.sort_by(|left, right| left.0.cmp(&right.0));
 
@@ -1239,7 +1239,7 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
             diagnostic = BLEND_REACHABILITY,
             event = "diagnostic_identity",
             node = node_name,
-            runtime_node = node_info.started_node.name.as_str(),
+            runtime_node = node_info.runtime_name.as_str(),
             peer_id = %peer_id,
             blend_provider_id = ?blend_provider_id,
             expected_provider = expected_provider_names.contains(&node_name),
@@ -1252,7 +1252,7 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
                 "event": "diagnostic_identity",
                 "timestamp": OffsetDateTime::now_utc().to_string(),
                 "node": node_name,
-                "runtime_node": node_info.started_node.name,
+                "runtime_node": node_info.runtime_name,
                 "peer_id": peer_id.to_string(),
                 "blend_provider_id": format!("{blend_provider_id:?}"),
                 "expected_provider": expected_provider_names.contains(&node_name),

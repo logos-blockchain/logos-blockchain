@@ -72,11 +72,7 @@ async fn log_node_wallet_balance(world: &CucumberWorld, wallet: &WalletInfo) -> 
             ),
         })?;
 
-    let balance_response = node
-        .started_node
-        .client
-        .wallet_balance(wallet.public_key()?, None)
-        .await;
+    let balance_response = node.client.wallet_balance(wallet.public_key()?, None).await;
     match balance_response {
         Ok(balance) => {
             info!(
@@ -277,8 +273,7 @@ fn exported_utxo(utxo: &Utxo) -> Result<ExportedUtxo, StepError> {
 
 async fn best_known_wallet_node_height(world: &CucumberWorld, wallet: &WalletInfo) -> Option<u64> {
     let node = world.nodes_info.get(&wallet.node_name)?;
-    node.started_node
-        .client
+    node.client
         .consensus_info()
         .await
         .ok()

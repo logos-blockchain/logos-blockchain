@@ -268,11 +268,7 @@ pub async fn drain_node_wallet(
                 sender.node_name, sender.wallet_name
             ),
         })?;
-    let balance_response = node
-        .started_node
-        .client
-        .wallet_balance(sender.public_key()?, None)
-        .await;
+    let balance_response = node.client.wallet_balance(sender.public_key()?, None).await;
     let Ok(mut balance) = balance_response else {
         info!(
             target: TARGET,
@@ -343,20 +339,12 @@ pub async fn drain_node_wallet(
                 }
             }
         };
-        wait_for_transactions_inclusion(
-            &node.started_node.client,
-            &[tx_hash],
-            DRAIN_TRANSACTION_TIMEOUT,
-        )
-        .await?;
+        wait_for_transactions_inclusion(&node.client, &[tx_hash], DRAIN_TRANSACTION_TIMEOUT)
+            .await?;
 
         submitted += 1;
         remaining_tranches = remaining_tranches.saturating_sub(1);
-        let balance_response = node
-            .started_node
-            .client
-            .wallet_balance(sender.public_key()?, None)
-            .await;
+        let balance_response = node.client.wallet_balance(sender.public_key()?, None).await;
         let Ok(refreshed_balance) = balance_response else {
             info!(
                 target: TARGET,

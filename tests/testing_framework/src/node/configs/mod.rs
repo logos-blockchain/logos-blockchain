@@ -2,6 +2,11 @@ pub mod deployment;
 mod dynamic;
 pub(crate) mod node_configs;
 pub mod postprocess;
+mod saved_deployment;
+mod shared_deployment;
+
+pub use saved_deployment::{PreparedConfigBundle, SavedDeployment};
+pub use shared_deployment::SharedDeployment;
 pub mod wallet;
 use lb_node::config::deployment::DeploymentSettings;
 

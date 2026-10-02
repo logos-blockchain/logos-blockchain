@@ -175,7 +175,7 @@ pub fn build_fork_group_scanner_configs(
                 world
                     .nodes_info
                     .get(node_name)
-                    .map(|node| (node_name.clone(), node.started_node.client.clone()))
+                    .map(|node| (node_name.clone(), node.client.clone()))
             })
             .collect::<BTreeMap<String, NodeHttpClient>>();
 

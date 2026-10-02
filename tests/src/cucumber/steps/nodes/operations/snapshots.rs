@@ -103,7 +103,7 @@ pub async fn get_cryptarchia_info_all_nodes(world: &CucumberWorld, step: &str) {
         let Some(node_info) = world.nodes_info.get(&node_name) else {
             continue;
         };
-        match node_info.started_node.client.consensus_info().await {
+        match node_info.client.consensus_info().await {
             Ok(consensus) => {
                 let mode = if matches!(consensus.phase, PhaseTag::Following) {
                     "Online"

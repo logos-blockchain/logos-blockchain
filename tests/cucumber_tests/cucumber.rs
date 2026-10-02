@@ -1,6 +1,16 @@
 /// Usage: Set `CUCUMBER_DEPLOYER_K8S` or `CUCUMBER_DEPLOYER_COMPOSE` to choose
 /// the deployer. Otherwise, the Local deployer is used by default.
 ///
+/// To reuse native files with a matching older binary, set
+/// `CUCUMBER_PREPARED_CONFIG` to a bundle such as
+/// `tests/cucumber_tests/fixtures/core-0.3.0-rc.5/cluster.yaml`, and set
+/// `LOGOS_BLOCKCHAIN_NODE_BIN` (or `LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL`).
+/// The bundle lists the existing scenarios supported by its saved setup.
+/// Local manual clusters can use the bundle's saved wallet accounts and genesis
+/// notes. Generating new funding, Blend providers or typed overrides is
+/// unsupported. Scenarios absent from the bundle's `supported_scenarios` fail
+/// before startup.
+///
 /// Example using docker compose deployer:
 /// ```sh
 /// CUCUMBER_DEPLOYER_COMPOSE=1 cargo run -p runner-examples --bin cucumber_auto -- --name "Run auto deployer smoke scenario"
@@ -27,9 +37,9 @@ use cucumber::{
     writer::Verbosity,
 };
 use lb_testing_framework::{
-    hash_str, is_truthy_env, record_system_monitor_event, register_system_monitor_output_file,
-    release_reserved_port_block, resolve_automatic_genesis_time,
-    unregister_system_monitor_output_file,
+    PreparedConfigBundle, hash_str, is_truthy_env, record_system_monitor_event,
+    register_system_monitor_output_file, release_reserved_port_block,
+    resolve_automatic_genesis_time, unregister_system_monitor_output_file,
 };
 use logos_blockchain_tests::cucumber::{
     defaults::{
@@ -208,15 +218,23 @@ fn selected_deployer() -> DeployerKind {
     // If those are unset, the runner falls back to `LOGOS_BLOCKCHAIN_TESTNET_IMAGE`
     // or the default local node and cfgsync images built by the runtime
     // docker scripts under `tests/testing_framework/assets/runtime/scripts/docker`.
-    if is_truthy_env(CUCUMBER_DEPLOYER_K8S) {
-        return DeployerKind::K8s;
-    }
+    let deployer = if is_truthy_env(CUCUMBER_DEPLOYER_K8S) {
+        DeployerKind::K8s
+    } else if is_truthy_env(CUCUMBER_DEPLOYER_COMPOSE) {
+        DeployerKind::Compose
+    } else {
+        DeployerKind::Local
+    };
 
-    if is_truthy_env(CUCUMBER_DEPLOYER_COMPOSE) {
-        return DeployerKind::Compose;
-    }
+    assert!(
+        prepared_config_path().is_none() || deployer == DeployerKind::Local,
+        "CUCUMBER_PREPARED_CONFIG requires the local deployer"
+    );
+    deployer
+}
 
-    DeployerKind::Local
+fn prepared_config_path() -> Option<PathBuf> {
+    std::env::var_os("CUCUMBER_PREPARED_CONFIG").map(PathBuf::from)
 }
 
 fn get_feature_path_for_deployer(deployer: DeployerKind) -> PathBuf {
@@ -238,10 +256,9 @@ fn prepare_world_for_scenario(
     scenario_name: &str,
 ) {
     world.set_deployer(deployer);
-    world.set_genesis_time(resolve_automatic_genesis_time());
-
-    if let Err(err) = world.preflight(deployer) {
-        println!("Preflight failed for scenario '{scenario_name}': {err}");
+    world.cluster.prepared_config = prepared_config_path();
+    if world.cluster.prepared_config.is_none() {
+        world.set_genesis_time(resolve_automatic_genesis_time());
     }
 
     let scenario_dir =
@@ -262,6 +279,17 @@ fn prepare_world_for_scenario(
 
     world.set_scenario_base_dir(&scenario_dir, &deployer);
     world.set_scenario_name(scenario_name);
+
+    if let Some(path) = &world.cluster.prepared_config {
+        PreparedConfigBundle::load(path)
+            .and_then(|bundle| bundle.require_scenario(scenario_name))
+            .unwrap_or_else(|error| panic!("prepared configuration {}: {error:#}", path.display()));
+    }
+
+    if let Err(err) = world.preflight(deployer) {
+        println!("Preflight failed for scenario '{scenario_name}': {err}");
+    }
+
     world.apply_deployment_config_override_path();
 
     let started_at_ns = SystemTime::now()

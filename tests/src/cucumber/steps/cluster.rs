@@ -2,20 +2,25 @@ use std::{collections::HashMap, hash::BuildHasher, time::Duration};
 
 use lb_libp2p::{Multiaddr, PeerId, Protocol};
 use lb_testing_framework::{
-    DeploymentBuilder, LbcClusterApp, LbcEnv, NodeHttpClient, TopologyConfig,
-    configs::{deployment::NodeBinaryProfile, wallet::WalletAccount},
+    DeploymentBuilder, LbcClusterApp, LbcEnv, NodeHttpClient, SavedDeployment, SavedLogosEnv,
+    SharedDeployment, TopologyConfig,
+    configs::{
+        deployment::{NodeBinaryProfile, SdpFundingConfig},
+        wallet::WalletAccount,
+    },
     internal::DeploymentPlan,
     resolve_automatic_genesis_time,
 };
 use testing_framework_app::AppDeployer;
 use testing_framework_core::{
-    scenario::{StartNodeOptions, StartedNode},
+    scenario::{ClusterStartMode, StartNodeOptions, StartedNode},
     topology::FixedDeploymentProvider,
 };
 use tokio::time::{Instant, sleep};
 use tracing::warn;
 
 use crate::cucumber::{
+    deployment::{CucumberClusterApp, runtime_info::NodeRuntimeInfo},
     error::{StepError, StepResult},
     fee_reserve::create_scenario_fee_wallet_account,
     steps::TARGET,
@@ -126,14 +131,75 @@ pub async fn install_local_manual_cluster(
     world: &mut CucumberWorld,
     spec: ManualClusterSpec,
 ) -> Result<(), StepError> {
+    if let Some(path) = &world.cluster.prepared_config {
+        validate_prepared_cluster(world, spec)?;
+        let deployment = SavedDeployment::load(path, spec.capacity)?;
+        world.wallet_registry.wallet_accounts = deployment
+            .wallet_accounts()
+            .iter()
+            .map(|(index, account)| (*index, account.clone()))
+            .collect();
+        world.chain.genesis_block_utxos = deployment.genesis_utxos().to_vec();
+        let inputs = deployment.shared_deployment().clone();
+        let node_runtime_info = NodeRuntimeInfo::from_saved(&deployment)?;
+        let app = SavedLogosEnv::prepare_app(deployment)
+            .await?
+            .with_start_mode(ClusterStartMode::OnDemand);
+
+        world.cluster.install_local(
+            AppDeployer::new()
+                .deploy(CucumberClusterApp { app, inputs })
+                .await?,
+        );
+        world.cluster.node_runtime_info = node_runtime_info;
+        world.cluster.manual_cluster_spec = Some(spec);
+        return Ok(());
+    }
+
     let deployment = build_manual_cluster_from_spec(world, spec)?;
-    world.cluster.local_cluster = None;
-    world.cluster.k8s_manual_cluster = None;
+    let node_runtime_info = NodeRuntimeInfo::from_deployment(&deployment)?;
+    let inputs = SharedDeployment::from_plan(&deployment)?;
 
     let app = LbcClusterApp::new(Box::new(FixedDeploymentProvider::new(deployment)))
         .with_on_demand_start();
-    world.cluster.local_cluster = Some(AppDeployer::new().deploy(app).await?);
+    let app = CucumberClusterApp { app, inputs };
+
+    world
+        .cluster
+        .install_local(AppDeployer::new().deploy(app).await?);
+    world.cluster.node_runtime_info = node_runtime_info;
     world.cluster.manual_cluster_spec = Some(spec);
+
+    Ok(())
+}
+
+fn validate_prepared_cluster(
+    world: &CucumberWorld,
+    spec: ManualClusterSpec,
+) -> Result<(), StepError> {
+    world
+        .cluster
+        .validate_genesis_wallets(&world.chain.genesis_tokens)?;
+    if !matches!(spec.kind, ManualClusterKind::Generated)
+        || world.lifecycle.genesis_time.is_some()
+        || world
+            .wallet_registry
+            .fee_state
+            .sponsored_genesis_account
+            .is_some()
+        || world
+            .cluster
+            .blend_core_nodes
+            .is_some_and(|count| count != 0)
+        || world.cluster.sdp_funding_config != SdpFundingConfig::default()
+        || world.tokio_console_profile_enabled()
+    {
+        return Err(StepError::InvalidArgument {
+            message: "saved configuration cannot be regenerated for custom genesis, \
+                      sponsored fee accounts, Blend providers, devnet or profiling settings"
+                .into(),
+        });
+    }
     Ok(())
 }
 
@@ -203,8 +269,8 @@ pub async fn rebuild_pending_local_manual_cluster(world: &mut CucumberWorld) -> 
 }
 
 pub async fn stop_active_manual_cluster(world: &CucumberWorld) -> StepResult {
-    if let Some(cluster) = world.cluster.local_cluster() {
-        cluster.stop_all().await?;
+    if world.cluster.local_app.is_some() {
+        world.cluster.local_control()?.stop_all().await?;
         return Ok(());
     }
     if let Some(cluster) = world.cluster.k8s_manual_cluster.as_ref() {
@@ -221,7 +287,7 @@ pub async fn start_manual_node(
     node_name: &str,
     options: StartNodeOptions<LbcEnv>,
 ) -> Result<StartedNode<LbcEnv>, StepError> {
-    if let Some(cluster) = world.cluster.local_cluster() {
+    if let Some(cluster) = world.cluster.logos_cluster() {
         return Box::pin(cluster.start_node_with(node_name, options))
             .await
             .map_err(|e| StepError::LogicalError {
@@ -243,8 +309,10 @@ pub async fn start_manual_node(
 }
 
 pub async fn wait_manual_node_ready(world: &CucumberWorld, node_name: &str) -> StepResult {
-    if let Some(cluster) = world.cluster.local_cluster() {
-        return cluster
+    if world.cluster.local_app.is_some() {
+        return world
+            .cluster
+            .local_control()?
             .wait_node_ready(node_name)
             .await
             .map_err(|e| StepError::LogicalError {
@@ -266,16 +334,17 @@ pub async fn wait_manual_node_ready(world: &CucumberWorld, node_name: &str) -> S
     })
 }
 
-pub fn manual_node_client(
+pub async fn manual_node_client(
     world: &CucumberWorld,
     node_name: &str,
 ) -> Result<NodeHttpClient, StepError> {
-    if let Some(cluster) = world.cluster.local_cluster() {
-        return cluster
-            .node_client(node_name)
-            .ok_or_else(|| StepError::LogicalError {
-                message: format!("missing client for node '{node_name}'"),
-            });
+    if world.cluster.local_app.is_some() {
+        let access = world
+            .cluster
+            .local_control()?
+            .node_access(node_name)
+            .await?;
+        return Ok(NodeHttpClient::from_url(access.api_base_url()?));
     }
 
     if let Some(cluster) = world.cluster.k8s_manual_cluster.as_ref() {
@@ -303,7 +372,7 @@ pub async fn assert_manual_node_has_peers(
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
 
     loop {
-        let client = manual_node_client(world, &runtime_node_name)?;
+        let client = manual_node_client(world, &runtime_node_name).await?;
         let network = client.network_info().await?;
         if network.n_peers >= min_peers {
             return Ok(());
@@ -423,8 +492,8 @@ pub async fn insert_started_node_info<S: BuildHasher>(
         logical_node_name.to_owned(),
         NodeInfo {
             name: logical_node_name.to_owned(),
-            started_node,
-            run_config: None,
+            runtime_name: started_node.name,
+            client: started_node.client,
             chain_info: HashMap::new(),
             wallet_info,
             runtime_dir: std::path::PathBuf::new(),
