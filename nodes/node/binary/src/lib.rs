@@ -212,10 +212,7 @@ pub fn run_node_from_config(
     let mempool_service_config = MempoolConfig {
         user: config.user.mempool,
     }
-    .into_mempool_service_settings(
-        eras.map(|era| era.entry.parameters.protocol_names.mempool_topic.clone()),
-        recovery_data.clone(),
-    );
+    .into_mempool_service_settings(&eras, recovery_data.clone());
 
     let network_service_config = NetworkConfig {
         user: config.user.network,

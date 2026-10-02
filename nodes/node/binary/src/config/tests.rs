@@ -197,7 +197,7 @@ fn build_run_config_from_env_applies_environment_overrides() {
 fn service_settings_receive_recovery_data() {
     const STATE_PATH: &str = "./state";
     let deployment_settings = DeploymentSettings::default();
-    let eras = deployment_settings.eras().unwrap();
+    let eras = Arc::new(deployment_settings.eras().unwrap());
     let recovery_data = recovery_data_fixture(&eras);
 
     let blend_config = BlendConfig::with_required_values(BlendRequiredValues {
@@ -257,10 +257,7 @@ fn service_settings_receive_recovery_data() {
     let mempool_service_settings = MempoolServiceConfig {
         user: user_config.mempool.clone(),
     }
-    .into_mempool_service_settings(
-        eras.map(|era| era.entry.parameters.protocol_names.mempool_topic.clone()),
-        recovery_data.clone(),
-    );
+    .into_mempool_service_settings(&eras, recovery_data.clone());
     assert_eq!(
         mempool_service_settings
             .recovery_data

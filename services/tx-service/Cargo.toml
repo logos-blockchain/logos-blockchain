@@ -26,6 +26,7 @@ indexmap              = { features = ["serde", "std"], workspace = true }
 lb-binary-codec       = { workspace = true }
 lb-core               = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
+lb-era-parameters     = { workspace = true }
 lb-log-targets        = { workspace = true }
 lb-network-service    = { workspace = true }
 lb-services-utils     = { workspace = true }
