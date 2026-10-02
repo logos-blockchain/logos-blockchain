@@ -4,6 +4,7 @@ pub mod config;
 //   algorithm, including a minimal UTxO model.
 // - `mantle_ops`: our extensions in the form of Mantle operations, e.g. SDP.
 pub mod cryptarchia;
+mod era;
 mod gas_and_fees;
 mod intent;
 pub mod mantle;
@@ -323,8 +324,11 @@ impl LedgerState {
     where
         LeaderProof: leader_proof::LeaderProof,
     {
-        let last_epoch_state = self.cryptarchia_ledger.epoch_state().clone();
-        let mut cryptarchia_ledger = self
+        // A block is applied under the era of its slot, which the state
+        // crosses into first.
+        let state = self.into_era_of(slot, eras);
+        let last_epoch_state = state.cryptarchia_ledger.epoch_state().clone();
+        let mut cryptarchia_ledger = state
             .cryptarchia_ledger
             .try_apply_header::<LeaderProof, Id>(
                 slot,
@@ -333,11 +337,11 @@ impl LedgerState {
                 // TODO: threading SDP here because EpochState is currently embedded in
                 // CryptarchiaLedger.
                 // In the future, we will pull EpochState up into LedgerState.
-                &self.mantle_ledger.sdp,
-                &self.mantle_ledger.pow,
+                &state.mantle_ledger.sdp,
+                &state.mantle_ledger.pow,
                 eras,
             )?;
-        let (mantle_ledger, effect) = self.mantle_ledger.try_apply_header(
+        let (mantle_ledger, effect) = state.mantle_ledger.try_apply_header(
             &last_epoch_state,
             cryptarchia_ledger.epoch_state(),
             *proof.voucher_cm(),
@@ -351,7 +355,7 @@ impl LedgerState {
 
         Ok((
             Self {
-                block_number: self
+                block_number: state
                     .block_number
                     .checked_add(1)
                     .expect("Logos blockchain lived long and prospered"),
@@ -363,7 +367,8 @@ impl LedgerState {
     }
 
     /// Verifies a leadership proof for a block at `slot` whose parent is the
-    /// block this state belongs to, leaving the state untouched.
+    /// block this state belongs to, with the state in the era of `slot`,
+    /// leaving the state untouched.
     pub fn verify_proof_of_leadership<LeaderProof, Id>(
         &self,
         slot: Slot,
@@ -373,11 +378,12 @@ impl LedgerState {
     where
         LeaderProof: leader_proof::LeaderProof,
     {
-        self.cryptarchia_ledger.verify_proof_of_leadership(
+        let state = self.in_era_of(slot, eras);
+        state.cryptarchia_ledger.verify_proof_of_leadership(
             slot,
             proof,
-            &self.mantle_ledger.sdp,
-            &self.mantle_ledger.pow,
+            &state.mantle_ledger.sdp,
+            &state.mantle_ledger.pow,
             eras,
         )
     }
@@ -627,7 +633,8 @@ impl LedgerState {
         self.cryptarchia_ledger.next_epoch_state()
     }
 
-    /// Computes the epoch state for a given slot.
+    /// Computes the epoch state for a given slot, with the state in the era
+    /// of the slot.
     ///
     /// This handles the case where epochs have been skipped (no blocks
     /// produced).
@@ -639,10 +646,11 @@ impl LedgerState {
         slot: Slot,
         eras: &Eras<Config>,
     ) -> Result<EpochState, LedgerError<Id>> {
-        self.cryptarchia_ledger.epoch_state_for_slot(
+        let state = self.in_era_of(slot, eras);
+        state.cryptarchia_ledger.epoch_state_for_slot(
             slot,
-            &self.mantle_ledger.sdp,
-            &self.mantle_ledger.pow,
+            &state.mantle_ledger.sdp,
+            &state.mantle_ledger.pow,
             eras,
         )
     }
