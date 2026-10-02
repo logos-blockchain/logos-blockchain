@@ -14,6 +14,8 @@ pub use framework::local::{
     LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_SHA256, LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL, SavedLogosEnv,
     USER_CONFIG_FILE, ensure_node_binary_built,
 };
+#[cfg(feature = "nimbos")]
+pub mod nimbos;
 mod node;
 mod unique_persistent;
 pub mod workloads;

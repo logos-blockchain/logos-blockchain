@@ -79,6 +79,7 @@ tracing-subscriber               = { features = ["env-filter", "fmt"], workspace
 cucumber             = []
 cucumber_stand_alone = []
 mantle_sdp           = []
+nimbos               = ["lb-testing-framework/nimbos"]
 testing_framework    = []
 tip_poll_self_heal   = []
 
@@ -125,6 +126,11 @@ path = "src/tests/mantle/leader.rs"
 name              = "test_testing_framework_smoke_local"
 path              = "src/tests/testing_framework/smoke_local.rs"
 required-features = ["testing_framework"]
+
+[[test]]
+name              = "test_testing_framework_logos_nimbos_mixed"
+path              = "src/tests/testing_framework/logos_nimbos_mixed.rs"
+required-features = ["nimbos"]
 
 [[test]]
 name              = "test_testing_framework_external_urls_inscription"

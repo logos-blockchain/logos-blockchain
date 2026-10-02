@@ -49,5 +49,9 @@ testing-framework-runner-local   = { workspace = true }
 thiserror                        = { workspace = true }
 time                             = { workspace = true }
 tokio                            = { features = ["macros", "process", "rt-multi-thread", "time"], workspace = true }
+toml                             = { version = "0.9.12", optional = true }
 tracing                          = { workspace = true }
 uuid                             = { workspace = true }
+
+[features]
+nimbos = ["dep:toml"]
