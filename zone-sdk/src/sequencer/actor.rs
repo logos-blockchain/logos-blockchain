@@ -2209,17 +2209,17 @@ mod tests {
         };
         let signatures = proof.signatures();
         assert_eq!(signatures.len(), 1);
+        let (key_index, signature) = signatures
+            .first_key_value()
+            .expect("the proof holds one signature");
         assert_eq!(
-            signatures[0].channel_key_index, 1,
+            *key_index, 1,
             "signature must claim the signer's position in the current accredited list"
         );
         own_key
             .public_key()
             .into_unverified()
-            .verify(
-                signed_ops.hash().as_signing_bytes(),
-                &signatures[0].signature,
-            )
+            .verify(signed_ops.hash().as_signing_bytes(), signature)
             .expect("signature must verify against the claimed key over the funded tx hash");
     }
 

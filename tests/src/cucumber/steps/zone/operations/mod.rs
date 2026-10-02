@@ -32,7 +32,7 @@ use lb_core::{
         traits::Hashable as _,
         transactions::{builder::MantleTxBuilder, states::Unverified},
     },
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},

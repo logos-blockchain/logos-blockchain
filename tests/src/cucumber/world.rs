@@ -25,6 +25,7 @@ use lb_core::{
             states::{Preverified, VerificationState},
         },
     },
+    proofs::channel_multi_sig_proof::IndexedSignatures,
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, ZkPublicKey};
@@ -254,7 +255,7 @@ pub struct ZoneState {
     saved_checkpoints: HashMap<String, SequencerCheckpoint>,
     latest_checkpoints: HashMap<String, SequencerCheckpoint>,
     prepared_configs: HashMap<String, PreparedChannelConfig>,
-    prepared_config_signatures: HashMap<String, Vec<IndexedSignature>>,
+    prepared_config_signatures: HashMap<String, IndexedSignatures>,
     sequencer_startups: HashMap<String, ZoneSequencerStartup>,
     observed_mempool_pending: HashMap<String, HashSet<InscriptionId>>,
     sorted_total_payloads: Option<usize>,
@@ -586,15 +587,23 @@ impl ZoneState {
             })
     }
 
-    pub fn add_prepared_config_signature(&mut self, alias: String, signature: IndexedSignature) {
+    pub fn add_prepared_config_signature(
+        &mut self,
+        alias: String,
+        IndexedSignature {
+            channel_key_index,
+            signature,
+        }: IndexedSignature,
+    ) {
         self.prepared_config_signatures
             .entry(alias)
             .or_default()
-            .push(signature);
+            .try_insert(channel_key_index, signature)
+            .unwrap();
     }
 
     #[must_use]
-    pub fn prepared_config_signatures(&self, alias: &str) -> Vec<IndexedSignature> {
+    pub fn prepared_config_signatures(&self, alias: &str) -> IndexedSignatures {
         self.prepared_config_signatures
             .get(alias)
             .cloned()

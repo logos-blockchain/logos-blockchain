@@ -168,10 +168,7 @@ pub async fn submit_zone_channel_split(
     let funded_tx = response.funded_tx;
     let tx_hash = funded_tx.hash();
     let signature = signing_key.sign_payload(tx_hash.as_signing_bytes());
-    let proof = ChannelMultiSigProof::try_new([IndexedSignature::new(0, signature)].into())
-        .map_err(|error| ZoneTestError::SplitTransfer {
-            message: format!("multi-sig proof assembly failed: {error:?}"),
-        })?;
+    let proof = ChannelMultiSigProof::new(IndexedSignatures::from((0, signature)));
     let mut op_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(proof)]);
     if let Some(transfer_proof) = response.transfer_proof {
         op_proofs

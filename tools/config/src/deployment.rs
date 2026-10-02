@@ -152,14 +152,14 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     .unwrap(),
                 },
                 sdp_config: lb_node::config::cryptarchia::deployment::SdpConfig {
-                    service_params: [(
+                    service_params: (
                         ServiceType::BlendNetwork,
                         ServiceParameters {
                             inactivity_period: SDP_INACTIVITY_PERIOD.try_into().unwrap(),
                             epoch: SDP_EPOCH,
                         },
-                    )]
-                    .into(),
+                    )
+                        .into(),
                     min_stake: lb_core::sdp::MinStake {
                         threshold: MIN_STAKE_THRESHOLD,
                         timestamp: MIN_STAKE_TIMESTAMP,

@@ -158,16 +158,16 @@ impl VerifiableOperation<StandardMode>
             }
 
             // Check the signatures. Don't defer this because ed25519 verification is cheap.
-            for signature in signatures {
+            for (index, signature) in signatures {
                 if channel
                     .accredited_keys
-                    .get(signature.channel_key_index as usize)
+                    .get(*index as usize)
                     .ok_or_else(|| Error::InvalidSignatureIndex {
                         channel_id: operation.channel,
                         sequencers: channel.accredited_keys.len(),
-                        index: signature.channel_key_index,
+                        index: *index,
                     })?
-                    .verify(context.tx_hash_view.as_bytes(), &signature.signature)
+                    .verify(context.tx_hash_view.as_bytes(), signature)
                     .is_err()
                 {
                     return Err(Error::InvalidSignature);
@@ -326,7 +326,7 @@ mod tests {
             channels: &Channels::new(),
             tx_hash_view: &tx_hash_view,
         };
-        let proof = ChannelMultiSigProof::try_new([].into()).unwrap();
+        let proof = ChannelMultiSigProof::empty();
         let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(op, proof)
             .into_preverified(&())
             .unwrap();

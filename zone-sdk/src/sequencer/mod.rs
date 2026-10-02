@@ -90,7 +90,7 @@ pub use lb_core::{
         ops::{OpProof, channel::config::ChannelConfigOp},
         transactions::Ops,
     },
-    proofs::channel_multi_sig_proof::IndexedSignature,
+    proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
 };
 pub use lb_key_management_system_service::keys::{Ed25519Key, UnverifiedEd25519PublicKey};
 // Pure key-only signing primitive for prepared multi-sig artifacts — usable by

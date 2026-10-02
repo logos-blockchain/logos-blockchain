@@ -384,7 +384,10 @@ mod tests {
 
     use serde::{Deserialize, Deserializer};
 
-    use crate::bounded::{BoundedError, BoundedVec, UpperBoundedVec};
+    use crate::bounded::{
+        BoundedError, BoundedVec, UpperBoundedVec,
+        collection::test_utils::assert_serde_matches_underlying,
+    };
 
     /// Concrete instantiation used across the tests: between 2 and 4 elements.
     type TestBoundedVectorMin2 = BoundedVec<u8, 2, 4>;
@@ -698,6 +701,18 @@ mod tests {
 
         assert_eq!(restored, original);
         assert_eq!(encoded, bincode::serialize(&vec![5u8, 6, 7]).unwrap());
+    }
+
+    /// Within its bounds, a bounded vector reads and writes exactly as a vector
+    /// does, repeated elements included.
+    #[test]
+    fn serde_matches_the_underlying_vector() {
+        for elements in [&[1u8, 2][..], &[3, 1, 3, 2]] {
+            assert_serde_matches_underlying::<TestBoundedVectorMin2, Vec<u8>>(
+                &serde_json::to_string(elements).unwrap(),
+                &bincode::serialize(elements).unwrap(),
+            );
+        }
     }
 
     #[test]

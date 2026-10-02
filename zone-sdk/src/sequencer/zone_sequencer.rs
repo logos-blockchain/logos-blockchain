@@ -23,7 +23,7 @@ use lb_core::{
         traits::Hashable as _,
         transactions::{Ops, hash::TxHash, states::Unverified},
     },
-    proofs::channel_multi_sig_proof::IndexedSignature,
+    proofs::channel_multi_sig_proof::IndexedSignatures,
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -204,7 +204,7 @@ pub(super) enum ActorRequest {
         // Boxed: `PreparedChannelConfig` is much larger than the other
         // variants' payloads, so keep it off the enum's inline footprint.
         prepared: Box<PreparedChannelConfig>,
-        signatures: Vec<IndexedSignature>,
+        signatures: IndexedSignatures,
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
     SubmitSignedTx {
@@ -1367,8 +1367,9 @@ where
     /// and submit it.
     ///
     /// `signatures` must be indexed against
-    /// [`PreparedChannelConfig::accredited_keys`] and strictly ascending by
-    /// index. Once assembled, the fully-signed config tx is a plain
+    /// [`PreparedChannelConfig::accredited_keys`], with at most one signature
+    /// per index, in any order. Once assembled, the fully-signed config tx is
+    /// a plain
     /// `[CHANNEL_CONFIG, TRANSFER(fee)]` — identical in shape to a single-sig
     /// config — so it flows through the same submit path as
     /// [`Self::do_submit_signed_tx`] (track → `submit_other`, queue post,
@@ -1376,7 +1377,7 @@ where
     pub(super) fn do_submit_channel_config(
         &mut self,
         prepared: PreparedChannelConfig,
-        signatures: Vec<IndexedSignature>,
+        signatures: IndexedSignatures,
     ) -> Result<PublishReceipt, Error> {
         let signed_tx =
             assemble_channel_config_tx(prepared.tx, prepared.transfer_proof, signatures)?;

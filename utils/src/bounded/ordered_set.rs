@@ -41,11 +41,14 @@ where
 /// range `[MIN, MAX]`: a bounded vector whose elements are pairwise distinct.
 ///
 /// A thin alias over [`Bounded`]. Every checked construction path
-/// ([`TryFrom<Vec<T>>`](TryFrom), [`Self::try_from_iter`], deserialization)
-/// enforces the bound and rejects a repeated element instead of dropping it,
-/// so the elements read are always the elements held, in the order they were
-/// read. Elements are appended with [`Self::try_push`] and removed by position
-/// with [`Self::try_remove`] and [`Self::try_pop`], as on a vector.
+/// ([`TryFrom<Vec<T>>`](TryFrom), [`Self::try_from_iter`]) enforces the bound
+/// and rejects a repeated element instead of dropping it, so the elements
+/// given are always the elements held, in the order they were given.
+/// Deserialization reads at most `MAX` elements, repeats included, and merges
+/// a repeated element into its first occurrence, as an [`OrderedSet`] does;
+/// `MIN` applies to the elements held once repeats have merged. Elements are
+/// appended with [`Self::try_push`] and removed by position with
+/// [`Self::try_remove`] and [`Self::try_pop`], as on a vector.
 ///
 /// Read access goes through `Deref` to the inner [`IndexSet`]. There is no
 /// `DerefMut` and no mutable iteration: replacing an element in place could
@@ -298,7 +301,13 @@ mod tests {
 
     use indexmap::IndexSet;
 
-    use crate::bounded::{BoundedError, BoundedOrderedSet, UpperBoundedOrderedSet};
+    use crate::{
+        bounded::{
+            BoundedError, BoundedOrderedSet, UpperBoundedOrderedSet,
+            collection::test_utils::assert_serde_matches_underlying,
+        },
+        ordered_set::OrderedSet,
+    };
 
     /// Concrete instantiation used across the tests: between 2 and 4 elements.
     type TestSet = BoundedOrderedSet<u8, 2, 4>;
@@ -485,20 +494,50 @@ mod tests {
         assert_eq!(encoded, bincode::serialize(&vec![3u8, 1, 2]).unwrap());
     }
 
+    /// Within its bounds, a bounded ordered set reads and writes exactly as an
+    /// ordered set does: a repeated element merges into its first occurrence.
     #[test]
-    fn deserialize_rejects_a_repeated_element() {
-        let json = serde_json::from_str::<TestSet>("[1,2,1]").unwrap_err();
+    fn serde_matches_the_underlying_ordered_set() {
+        for elements in [&[2u8, 1][..], &[3, 1, 3, 2], &[1, 1, 2, 2]] {
+            assert_serde_matches_underlying::<TestSet, OrderedSet<u8>>(
+                &serde_json::to_string(elements).unwrap(),
+                &bincode::serialize(elements).unwrap(),
+            );
+        }
+    }
+
+    /// Every element read counts against `MAX`, repeats included, so the work
+    /// an input costs stays bounded. The element past `MAX` is refused where it
+    /// arrives: the malformed element after it is never read.
+    #[test]
+    fn deserialize_refuses_the_element_past_maximum_even_when_repeated() {
+        let json = serde_json::from_str::<TestSet>(r#"[1,1,1,1,1,"malformed"]"#).unwrap_err();
         assert!(
             json.to_string()
-                .contains("Item at index 2 is a duplicate of an earlier item"),
+                .contains("Item count 5 exceeds static maximum of 4"),
             "unexpected error: {json}"
         );
 
-        let encoded = bincode::serialize(&vec![1u8, 2, 1]).unwrap();
+        // A declared length past `MAX` is refused before any element is decoded.
+        let encoded = bincode::serialize(&vec![1u8; 5]).unwrap();
         let binary = bincode::deserialize::<TestSet>(&encoded).unwrap_err();
         assert!(
-            binary.to_string().contains("duplicate"),
+            binary
+                .to_string()
+                .contains("Item count 5 exceeds static maximum of 4"),
             "unexpected error: {binary}"
+        );
+    }
+
+    /// The minimum applies to the elements held, once repeats have merged.
+    #[test]
+    fn deserialize_checks_the_minimum_after_merging() {
+        let err = serde_json::from_str::<TestSet>("[1,1]").unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Item count 1 is below minimum of 2"),
+            "unexpected error: {err}"
         );
     }
 

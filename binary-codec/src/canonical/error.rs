@@ -46,6 +46,11 @@ pub enum DecodeError {
         type_name: &'static str,
         index: usize,
     },
+    #[error("Item at index {index} of {type_name} does not come after the item before it")]
+    OutOfOrderItem {
+        type_name: &'static str,
+        index: usize,
+    },
     #[error("{0}")]
     Custom(Cow<'static, str>),
 }
@@ -123,6 +128,19 @@ impl DecodeError {
         T: ?Sized,
     {
         Self::DuplicateItem {
+            type_name: type_name::<T>(),
+            index,
+        }
+    }
+
+    /// The item at `index` of a `T` whose items must come in increasing order
+    /// comes before the item before it.
+    #[must_use]
+    pub fn out_of_order_item<T>(index: usize) -> Self
+    where
+        T: ?Sized,
+    {
+        Self::OutOfOrderItem {
             type_name: type_name::<T>(),
             index,
         }

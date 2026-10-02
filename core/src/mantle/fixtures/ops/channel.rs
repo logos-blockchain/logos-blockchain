@@ -21,7 +21,7 @@ use crate::{
             withdraw::ChannelWithdrawOp,
         },
     },
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
 };
 
 codec_fixtures!(ChannelId, Self::from([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000");
@@ -76,15 +76,7 @@ codec_fixtures!(
     CHANNEL_TRANSFER.clone() => CHANNEL_TRANSFER_PAYLOAD_HEX,
 );
 
-codec_fixtures!(
-    IndexedSignature,
-    Self {
-        channel_key_index: 1,
-        signature: Ed25519Signature::from_bytes(&[0u8; _])
-    } => "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100"
-);
-
 codec_fixtures!(ChannelMultiSigProof,
-    Self::try_new([].into()).unwrap() => "0000",
-    Self::try_new([IndexedSignature::new(0, Ed25519Signature::from_bytes(&[0u8; _]))].into()).unwrap() => "0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    Self::empty() => "0000",
+    Self::new(IndexedSignatures::from((1, Ed25519Signature::from_bytes(&[0u8; _])))) => "0100010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 );

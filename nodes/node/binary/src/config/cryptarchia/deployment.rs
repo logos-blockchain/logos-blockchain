@@ -1,6 +1,6 @@
 use core::num::{NonZero, NonZeroU32, NonZeroU64};
-use std::collections::BTreeMap;
 
+use lb_binary_codec::canonical::BTreeMap;
 use lb_chain_service::Epoch;
 use lb_core::sdp::{InactivityPeriod, MinStake, ServiceType};
 use lb_cryptarchia_engine::{

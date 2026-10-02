@@ -1,134 +1,90 @@
 //! Building a bounded collection item by item, from an iterator or from a
 //! serde sequence or map.
 //!
-//! Every checked path that builds a [`Bounded`] collection one item at a time
-//! goes through [`collect`], so the same rules hold for all of them:
+//! A bounded collection adds its bounds to the collection it wraps, and leaves
+//! everything else to it:
 //!
-//! - The first `MIN` items are mandatory, like the fields of a struct. An input
-//!   that ends before them fails where it ends.
-//! - Past `MIN` the input may end at any point, and it is stopped one item past
-//!   `MAX`.
-//! - A collection may refuse an item it already holds. That is an error, never
-//!   a silent merge: merging would let `[a, a]` pass a `MIN = 2` bound that it
-//!   does not meet, and would let two different inputs produce the same value.
+//! - No input may supply more than `MAX` items, repeats included, so building a
+//!   collection never costs more than `MAX` items' worth of work. The item past
+//!   `MAX` is refused where it arrives; a map refuses it on its key, before its
+//!   value is decoded.
+//! - Once the input ends, the collection must hold at least `MIN` items,
+//!   counted after any repeats have merged.
+//! - Deserialization treats a repeated element or key exactly as the wrapped
+//!   collection's own `insert` does. Construction from an iterator is stricter,
+//!   and rejects a repeat as an error.
 //! - A declared length is trusted for pre-allocation only up to the budget
-//!   every bounded collection shares (see [`allocation_size_for_hint`]).
-//!
-//! Each bound is checked as the items arrive, so wrapping the finished
-//! collection needs no check at all. Deserialization also rejects a declared
-//! length outside the bounds before a single item is decoded.
+//!   every bounded collection shares (see [`allocation_size_for_hint`]), and
+//!   one outside the bounds is rejected before a single item is decoded.
 
-use core::{convert::identity, fmt, marker::PhantomData};
+use core::{fmt, marker::PhantomData};
 
 use serde::{
     Deserialize,
-    de::{Error as _, SeqAccess, Visitor},
+    de::{Error as _, MapAccess, SeqAccess, Visitor},
 };
 
-use crate::bounded::{Bounded, BoundedError, allocation_size_for_hint};
+use crate::bounded::{Bounded, BoundedError, BoundedLen, allocation_size_for_hint};
 
 /// A collection a bounded type can be built from, one item at a time.
-pub trait BoundedCollection: Sized {
+pub trait BoundedCollection: BoundedLen + Sized {
     /// What one insertion adds.
     type Item;
 
     fn with_capacity(capacity: usize) -> Self;
 
-    /// Adds `item`, unless the collection already holds it, in which case the
-    /// collection is left untouched and `false` is returned. A vector accepts
-    /// every item.
+    /// Adds `item` as the collection's own `insert` does, and returns whether
+    /// the collection grew: a vector appends every item, a set keeps the
+    /// element it already holds, and a map replaces the value under a key it
+    /// already holds.
     fn add(&mut self, item: Self::Item) -> bool;
 }
 
-/// Builds a bounded collection from the items `next` yields until it returns
-/// `None`.
+/// Builds a bounded collection from an iterator, rejecting a repeated item.
 ///
-/// `next` is given the collection built so far, so a source that reads an item
-/// in parts can refuse it before reading the rest, as the ordered map's visitor
-/// does with a key it cannot admit. Whatever `next` yields is still checked
-/// here like any other item.
-///
-/// `hint` is the length the input declares, if any, and only sizes the initial
-/// allocation. `into_error` turns a bound violation into the input's own error
-/// type.
-pub fn collect<Collection, VisitorFn, ErrorFn, Error, const MIN: usize, const MAX: usize>(
-    hint: Option<usize>,
-    mut next: VisitorFn,
-    into_error: ErrorFn,
-) -> Result<Bounded<Collection, MIN, MAX>, Error>
-where
-    Collection: BoundedCollection,
-    VisitorFn: FnMut(&Collection) -> Result<Option<Collection::Item>, Error>,
-    ErrorFn: Fn(BoundedError) -> Error,
-{
-    let mut collection =
-        Collection::with_capacity(allocation_size_for_hint::<Collection::Item, MAX>(hint));
-
-    // The input must supply the first `MIN` items.
-    for index in 0..MIN {
-        let Some(item) = next(&collection)? else {
-            return Err(into_error(BoundedError::too_few(index, MIN)));
-        };
-        try_add::<Collection, MAX>(&mut collection, item, index).map_err(&into_error)?;
-    }
-
-    // The input may end at any point, as long as it stops by `MAX`.
-    let mut index = MIN;
-    while let Some(item) = next(&collection)? {
-        try_add::<Collection, MAX>(&mut collection, item, index).map_err(&into_error)?;
-        // `index` can go up to `MAX` which is of the same type, so no overflow risk
-        // here.
-        index += 1;
-    }
-
-    // At least `MIN` items were accepted, and none past `MAX`.
-    Ok(Bounded::new_unchecked(collection))
-}
-
-/// Builds a bounded collection from an iterator.
-///
-/// The iterator's lower size bound only sizes the initial allocation.
+/// Iteration stops at the first repeat or at the first item past `MAX`. The
+/// iterator's lower size bound only sizes the initial allocation.
 pub fn collect_iter<Collection, Items, const MIN: usize, const MAX: usize>(
-    items_iter: Items,
+    items: Items,
 ) -> Result<Bounded<Collection, MIN, MAX>, BoundedError>
 where
     Collection: BoundedCollection,
     Items: IntoIterator<Item = Collection::Item>,
 {
-    let mut items = items_iter.into_iter();
-    collect(Some(items.size_hint().0), |_| Ok(items.next()), identity)
+    let items = items.into_iter();
+    let mut collection = Collection::with_capacity(
+        allocation_size_for_hint::<Collection::Item, MAX>(Some(items.size_hint().0)),
+    );
+    for (index, item) in items.enumerate() {
+        check_position::<MAX>(index)?;
+        // A repeat has already been merged by the time it is found, but the
+        // collection is dropped with the error.
+        if !collection.add(item) {
+            return Err(BoundedError::DuplicateItem { index });
+        }
+    }
+    Bounded::try_new(collection)
 }
 
-/// Adds the item at input position `index`, refusing it past `MAX` or when it
-/// is already held.
-fn try_add<Collection, const MAX: usize>(
-    collection: &mut Collection,
-    item: Collection::Item,
-    index: usize,
-) -> Result<(), BoundedError>
-where
-    Collection: BoundedCollection,
-{
+/// Refuses the item at input position `index` when it is past `MAX`.
+const fn check_position<const MAX: usize>(index: usize) -> Result<(), BoundedError> {
     if index >= MAX {
         return Err(BoundedError::TooManyItems {
             count: index.saturating_add(1),
             max: MAX,
         });
     }
-    if collection.add(item) {
-        Ok(())
-    } else {
-        Err(BoundedError::DuplicateItem { index })
-    }
+    Ok(())
 }
 
 /// Rejects a declared length outside `[MIN, MAX]` before any item is decoded.
 ///
 /// Binary formats declare the length up front, so an input of the wrong size
-/// fails here without a single item being decoded. Formats that declare
-/// nothing, such as JSON, are held to the same bounds by [`collect`] as the
-/// items arrive.
-pub fn check_declared_len<Collection, Error, const MIN: usize, const MAX: usize>(
+/// fails here without a single item being decoded: one declaring more than
+/// `MAX` items would supply them, and one declaring fewer than `MIN` could
+/// never leave the collection holding `MIN`. Formats that declare nothing,
+/// such as JSON, are held to the same bounds as the items arrive.
+fn check_declared_len<Collection, Error, const MIN: usize, const MAX: usize>(
     hint: Option<usize>,
 ) -> Result<(), Error>
 where
@@ -139,7 +95,7 @@ where
     })
 }
 
-/// Deserializes a sequence into a bounded vector or ordered set.
+/// Deserializes a sequence into a bounded collection, one element at a time.
 pub struct SeqVisitor<Collection, const MIN: usize, const MAX: usize>(PhantomData<Collection>);
 
 impl<Collection, const MIN: usize, const MAX: usize> SeqVisitor<Collection, MIN, MAX> {
@@ -156,7 +112,10 @@ where
     type Value = Bounded<Collection, MIN, MAX>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "a sequence of between {MIN} and {MAX} items")
+        write!(
+            formatter,
+            "a sequence of at most {MAX} items, making a collection of at least {MIN}"
+        )
     }
 
     fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
@@ -165,7 +124,95 @@ where
     {
         let hint = sequence.size_hint();
         check_declared_len::<Collection, A::Error, MIN, MAX>(hint)?;
-        collect(hint, |_| sequence.next_element(), A::Error::custom)
+        let mut collection =
+            Collection::with_capacity(allocation_size_for_hint::<Collection::Item, MAX>(hint));
+        let mut index = 0;
+        while let Some(item) = sequence.next_element()? {
+            check_position::<MAX>(index).map_err(A::Error::custom)?;
+            collection.add(item);
+            // `index` stays below `MAX`, so it cannot overflow.
+            index += 1;
+        }
+        Bounded::try_new(collection).map_err(A::Error::custom)
+    }
+}
+
+/// Deserializes a map into a bounded map, one entry at a time, reading each
+/// entry key first.
+///
+/// The entry past `MAX` is refused on its key, before its value is decoded.
+pub struct MapVisitor<Map, const MIN: usize, const MAX: usize>(PhantomData<Map>);
+
+impl<Map, const MIN: usize, const MAX: usize> MapVisitor<Map, MIN, MAX> {
+    pub const fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<'de, Map, K, V, const MIN: usize, const MAX: usize> Visitor<'de> for MapVisitor<Map, MIN, MAX>
+where
+    Map: BoundedCollection<Item = (K, V)>,
+    K: Deserialize<'de>,
+    V: Deserialize<'de>,
+{
+    type Value = Bounded<Map, MIN, MAX>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "a map of at most {MAX} entries, making a map of at least {MIN}"
+        )
+    }
+
+    fn visit_map<A>(self, mut entries: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let hint = entries.size_hint();
+        check_declared_len::<Map, A::Error, MIN, MAX>(hint)?;
+        let mut map = Map::with_capacity(allocation_size_for_hint::<(K, V), MAX>(hint));
+        let mut index = 0;
+        while let Some(key) = entries.next_key()? {
+            check_position::<MAX>(index).map_err(A::Error::custom)?;
+            let value = entries.next_value()?;
+            map.add((key, value));
+            // `index` stays below `MAX`, so it cannot overflow.
+            index += 1;
+        }
+        Bounded::try_new(map).map_err(A::Error::custom)
+    }
+}
+
+#[cfg(test)]
+pub mod test_utils {
+    use core::fmt::Debug;
+
+    use serde::{Serialize, de::DeserializeOwned};
+
+    /// Asserts that a bounded collection reads `json` and `bincode` exactly as
+    /// the collection it wraps does, and writes the result back alike.
+    pub fn assert_serde_matches_underlying<Wrapper, Inner>(json: &str, bincode: &[u8])
+    where
+        Wrapper: Serialize + DeserializeOwned + AsRef<Inner> + Debug,
+        Inner: Serialize + DeserializeOwned + PartialEq + Debug,
+    {
+        let inner: Inner = serde_json::from_str(json).unwrap();
+        let wrapper: Wrapper = serde_json::from_str(json).unwrap();
+        assert_eq!(wrapper.as_ref(), &inner, "reading JSON {json}");
+        assert_eq!(
+            serde_json::to_string(&wrapper).unwrap(),
+            serde_json::to_string(&inner).unwrap(),
+            "writing back JSON {json}"
+        );
+
+        let inner: Inner = bincode::deserialize(bincode).unwrap();
+        let wrapper: Wrapper = bincode::deserialize(bincode).unwrap();
+        assert_eq!(wrapper.as_ref(), &inner, "reading bincode {bincode:?}");
+        assert_eq!(
+            bincode::serialize(&wrapper).unwrap(),
+            bincode::serialize(&inner).unwrap(),
+            "writing back bincode {bincode:?}"
+        );
     }
 }
 
@@ -178,7 +225,7 @@ mod tests {
         Result<Bounded<Vec<u8>, MIN, MAX>, BoundedError>;
 
     #[test]
-    fn an_input_that_ends_before_the_minimum_fails_where_it_ends() {
+    fn an_input_that_ends_before_the_minimum_fails() {
         let empty: Collected<2, 4> = collect_iter([]);
         let short: Collected<2, 4> = collect_iter([1]);
 

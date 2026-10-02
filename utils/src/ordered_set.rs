@@ -1,13 +1,13 @@
 use core::{
     cmp::Ordering,
     fmt::{self, Debug, Formatter},
-    hash::{Hash, Hasher},
+    hash::{BuildHasher, Hash, Hasher},
     ops::{Deref, DerefMut},
 };
 use std::hash::RandomState;
 
 use indexmap::{IndexSet, set};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A set that keeps its elements in the order they were inserted and compares
 /// as the sequence it holds.
@@ -18,8 +18,14 @@ use serde::Serialize;
 /// and so do equality, hashing and ordering. Two ordered sets are equal exactly
 /// when they hold the same elements in the same order, which is exactly when
 /// they encode to the same bytes.
-#[derive(Clone, Serialize)]
-#[serde(bound(serialize = "T: Serialize"), transparent)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(
+    bound(
+        serialize = "T: Serialize",
+        deserialize = "T: Deserialize<'de> + Eq + Hash, S: BuildHasher + Default"
+    ),
+    transparent
+)]
 pub struct OrderedSet<T, S = RandomState>(IndexSet<T, S>);
 
 impl<T, S> Debug for OrderedSet<T, S>
@@ -114,5 +120,20 @@ impl<T, S> IntoIterator for OrderedSet<T, S> {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OrderedSet;
+
+    /// Serde is the inner set's: the order is kept, and a repeated element
+    /// merges into its first occurrence.
+    #[test]
+    fn deserializes_as_the_inner_index_set() {
+        let set: OrderedSet<u8> = serde_json::from_str("[3,1,3,2]").unwrap();
+
+        assert_eq!(set.iter().copied().collect::<Vec<_>>(), [3, 1, 2]);
+        assert_eq!(serde_json::to_string(&set).unwrap(), "[3,1,2]");
     }
 }
