@@ -376,8 +376,8 @@ where
             panic!("Key with specified ID is not a ZK key.");
         };
 
-        // TODO: This will go once we do not need to pass the secret key anymore, i.e.,
-        // when we have libp2p integration with KMS.
+        // TODO: This will go once we do not need to pass the secret key
+        // anymore, i.e., when we have libp2p integration with KMS.
         let non_ephemeral_signing_key = {
             let (sender, receiver) = oneshot::channel();
             kms_api
@@ -496,10 +496,10 @@ where
         )
         .await;
 
-        // The main event loop has ended because the node is no longer a core node
-        // in the new epoch.
-        // Before terminating the service, complete the old epoch during a single
-        // epoch transition period.
+        // The main event loop has ended because the node is no longer a core
+        // node in the new epoch.
+        // Before terminating the service, complete the old epoch during a
+        // single epoch transition period.
         retire(
             // We don't need epoch numbers anymore since we know we are dealing with a single,
             // past epoch.
@@ -713,15 +713,16 @@ where
             // Everything else in a stale state belongs to the epoch it was
             // saved under, but a transaction still waiting for a `PoW` solution
             // has not been encapsulated and so belongs to none: it outlives the
-            // state that carried it, the same way it outlives an epoch rotation.
+            // state that carried it, the same way it outlives an epoch
+            // rotation.
             //
             // The tokens that state collected are the exception. A state saved
             // under the immediately preceding epoch holds a full epoch's worth
-            // of them, and they are still worth an activity proof: rotating that
-            // collector here is the same move the running service makes at an
-            // epoch boundary, and it hands the proof to the submission below.
-            // A gap of two or more epochs is past submitting for, so it is
-            // dropped.
+            // of them, and they are still worth an activity proof: rotating
+            // that collector here is the same move the running
+            // service makes at an epoch boundary, and it hands the
+            // proof to the submission below. A gap of two or more
+            // epochs is past submitting for, so it is dropped.
             let (pending_transactions, recovered_old_epoch_token_collector) = maybe_stale_state
                 .map_or_else(
                     || (VecDeque::new(), None),
@@ -750,8 +751,8 @@ where
     };
 
     // If there is the old epoch token collector loaded from `last_saved_state`,
-    // compute/submit its activity proof because we won't collect more tokens for
-    // the old epoch after this initialization step because we are not
+    // compute/submit its activity proof because we won't collect more tokens
+    // for the old epoch after this initialization step because we are not
     // establishing connections for the old epoch.
     let mut state_updater = current_recovery_checkpoint.start_updating();
     if let Some(old_epoch_token_collector) = state_updater.clear_old_epoch_token_collector() {
@@ -844,8 +845,8 @@ async fn post_initialize<PolInfoProvider, RuntimeServiceId>(
 where
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
 {
-    // There might be services that depend on Blend to be ready before starting, so
-    // we cannot wait for the stream to be sent before we signal we are
+    // There might be services that depend on Blend to be ready before starting,
+    // so we cannot wait for the stream to be sent before we signal we are
     // ready, hence this should always be called after `notify_ready();`.
     // Also, Blend services start even if such a stream is not immediately
     // available, since they will simply keep blending cover messages.
@@ -1664,7 +1665,7 @@ async fn retire<
             // yields without a trace. Only the expiry ends the window; the
             // other cases are logged and the wait goes on.
             epoch_event = remaining_epoch_stream.next() => {
-                if retirement_window_closed(epoch_event.as_ref()) {
+                if transition_period_expired(epoch_event.as_ref()) {
                     break;
                 }
             }
@@ -1693,7 +1694,7 @@ async fn retire<
 /// this epoch's timer with the new epoch's, so the expiry that comes next is
 /// later than planned; an ended stream means no expiry will come at all. Both
 /// are logged so the delay is visible, and the wait goes on.
-fn retirement_window_closed<Info>(epoch_event: Option<&EpochEvent<Info>>) -> bool {
+fn transition_period_expired<Info>(epoch_event: Option<&EpochEvent<Info>>) -> bool {
     match epoch_event {
         Some(EpochEvent::TransitionPeriodExpired) => true,
         Some(EpochEvent::NewEpoch(_)) => {
@@ -1764,13 +1765,15 @@ where
                 core_poq_generator,
                 public: new_epoch_info,
             } = *core_epoch_info;
-            // Once a new epoch starts, the old epoch's proving is useless: retiring
-            // its processor into a receive-only one for the transition period drops
-            // the generators, and with them the `PoW` mining they have in flight.
+            // Once a new epoch starts, the old epoch's proving is useless:
+            // retiring its processor into a receive-only one for
+            // the transition period drops the generators, and with
+            // them the `PoW` mining they have in flight.
             let old_cryptographic_processor = current_cryptographic_processor.rotate_epoch();
-            // Queued proposals go with it, and for the same reason: the rotation
-            // is what makes them unsendable. Anything not yet encapsulated would
-            // now draw on the new epoch's leadership quota — one message's worth
+            // Queued proposals go with it, and for the same reason: the
+            // rotation is what makes them unsendable. Anything not
+            // yet encapsulated would now draw on the new epoch's
+            // leadership quota — one message's worth
             let (
                 _,
                 _,
@@ -1830,7 +1833,8 @@ where
                 .as_ref()
                 .is_some_and(|secret| secret.epoch == new_epoch_info.epoch)
             {
-                // We consume the stream by `take()`ing only if the epochs match.
+                // We consume the stream by `take()`ing only if the epochs
+                // match.
                 let current_secret_info = current_secret_info
                     .take()
                     .expect("Secret PoL info presence checked above.");
@@ -2015,13 +2019,13 @@ where
     ProofsVerifier: ProofsVerifierTrait,
 {
     let mut state_updater = current_recovery_checkpoint.start_updating();
-    // The epoch this message is built under, and the one whose end takes it with
-    // it if it is never released.
+    // The epoch this message is built under, and the one whose end takes it
+    // with it if it is never released.
     let epoch = cryptographic_processor.epoch();
 
-    // Before blending the data message, we try to peel off any outer layers that
-    // are addressed to us. In this case, we collect the blending tokens and we
-    // blend only the remaining layers.
+    // Before blending the data message, we try to peel off any outer layers
+    // that are addressed to us. In this case, we collect the blending
+    // tokens and we blend only the remaining layers.
     let self_decapsulation_output = cryptographic_processor
         .receiver()
         .decapsulate_message_recursive(wrapped_message.clone());
@@ -2029,8 +2033,9 @@ where
     let payload_type = payload.payload_type();
 
     let Ok(multi_layer_decapsulation_output) = self_decapsulation_output else {
-        // The outermost layer of the data message is not for us, hence we treat this as
-        // a regular data message that should be released at the next round.
+        // The outermost layer of the data message is not for us, hence we treat
+        // this as a regular data message that should be released at the
+        // next round.
         tracing::debug!(target: LOG_TARGET, "Locally generated data message does not have its outermost layer addressed to us. Sending it out as a data message...");
         if let Some(failure_detector) = failure_detector {
             failure_detector.mark_payload_as_encapsulated(wrapped_message.id(), payload, epoch);
@@ -2052,9 +2057,9 @@ where
         return state_updater.commit_changes();
     };
 
-    // It happened that the outermost `N` layers were addressed to this very same
-    // node, so we collect blending tokens for those layers and propagate only the
-    // remaining part.
+    // It happened that the outermost `N` layers were addressed to this very
+    // same node, so we collect blending tokens for those layers and
+    // propagate only the remaining part.
     let (blending_tokens, remaining_message_type) =
         multi_layer_decapsulation_output.into_components();
     let processed_message = match remaining_message_type {
@@ -2093,17 +2098,17 @@ where
     state_updater.collect_current_epoch_tokens(blending_tokens.into_iter());
 
     scheduler.schedule_processed_message(processed_message.clone());
-    // We treat a partially or fully decapsulated message as a processed message,
-    // and we schedule for its release at the next release round.
+    // We treat a partially or fully decapsulated message as a processed
+    // message, and we schedule for its release at the next release round.
     if state_updater
         .add_unsent_processed_message(processed_message.clone())
         .is_err()
     {
-        // With a data replication factor greater than `0`, it's expected to have
-        // multiple identical copies of the same data message, so in that case it's not
-        // a warning and should not be logged.
-        // Hence, we only log a warning in the unexpected case of an encapsulated
-        // message seen twice, which should never happen.
+        // With a data replication factor greater than `0`, it's expected to
+        // have multiple identical copies of the same data message, so
+        // in that case it's not a warning and should not be logged.
+        // Hence, we only log a warning in the unexpected case of an
+        // encapsulated message seen twice, which should never happen.
         if matches!(processed_message, ProcessedMessage::Encapsulated(_)) {
             tracing::warn!(
                 target: LOG_TARGET,
@@ -2521,12 +2526,13 @@ async fn handle_release_round_for_old_epoch<
         release_type.map_or_else(|| (vec![], false), RoundReleaseType::into_components);
     let (data_count, processed_count) = (data_messages.len(), processed_messages.len());
 
-    // Data messages the epoch left unreleased carry its `PoQ`, which only verifies
-    // against that epoch's public inputs, so they are published under the old
-    // epoch's number and therefore to the peers still negotiated for it. They are
-    // not tracked in the new epoch's recovery state, which was reset on rotation,
-    // and they do not consume the new epoch's core quota, since they neither spend
-    // it nor reach current-epoch peers.
+    // Data messages the epoch left unreleased carry its `PoQ`, which only
+    // verifies against that epoch's public inputs, so they are published
+    // under the old epoch's number and therefore to the peers still
+    // negotiated for it. They are not tracked in the new epoch's recovery
+    // state, which was reset on rotation, and they do not consume the new
+    // epoch's core quota, since they neither spend it nor reach
+    // current-epoch peers.
     let data_messages_relay_futures = data_messages
         .into_iter()
         .inspect(|data_message_to_blend| {
@@ -2681,8 +2687,8 @@ where
         .receiver()
         .decapsulate_message_recursive(encapsulated_cover_message.clone());
     let Ok(multi_layer_decapsulation_output) = self_decapsulation_output else {
-        // First layer not addressed to ourselves, so it goes out fully encapsulated.
-        // The quota it spent was already recorded above.
+        // First layer not addressed to ourselves, so it goes out fully
+        // encapsulated. The quota it spent was already recorded above.
         tracing::trace!(target: LOG_TARGET, "Locally generated cover message does not have its outermost layer addressed to us. Sending it out fully encapsulated...");
         return Some(encapsulated_cover_message.into());
     };
