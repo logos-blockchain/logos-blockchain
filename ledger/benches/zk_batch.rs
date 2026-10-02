@@ -1,4 +1,4 @@
-//! Benchmarks for the per-block ZKP batch verification
+//! Benchmarks for the per-block proof batch verification
 //!
 //! Run with `cargo bench -p logos-blockchain-ledger --bench zk_batch`.
 //!
