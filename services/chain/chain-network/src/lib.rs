@@ -1044,7 +1044,7 @@ where
 async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool>(
     block: Block<Cryptarchia::Tx>,
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
-    mempool_adapter: &MempoolAdapter<Mempool::Item>,
+    mempool: &MempoolAdapter<Mempool::Item>,
 ) -> Result<(), Error>
 where
     Cryptarchia: CryptarchiaServiceData,
@@ -1066,11 +1066,16 @@ where
         "block applied; reconciling mempool"
     );
 
-    remove_newly_canonical_txs_from_mempool(newly_canonical_txs, mempool_adapter).await;
+    // Remove txs of every block that entered the canonical chain.
+    // Do this even when there is no tx to remove because this also triggers mempool
+    // TTL eviction.
+    if let Err(err) = mempool.remove_transactions(&newly_canonical_txs).await {
+        error!(target: LOG_TARGET, err, "could not remove transactions from mempool");
+    }
 
     // Re-insert reorged txs back into the mempool.
     join_all(reorged_txs.into_iter().map(|tx| {
-        let mempool_adapter = mempool_adapter.clone();
+        let mempool_adapter = mempool.clone();
         async move {
             if let Err(e) = mempool_adapter.add_transaction(tx).await {
                 error!(target: LOG_TARGET, "Could not reinsert a reorged tx into mempool: {e:?}");
@@ -1080,27 +1085,6 @@ where
     .await;
 
     Ok(())
-}
-
-/// Retire the transactions of every block that entered the canonical chain.
-///
-/// Called for every applied block, even when no txs entered the canonical
-/// chain, because a mempool removal also triggers TTL eviction.
-async fn remove_newly_canonical_txs_from_mempool<Tx>(
-    newly_canonical_txs: Vec<TxHash>,
-    mempool_adapter: &MempoolAdapter<Tx>,
-) where
-    Tx: Hashable<Hash = TxHash> + Send + 'static,
-{
-    if let Err(e) = mempool_adapter
-        .remove_transactions(&newly_canonical_txs)
-        .await
-    {
-        error!(
-            target: LOG_TARGET,
-            "could not remove transactions from mempool: {e}"
-        );
-    }
 }
 
 /// Reconstruct a `Block` from a `Proposal` by resolving its reference prefixes
