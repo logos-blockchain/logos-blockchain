@@ -52,6 +52,15 @@ impl EraParameters {
         }
     }
 
+    /// How many slots, from the era's first, the network keeps accepting the
+    /// identifiers of the era before it.
+    #[must_use]
+    pub const fn transition_slots(&self) -> u64 {
+        match self {
+            Self::V1(parameters) => parameters.transition_slots(),
+        }
+    }
+
     /// The ledger's configuration while the era is in force.
     #[must_use]
     pub fn ledger_config(&self) -> lb_ledger::Config {

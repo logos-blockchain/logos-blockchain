@@ -52,6 +52,7 @@ mod test {
                 version: EraVersion::V1,
                 slot_duration: Duration::from_secs(1),
                 epoch_length: NonZero::new(100).unwrap(),
+                transition_slots: 0,
                 parameters: (),
             }],
         )

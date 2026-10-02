@@ -208,6 +208,7 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
             version: EraVersion::V1,
             slot_duration: Duration::from_secs(1),
             epoch_length: NonZero::new(config.epoch_length()).unwrap(),
+            transition_slots: 0,
             parameters: config.clone(),
         }],
     )

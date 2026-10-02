@@ -17,6 +17,10 @@ pub mod time;
 
 pub(super) mod codec;
 
+/// How long, in Blend rounds from the first slot of an era, the network keeps
+/// accepting the identifiers of the era before it.
+const ERA_TRANSITION_ROUNDS: u64 = 30;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Parameters {
     pub blend: blend::Settings,
@@ -25,6 +29,13 @@ pub struct Parameters {
 }
 
 impl Parameters {
+    /// The era's transition period, in slots: [`ERA_TRANSITION_ROUNDS`]
+    /// rounds, each lasting a slot ([`blend::Settings::round_duration`]).
+    #[must_use]
+    pub const fn transition_slots(&self) -> u64 {
+        ERA_TRANSITION_ROUNDS
+    }
+
     #[must_use]
     pub const fn blend_round_duration(&self) -> Duration {
         self.blend.round_duration(&self.time.slot_duration)

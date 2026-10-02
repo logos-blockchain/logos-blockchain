@@ -125,6 +125,7 @@ impl DeploymentSettings {
                 version: parameters.version(),
                 slot_duration: parameters.slot_duration(),
                 epoch_length: parameters.epoch_length(),
+                transition_slots: parameters.transition_slots(),
                 parameters: EraDefinition {
                     parameters: parameters.clone(),
                     digest,
