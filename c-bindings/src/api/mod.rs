@@ -19,4 +19,4 @@ pub mod version;
 pub mod wallet;
 
 pub(crate) use memory::free;
-pub use memory::free_cstring;
+pub use memory::{free_cstring, free_operation_status};

@@ -243,7 +243,11 @@ pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) -> Oper
         ))
     };
     for address_pointer in address_pointers {
-        return_error_if_null_pointer!(address_pointer);
+        // A null entry owns nothing. Skipping it rather than returning keeps
+        // the entries after it from leaking.
+        if address_pointer.is_null() {
+            continue;
+        }
         unsafe { drop(Box::from_raw(address_pointer.cast::<[u8; 32]>())) };
     }
     OperationStatus::OK
@@ -706,9 +710,7 @@ pub unsafe extern "C" fn get_leader_aged_notes(
 /// [`get_leader_aged_notes`] and must call this exactly once per result.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_leader_aged_notes(notes: LeaderAgedNotes) -> OperationStatus {
-    if notes.notes.is_null() {
-        return OperationStatus::OK;
-    }
+    return_error_if_null_pointer!(notes.notes);
     let notes = unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(notes.notes, notes.len)) };
     drop(notes);
     OperationStatus::OK
@@ -723,9 +725,7 @@ pub unsafe extern "C" fn free_leader_aged_notes(notes: LeaderAgedNotes) -> Opera
 /// and must call this exactly once per result.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_wallet_notes(notes: WalletNotes) -> OperationStatus {
-    if notes.notes.is_null() {
-        return OperationStatus::OK;
-    }
+    return_error_if_null_pointer!(notes.notes);
     let notes = unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(notes.notes, notes.len)) };
     drop(notes);
     OperationStatus::OK

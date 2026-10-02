@@ -1,6 +1,6 @@
 use std::ffi::{CStr, CString, c_char};
 
-#[derive(Default, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 #[repr(C)]
 pub enum OperationStatusCode {
     #[default]
@@ -24,9 +24,11 @@ pub enum OperationStatusCode {
 pub struct OperationStatus {
     pub code: OperationStatusCode,
 
-    /// A NUL-terminated description of the error.
+    /// A NUL-terminated description of the error. Null on success.
     ///
-    /// The caller must free this with
+    /// The caller must free it, either by passing the whole status to
+    /// [`free_operation_status`](crate::api::memory::free_operation_status)
+    /// or by passing the message to
     /// [`free_cstring`](crate::api::memory::free_cstring).
     pub message: *mut c_char,
 }
