@@ -36,7 +36,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots, era::Eras};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
-use lb_era_parameters::EraDefinition;
+use lb_era_parameters::{EraDefinition, EraParameters};
 pub use lb_ledger::EpochState;
 use lb_ledger::{ConfigSchedule as _, LedgerState};
 use lb_log_targets::chain;
@@ -601,7 +601,9 @@ pub struct CryptarchiaSettings {
 /// block or an epoch under.
 #[must_use]
 pub fn ledger_eras(eras: &Eras<EraDefinition>) -> Eras<lb_ledger::Config> {
-    eras.map(|era| era.entry.parameters.parameters.ledger_config())
+    eras.map(|era| match &era.entry.parameters.parameters {
+        EraParameters::V1(parameters) => parameters.ledger_config(),
+    })
 }
 
 impl StorageRecoverySettings for CryptarchiaSettings {
