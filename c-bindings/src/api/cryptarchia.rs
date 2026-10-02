@@ -156,10 +156,15 @@ pub unsafe extern "C" fn get_cryptarchia_info(
 /// # Arguments
 ///
 /// - `pointer`: A pointer to the [`CryptarchiaInfo`] struct to be freed.
+///
+/// # Safety
+///
+/// A non-null `pointer` must come from [`get_cryptarchia_info`] and must not
+/// have been freed already.
 #[panic_to_error]
 #[unsafe(no_mangle)]
-pub extern "C" fn free_cryptarchia_info(pointer: *mut CryptarchiaInfo) -> OperationStatus {
-    free::<CryptarchiaInfo>(pointer)
+pub unsafe extern "C" fn free_cryptarchia_info(pointer: *mut CryptarchiaInfo) -> OperationStatus {
+    unsafe { free::<CryptarchiaInfo>(pointer) }
 }
 
 /// Gets a block's events as a JSON string.

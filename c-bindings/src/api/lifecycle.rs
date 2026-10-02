@@ -43,6 +43,18 @@ pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlo
 /// An [`FfiInitializedLogosBlockchainNodeResult`] containing either a pointer
 /// to the initialized [`LogosBlockchainNode`] or an error code.
 ///
+/// # The node handle
+///
+/// The returned pointer is an opaque handle, owned by the caller until it is
+/// passed to [`shutdown_node`]. The rules for it apply to every function that
+/// takes a [`LogosBlockchainNode`]:
+///
+/// - It may be used from several threads at the same time.
+/// - No call may be in progress on any thread when [`shutdown_node`] is called,
+///   and none may be made afterwards: the handle is freed there.
+/// - It must not be used from inside a subscription callback. Such calls fail
+///   with [`OperationStatusCode::RuntimeError`].
+///
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers. The caller
@@ -56,7 +68,7 @@ pub unsafe extern "C" fn start_lb_node(
 ) -> FfiInitializedLogosBlockchainNodeResult {
     return_error_if_null_pointer!(config_path);
 
-    initialize_lb_node(config_path, custom_deployment_path).map_or_else(
+    unsafe { initialize_lb_node(config_path, custom_deployment_path) }.map_or_else(
         FfiInitializedLogosBlockchainNodeResult::err,
         FfiInitializedLogosBlockchainNodeResult::from_value,
     )
@@ -84,11 +96,16 @@ pub unsafe extern "C" fn start_lb_node(
 ///
 /// A [`Result`] containing either the initialized [`LogosBlockchainNode`] or an
 /// error code.
-fn initialize_lb_node(
+///
+/// # Safety
+///
+/// `config_path` must be a valid NUL-terminated C string, and
+/// `custom_deployment_path` either null or one as well.
+unsafe fn initialize_lb_node(
     config_path: *const c_char,
     custom_deployment_path: *const c_char,
 ) -> StatusResult<LogosBlockchainNode> {
-    let run_config = resolve_run_config(config_path, custom_deployment_path)?;
+    let run_config = unsafe { resolve_run_config(config_path, custom_deployment_path) }?;
 
     // Captured before the run config is consumed, so the node handle can answer
     // for its chain without querying a service for a value that cannot change.
@@ -145,11 +162,11 @@ fn initialize_lb_node(
 ///
 /// `config_path` must be a valid NUL-terminated C string, and
 /// `custom_deployment_path` either null or one as well.
-pub(crate) fn resolve_run_config(
+pub(crate) unsafe fn resolve_run_config(
     config_path: *const c_char,
     custom_deployment_path: *const c_char,
 ) -> StatusResult<RunConfig> {
-    let user_config = get_user_config(config_path)?;
+    let user_config = unsafe { get_user_config(config_path) }?;
 
     let mut run_config = build_run_config_from_env(user_config).map_err(|e| {
         OperationStatus::error(
@@ -159,13 +176,16 @@ pub(crate) fn resolve_run_config(
     })?;
 
     if !custom_deployment_path.is_null() {
-        run_config.deployment = get_deployment_config(custom_deployment_path)?;
+        run_config.deployment = unsafe { get_deployment_config(custom_deployment_path) }?;
     }
 
     Ok(run_config)
 }
 
-fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
+/// # Safety
+///
+/// `config_path` must be a valid NUL-terminated C string.
+unsafe fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
     let user_config_path = unsafe { std::ffi::CStr::from_ptr(config_path) }
         .to_str()
         .map_err(|e| {
@@ -184,7 +204,10 @@ fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
     )
 }
 
-fn get_deployment_config(
+/// # Safety
+///
+/// `custom_deployment_path` must be null or a valid NUL-terminated C string.
+unsafe fn get_deployment_config(
     custom_deployment_path: *const c_char,
 ) -> StatusResult<DeploymentSettings> {
     if custom_deployment_path.is_null() {
@@ -232,7 +255,10 @@ fn get_deployment_config(
 /// The caller must ensure that:
 /// - `node` is a valid pointer to a [`LogosBlockchainNode`] instance
 /// - The [`LogosBlockchainNode`] instance was created by this library
-/// - The pointer will not be used after this function returns
+/// - No other call using `node` is in progress on any thread
+/// - The pointer will not be used after this function returns. The node is
+///   consumed and freed even when the shutdown itself reports an error; the one
+///   exception is the callback case above.
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn shutdown_node(node: *mut LogosBlockchainNode) -> OperationStatus {

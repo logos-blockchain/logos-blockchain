@@ -119,8 +119,13 @@ pub unsafe extern "C" fn get_time_info(node: *const LogosBlockchainNode) -> FfiT
 /// # Arguments
 ///
 /// - `pointer`: A pointer to the [`TimeInfo`] struct to be freed.
+///
+/// # Safety
+///
+/// A non-null `pointer` must come from [`get_time_info`] and must not have
+/// been freed already.
 #[panic_to_error]
 #[unsafe(no_mangle)]
-pub extern "C" fn free_time_info(pointer: *mut TimeInfo) -> OperationStatus {
-    free::<TimeInfo>(pointer)
+pub unsafe extern "C" fn free_time_info(pointer: *mut TimeInfo) -> OperationStatus {
+    unsafe { free::<TimeInfo>(pointer) }
 }

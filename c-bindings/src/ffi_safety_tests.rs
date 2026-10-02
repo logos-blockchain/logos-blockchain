@@ -11,6 +11,14 @@
 //! `free_*` function, so anything valgrind reports as definitely lost is a
 //! leak in the bindings rather than in the tests.
 
+#![allow(
+    clippy::multiple_unsafe_ops_per_block,
+    clippy::cognitive_complexity,
+    clippy::semicolon_outside_block,
+    clippy::significant_drop_tightening,
+    reason = "These tests are long runs of FFI calls: one unsafe block per call would bury them."
+)]
+
 use std::{
     ffi::{CStr, CString, c_char},
     path::{Path, PathBuf},
@@ -350,7 +358,7 @@ mod no_node {
 
     #[panic_to_error]
     extern "C" fn panics_with_unit() {
-        std::panic::panic_any(42_u8);
+        std::panic::panic_any(42u8);
     }
 
     /// A panic inside an exported function comes back as a `RuntimeError`
@@ -1214,7 +1222,7 @@ mod with_node {
         // The refused shutdown left the node running.
         let result = unsafe { get_time_info(node) };
         assert!(result.is_ok());
-        assert!(free_time_info(result.value).is_ok());
+        assert!(unsafe { free_time_info(result.value) }.is_ok());
         let (status, message) = consume(unsafe { shutdown_node(node) });
         assert_eq!(status, OperationStatusCode::Ok, "{message}");
     }
@@ -1230,7 +1238,7 @@ mod with_node {
             std::thread::sleep(Duration::from_secs(2));
             let result = unsafe { get_time_info(node) };
             assert!(result.is_ok());
-            assert!(free_time_info(result.value).is_ok());
+            assert!(unsafe { free_time_info(result.value) }.is_ok());
             let (status, message) = consume(unsafe { shutdown_node(node) });
             assert_eq!(status, OperationStatusCode::Ok, "{message}");
         }

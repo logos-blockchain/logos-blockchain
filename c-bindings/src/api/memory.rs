@@ -11,7 +11,12 @@ use crate::{OperationStatus, return_error_if_null_pointer};
 /// # Arguments
 ///
 /// - `pointer`: A pointer to the memory to be freed, or null.
-pub fn free<Type>(pointer: *mut Type) -> OperationStatus {
+///
+/// # Safety
+///
+/// A non-null `pointer` must have been produced by `Box::into_raw` for a
+/// `Type` and must not have been freed already.
+pub unsafe fn free<Type>(pointer: *mut Type) -> OperationStatus {
     return_error_if_null_pointer!(pointer);
     unsafe { drop(Box::from_raw(pointer)) };
     OperationStatus::OK

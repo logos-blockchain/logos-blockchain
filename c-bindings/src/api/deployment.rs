@@ -77,7 +77,8 @@ impl DeploymentInfo {
             self.node_version,
         ] {
             // A null field has nothing to free; the status reporting it does.
-            unsafe { free_operation_status(free_cstring(pointer)) };
+            let status = unsafe { free_cstring(pointer) };
+            unsafe { free_operation_status(status) };
         }
     }
 }
@@ -128,7 +129,7 @@ pub unsafe extern "C" fn get_deployment_info(
 ) -> FfiDeploymentInfoResult {
     return_error_if_null_pointer!(config_path);
 
-    let run_config = match resolve_run_config(config_path, custom_deployment_path) {
+    let run_config = match unsafe { resolve_run_config(config_path, custom_deployment_path) } {
         Ok(run_config) => run_config,
         Err(error) => return FfiDeploymentInfoResult::err(error),
     };
@@ -156,5 +157,5 @@ pub unsafe extern "C" fn free_deployment_info(pointer: *mut DeploymentInfo) -> O
     return_error_if_null_pointer!(pointer);
     let deployment_info = unsafe { &mut *pointer };
     unsafe { deployment_info.free() };
-    free::<DeploymentInfo>(pointer)
+    unsafe { free::<DeploymentInfo>(pointer) }
 }

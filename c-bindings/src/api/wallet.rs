@@ -235,6 +235,9 @@ pub unsafe extern "C" fn get_known_addresses(
 ///     free_known_addresses(addresses);
 /// }
 /// ```
+///
+/// The value must be passed back exactly as it was returned: its pointer and
+/// length decide what is freed.
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) -> OperationStatus {
@@ -378,6 +381,9 @@ pub unsafe extern "C" fn get_claimable_vouchers(
 /// This function is unsafe because it reconstructs a boxed slice from a raw
 /// pointer. The caller must only pass values returned by
 /// [`get_claimable_vouchers`] and must call this exactly once per result.
+///
+/// The value must be passed back exactly as it was returned: its pointer and
+/// length decide what is freed.
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_claimable_vouchers(vouchers: ClaimableVouchers) -> OperationStatus {
@@ -438,8 +444,8 @@ pub type FfiBalanceResult = FfiStatusResult<Value>;
 /// # Arguments
 ///
 /// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance.
-/// - `wallet_address`: A non-null pointer to the public key bytes of the wallet
-///   address to query.
+/// - `wallet_address`: A non-null pointer to the 32-byte public key of the
+///   wallet address to query.
 /// - `optional_tip`: An optional pointer to the header ID to query the balance
 ///   at. If null, the current tip will be used.
 ///
@@ -716,6 +722,9 @@ pub unsafe extern "C" fn get_leader_aged_notes(
 /// This function is unsafe because it reconstructs a boxed slice from a raw
 /// pointer. The caller must only pass values returned by
 /// [`get_leader_aged_notes`] and must call this exactly once per result.
+///
+/// The value must be passed back exactly as it was returned: its pointer and
+/// length decide what is freed.
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_leader_aged_notes(notes: LeaderAgedNotes) -> OperationStatus {
@@ -732,6 +741,9 @@ pub unsafe extern "C" fn free_leader_aged_notes(notes: LeaderAgedNotes) -> Opera
 /// This function is unsafe because it reconstructs a boxed slice from a raw
 /// pointer. The caller must only pass values returned by [`get_wallet_notes`]
 /// and must call this exactly once per result.
+///
+/// The value must be passed back exactly as it was returned: its pointer and
+/// length decide what is freed.
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_wallet_notes(notes: WalletNotes) -> OperationStatus {
