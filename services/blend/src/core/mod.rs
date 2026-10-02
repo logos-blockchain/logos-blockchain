@@ -1665,8 +1665,12 @@ async fn retire<
             // yields without a trace. Only the expiry ends the window; the
             // other cases are logged and the wait goes on.
             epoch_event = remaining_epoch_stream.next() => {
-                if transition_period_expired(epoch_event.as_ref()) {
-                    break;
+                match epoch_event {
+                    Some(EpochEvent::TransitionPeriodExpired) | None => break,
+                    Some(EpochEvent::NewEpoch(epoch)) => {
+                        error!(target: LOG_TARGET, "New epoch ({epoch:?}) started before the retiring epoch's transition period expired");
+                        panic!("New epoch started before the retiring epoch's transition period expired");
+                    }
                 }
             }
         }
@@ -1677,7 +1681,9 @@ async fn retire<
     if let Some(failure_detector) = failure_detector.as_mut() {
         failure_detector.drop_unreleased_payloads_for_epoch(epoch);
     }
+
     handle_epoch_transition_expired(&mut backend, retiring_epoch.into_tokens(), &sdp_relay).await;
+
     // Now the core service is no longer needed for the current (new) epoch,
     // and the remaining epoch transition has been completed, so finishing the
     // retirement process — bar the deadlines this epoch's own releases are
@@ -1686,25 +1692,6 @@ async fn retire<
         failure_detector
             .drain_pending_message_queue(&payload_dispatcher)
             .await;
-    }
-}
-
-/// Whether an epoch event ends the retirement window. Only the transition
-/// period expiry does. A new epoch arriving first means the stream replaced
-/// this epoch's timer with the new epoch's, so the expiry that comes next is
-/// later than planned; an ended stream means no expiry will come at all. Both
-/// are logged so the delay is visible, and the wait goes on.
-fn transition_period_expired<Info>(epoch_event: Option<&EpochEvent<Info>>) -> bool {
-    match epoch_event {
-        Some(EpochEvent::TransitionPeriodExpired) => true,
-        Some(EpochEvent::NewEpoch(_)) => {
-            warn!(target: LOG_TARGET, "New epoch started before the retiring epoch's transition period expired; retirement now ends with the new epoch's transition period.");
-            false
-        }
-        None => {
-            warn!(target: LOG_TARGET, "Epoch stream ended during retirement; no transition period expiry will arrive.");
-            false
-        }
     }
 }
 
