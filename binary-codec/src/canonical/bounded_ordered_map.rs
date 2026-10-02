@@ -173,7 +173,7 @@ mod tests {
 
         let (rest, decoded) = Map::decode(&bytes, &((), ())).unwrap();
 
-        assert!(rest.is_empty());
+        assert_eq!(rest, b"");
         assert_eq!(entries(&decoded), [(1, 0xAA), (256, 0xBB)]);
         assert_eq!(decoded.encode_to_vec(), bytes);
     }

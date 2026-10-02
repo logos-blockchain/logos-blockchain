@@ -253,10 +253,6 @@ pub struct WithInscriptionAndDeclarations {
     sdp_declarations: GenesisSDPDeclareOps,
 }
 
-#[expect(
-    clippy::too_long_first_doc_paragraph,
-    reason = "Necessary documentation"
-)]
 /// Typestate marker: builder holds all three pieces required to assemble a
 /// [`GenesisTx`] — notes, an inscription, and optional SDP declaration.
 /// This is the only state that exposes [`GenesisBlockBuilder::build`].

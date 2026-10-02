@@ -141,7 +141,7 @@ mod tests {
             error,
             PackingError::Serialization(bincode::Error::Serialize(_))
         ));
-        assert!(writer.into_inner().is_empty());
+        assert_eq!(writer.into_inner(), b"");
     }
 
     #[tokio::test]

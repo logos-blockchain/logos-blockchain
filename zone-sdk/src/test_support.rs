@@ -256,7 +256,7 @@ impl adapter::Node for MockNode {
     async fn block(&self, id: HeaderId) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
         if self
             .block_fetch_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 left.checked_sub(1)
             })
             .is_ok()

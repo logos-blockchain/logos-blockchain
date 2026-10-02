@@ -262,7 +262,7 @@ where
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) {
         match msg {
-            SdpMessage::PostActivity { metadata, .. } => {
+            SdpMessage::PostActivity { metadata } => {
                 metrics::activity_posts_total();
 
                 self.handle_post_activity(metadata, wallet_adapter, mempool_adapter, chain_api)

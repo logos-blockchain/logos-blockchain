@@ -580,7 +580,7 @@ mod test {
             .expect("the input is a channel note of this channel");
 
         assert!(!context.channels.is_channel_note(&utxo().id()));
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]

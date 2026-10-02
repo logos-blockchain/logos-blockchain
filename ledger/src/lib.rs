@@ -1347,7 +1347,7 @@ mod tests {
                 .channels
                 .contains_key(&channel_id)
         );
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]
@@ -1392,7 +1392,7 @@ mod tests {
                 .accredited_keys,
             verifying_key.into_unverified().into()
         );
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]
@@ -1813,7 +1813,7 @@ mod tests {
                 .is_channel_note(&deposited)
         );
         assert!(new_state.latest_utxos().contains(&deposited));
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     // A transaction can create a channel, fund it and spend from it, so the fee
@@ -2633,7 +2633,7 @@ mod tests {
         // The `unwrap` should succeed because the user pays at least the base fee of
         // 794
         let (no_priority_fee_ledger, events, _) = result.unwrap();
-        assert!(events.is_empty());
+        assert_eq!(events, []);
 
         // The tx ays 1794 fees = 590 execution base fee + 1000 execution tip + 204
         // storage
@@ -2665,7 +2665,7 @@ mod tests {
                 .leaders
                 .get_pending_rewards()
         );
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]

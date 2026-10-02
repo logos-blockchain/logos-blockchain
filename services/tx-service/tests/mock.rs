@@ -490,7 +490,7 @@ async fn removed_items_are_not_pending_but_still_fetchable() {
         .expect("pending view should still work")
         .collect::<Vec<_>>()
         .await;
-    assert!(pending_after_remove.is_empty());
+    assert_eq!(pending_after_remove, []);
 
     let fetched_after_remove = pool
         .get_items_by_keys([tx_id])
@@ -583,11 +583,11 @@ fn local_submission_rejects_oversized_tx() {
             } if size > MAX_BLOCK_TRANSACTIONS_SIZE
         ));
 
-        assert!(
+        assert_eq!(
             app.runtime()
                 .handle()
-                .block_on(pending_txs(&mempool_outbound))
-                .is_empty()
+                .block_on(pending_txs(&mempool_outbound)),
+            []
         );
 
         drop(app.runtime().handle().block_on(app.handle().shutdown()));

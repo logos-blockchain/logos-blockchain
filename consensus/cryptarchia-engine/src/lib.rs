@@ -1177,12 +1177,12 @@ pub mod tests {
         let outcome = engine
             .receive_block_with_canonical_change(f1, fork_parent, 4.into(), UncleSlots::default())
             .unwrap();
-        assert!(outcome.newly_canonical_blocks.is_empty());
+        assert_eq!(outcome.newly_canonical_blocks, Vec::<[u8; 32]>::new());
 
         let outcome = engine
             .receive_block_with_canonical_change(f2, f1, 5.into(), UncleSlots::default())
             .unwrap();
-        assert!(outcome.newly_canonical_blocks.is_empty());
+        assert_eq!(outcome.newly_canonical_blocks, Vec::<[u8; 32]>::new());
 
         let outcome = engine
             .receive_block_with_canonical_change(f3, f2, 6.into(), UncleSlots::default())
@@ -1640,7 +1640,7 @@ mod uncle_tests {
 
     use lb_utils::math::NonNegativeRatio;
 
-    use crate::{Config, Cryptarchia, Slot, State, UncleSlots};
+    use crate::{Branch, Config, Cryptarchia, Slot, State, UncleSlots};
 
     #[test]
     fn select_uncles_honors_the_window() {
@@ -1707,10 +1707,9 @@ mod uncle_tests {
             ],
         );
 
-        assert!(
-            engine
-                .select_uncles(engine.branches().get(&b1).unwrap(), 11.into())
-                .is_empty()
+        assert_eq!(
+            engine.select_uncles(engine.branches().get(&b1).unwrap(), 11.into()),
+            Vec::<&Branch<u64>>::new()
         );
     }
 

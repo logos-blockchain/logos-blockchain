@@ -149,7 +149,7 @@ mod tests {
         assert_eq!(output, hash(input, 3));
 
         // An empty output if the request size is zero.
-        assert!(hash(input, 0).is_empty());
+        assert_eq!(hash(input, 0), b"");
 
         // Output shouldn't be longer than the maximum size.
         let output = hash(input, Blake2bVar::MAX_OUTPUT_SIZE.checked_add(1).unwrap());

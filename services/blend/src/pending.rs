@@ -213,7 +213,6 @@ impl PendingTransactions {
     }
 
     /// Those still waiting, oldest first.
-    #[must_use]
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &Vec<u8>> {
         self.0.iter()
     }

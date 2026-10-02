@@ -577,7 +577,7 @@ mod tests {
                 transfer_threshold: crate::mantle::channel::DEFAULT_TRANSFER_THRESHOLD,
             })
         );
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]
@@ -630,7 +630,7 @@ mod tests {
                 transfer_threshold: 3,
             })
         );
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]

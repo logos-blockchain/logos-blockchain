@@ -308,12 +308,11 @@ where
                     self.backfill_to = Some(network_lib_slot);
                     return false;
                 }
-                true
             }
             Err(e) => {
                 warn!(target: TARGET, "Failed to fetch consensus info for backfill check: {e}");
-                true
             }
         }
+        true
     }
 }

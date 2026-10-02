@@ -306,7 +306,7 @@ mod tests {
 
         let (mut detection, start, _channel) = watching();
         detection.mark_payload_as_blended(proposal());
-        assert!(until(&mut detection, start, APART).await.is_empty());
+        assert_eq!(until(&mut detection, start, APART).await, []);
         detection.mark_payload_as_blended(proposal());
 
         assert!(
@@ -381,7 +381,7 @@ mod tests {
         detection.mark_payload_as_blended(proposal());
         channel.send(proposal()).expect("the watch is listening");
         // Let the delivery land before the second copy goes out.
-        assert!(until(&mut detection, start, 2).await.is_empty());
+        assert_eq!(until(&mut detection, start, 2).await, []);
 
         detection.mark_payload_as_blended(proposal());
 
@@ -403,7 +403,7 @@ mod tests {
         detection.mark_payload_as_blended(proposal());
         channel.send(proposal()).expect("the watch is listening");
         // One round in, so the delivery has landed and the deadline has not.
-        assert!(until(&mut detection, start, 1).await.is_empty());
+        assert_eq!(until(&mut detection, start, 1).await, []);
 
         tokio::time::timeout(
             ROUND,

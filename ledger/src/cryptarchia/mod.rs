@@ -2047,7 +2047,7 @@ pub mod tests {
             balance,
             i128::from(input_note.value - output_note1.value - output_note2.value)
         );
-        assert!(events.is_empty());
+        assert_eq!(events, []);
 
         // Verify input was consumed
         assert!(!new_state.utxos.contains(&input_utxo.id()));
@@ -2082,7 +2082,7 @@ pub mod tests {
         );
         assert!(!final_state.utxos.contains(&output_utxo1.id()));
         assert!(!final_state.utxos.contains(&output_utxo2.id()));
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]
@@ -2157,7 +2157,7 @@ pub mod tests {
             .try_apply_transfer::<(), MainnetGasProfile>(signed_operation)
             .unwrap();
         assert_eq!(balance, -1);
-        assert!(events.is_empty());
+        assert_eq!(events, []);
 
         let (_tx, transfer_op, transfer_proof) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![output_note]);
@@ -2193,7 +2193,7 @@ pub mod tests {
 
         let (new_state, balance, events) = result.unwrap();
         assert_eq!(balance, 10000);
-        assert!(events.is_empty());
+        assert_eq!(events, []);
 
         // Verify input was consumed
         assert!(!new_state.utxos.contains(&input_utxo.id()));

@@ -62,7 +62,6 @@ impl EraSchedule {
 
     /// Every era of the schedule with the epoch it starts at, in activation
     /// order: only the genesis era, for now.
-    #[must_use]
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (Epoch, &EraParameters)> {
         iter::once((GENESIS_EPOCH, &self.genesis_era))
     }

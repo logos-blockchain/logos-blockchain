@@ -8,10 +8,10 @@ use crate::libp2p::{errors::ChainSyncError, packing::pack_to_writer};
 
 pub async fn send_message<M: BoundedSerializeOp + DeserializeOwned + Sync>(
     peer_id: PeerId,
-    mut stream: &mut Stream,
+    stream: &mut Stream,
     message: &M,
 ) -> Result<(), ChainSyncError> {
-    pack_to_writer(message, &mut stream)
+    pack_to_writer(message, stream)
         .await
         .map_err(|e| ChainSyncError::from((peer_id, e)))?;
 

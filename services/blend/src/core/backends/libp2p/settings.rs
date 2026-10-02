@@ -45,7 +45,6 @@ impl BlendConfig<Libp2pBlendBackendSettings> {
         self.keypair().public().to_peer_id()
     }
 
-    #[must_use]
     pub fn peering_degree_check_clock(&self) -> Pin<Box<dyn Stream<Item = ()> + Send>> {
         let Some(interval_duration) = self.backend.peering_degree_check_interval else {
             // If no interval is configured, return a stream that never yields anything.

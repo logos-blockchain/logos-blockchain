@@ -233,7 +233,7 @@ const fn are_siblings_at(a: usize, b: usize, height: usize) -> bool {
 
 /// The unique height at which leaves `a` and `b` are siblings.
 const fn sibling_height(a: usize, b: usize) -> usize {
-    (usize::BITS - (a ^ b).leading_zeros()) as usize
+    (a ^ b).bit_width() as usize
 }
 
 #[cfg(test)]
