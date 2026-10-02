@@ -17,6 +17,7 @@ pub use lb_core::{
     header::HeaderId,
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };
+use lb_era_parameters::ProtocolNames;
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 use lb_storage_service::recovery::load_recovery_data;
 pub use lb_storage_service::{
@@ -57,18 +58,23 @@ use crate::{
     panic::log_and_exit_hook,
 };
 
-fn max_data_size_by_topic(
-    transaction_topic: &str,
-    proposal_topic: &str,
+/// The data limit of every gossip topic of every era. Gossipsub fixes its
+/// topics' limits when the swarm is built, so the topics of every scheduled
+/// era are registered at startup, each era's ahead of its activation.
+fn max_data_size_by_topic<'names>(
+    eras: impl IntoIterator<Item = &'names ProtocolNames>,
 ) -> HashMap<lb_libp2p::gossipsub::TopicHash, usize> {
     let mut limits: HashMap<lb_libp2p::gossipsub::TopicHash, usize> = HashMap::new();
-    for (topic, required) in [
-        (
-            transaction_topic,
-            MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
-        ),
-        (proposal_topic, Proposal::MAX_ENCODED_SIZE),
-    ] {
+    let topics = eras.into_iter().flat_map(|names| {
+        [
+            (
+                names.mempool_topic.as_str(),
+                MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
+            ),
+            (names.cryptarchia_topic.as_str(), Proposal::MAX_ENCODED_SIZE),
+        ]
+    });
+    for (topic, required) in topics {
         let topic = lb_libp2p::gossipsub::IdentTopic::new(topic).hash();
         limits
             .entry(topic)
@@ -209,10 +215,7 @@ pub fn run_node_from_config(
     }
     .into_network_config(
         &protocol_names,
-        max_data_size_by_topic(
-            &protocol_names.mempool_topic,
-            &protocol_names.cryptarchia_topic,
-        ),
+        max_data_size_by_topic(eras.iter().map(|era| &era.entry.parameters.protocol_names)),
     );
 
     let wallet_config = WalletConfig {
@@ -307,17 +310,50 @@ pub async fn get_services_to_start(
 
 #[cfg(test)]
 mod tests {
+    use lb_core::{era::ForkDigest, mantle::transactions::genesis_tx::ChainId};
+
     use super::*;
+
+    fn names(fork_digest: [u8; 32]) -> ProtocolNames {
+        let chain_id = ChainId::try_from("test".to_owned()).unwrap();
+        ProtocolNames::derive(&chain_id, ForkDigest::from(fork_digest))
+    }
+
+    fn hash(topic: &str) -> lb_libp2p::gossipsub::TopicHash {
+        lb_libp2p::gossipsub::IdentTopic::new(topic).hash()
+    }
 
     #[test]
     fn shared_application_topics_use_the_largest_data_limit() {
-        let topic = "/shared/application/topic";
-        let limits = max_data_size_by_topic(topic, topic);
-        let topic_hash = lb_libp2p::gossipsub::IdentTopic::new(topic).hash();
+        let topic = "/shared/application/topic".to_owned();
+        let shared = ProtocolNames {
+            mempool_topic: topic.clone(),
+            cryptarchia_topic: topic.clone(),
+            ..names([0; 32])
+        };
+        let limits = max_data_size_by_topic([&shared]);
 
         assert_eq!(
-            limits.get(&topic_hash),
+            limits.get(&hash(&topic)),
             Some(&MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE.max(Proposal::MAX_ENCODED_SIZE))
         );
+    }
+
+    #[test]
+    fn the_topics_of_every_era_are_registered() {
+        let (genesis, next) = (names([0; 32]), names([1; 32]));
+        let limits = max_data_size_by_topic([&genesis, &next]);
+
+        assert_eq!(limits.len(), 4);
+        for era in [&genesis, &next] {
+            assert_eq!(
+                limits.get(&hash(&era.mempool_topic)),
+                Some(&MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE)
+            );
+            assert_eq!(
+                limits.get(&hash(&era.cryptarchia_topic)),
+                Some(&Proposal::MAX_ENCODED_SIZE)
+            );
+        }
     }
 }
