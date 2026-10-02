@@ -1,4 +1,5 @@
 use lb_api_service::http::libp2p::libp2p_info;
+use lb_c_macros::panic_to_error;
 use lb_network_service::backends::libp2p::Libp2pInfo;
 
 use crate::{
@@ -81,6 +82,7 @@ pub type FfiNetworkInfoResult = FfiStatusResult<NetworkInfo>;
 /// must ensure that `node` is non-null and points to a valid
 /// [`LogosBlockchainNode`] instance.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_network_info(
     node: *const LogosBlockchainNode,

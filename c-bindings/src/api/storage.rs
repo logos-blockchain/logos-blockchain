@@ -1,5 +1,6 @@
 use std::ffi::{CString, c_char};
 
+use lb_c_macros::panic_to_error;
 use lb_core::mantle::{ledger::verification_mode::StandardMode, transactions::states::Unverified};
 use lb_node::{RuntimeServiceId, SignedOps};
 
@@ -101,6 +102,7 @@ pub type FfiGetBlockResult = FfiStatusResult<*mut c_char>;
 ///
 /// This function allocates memory for the output C string. The caller must
 /// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_block(
     node: *const LogosBlockchainNode,
@@ -203,6 +205,7 @@ pub type FfiGetTransactionResult = FfiStatusResult<*mut c_char>;
 ///
 /// This function allocates memory for the output C string. The caller must
 /// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_transaction(
     node: *const LogosBlockchainNode,
@@ -297,6 +300,7 @@ pub type FfiGetBlocksResult = FfiStatusResult<*mut c_char>;
 ///
 /// This function allocates memory for the output C string. The caller must
 /// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_blocks(
     node: *const LogosBlockchainNode,

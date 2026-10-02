@@ -1,4 +1,7 @@
-use std::ffi::{CStr, CString, c_char};
+use std::{
+    any::Any,
+    ffi::{CStr, CString, c_char},
+};
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 #[repr(C)]
@@ -47,6 +50,20 @@ impl OperationStatus {
             .unwrap_or_default()
             .into_raw();
         Self { code, message }
+    }
+
+    /// The status an exported function returns when its body panicked: see
+    /// [`panic_to_error`](lb_c_macros::panic_to_error).
+    pub(crate) fn from_panic(payload: &(dyn Any + Send)) -> Self {
+        let message = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("no message");
+        Self::error(
+            OperationStatusCode::RuntimeError,
+            format!("Internal panic: {message}"),
+        )
     }
 
     #[must_use]

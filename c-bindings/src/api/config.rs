@@ -6,6 +6,7 @@ use std::{
     str::FromStr as _,
 };
 
+use lb_c_macros::panic_to_error;
 use lb_node::cli::{
     EmbeddedInitArgs, InitArgs, MigrateArgs, ParticipateArgs, UpdateArgs, config::merge::MergeFlags,
 };
@@ -172,6 +173,7 @@ pub fn generate_config_sync(args: EmbeddedInitArgs) -> OperationStatus {
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn generate_user_config(args: GenerateConfigArgs) -> OperationStatus {
     let init_args = EmbeddedInitArgs::from(args);
@@ -196,6 +198,7 @@ pub unsafe extern "C" fn generate_user_config(args: GenerateConfigArgs) -> Opera
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid NUL-terminated C strings.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn update_user_config(
     user_config_path: *const c_char,
@@ -237,6 +240,7 @@ pub unsafe extern "C" fn update_user_config(
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid NUL-terminated C strings.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn migrate_user_config(
     output_path: *const c_char,
@@ -278,6 +282,7 @@ pub unsafe extern "C" fn migrate_user_config(
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid NUL-terminated C strings.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn migrate_user_config_0_1_2(
     new_config_path: *const c_char,
@@ -376,6 +381,7 @@ pub type FfiMergeUserConfigResult = FfiStatusResult<*mut c_char>;
 /// caller must free it using the [`free_cstring`](super::free_cstring)
 /// function.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn merge_user_config(
     source_path: *const c_char,
@@ -457,6 +463,7 @@ pub unsafe extern "C" fn merge_user_config(
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all non-null pointers are valid NUL-terminated C strings.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn participate(
     config_path: *const c_char,

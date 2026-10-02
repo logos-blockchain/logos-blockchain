@@ -1,6 +1,7 @@
 use std::ffi::{CString, c_char};
 
 use futures::StreamExt as _;
+use lb_c_macros::panic_to_error;
 use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
     block::{Block as CoreBlock, BlockTransactions},
@@ -149,6 +150,7 @@ pub fn subscribe_to_new_blocks_sync(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn subscribe_to_new_blocks(
     node: *const LogosBlockchainNode,
@@ -231,6 +233,7 @@ pub fn subscribe_to_processed_blocks_sync(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn subscribe_to_processed_blocks(
     node: *const LogosBlockchainNode,
@@ -304,6 +307,7 @@ pub fn subscribe_to_lib_blocks_sync(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn subscribe_to_lib_blocks(
     node: *const LogosBlockchainNode,
