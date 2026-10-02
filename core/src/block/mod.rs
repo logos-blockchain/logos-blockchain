@@ -8,9 +8,9 @@ use core::fmt::Debug;
 use bytes::Bytes;
 use lb_binary_codec::{
     bincode::{DeserializeOp as _, SerializeOp as _},
-    canonical::{BinaryCodec, BinaryEncode as _},
+    canonical::{BinaryCodec, BinaryDecodeExt as _, BinaryEncode as _, DecodeError},
 };
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Slot, era::EraVersion};
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use lb_utils::bounded::{BoundedError, BoundedVec, UpperBoundedVec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -26,6 +26,21 @@ use crate::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
     utils::merkle,
 };
+
+/// The slot of the block or proposal `bytes` encode, read off the start of
+/// the encoding, before anything else of it is parsed. `None` if `bytes` is
+/// too short to start with a slot.
+///
+/// Both start with their header, and a header with its slot: an unsigned
+/// 64-bit integer in little-endian order, in the canonical layout and in
+/// bincode alike, in every era. The slot names the era of the block, whose
+/// version decodes the rest.
+#[must_use]
+pub fn encoded_slot(bytes: &[u8]) -> Option<Slot> {
+    bytes
+        .first_chunk()
+        .map(|slot| Slot::new(u64::from_le_bytes(*slot)))
+}
 
 /// The maximum number of transactions allowed in a block.
 const MAX_BLOCK_TRANSACTIONS: usize = 1024;
@@ -170,6 +185,14 @@ impl Proposal {
     #[must_use]
     pub const fn signature(&self) -> &Ed25519Signature {
         &self.signature
+    }
+
+    /// Decodes a proposal of an era of `version`, from its canonical
+    /// encoding.
+    pub fn decode_in(version: EraVersion, bytes: &[u8]) -> Result<Self, DecodeError> {
+        match version {
+            EraVersion::V1 => Self::decode_all(bytes),
+        }
     }
 }
 
@@ -381,6 +404,21 @@ pub fn body_root<Tx: Hashable<Hash = TxHash>>(
     h.update(uncle_headers.encode_to_vec());
     h.update(merkle::calculate_transactions_root(transactions));
     ContentId::from(<[u8; 32]>::from(h.finalize()))
+}
+
+impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize>
+    Block<Tx>
+{
+    /// Decodes and verifies a block of an era of `version`, from the bytes
+    /// blocks are synced and stored as.
+    pub fn decode_in(
+        version: EraVersion,
+        bytes: Bytes,
+    ) -> Result<Self, lb_binary_codec::bincode::Error> {
+        match version {
+            EraVersion::V1 => Self::try_from(bytes),
+        }
+    }
 }
 
 impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize>
@@ -848,6 +886,37 @@ mod tests {
         .expect_err("genesis slot must be rejected by reconstruct path");
 
         assert!(matches!(err, Error::Header(HeaderError::GenesisSlot)));
+    }
+
+    /// A block's and a proposal's encodings start with their slot, which a
+    /// node reads to learn the era that decodes the rest.
+    #[test]
+    fn encodings_start_with_the_slot() {
+        let slot = Slot::from(0x0102_0304_0506_0708u64);
+        let block = Block::create(
+            [0u8; 32].into(),
+            slot,
+            UncleHeaders::empty(),
+            create_proof(),
+            BlockTransactions::<Ops>::try_from(create_tx(3)).unwrap(),
+            &Ed25519Key::from_bytes(&[0; 32]),
+        )
+        .expect("valid block");
+
+        let block_bytes = Bytes::try_from(block.clone()).unwrap();
+        assert_eq!(encoded_slot(&block_bytes), Some(slot));
+        let decoded = Block::<Ops>::decode_in(EraVersion::V1, block_bytes).unwrap();
+        assert_eq!(decoded.header().id(), block.header().id());
+
+        let proposal = block.to_proposal();
+        let proposal_bytes = proposal.encode();
+        assert_eq!(encoded_slot(&proposal_bytes), Some(slot));
+        assert_eq!(
+            Proposal::decode_in(EraVersion::V1, &proposal_bytes).unwrap(),
+            proposal
+        );
+
+        assert_eq!(encoded_slot(&proposal_bytes[..7]), None);
     }
 
     /// The maximum-size proposal continues to match its canonical size bound.

@@ -1,9 +1,11 @@
-use std::{collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, time::Instant};
+use std::{
+    collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, sync::Arc,
+    time::Instant,
+};
 
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
-use lb_binary_codec::canonical::BinaryDecodeExt as _;
 use lb_core::{
-    block::{Block, Proposal},
+    block::{Block, Proposal, encoded_slot},
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
@@ -11,7 +13,9 @@ use lb_core::{
         transactions::states::Preverified,
     },
 };
+use lb_cryptarchia_engine::era::{EraVersion, Eras};
 use lb_cryptarchia_sync::GetTipResponse;
+use lb_era_parameters::EraDefinition;
 use lb_log_targets::chain;
 use lb_network_service::{
     NetworkService,
@@ -26,7 +30,7 @@ use overwatch::{
     services::{ServiceData, relay::OutboundRelay},
 };
 use rand::{seq::IteratorRandom as _, thread_rng};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 use tokio_stream::{StreamExt as _, wrappers::errors::BroadcastStreamRecvError};
 
@@ -54,8 +58,11 @@ where
     _phantom_tx: PhantomData<Tx>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LibP2pAdapterSettings {
+    /// The chain's eras: each era's blocks and proposals are decoded by the
+    /// codec of its version.
+    pub eras: Arc<Eras<EraDefinition>>,
     pub topic: String,
     /// The maximum number of connected peers to attempt downloads from
     /// for each target block.
@@ -194,6 +201,13 @@ where
     }
 }
 
+/// The version of the era of the block or proposal `bytes` encode, read off
+/// its slot: the codec that decodes the rest.
+fn era_version(eras: &Eras<EraDefinition>, bytes: &[u8]) -> Result<EraVersion, DynError> {
+    let slot = encoded_slot(bytes).ok_or("too short to start with a slot")?;
+    Ok(eras.at_slot(slot).entry.version)
+}
+
 #[async_trait::async_trait]
 impl<Tx, RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for LibP2pAdapter<Tx, RuntimeServiceId>
 where
@@ -243,10 +257,13 @@ where
             return Err(Box::new(error));
         }
         let topic_hash = TopicHash::from_raw(self.settings.topic.clone());
+        let eras = Arc::clone(&self.settings.eras);
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
             Ok(message) if message.topic == topic_hash => {
-                match Proposal::decode_all(&message.data) {
+                match era_version(&eras, &message.data)
+                    .and_then(|version| Ok(Proposal::decode_in(version, &message.data)?))
+                {
                     Ok(proposal) => Some(proposal),
                     Err(e) => {
                         tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
@@ -398,11 +415,14 @@ where
         }
 
         let stream = receiver.await?;
-        let stream = stream.map_err(|e| Box::new(e) as DynError).map(|result| {
-            let block = result?;
-            let block: Self::Block = Block::try_from(block).map_err(|e| Box::new(e) as DynError)?;
-            Ok((block.header().id(), block))
-        });
+        let eras = Arc::clone(&self.settings.eras);
+        let stream = stream
+            .map_err(|e| Box::new(e) as DynError)
+            .map(move |result| {
+                let block = result?;
+                let block: Self::Block = Block::decode_in(era_version(&eras, &block)?, block)?;
+                Ok((block.header().id(), block))
+            });
 
         Ok(Box::new(stream))
     }

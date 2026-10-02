@@ -71,6 +71,7 @@ impl ServiceConfig {
                 },
             },
             network: LibP2pAdapterSettings {
+                eras: Arc::clone(eras),
                 topic: eras
                     .genesis()
                     .entry
