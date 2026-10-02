@@ -835,7 +835,8 @@ where
     );
 
     let backend = Backend::new(
-        blend_config.clone(),
+        &blend_configs,
+        current_epoch_public_info.era,
         overwatch_handle,
         BackendEpochInfo {
             membership: current_epoch_public_info.membership.clone(),
@@ -1169,7 +1170,8 @@ where
                         recovery_checkpoint = complete_transition_period(backend, sdp_relay, recovery_checkpoint).await;
                     }
                     EpochEvent::NewEpoch(new_epoch_info) => {
-                        return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(new_epoch_info, current_epoch.into_components(), latest_secret_pol_info, blend_configs, backend, recovery_checkpoint).await;
+                        let previous_era = current_epoch.epoch_info().era;
+                        return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(new_epoch_info, previous_era, current_epoch.into_components(), latest_secret_pol_info, blend_configs, backend, recovery_checkpoint).await;
                     }
                 }
             }
@@ -1280,7 +1282,8 @@ where
                         };
                     }
                     EpochEvent::NewEpoch(new_epoch_info) => {
-                        return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(new_epoch_info, during_transition.into_components(), latest_secret_pol_info, blend_configs, backend, recovery_checkpoint).await;
+                        let previous_era = during_transition.current().epoch_info().era;
+                        return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(new_epoch_info, previous_era, during_transition.into_components(), latest_secret_pol_info, blend_configs, backend, recovery_checkpoint).await;
                     }
                 }
             }
@@ -1479,6 +1482,7 @@ async fn rotate<
     RuntimeServiceId,
 >(
     new_epoch_info: CoreEpochStateInfo<NodeId, CorePoQGenerator>,
+    previous_era: Era,
     components: Components<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
     latest_secret_pol_info: &mut Option<PolEpochInfo>,
     blend_configs: &Eras<RunningBlendConfig<Backend::Settings>>,
@@ -1506,9 +1510,11 @@ where
     let (crypto_processor, message_scheduler, _) = components;
     // The new epoch runs under the settings of its own era.
     let blend_config = settings_in(blend_configs, new_epoch_info.era());
+    let opens_new_era = new_epoch_info.era() != previous_era;
     match handle_epoch_event(
         new_epoch_info,
         blend_config,
+        opens_new_era,
         crypto_processor,
         message_scheduler,
         recovery_checkpoint,
@@ -1751,6 +1757,7 @@ async fn retire<
 /// away. It ignores the transition period expiration event and returns the
 /// previous cryptographic processor as is.
 #[expect(clippy::too_many_lines, reason = "necessary for epoch handling")]
+#[expect(clippy::too_many_arguments, reason = "categorize args")]
 async fn handle_epoch_event<
     NodeId,
     ProofsGenerator,
@@ -1763,6 +1770,7 @@ async fn handle_epoch_event<
 >(
     new_epoch_info: CoreEpochStateInfo<NodeId, CorePoQGenerator>,
     settings: &RunningBlendConfig<Backend::Settings>,
+    opens_new_era: bool,
     current_cryptographic_processor: CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1834,11 +1842,14 @@ where
                 pow: new_epoch_info.poq_pow_public_inputs,
             };
             backend
-                .rotate_epoch(BackendEpochInfo {
-                    membership: new_epoch_info.membership.clone(),
-                    epoch: new_epoch_info.epoch,
-                    proofs_verifier: ProofsVerifier::new(new_poq_verification_inputs),
-                })
+                .rotate_epoch(
+                    BackendEpochInfo {
+                        membership: new_epoch_info.membership.clone(),
+                        epoch: new_epoch_info.epoch,
+                        proofs_verifier: ProofsVerifier::new(new_poq_verification_inputs),
+                    },
+                    opens_new_era.then(|| settings.clone()),
+                )
                 .await;
 
             let new_scheduler_epoch_info = SchedulerEpochInfo {

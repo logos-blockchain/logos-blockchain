@@ -9,6 +9,7 @@ use lb_blend::message::encap::{
     ProofsVerifier as ProofsVerifierTrait, validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_chain_service::Epoch;
+use lb_cryptarchia_engine::era::{Era, Eras};
 use lb_log_targets::{blend, diagnostic::BLEND_REACHABILITY};
 use lb_utils::tokio::task::spawn_on;
 use libp2p::PeerId;
@@ -62,17 +63,24 @@ where
     type Settings = Libp2pBlendBackendSettings;
 
     fn new(
-        config: BlendConfig<Self::Settings>,
+        configs: &Eras<BlendConfig<Self::Settings>>,
+        current_era: Era,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         current_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
         rng: Rng,
     ) -> Self {
         let (swarm_message_sender, swarm_message_receiver) = mpsc::channel(CHANNEL_SIZE);
         let (incoming_message_sender, _) = broadcast::channel(CHANNEL_SIZE);
+        let config = &configs
+            .get(current_era)
+            .expect("the era of the current epoch is scheduled")
+            .entry
+            .parameters;
         let minimum_network_size = config.minimum_network_size.try_into().unwrap();
 
         let swarm = BlendSwarm::<_, _>::new(SwarmParams {
-            config: &config,
+            config,
+            configs,
             current_epoch_info,
             incoming_message_sender: incoming_message_sender.clone(),
             minimum_network_size,
@@ -122,10 +130,17 @@ where
         }
     }
 
-    async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>) {
+    async fn rotate_epoch(
+        &mut self,
+        new_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
+        new_era: Option<BlendConfig<Self::Settings>>,
+    ) {
         if let Err(e) = self
             .swarm_message_sender
-            .send(BlendSwarmMessage::StartNewEpoch(new_epoch_info))
+            .send(BlendSwarmMessage::StartNewEpoch {
+                new_epoch_info,
+                new_era: new_era.map(Box::new),
+            })
             .await
         {
             tracing::error!(target: LOG_TARGET, "Failed to send new public epoch info to BlendSwarm: {e}");

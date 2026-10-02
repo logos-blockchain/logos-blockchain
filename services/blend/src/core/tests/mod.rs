@@ -580,7 +580,8 @@ async fn test_handle_epoch_transition_expired() {
     // Create backend.
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        settings.clone(),
+        &single_era(settings.clone()),
+        Era::GENESIS,
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
@@ -673,7 +674,8 @@ async fn test_handle_epoch_event_discards_queued_proposals() {
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        settings.clone(),
+        &single_era(settings.clone()),
+        Era::GENESIS,
         overwatch_handle,
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
@@ -760,7 +762,8 @@ async fn test_handle_epoch_event() {
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        settings.clone(),
+        &single_era(settings.clone()),
+        Era::GENESIS,
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
@@ -779,6 +782,7 @@ async fn test_handle_epoch_event() {
         }
         .into(),
         &settings,
+        false,
         crypto_processor,
         scheduler,
         ServiceState::with_epoch(
@@ -863,6 +867,7 @@ async fn test_handle_epoch_event() {
             epoch_nonce: ZkHash::ZERO,
         },
         &settings,
+        false,
         current_crypto_processor,
         current_scheduler,
         new_recovery_checkpoint,
@@ -913,7 +918,8 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        settings.clone(),
+        &single_era(settings.clone()),
+        Era::GENESIS,
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
@@ -939,6 +945,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
         }
         .into(),
         &settings,
+        false,
         crypto_processor,
         scheduler,
         ServiceState::with_epoch(
@@ -1013,7 +1020,8 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        settings.clone(),
+        &single_era(settings.clone()),
+        Era::GENESIS,
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
@@ -1049,6 +1057,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
         }
         .into(),
         &settings,
+        false,
         crypto_processor,
         scheduler,
         ServiceState::with_epoch(
@@ -1124,7 +1133,8 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        settings.clone(),
+        &single_era(settings.clone()),
+        Era::GENESIS,
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
@@ -1140,6 +1150,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
             epoch_nonce: ZkHash::from(1),
         },
         &settings,
+        false,
         crypto_processor,
         scheduler,
         ServiceState::with_epoch(
@@ -1203,7 +1214,8 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        settings.clone(),
+        &single_era(settings.clone()),
+        Era::GENESIS,
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
@@ -1217,6 +1229,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
             epoch_nonce: ZkHash::ZERO,
         },
         &settings,
+        false,
         crypto_processor,
         scheduler,
         ServiceState::with_epoch(

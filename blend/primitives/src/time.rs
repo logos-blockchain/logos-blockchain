@@ -102,6 +102,12 @@ impl RoundClock {
         }
     }
 
+    /// How long each round of this clock lasts.
+    #[must_use]
+    pub const fn round_duration_in_seconds(&self) -> NonZeroU64 {
+        self.round_duration_in_seconds
+    }
+
     /// The round that now falls in.
     #[must_use]
     pub fn current_round(&self) -> Round {

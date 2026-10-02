@@ -1,4 +1,5 @@
 use core::{
+    fmt::{self, Debug, Formatter},
     num::{NonZeroU64, NonZeroUsize},
     ops::Deref,
     pin::Pin,
@@ -27,6 +28,7 @@ use lb_blend::{
     },
 };
 use lb_chain_service::Epoch;
+use lb_cryptarchia_engine::era::Eras;
 use lb_libp2p::{DialError, DialErrorExt as _, DialOpts, SwarmEvent};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, swarm::dial_opts::PeerCondition};
@@ -42,7 +44,7 @@ use crate::{
             BackendEpochInfo,
             libp2p::{
                 LOG_TARGET, Libp2pBlendBackendSettings,
-                behaviour::{BlendBehaviour, BlendBehaviourEvent},
+                behaviour::{BlendBehaviour, BlendBehaviourEvent, network_config},
             },
         },
         settings::RunningBlendConfig as BlendConfig,
@@ -58,17 +60,49 @@ use crate::{
 /// (rejecting) membership at event-loop speed, wasting CPU and flooding logs.
 const FULL_MEMBERSHIP_RETRY_DELAY: Duration = Duration::from_mins(1);
 
-#[derive(Debug)]
 pub enum BlendSwarmMessage<ProofsVerifier> {
     Publish {
         message: Box<EncapsulatedMessageWithVerifiedPublicHeader>,
         epoch: Epoch,
     },
-    StartNewEpoch(BackendEpochInfo<PeerId, ProofsVerifier>),
+    /// A new epoch, with the settings of the era it opens, if it opens one.
+    StartNewEpoch {
+        new_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
+        new_era: Option<Box<BlendConfig<Libp2pBlendBackendSettings>>>,
+    },
     CompleteEpochTransition,
     GetNetworkInfo {
         reply: oneshot::Sender<Option<NetworkInfo<PeerId>>>,
     },
+}
+
+// Not derived: an era's settings hold this node's signing key.
+impl<ProofsVerifier> Debug for BlendSwarmMessage<ProofsVerifier>
+where
+    ProofsVerifier: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Publish { message, epoch } => f
+                .debug_struct("Publish")
+                .field("message", message)
+                .field("epoch", epoch)
+                .finish(),
+            Self::StartNewEpoch {
+                new_epoch_info,
+                new_era,
+            } => f
+                .debug_struct("StartNewEpoch")
+                .field("new_epoch_info", new_epoch_info)
+                .field("opens_new_era", &new_era.is_some())
+                .finish(),
+            Self::CompleteEpochTransition => f.write_str("CompleteEpochTransition"),
+            Self::GetNetworkInfo { reply } => f
+                .debug_struct("GetNetworkInfo")
+                .field("reply", reply)
+                .finish(),
+        }
+    }
 }
 
 pub struct DialAttempt {
@@ -152,7 +186,10 @@ where
 }
 
 pub struct SwarmParams<'config, Rng, ProofsVerifier> {
+    /// The settings of the era of the current epoch.
     pub config: &'config BlendConfig<Libp2pBlendBackendSettings>,
+    /// The settings of every era.
+    pub configs: &'config Eras<BlendConfig<Libp2pBlendBackendSettings>>,
     pub current_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
     pub rng: Rng,
     pub swarm_message_receiver: mpsc::Receiver<BlendSwarmMessage<ProofsVerifier>>,
@@ -175,6 +212,7 @@ where
     pub(super) fn new(
         SwarmParams {
             config,
+            configs,
             current_epoch_info,
             rng,
             swarm_message_receiver: swarm_messages_receiver,
@@ -192,11 +230,20 @@ where
         // that a neighbour sending at the rate the protocol expects never
         // stalls, and that the `η` rounds it may hold a message for are not
         // spent waiting on flow control.
-        let receive_window = connection_receive_window(
-            config.backend.connection_share_per_round,
-            config.time.network_absorption_in_rounds,
-            config.num_blend_layers,
-        );
+        // Built once, so sized for the era that needs the most: a later era
+        // may carry larger messages, or more of them.
+        let receive_window = configs
+            .iter()
+            .map(|era| {
+                let config = &era.entry.parameters;
+                connection_receive_window(
+                    config.backend.connection_share_per_round,
+                    config.time.network_absorption_in_rounds,
+                    config.num_blend_layers,
+                )
+            })
+            .max()
+            .expect("a chain has at least one era");
         let mut swarm = SwarmBuilder::with_existing_identity(config.keypair())
             .with_tokio()
             .with_quic_config(|mut quic| {
@@ -666,14 +713,29 @@ where
             BlendSwarmMessage::Publish { message, epoch } => {
                 self.handle_publish_swarm_message(&message, epoch);
             }
-            BlendSwarmMessage::StartNewEpoch(new_epoch_info) => {
+            BlendSwarmMessage::StartNewEpoch {
+                new_epoch_info,
+                new_era,
+            } => {
                 self.current_epoch_info = new_epoch_info;
+                if let Some(new_era) = &new_era {
+                    self.minimum_network_size = new_era.minimum_network_size.try_into().unwrap();
+                }
+                let new_era = new_era.map(|new_era| {
+                    (
+                        network_config(&new_era),
+                        new_era.backend.protocol_name.clone().into_inner(),
+                    )
+                });
                 self.swarm.behaviour_mut().blend.start_new_epoch(
                     (
                         self.current_epoch_info.membership.clone(),
                         self.current_epoch_info.epoch,
                     ),
                     self.current_epoch_info.proofs_verifier.clone(),
+                    new_era
+                        .as_ref()
+                        .map(|(config, protocol_name)| (config, protocol_name.clone())),
                 );
                 self.ongoing_dials.clear();
                 self.pending_retries.clear();

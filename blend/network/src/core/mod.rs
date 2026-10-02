@@ -75,15 +75,36 @@ where
         }
     }
 
+    /// Starts a new epoch. One that opens a new era comes with the era's
+    /// settings, `config` and `protocol_name`: the connections it negotiates
+    /// speak its protocol and carry its messages, while the old epoch's keep
+    /// their own until the transition period ends.
     pub fn start_new_epoch(
         &mut self,
         new_epoch_info: (Membership<PeerId>, Epoch),
         new_proofs_verifier: ProofsVerifier,
+        new_era: Option<(&Config, StreamProtocol)>,
     ) {
-        self.with_core_mut()
-            .start_new_epoch(new_epoch_info.clone(), new_proofs_verifier.clone());
-        self.with_edge_mut()
-            .start_new_epoch(new_epoch_info, new_proofs_verifier);
+        self.with_core_mut().start_new_epoch(
+            new_epoch_info.clone(),
+            new_proofs_verifier.clone(),
+            new_era.as_ref().map(|(config, protocol_name)| {
+                ((&config.common, &config.with_core), protocol_name.clone())
+            }),
+        );
+        // Both sides keep counting the same rounds.
+        let round_clock = self.with_core().round_clock().clone();
+        self.with_edge_mut().start_new_epoch(
+            new_epoch_info,
+            new_proofs_verifier,
+            new_era.map(|(config, protocol_name)| {
+                (
+                    (&config.common, &config.with_edge),
+                    round_clock,
+                    protocol_name,
+                )
+            }),
+        );
     }
 
     pub const fn with_core(&self) -> &CoreToCoreBehaviour<ProofsVerifier> {

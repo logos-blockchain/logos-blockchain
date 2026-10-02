@@ -1,21 +1,26 @@
-use core::time::Duration;
+use core::{
+    num::{NonZeroU64, NonZeroU128, NonZeroUsize},
+    time::Duration,
+};
 
 use either::Either;
 use futures::StreamExt as _;
 use lb_blend_membership::Membership;
 use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
+use lb_blend_primitives::time::RoundCount;
 use lb_cryptarchia_engine::Epoch;
 use lb_libp2p::{NetworkBehaviour as _, SwarmEvent};
-use libp2p::{Multiaddr, swarm::ConnectionId};
+use libp2p::{Multiaddr, StreamProtocol, swarm::ConnectionId};
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
 use tokio::{select, time::sleep};
 
 use crate::core::{
+    CommonConfig,
     tests::utils::{TestEncapsulatedMessageWithEpoch, TestProofsVerifier, TestSwarm},
     with_core::{
         behaviour::{
-            Event,
+            Config, Event,
             handler::ToBehaviour,
             tests::utils::{
                 BehaviourBuilder, PEERING_DEGREE, SwarmExt as _, build_memberships,
@@ -25,6 +30,55 @@ use crate::core::{
         error::SendError,
     },
 };
+
+const NEXT_PROTOCOL_NAME: StreamProtocol = StreamProtocol::new("/blend/next-era");
+
+/// An epoch that opens a new era takes its settings: nodes that both entered
+/// it connect under its protocol, with its layers.
+#[test(tokio::test)]
+async fn nodes_that_entered_a_new_era_connect_under_its_protocol() {
+    let common = CommonConfig {
+        round_duration_in_seconds: NonZeroU64::new(2).unwrap(),
+        minimum_network_size: NonZeroUsize::new(1).unwrap(),
+        num_blend_layers: NonZeroU64::new(4).unwrap(),
+    };
+    let core = Config {
+        target_peering_degree: PEERING_DEGREE,
+        liveness_window_in_rounds: NonZeroU128::new(1_000_000).unwrap(),
+        connection_share_per_round: NonZeroU64::new(1_000).unwrap(),
+        send_deadline_in_rounds: RoundCount::new(NonZeroU128::new(2).unwrap()),
+        handshake_deadline_in_rounds: RoundCount::new(NonZeroU128::new(2).unwrap()),
+    };
+
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let mut dialer = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut listener = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let memberships = build_memberships(&[&dialer, &listener]);
+    for (swarm, membership) in [
+        (&mut dialer, &memberships[0]),
+        (&mut listener, &memberships[1]),
+    ] {
+        swarm.behaviour_mut().start_new_epoch(
+            (membership.clone(), Epoch::new(1)),
+            TestProofsVerifier::accepting(),
+            Some(((&common, &core), NEXT_PROTOCOL_NAME)),
+        );
+        let behaviour = swarm.behaviour();
+        assert_eq!(behaviour.protocol_name, NEXT_PROTOCOL_NAME);
+        assert_eq!(behaviour.num_blend_layers, common.num_blend_layers);
+        assert_eq!(
+            behaviour.round_clock().round_duration_in_seconds(),
+            common.round_duration_in_seconds
+        );
+    }
+
+    listener.listen().with_memory_addr_external().await;
+    dialer.connect_and_wait_for_upgrade(&mut listener).await;
+}
 
 #[test(tokio::test)]
 async fn publish_message() {
@@ -46,10 +100,12 @@ async fn publish_message() {
     dialer.behaviour_mut().start_new_epoch(
         (memberships[0].clone(), epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
     listener.behaviour_mut().start_new_epoch(
         (memberships[1].clone(), epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
 
     // Send a message but expect [`SendError::NoPeers`]
@@ -144,6 +200,7 @@ async fn fully_negotiated_racing_epoch_transition_is_ignored() {
     behaviour.start_new_epoch(
         (Membership::new_without_local(&[]), Epoch::new(1)),
         TestProofsVerifier::accepting(),
+        None,
     );
     assert!(
         behaviour.connections_waiting_upgrade.is_empty(),
@@ -206,14 +263,17 @@ async fn forward_message() {
     forwarder.behaviour_mut().start_new_epoch(
         (memberships[1].clone(), new_epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
     receiver1.behaviour_mut().start_new_epoch(
         (memberships[2].clone(), new_epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
     receiver2.behaviour_mut().start_new_epoch(
         (memberships[3].clone(), new_epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
     forwarder.connect_and_wait_for_upgrade(&mut receiver2).await;
 
@@ -252,6 +312,7 @@ async fn forward_message() {
     sender.behaviour_mut().start_new_epoch(
         (memberships[0].clone(), new_epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
     sender.connect_and_wait_for_upgrade(&mut forwarder).await;
 
@@ -306,10 +367,12 @@ async fn finish_epoch_transition() {
     dialer.behaviour_mut().start_new_epoch(
         (memberships[0].clone(), epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
     listener.behaviour_mut().start_new_epoch(
         (memberships[1].clone(), epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
 
     // Finish the transition period
@@ -359,6 +422,7 @@ async fn old_epoch_message_not_forwarded_back_to_sender() {
     forwarder.behaviour_mut().start_new_epoch(
         (memberships[1].clone(), new_epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
 
     // Sender publishes a message for the old epoch.
@@ -431,10 +495,12 @@ async fn publish_to_invalid_epoch_returns_error() {
     dialer.behaviour_mut().start_new_epoch(
         (memberships[0].clone(), epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
     listener.behaviour_mut().start_new_epoch(
         (memberships[1].clone(), epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
     dialer.connect_and_wait_for_upgrade(&mut listener).await;
 
@@ -465,10 +531,12 @@ async fn forward_to_invalid_epoch_returns_error() {
     dialer.behaviour_mut().start_new_epoch(
         (memberships[0].clone(), epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
     listener.behaviour_mut().start_new_epoch(
         (memberships[1].clone(), epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
     dialer.connect_and_wait_for_upgrade(&mut listener).await;
 
@@ -500,10 +568,12 @@ async fn event_message_carries_epoch_number() {
     dialer.behaviour_mut().start_new_epoch(
         (memberships[0].clone(), epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
     listener.behaviour_mut().start_new_epoch(
         (memberships[1].clone(), epoch),
         TestProofsVerifier::accepting(),
+        None,
     );
     dialer.connect_and_wait_for_upgrade(&mut listener).await;
 
@@ -560,6 +630,7 @@ async fn start_new_epoch_moves_peers_to_old_epoch() {
     node_a.behaviour_mut().start_new_epoch(
         (memberships[0].clone(), 1.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
 
     // After epoch transition: current negotiated_peers must be empty
@@ -603,6 +674,7 @@ async fn finish_epoch_transition_emits_peer_disconnected_for_old_epoch_peers() {
     node_a.behaviour_mut().start_new_epoch(
         (memberships[0].clone(), 1.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
 
     // Finish the transition; this should close all old epoch connections.
@@ -655,10 +727,12 @@ async fn consecutive_epoch_transitions_replace_old_epoch() {
     dialer.behaviour_mut().start_new_epoch(
         (memberships[0].clone(), 1.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
     listener.behaviour_mut().start_new_epoch(
         (memberships[1].clone(), 1.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
     assert!(dialer.behaviour().old_epoch.is_some());
 
@@ -673,10 +747,12 @@ async fn consecutive_epoch_transitions_replace_old_epoch() {
     dialer.behaviour_mut().start_new_epoch(
         (memberships[0].clone(), 2.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
     listener.behaviour_mut().start_new_epoch(
         (memberships[1].clone(), 2.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
     assert!(dialer.behaviour().old_epoch.is_some());
     assert_eq!(
@@ -743,18 +819,22 @@ async fn epoch_transition_reboots_peering_degree() {
     node_a.behaviour_mut().start_new_epoch(
         (memberships[0].clone(), 1.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
     node_b.behaviour_mut().start_new_epoch(
         (memberships[1].clone(), 1.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
     node_c.behaviour_mut().start_new_epoch(
         (memberships[2].clone(), 1.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
     node_d.behaviour_mut().start_new_epoch(
         (memberships[3].clone(), 1.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
 
     // After transition, the new epoch has no peers, so every slot is free

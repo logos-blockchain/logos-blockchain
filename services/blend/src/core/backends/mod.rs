@@ -6,6 +6,7 @@ use lb_blend::{
     scheduling::membership::Membership,
 };
 use lb_chain_service::Epoch;
+use lb_cryptarchia_engine::era::{Era, Eras};
 use overwatch::overwatch::handle::OverwatchHandle;
 
 use crate::{core::settings::RunningBlendConfig as BlendConfig, message::NetworkInfo};
@@ -32,8 +33,11 @@ pub struct BackendEpochInfo<NodeId, ProofsVerifier> {
 pub trait BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId> {
     type Settings: Clone + Debug + Send + Sync + 'static;
 
+    /// A backend for the epoch of `current_epoch_info`, of era `current_era`,
+    /// on a chain whose eras' settings are `service_configs`.
     fn new(
-        service_config: BlendConfig<Self::Settings>,
+        service_configs: &Eras<BlendConfig<Self::Settings>>,
+        current_era: Era,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         current_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>,
         rng: Rng,
@@ -45,8 +49,12 @@ pub trait BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId> {
         msg: EncapsulatedMessageWithVerifiedPublicHeader,
         intended_epoch: Epoch,
     );
-    /// Rotate epoch.
-    async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>);
+    /// Rotate epoch: one that opens a new era comes with the era's settings.
+    async fn rotate_epoch(
+        &mut self,
+        new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>,
+        new_era: Option<BlendConfig<Self::Settings>>,
+    );
     /// Complete the epoch transition, dropping the old epoch's state and its
     /// `PoQ` verifier.
     async fn complete_epoch_transition(&mut self);

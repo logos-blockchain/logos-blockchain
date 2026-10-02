@@ -117,6 +117,28 @@ impl PeerBlacklist {
         }
     }
 
+    /// Takes the capacity and the expiry of a new era. If the era restarted
+    /// the round clock, at `restarted_at`, every entry is given a whole window
+    /// from the restart: the rounds it was stamped with belong to the old
+    /// clock, and no peer is admitted before its window has passed.
+    pub fn enter_era(
+        &mut self,
+        capacity: NonZeroUsize,
+        expiry: RoundCount,
+        restarted_at: Option<Round>,
+    ) {
+        self.capacity = capacity;
+        self.expiry = expiry;
+        while self.entries.len() > capacity.get() {
+            self.entries.pop_front();
+        }
+        if let Some(now) = restarted_at {
+            for entry in &mut self.entries {
+                entry.expires_at = now.saturating_add(expiry);
+            }
+        }
+    }
+
     /// Blacklists a peer, or refreshes the entry of one already blacklisted.
     ///
     /// Refreshing moves the peer to the back, so re-offending both restarts its
@@ -249,6 +271,42 @@ mod tests {
             !blacklist.contains(&peer, Round::from(10 + EXPIRY_ROUNDS.get())),
             "`W` rounds after the offence the peer may be dialed again"
         );
+    }
+
+    #[test]
+    fn a_new_era_that_restarts_the_clock_gives_every_entry_a_whole_window() {
+        let (mut blacklist, peer) = (blacklist(), PeerId::random());
+        blacklist.insert_or_extend(peer, BlacklistReason::InvalidProofOfQuota, Round::from(100));
+
+        // The new era's clock starts over at round 0, with a shorter window.
+        let expiry = NonZeroU128::new(5).unwrap();
+        blacklist.enter_era(CAPACITY, RoundCount::new(expiry), Some(Round::from(0)));
+
+        assert!(blacklist.contains(&peer, Round::from(expiry.get() - 1)));
+        assert!(!blacklist.contains(&peer, Round::from(expiry.get())));
+    }
+
+    #[test]
+    fn a_smaller_capacity_keeps_the_most_recent_offenders() {
+        let mut blacklist = blacklist();
+        let peers: Vec<_> = repeat_with(PeerId::random).take(CAPACITY.get()).collect();
+        for (round, peer) in (0..).zip(&peers) {
+            blacklist.insert_or_extend(
+                *peer,
+                BlacklistReason::InvalidProofOfQuota,
+                Round::from(round),
+            );
+        }
+
+        let capacity = NonZeroUsize::new(2).unwrap();
+        blacklist.enter_era(capacity, RoundCount::new(EXPIRY_ROUNDS), None);
+
+        let now = Round::from(CAPACITY.get() as u128);
+        let kept: Vec<_> = peers
+            .iter()
+            .filter(|peer| blacklist.contains(peer, now))
+            .collect();
+        assert_eq!(kept, peers.iter().rev().take(2).rev().collect::<Vec<_>>());
     }
 
     #[test]

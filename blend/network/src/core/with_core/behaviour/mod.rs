@@ -380,19 +380,24 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             liveness: PeerLivenessMap::new(RoundCount::new(core_config.liveness_window_in_rounds)),
             below_target_degree_since: None,
             blacklist: PeerBlacklist::new(
-                core_config
-                    .target_peering_degree
-                    .checked_mul(BLACKLIST_TARGET_PEERING_DEGREE_MULTIPLIER)
-                    .expect("Blacklist capacity overflowed `usize`."),
+                blacklist_capacity(core_config.target_peering_degree),
                 RoundCount::new(core_config.liveness_window_in_rounds),
             ),
         }
     }
 
+    /// The clock every round of this behaviour is counted on.
+    pub(crate) const fn round_clock(&self) -> &RoundClock {
+        &self.round_clock
+    }
+
+    /// Starts a new epoch, under the settings of the era it opens, if it opens
+    /// one (see [`Self::enter_era`]).
     pub(crate) fn start_new_epoch(
         &mut self,
         new_epoch_info: (Membership<PeerId>, Epoch),
         new_proofs_verifier: ProofsVerifier,
+        new_era: Option<((&CommonConfig, &Config), StreamProtocol)>,
     ) {
         let current_epoch_number = self.current_epoch_info.1;
 
@@ -426,7 +431,51 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         // that just ended, so they do not carry over.
         self.liveness.clear();
 
+        // Taken after the old epoch was handed what it needs of the era it
+        // belongs to.
+        if let Some((era, protocol_name)) = new_era {
+            self.enter_era(era, protocol_name);
+        }
+
         tracing::debug!(target: LOG_TARGET, "Started a new epoch by passing negotiated peers and exchanged message IDs to the old epoch. Now, no negotiated peers in the current epoch.");
+    }
+
+    /// Takes the settings of the era of the epoch that starts: the
+    /// connections it negotiates speak its protocol and carry messages of its
+    /// layers, while the old epoch's keep their own until the transition
+    /// period ends. A new round duration restarts the round clock.
+    fn enter_era(
+        &mut self,
+        (common_config, core_config): (&CommonConfig, &Config),
+        protocol_name: StreamProtocol,
+    ) {
+        let restarted_at = (common_config.round_duration_in_seconds
+            != self.round_clock.round_duration_in_seconds())
+        .then(|| {
+            self.round_clock = RoundClock::new(common_config.round_duration_in_seconds);
+            self.current_round = self.round_clock.current_round();
+            // Counted on the old clock.
+            self.below_target_degree_since = None;
+            self.current_round
+        });
+        self.target_peering_degree = core_config.target_peering_degree;
+        self.protocol_name = protocol_name;
+        self.minimum_network_size = common_config.minimum_network_size;
+        self.num_blend_layers = common_config.num_blend_layers;
+        self.connection_share_per_round = core_config.connection_share_per_round;
+        self.send_deadline = core_config.send_deadline_in_rounds;
+        self.handshake_deadline = core_config.handshake_deadline_in_rounds;
+        self.handshake_upgrade_timeout = handshake_upgrade_timeout(
+            common_config.round_duration_in_seconds,
+            core_config.handshake_deadline_in_rounds,
+        );
+        self.liveness =
+            PeerLivenessMap::new(RoundCount::new(core_config.liveness_window_in_rounds));
+        self.blacklist.enter_era(
+            blacklist_capacity(core_config.target_peering_degree),
+            RoundCount::new(core_config.liveness_window_in_rounds),
+            restarted_at,
+        );
     }
 
     pub(crate) fn finish_epoch_transition(&mut self) {
@@ -1338,6 +1387,14 @@ where
 
         true
     }
+}
+
+/// How many peers may be blacklisted at once, for a peering degree of
+/// `target_peering_degree`.
+const fn blacklist_capacity(target_peering_degree: NonZeroUsize) -> NonZeroUsize {
+    target_peering_degree
+        .checked_mul(BLACKLIST_TARGET_PEERING_DEGREE_MULTIPLIER)
+        .expect("Blacklist capacity overflowed `usize`.")
 }
 
 /// Point a peer's record at the connection that replaced the one it held,

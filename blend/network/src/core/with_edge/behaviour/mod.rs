@@ -135,10 +135,14 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         }
     }
 
+    /// Starts a new epoch, under the settings of the era it opens, if it opens
+    /// one: edge nodes dial it with the era's protocol, and send messages of
+    /// its layers.
     pub(crate) fn start_new_epoch(
         &mut self,
         new_epoch_info: (Membership<PeerId>, Epoch),
         new_proofs_verifier: ProofsVerifier,
+        new_era: Option<((&CommonConfig, &Config), RoundClock, StreamProtocol)>,
     ) {
         self.current_membership = new_epoch_info.0;
         self.current_epoch = new_epoch_info.1;
@@ -149,6 +153,19 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         for conn in &peers {
             self.close_substream(*conn);
         }
+        let Some(((common_config, edge_config), round_clock, protocol_name)) = new_era else {
+            return;
+        };
+        self.connection_timeout = edge_config.connection_timeout;
+        self.max_incoming_connections = edge_config.max_incoming_connections;
+        self.accept_share = RoundShare::new(
+            edge_config.accepted_connections_per_round,
+            round_clock.current_round(),
+        );
+        self.round_clock = round_clock;
+        self.protocol_name = protocol_name;
+        self.minimum_network_size = common_config.minimum_network_size;
+        self.num_blend_layers = common_config.num_blend_layers;
     }
 
     fn try_wake(&mut self) {

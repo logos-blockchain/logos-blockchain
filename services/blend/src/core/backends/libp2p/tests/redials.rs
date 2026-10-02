@@ -327,7 +327,10 @@ async fn core_epoch_rotation_clears_pending_retries() {
         proofs_verifier: TestProofsVerifier,
     };
     swarm_message_sender
-        .send(BlendSwarmMessage::StartNewEpoch(new_epoch_info))
+        .send(BlendSwarmMessage::StartNewEpoch {
+            new_epoch_info,
+            new_era: None,
+        })
         .await
         .unwrap();
     dialing_swarm.poll_next().await;
@@ -401,11 +404,14 @@ async fn core_does_not_give_up_below_minimum_peering_degree() {
     // peers to reach the minimum degree.
     let new_membership = build_membership(&nodes, Some(*dialing_swarm.local_peer_id()));
     swarm_message_sender
-        .send(BlendSwarmMessage::StartNewEpoch(BackendEpochInfo {
-            membership: new_membership,
-            epoch: 2.into(),
-            proofs_verifier: TestProofsVerifier,
-        }))
+        .send(BlendSwarmMessage::StartNewEpoch {
+            new_epoch_info: BackendEpochInfo {
+                membership: new_membership,
+                epoch: 2.into(),
+                proofs_verifier: TestProofsVerifier,
+            },
+            new_era: None,
+        })
         .await
         .unwrap();
 
