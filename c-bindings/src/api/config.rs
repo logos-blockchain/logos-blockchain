@@ -124,7 +124,9 @@ impl From<GenerateConfigArgs> for EmbeddedInitArgs {
 
         // ---- skip_ibd ----
         if !value.skip_ibd.is_null() {
-            init_args.skip_ibd = unsafe { *value.skip_ibd };
+            // Read as a byte: C can store any value in a `bool`, and anything
+            // but 0 or 1 is not a valid Rust `bool`.
+            init_args.skip_ibd = unsafe { *value.skip_ibd.cast::<u8>() } != 0;
         }
 
         // ---- log_filter ----
@@ -309,21 +311,25 @@ pub unsafe extern "C" fn migrate_user_config_0_1_2(
 }
 
 /// Merge behaviour flags. Mirror of [`MergeFlags`] for the C API.
+///
+/// Each flag is a byte: zero is off, anything else is on. They are not `bool`
+/// because C can store any value in one, and anything but 0 or 1 is not a
+/// valid Rust `bool`.
 #[repr(C)]
 pub struct MergeConfigFlags {
     /// Insert source keys missing from the destination instead of reporting
     /// them.
-    pub source_insert_missing: bool,
+    pub source_insert_missing: u8,
     /// Insert extra keys missing from the destination instead of reporting
     /// them.
-    pub extra_insert_missing: bool,
+    pub extra_insert_missing: u8,
 }
 
 impl From<MergeConfigFlags> for MergeFlags {
     fn from(value: MergeConfigFlags) -> Self {
         Self {
-            source_insert_missing: value.source_insert_missing,
-            extra_insert_missing: value.extra_insert_missing,
+            source_insert_missing: value.source_insert_missing != 0,
+            extra_insert_missing: value.extra_insert_missing != 0,
         }
     }
 }
@@ -520,8 +526,8 @@ mod test {
     };
 
     const NO_INSERT: MergeConfigFlags = MergeConfigFlags {
-        source_insert_missing: false,
-        extra_insert_missing: false,
+        source_insert_missing: 0,
+        extra_insert_missing: 0,
     };
 
     fn cstring(path: &Path) -> CString {
@@ -557,7 +563,7 @@ mod test {
             generate_key(
                 config_c.as_ptr(),
                 keystore_c.as_ptr(),
-                KeyType::Zk,
+                KeyType::Zk as u32,
                 generated_title.as_ptr(),
             )
         };
@@ -576,7 +582,7 @@ mod test {
             add_key(
                 config_c.as_ptr(),
                 keystore_c.as_ptr(),
-                KeyType::Ed25519,
+                KeyType::Ed25519 as u32,
                 key_hex.as_ptr(),
                 added_title.as_ptr(),
             )

@@ -8,15 +8,35 @@ use lb_node::cli::keys::{
 
 use crate::{
     OperationStatus, api::config::cstr_to_path, errors::OperationStatusCode,
-    result::FfiStatusResult, return_error_if_null_pointer,
+    result::FfiStatusResult, return_error_if_null_pointer, unwrap_or_return_error,
 };
 
 /// Type of key to generate or add to a keystore.
+///
+/// Functions take it as a `u32` rather than as this enum: an enum value
+/// outside the listed ones is undefined behaviour in Rust, and nothing stops
+/// a C caller from passing one. The integer is checked and turned into a
+/// [`KeyType`] on the Rust side.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub enum KeyType {
     Ed25519 = 0x0,
     Zk = 0x1,
+}
+
+impl TryFrom<u32> for KeyType {
+    type Error = OperationStatus;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0x0 => Ok(Self::Ed25519),
+            0x1 => Ok(Self::Zk),
+            unknown => Err(OperationStatus::error(
+                OperationStatusCode::ValidationError,
+                format!("Unknown key type {unknown}."),
+            )),
+        }
+    }
 }
 
 impl From<KeyType> for NodeKeyType {
@@ -52,7 +72,7 @@ pub type FfiGenerateKeyResult = FfiStatusResult<*mut c_char>;
 ///
 /// - `user_config_path`: Path to the user config YAML file.
 /// - `keystore_path`: Path to the keystore YAML file.
-/// - `key_type`: The [`KeyType`] of key to generate.
+/// - `key_type`: The [`KeyType`] of key to generate, as its integer value.
 /// - `key_title`: Optional (nullable) title for the new key. When null, a title
 ///   is auto-generated.
 ///
@@ -76,11 +96,12 @@ pub type FfiGenerateKeyResult = FfiStatusResult<*mut c_char>;
 pub unsafe extern "C" fn generate_key(
     user_config_path: *const c_char,
     keystore_path: *const c_char,
-    key_type: KeyType,
+    key_type: u32,
     key_title: *const c_char,
 ) -> FfiGenerateKeyResult {
     return_error_if_null_pointer!(user_config_path);
     return_error_if_null_pointer!(keystore_path);
+    let key_type = unwrap_or_return_error!(KeyType::try_from(key_type));
 
     let args = GenerateKeyArgs::new(
         unsafe { cstr_to_path(user_config_path) },
@@ -116,7 +137,7 @@ pub unsafe extern "C" fn generate_key(
 ///
 /// - `user_config_path`: Path to the user config YAML file.
 /// - `keystore_path`: Path to the keystore YAML file.
-/// - `key_type`: The [`KeyType`] of the provided key.
+/// - `key_type`: The [`KeyType`] of the provided key, as its integer value.
 /// - `key_hex`: The secret key as a hex-encoded C string.
 /// - `key_title`: Optional (nullable) title for the key. When null, a title is
 ///   auto-generated.
@@ -135,13 +156,14 @@ pub unsafe extern "C" fn generate_key(
 pub unsafe extern "C" fn add_key(
     user_config_path: *const c_char,
     keystore_path: *const c_char,
-    key_type: KeyType,
+    key_type: u32,
     key_hex: *const c_char,
     key_title: *const c_char,
 ) -> OperationStatus {
     return_error_if_null_pointer!(user_config_path);
     return_error_if_null_pointer!(keystore_path);
     return_error_if_null_pointer!(key_hex);
+    let key_type = unwrap_or_return_error!(KeyType::try_from(key_type));
 
     let key_hex = unsafe { CStr::from_ptr(key_hex) }.to_string_lossy();
 
