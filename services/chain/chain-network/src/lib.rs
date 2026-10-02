@@ -1060,12 +1060,15 @@ where
         newly_canonical_txs,
         reorged_txs,
     } = cryptarchia.apply_block(block).await?;
-    debug!(target: LOG_TARGET, ?block_id, ?tip, "block applied successfully");
+    debug!(
+        target: LOG_TARGET, ?block_id, ?tip,
+        retired_txs = newly_canonical_txs.len(), reinserted_txs = reorged_txs.len(),
+        "block applied; reconciling mempool"
+    );
 
     remove_newly_canonical_txs_from_mempool(newly_canonical_txs, mempool_adapter).await;
 
     // Re-insert reorged txs back into the mempool.
-    debug!(target: LOG_TARGET, "reinserting {} reorged txs back into the mempool", reorged_txs.len());
     join_all(reorged_txs.into_iter().map(|tx| {
         let mempool_adapter = mempool_adapter.clone();
         async move {
@@ -1089,7 +1092,6 @@ async fn remove_newly_canonical_txs_from_mempool<Tx>(
 ) where
     Tx: Hashable<Hash = TxHash> + Send + 'static,
 {
-    debug!(target: LOG_TARGET, "retiring {} newly canonical transactions from mempool", newly_canonical_txs.len());
     if let Err(e) = mempool_adapter
         .remove_transactions(&newly_canonical_txs)
         .await
