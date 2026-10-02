@@ -27,7 +27,7 @@ use lb_core::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
     sdp::ServiceParameters,
 };
-use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
+use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots, era::Eras};
 use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
@@ -691,9 +691,24 @@ pub fn chain_with_fork() -> (
     ZkKey,
     Utxo,
 ) {
+    chain_with_fork_over(single_era(ledger_config(3.try_into().unwrap())))
+}
+
+/// [`chain_with_fork`], over the ledger config of every era of `ledger_eras`.
+#[expect(clippy::type_complexity, reason = "a test helper")]
+pub fn chain_with_fork_over(
+    ledger_eras: Eras<lb_ledger::Config>,
+) -> (
+    Cryptarchia,
+    Block<SignedOps<Preverified, StandardMode>>,
+    Block<SignedOps<Preverified, StandardMode>>,
+    Ed25519Key,
+    ZkKey,
+    Utxo,
+) {
     let genesis_id = GENESIS_ID.into();
     let (zk_key, utxo) = utxo();
-    let mut cryptarchia = genesis_cryptarchia(utxo);
+    let mut cryptarchia = genesis_cryptarchia_over(ledger_eras, utxo);
 
     // Both extend the genesis, and the same key wins the same slot, so the
     // two blocks differ only in their (randomly generated) block leaders.
@@ -727,12 +742,17 @@ pub const GENESIS_ID: [u8; 32] = [0; 32];
 
 /// A chain with only the genesis block, holding `utxo`.
 pub fn genesis_cryptarchia(utxo: Utxo) -> Cryptarchia {
-    let config = ledger_config(3.try_into().unwrap());
+    genesis_cryptarchia_over(single_era(ledger_config(3.try_into().unwrap())), utxo)
+}
+
+/// [`genesis_cryptarchia`], over the ledger config of every era of
+/// `ledger_eras`.
+pub fn genesis_cryptarchia_over(ledger_eras: Eras<lb_ledger::Config>, utxo: Utxo) -> Cryptarchia {
     Cryptarchia::from_lib(
         GENESIS_ID.into(),
-        LedgerState::from_utxos([utxo], &single_era(config.clone())),
+        LedgerState::from_utxos([utxo], &ledger_eras),
         GENESIS_ID.into(),
-        Arc::new(single_era(config)),
+        Arc::new(ledger_eras),
         lb_cryptarchia_engine::State::Bootstrapping,
         Slot::genesis(),
         0,

@@ -21,6 +21,9 @@ impl Cryptarchia {
     ///
     /// # Rules
     /// - Each uncle's slot must be older than the block's slot.
+    /// - Each uncle must be of the block's era, so that the block and its
+    ///   uncles follow one config, and an uncle never crosses a boundary
+    ///   between eras.
     /// - Each uncle must not be on the chain that the block extends.
     /// - Each uncle's parent must be on the chain the block extends, within the
     ///   uncle reference window.
@@ -41,12 +44,22 @@ impl Cryptarchia {
                 info: Box::new(self.info()),
             })?;
 
-        // Each uncle's slot must be older than the block's slot.
+        // Each uncle's slot must be older than the block's slot, and of the
+        // block's era.
+        let eras = self.ledger.eras();
+        let era = eras.at_slot(slot).era;
         for uncle in block.uncle_headers().iter() {
-            if uncle.header().slot() >= slot {
+            let uncle_slot = uncle.header().slot();
+            if uncle_slot >= slot {
                 return Err(Error::InvalidUncle {
                     uncle: uncle.header().id(),
                     reason: UncleError::NotStrictlyOlder,
+                });
+            }
+            if eras.at_slot(uncle_slot).era != era {
+                return Err(Error::InvalidUncle {
+                    uncle: uncle.header().id(),
+                    reason: UncleError::OtherEra,
                 });
             }
         }
@@ -150,6 +163,8 @@ impl Cryptarchia {
 pub enum UncleError {
     #[error("not strictly older than the block")]
     NotStrictlyOlder,
+    #[error("of another era than the block")]
+    OtherEra,
     #[error("parent not on the chain that the block is extending, within the window")]
     ParentNotOnChain,
     #[error("on the chain that the block is extending")]
@@ -186,11 +201,14 @@ mod tests {
     };
     use lb_cryptarchia_engine::Slot;
     use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_ledger::config::schedule;
     use lb_utils::bounded::BoundedOrderedSet;
     use rand::thread_rng;
 
     use super::*;
-    use crate::tests::{chain_with_fork, signed_header, try_build_block};
+    use crate::tests::{
+        chain_with_fork, chain_with_fork_over, ledger_config, signed_header, try_build_block,
+    };
 
     #[test]
     fn test_accept_valid_uncle() {
@@ -243,6 +261,36 @@ mod tests {
             err,
             Error::InvalidUncle {
                 reason: UncleError::NotStrictlyOlder,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_reject_uncle_of_another_era() {
+        // A second era from epoch 1: the uncle, at slot 1, is of era 0, and the
+        // block, at the first slot of era 1, of era 1.
+        let config = ledger_config(3.try_into().unwrap());
+        let eras = schedule([(0.into(), config.clone()), (1.into(), config.clone())]);
+        let era_1_start = Slot::new(config.epoch_length());
+        let (mut cryptarchia, _, u1, u1_key, ..) = chain_with_fork_over(eras);
+
+        let block = craft_block_with_uncles(
+            cryptarchia.tip(),
+            era_1_start,
+            UncleHeaders::new(BoundedOrderedSet::from(signed_header(&u1))),
+            u1.header().leader_proof(),
+            &u1_key,
+        );
+
+        let block_header_slot = block.header().slot();
+        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
+            panic!("expected the block to be rejected");
+        };
+        assert!(matches!(
+            err,
+            Error::InvalidUncle {
+                reason: UncleError::OtherEra,
                 ..
             }
         ));

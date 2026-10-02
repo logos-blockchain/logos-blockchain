@@ -327,7 +327,11 @@ fn select_uncles(
         return UncleSlots::default();
     }
     let uncle_slots = engine
-        .select_uncles(engine.branches().get(&parent).unwrap(), slot)
+        .select_uncles(
+            engine.branches().get(&parent).unwrap(),
+            slot,
+            Slot::genesis(),
+        )
         .into_iter()
         .map(Branch::slot)
         .collect::<Vec<_>>();

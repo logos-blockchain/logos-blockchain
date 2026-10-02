@@ -736,7 +736,15 @@ where
     /// - u5's slot is already taken by u4 selected earlier.
     /// - u8 is not the 1st block of a fork.
     /// - u9's slot(9) is not smaller than the slot(9) of the new block.
-    pub fn select_uncles(&self, parent: &Branch<Id>, slot: Slot) -> Vec<&Branch<Id>>
+    ///
+    /// An uncle must also be of the era of the new block, which starts at
+    /// `era_start`: older candidates are excluded before any is selected.
+    pub fn select_uncles(
+        &self,
+        parent: &Branch<Id>,
+        slot: Slot,
+        era_start: Slot,
+    ) -> Vec<&Branch<Id>>
     where
         Id: Ord,
     {
@@ -745,6 +753,7 @@ where
 
         let (ancestors, occupied_slots) = self.collect_chain_within_window(parent, window_start);
         let mut candidates = self.uncle_candidates(slot, window_start, &ancestors, &occupied_slots);
+        candidates.retain(|(_, uncle)| uncle.slot >= era_start);
 
         // Oldest parent first, because the slot window moves and the oldest candidates
         // are the closest to expiring.
@@ -1720,7 +1729,11 @@ mod uncle_tests {
         );
 
         let selected: Vec<_> = engine
-            .select_uncles(engine.branches().get(&b2).unwrap(), 11.into())
+            .select_uncles(
+                engine.branches().get(&b2).unwrap(),
+                11.into(),
+                Slot::genesis(),
+            )
             .iter()
             .map(|uncle| uncle.id())
             .collect();
@@ -1755,7 +1768,11 @@ mod uncle_tests {
         );
 
         assert_eq!(
-            engine.select_uncles(engine.branches().get(&b1).unwrap(), 11.into()),
+            engine.select_uncles(
+                engine.branches().get(&b1).unwrap(),
+                11.into(),
+                Slot::genesis()
+            ),
             Vec::<&Branch<u64>>::new()
         );
     }
@@ -1789,11 +1806,42 @@ mod uncle_tests {
         );
 
         let selected: Vec<_> = engine
-            .select_uncles(engine.branches().get(&b1).unwrap(), 7.into())
+            .select_uncles(
+                engine.branches().get(&b1).unwrap(),
+                7.into(),
+                Slot::genesis(),
+            )
             .iter()
             .map(|uncle| uncle.id())
             .collect();
         assert_eq!(selected, [u1, u2, u3, u4]);
+    }
+
+    #[test]
+    fn select_uncles_takes_only_uncles_of_the_era_of_the_block() {
+        // The tree of `select_uncles_takes_at_most_max_uncles`, with the era of
+        // the new block starting at slot 3: u1 and u2 are of the previous era,
+        // and excluded before at most `MAX_UNCLES` are taken, so u5 makes it.
+        let [g, b1, u1, u2, u3, u4, u5] = [0u64, 1, 2, 3, 4, 5, 6];
+        let engine = build_tree(
+            10,
+            g,
+            [
+                (b1, g, 6.into()),
+                (u1, g, 1.into()),
+                (u2, g, 2.into()),
+                (u3, g, 3.into()),
+                (u4, g, 4.into()),
+                (u5, g, 5.into()),
+            ],
+        );
+
+        let selected: Vec<_> = engine
+            .select_uncles(engine.branches().get(&b1).unwrap(), 7.into(), 3.into())
+            .iter()
+            .map(|uncle| uncle.id())
+            .collect();
+        assert_eq!(selected, [u3, u4, u5]);
     }
 
     #[test]
@@ -1815,7 +1863,11 @@ mod uncle_tests {
         );
 
         let selected: Vec<_> = engine
-            .select_uncles(engine.branches().get(&b1).unwrap(), 7.into())
+            .select_uncles(
+                engine.branches().get(&b1).unwrap(),
+                7.into(),
+                Slot::genesis(),
+            )
             .iter()
             .map(|uncle| uncle.id())
             .collect();
@@ -1856,7 +1908,11 @@ mod uncle_tests {
         );
 
         let selected: Vec<_> = engine
-            .select_uncles(engine.branches().get(&b4).unwrap(), 10.into())
+            .select_uncles(
+                engine.branches().get(&b4).unwrap(),
+                10.into(),
+                Slot::genesis(),
+            )
             .iter()
             .map(|uncle| uncle.id())
             .collect();
@@ -1888,7 +1944,11 @@ mod uncle_tests {
         );
 
         let selected: Vec<_> = engine
-            .select_uncles(engine.branches().get(&b2).unwrap(), 11.into())
+            .select_uncles(
+                engine.branches().get(&b2).unwrap(),
+                11.into(),
+                Slot::genesis(),
+            )
             .iter()
             .map(|uncle| uncle.id())
             .collect();
@@ -1926,7 +1986,11 @@ mod uncle_tests {
         );
 
         let selected: Vec<_> = engine
-            .select_uncles(engine.branches().get(&b2).unwrap(), 8.into())
+            .select_uncles(
+                engine.branches().get(&b2).unwrap(),
+                8.into(),
+                Slot::genesis(),
+            )
             .iter()
             .map(|uncle| uncle.id())
             .collect();

@@ -520,11 +520,13 @@ where
             return UncleHeaders::empty();
         };
 
+        // An uncle must be of the era of the new block.
+        let era_start = self.cryptarchia.ledger.eras().at_slot(slot).first_slot;
         let mut uncles = Vec::new();
         for candidate in self
             .cryptarchia
             .consensus
-            .select_uncles(parent_branch, slot)
+            .select_uncles(parent_branch, slot, era_start)
         {
             // Every block accepted into the block tree is persisted, so a
             // candidate must be loadable. Even if not, a proposal is still
