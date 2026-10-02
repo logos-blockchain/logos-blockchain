@@ -1,4 +1,4 @@
-use std::ffi::c_char;
+use std::{ffi::c_char, panic};
 
 use lb_node::{
     UserConfig,
@@ -92,7 +92,17 @@ fn initialize_lb_node(
     let chain_id = run_config.deployment.chain_id();
 
     let runtime = Runtime::new().expect("Failed to create Tokio runtime");
-    let app = run_node_from_config(run_config, Some(runtime.handle().clone())).map_err(|e| {
+
+    // `run_node_from_config` installs the node binary's panic hook, which logs
+    // and then exits the process. That is right for the standalone binary but
+    // not for a library: the hook is process-wide, so it would end the host on
+    // any panic in any of its threads, and stay in place after the node is
+    // shut down. The host's own hook is put back as soon as the call returns.
+    let host_panic_hook = panic::take_hook();
+    let app = run_node_from_config(run_config, Some(runtime.handle().clone()));
+    panic::set_hook(host_panic_hook);
+
+    let app = app.map_err(|e| {
         OperationStatus::error(
             OperationStatusCode::InitializationError,
             format!("Could not initialize Overwatch: {e}"),
