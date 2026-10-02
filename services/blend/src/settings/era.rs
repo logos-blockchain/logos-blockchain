@@ -1,4 +1,5 @@
 use ::core::time::Duration;
+use lb_cryptarchia_engine::era::Eras;
 use lb_era_parameters::{EraDefinition, EraParameters, v1::blend::Settings as BlendParameters};
 use lb_services_utils::overwatch::RecoveryData;
 
@@ -13,10 +14,15 @@ use crate::{
 };
 
 impl Settings<Libp2pCoreBackendSettings, Libp2pEdgeBackendSettings, Libp2pBroadcastSettings> {
-    /// The settings of the Blend services while `era` is in force, for a node
-    /// configured with `user`.
+    /// The settings of the Blend services while `era` is in force, on a chain
+    /// whose eras are `eras`, for a node configured with `user`.
     #[must_use]
-    pub fn from_era(user: user::Config, era: &EraDefinition, recovery_data: RecoveryData) -> Self {
+    pub fn from_era(
+        user: user::Config,
+        era: &EraDefinition,
+        eras: &Eras<EraDefinition>,
+        recovery_data: RecoveryData,
+    ) -> Self {
         let EraParameters::V1(parameters) = &era.parameters;
         let blend = &parameters.blend;
         let slots_per_epoch = parameters.cryptarchia.slots_per_epoch();
@@ -29,8 +35,16 @@ impl Settings<Libp2pCoreBackendSettings, Libp2pEdgeBackendSettings, Libp2pBroadc
                 non_ephemeral_signing_key_id: user.non_ephemeral_signing_key_id,
                 num_blend_layers: blend.common.num_blend_layers,
                 minimum_network_size: blend.common.minimum_network_size.into(),
+                // A proposal goes out on the topic of its own era, which is
+                // not always the era in force.
                 broadcast: Libp2pBroadcastSettings {
-                    topic: era.protocol_names.cryptarchia_topic.clone(),
+                    topics: eras.map(|era| {
+                        era.entry
+                            .parameters
+                            .protocol_names
+                            .cryptarchia_topic
+                            .clone()
+                    }),
                 },
                 abstain_on_failure: user.abstain_on_failure,
                 recovery_data,

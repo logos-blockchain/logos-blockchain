@@ -8,9 +8,11 @@ use futures::{Stream, StreamExt as _, stream, stream::BoxStream};
 use lb_binary_codec::bincode::DeserializeOp;
 use lb_chain_network_service::Message as ChainNetworkMsg;
 use lb_core::{
+    block::encoded_slot,
     header::HeaderId,
     mantle::{traits::Hashable, transactions::hash::PrefixedKey},
 };
+use lb_cryptarchia_engine::era::Eras;
 use lb_log_targets::blend;
 use lb_network_service::{
     NetworkService,
@@ -23,7 +25,7 @@ use lb_tx_service::{
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
 };
 use overwatch::services::{AsServiceId, ServiceData, relay::OutboundRelay};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 
@@ -55,14 +57,19 @@ where
 
 /// Settings used to broadcast messages to the network service that uses libp2p
 /// backend.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct Libp2pBroadcastSettings {
-    pub topic: String,
+    /// The proposal topic of every era.
+    pub topics: Eras<String>,
 }
 
 /// Broadcast an unencrypted block proposal to the network by publishing it
-/// under the configured gossipsub topic.
-async fn broadcast_block_proposal(network_relay: &NetworkRelay, topic: String, proposal: Vec<u8>) {
+/// under the proposal topic of its era, the era of its slot.
+async fn broadcast_block_proposal(
+    network_relay: &NetworkRelay,
+    topics: &Eras<String>,
+    proposal: Vec<u8>,
+) {
     if proposal.len() > MAX_PAYLOAD_BODY_SIZE {
         tracing::error!(
             target: LOG_TARGET,
@@ -72,6 +79,11 @@ async fn broadcast_block_proposal(network_relay: &NetworkRelay, topic: String, p
         );
         return;
     }
+    let Some(slot) = encoded_slot(&proposal) else {
+        tracing::error!(target: LOG_TARGET, "Refusing to broadcast a block proposal without a slot");
+        return;
+    };
+    let topic = topics.at_slot(slot).entry.parameters.clone();
 
     if let Err(error) = network_relay
         .send(NetworkMsg::Process(Command::PubSub(
@@ -279,12 +291,8 @@ where
     async fn dispatch(&self, payload: DataPayload) {
         match payload {
             DataPayload::BlockProposal(proposal) => {
-                broadcast_block_proposal(
-                    &self.network_relay,
-                    self.settings.topic.clone(),
-                    proposal,
-                )
-                .await;
+                broadcast_block_proposal(&self.network_relay, &self.settings.topics, proposal)
+                    .await;
             }
             DataPayload::Transaction(transaction) => {
                 submit_transaction(&self.mempool_relay, transaction).await;
@@ -309,5 +317,51 @@ where
         .take_while(|observed| ready(observed.is_some()))
         .map(|observed| observed.expect("`take_while` stops at the first end marker."))
         .boxed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::{num::NonZero, time::Duration};
+
+    use lb_cryptarchia_engine::{
+        Epoch,
+        era::{EraEntry, EraVersion},
+    };
+    use time::OffsetDateTime;
+    use tokio::sync::mpsc;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn a_proposal_is_broadcast_on_the_topic_of_its_era() {
+        // Era 1 starts at slot 10.
+        let topics = Eras::new(
+            OffsetDateTime::UNIX_EPOCH,
+            [0, 1].map(|era| EraEntry {
+                first_epoch: Epoch::new(era),
+                version: EraVersion::V1,
+                slot_duration: Duration::from_secs(1),
+                epoch_length: NonZero::new(10).unwrap(),
+                transition_slots: 0,
+                parameters: format!("/proposals/{era}"),
+            }),
+        )
+        .unwrap();
+        let (sender, mut receiver) = mpsc::channel(1);
+        let network_relay = OutboundRelay::new(sender);
+
+        for (slot, expected_topic) in [(9u64, "/proposals/0"), (10, "/proposals/1")] {
+            // A proposal's encoding starts with its slot.
+            let proposal = [slot.to_le_bytes(), [0; 8]].concat();
+            broadcast_block_proposal(&network_relay, &topics, proposal).await;
+            let Some(NetworkMsg::Process(Command::PubSub(PubSubCommand::Broadcast {
+                topic, ..
+            }))) = receiver.recv().await
+            else {
+                panic!("the proposal is broadcast");
+            };
+            assert_eq!(topic, expected_topic);
+        }
     }
 }

@@ -229,7 +229,11 @@ fn service_settings_receive_recovery_data() {
     let (blend_service_settings, _, _) = BlendServiceConfig {
         user: user_config.blend.clone(),
     }
-    .into_blend_services_settings(&eras.genesis().entry.parameters, recovery_data.clone());
+    .into_blend_services_settings(
+        &eras.genesis().entry.parameters,
+        &eras,
+        recovery_data.clone(),
+    );
     assert_eq!(
         blend_service_settings
             .common

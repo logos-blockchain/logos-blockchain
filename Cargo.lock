@@ -4269,6 +4269,7 @@ dependencies = [
  "serde_with",
  "test-log",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tokio-stream",
  "tracing",

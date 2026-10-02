@@ -193,7 +193,7 @@ pub fn run_node_from_config(
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
         user: config.user.blend,
     }
-    .into_blend_services_settings(era, recovery_data.clone());
+    .into_blend_services_settings(era, &eras, recovery_data.clone());
 
     let time_service_config = TimeConfig {
         user: config.user.time,

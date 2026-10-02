@@ -3,7 +3,6 @@ use std::fmt::Debug;
 use futures::stream::BoxStream;
 use lb_network_service::{NetworkService, backends::NetworkBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
-use serde::{Serialize, de::DeserializeOwned};
 
 use crate::message::DataPayload;
 
@@ -26,7 +25,7 @@ pub trait PayloadDispatcher<RuntimeServiceId> {
     /// The chain-network service asked about the block proposals it receives.
     type ChainNetworkService: ServiceData<Message: Send + 'static> + 'static;
     /// Settings used to broadcast messages using the network service.
-    type Settings: Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static;
+    type Settings: Clone + Debug + Send + Sync + 'static;
 
     fn new(
         network_relay: OutboundRelay<

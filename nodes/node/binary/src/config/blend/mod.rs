@@ -10,6 +10,7 @@ use lb_blend_service::{
     },
     settings::{Settings as BlendSettings, user::Config},
 };
+use lb_cryptarchia_engine::era::Eras;
 use lb_era_parameters::EraDefinition;
 use lb_services_utils::overwatch::RecoveryData;
 
@@ -36,9 +37,10 @@ impl ServiceConfig {
     pub fn into_blend_services_settings(
         self,
         era: &EraDefinition,
+        eras: &Eras<EraDefinition>,
         recovery_data: RecoveryData,
     ) -> BlendServicesSettings {
-        let blend_service_settings = BlendSettings::from_era(self.user, era, recovery_data);
+        let blend_service_settings = BlendSettings::from_era(self.user, era, eras, recovery_data);
         let blend_core_settings: BlendCoreSettings<_, _> = blend_service_settings.clone().into();
         let blend_edge_settings: BlendEdgeSettings<_, _> = blend_service_settings.clone().into();
         (
