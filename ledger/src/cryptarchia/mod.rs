@@ -911,7 +911,7 @@ pub mod tests {
     use super::*;
     use crate::{
         Ledger,
-        config::single_era,
+        config::{schedule, single_era},
         leader_proof::LeaderProof,
         mantle::{
             pow::tx_density::ClosedEpochLoad,
@@ -2222,6 +2222,126 @@ pub mod tests {
 
         // Verify input was consumed
         assert!(!new_state.utxos.contains(&input_utxo.id()));
+    }
+
+    /// Era 0 runs the test config: k = 1 and f = 1/10, so epochs of 100
+    /// slots whose block density is measured over the first 60, and a learning
+    /// rate of 1. Era 1, from epoch 2: k = 4, f = 1/5 and a learning rate of
+    /// 1/2, so epochs of 200 slots whose density is measured over the first
+    /// 120.
+    fn two_eras() -> (Config, Config, Eras<Config>) {
+        let era_0 = config();
+        let era_1 = Config {
+            consensus_config: lb_cryptarchia_engine::Config::new(
+                NonZero::new(4).unwrap(),
+                NonNegativeRatio::new(1, 5.try_into().unwrap()),
+                0.5f64.try_into().expect("1/2 > 0"),
+                NonZero::new(12).unwrap(),
+            ),
+            ..era_0.clone()
+        };
+        let eras = schedule([(0.into(), era_0.clone()), (2.into(), era_1.clone())]);
+        (era_0, era_1, eras)
+    }
+
+    /// The state in epoch 1, the last of era 0, at its first slot, with a
+    /// total stake of 10000 and 3 blocks in the density window of epoch 1.
+    fn state_in_last_epoch_of_era_0(eras: &Eras<Config>) -> LedgerState {
+        let sdp = SdpLedger::new(0.into());
+        // Epoch 0 meets the expected density of 6 blocks, so the total stake
+        // carries over to epoch 1 unchanged.
+        let mut state = genesis_state(&[utxo()]);
+        for slot in 1..=6 {
+            state = state.mark_occupied_slots(Slot::new(slot), &UncleSlots::default());
+        }
+        let mut state = state
+            .update_epoch_state::<HeaderId>(Slot::new(100), &sdp, &pow_state(), eras)
+            .unwrap();
+        assert_eq!(state.epoch_state.epoch, 1);
+        assert_eq!(state.epoch_state.total_stake, 10_000);
+        for slot in [100, 110, 120] {
+            state = state.mark_occupied_slots(Slot::new(slot), &UncleSlots::default());
+        }
+        state
+    }
+
+    #[test]
+    fn an_era_boundary_settles_the_epoch_under_its_era_and_sets_up_the_next_under_its_own() {
+        let (era_0, era_1, eras) = two_eras();
+        let state = state_in_last_epoch_of_era_0(&eras);
+
+        let state = state
+            .update_epoch_state::<HeaderId>(
+                Slot::new(200),
+                &SdpLedger::new(0.into()),
+                &pow_state(),
+                &eras,
+            )
+            .unwrap();
+        assert_eq!(state.epoch_state.epoch, 2);
+
+        // The total stake is inferred from the density of epoch 1 under era 0.
+        let total_stake =
+            StakeInference::from_config(&era_0).total_stake_inference::<PRECISION>(10_000, 3);
+        assert_eq!(total_stake, 5_000);
+        assert_ne!(
+            StakeInference::from_config(&era_1).total_stake_inference::<PRECISION>(10_000, 3),
+            total_stake
+        );
+        assert_eq!(state.epoch_state.total_stake, total_stake);
+        // The lottery values of epoch 2 follow f of era 1.
+        assert_eq!(
+            (state.epoch_state.lottery_0, state.epoch_state.lottery_1),
+            era_1
+                .lottery_constants()
+                .compute_lottery_values(total_stake)
+        );
+        // The density of epoch 2 is measured over the first 120 of its 200
+        // slots.
+        assert_eq!(
+            state.block_density.period_range(),
+            &(Slot::new(200)..=Slot::new(319))
+        );
+        // Epoch 3 starts after the 200 slots of epoch 2.
+        assert_eq!(eras.epoch_of(Slot::new(399)), 2);
+        assert_eq!(eras.epoch_of(Slot::new(400)), 3);
+    }
+
+    #[test]
+    fn a_jump_over_an_era_boundary_settles_each_skipped_epoch_under_its_era() {
+        let (era_0, era_1, eras) = two_eras();
+        let state = state_in_last_epoch_of_era_0(&eras);
+
+        // From epoch 1 straight to epoch 3, skipping epoch 2 of era 1.
+        let state = state
+            .update_epoch_state::<HeaderId>(
+                Slot::new(400),
+                &SdpLedger::new(0.into()),
+                &pow_state(),
+                &eras,
+            )
+            .unwrap();
+        assert_eq!(state.epoch_state.epoch, 3);
+
+        // Epoch 1 is settled under era 0, then epoch 2, without a block, under
+        // era 1, whose learning rate of 1/2 halves the stake instead of
+        // dropping it to the minimum.
+        let total_stake = StakeInference::from_config(&era_1).total_stake_inference::<PRECISION>(
+            StakeInference::from_config(&era_0).total_stake_inference::<PRECISION>(10_000, 3),
+            0,
+        );
+        assert_eq!(total_stake, 2_500);
+        assert_eq!(state.epoch_state.total_stake, total_stake);
+        assert_eq!(
+            (state.epoch_state.lottery_0, state.epoch_state.lottery_1),
+            era_1
+                .lottery_constants()
+                .compute_lottery_values(total_stake)
+        );
+        assert_eq!(
+            state.block_density.period_range(),
+            &(Slot::new(400)..=Slot::new(519))
+        );
     }
 
     #[test]
