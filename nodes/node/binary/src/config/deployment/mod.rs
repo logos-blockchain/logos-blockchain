@@ -1,4 +1,4 @@
-use core::{num::NonZero, time::Duration};
+use core::time::Duration;
 
 use lb_core::{
     block::genesis::GenesisBlock,
@@ -120,14 +120,11 @@ impl DeploymentSettings {
             era_digests.push(digest);
             let fork_digest =
                 ForkDigest::compute(genesis_id, &chain_id, era_digests.iter().copied());
-            let EraParameters::V1(layout) = parameters;
             entries.push(EraEntry {
                 first_epoch,
                 version: parameters.version(),
-                slot_duration: layout.time.slot_duration,
-                epoch_length: NonZero::new(layout.cryptarchia.slots_per_epoch()).expect(
-                    "an epoch has at least one slot: its phases and base period are not zero",
-                ),
+                slot_duration: parameters.slot_duration(),
+                epoch_length: parameters.epoch_length(),
                 parameters: EraDefinition {
                     parameters: parameters.clone(),
                     digest,

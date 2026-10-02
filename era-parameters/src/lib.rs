@@ -1,6 +1,8 @@
 //! The parameters of an era, in the layout of each version, and what a node
 //! derives from them: the digests and the protocol names of the era.
 
+use core::{num::NonZero, time::Duration};
+
 use lb_core::era::{EraDigest, ForkDigest};
 use lb_cryptarchia_engine::era::EraVersion;
 use serde::{Deserialize, Serialize};
@@ -31,6 +33,23 @@ impl EraParameters {
 
     const fn tag(&self) -> u16 {
         self.version().tag()
+    }
+
+    /// How long each slot of the era lasts.
+    #[must_use]
+    pub const fn slot_duration(&self) -> Duration {
+        match self {
+            Self::V1(parameters) => parameters.time.slot_duration,
+        }
+    }
+
+    /// The number of slots in each epoch of the era.
+    #[must_use]
+    pub const fn epoch_length(&self) -> NonZero<u64> {
+        match self {
+            Self::V1(parameters) => NonZero::new(parameters.cryptarchia.slots_per_epoch())
+                .expect("an epoch has at least one slot: its phases and base period are not zero"),
+        }
     }
 
     /// The ledger's configuration while the era is in force.
