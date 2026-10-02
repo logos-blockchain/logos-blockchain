@@ -12,7 +12,7 @@ use crate::mantle::{Note, NoteId};
 use crate::{
     events::TxEvent,
     mantle::{
-        batch::DeferredProof,
+        batch::DeferredZkSig,
         channel::Channels,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
@@ -137,7 +137,7 @@ impl PreverifiableOperation<StandardMode>
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverified, StandardMode> {
-    type DeferredProof = DeferredProof;
+    type DeferredProof = DeferredZkSig;
     type Context<'a> = TransferValidationContext<'a>;
     type Error = TransferError;
 
@@ -155,7 +155,7 @@ impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverifi
         let pks = operation.inputs.get_pk(context.utxos)?;
         let inputs = public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &pks)
             .map_err(|_| TransferError::InvalidProof)?;
-        Ok(DeferredProof::ZkSig(*self.proof().as_proof(), inputs))
+        Ok(DeferredZkSig::new(*self.proof().as_proof(), inputs))
     }
 }
 
@@ -187,7 +187,7 @@ mod test {
     use crate::{
         mantle::{
             Note, NoteId, TxHash, Utxo,
-            batch::{DeferredProof, Error as BatchError, test_utils::batch_verify},
+            batch::{DeferredZkSig, Error as BatchError, test_utils::batch_verify},
             channel::Channels,
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger,
@@ -287,7 +287,7 @@ mod test {
         ZkKey::from(BigUint::from(7u8))
     }
 
-    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredProof {
+    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredZkSig {
         let input_utxo = Utxo {
             op_id: [1u8; 32],
             output_index: 0,
