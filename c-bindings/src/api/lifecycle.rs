@@ -40,11 +40,19 @@ pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlo
 ///
 /// An [`FfiInitializedLogosBlockchainNodeResult`] containing either a pointer
 /// to the initialized [`LogosBlockchainNode`] or an error code.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. The caller
+/// must ensure that `config_path` is a valid NUL-terminated C string, and that
+/// `custom_deployment_path` is either null or one as well.
 #[unsafe(no_mangle)]
-pub extern "C" fn start_lb_node(
+pub unsafe extern "C" fn start_lb_node(
     config_path: *const c_char,
     custom_deployment_path: *const c_char,
 ) -> FfiInitializedLogosBlockchainNodeResult {
+    return_error_if_null_pointer!(config_path);
+
     initialize_lb_node(config_path, custom_deployment_path).map_or_else(
         FfiInitializedLogosBlockchainNodeResult::err,
         FfiInitializedLogosBlockchainNodeResult::from_value,
@@ -318,10 +326,12 @@ mod test {
     fn test_basic_lifecycle() {
         let test_paths = TestConfigPaths::new();
 
-        let start_status = start_lb_node(
-            test_paths.node_config.as_ptr(),
-            test_paths.deployment_config.as_ptr(),
-        );
+        let start_status = unsafe {
+            start_lb_node(
+                test_paths.node_config.as_ptr(),
+                test_paths.deployment_config.as_ptr(),
+            )
+        };
 
         assert!(
             start_status.is_ok(),
@@ -353,10 +363,12 @@ mod test {
         // no other test observes it.
         unsafe { std::env::set_var("HTTP_HOST", "not-a-socket-address") };
 
-        let start_status = start_lb_node(
-            test_paths.node_config.as_ptr(),
-            test_paths.deployment_config.as_ptr(),
-        );
+        let start_status = unsafe {
+            start_lb_node(
+                test_paths.node_config.as_ptr(),
+                test_paths.deployment_config.as_ptr(),
+            )
+        };
 
         unsafe { std::env::remove_var("HTTP_HOST") };
 
