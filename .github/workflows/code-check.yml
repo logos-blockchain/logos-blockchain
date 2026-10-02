@@ -231,17 +231,27 @@ jobs:
       #
       # Valgrind comes from nix: the runner has no passwordless sudo to install
       # it with, and nix is already there.
+      #
+      # Valgrind cannot start on Ubuntu's own dynamic loader: it needs a few of
+      # its symbols, which Ubuntu strips and ships in `libc6-dbg` (not
+      # installable here either). So the test binary is started through the
+      # loader of nix's glibc instead, which keeps them. That glibc is newer
+      # than the one the binary was built against, which glibc supports; the
+      # remaining libraries (libstdc++, libgcc_s) still come from the system.
       - name: Run the FFI safety tests under valgrind
         if: steps.changes.outputs.run == 'true'
         env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: >-
-            valgrind --leak-check=full --errors-for-leak-kinds=definite --error-exitcode=1
-            --num-callers=30 --suppressions=${{ github.workspace }}/c-bindings/valgrind.supp
           # Blocks take far longer to arrive under valgrind.
           FFI_AUDIT_WAIT_SECS: 600
-        run: >-
-          nix shell 'nixpkgs#valgrind' --command
-          cargo test --locked -p logos-blockchain-c -- --ignored --test-threads=1 ffi_safety_tests
+        run: |
+          glibc="$(nix build --no-link --print-out-paths 'nixpkgs#glibc^out')"
+          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="valgrind \
+            --leak-check=full --errors-for-leak-kinds=definite --error-exitcode=1 \
+            --num-callers=30 --suppressions=$GITHUB_WORKSPACE/c-bindings/valgrind.supp \
+            $glibc/lib/ld-linux-x86-64.so.2 \
+            --library-path $glibc/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
+          nix shell 'nixpkgs#valgrind' --command \
+            cargo test --locked -p logos-blockchain-c -- --ignored --test-threads=1 ffi_safety_tests
 
       - name: Clean up build artifacts
         if: success() || failure()
