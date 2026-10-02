@@ -236,6 +236,7 @@ fn apply_prepared_block_event(
     // sequencer already knew about (its own publishes and previously
     // observed ones) from genuinely new network entries.
     let tracked_before = s.tracked_tx_hashes();
+    let tracked_msgs_before = s.tracked_msg_ids();
 
     // Install finalized history first. It is not mirrored into pending: the
     // matching local entries are removed below using the returned hashes.
@@ -279,21 +280,9 @@ fn apply_prepared_block_event(
         note_ops,
     );
 
-    // Remove our pending txs that were finalized in the backfilled LIB blocks.
-    // `finalized_items` already carries the typed payloads (built before
-    // pending was mutated) so we just need to clean up state here.
-    for tx_hash in &finalized_batch.our_tx_hashes {
-        s.remove_pending(tx_hash);
-    }
-
-    *current_tip = Some(tip);
-
-    mirror_branch_from_store(s, tip, channel_id);
-
-    // Detect channel changes by diffing the channel view on every block. On
-    // the first event there is no old tip: what restored pending chains on
-    // was the view before the restart, and the rest of the channel is new
-    // (a clean start on an existing channel).
+    // Remove our pending txs that were finalized in the backfilled LIB blocks,
+    // by tx hash and by message id. `finalized_items` already carries the
+    // typed payloads (built before pending was mutated).
     let finalized_now: HashSet<MsgId> = finalized_batch
         .items
         .iter()
@@ -303,8 +292,21 @@ fn apply_prepared_block_event(
             _ => None,
         })
         .collect();
+    for tx_hash in &finalized_batch.our_tx_hashes {
+        s.remove_pending(tx_hash);
+    }
+    s.take_landed(&finalized_now);
 
-    let old_lineage = old_lineage.unwrap_or_else(|| s.lineage_under(tip, &tracked_before));
+    *current_tip = Some(tip);
+
+    mirror_branch_from_store(s, tip, channel_id);
+
+    // Detect channel changes by diffing the channel view on every block. On
+    // the first event there is no old tip: what restored pending chains on
+    // was the view before the restart, and the rest of the channel is new
+    // (a clean start on an existing channel).
+    let old_lineage =
+        old_lineage.unwrap_or_else(|| s.lineage_under(tip, &tracked_before, &tracked_msgs_before));
     let channel_update = s.detect_channel_update(&old_lineage, tip, &finalized_now);
 
     // On a pure extension (nothing orphaned — including the first event,
@@ -325,11 +327,21 @@ fn apply_prepared_block_event(
     // the view had before this event. A pending entry survives a branch
     // change only by chaining on the fork point, since anything adopted
     // above it takes its slot and sheds it.
+    // Matched by message or config id; by tx hash for an entry carrying
+    // neither.
     let old_txs: HashSet<TxHash> = old_lineage.iter().map(|info| info.tx_hash).collect();
+    let old_msgs: HashSet<MsgId> = old_lineage.iter().map(|info| info.this_msg).collect();
     let common_prefix = s
         .channel_view_txs(tip, &finalized_now)
         .into_iter()
-        .filter(|tx| old_txs.contains(&tx.tx_hash()))
+        .filter(|tx| {
+            let mut ids = update_tx_msg_ids(tx, channel_id).peekable();
+            if ids.peek().is_some() {
+                ids.any(|id| old_msgs.contains(&id))
+            } else {
+                old_txs.contains(&tx.tx_hash())
+            }
+        })
         .collect();
 
     BlockEventResult {
@@ -495,6 +507,30 @@ pub fn channel_inscriptions(
         }
     }
     entries
+}
+
+/// The message and config ids an update entry carries for `channel_id`.
+fn update_tx_msg_ids(
+    tx: &ChannelUpdateTx,
+    channel_id: ChannelId,
+) -> impl Iterator<Item = MsgId> + '_ {
+    let typed = tx.inscription().map(|info| info.this_msg);
+    let opaque = match tx {
+        ChannelUpdateTx::Config(signed) | ChannelUpdateTx::Custom(signed) => {
+            let mut ids: Vec<MsgId> = channel_inscriptions(signed, channel_id)
+                .iter()
+                .map(|info| info.this_msg)
+                .collect();
+            ids.extend(
+                channel_configs(signed, channel_id)
+                    .iter()
+                    .map(|info| info.this_msg),
+            );
+            ids
+        }
+        _ => Vec::new(),
+    };
+    typed.into_iter().chain(opaque)
 }
 
 /// A tx's config-lineage entries for `channel_id`, in op order.
@@ -2744,14 +2780,6 @@ mod tests {
             r[3].result.channel_update.is_none(),
             "bare un-mine is silent"
         );
-        let s = state.as_ref().unwrap();
-        assert!(s.is_tracked(&cfg_hash));
-        assert!(
-            s.pending_txs(bz.header.id)
-                .iter()
-                .any(|(h, _)| *h == cfg_hash),
-            "un-mined, it is re-posted"
-        );
         let u = r[4]
             .result
             .channel_update
@@ -2759,8 +2787,16 @@ mod tests {
             .expect("cfg' supersedes cfg");
         let orphaned: Vec<TxHash> = u.orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
         let adopted: Vec<TxHash> = u.adopted.iter().map(ChannelUpdateTx::tx_hash).collect();
-        assert_eq!(orphaned, vec![cfg_hash]);
+        assert_eq!(
+            orphaned,
+            vec![cfg_hash],
+            "still in the view until the rival"
+        );
         assert_eq!(adopted, vec![rival_hash]);
+        // The rival takes the config position: cfg is displaced with it.
+        let shed: Vec<TxHash> = r[4].shed_other.iter().map(SignedOps::hash).collect();
+        assert_eq!(shed, vec![cfg_hash]);
+        assert!(!state.as_ref().unwrap().is_tracked(&cfg_hash));
     }
 
     /// After a checkpoint restore the first event's view carries the restored
@@ -2824,6 +2860,124 @@ mod tests {
         assert_eq!(prefix, vec![cfg_hash]);
         let u = r[0].result.channel_update.as_ref().expect("M1, M2 adopted");
         assert_eq!(msg_ids(&u.adopted), vec![m1_id, m2_id]);
+    }
+
+    /// A restored pending P whose message finalized under another hash while
+    /// the sequencer was down — the original of a re-funded publish won — is
+    /// retired by the LIB backfill, not shed as off-branch and orphaned.
+    #[tokio::test]
+    async fn restored_pending_finalized_under_another_hash_is_retired_not_orphaned() {
+        // G(0) <- B1 (original carrying M, finalized, never seen live) <- B2 (live)
+        let ch = ChannelId::from([0u8; 32]);
+        let m = inscribe_op(ch, MsgId::root(), b"m");
+        let m_id = m.id();
+        let original = unverified_tx_with_ops(vec![
+            Op::ChannelInscribe(m.clone()),
+            Op::ChannelConfig(channel_config(ch, MsgId::root())),
+        ]);
+        let rebuilt = unverified_tx_with_ops(vec![Op::ChannelInscribe(m)]);
+        assert_ne!(original.hash(), rebuilt.hash());
+        let mut restored = TxState::new(header_id(0), MsgId::root());
+        restored
+            .submit_inscription(
+                rebuilt,
+                MsgId::root(),
+                m_id,
+                Inscription::new_unchecked(b"m".to_vec()),
+            )
+            .unwrap();
+        let b1 = api_block(1, 0, 1, vec![original]);
+        let b2 = api_block(2, 1, 2, Vec::new());
+        let node = MockNode {
+            immutable: vec![b1],
+            ..MockNode::default()
+        };
+        let event = ProcessedBlockEvent {
+            block: b2,
+            tip: header_id(2),
+            tip_slot: Slot::from(2),
+            lib: header_id(1),
+            lib_slot: Slot::from(1),
+        };
+
+        let r = drive_with(&node, &mut Some(restored), ch, &[event]).await;
+
+        assert!(
+            r[0].shed.is_empty(),
+            "the message landed: nothing to orphan"
+        );
+        assert!(
+            r[0].result
+                .channel_update
+                .as_ref()
+                .is_none_or(|u| u.orphaned.is_empty())
+        );
+        assert!(
+            r[0].result
+                .finalized_items
+                .iter()
+                .flat_map(|tx| tx.ops.iter())
+                .any(|op| matches!(op, FinalizedOp::Inscription(i) if i.this_msg == m_id)),
+            "M is reported finalized"
+        );
+    }
+
+    /// After a restore, the first event may mine the original of a re-funded
+    /// publish: the same message under another hash. It is the restored
+    /// entry landing, not a new entry: nothing adopted, and the message stays
+    /// in the view under the hash that mined it.
+    #[tokio::test]
+    async fn restored_pending_mined_under_another_hash_is_neither_adopted_nor_dropped() {
+        use lb_core::mantle::{
+            ledger::{BoundedInputs, Outputs},
+            ops::transfer::TransferOp,
+        };
+        let ch = ChannelId::from([0u8; 32]);
+        let m = inscribe_op(ch, MsgId::root(), b"m");
+        let m_id = m.id();
+        let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
+        let original = unverified_tx_with_ops(vec![
+            Op::ChannelInscribe(m.clone()),
+            Op::Transfer(TransferOp::new(
+                BoundedInputs::from(NoteId::from(Fr::from(1u64))).into(),
+                Outputs::new([Note::new(50, pk)]),
+            )),
+        ]);
+        let original_hash = original.hash();
+        let rebuilt = unverified_tx_with_ops(vec![Op::ChannelInscribe(m)]);
+        assert_ne!(original_hash, rebuilt.hash());
+        let mut restored = TxState::new(header_id(0), MsgId::root());
+        restored
+            .submit_inscription(
+                rebuilt,
+                MsgId::root(),
+                m_id,
+                Inscription::new_unchecked(b"m".to_vec()),
+            )
+            .unwrap();
+        let b1 = api_block(1, 0, 1, vec![original]);
+
+        let mut state = Some(restored);
+        let r = drive(&mut state, ch, &[live_event(&b1)]).await;
+
+        assert!(r[0].shed.is_empty());
+        assert!(
+            r[0].result.channel_update.is_none(),
+            "our own message landing is not a view change"
+        );
+        let prefix: Vec<TxHash> = r[0]
+            .result
+            .common_prefix
+            .iter()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect();
+        assert_eq!(
+            prefix,
+            vec![original_hash],
+            "M stays in the view, under the mined hash"
+        );
+        let landed = state.as_ref().unwrap().pending_inscription(&original_hash);
+        assert!(landed.is_some_and(|p| p.this_msg == m_id));
     }
 
     /// After a restore, a pending P whose unfinalized parent M is rediscovered

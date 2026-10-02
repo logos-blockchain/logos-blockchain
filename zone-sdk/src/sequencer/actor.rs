@@ -10,13 +10,14 @@ use lb_core::mantle::{
     channel::ChannelState, ops::channel::ChannelId, traits::Hashable as _,
     transactions::hash::TxHash,
 };
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use super::{
     TARGET,
     block_fetch::{BlockEventResult, classify_shed_other, handle_block_event, orphan_from_shed},
     slot_clock::{SlotClock, slot_to_u64},
-    state::{ChannelUpdateInfo, TxState},
+    state::{ChannelUpdateInfo, RefundCandidate, TxState},
+    tx_builder::{fund_builder, sign_own_tx},
     types::{
         ChannelUpdate, ChannelUpdateTx, DepositInfo, Error, Event, FinalizedTx,
         SequencerChannelView, SequencerCheckpoint, TurnNotification,
@@ -420,6 +421,77 @@ where
         Some(Slot::from(closes_at))
     }
 
+    /// Rebuild own pending txs that stayed unmined past
+    /// `stale_refund_slots`: re-fund the stored channel ops and re-sign, so
+    /// the entry keeps its message id under a new tx hash and the following
+    /// `resubmit_pending` posts it. Runs only when a post could follow, on
+    /// our turn with a connected node: a rebuild that then waits for the
+    /// turn would only age its fresh fee note. A rebuild of a merely slow tx
+    /// is harmless: both claim the same lineage slot, so whichever lands
+    /// first kills the other.
+    pub(super) async fn refund_stale_pending(&mut self) {
+        let window = self.config.stale_refund_slots;
+        if window == 0 || !self.connected || !self.can_publish_inscription_now() {
+            return;
+        }
+        let (Some(state), Some(tip)) = (self.state.as_ref(), self.current_tip) else {
+            return;
+        };
+        let candidates = state.refund_candidates(tip, self.lib_slot, window);
+        let mut changed = false;
+        for candidate in candidates {
+            if self.posting.contains(&candidate.tx_hash) {
+                continue;
+            }
+            let old_hash = candidate.tx_hash;
+            match self.refund_one(candidate).await {
+                Ok(new_hash) => info!(
+                    target: TARGET,
+                    "Re-funded stale tx {} -> {}",
+                    hex::encode(old_hash.0),
+                    hex::encode(new_hash.0)
+                ),
+                Err(e) => {
+                    warn!(
+                        target: TARGET,
+                        "Failed to re-fund stale tx {}: {e}; retrying after another window",
+                        hex::encode(old_hash.0)
+                    );
+                    if let Some(state) = self.state.as_mut() {
+                        state.stamp_funding(&old_hash, self.lib_slot, None);
+                    }
+                }
+            }
+            changed = true;
+        }
+        if changed {
+            self.publish_checkpoint();
+        }
+    }
+
+    /// Re-fund, re-sign and swap in one candidate; returns its new hash.
+    async fn refund_one(&mut self, candidate: RefundCandidate) -> Result<TxHash, Error> {
+        let own_key_index = match (candidate.bundle, self.own_key_index) {
+            (false, _) => None,
+            (true, Some(index)) => Some(index),
+            (true, None) => {
+                return Err(Error::Network(
+                    "not on the accredited list; cannot re-sign the bundle".into(),
+                ));
+            }
+        };
+        let (tx, transfer_proof) =
+            fund_builder(&self.node, &self.config.funding, candidate.pre_fund.clone()).await?;
+        let signed = sign_own_tx(tx, transfer_proof, &self.signing_key, own_key_index)?;
+        let funded_at = self.lib_slot;
+        self.state
+            .as_mut()
+            .and_then(|state| {
+                state.replace_pending(&candidate.tx_hash, signed, candidate.pre_fund, funded_at)
+            })
+            .ok_or_else(|| Error::Network("no longer pending".into()))
+    }
+
     /// Re-post pending txs that aren't safe at the current tip by pushing
     /// a `post_transaction` batch into `in_flight_resubmit`. The drive
     /// loop's `next_event` arm drains it and marks successful posts;
@@ -567,6 +639,8 @@ where
             self.last_msg_id = s.channel_tip_at(tip);
         }
 
+        self.shed_expired_into(&mut orphaned, &mut seen);
+
         let channel_update = if orphaned.is_empty() {
             ChannelUpdate::Extension { adopted }
         } else {
@@ -583,6 +657,36 @@ where
         };
 
         (channel_update, deposits, finalized_items)
+    }
+
+    /// Shed into `orphaned` what is not mined on the current branch, was
+    /// funded longer ago than the refund window and cannot be rebuilt here;
+    /// own entries with pre-funding ops wait for the resubmit tick instead.
+    fn shed_expired_into(
+        &mut self,
+        orphaned: &mut Vec<ChannelUpdateTx>,
+        seen: &mut HashSet<TxHash>,
+    ) {
+        let (Some(state), Some(tip)) = (self.state.as_mut(), self.current_tip) else {
+            return;
+        };
+        let (expired, expired_other) =
+            state.shed_expired(tip, self.lib_slot, self.config.stale_refund_slots);
+        if expired.is_empty() && expired_other.is_empty() {
+            return;
+        }
+        self.last_msg_id = state.publish_parent(tip);
+        let shed = expired.into_iter().map(orphan_from_shed).chain(
+            expired_other
+                .into_iter()
+                .map(|tx| classify_shed_other(tx, self.channel_id)),
+        );
+        for tx in shed {
+            if seen.insert(tx.tx_hash()) {
+                warn!(target: TARGET, "Pending tx {} expired unmined; orphaned", hex::encode(tx.tx_hash().0));
+                orphaned.push(tx);
+            }
+        }
     }
 
     fn log_channel_update(update: &ChannelUpdateInfo) {
@@ -948,6 +1052,177 @@ mod tests {
         );
         assert_eq!(msg_ids(update.adopted()), vec![y_id]);
         assert_eq!(msg_ids(update.orphaned()), vec![z_id]);
+    }
+
+    /// Drive a sequencer with `stale_refund_slots = window` through a
+    /// publish and two LIB advances; returns how many fund calls the node
+    /// saw within `for_at_most` and the checkpoint published last. Posts
+    /// are no signal: the resubmit pass re-posts every unmined entry on each
+    /// tick regardless.
+    async fn drive_stale_publish(
+        window: u64,
+        for_at_most: std::time::Duration,
+    ) -> (usize, SequencerCheckpoint) {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let (up_tx, up_rx) = watch::channel(true);
+        let (fees_tx, mut fees_rx) = mpsc::channel(16);
+        let lib_event =
+            |block: &lb_common_http_client::ApiBlock, lib: u8, lib_slot: u64| ProcessedBlockEvent {
+                block: block.clone(),
+                tip: block.header.id,
+                tip_slot: block.header.slot,
+                lib: header_id(lib),
+                lib_slot: Slot::from(lib_slot),
+            };
+        let b1 = api_block(1, 0, 1, Vec::new());
+        let b2 = api_block(2, 1, 2, Vec::new());
+        let b3 = api_block(3, 2, 9, Vec::new());
+        // The second connection is gated behind `up` so the publish is in
+        // before the LIB advances age it.
+        let node = MockNode {
+            up: Some(up_rx),
+            funding_priority_fees: Some(fees_tx),
+            scripts: scripts(vec![
+                StreamScript {
+                    events: vec![live_event(&b1)],
+                    then: StreamEnd::Hang,
+                },
+                StreamScript {
+                    events: vec![lib_event(&b2, 1, 1), lib_event(&b3, 2, 8)],
+                    then: StreamEnd::Hang,
+                },
+            ]),
+            ..MockNode::default()
+        };
+        let config = SequencerConfig {
+            reconnect_delay: std::time::Duration::from_millis(20),
+            resubmit_interval: std::time::Duration::from_millis(20),
+            stale_refund_slots: window,
+            ..SequencerConfig::new(funding_config())
+        };
+        let mut sequencer =
+            ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
+        let client = sequencer.client();
+
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+        let publish = client.publish(b"stale".into());
+        tokio::select! {
+            result = publish => drop(result.expect("publish is accepted after Ready")),
+            () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+        }
+        up_tx.send(false).unwrap();
+
+        let deadline = tokio::time::Instant::now() + for_at_most;
+        let reconnect = tokio::time::sleep(std::time::Duration::from_millis(100));
+        tokio::pin!(reconnect);
+        let mut fund_calls = 0;
+        loop {
+            tokio::select! {
+                () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+                () = &mut reconnect => up_tx.send(true).unwrap(),
+                Some(_) = fees_rx.recv() => fund_calls += 1,
+                () = tokio::time::sleep_until(deadline) => break,
+            }
+            if fund_calls >= 2 {
+                break;
+            }
+        }
+        assert_eq!(
+            sequencer.state.as_ref().unwrap().pending_publish_count(),
+            1,
+            "a rebuild replaces the entry, it never duplicates it"
+        );
+        let checkpoint = sequencer
+            .subscribe_checkpoint()
+            .borrow()
+            .clone()
+            .expect("a checkpoint was published");
+        (fund_calls, checkpoint)
+    }
+
+    /// An own publish unmined past the window is re-funded once the LIB has
+    /// moved past it, and the checkpoint published right after carries the
+    /// rebuilt entry: its funding stamp is the LIB slot of the re-fund, not
+    /// of the publish.
+    #[tokio::test]
+    async fn stale_publish_is_refunded() {
+        let (fund_calls, checkpoint) =
+            drive_stale_publish(1, std::time::Duration::from_secs(5)).await;
+        assert_eq!(fund_calls, 2, "the publish's funding, then the rebuild's");
+        assert_eq!(checkpoint.funding.len(), 1);
+        assert_eq!(
+            checkpoint.funding[0].funded_at,
+            Slot::from(8),
+            "the checkpoint was republished after the re-fund"
+        );
+    }
+
+    /// The pre-funding ops of a publish survive a checkpoint round trip
+    /// through serde and a restore, so a restored sequencer can still re-fund
+    /// what it restored.
+    #[tokio::test]
+    async fn funding_record_survives_a_checkpoint_round_trip() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let config = SequencerConfig::new(funding_config());
+        let mut sequencer = ZoneSequencer::init_with_config(
+            channel_id,
+            sequencer_key.clone(),
+            MockNode::default(),
+            config.clone(),
+            None,
+        );
+        let client = sequencer.client();
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+        let publish = client.publish(b"restored".into());
+        let (result, checkpoint) = tokio::select! {
+            result = publish => result.expect("publish is accepted after Ready"),
+            () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+        };
+        let tx_hash = result.inscription_id();
+        assert_eq!(checkpoint.funding.len(), 1);
+        assert_eq!(checkpoint.funding[0].tx_hash, tx_hash);
+        assert!(checkpoint.funding[0].pre_fund.is_some());
+
+        let json = serde_json::to_string(&checkpoint).expect("checkpoint serializes");
+        let restored_checkpoint: SequencerCheckpoint =
+            serde_json::from_str(&json).expect("checkpoint deserializes");
+        let restored = ZoneSequencer::init_with_config(
+            channel_id,
+            sequencer_key,
+            MockNode::default(),
+            config,
+            Some(restored_checkpoint),
+        );
+
+        let state = restored.state.as_ref().expect("restored state");
+        let entry = state.pending_inscription(&tx_hash).expect("restored");
+        assert!(
+            entry.pre_fund.is_some(),
+            "the restored entry keeps its pre-funding ops"
+        );
+        assert_eq!(
+            entry.funded_at,
+            Some(checkpoint.funding[0].funded_at),
+            "and its stamp"
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_refund_window_never_refunds() {
+        let (fund_calls, checkpoint) =
+            drive_stale_publish(0, std::time::Duration::from_secs(1)).await;
+        assert_eq!(fund_calls, 1);
+        assert_eq!(checkpoint.funding[0].funded_at, Slot::from(0));
     }
 
     #[tokio::test]
@@ -2277,10 +2552,11 @@ mod tests {
     /// A configuration extends the mined config tip, never a config of ours
     /// still in flight: the proof is built for the mined key set, so pairing
     /// it with a pending config's id would produce a tx the ledger can only
-    /// reject. Two configs issued back to back contest the same slot and the
-    /// loser is shed once the winner lands.
+    /// reject. A config position has one pending continuation, so a second
+    /// config on the same mined tip is refused until the first lands or
+    /// expires.
     #[tokio::test]
-    async fn consecutive_channel_configs_claim_the_mined_config_tip() {
+    async fn a_second_config_on_a_pending_config_position_is_refused() {
         let own_key = Ed25519Key::from_bytes(&[7; 32]);
         let mut sequencer = ready_sequencer_with_channel(None, own_key.clone()).await;
 
@@ -2295,7 +2571,7 @@ mod tests {
             )
             .await
             .expect("first config should be accepted");
-        let (_receipt, second_tx) = sequencer
+        let second = sequencer
             .handle()
             .channel_config(
                 VerifiedChannelKeys::new_unchecked(vec![own_key.public_key()]),
@@ -2304,19 +2580,16 @@ mod tests {
                 1,
                 1,
             )
-            .await
-            .expect("second config should be accepted");
+            .await;
 
-        let first = config_op_of(&first_tx);
-        let second = config_op_of(&second_tx);
         assert_eq!(
-            first.parent,
+            config_op_of(&first_tx).parent,
             MsgId::root(),
             "the config claiming an unclaimed channel must be rooted at ZERO"
         );
-        assert_eq!(
-            second.parent, first.parent,
-            "a config in flight must not become the parent of the next one"
+        assert!(
+            matches!(second, Err(Error::ChannelStateChanged(_))),
+            "the position is taken while the first config pends: {second:?}"
         );
     }
 }

@@ -38,9 +38,9 @@ use super::{
     slot_clock::SlotClock,
     state::{BlockChannelTx, ParentTaken, TxState},
     tx_builder::{
-        assemble_channel_config_tx, build_and_fund_config, build_atomic_bundle_ops_proofs,
-        create_channel_config_tx, create_inscribe_tx, find_own_key_index, fund_ops,
-        prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
+        assemble_channel_config_tx, build_and_fund_config, create_channel_config_tx,
+        create_inscribe_tx, find_own_key_index, fund_ops, prepare_tx as build_prepare_tx,
+        sign_own_tx, sign_tx as build_sign_tx,
     },
     types::{
         AtomicWithdrawInfo, ChannelWalletView, Error, Event, FundingConfig, InscriptionInfo,
@@ -267,6 +267,7 @@ where
                 lib_slot,
                 channel_notes,
                 finalized_config,
+                funding,
             } = cp;
             let finalized_msg =
                 restored_pending_channel_tip(&pending_txs, channel_id).unwrap_or(last_msg_id);
@@ -278,6 +279,7 @@ where
                     warn!(target: TARGET, "Dropping checkpointed tx {hash:?}: {taken}");
                 }
             }
+            tx_state.restore_fundings(funding, lib_slot);
             (Some(tx_state), lib_slot, last_msg_id, false)
         } else {
             info!(target: TARGET, "Starting fresh (no checkpoint)");
@@ -542,6 +544,7 @@ where
                 None
             }
             _ = self.resubmit_interval.tick(), if self.current_tip.is_some() => {
+                self.refund_stale_pending().await;
                 self.resubmit_pending();
                 None
             }
@@ -725,7 +728,7 @@ where
         self.ensure_fundable()?;
 
         let parent = self.compute_publish_parent();
-        let (signed_tx, new_msg_id) = create_inscribe_tx(
+        let (signed_tx, new_msg_id, pre_fund) = create_inscribe_tx(
             &self.node,
             &self.config.funding,
             self.channel_id,
@@ -755,6 +758,7 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         state.submit_inscription(signed_tx.clone(), parent, new_msg_id, data)?;
+        state.stamp_funding(&id, self.lib_slot, Some(pre_fund));
         self.last_msg_id = new_msg_id;
 
         if self.can_publish_inscription_now() {
@@ -789,7 +793,6 @@ where
     /// computation, status queueing and checkpointing. Scoped to single-signer
     /// (centralized) channels — only the sequencer's own signature proves the
     /// transfer and withdraw ops.
-    #[expect(clippy::too_many_lines, reason = "single bundle assembly pipeline")]
     pub(super) async fn do_publish_atomic_withdraw(
         &mut self,
         inscribe: Inscription,
@@ -850,15 +853,9 @@ where
             Op::ChannelWithdraw(withdraw_op.clone()),
         ];
 
-        let (tx, transfer_proof) = fund_ops(&self.node, &self.config.funding, ops).await?;
-        let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
-        let ops_proofs =
-            build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
-        let signed_tx = SignedOps::from_parts(tx, ops_proofs).map_err(|error| {
-            Error::Network(format!(
-                "failed to build signed atomic withdraw tx: {error:?}"
-            ))
-        })?;
+        let (tx, transfer_proof, pre_fund) =
+            fund_ops(&self.node, &self.config.funding, ops).await?;
+        let signed_tx = sign_own_tx(tx, transfer_proof, &self.signing_key, Some(own_key_index))?;
 
         let tx_hash = signed_tx.hash();
         let withdraw_infos = vec![WithdrawInfo {
@@ -889,6 +886,7 @@ where
             withdraw_infos.clone(),
             outputs.clone(),
         )?;
+        state.stamp_funding(&tx_hash, self.lib_slot, Some(pre_fund));
         self.last_msg_id = msg_id;
 
         if self.can_publish_inscription_now() {
@@ -1034,13 +1032,9 @@ where
             Op::ChannelTransfer(transfer_op),
         ];
 
-        let (tx, transfer_proof) = fund_ops(&self.node, &self.config.funding, ops).await?;
-        let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
-        let ops_proofs =
-            build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
-        let signed_tx = SignedOps::from_parts(tx, ops_proofs).map_err(|error| {
-            Error::Network(format!("failed to build signed atomic fund tx: {error:?}"))
-        })?;
+        let (tx, transfer_proof, pre_fund) =
+            fund_ops(&self.node, &self.config.funding, ops).await?;
+        let signed_tx = sign_own_tx(tx, transfer_proof, &self.signing_key, Some(own_key_index))?;
 
         let tx_hash = signed_tx.hash();
 
@@ -1062,6 +1056,7 @@ where
             inscribe.clone(),
             consumed_inputs.clone(),
         )?;
+        state.stamp_funding(&tx_hash, self.lib_slot, Some(pre_fund));
         self.last_msg_id = msg_id;
 
         if self.can_publish_inscription_now() {
@@ -1202,6 +1197,7 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         state.submit_other(signed_tx.clone(), self.channel_id)?;
+        state.stamp_funding(&tx_hash, self.lib_slot, None);
 
         info!(target: TARGET, "Submitted channel_config transaction {}", hex::encode(tx_hash.0));
 
@@ -1269,6 +1265,14 @@ where
             (Some(state), Some(tip)) => state.config_tip_at(tip),
             _ => MsgId::root(),
         };
+
+        // Refuse early, before signatures are collected over it, if a config
+        // already pends on this parent; expiry frees the position.
+        if let Some(state) = self.state.as_ref()
+            && let Some(by) = state.pending_config_child(parent)
+        {
+            return Err(ParentTaken { parent, by }.into());
+        }
 
         let (tx, transfer_proof) = build_and_fund_config(
             &self.node,
@@ -1343,6 +1347,7 @@ where
         let state = self.state.as_mut().unwrap();
         let id = tx.hash();
         let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id)?;
+        state.stamp_funding(&id, self.lib_slot, None);
         let parent_msg = self.last_msg_id;
         // The tip the tx leaves behind is defined by its inscriptions (the
         // last one); a tx without any — e.g. a pure config — leaves the tip
@@ -1515,6 +1520,7 @@ pub(super) fn build_checkpoint(
         lib_slot,
         channel_notes: state.channel_notes_base(),
         finalized_config: state.finalized_config(),
+        funding: state.funding_records(),
     }
 }
 

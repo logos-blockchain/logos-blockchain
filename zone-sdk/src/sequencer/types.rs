@@ -18,7 +18,7 @@ use lb_core::{
             },
         },
         traits::Hashable as _,
-        transactions::{Ops, TxHash, states::Unverified},
+        transactions::{MantleTxBuilder, Ops, TxHash, states::Unverified},
     },
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
@@ -29,6 +29,9 @@ use super::tx_builder::sign_prepared;
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
+/// Long enough that a merely slow tx is not rebuilt: a valid tx the node
+/// holds lands within a few blocks, so one unmined this long is stuck.
+const DEFAULT_STALE_REFUND_SLOTS: u64 = 30;
 
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
@@ -57,6 +60,23 @@ pub struct SequencerCheckpoint {
     /// (matching the old reset-to-root behavior).
     #[serde(default = "MsgId::root")]
     pub finalized_config: MsgId,
+    /// Funding record of each pending tx this sequencer submitted.
+    #[serde(default)]
+    pub funding: Vec<PendingFunding>,
+}
+
+/// How a pending tx was funded: when, and with which channel ops, so a stale
+/// one can be re-funded.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PendingFunding {
+    pub tx_hash: TxHash,
+    /// The LIB slot the tx was funded, or last re-funded, at; expiry counts
+    /// from it.
+    pub funded_at: Slot,
+    /// The channel ops before funding, for a tx the sequencer built and
+    /// signed itself; `None` for one it only submitted, which is shed when
+    /// stale instead of rebuilt.
+    pub pre_fund: Option<MantleTxBuilder>,
 }
 
 /// Result of a publish operation.
@@ -314,6 +334,9 @@ pub struct SequencerConfig {
     pub publish_channel_capacity: usize,
     pub min_slots_remaining_in_turn: u64,
     pub max_pending_publish_depth: usize,
+    /// LIB slots a pending tx may stay unmined before it is re-funded or
+    /// orphaned; `0` disables.
+    pub stale_refund_slots: u64,
     /// Fund transactions from the node's wallet before signing.
     pub funding: FundingConfig,
 }
@@ -328,6 +351,7 @@ impl SequencerConfig {
             publish_channel_capacity: DEFAULT_PUBLISH_CHANNEL_CAPACITY,
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: 10,
+            stale_refund_slots: DEFAULT_STALE_REFUND_SLOTS,
             funding,
         }
     }
@@ -490,9 +514,9 @@ pub enum ChannelUpdate {
         /// only after it was reported orphaned.
         adopted: Vec<ChannelUpdateTx>,
         /// Entries that left the view: ones that were on chain, plus our own
-        /// pending that can no longer land. Revert from state and treat as
-        /// republish candidates; see [`ChannelUpdateTx`] for how to republish
-        /// each variant.
+        /// pending that can no longer land, plus stale multi-sig and custom
+        /// txs. Revert from state and treat as republish candidates; see
+        /// [`ChannelUpdateTx`] for how to republish each variant.
         orphaned: Vec<ChannelUpdateTx>,
     },
 }

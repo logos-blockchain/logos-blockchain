@@ -28,7 +28,7 @@ use super::{
     balance_update_payload, collect_indexed_messages, collect_indexed_messages_exactly_once,
     ensure_zone_transactions_included,
     errors::{log_step_error, zone_step_error},
-    parse_balance_payload, publish_message_with_retry,
+    parse_balance_payload, publish_message_with_retry, replay_finalized_history,
     tables::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
         custom_tx_rows, generated_zone_message_batches, generated_zone_message_sequencers,

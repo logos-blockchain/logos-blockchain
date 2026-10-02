@@ -3,12 +3,12 @@ use super::{
     HashSet, Inscription, Step, StepError, StepResult, assert_sorted_outcome,
     collect_indexed_messages, collect_indexed_messages_exactly_once,
     ensure_zone_transactions_included, log_step_error, make_inscription, parse_balance_payload,
-    scan_indexer_for_payloads, single_column_table, wait_for_channel_transfer_input_count,
-    wait_for_channel_wallet_counts, wait_for_channel_wallet_note, wait_for_deposit,
-    wait_for_exact_indexed_payload_count, wait_for_finalized_deposit_via_sequencer,
-    wait_for_finalized_withdraw_via_sequencer, wait_for_indexer_unordered,
-    wait_for_transactions_finalized, wait_for_withdraw, wait_until_sorted_conflict_settles,
-    zone_step_error,
+    replay_finalized_history, scan_indexer_for_payloads, single_column_table,
+    wait_for_channel_transfer_input_count, wait_for_channel_wallet_counts,
+    wait_for_channel_wallet_note, wait_for_deposit, wait_for_exact_indexed_payload_count,
+    wait_for_finalized_deposit_via_sequencer, wait_for_finalized_withdraw_via_sequencer,
+    wait_for_indexer_unordered, wait_for_transactions_finalized, wait_for_withdraw,
+    wait_until_sorted_conflict_settles, zone_step_error,
 };
 
 #[cucumber::then("the channel view contract holds for all zone sequencers")]
@@ -426,6 +426,54 @@ async fn step_zone_indexer_returns_all_messages_exactly_once_any_order(
         .map_err(|error| zone_step_error(step, &error))?;
 
     ensure_indexed_payloads_match_once(&expected_set, &seen, &all_payloads)
+}
+
+/// The message finalized, but not as the tx the publish returned: the SDK
+/// re-funded it under a new hash after the original was stuck.
+#[cucumber::then(expr = "zone message {string} finalized under a different tx hash than submitted")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_zone_message_finalized_under_a_rebuilt_tx(
+    world: &mut CucumberWorld,
+    step: &Step,
+    message_alias: String,
+) -> StepResult {
+    let message = log_step_error(step, world.zone.published_message(&message_alias))?;
+    let submitted = message
+        .inscription_id
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Zone message '{message_alias}' has no submitted tx hash"),
+        })?;
+    let payload = message.payload.clone();
+    let reader = log_step_error(step, world.zone.indexer())?;
+    let history = replay_finalized_history(reader)
+        .await
+        .map_err(|error| zone_step_error(step, &error))?;
+
+    let finalized_as: Vec<_> = history
+        .iter()
+        .filter(|tx| {
+            tx.ops.iter().any(|op| {
+                matches!(op, lb_zone_sdk::sequencer::FinalizedOp::Inscription(info) if info.payload == payload)
+            })
+        })
+        .map(|tx| tx.tx_hash)
+        .collect();
+    if finalized_as.is_empty() {
+        return Err(StepError::LogicalError {
+            message: format!("Zone message '{message_alias}' is not finalized"),
+        });
+    }
+    if finalized_as.contains(&submitted) {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "Zone message '{message_alias}' finalized as the tx it was submitted with; nothing was re-funded"
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn published_payload_set(
