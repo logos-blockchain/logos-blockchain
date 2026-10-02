@@ -26,7 +26,7 @@ use crate::{
     api::types::block::Block,
     callbacks::{BoxedCallback, CCallback, into_boxed_callback},
     errors::OperationStatusCode,
-    logging, return_error_if_null_pointer,
+    logging, return_error_if_null_pointer, unwrap_or_return_error,
 };
 
 #[derive(Serialize)]
@@ -61,7 +61,7 @@ pub fn subscribe_to_new_blocks_sync(
     node: &LogosBlockchainNode,
     mut callback_per_block: BoxedCallback<*const c_char>,
 ) -> OperationStatus {
-    let runtime_handler = node.get_runtime_handle();
+    let runtime_handler = unwrap_or_return_error!(node.get_runtime_handle());
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
         let Ok(storage) =
@@ -147,6 +147,11 @@ pub fn subscribe_to_new_blocks_sync(
 ///
 /// An [`OperationStatus`] indicating success or failure.
 ///
+/// The callback runs on one of the node's own threads. It must not call back
+/// into the node: every function taking a [`LogosBlockchainNode`] fails with
+/// [`OperationStatusCode::RuntimeError`] when called from inside a callback.
+/// Hand the event to another thread instead.
+///
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
@@ -178,7 +183,7 @@ pub fn subscribe_to_processed_blocks_sync(
     node: &LogosBlockchainNode,
     mut on_event: BoxedCallback<*const c_char>,
 ) -> OperationStatus {
-    let runtime_handler = node.get_runtime_handle();
+    let runtime_handler = unwrap_or_return_error!(node.get_runtime_handle());
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
         let stream = match lb_api_service::http::mantle::get_new_blocks_stream::<
@@ -230,6 +235,11 @@ pub fn subscribe_to_processed_blocks_sync(
 /// An [`OperationStatus`] indicating whether the subscription was established.
 /// On error, the callback is never called.
 ///
+/// The callback runs on one of the node's own threads. It must not call back
+/// into the node: every function taking a [`LogosBlockchainNode`] fails with
+/// [`OperationStatusCode::RuntimeError`] when called from inside a callback.
+/// Hand the event to another thread instead.
+///
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
@@ -249,7 +259,7 @@ pub fn subscribe_to_lib_blocks_sync(
     node: &LogosBlockchainNode,
     mut on_event: BoxedCallback<*const c_char>,
 ) -> OperationStatus {
-    let runtime_handler = node.get_runtime_handle();
+    let runtime_handler = unwrap_or_return_error!(node.get_runtime_handle());
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
         let stream = match lb_api_service::http::mantle::lib_block_stream(overwatch).await {
@@ -303,6 +313,11 @@ pub fn subscribe_to_lib_blocks_sync(
 ///
 /// An [`OperationStatus`] indicating whether the subscription was established.
 /// On error, the callback is never called.
+///
+/// The callback runs on one of the node's own threads. It must not call back
+/// into the node: every function taking a [`LogosBlockchainNode`] fails with
+/// [`OperationStatusCode::RuntimeError`] when called from inside a callback.
+/// Hand the event to another thread instead.
 ///
 /// # Safety
 ///

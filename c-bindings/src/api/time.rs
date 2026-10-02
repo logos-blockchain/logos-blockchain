@@ -34,7 +34,7 @@ pub struct TimeInfo {
 /// A `Result` containing the [`TimeInfo`] on success, or an
 /// [`OperationStatus`] error on failure.
 pub(crate) fn get_time_info_sync(node: &LogosBlockchainNode) -> StatusResult<TimeInfo> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     let overwatch_handle = node.get_overwatch_handle();
 
     runtime_handle.block_on(async move {

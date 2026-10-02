@@ -32,7 +32,7 @@ pub(crate) fn get_block_sync(
     node: &LogosBlockchainNode,
     header_id: HeaderId,
 ) -> StatusResult<CString> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     let overwatch_handle = node.get_overwatch_handle();
 
     let block = runtime_handle
@@ -137,7 +137,7 @@ pub(crate) fn get_transaction_sync(
     node: &LogosBlockchainNode,
     tx_hash: lb_core::mantle::TxHash,
 ) -> StatusResult<CString> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     let overwatch_handle = node.get_overwatch_handle();
 
     let tx = runtime_handle
@@ -240,7 +240,7 @@ pub(crate) fn get_blocks_sync(
     from_slot: usize,
     to_slot: usize,
 ) -> StatusResult<CString> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     let overwatch_handle = node.get_overwatch_handle();
 
     let blocks = runtime_handle

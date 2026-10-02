@@ -99,7 +99,7 @@ impl From<lb_chain_service::ChainServiceInfo> for CryptarchiaInfo {
 pub(crate) fn get_cryptarchia_info_sync(
     node: &LogosBlockchainNode,
 ) -> StatusResult<lb_chain_service::ChainServiceInfo> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
 
     let Ok(info) = runtime_handle.block_on(lb_api_service::http::consensus::cryptarchia_info(
         node.get_overwatch_handle(),
@@ -182,7 +182,7 @@ pub(crate) fn get_block_events_sync(
     node: &LogosBlockchainNode,
     header_id: HeaderId,
 ) -> StatusResult<CString> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     let overwatch_handle = node.get_overwatch_handle();
 
     let events = runtime_handle.block_on(async move {

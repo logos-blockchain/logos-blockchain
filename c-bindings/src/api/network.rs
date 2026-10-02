@@ -52,7 +52,7 @@ impl From<Libp2pInfo> for NetworkInfo {
 /// A [`Result`] containing the swarm information on success, or an
 /// [`OperationStatus`] error on failure.
 pub(crate) fn get_network_info_sync(node: &LogosBlockchainNode) -> StatusResult<Libp2pInfo> {
-    node.get_runtime_handle()
+    node.get_runtime_handle()?
         .block_on(libp2p_info(node.get_overwatch_handle()))
         .map_err(|error| {
             OperationStatus::error(

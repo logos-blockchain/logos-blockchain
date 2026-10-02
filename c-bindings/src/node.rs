@@ -12,6 +12,7 @@ use tokio::runtime::{Handle, Runtime};
 use crate::{
     errors::{OperationStatus, OperationStatusCode},
     logging,
+    result::StatusResult,
 };
 
 // Define an opaque type for the complex Overwatch type
@@ -79,15 +80,19 @@ impl LogosBlockchainNode {
         .handle()
     }
 
-    #[must_use]
-    pub(crate) fn get_runtime_handle(&self) -> &Handle {
-        unsafe {
+    /// The handle the node functions block on.
+    ///
+    /// Fails when the calling thread cannot block: see
+    /// [`ensure_blocking_allowed`].
+    pub(crate) fn get_runtime_handle(&self) -> StatusResult<&Handle> {
+        ensure_blocking_allozwed()?;
+        Ok(unsafe {
             self.runtime
                 .cast::<Runtime>()
                 .as_ref()
                 .expect("A valid `tokio::Runtime` not null pointer")
         }
-        .handle()
+        .handle())
     }
 
     /// Gets ownership of the inner [`LogosBlockchainOverwatch`] and [`Runtime`]
@@ -122,6 +127,23 @@ impl LogosBlockchainNode {
         overwatch.blocking_wait_finished();
         OperationStatus::OK
     }
+}
+
+/// Fails when the calling thread belongs to an async runtime.
+///
+/// Every node function is a synchronous wrapper that blocks on the node's
+/// runtime, and blocking on a thread that is itself driving async tasks
+/// panics. That is the thread subscription callbacks run on, so this is what
+/// turns a call made from inside a callback into an error.
+pub(crate) fn ensure_blocking_allowed() -> StatusResult<()> {
+    if Handle::try_current().is_ok() {
+        return Err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            "This function blocks and cannot be called from an async runtime thread, such as \
+             from inside a subscription callback.",
+        ));
+    }
+    Ok(())
 }
 
 // Implement Drop to prevent memory leaks

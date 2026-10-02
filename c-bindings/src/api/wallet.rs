@@ -75,7 +75,7 @@ type WalletNotesData = (lb_core::header::HeaderId, Vec<(CoreNoteId, Value)>);
 pub(crate) fn get_known_addresses_sync(
     node: &LogosBlockchainNode,
 ) -> StatusResult<Vec<ZkPublicKey>> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     runtime_handle.block_on(async {
         let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
             node.get_overwatch_handle(),
@@ -273,7 +273,7 @@ pub(crate) fn get_claimable_vouchers_sync(
     node: &LogosBlockchainNode,
     tip: Option<CoreHeaderId>,
 ) -> StatusResult<TipResponse<ClaimableVouchersInfo>> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     runtime_handle.block_on(async {
         let mut status_watcher = node
             .get_overwatch_handle()
@@ -412,7 +412,7 @@ pub(crate) fn get_balance_sync(
     tip: lb_core::header::HeaderId,
     wallet_address: ZkPublicKey,
 ) -> StatusResult<Option<Value>> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     runtime_handle
         .block_on(async {
             let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
@@ -514,7 +514,7 @@ pub(crate) fn get_wallet_notes_sync(
     tip: lb_core::header::HeaderId,
     wallet_address: ZkPublicKey,
 ) -> StatusResult<Option<WalletNotesData>> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     runtime_handle
         .block_on(async {
             let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
@@ -634,7 +634,7 @@ pub(crate) fn get_leader_aged_notes_sync(
     node: &LogosBlockchainNode,
     tip: Option<CoreHeaderId>,
 ) -> StatusResult<TipResponse<LeaderAgedNotesInfo>> {
-    node.get_runtime_handle().block_on(async {
+    node.get_runtime_handle()?.block_on(async {
         let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
             node.get_overwatch_handle(),
         )
@@ -827,7 +827,7 @@ pub(crate) fn transfer_funds_sync(
     recipient_public_key: ZkPublicKey,
     amount: u64,
 ) -> StatusResult<SignedOps<Preverified, StandardMode>> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
         let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
@@ -1074,7 +1074,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
     funding_public_keys: Vec<ZkPublicKey>,
     max_tx_fee: GasCost,
 ) -> StatusResult<SignedOps<Preverified, StandardMode>> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
         let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
@@ -1372,7 +1372,7 @@ pub(crate) fn channel_deposit_sync(
     amount: Value,
     metadata: Metadata,
 ) -> StatusResult<SignedOps<Preverified, StandardMode>> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
         let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
@@ -1581,7 +1581,7 @@ pub(crate) fn wallet_fund_tx_sync(
     node: &LogosBlockchainNode,
     request: WalletFundRequestBody,
 ) -> StatusResult<WalletFundResponseBody> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
         let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
@@ -1816,7 +1816,7 @@ pub unsafe extern "C" fn submit_signed_transaction(
     };
 
     let transaction_hash = preverified_tx.hash().0;
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = unwrap_or_return_error!(node.get_runtime_handle());
     let submit_result = runtime_handle.block_on(async {
         mempool::add_tx(node.get_overwatch_handle(), preverified_tx, Hashable::hash).await
     });
