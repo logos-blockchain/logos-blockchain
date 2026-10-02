@@ -18,7 +18,7 @@ use lb_cryptarchia_engine::{
     era::{Era, EraInForce, EraVersion, Eras},
 };
 use lb_cryptarchia_sync::GetTipResponse;
-use lb_era_parameters::EraDefinition;
+use lb_era_parameters::{EraDefinition, ProtocolNames};
 use lb_log_targets::chain;
 use lb_network_service::{
     NetworkService,
@@ -149,8 +149,8 @@ where
         }
     }
 
-    /// The topic the proposals of `era` are gossiped on.
-    fn proposal_topic(&self, era: Era) -> &str {
+    /// The protocol and topic names of `era`.
+    fn protocol_names(&self, era: Era) -> &ProtocolNames {
         &self
             .settings
             .eras
@@ -159,7 +159,6 @@ where
             .entry
             .parameters
             .protocol_names
-            .cryptarchia_topic
     }
 
     async fn get_connected_peers(
@@ -275,7 +274,7 @@ where
         }
         let previously: Vec<Era> = previous.into_iter().flat_map(EraInForce::eras).collect();
         for era in in_force.eras().filter(|era| !previously.contains(era)) {
-            let topic = self.proposal_topic(era);
+            let topic = &self.protocol_names(era).cryptarchia_topic;
             tracing::debug!(
                 target: LOG_TARGET,
                 era = era.into_inner(),
@@ -287,13 +286,28 @@ where
             .into_iter()
             .filter(|era| !in_force.eras().any(|in_force| in_force == *era))
         {
-            let topic = self.proposal_topic(era);
+            let topic = &self.protocol_names(era).cryptarchia_topic;
             tracing::debug!(
                 target: LOG_TARGET,
                 era = era.into_inner(),
                 "Unsubscribing chain-network adapter from pubsub topic {topic}"
             );
             Self::send_pubsub_command(&self.network_relay, Unsubscribe(topic.into())).await;
+        }
+        // Blocks are synced over the protocol of the era in force, falling back
+        // to the retiring era's with a peer that has not moved on yet.
+        let protocols = in_force
+            .eras()
+            .map(|era| self.protocol_names(era).chain_sync.clone())
+            .collect();
+        if let Err(error) = self
+            .network_relay
+            .send(NetworkMsg::Process(Command::ChainSync(
+                ChainSyncCommand::SetProtocols { protocols },
+            )))
+            .await
+        {
+            tracing::error!(target: LOG_TARGET, "error setting the chain sync protocols: {error}");
         }
     }
 

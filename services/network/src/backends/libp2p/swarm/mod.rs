@@ -59,15 +59,23 @@ const LOG_TARGET: &str = network_service::backends::libp2p::ROOT;
 #[derive(Debug)]
 struct ProtocolContract {
     kademlia_protocol: Libp2pStreamProtocol,
-    chain_sync_protocol: Libp2pStreamProtocol,
+    /// The chain sync protocols spoken: a peer that speaks one of them can be
+    /// synced with.
+    chain_sync_protocols: Vec<Libp2pStreamProtocol>,
 }
 
 impl ProtocolContract {
     fn from_config(config: &lb_libp2p::SwarmConfig) -> Self {
         Self {
             kademlia_protocol: config.kad_protocol_name.clone().into_inner(),
-            chain_sync_protocol: config.chain_sync_protocol_name.clone().into_inner(),
+            chain_sync_protocols: vec![config.chain_sync_protocol_name.clone().into_inner()],
         }
+    }
+
+    fn speaks_chain_sync(&self, advertised_protocols: &HashSet<Libp2pStreamProtocol>) -> bool {
+        self.chain_sync_protocols
+            .iter()
+            .any(|protocol| advertised_protocols.contains(protocol))
     }
 }
 
@@ -330,14 +338,22 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     }
 
     fn chainsync_eligible_peers(&self) -> HashSet<PeerId> {
-        self.peers_supporting_protocol(&self.protocol_contract.chain_sync_protocol)
-    }
-
-    fn peers_supporting_protocol(&self, protocol: &Libp2pStreamProtocol) -> HashSet<PeerId> {
         self.peer_advertised_protocols
             .iter()
-            .filter_map(|(peer_id, protocols)| protocols.contains(protocol).then_some(*peer_id))
+            .filter_map(|(peer_id, protocols)| {
+                self.protocol_contract
+                    .speaks_chain_sync(protocols)
+                    .then_some(*peer_id)
+            })
             .collect()
+    }
+
+    /// Speaks `protocols` for chain sync from now on, the preferred first.
+    fn set_chain_sync_protocols(&mut self, protocols: Vec<Libp2pStreamProtocol>) {
+        self.protocol_contract
+            .chain_sync_protocols
+            .clone_from(&protocols);
+        self.swarm.set_chain_sync_protocols(protocols);
     }
 
     /// A peer can be disconnected but still remain known through Kademlia and
@@ -810,6 +826,42 @@ mod tests {
         assert_eq!(
             handler.chainsync_eligible_peers(),
             HashSet::from([supported])
+        );
+    }
+
+    #[tokio::test]
+    async fn peers_advertising_any_chainsync_protocol_spoken_are_eligible() {
+        let mut handler = create_handler();
+        let (retiring, next, both) = (PeerId::random(), PeerId::random(), PeerId::random());
+        for (peer, protocols) in [
+            (retiring, &["/chainsync/test"][..]),
+            (next, &["/chainsync/next"][..]),
+            (both, &["/chainsync/test", "/chainsync/next"][..]),
+        ] {
+            handler
+                .peer_advertised_protocols
+                .insert(peer, advertised_protocols(protocols));
+        }
+
+        // A transition: both the next and the retiring protocol are spoken.
+        handler.handle_chainsync_command(ChainSyncCommand::SetProtocols {
+            protocols: vec![
+                StreamProtocol::new("/chainsync/next"),
+                StreamProtocol::new("/chainsync/test"),
+            ],
+        });
+        assert_eq!(
+            handler.chainsync_eligible_peers(),
+            HashSet::from([retiring, next, both])
+        );
+
+        // The transition is over: only the next protocol is spoken.
+        handler.handle_chainsync_command(ChainSyncCommand::SetProtocols {
+            protocols: vec![StreamProtocol::new("/chainsync/next")],
+        });
+        assert_eq!(
+            handler.chainsync_eligible_peers(),
+            HashSet::from([next, both])
         );
     }
 

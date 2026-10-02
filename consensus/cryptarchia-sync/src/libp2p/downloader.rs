@@ -25,10 +25,10 @@ impl Downloader {
     pub async fn send_tip_request(
         peer_id: PeerId,
         control: &mut Control,
-        protocol_name: StreamProtocol,
+        protocols: Vec<StreamProtocol>,
         reply_sender: oneshot::Sender<Result<GetTipResponse, ChainSyncError>>,
     ) -> Result<TipRequestStream, ChainSyncError> {
-        let mut stream = open_stream(peer_id, control, protocol_name).await?;
+        let mut stream = open_stream(peer_id, control, &protocols).await?;
 
         let tip_request = RequestMessage::GetTip;
         send_message(peer_id, &mut stream, &tip_request).await?;
@@ -41,10 +41,10 @@ impl Downloader {
         peer_id: PeerId,
         mut control: Control,
         request: DownloadBlocksRequest,
-        protocol_name: StreamProtocol,
+        protocols: Vec<StreamProtocol>,
         reply_sender: oneshot::Sender<BoxedStream<Result<SerialisedBlock, ChainSyncError>>>,
     ) -> Result<BlocksRequestStream, ChainSyncError> {
-        let mut stream = open_stream(peer_id, &mut control, protocol_name).await?;
+        let mut stream = open_stream(peer_id, &mut control, &protocols).await?;
 
         let download_request = RequestMessage::DownloadBlocksRequest(request);
 

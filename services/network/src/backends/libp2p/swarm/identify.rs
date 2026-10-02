@@ -31,8 +31,9 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         let advertised_protocols = info.protocols.into_iter().collect::<HashSet<_>>();
         let supports_kademlia =
             advertised_protocols.contains(&self.protocol_contract.kademlia_protocol);
-        let supports_chainsync =
-            advertised_protocols.contains(&self.protocol_contract.chain_sync_protocol);
+        let supports_chainsync = self
+            .protocol_contract
+            .speaks_chain_sync(&advertised_protocols);
         tracing::debug!(
             target: LOG_TARGET,
             peer = %peer_id,

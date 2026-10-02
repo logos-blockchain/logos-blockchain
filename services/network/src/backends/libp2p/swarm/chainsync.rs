@@ -3,6 +3,7 @@ use std::{collections::HashSet, fmt::Debug};
 use lb_libp2p::{
     PeerId,
     cryptarchia_sync::{BoxedStream, ChainSyncError, GetTipResponse, HeaderId, SerialisedBlock},
+    protocol_name::StreamProtocol,
 };
 use lb_log_targets::network_service;
 use rand::RngCore;
@@ -30,12 +31,20 @@ pub enum ChainSyncCommand {
         additional_blocks: HashSet<HeaderId>,
         reply_sender: oneshot::Sender<SerialisedBlockStream>,
     },
+    /// Speaks `protocols` for chain sync from now on, the preferred first:
+    /// accepts the requests of each, and of no other, and requests a peer
+    /// with the first of them it speaks.
+    SetProtocols { protocols: Vec<StreamProtocol> },
 }
 
 impl Debug for ChainSyncCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EligiblePeers { .. } => f.debug_struct("EligiblePeers").finish(),
+            Self::SetProtocols { protocols } => f
+                .debug_struct("SetProtocols")
+                .field("protocols", protocols)
+                .finish(),
             Self::RequestTip { peer, .. } => {
                 f.debug_struct("RequestTip").field("peer", peer).finish()
             }
@@ -63,10 +72,18 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         clippy::cognitive_complexity,
         reason = "The command handler keeps all chainsync command dispatch in one place."
     )]
-    pub(super) fn handle_chainsync_command(&self, command: ChainSyncCommand) {
+    pub(super) fn handle_chainsync_command(&mut self, command: ChainSyncCommand) {
         match command {
             ChainSyncCommand::EligiblePeers { reply_sender } => {
                 log_error!(reply_sender.send(self.chainsync_eligible_peers()));
+            }
+            ChainSyncCommand::SetProtocols { protocols } => {
+                let protocols: Vec<_> = protocols
+                    .into_iter()
+                    .map(StreamProtocol::into_inner)
+                    .collect();
+                tracing::debug!(target: LOG_TARGET, ?protocols, "speaking chain sync protocols");
+                self.set_chain_sync_protocols(protocols);
             }
             ChainSyncCommand::RequestTip { peer, reply_sender } => {
                 if let Err(e) = self.swarm.request_tip(peer, reply_sender) {
