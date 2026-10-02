@@ -1,15 +1,20 @@
 //! FFI safety audit tests.
 //!
-//! These drive the exported C API the way a C caller would, and are meant to
-//! be run under valgrind as well as natively:
+//! These drive the exported C API the way a C caller would. Every allocation
+//! handed out by the API is released through the matching `free_*` function,
+//! so anything valgrind reports as definitely lost is a leak in the bindings
+//! rather than in the tests.
+//!
+//! They are only meaningful under valgrind, so they are `#[ignore]`d for the
+//! regular test runners and have their own CI job (`FFI valgrind tests`). To
+//! run them locally, let Cargo start the test binary through valgrind:
 //!
 //! ```text
-//! cargo valgrind test -p logos-blockchain-c -- --test-threads=1 ffi_safety_tests
+//! CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="valgrind --leak-check=full \
+//!   --errors-for-leak-kinds=definite --error-exitcode=1 \
+//!   --suppressions=$PWD/c-bindings/valgrind.supp" \
+//!   cargo test -p logos-blockchain-c -- --ignored --test-threads=1 ffi_safety_tests
 //! ```
-//!
-//! Every allocation handed out by the API is released through the matching
-//! `free_*` function, so anything valgrind reports as definitely lost is a
-//! leak in the bindings rather than in the tests.
 
 #![allow(
     clippy::multiple_unsafe_ops_per_block,
@@ -203,6 +208,7 @@ mod no_node {
     /// Every exported function that takes a required pointer must reject NULL
     /// with a `NullPointer` status instead of dereferencing it.
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     fn null_pointers_are_rejected() {
         let node: *const LogosBlockchainNode = ptr::null();
         let id = [0u8; 32];
@@ -290,6 +296,7 @@ mod no_node {
     /// carries) as a `NullPointer` error with a message, and that status is
     /// released like any other.
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     fn free_functions_report_null() {
         let statuses = unsafe {
             [
@@ -315,6 +322,7 @@ mod no_node {
     /// A null entry in the list must not keep the entries after it from being
     /// freed. Valgrind is what catches a regression here.
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     fn free_known_addresses_skips_null_entries() {
         let entry = || Box::into_raw(Box::new([7u8; 32])).cast::<u8>();
         let entries: Box<[*mut u8]> = Box::new([entry(), ptr::null_mut(), entry()]);
@@ -329,6 +337,7 @@ mod no_node {
     /// Any status can be handed to `free_operation_status`, whether or not it
     /// carries a message. Valgrind is what catches a regression here.
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     fn free_operation_status_releases_any_status() {
         unsafe {
             free_operation_status(OperationStatus::OK);
@@ -365,6 +374,7 @@ mod no_node {
     /// instead of aborting the process, whatever the return type, and early
     /// returns inside the body still work.
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     fn panics_become_errors() {
         assert_eq!(
             consume(panics_with_status(c"formatted".as_ptr())),
@@ -394,6 +404,7 @@ mod no_node {
     }
 
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     fn status_helpers() {
         let ok = OperationStatus::OK;
         let error = OperationStatus::error(OperationStatusCode::NotFound, "nope");
@@ -415,6 +426,7 @@ mod no_node {
     /// Integers standing in for enums and flags are checked or normalised:
     /// a C caller can put any value in them.
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     fn out_of_range_enums_and_flags() {
         let temp_dir = TempDir::new().unwrap();
         let config = cstring(&temp_dir.path().join("user_config.yaml"));
@@ -486,6 +498,7 @@ mod no_node {
     }
 
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     fn version_info_roundtrip() {
         let result = get_build_version_info();
         assert!(result.is_ok());
@@ -495,6 +508,7 @@ mod no_node {
     }
 
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     fn deployment_info_roundtrip() {
         let paths = TestConfigPaths::new();
         let result = unsafe {
@@ -523,6 +537,7 @@ mod no_node {
     /// `generate_user_config` through real pointers, including the odd ones: a
     /// null and an unparsable entry in the peer list.
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     fn generate_user_config_through_pointers() {
         let temp_dir = TempDir::new().unwrap();
         let output = cstring(&temp_dir.path().join("user_config.yaml"));
@@ -586,6 +601,7 @@ mod no_node {
     /// Error paths allocate a message and nothing else; once the caller frees
     /// the message there must be nothing left behind.
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     #[serial]
     fn error_paths_release_everything() {
         let temp_dir = TempDir::new().unwrap();
@@ -671,6 +687,7 @@ mod no_node {
     /// An error message that echoes a NUL byte from its input must still
     /// reach the caller as a C string.
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     #[serial]
     fn error_message_with_interior_nul() {
         let status = OperationStatus::error(OperationStatusCode::NotFound, "a\0b\0");
@@ -780,6 +797,7 @@ mod with_node {
     /// Starts a node, calls every node-bound function at least once on both
     /// the success and the error path, releases everything and shuts down.
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     #[serial]
     fn full_api_sweep() {
         let paths = TestConfigPaths::new();
@@ -1150,6 +1168,7 @@ mod with_node {
     /// Starting a node must leave the host's panic hook in place: the node
     /// binary's own hook exits the process, which would end this test.
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     #[serial]
     fn start_keeps_the_host_panic_hook() {
         static HOST_HOOK_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -1197,6 +1216,7 @@ mod with_node {
     /// block. Calling them from there must fail cleanly, and a refused
     /// `shutdown_node` must leave the node usable.
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     #[serial]
     fn node_calls_from_a_callback_are_refused() {
         let paths = TestConfigPaths::new();
@@ -1230,6 +1250,7 @@ mod with_node {
     /// Start/stop cycles must not accumulate memory or leave the state
     /// directory locked.
     #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
     #[serial]
     fn restart_cycles() {
         let paths = TestConfigPaths::new();
