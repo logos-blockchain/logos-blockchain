@@ -6,6 +6,8 @@
 pub mod api;
 mod callbacks;
 mod errors;
+#[cfg(test)]
+mod ffi_safety_tests;
 pub(crate) mod logging;
 mod macros;
 mod node;
