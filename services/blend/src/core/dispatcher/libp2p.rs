@@ -5,14 +5,16 @@ use core::{
 };
 
 use futures::{Stream, StreamExt as _, stream, stream::BoxStream};
-use lb_binary_codec::bincode::DeserializeOp;
 use lb_chain_network_service::Message as ChainNetworkMsg;
 use lb_core::{
     block::encoded_slot,
     header::HeaderId,
-    mantle::{traits::Hashable, transactions::hash::PrefixedKey},
+    mantle::{
+        traits::Hashable,
+        transactions::{codec::DecodeInEra, hash::PrefixedKey},
+    },
 };
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::{EraVersion, Eras};
 use lb_log_targets::blend;
 use lb_network_service::{
     NetworkService,
@@ -26,6 +28,7 @@ use lb_tx_service::{
 };
 use overwatch::services::{AsServiceId, ServiceData, relay::OutboundRelay};
 use serde::Serialize;
+use time::OffsetDateTime;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 
@@ -61,6 +64,16 @@ where
 pub struct Libp2pBroadcastSettings {
     /// The proposal topic of every era.
     pub topics: Eras<String>,
+}
+
+impl Libp2pBroadcastSettings {
+    /// The version of the era in force by the wall clock: the era the mempool
+    /// admits transactions under, and so the one a blended transaction is
+    /// decoded under.
+    fn version_in_force(&self) -> EraVersion {
+        let slot = self.topics.slot_at(OffsetDateTime::now_utc());
+        self.topics.at_slot(slot).entry.version
+    }
 }
 
 /// Broadcast an unencrypted block proposal to the network by publishing it
@@ -171,15 +184,16 @@ where
 }
 
 /// Submit a decapsulated transaction to the local mempool after validating its
-/// structure.
+/// structure under the era of `version`.
 async fn submit_transaction<Item, Key>(
     mempool_relay: &MempoolRelay<Item, Key>,
+    version: EraVersion,
     transaction: Vec<u8>,
 ) where
-    Item: Hashable<Hash = Key> + DeserializeOp + Send,
+    Item: Hashable<Hash = Key> + DecodeInEra + Send,
     Key: PrefixedKey<Prefix: Send> + Send,
 {
-    let Ok(transaction) = Item::from_bytes(&transaction).inspect_err(|e| {
+    let Ok(transaction) = Item::decode_in(version, &transaction).inspect_err(|e| {
         tracing::error!(
             target: LOG_TARGET,
             "Discarding a decapsulated payload that does not decode as a transaction: {e}"
@@ -246,8 +260,7 @@ impl<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId> PayloadDispatch
     for Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
 where
     Mempool: RecoverableMempool<BlockId = HeaderId, RecoveryState: 'static> + Send + Sync + 'static,
-    Mempool::Item:
-        Hashable<Hash = Mempool::Key> + Clone + Serialize + DeserializeOp + Send + 'static,
+    Mempool::Item: Hashable<Hash = Mempool::Key> + Clone + Serialize + DecodeInEra + Send + 'static,
     Mempool::Key: PrefixedKey<Prefix: Send> + Send + 'static,
     Mempool::Settings: Clone + Send + Sync,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync + 'static,
@@ -295,7 +308,12 @@ where
                     .await;
             }
             DataPayload::Transaction(transaction) => {
-                submit_transaction(&self.mempool_relay, transaction).await;
+                submit_transaction(
+                    &self.mempool_relay,
+                    self.settings.version_in_force(),
+                    transaction,
+                )
+                .await;
             }
         }
     }
@@ -324,11 +342,7 @@ where
 mod tests {
     use core::{num::NonZero, time::Duration};
 
-    use lb_cryptarchia_engine::{
-        Epoch,
-        era::{EraEntry, EraVersion},
-    };
-    use time::OffsetDateTime;
+    use lb_cryptarchia_engine::{Epoch, era::EraEntry};
     use tokio::sync::mpsc;
 
     use super::*;
