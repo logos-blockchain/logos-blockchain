@@ -2929,7 +2929,7 @@ mod tests {
     #[tokio::test]
     async fn restored_pending_mined_under_another_hash_is_neither_adopted_nor_dropped() {
         use lb_core::mantle::{
-            ledger::{Inputs, Outputs},
+            ledger::{BoundedInputs, Outputs},
             ops::transfer::TransferOp,
         };
         let ch = ChannelId::from([0u8; 32]);
@@ -2939,7 +2939,7 @@ mod tests {
         let original = unverified_tx_with_ops(vec![
             Op::ChannelInscribe(m.clone()),
             Op::Transfer(TransferOp::new(
-                Inputs::new([NoteId::from(Fr::from(1u64))]),
+                BoundedInputs::from(NoteId::from(Fr::from(1u64))).into(),
                 Outputs::new([Note::new(50, pk)]),
             )),
         ]);

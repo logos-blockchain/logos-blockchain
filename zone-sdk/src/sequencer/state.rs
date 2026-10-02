@@ -2592,7 +2592,7 @@ mod tests {
             vec![unfunded],
             "the entry without pre-funding ops is shed"
         );
-        assert!(shed_other.is_empty());
+        assert_eq!(shed_other.len(), 0);
         assert!(state.pending_inscription(&funded).is_some());
         assert!(state.pending_inscription(&unfunded).is_none());
     }
@@ -2910,7 +2910,7 @@ mod tests {
         state.observe_other_tx(same_config_other_tx, channel_id);
 
         assert!(!state.is_tracked(&again_hash), "retired");
-        assert!(state.shed_off_branch_pending_other(tip).is_empty());
+        assert_eq!(state.shed_off_branch_pending_other(tip).len(), 0);
     }
 
     /// The original of a re-funded publish can still win: it is the same
