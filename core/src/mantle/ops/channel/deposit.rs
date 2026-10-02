@@ -10,7 +10,7 @@ use crate::mantle::NoteId;
 use crate::{
     events::{DepositNote, DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
-        batch::DeferredZkpVerification,
+        batch::DeferredProof,
         channel::{Channels, Error},
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
@@ -109,7 +109,7 @@ impl PreverifiableOperation<StandardMode> for SignedOperation<DepositOp, Unverif
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<DepositOp, Preverified, StandardMode> {
-    type DeferredProof = DeferredZkpVerification;
+    type DeferredProof = DeferredProof;
     type Context<'a> = DepositValidationContext<'a>;
     type Error = Error;
 
@@ -138,10 +138,7 @@ impl VerifiableOperation<StandardMode> for SignedOperation<DepositOp, Preverifie
         let public_keys = operation.inputs.get_pk(context.utxos)?;
         let inputs = public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &public_keys)
             .map_err(|_| Error::InvalidSignature)?;
-        Ok(DeferredZkpVerification::ZkSig(
-            *self.proof().as_proof(),
-            inputs,
-        ))
+        Ok(DeferredProof::ZkSig(*self.proof().as_proof(), inputs))
     }
 }
 
@@ -495,7 +492,7 @@ mod test {
         ZkKey::from(BigUint::from(7u8))
     }
 
-    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> DeferredZkpVerification {
+    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredProof {
         let input_utxo = Utxo {
             op_id: [1u8; 32],
             output_index: 0,
@@ -527,14 +524,14 @@ mod test {
     }
 
     #[test]
-    fn deferred_zkp_is_accepted() {
-        assert!(batch_verify(deferred_zkp_signed_by(&[input_key()])).is_ok());
+    fn deferred_proof_is_accepted() {
+        assert!(batch_verify(deferred_proof_signed_by(&[input_key()])).is_ok());
     }
 
     #[test]
-    fn wrong_deferred_zkp_is_rejected() {
+    fn wrong_deferred_proof_is_rejected() {
         assert!(matches!(
-            batch_verify(deferred_zkp_signed_by(&[unrelated_key()])),
+            batch_verify(deferred_proof_signed_by(&[unrelated_key()])),
             Err(BatchError::InvalidZkSignatures)
         ));
     }

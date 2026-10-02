@@ -117,8 +117,8 @@ pub enum Error {
     AwaitingGenesisTime,
     #[error("Invalid uncle {uncle}: {reason}")]
     InvalidUncle { uncle: HeaderId, reason: UncleError },
-    #[error("Batch ZKP verification error: {0}")]
-    BatchZkpVerification(#[from] lb_core::mantle::batch::Error),
+    #[error("Batch deferred proof verification error: {0}")]
+    BatchDeferredProofVerification(#[from] lb_core::mantle::batch::Error),
 }
 
 struct InitializedCryptarchia {
