@@ -13,6 +13,7 @@ version     = { workspace = true }
 futures                       = { workspace = true }
 lb-api-service                = { workspace = true }
 lb-blend-service              = { workspace = true }
+lb-c-macros                   = { workspace = true }
 lb-chain-leader-service       = { workspace = true }
 lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }

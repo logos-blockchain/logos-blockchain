@@ -4281,6 +4281,7 @@ dependencies = [
  "futures",
  "logos-blockchain-api-service",
  "logos-blockchain-blend-service",
+ "logos-blockchain-c-macros",
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
@@ -4303,6 +4304,15 @@ dependencies = [
  "serial_test",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "logos-blockchain-c-macros"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]

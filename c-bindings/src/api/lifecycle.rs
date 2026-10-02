@@ -1,5 +1,6 @@
 use std::{ffi::c_char, panic};
 
+use lb_c_macros::panic_to_error;
 use lb_node::{
     UserConfig,
     cli::build_run_config_from_env,
@@ -46,6 +47,7 @@ pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlo
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that `config_path` is a valid NUL-terminated C string, and that
 /// `custom_deployment_path` is either null or one as well.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn start_lb_node(
     config_path: *const c_char,
@@ -226,6 +228,7 @@ fn get_deployment_config(
 /// - `node` is a valid pointer to a [`LogosBlockchainNode`] instance
 /// - The [`LogosBlockchainNode`] instance was created by this library
 /// - The pointer will not be used after this function returns
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn shutdown_node(node: *mut LogosBlockchainNode) -> OperationStatus {
     return_error_if_null_pointer!(node);

@@ -41,6 +41,7 @@ members = [
   "blend/provers",
   "blend/scheduling",
   "c-bindings",
+  "c-bindings/macros",
   "consensus/cryptarchia-engine",
   "consensus/cryptarchia-sync",
   "core",
@@ -109,6 +110,7 @@ hasher                             = { default-features = false, version = "0.1.
 jf-poseidon2                       = { default-features = false, git = "https://github.com/EspressoSystems/jellyfish.git", rev = "8d80230358e900f8d63765a937f63f4978ca1daa" }
 lb-api-service                     = { default-features = false, package = "logos-blockchain-api-service", path = "./services/api" }
 lb-binary-codec                    = { default-features = false, package = "logos-blockchain-binary-codec", path = "./binary-codec" }
+lb-c-macros                        = { default-features = false, package = "logos-blockchain-c-macros", path = "./c-bindings/macros" }
 lb-binary-codec-macros             = { default-features = false, package = "logos-blockchain-binary-codec-macros", path = "./binary-codec/macros" }
 lb-blake2btree                     = { default-features = false, package = "logos-blockchain-blake2btree", path = "merkle/blake2btree" }
 lb-blend                           = { default-features = false, package = "logos-blockchain-blend", path = "./blend/core" }
