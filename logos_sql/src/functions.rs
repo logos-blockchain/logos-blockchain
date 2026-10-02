@@ -13,13 +13,14 @@ use std::{
 use rusqlite::{
     Connection,
     functions::{Context, FunctionFlags},
+    limits::Limit,
     params_from_iter,
     types::Value,
 };
 
 use crate::{
     error::Error,
-    protocol::{CapturedFunction, CapturedFunctionCall, CapturedFunctionCalls},
+    protocol::{CapturedFunction, CapturedFunctionCall, CapturedFunctionCalls, MAX_BODY_BYTES},
 };
 
 /// Describes one `SQLite` built-in intercepted by the replicated connection.
@@ -105,7 +106,12 @@ impl FunctionOverrides {
     /// used to evaluate the original built-ins during capture.
     pub fn install(connection: &Connection) -> Result<Self, Error> {
         let state = Arc::new(Mutex::new(Mode::Passthrough));
-        let evaluator = Arc::new(Mutex::new(Connection::open_in_memory()?));
+        let evaluator = Connection::open_in_memory()?;
+
+        // Captured functions must not allocate values that application SQL
+        // would reject on the writer connection.
+        evaluator.set_limit(Limit::SQLITE_LIMIT_LENGTH, MAX_BODY_BYTES as i32)?;
+        let evaluator = Arc::new(Mutex::new(evaluator));
 
         for definition in FUNCTIONS {
             let state = Arc::clone(&state);

@@ -25,7 +25,7 @@ const MAX_PAYLOAD_BYTES: usize = Inscription::MAX;
 
 // Allow up to 64 MiB before compression. This caps decompression allocations;
 // the compressed payload must still fit the chain's smaller inscription limit.
-const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 /// Stable identity of one application write.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, BinaryCodec)]

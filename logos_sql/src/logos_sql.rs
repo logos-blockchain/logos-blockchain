@@ -44,7 +44,7 @@ pub struct WriterConfig {
 
 /// A running `λSQL` database.
 ///
-/// `LogosSql` owns one background task. That task is the only owner of both the
+/// `LogosSql` owns one background task on a dedicated thread. It owns both the
 /// `ZoneSDK` sequencer and the database writer. Dropping `LogosSql` aborts the
 /// task; call [`Self::shutdown`] to stop it gracefully and observe errors.
 pub struct LogosSql {
@@ -111,7 +111,7 @@ impl LogosSql {
             checkpoint.clone(),
         );
 
-        let runtime = runtime::spawn(sequencer, db, config.channel_id, checkpoint, read_only);
+        let runtime = runtime::spawn(sequencer, db, config.channel_id, checkpoint, read_only)?;
 
         let mut logos_sql = Self {
             lib_path,

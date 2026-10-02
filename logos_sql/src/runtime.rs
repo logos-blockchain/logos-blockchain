@@ -1,6 +1,6 @@
 //! Single-owner runtime for SQL writes and channel events.
 
-use std::time::Duration;
+use std::{thread, time::Duration};
 
 use lb_zone_sdk::{
     adapter::NodeHttpClient,
@@ -8,6 +8,7 @@ use lb_zone_sdk::{
     sequencer::{Event, SequencerCheckpoint, ZoneSequencer, channel_inscriptions},
 };
 use tokio::{
+    runtime::Builder,
     sync::{mpsc, oneshot},
     task::JoinHandle,
 };
@@ -56,14 +57,14 @@ pub struct RuntimeHandle {
     task: JoinHandle<Result<(), Error>>,
 }
 
-/// Starts the task that owns the sequencer and writable database connections.
+/// Starts the dedicated thread that owns the sequencer and database writer.
 pub fn spawn(
     sequencer: ZoneSequencer<NodeHttpClient>,
     db: Databases,
     channel_id: ChannelId,
     restored_checkpoint: Option<SequencerCheckpoint>,
     read_only: bool,
-) -> RuntimeHandle {
+) -> Result<RuntimeHandle, Error> {
     let (command_tx, command_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
     let (ready_tx, ready_rx) = oneshot::channel();
 
@@ -79,13 +80,13 @@ pub fn spawn(
         event_pending_retry: None,
         publish_state: PublishState::Idle,
     };
-    let task = tokio::spawn(runtime.run(restored_checkpoint));
+    let task = runtime.spawn(restored_checkpoint)?;
 
-    RuntimeHandle {
+    Ok(RuntimeHandle {
         command_tx,
         ready_rx,
         task,
-    }
+    })
 }
 
 impl RuntimeHandle {
@@ -218,6 +219,32 @@ struct PendingEvent {
 }
 
 impl Runtime {
+    fn spawn(
+        self,
+        restored_checkpoint: Option<SequencerCheckpoint>,
+    ) -> Result<JoinHandle<Result<(), Error>>, Error> {
+        // SQL and database rebuilds are synchronous. Keep the existing owner
+        // loop on its own thread so they cannot block the application's async
+        // workers. Its executor still drives the sequencer's network requests.
+        let executor = Builder::new_current_thread().enable_all().build()?;
+        let (finished_tx, finished_rx) = oneshot::channel();
+        let task = executor.spawn(async move {
+            let result = self.run(restored_checkpoint).await;
+            let _ = finished_tx.send(());
+            result
+        });
+
+        thread::Builder::new()
+            .name("logos-sql".to_owned())
+            .spawn(move || {
+                // Cancellation or panic drops the sender too, allowing the
+                // executor and thread to stop even without graceful shutdown.
+                executor.block_on(async { drop(finished_rx.await) });
+            })?;
+
+        Ok(task)
+    }
+
     async fn run(mut self, restored_checkpoint: Option<SequencerCheckpoint>) -> Result<(), Error> {
         self.recover_published_write(restored_checkpoint.as_ref())?;
 
@@ -582,6 +609,8 @@ const fn is_retryable_apply_error(error: &Error) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use lb_key_management_system_service::keys::Ed25519Key;
     use lb_zone_sdk::{
         CommonHttpClient,
@@ -594,10 +623,126 @@ mod tests {
     };
     use rusqlite::Connection;
     use tempfile::TempDir;
-    use tokio::sync::{mpsc, oneshot};
+    use tokio::{
+        sync::{mpsc, oneshot},
+        time::{sleep, timeout},
+    };
 
-    use super::{COMMAND_CHANNEL_CAPACITY, Command, PendingEvent, PublishState, Runtime};
-    use crate::{db::Databases, error::Error, sql::TransactionBuilder, status::WriteStatus};
+    use super::{
+        COMMAND_CHANNEL_CAPACITY, Command, PendingEvent, PublishState, Runtime, RuntimeHandle,
+    };
+    use crate::{
+        db::Databases, error::Error, protocol::TxId, sql::TransactionBuilder, status::WriteStatus,
+    };
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn waiting_for_sqlite_does_not_block_the_application() {
+        let (_dir, mut runtime, ready_rx) = runtime();
+        runtime.sequencer_ready = true;
+
+        let connection = Connection::open(runtime.db.live_path()).unwrap();
+        connection
+            .execute_batch("CREATE TABLE items(value INTEGER); BEGIN IMMEDIATE")
+            .unwrap();
+
+        let (command_tx, command_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
+        runtime.command_rx = command_rx;
+        let (response_tx, response_rx) = oneshot::channel();
+        let (tx_id, transaction) = TransactionBuilder::new("INSERT INTO items VALUES (1)")
+            .query("INSERT INTO missing VALUES (1)")
+            .finish()
+            .unwrap();
+        command_tx
+            .try_send(Command::Execute {
+                tx_id,
+                transaction,
+                response_tx,
+            })
+            .unwrap();
+
+        let task = runtime.spawn(None).unwrap();
+        let handle = RuntimeHandle {
+            command_tx,
+            ready_rx,
+            task,
+        };
+
+        // SQLite waits for our lock. This single-threaded application must
+        // still wake up and release it, rather than wait for SQLite's timeout.
+        let started = Instant::now();
+        sleep(Duration::from_millis(100)).await;
+        connection.execute_batch("ROLLBACK").unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2));
+
+        // The second statement deliberately fails: no publication is needed
+        // to test the worker, and the first statement must be rolled back.
+        let result = timeout(Duration::from_secs(5), response_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(result, Err(Error::Database(_))));
+        let rows: i64 = connection
+            .query_row("SELECT count(*) FROM items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 0);
+
+        timeout(Duration::from_secs(5), handle.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn worker_startup_failure_reaches_the_caller() {
+        let (_dir, runtime, _) = runtime();
+        Connection::open(runtime.db.live_path())
+            .unwrap()
+            .execute_batch("DROP TABLE __logos_sql_pending_publish")
+            .unwrap();
+
+        let mut handle = super::spawn(
+            runtime.sequencer,
+            runtime.db,
+            runtime.channel_id,
+            None,
+            false,
+        )
+        .unwrap();
+        let result = timeout(Duration::from_secs(5), handle.wait_until_ready())
+            .await
+            .unwrap();
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn worker_can_be_cancelled_while_waiting_for_the_node() {
+        let (_dir, runtime, _) = runtime();
+        let handle = super::spawn(
+            runtime.sequencer,
+            runtime.db,
+            runtime.channel_id,
+            None,
+            false,
+        )
+        .unwrap();
+
+        // A command response confirms the worker started and can serve the
+        // application while the node is unavailable.
+        assert!(
+            handle
+                .write_status(TxId::generate())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        handle.abort();
+
+        let error = timeout(Duration::from_secs(5), handle.task)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(error.is_cancelled());
+    }
 
     #[tokio::test]
     async fn read_only_accepts_channel_writes_only() {
