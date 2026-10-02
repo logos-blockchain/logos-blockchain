@@ -26,13 +26,13 @@ pub enum DeferredZkpVerification {
 
 /// ZKP verifications deferred while applying a block.
 #[derive(Default)]
+#[must_use]
 pub struct DeferredZkpVerifications {
     zk_sigs: Vec<(ZkSignProof, ZkSignVerifierInputs)>,
     leader_claims: Vec<(PoCProof, PoCVerifierInput)>,
 }
 
 impl DeferredZkpVerifications {
-    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
