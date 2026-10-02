@@ -156,6 +156,7 @@ where
                 lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    lb_time_service::backends::NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<

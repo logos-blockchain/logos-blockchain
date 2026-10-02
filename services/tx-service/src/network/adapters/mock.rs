@@ -1,11 +1,13 @@
 use futures::{Stream, StreamExt as _};
 use lb_core::mantle::mock::{MockTransaction, MockTxId};
+use lb_cryptarchia_engine::Slot;
 use lb_log_targets::mempool;
 use lb_network_service::{
     NetworkService,
     backends::mock::{Mock, MockBackendMessage, MockContentTopic, MockMessage, NetworkEvent},
     message::NetworkMsg,
 };
+use lb_time_service::backends::SystemTimeBackend;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 
 use crate::network::NetworkAdapter;
@@ -19,12 +21,21 @@ pub struct MockAdapter<RuntimeServiceId> {
     network_relay: OutboundRelay<<NetworkService<Mock, RuntimeServiceId> as ServiceData>::Message>,
 }
 
+impl<RuntimeServiceId> Clone for MockAdapter<RuntimeServiceId> {
+    fn clone(&self) -> Self {
+        Self {
+            network_relay: self.network_relay.clone(),
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeServiceId> {
     type Backend = Mock;
     type Settings = ();
     type Payload = MockTransaction<MockMessage>;
     type Key = MockTxId;
+    type TimeBackend = SystemTimeBackend;
 
     async fn new(
         _settings: Self::Settings,
@@ -55,6 +66,9 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
         }
         Self { network_relay }
     }
+
+    /// The mock network has one topic in every era.
+    async fn follow_eras_at(&self, _slot: Slot) {}
 
     async fn payload_stream(
         &self,

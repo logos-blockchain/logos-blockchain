@@ -18,6 +18,10 @@ use lb_core::{
         transactions::hash::{PrefixedKey as _, TxHashPrefix},
     },
 };
+use lb_cryptarchia_engine::{
+    Epoch,
+    era::{EraEntry, EraVersion, Eras},
+};
 use lb_network_service::{
     NetworkService,
     backends::mock::{Mock, MockBackendMessage, MockConfig, MockMessage},
@@ -32,6 +36,7 @@ use lb_storage_service::{
     recovery::{StorageRecoveryBackend, load_recovery_data},
     rocksdb,
 };
+use lb_time_service::{TimeService, TimeServiceSettings, backends::SystemTimeBackend};
 use lb_tracing_service::{Tracing, TracingSettings};
 use lb_utils::noop_service::NoService;
 use logos_blockchain_tx_service::{
@@ -74,6 +79,7 @@ type MockMempoolService = GenericTxMempoolService<
 #[derive_services]
 struct MockPoolNode {
     logging: Tracing<RuntimeServiceId>,
+    time: TimeService<SystemTimeBackend, RuntimeServiceId>,
     network: NetworkService<Mock, RuntimeServiceId>,
     storage: StorageService<RuntimeServiceId>,
     mockpool: MockMempoolService,
@@ -117,6 +123,21 @@ fn mock_pool_node_settings(
                 recovery_data: RecoveryData::default(),
             },
             logging: TracingSettings::default(),
+            time: TimeServiceSettings {
+                eras: Eras::new(
+                    time::OffsetDateTime::now_utc(),
+                    [EraEntry {
+                        first_epoch: Epoch::new(0),
+                        version: EraVersion::V1,
+                        slot_duration: Duration::from_secs(1),
+                        epoch_length: 100.try_into().unwrap(),
+                        transition_slots: 0,
+                        parameters: (),
+                    }],
+                )
+                .unwrap(),
+                backend: (),
+            },
             no_service: (),
         },
         temp_dir,

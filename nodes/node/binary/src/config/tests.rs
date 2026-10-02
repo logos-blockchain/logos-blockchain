@@ -223,7 +223,6 @@ fn service_settings_receive_recovery_data() {
     };
 
     let deployment_settings = DeploymentSettings::default();
-    let protocol_names = deployment_settings.genesis_protocol_names();
     let eras = deployment_settings.runnable_eras().unwrap();
 
     let (_, blend_core_settings, _) = BlendServiceConfig {
@@ -253,7 +252,10 @@ fn service_settings_receive_recovery_data() {
     let mempool_service_settings = MempoolServiceConfig {
         user: user_config.mempool.clone(),
     }
-    .into_mempool_service_settings(protocol_names.mempool_topic, recovery_data.clone());
+    .into_mempool_service_settings(
+        eras.map(|era| era.entry.parameters.protocol_names.mempool_topic.clone()),
+        recovery_data.clone(),
+    );
     assert_eq!(
         mempool_service_settings
             .recovery_data

@@ -4,6 +4,7 @@ use lb_core::mantle::{
     traits::Hashable as _,
     transactions::{hash::TxHash, states::Preverified},
 };
+use lb_cryptarchia_engine::era::Eras;
 use lb_services_utils::overwatch::RecoveryData;
 use lb_tx_service::{
     TxMempoolSettings, backend::MempoolSettings,
@@ -22,7 +23,7 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_mempool_service_settings(
         self,
-        topic: String,
+        topics: Eras<String>,
         recovery_data: RecoveryData,
     ) -> TxMempoolSettings<
         MempoolSettings,
@@ -31,7 +32,7 @@ impl ServiceConfig {
         TxMempoolSettings {
             network_adapter: Libp2pNetworkAdapterSettings {
                 id: SignedOps::<Preverified, StandardMode>::hash,
-                topic,
+                topics,
             },
             pool: MempoolSettings {
                 tx_ttl: self.user.tx_ttl,

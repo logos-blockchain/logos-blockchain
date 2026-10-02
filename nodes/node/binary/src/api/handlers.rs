@@ -64,7 +64,7 @@ use lb_sdp_service::{
     mempool::SdpMempoolAdapter, state::SdpStateStorage, wallet::SdpWalletAdapter,
 };
 use lb_storage_service::{StorageService, api::StorageApi};
-use lb_time_service::TimeServiceMessage;
+use lb_time_service::{TimeServiceMessage, backends::NtpTimeBackend};
 use lb_tx_service::{
     MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
@@ -394,6 +394,7 @@ where
                 MempoolNetworkAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<
@@ -448,6 +449,7 @@ where
                 MempoolNetworkAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<
@@ -780,6 +782,7 @@ where
                 MempoolNetworkAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<
@@ -799,6 +802,7 @@ where
         MempoolNetworkAdapter<
             SignedOps<Preverified, StandardMode>,
             <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            NtpTimeBackend,
             RuntimeServiceId,
         >,
         StorageAdapter,
@@ -842,6 +846,7 @@ where
                 MempoolNetworkAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<
@@ -887,6 +892,7 @@ where
                 MempoolNetworkAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<
@@ -933,6 +939,7 @@ where
                 MempoolNetworkAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<
@@ -952,6 +959,7 @@ where
             MempoolNetworkAdapter<
                 SignedOps<Preverified, StandardMode>,
                 <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
             Mempool<
@@ -1047,6 +1055,7 @@ where
                 MempoolNetworkAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<
@@ -1093,6 +1102,7 @@ where
             MempoolNetworkAdapter<
                 SignedOps<Preverified, StandardMode>,
                 <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
             StorageAdapter,
@@ -1982,6 +1992,7 @@ pub mod wallet {
                     MempoolNetworkAdapter<
                         SignedOps<Preverified, StandardMode>,
                         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                        NtpTimeBackend,
                         RuntimeServiceId,
                     >,
                     Mempool<
@@ -2025,6 +2036,7 @@ pub mod wallet {
                     MempoolNetworkAdapter<
                         SignedOps<Preverified, StandardMode>,
                         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                        NtpTimeBackend,
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
@@ -2079,6 +2091,7 @@ pub mod wallet {
                     MempoolNetworkAdapter<
                         SignedOps<Preverified, StandardMode>,
                         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                        NtpTimeBackend,
                         RuntimeServiceId,
                     >,
                     Mempool<
@@ -2139,6 +2152,7 @@ pub mod wallet {
                     MempoolNetworkAdapter<
                         SignedOps<Preverified, StandardMode>,
                         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                        NtpTimeBackend,
                         RuntimeServiceId,
                     >,
                     Mempool<
@@ -2199,6 +2213,7 @@ pub mod wallet {
                     MempoolNetworkAdapter<
                         SignedOps<Preverified, StandardMode>,
                         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                        NtpTimeBackend,
                         RuntimeServiceId,
                     >,
                     Mempool<

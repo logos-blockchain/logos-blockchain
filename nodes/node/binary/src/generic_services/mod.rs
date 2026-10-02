@@ -25,6 +25,7 @@ pub type MempoolNetworkAdapter<RuntimeServiceId> =
     lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
         SignedOps<Preverified, StandardMode>,
         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+        NtpTimeBackend,
         RuntimeServiceId,
     >;
 
@@ -54,6 +55,7 @@ pub type TimeService<RuntimeServiceId> =
 pub type MempoolAdapter<RuntimeServiceId> = lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
     SignedOps<Preverified, StandardMode>,
     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+    NtpTimeBackend,
     RuntimeServiceId,
 >;
 
@@ -106,6 +108,7 @@ pub type SdpMempoolAdapter<RuntimeServiceId> = sdp::mempool::SdpMempoolAdapter<
     lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
         SignedOps<Preverified, StandardMode>,
         TxHash,
+        NtpTimeBackend,
         RuntimeServiceId,
     >,
     Mempool<
