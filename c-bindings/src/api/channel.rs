@@ -30,7 +30,7 @@ pub(crate) fn get_channel_state_sync(
     node: &LogosBlockchainNode,
     channel_id: ChannelId,
 ) -> StatusResult<CString> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     let overwatch_handle = node.get_overwatch_handle();
 
     let state = runtime_handle
