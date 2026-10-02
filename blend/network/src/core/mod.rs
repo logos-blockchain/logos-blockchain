@@ -12,7 +12,7 @@ use core::num::{NonZeroU64, NonZeroUsize};
 
 use lb_blend_membership::Membership;
 use lb_blend_primitives::time::RoundClock;
-use lb_cryptarchia_engine::Epoch;
+use lb_cryptarchia_engine::{Epoch, era::EraVersion};
 use libp2p::{PeerId, StreamProtocol};
 
 use self::{
@@ -42,6 +42,8 @@ pub struct CommonConfig {
     pub round_duration_in_seconds: NonZeroU64,
     pub minimum_network_size: NonZeroUsize,
     pub num_blend_layers: NonZeroU64,
+    /// The version of the era, which decodes the messages of its epochs.
+    pub era_version: EraVersion,
 }
 
 impl<ProofsVerifier> NetworkBehaviour<ProofsVerifier>

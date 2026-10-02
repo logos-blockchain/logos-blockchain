@@ -14,6 +14,7 @@ use futures::{StreamExt as _, select};
 use lb_blend_membership::{Membership, Node};
 use lb_blend_message::crypto::key_ext::Ed25519SecretKeyExt as _;
 use lb_blend_primitives::time::{Round, RoundClock, RoundCount};
+use lb_cryptarchia_engine::era::EraVersion;
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_libp2p::{NetworkBehaviour, SwarmEvent};
 use libp2p::{
@@ -196,6 +197,7 @@ impl BehaviourBuilder {
             num_blend_layers: self
                 .num_blend_layers
                 .unwrap_or_else(|| 3.try_into().unwrap()),
+            era_version: EraVersion::V1,
             old_epoch: None,
             connection_share_per_round: self
                 .connection_share_per_round

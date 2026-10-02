@@ -6,7 +6,7 @@ use lb_blend_message::{
     deserialize_encapsulated_message,
     encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
 };
-use lb_cryptarchia_engine::Epoch;
+use lb_cryptarchia_engine::{Epoch, era::EraVersion};
 use libp2p::{
     PeerId,
     swarm::{ConnectionId, NotifyHandler, ToSwarm},
@@ -89,7 +89,7 @@ pub fn handle_received_serialized_encapsulated_message<Verifier>(
     pending_verifications: &PendingPoQVerifications,
     waker: &mut Option<Waker>,
     epoch: Epoch,
-    num_blend_layers: NonZeroU64,
+    (era_version, num_blend_layers): (EraVersion, NonZeroU64),
     proofs_verifier: &Arc<Verifier>,
 ) -> Result<(), ReceiveError>
 where
@@ -97,7 +97,7 @@ where
 {
     // Deserialize the message.
     let deserialized_encapsulated_message =
-        deserialize_encapsulated_message(serialized_message, &num_blend_layers)
+        deserialize_encapsulated_message(era_version, serialized_message, &num_blend_layers)
             .map_err(|_| ReceiveError::UndeserializableMessage)?;
 
     // Exit early if we've received this message already and we know it's a valid

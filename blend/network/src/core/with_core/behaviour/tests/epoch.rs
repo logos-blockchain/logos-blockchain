@@ -8,7 +8,7 @@ use futures::StreamExt as _;
 use lb_blend_membership::Membership;
 use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
 use lb_blend_primitives::time::RoundCount;
-use lb_cryptarchia_engine::Epoch;
+use lb_cryptarchia_engine::{Epoch, era::EraVersion};
 use lb_libp2p::{NetworkBehaviour as _, SwarmEvent};
 use libp2p::{Multiaddr, StreamProtocol, swarm::ConnectionId};
 use libp2p_swarm_test::SwarmExt as _;
@@ -41,6 +41,7 @@ async fn nodes_that_entered_a_new_era_connect_under_its_protocol() {
         round_duration_in_seconds: NonZeroU64::new(2).unwrap(),
         minimum_network_size: NonZeroUsize::new(1).unwrap(),
         num_blend_layers: NonZeroU64::new(4).unwrap(),
+        era_version: EraVersion::V1,
     };
     let core = Config {
         target_peering_degree: PEERING_DEGREE,

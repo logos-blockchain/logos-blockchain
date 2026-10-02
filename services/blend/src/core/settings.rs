@@ -2,6 +2,7 @@ use core::time::Duration;
 use std::{num::NonZeroU64, sync::Arc};
 
 use lb_core::blend::core_quota;
+use lb_cryptarchia_engine::era::EraVersion;
 use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
 use lb_poq::Quota;
 use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
@@ -52,6 +53,8 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub activity_threshold_sensitivity: u64,
     pub pow_mining_pool: Arc<ThreadPool>,
     pub abstain_on_failure: bool,
+    /// The version of the era, which decodes the messages of its epochs.
+    pub era_version: EraVersion,
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {

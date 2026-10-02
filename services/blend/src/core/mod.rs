@@ -434,6 +434,7 @@ where
                 activity_threshold_sensitivity: blend_config.activity_threshold_sensitivity,
                 pow_mining_pool: Arc::clone(&pow_mining_pool),
                 abstain_on_failure: blend_config.abstain_on_failure,
+                era_version: era.entry.version,
             }
         });
         let (

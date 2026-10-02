@@ -19,7 +19,7 @@ use lb_blend_message::{
     },
 };
 use lb_blend_primitives::time::RoundClock;
-use lb_cryptarchia_engine::Epoch;
+use lb_cryptarchia_engine::{Epoch, era::EraVersion};
 use lb_log_targets::blend;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
@@ -103,6 +103,7 @@ pub struct Behaviour<ProofsVerifier> {
     protocol_name: StreamProtocol,
     minimum_network_size: NonZeroUsize,
     num_blend_layers: NonZeroU64,
+    era_version: EraVersion,
 }
 
 impl<ProofsVerifier> Behaviour<ProofsVerifier> {
@@ -132,6 +133,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             protocol_name,
             minimum_network_size: common_config.minimum_network_size,
             num_blend_layers: common_config.num_blend_layers,
+            era_version: common_config.era_version,
         }
     }
 
@@ -166,6 +168,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         self.protocol_name = protocol_name;
         self.minimum_network_size = common_config.minimum_network_size;
         self.num_blend_layers = common_config.num_blend_layers;
+        self.era_version = common_config.era_version;
     }
 
     fn try_wake(&mut self) {
@@ -228,9 +231,11 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     ) where
         ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
     {
-        let Ok(deserialized_encapsulated_message) =
-            deserialize_encapsulated_message(serialized_message, &self.num_blend_layers)
-        else {
+        let Ok(deserialized_encapsulated_message) = deserialize_encapsulated_message(
+            self.era_version,
+            serialized_message,
+            &self.num_blend_layers,
+        ) else {
             tracing::trace!(target: LOG_TARGET, "Failed to deserialize received message. Ignoring...");
             return;
         };

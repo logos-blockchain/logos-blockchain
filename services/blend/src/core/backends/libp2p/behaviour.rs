@@ -46,6 +46,7 @@ pub fn network_config(
             minimum_network_size: config.minimum_network_size.try_into().unwrap(),
             num_blend_layers: config.num_blend_layers,
             round_duration_in_seconds: config.time.round_duration_in_seconds,
+            era_version: config.era_version,
         },
         with_core: lb_blend::network::core::with_core::behaviour::Config {
             target_peering_degree: (config.backend.target_peering_degree.get() as usize)

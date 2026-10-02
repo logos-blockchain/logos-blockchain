@@ -24,6 +24,7 @@ use lb_blend::{
     scheduling::membership::{Membership, Node},
 };
 use lb_chain_service::Epoch;
+use lb_cryptarchia_engine::era::EraVersion;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_libp2p::{Protocol, SwarmEvent};
 use libp2p::{Multiaddr, PeerId, Swarm, core::transport::ListenerId, identity::Keypair};
@@ -230,6 +231,7 @@ impl BlendBehaviourBuilder {
                         minimum_network_size: 1.try_into().unwrap(),
                         num_blend_layers: 3.try_into().unwrap(),
                         round_duration_in_seconds: 1.try_into().unwrap(),
+                        era_version: EraVersion::V1,
                     },
                     with_core: CoreToCoreConfig {
                         connection_share_per_round: NonZeroU64::new(1_000).unwrap(),

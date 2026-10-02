@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use futures::StreamExt as _;
 use lb_blend_membership::{Membership, Node};
 use lb_blend_primitives::time::RoundClock;
+use lb_cryptarchia_engine::era::EraVersion;
 use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
 use lb_libp2p::SwarmEvent;
 use libp2p::{Multiaddr, PeerId, Stream, Swarm};
@@ -128,6 +129,7 @@ impl BehaviourBuilder {
             num_blend_layers: self
                 .num_blend_layers
                 .unwrap_or_else(|| 3.try_into().unwrap()),
+            era_version: EraVersion::V1,
         }
     }
 }
