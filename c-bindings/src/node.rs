@@ -85,7 +85,7 @@ impl LogosBlockchainNode {
     /// Fails when the calling thread cannot block: see
     /// [`ensure_blocking_allowed`].
     pub(crate) fn get_runtime_handle(&self) -> StatusResult<&Handle> {
-        ensure_blocking_allozwed()?;
+        ensure_blocking_allowed()?;
         Ok(unsafe {
             self.runtime
                 .cast::<Runtime>()

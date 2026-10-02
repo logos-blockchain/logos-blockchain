@@ -69,6 +69,7 @@ use crate::{
             submit_signed_transaction, transfer_funds, wallet_fund_tx,
         },
     },
+    errors::{is_error, is_ok},
     result::FfiResult,
     return_error_if_null_pointer,
 };
@@ -184,8 +185,8 @@ impl TestConfigPaths {
 }
 
 const NO_INSERT: MergeConfigFlags = MergeConfigFlags {
-    source_insert_missing: false,
-    extra_insert_missing: false,
+    source_insert_missing: 0,
+    extra_insert_missing: 0,
 };
 
 mod no_node {
@@ -251,11 +252,17 @@ mod no_node {
             assert_eq!(code(participate(null_s, s, s, null_s)), np);
             assert_eq!(code(participate(s, null_s, s, null_s)), np);
             assert_eq!(code(participate(s, s, null_s, null_s)), np);
-            assert_eq!(code(generate_key(null_s, s, KeyType::Zk, null_s)), np);
-            assert_eq!(code(generate_key(s, null_s, KeyType::Zk, null_s)), np);
-            assert_eq!(code(add_key(null_s, s, KeyType::Zk, s, null_s)), np);
-            assert_eq!(code(add_key(s, null_s, KeyType::Zk, s, null_s)), np);
-            assert_eq!(code(add_key(s, s, KeyType::Zk, null_s, null_s)), np);
+            assert_eq!(
+                code(generate_key(null_s, s, KeyType::Zk as u32, null_s)),
+                np
+            );
+            assert_eq!(
+                code(generate_key(s, null_s, KeyType::Zk as u32, null_s)),
+                np
+            );
+            assert_eq!(code(add_key(null_s, s, KeyType::Zk as u32, s, null_s)), np);
+            assert_eq!(code(add_key(s, null_s, KeyType::Zk as u32, s, null_s)), np);
+            assert_eq!(code(add_key(s, s, KeyType::Zk as u32, null_s, null_s)), np);
             assert_eq!(code(remove_key(null_s, s, s)), np);
             assert_eq!(code(remove_key(s, null_s, s)), np);
             assert_eq!(code(remove_key(s, s, null_s)), np);
@@ -375,13 +382,92 @@ mod no_node {
     #[test]
     fn status_helpers() {
         let ok = OperationStatus::OK;
-        assert!(ok.is_ok());
-        assert!(!ok.is_error());
         let error = OperationStatus::error(OperationStatusCode::NotFound, "nope");
-        assert!(error.is_error());
+        unsafe {
+            assert!(is_ok(&raw const ok));
+            assert!(!is_error(&raw const ok));
+            assert!(!is_ok(&raw const error));
+            assert!(is_error(&raw const error));
+            // No status is not a success.
+            assert!(!is_ok(ptr::null()));
+            assert!(is_error(ptr::null()));
+        }
         assert_eq!(
             consume(error),
             (OperationStatusCode::NotFound, "nope".into())
+        );
+    }
+
+    /// Integers standing in for enums and flags are checked or normalised:
+    /// a C caller can put any value in them.
+    #[test]
+    fn out_of_range_enums_and_flags() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = cstring(&temp_dir.path().join("user_config.yaml"));
+        let kms = cstring(&temp_dir.path().join("keystore.yaml"));
+        // Any byte is a valid "true" behind a C `bool *`.
+        let skip_ibd: u8 = 0xAB;
+        let status = unsafe {
+            generate_user_config(GenerateConfigArgs {
+                initial_peers: ptr::null(),
+                initial_peers_count: ptr::null(),
+                output: config.as_ptr(),
+                net_port: ptr::null(),
+                blend_port: ptr::null(),
+                http_addr: ptr::null(),
+                external_address: ptr::null(),
+                state_path: ptr::null(),
+                storage_path: ptr::null(),
+                logs_path: ptr::null(),
+                skip_ibd: (&raw const skip_ibd).cast::<bool>(),
+                log_filter: ptr::null(),
+                kms_file: kms.as_ptr(),
+            })
+        };
+        assert_eq!(code(status), OperationStatusCode::Ok);
+
+        for key_type in [2, 7, u32::MAX] {
+            let (code, message) = consume(unsafe {
+                generate_key(config.as_ptr(), kms.as_ptr(), key_type, ptr::null())
+            });
+            assert_eq!(code, OperationStatusCode::ValidationError, "{message}");
+            assert_eq!(
+                self::code(unsafe {
+                    add_key(
+                        config.as_ptr(),
+                        kms.as_ptr(),
+                        key_type,
+                        c"11".as_ptr(),
+                        ptr::null(),
+                    )
+                }),
+                OperationStatusCode::ValidationError
+            );
+        }
+
+        // Any non-zero flag is on: the missing key is inserted, not reported.
+        let source = temp_dir.path().join("source.yaml");
+        let destination = temp_dir.path().join("destination.yaml");
+        std::fs::write(&source, "{ a: 2, b: 2 }").unwrap();
+        std::fs::write(&destination, "{ a: 1 }").unwrap();
+        let result = unsafe {
+            merge_user_config(
+                cstring(&source).as_ptr(),
+                cstring(&destination).as_ptr(),
+                ptr::null(),
+                MergeConfigFlags {
+                    source_insert_missing: 0xAB,
+                    extra_insert_missing: 0,
+                },
+            )
+        };
+        assert!(result.value.is_null(), "Expected no conflict report");
+        assert_eq!(code(result), OperationStatusCode::Ok);
+        let merged: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&destination).unwrap()).unwrap();
+        assert_eq!(
+            merged,
+            serde_yaml::from_str::<serde_yaml::Value>("{ a: 2, b: 2 }").unwrap()
         );
     }
 
@@ -465,8 +551,14 @@ mod no_node {
         assert!(result.is_ok());
         assert!(unsafe { free_cstring(result.value) }.is_ok());
 
-        let result =
-            unsafe { generate_key(output.as_ptr(), kms.as_ptr(), KeyType::Zk, ptr::null()) };
+        let result = unsafe {
+            generate_key(
+                output.as_ptr(),
+                kms.as_ptr(),
+                KeyType::Zk as u32,
+                ptr::null(),
+            )
+        };
         assert!(result.is_ok());
         assert!(unsafe { free_cstring(result.value) }.is_ok());
 
@@ -522,7 +614,7 @@ mod no_node {
                     OperationStatusCode::Ok
                 );
                 assert_ne!(
-                    code(generate_key(p, p, KeyType::Ed25519, ptr::null())),
+                    code(generate_key(p, p, KeyType::Ed25519 as u32, ptr::null())),
                     OperationStatusCode::Ok
                 );
                 assert_ne!(
@@ -543,7 +635,7 @@ mod no_node {
                 code(add_key(
                     missing.as_ptr(),
                     missing.as_ptr(),
-                    KeyType::Zk,
+                    KeyType::Zk as u32,
                     c"zz".as_ptr(),
                     ptr::null()
                 )),
@@ -553,7 +645,7 @@ mod no_node {
                 code(add_key(
                     missing.as_ptr(),
                     missing.as_ptr(),
-                    KeyType::Ed25519,
+                    KeyType::Ed25519 as u32,
                     c"abcd".as_ptr(),
                     ptr::null()
                 )),
