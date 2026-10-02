@@ -507,7 +507,7 @@ mod test {
 
     use super::*;
     use crate::api::{
-        free_cstring,
+        free_cstring, free_operation_status,
         keys::{KeyType, add_key, generate_key, remove_key},
         peer::get_peer_id,
     };
@@ -701,6 +701,7 @@ mod test {
             )
         };
         assert_eq!(result.error.code, OperationStatusCode::ValidationError);
+        unsafe { free_operation_status(result.error) };
         let destination =
             std::fs::read_to_string(&destination_path).expect("Failed to read destination");
         assert_eq!(destination, "a: 1");

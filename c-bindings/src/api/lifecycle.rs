@@ -232,7 +232,10 @@ mod test {
     use serial_test::serial;
     use tempfile::TempDir;
 
-    use crate::api::lifecycle::{shutdown_node, start_lb_node};
+    use crate::api::{
+        free_operation_status,
+        lifecycle::{shutdown_node, start_lb_node},
+    };
 
     static REPOSITORY_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
         let crate_dir = env!("CARGO_MANIFEST_DIR");
@@ -377,5 +380,6 @@ mod test {
             "An invalid HTTP_HOST env override should fail node start, proving env \
              overrides are applied"
         );
+        unsafe { free_operation_status(start_status.error) };
     }
 }
