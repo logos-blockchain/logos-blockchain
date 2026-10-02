@@ -2,16 +2,12 @@ use core::{
     cmp::Ordering,
     fmt::{self, Display, Formatter},
 };
-use std::{num::NonZero, time::Duration};
+use std::num::NonZero;
 
 use lb_binary_codec::{
     bincode::{self, BoundedSerializeOp},
     canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
 };
-use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
-use time::OffsetDateTime;
-#[cfg(feature = "tokio")]
-use tokio::time::{Interval, MissedTickBehavior};
 
 #[derive(
     Clone,
@@ -157,27 +153,6 @@ impl Slot {
         Self(0)
     }
 
-    #[must_use]
-    pub fn from_offset_and_config(
-        offset_date_time: OffsetDateTime,
-        slot_config: SlotConfig,
-    ) -> Self {
-        // TODO: leap seconds / weird time stuff
-        let since_start = offset_date_time - slot_config.genesis_time;
-        if since_start.is_negative() {
-            // current slot is behind the start time, so return default 0
-            Self::genesis()
-        } else {
-            // since_start is already checked never negative in this case
-            // division panics if `slot_duration` is less than a second.
-            Self::from(
-                (since_start.whole_seconds() as u64)
-                    .checked_div(slot_config.slot_duration.as_secs())
-                    .expect("slots tick should be at least a second"),
-            )
-        }
-    }
-
     /// Strict slot addition, panicking if overflow occurred.
     ///
     /// # Panics
@@ -295,48 +270,4 @@ pub const fn epoch_length(
         .saturating_add(epoch_period_nonce_buffer.get() as u64)
         .saturating_add(epoch_period_nonce_stabilization.get() as u64))
     .saturating_mul(base_period_length.get())
-}
-
-#[serde_with::serde_as]
-#[derive(Copy, Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct SlotConfig {
-    #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
-    pub slot_duration: Duration,
-    /// Start of the first epoch
-    pub genesis_time: OffsetDateTime,
-}
-
-#[cfg(feature = "tokio")]
-#[derive(Clone, Debug)]
-pub struct SlotTimer {
-    config: SlotConfig,
-}
-
-#[cfg(feature = "tokio")]
-impl SlotTimer {
-    #[must_use]
-    pub const fn new(config: SlotConfig) -> Self {
-        Self { config }
-    }
-
-    #[must_use]
-    pub fn current_slot(&self, now: OffsetDateTime) -> Slot {
-        Slot::from_offset_and_config(now, self.config)
-    }
-
-    /// Ticks at the start of each slot, starting from the next slot
-    #[must_use]
-    pub fn slot_interval(&self, now: OffsetDateTime) -> Interval {
-        let slot_duration = self.config.slot_duration;
-        let next_slot_start = self.config.genesis_time
-            + slot_duration * u64::from(self.current_slot(now).strict_add(1.into())) as u32;
-        let delay = next_slot_start - now;
-        let mut interval = tokio::time::interval_at(
-            tokio::time::Instant::now()
-                + Duration::try_from(delay).expect("could not set slot timer duration"),
-            slot_duration,
-        );
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        interval
-    }
 }

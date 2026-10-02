@@ -141,7 +141,7 @@ where
         ),
         async move |(mut ticks, mut last_epoch, chain_api, signing_pk, zk_pk, component)| {
             loop {
-                let SlotTick { epoch, slot } = ticks.next().await?;
+                let SlotTick { epoch, slot, .. } = ticks.next().await?;
                 if Some(epoch) == last_epoch {
                     continue;
                 }

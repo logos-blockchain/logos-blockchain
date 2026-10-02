@@ -15,8 +15,7 @@ workspace = true
 [dependencies]
 async-trait           = { workspace = true }
 futures               = { workspace = true }
-lb-cryptarchia-engine = { features = ["tokio"], workspace = true }
-lb-era-parameters     = { workspace = true }
+lb-cryptarchia-engine = { workspace = true }
 lb-log-targets        = { workspace = true }
 lb-tracing            = { workspace = true }
 lb-utils              = { workspace = true }
@@ -27,7 +26,7 @@ serde_with            = { workspace = true }
 sntpc                 = { features = ["std", "tokio-socket"], optional = true, workspace = true }
 thiserror             = { optional = true, workspace = true }
 time                  = { features = ["std"], workspace = true }
-tokio                 = { workspace = true }
+tokio                 = { features = ["time"], workspace = true }
 tokio-stream          = { workspace = true }
 tracing               = { workspace = true }
 

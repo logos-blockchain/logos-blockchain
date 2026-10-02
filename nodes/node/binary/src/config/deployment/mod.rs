@@ -133,7 +133,7 @@ impl DeploymentSettings {
                 },
             });
         }
-        Eras::new(entries)
+        Eras::new(self.genesis_time().into(), entries)
     }
 
     /// The schedule resolved, if this release can run it.

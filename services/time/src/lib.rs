@@ -1,12 +1,13 @@
-use core::num::NonZero;
 use std::{
     fmt::{Debug, Display, Formatter},
     pin::Pin,
 };
 
 use futures::{Stream, StreamExt as _};
-use lb_cryptarchia_engine::{Epoch, EpochConfig, Slot, time::SlotConfig};
-use lb_era_parameters::{EraDefinition, EraParameters};
+use lb_cryptarchia_engine::{
+    Epoch, Slot,
+    era::{Era, Eras},
+};
 use lb_log_targets::time as log_targets_time;
 use log::error;
 use overwatch::{
@@ -16,7 +17,6 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
-use time::OffsetDateTime;
 use tokio::sync::{oneshot, watch};
 use tokio_stream::wrappers::WatchStream;
 
@@ -32,15 +32,19 @@ const LOG_TARGET: &str = log_targets_time::ROOT;
 /// and is mapped to the API response struct by the API layer
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TimeServiceInfo {
+    /// The slot duration of the era of the current slot.
     pub slot_duration_ms: u64,
     pub genesis_time_unix_ms: i64,
     pub current_slot: Slot,
     pub current_epoch: Epoch,
+    /// The epoch length of the era of the current slot.
     pub slots_per_epoch: u64,
 }
 
+/// A slot that has started, with its epoch and its era.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SlotTick {
+    pub era: Era,
     pub epoch: Epoch,
     pub slot: Slot,
 }
@@ -69,46 +73,12 @@ impl Debug for TimeServiceMessage {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug)]
 pub struct TimeServiceSettings<BackendSettings> {
-    /// Slot settings in order to compute proper slot times
-    pub slot_config: SlotConfig,
-    /// Epoch settings in order to compute proper epoch times
-    pub epoch_config: EpochConfig,
-    /// Base period length related to epochs, used to compute epochs as well
-    pub base_period_length: NonZero<u64>,
+    /// The chain's eras: when each starts, and how long its slots and epochs
+    /// last, which is all the time service needs of them.
+    pub eras: Eras<()>,
     pub backend: BackendSettings,
-}
-
-impl<BackendSettings> TimeServiceSettings<BackendSettings> {
-    /// The settings of the time service while `era` is in force, on the chain
-    /// that started at `genesis_time`, with `backend` as the clock.
-    #[must_use]
-    pub fn from_era(
-        era: &EraDefinition,
-        genesis_time: OffsetDateTime,
-        backend: BackendSettings,
-    ) -> Self {
-        let EraParameters::V1(parameters) = &era.parameters;
-        let epoch_config = &parameters.cryptarchia.epoch_config;
-        Self {
-            slot_config: SlotConfig {
-                slot_duration: parameters.time.slot_duration,
-                genesis_time,
-            },
-            epoch_config: EpochConfig {
-                epoch_stake_distribution_stabilization: epoch_config
-                    .epoch_stake_distribution_stabilization,
-                epoch_period_nonce_buffer: epoch_config.epoch_period_nonce_buffer,
-                epoch_period_nonce_stabilization: epoch_config.epoch_period_nonce_stabilization,
-            },
-            base_period_length: parameters
-                .cryptarchia
-                .consensus_config()
-                .base_period_length(),
-            backend,
-        }
-    }
 }
 
 pub struct TimeService<Backend, RuntimeServiceId>
@@ -205,9 +175,8 @@ fn handle_service_message<BackendSettings>(
 ) {
     match message {
         TimeServiceMessage::Info { sender } => {
-            let Ok(slot_duration_ms) =
-                u64::try_from(settings.slot_config.slot_duration.as_millis())
-            else {
+            let era = &settings.eras.at_slot(current_slot_tick.slot).entry;
+            let Ok(slot_duration_ms) = u64::try_from(era.slot_duration.as_millis()) else {
                 drop(sender.send(Err(
                     "slot duration exceeds u64::MAX milliseconds".to_owned(),
                 )));
@@ -215,25 +184,22 @@ fn handle_service_message<BackendSettings>(
             };
             let Ok(genesis_time_unix_ms) = i64::try_from(
                 settings
-                    .slot_config
-                    .genesis_time
+                    .eras
+                    .genesis()
+                    .start_time
                     .unix_timestamp_nanos()
                     .div_euclid(1_000_000),
             ) else {
                 drop(sender.send(Err("genesis time exceeds i64::MAX milliseconds".to_owned())));
                 return;
             };
-            drop(
-                sender.send(Ok(TimeServiceInfo {
-                    slot_duration_ms,
-                    genesis_time_unix_ms,
-                    current_slot: current_slot_tick.slot,
-                    current_epoch: current_slot_tick.epoch,
-                    slots_per_epoch: settings
-                        .epoch_config
-                        .epoch_length(settings.base_period_length),
-                })),
-            );
+            drop(sender.send(Ok(TimeServiceInfo {
+                slot_duration_ms,
+                genesis_time_unix_ms,
+                current_slot: current_slot_tick.slot,
+                current_epoch: current_slot_tick.epoch,
+                slots_per_epoch: era.epoch_length.get(),
+            })));
         }
         TimeServiceMessage::Subscribe { sender } => {
             let stream = Pin::new(Box::new(WatchStream::from_changes(watch_receiver.clone())));

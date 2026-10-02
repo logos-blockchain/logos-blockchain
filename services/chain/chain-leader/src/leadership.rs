@@ -320,7 +320,7 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
     // at the end yields the first tick of the next epoch to process, or `None`
     // when the tick stream ends (which ends the loop).
     let mut current_slot_tick = slot_timer.next().await;
-    while let Some(SlotTick { slot, epoch }) = current_slot_tick {
+    while let Some(SlotTick { slot, epoch, .. }) = current_slot_tick {
         let Some(slot_context) =
             fetch_slot_context(&cryptarchia_api, &wallet_api, &ledger_config, slot).await
         else {

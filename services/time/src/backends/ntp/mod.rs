@@ -1,14 +1,14 @@
 pub mod async_client;
 
 use std::{
-    num::NonZero,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
 
 use futures::{Stream, StreamExt as _};
-use lb_cryptarchia_engine::{EpochConfig, Slot, time::SlotConfig};
+use lb_cryptarchia_engine::{Slot, era::Eras};
 use lb_log_targets::time as log_targets_time;
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use sntpc::{NtpResult, fraction_to_nanoseconds};
@@ -79,21 +79,14 @@ impl TimeBackend for NtpTimeBackend {
                 }),
         ));
         // compute the initial slot ticking stream
-        let local_date = OffsetDateTime::now_utc();
-        let (current_slot_tick, slot_timer) = slot_timer(
-            settings.slot_config,
-            local_date,
-            Slot::from_offset_and_config(local_date, settings.slot_config),
-            settings.epoch_config,
-            settings.base_period_length,
-        );
+        let eras = Arc::new(settings.eras);
+        let (current_slot_tick, slot_timer) =
+            slot_timer(Arc::clone(&eras), OffsetDateTime::now_utc());
         (
             current_slot_tick,
             Pin::new(Box::new(NtpStream {
                 interval,
-                slot_config: settings.slot_config,
-                epoch_config: settings.epoch_config,
-                base_period_length: settings.base_period_length,
+                eras,
                 slot_timer,
                 last_emitted_slot: current_slot_tick.slot,
             })),
@@ -107,12 +100,8 @@ type NtpResultStream = Pin<Box<dyn Stream<Item = NtpResult> + Send + Sync + Unpi
 pub struct NtpStream {
     /// Update interval stream
     interval: NtpResultStream,
-    /// Slot settings in order to compute proper slot times
-    slot_config: SlotConfig,
-    /// Epoch settings in order to compute proper epoch times
-    epoch_config: EpochConfig,
-    /// Base period length related to epochs, used to compute epochs as well
-    base_period_length: NonZero<u64>,
+    /// The chain's eras, which lay slots and epochs out in time
+    eras: Arc<Eras<()>>,
     /// `SlotTick` interval stream. This stream is replaced when an internal
     /// clock update happens.
     slot_timer: EpochSlotTickStream,
@@ -141,10 +130,6 @@ impl NtpStream {
     ///   reaches a slot strictly greater than the last emitted one.
     /// - Forward NTP corrections replace the synthetic timer immediately. This
     ///   can skip intermediate slot numbers if NTP jumps ahead.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
     fn handle_ntp_update(self: Pin<&mut Self>, cx: &mut Context<'_>) {
         let this = self.get_mut();
 
@@ -181,16 +166,8 @@ impl NtpStream {
             }
         };
 
-        let current_slot = Slot::from_offset_and_config(date, this.slot_config);
-        let epoch_config = this.epoch_config;
-        let base_period_length = this.base_period_length;
-        let (_, new_slot_timer) = slot_timer(
-            this.slot_config,
-            date,
-            current_slot,
-            epoch_config,
-            base_period_length,
-        );
+        let (current_slot_tick, new_slot_timer) = slot_timer(Arc::clone(&this.eras), date);
+        let current_slot = current_slot_tick.slot;
 
         if current_slot < this.last_emitted_slot {
             tracing::warn!(
@@ -235,23 +212,28 @@ impl NtpStream {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
+    use std::num::NonZero;
+
+    use lb_cryptarchia_engine::{
+        Epoch,
+        era::{Era, EraEntry, EraVersion},
+    };
 
     use super::*;
 
-    // Dummy SlotConfig and EpochConfig for testing
-    fn test_configs() -> (SlotConfig, EpochConfig, NonZeroU64) {
-        let slot_config = SlotConfig {
-            slot_duration: Duration::from_secs(1),
-            genesis_time: OffsetDateTime::UNIX_EPOCH,
-        };
-        let epoch_config = EpochConfig {
-            epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
-            epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
-            epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
-        };
-        let base_period_length = NonZeroU64::new(1).unwrap();
-        (slot_config, epoch_config, base_period_length)
+    /// One era from the Unix epoch, with slots of 1 s in epochs of 3 slots.
+    fn test_eras() -> Eras<()> {
+        Eras::new(
+            OffsetDateTime::UNIX_EPOCH,
+            [EraEntry {
+                first_epoch: Epoch::new(0),
+                version: EraVersion::V1,
+                slot_duration: Duration::from_secs(1),
+                epoch_length: NonZero::new(3).unwrap(),
+                parameters: (),
+            }],
+        )
+        .unwrap()
     }
 
     // Struct to hold richer NTP test data
@@ -329,6 +311,7 @@ mod tests {
         type Item = SlotTick;
         fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             Poll::Ready(Some(SlotTick {
+                era: Era::GENESIS,
                 epoch: 0.into(),
                 slot: self.slot,
             }))
@@ -346,6 +329,7 @@ mod tests {
                 let slot = self.slots[self.idx];
                 self.idx += 1;
                 Poll::Ready(Some(SlotTick {
+                    era: Era::GENESIS,
                     epoch: 0.into(),
                     slot,
                 }))
@@ -358,7 +342,6 @@ mod tests {
     /// Helper to create and poll an `NtpStream` for a given test scenario.
     fn check_monotonic_slots(ntp_data: Vec<NtpTestData>, initial_slot: u64) {
         let poll_count = ntp_data.len();
-        let (slot_config, epoch_config, base_period_length) = test_configs();
         let ntp_stream = MockNtpResultStream {
             data: ntp_data,
             idx: 0,
@@ -368,9 +351,7 @@ mod tests {
         };
         let mut stream = NtpStream {
             interval: Box::pin(ntp_stream),
-            slot_config,
-            epoch_config,
-            base_period_length,
+            eras: Arc::new(test_eras()),
             slot_timer: Box::pin(slot_timer),
             last_emitted_slot: Slot::new(initial_slot),
         };
@@ -563,7 +544,6 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_backward_ntp_update_rebases_ahead_slot_stream() {
-        let (slot_config, epoch_config, base_period_length) = test_configs();
         let mut stream = NtpStream {
             interval: Box::pin(MockNtpResultStream {
                 data: vec![NtpTestData {
@@ -576,9 +556,7 @@ mod tests {
                 }],
                 idx: 0,
             }),
-            slot_config,
-            epoch_config,
-            base_period_length,
+            eras: Arc::new(test_eras()),
             slot_timer: Box::pin(MockSlotTimerSequence {
                 slots: vec![Slot::new(11)],
                 idx: 0,
@@ -617,7 +595,6 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_forward_ntp_update_skips_to_rebased_slot_stream() {
-        let (slot_config, epoch_config, base_period_length) = test_configs();
         let mut stream = NtpStream {
             interval: Box::pin(MockNtpResultStream {
                 data: vec![NtpTestData {
@@ -630,9 +607,7 @@ mod tests {
                 }],
                 idx: 0,
             }),
-            slot_config,
-            epoch_config,
-            base_period_length,
+            eras: Arc::new(test_eras()),
             slot_timer: Box::pin(MockSlotTimerSequence {
                 slots: vec![Slot::new(11)],
                 idx: 0,
@@ -656,7 +631,6 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_on_time_forward_on_time_backward_ntp_sequence() {
-        let (slot_config, epoch_config, base_period_length) = test_configs();
         let mut stream = NtpStream {
             interval: Box::pin(MockNtpResultStepStream {
                 steps: vec![
@@ -701,9 +675,7 @@ mod tests {
                 ],
                 idx: 0,
             }),
-            slot_config,
-            epoch_config,
-            base_period_length,
+            eras: Arc::new(test_eras()),
             slot_timer: Box::pin(MockSlotTimerSequence {
                 slots: vec![Slot::new(11)],
                 idx: 0,
@@ -782,20 +754,8 @@ mod tests {
             },
             update_interval: Duration::from_millis(1),
         };
-        let slot_config = SlotConfig {
-            slot_duration: Duration::from_secs(1),
-            genesis_time: OffsetDateTime::UNIX_EPOCH,
-        };
-        let epoch_config = EpochConfig {
-            epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
-            epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
-            epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
-        };
-        let base_period_length = NonZeroU64::new(1).unwrap();
         let settings = TimeServiceSettings {
-            slot_config,
-            epoch_config,
-            base_period_length,
+            eras: test_eras(),
             backend: backend_settings,
         };
         poll_ntp_backend_stream(settings, 25).await;
@@ -814,20 +774,8 @@ mod tests {
             },
             update_interval: Duration::from_millis(50),
         };
-        let slot_config = SlotConfig {
-            slot_duration: Duration::from_secs(1),
-            genesis_time: OffsetDateTime::UNIX_EPOCH,
-        };
-        let epoch_config = EpochConfig {
-            epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
-            epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
-            epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
-        };
-        let base_period_length = NonZeroU64::new(1).unwrap();
         let settings = TimeServiceSettings {
-            slot_config,
-            epoch_config,
-            base_period_length,
+            eras: test_eras(),
             backend: backend_settings,
         };
         poll_ntp_backend_stream(settings, 25).await;

@@ -1,4 +1,4 @@
-use lb_core::mantle::GenesisTime;
+use lb_cryptarchia_engine::era::Eras;
 use lb_era_parameters::EraDefinition;
 use lb_time_service::{
     TimeServiceSettings,
@@ -17,13 +17,13 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_time_service_settings(
         self,
-        era: &EraDefinition,
-        genesis_time: GenesisTime,
+        eras: &Eras<EraDefinition>,
     ) -> TimeServiceSettings<NtpTimeBackendSettings> {
-        TimeServiceSettings::from_era(
-            era,
-            genesis_time.into(),
-            NtpTimeBackendSettings {
+        TimeServiceSettings {
+            // The time service only needs when each era starts and how long
+            // its slots and epochs last.
+            eras: eras.map(|_| ()),
+            backend: NtpTimeBackendSettings {
                 ntp_client_settings: NTPClientSettings {
                     timeout: self.user.backend.client.timeout,
                     listening_interface: self.user.backend.client.listening_interface,
@@ -31,6 +31,6 @@ impl ServiceConfig {
                 ntp_server: self.user.backend.server,
                 update_interval: self.user.backend.update_interval,
             },
-        )
+        }
     }
 }

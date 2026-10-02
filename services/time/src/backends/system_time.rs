@@ -1,4 +1,5 @@
-use lb_cryptarchia_engine::Slot;
+use std::sync::Arc;
+
 use time::OffsetDateTime;
 
 use crate::{
@@ -19,15 +20,7 @@ impl TimeBackend for SystemTimeBackend {
 
     fn tick_stream(self) -> (SlotTick, EpochSlotTickStream) {
         let Self { settings } = self;
-        let local_date = OffsetDateTime::now_utc();
-        let current_slot = Slot::from_offset_and_config(local_date, settings.slot_config);
-        slot_timer(
-            settings.slot_config,
-            local_date,
-            current_slot,
-            settings.epoch_config,
-            settings.base_period_length,
-        )
+        slot_timer(Arc::new(settings.eras), OffsetDateTime::now_utc())
     }
 }
 
@@ -36,7 +29,10 @@ mod test {
     use std::{num::NonZero, time::Duration};
 
     use futures::StreamExt as _;
-    use lb_cryptarchia_engine::{EpochConfig, Slot, time::SlotConfig};
+    use lb_cryptarchia_engine::{
+        Epoch, Slot,
+        era::{EraEntry, EraVersion, Eras},
+    };
     use time::OffsetDateTime;
 
     use crate::{
@@ -49,20 +45,18 @@ mod test {
         const SAMPLE_SIZE: u64 = 5;
         // The initial slot is 0 but we expect the stream starts from the next slot (1).
         let expected: Vec<_> = (1..=SAMPLE_SIZE).map(Slot::from).collect();
-        let settings = TimeServiceSettings {
-            slot_config: SlotConfig {
+        let eras = Eras::new(
+            OffsetDateTime::now_utc(),
+            [EraEntry {
+                first_epoch: Epoch::new(0),
+                version: EraVersion::V1,
                 slot_duration: Duration::from_secs(1),
-                genesis_time: OffsetDateTime::now_utc(),
-            },
-            epoch_config: EpochConfig {
-                epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
-                epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
-                epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
-            },
-            base_period_length: NonZero::new(10).unwrap(),
-            backend: (),
-        };
-        let backend = SystemTimeBackend::init(settings);
+                epoch_length: NonZero::new(100).unwrap(),
+                parameters: (),
+            }],
+        )
+        .unwrap();
+        let backend = SystemTimeBackend::init(TimeServiceSettings { eras, backend: () });
         let (current_slot_tick, stream) = backend.tick_stream();
         assert_eq!(current_slot_tick.slot, 0.into());
         let result: Vec<_> = stream

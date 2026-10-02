@@ -1,17 +1,22 @@
-//! The eras of a chain.
+//! The eras of a chain, resolved into slots and wall-clock time.
 //!
 //! An era is a range of consecutive epochs governed by one set of parameters.
 //! Eras are numbered from 0, the era that starts at genesis, and each one names
 //! the version of its parameter set: the rules, the parameter layout and the
-//! codecs it runs. Every era has its own slot duration and epoch length.
+//! codecs it runs. Every era has its own slot duration and epoch length, so its
+//! boundaries are resolved era by era: an era's first slot follows the previous
+//! era's last epoch, measured in the previous era's epoch length, and its start
+//! time follows the previous era's last slot, measured in the previous era's
+//! slot duration.
 
 use core::{num::NonZero, time::Duration};
 
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use strum::{EnumIter, IntoEnumIterator as _};
 use thiserror::Error;
+use time::OffsetDateTime;
 
-use crate::time::Epoch;
+use crate::time::{Epoch, Slot};
 
 /// An era, by its number: its position in its chain's era schedule, counting
 /// from 0 for the era that starts at genesis.
@@ -99,11 +104,33 @@ pub struct EraEntry<Parameters> {
     pub parameters: Parameters,
 }
 
-/// An era of a schedule: the era as the schedule lists it, and its number.
+/// An era of a schedule, resolved: the era as the schedule lists it, its
+/// number, and where it starts in slots and in time, which follow from every
+/// era before it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScheduledEra<Parameters> {
     pub era: Era,
+    pub first_slot: Slot,
+    pub start_time: OffsetDateTime,
     pub entry: EraEntry<Parameters>,
+}
+
+impl<Parameters> ScheduledEra<Parameters> {
+    /// The first slot and the start time of an era starting at `next_epoch`,
+    /// right after this one. `None` on overflow.
+    fn boundary(&self, next_epoch: Epoch) -> Option<(Slot, OffsetDateTime)> {
+        let epochs = u64::from(
+            next_epoch
+                .into_inner()
+                .checked_sub(self.entry.first_epoch.into_inner())?,
+        );
+        let slots = epochs.checked_mul(self.entry.epoch_length.get())?;
+        let first_slot = Slot::new(self.first_slot.into_inner().checked_add(slots)?);
+        let start_time = self
+            .start_time
+            .checked_add(span(self.entry.slot_duration, slots)?)?;
+        Some((first_slot, start_time))
+    }
 }
 
 /// Why a list of eras cannot be resolved.
@@ -121,12 +148,14 @@ pub enum ErasError {
     OutOfOrder { previous: Epoch, next: Epoch },
     #[error("a chain has at most {} eras", u32::from(u16::MAX) + 1)]
     TooManyEras,
+    #[error("era {} starts beyond the slots or the time this node can represent", .0.into_inner())]
+    Overflow(Era),
 }
 
-/// A chain's eras, in schedule order.
+/// A chain's eras, each resolved against the ones before it.
 ///
-/// Never empty, and the first era starts at genesis, at epoch 0; era `n` is
-/// the `n`-th entry.
+/// Never empty, and the first era starts at genesis: at epoch 0, slot 0 and
+/// the genesis time. Era `n` is the `n`-th entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Eras<Parameters> {
     genesis: ScheduledEra<Parameters>,
@@ -134,8 +163,12 @@ pub struct Eras<Parameters> {
 }
 
 impl<Parameters> Eras<Parameters> {
-    /// Numbers `entries`, listed in schedule order.
-    pub fn new(entries: impl IntoIterator<Item = EraEntry<Parameters>>) -> Result<Self, ErasError> {
+    /// Resolves `entries`, listed in schedule order, for a chain that starts
+    /// at `genesis_time`.
+    pub fn new(
+        genesis_time: OffsetDateTime,
+        entries: impl IntoIterator<Item = EraEntry<Parameters>>,
+    ) -> Result<Self, ErasError> {
         let mut entries = entries.into_iter();
         let genesis = entries.next().ok_or(ErasError::Empty)?;
         if genesis.first_epoch != Epoch::new(0) {
@@ -143,6 +176,8 @@ impl<Parameters> Eras<Parameters> {
         }
         let genesis = ScheduledEra {
             era: Era::GENESIS,
+            first_slot: Slot::genesis(),
+            start_time: genesis_time,
             entry: genesis,
         };
         let mut after_genesis: Vec<ScheduledEra<Parameters>> = Vec::new();
@@ -160,7 +195,15 @@ impl<Parameters> Eras<Parameters> {
                     next: entry.first_epoch,
                 });
             }
-            after_genesis.push(ScheduledEra { era, entry });
+            let (first_slot, start_time) = previous
+                .boundary(entry.first_epoch)
+                .ok_or(ErasError::Overflow(era))?;
+            after_genesis.push(ScheduledEra {
+                era,
+                first_slot,
+                start_time,
+                entry,
+            });
         }
         Ok(Self {
             genesis,
@@ -173,38 +216,284 @@ impl<Parameters> Eras<Parameters> {
     pub const fn genesis(&self) -> &ScheduledEra<Parameters> {
         &self.genesis
     }
+
+    /// The same schedule, each era carrying what `f` makes of it instead of
+    /// its parameters. Numbers, boundaries, versions and lengths are kept.
+    pub fn map<Mapped>(
+        &self,
+        mut f: impl FnMut(&ScheduledEra<Parameters>) -> Mapped,
+    ) -> Eras<Mapped> {
+        let genesis = map_era(&self.genesis, f(&self.genesis));
+        let after_genesis = self
+            .after_genesis
+            .iter()
+            .map(|era| map_era(era, f(era)))
+            .collect();
+        Eras {
+            genesis,
+            after_genesis,
+        }
+    }
+
+    /// The era `slot` belongs to.
+    #[must_use]
+    pub fn at_slot(&self, slot: Slot) -> &ScheduledEra<Parameters> {
+        self.last_started(|era| era.first_slot <= slot)
+    }
+
+    /// The epoch `slot` belongs to, counted in the epoch length of its era.
+    ///
+    /// # Panics
+    ///
+    /// If the epoch does not fit an [`Epoch`].
+    #[must_use]
+    pub fn epoch_of(&self, slot: Slot) -> Epoch {
+        let era = self.at_slot(slot);
+        let epochs_into_era = slot.into_inner().strict_sub(era.first_slot.into_inner())
+            / era.entry.epoch_length.get();
+        let epoch = u64::from(era.entry.first_epoch.into_inner()).strict_add(epochs_into_era);
+        Epoch::new(u32::try_from(epoch).expect("the epoch of a slot must fit an epoch number"))
+    }
+
+    /// The slot in progress at `time`, counted in the slot duration of its
+    /// era: the genesis slot before genesis.
+    ///
+    /// # Panics
+    ///
+    /// If the slot does not fit a [`Slot`].
+    #[must_use]
+    pub fn slot_at(&self, time: OffsetDateTime) -> Slot {
+        let era = self.last_started(|era| era.start_time <= time);
+        // Negative only before genesis: every later era starts by `time`.
+        let Ok(since_start) = u128::try_from((time - era.start_time).whole_nanoseconds()) else {
+            return Slot::genesis();
+        };
+        let slots_into_era = u64::try_from(since_start / era.entry.slot_duration.as_nanos())
+            .expect("the slot in progress must fit a slot number");
+        Slot::new(era.first_slot.into_inner().strict_add(slots_into_era))
+    }
+
+    /// When `slot` starts, counted in the slot duration of its era.
+    ///
+    /// # Panics
+    ///
+    /// If the time does not fit an [`OffsetDateTime`].
+    #[must_use]
+    pub fn time_of(&self, slot: Slot) -> OffsetDateTime {
+        let era = self.at_slot(slot);
+        let slots_into_era = slot.into_inner().strict_sub(era.first_slot.into_inner());
+        span(era.entry.slot_duration, slots_into_era)
+            .and_then(|span| era.start_time.checked_add(span))
+            .expect("the start of a slot must fit a date and time")
+    }
+
+    /// The last era `started` holds for, given that it holds for the eras up
+    /// to some point of the schedule and for none after it: the genesis era
+    /// when it holds for no later one.
+    fn last_started(
+        &self,
+        started: impl FnMut(&ScheduledEra<Parameters>) -> bool,
+    ) -> &ScheduledEra<Parameters> {
+        match self.after_genesis.partition_point(started) {
+            0 => &self.genesis,
+            started_after_genesis => &self.after_genesis[started_after_genesis - 1],
+        }
+    }
+}
+
+const fn map_era<Parameters, Mapped>(
+    era: &ScheduledEra<Parameters>,
+    parameters: Mapped,
+) -> ScheduledEra<Mapped> {
+    ScheduledEra {
+        era: era.era,
+        first_slot: era.first_slot,
+        start_time: era.start_time,
+        entry: EraEntry {
+            first_epoch: era.entry.first_epoch,
+            version: era.entry.version,
+            slot_duration: era.entry.slot_duration,
+            epoch_length: era.entry.epoch_length,
+            parameters,
+        },
+    }
+}
+
+/// `slots` slots of `slot_duration` each, as a span of time. `None` on
+/// overflow.
+fn span(slot_duration: Duration, slots: u64) -> Option<time::Duration> {
+    const NANOS_PER_SECOND: u128 = 1_000_000_000;
+    let nanos = slot_duration.as_nanos().checked_mul(u128::from(slots))?;
+    let seconds = i64::try_from(nanos / NANOS_PER_SECOND).ok()?;
+    let subsecond_nanos = i32::try_from(nanos % NANOS_PER_SECOND).ok()?;
+    Some(time::Duration::new(seconds, subsecond_nanos))
 }
 
 #[cfg(test)]
 mod tests {
     use core::{num::NonZero, time::Duration};
 
-    use super::{EraEntry, EraVersion, Eras, ErasError};
-    use crate::time::Epoch;
+    use time::OffsetDateTime;
 
-    fn entry(first_epoch: u32) -> EraEntry<()> {
+    use super::{Era, EraEntry, EraVersion, Eras, ErasError};
+    use crate::time::{Epoch, Slot};
+
+    const GENESIS: OffsetDateTime = OffsetDateTime::UNIX_EPOCH;
+
+    fn entry(first_epoch: u32, slot_duration: Duration, epoch_length: u64) -> EraEntry<()> {
         EraEntry {
             first_epoch: Epoch::new(first_epoch),
             version: EraVersion::V1,
-            slot_duration: Duration::from_secs(1),
-            epoch_length: NonZero::new(100).unwrap(),
+            slot_duration,
+            epoch_length: NonZero::new(epoch_length).unwrap(),
             parameters: (),
+        }
+    }
+
+    /// Era 0: slots of 1 s, epochs of 100 slots. Era 1 from epoch 3: slots of
+    /// 2 s, epochs of 50 slots. Era 2 from epoch 5: slots of 1.5 s, epochs of
+    /// 3 slots. Era 3 from epoch 6: slots of 1 s, epochs of 100 slots.
+    fn four_eras() -> Eras<()> {
+        Eras::new(
+            GENESIS,
+            [
+                entry(0, Duration::from_secs(1), 100),
+                entry(3, Duration::from_secs(2), 50),
+                entry(5, Duration::from_millis(1500), 3),
+                entry(6, Duration::from_secs(1), 100),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn seconds(seconds: f64) -> OffsetDateTime {
+        GENESIS + time::Duration::seconds_f64(seconds)
+    }
+
+    #[test]
+    fn each_era_starts_where_the_previous_one_ends_in_its_own_units() {
+        let eras = four_eras();
+        let boundaries: Vec<_> = [0, 299, 300, 399, 400, 402, 403]
+            .map(|slot| {
+                let era = eras.at_slot(Slot::new(slot));
+                (slot, era.era, era.first_slot, era.start_time)
+            })
+            .into_iter()
+            .collect();
+        assert_eq!(
+            boundaries,
+            [
+                (0, Era::GENESIS, Slot::genesis(), GENESIS),
+                (299, Era::GENESIS, Slot::genesis(), GENESIS),
+                // 3 epochs of 100 slots of 1 s.
+                (300, Era::new(1), Slot::new(300), seconds(300.0)),
+                (399, Era::new(1), Slot::new(300), seconds(300.0)),
+                // Then 2 epochs of 50 slots of 2 s.
+                (400, Era::new(2), Slot::new(400), seconds(500.0)),
+                (402, Era::new(2), Slot::new(400), seconds(500.0)),
+                // Then 1 epoch of 3 slots of 1.5 s.
+                (403, Era::new(3), Slot::new(403), seconds(504.5)),
+            ]
+        );
+    }
+
+    #[test]
+    fn slots_and_epochs_are_counted_in_the_units_of_their_era() {
+        let eras = four_eras();
+        let epochs = [0, 99, 100, 299, 300, 349, 350, 399, 400, 402, 403, 502, 503]
+            .map(|slot| (slot, eras.epoch_of(Slot::new(slot)).into_inner()));
+        assert_eq!(
+            epochs,
+            [
+                (0, 0),
+                (99, 0),
+                (100, 1),
+                (299, 2),
+                (300, 3),
+                (349, 3),
+                (350, 4),
+                (399, 4),
+                (400, 5),
+                (402, 5),
+                (403, 6),
+                (502, 6),
+                (503, 7),
+            ]
+        );
+
+        let slots = [
+            -10.0, 0.0, 0.999, 1.0, 299.999, 300.0, 301.999, 302.0, 500.0, 501.499, 501.5, 504.5,
+        ]
+        .map(|at| (at, eras.slot_at(seconds(at)).into_inner()));
+        assert_eq!(
+            slots,
+            [
+                // Before genesis, the genesis slot is in progress.
+                (-10.0, 0),
+                (0.0, 0),
+                (0.999, 0),
+                (1.0, 1),
+                (299.999, 299),
+                (300.0, 300),
+                (301.999, 300),
+                (302.0, 301),
+                (500.0, 400),
+                (501.499, 400),
+                (501.5, 401),
+                (504.5, 403),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_slot_starts_when_the_previous_one_ends() {
+        let eras = four_eras();
+        for slot in (0..=600).map(Slot::new) {
+            let start = eras.time_of(slot);
+            assert_eq!(eras.slot_at(start), slot);
+            let next_start = eras.time_of(Slot::new(slot.into_inner() + 1));
+            assert_eq!(eras.slot_at(next_start - time::Duration::NANOSECOND), slot);
+        }
+    }
+
+    #[test]
+    fn a_mapped_schedule_keeps_its_boundaries() {
+        let eras = four_eras();
+        let numbers = eras.map(|era| era.era);
+        for slot in [0, 300, 400, 403].map(Slot::new) {
+            let era = numbers.at_slot(slot);
+            assert_eq!(era.entry.parameters, era.era);
+            assert_eq!(era.first_slot, eras.at_slot(slot).first_slot);
+            assert_eq!(era.start_time, eras.at_slot(slot).start_time);
         }
     }
 
     #[test]
     fn invalid_schedules_are_rejected() {
-        assert_eq!(Eras::<()>::new([]), Err(ErasError::Empty));
+        let second = Duration::from_secs(1);
+        assert_eq!(Eras::<()>::new(GENESIS, []), Err(ErasError::Empty));
         assert_eq!(
-            Eras::new([entry(1)]),
+            Eras::new(GENESIS, [entry(1, second, 100)]),
             Err(ErasError::FirstEraAfterGenesis(Epoch::new(1)))
         );
         assert_eq!(
-            Eras::new([entry(0), entry(5), entry(5)]),
+            Eras::new(
+                GENESIS,
+                [
+                    entry(0, second, 100),
+                    entry(5, second, 100),
+                    entry(5, second, 100)
+                ]
+            ),
             Err(ErasError::OutOfOrder {
                 previous: Epoch::new(5),
                 next: Epoch::new(5)
             })
+        );
+        // Two epochs of the genesis era already run past the last slot.
+        assert_eq!(
+            Eras::new(GENESIS, [entry(0, second, u64::MAX), entry(2, second, 100)]),
+            Err(ErasError::Overflow(Era::new(1)))
         );
     }
 }

@@ -166,7 +166,6 @@ pub fn run_node_from_config(
     // chain ID is fixed by the deployment, so the API backend is handed it up
     // front rather than querying a service for a value that cannot change.
     let chain_id = config.deployment.chain_id();
-    let genesis_time = config.deployment.genesis_time();
 
     // The schedule, resolved. This release runs single-era schedules only, so
     // the genesis era is in force, and its protocol names, derived from the
@@ -193,7 +192,7 @@ pub fn run_node_from_config(
     let time_service_config = TimeConfig {
         user: config.user.time,
     }
-    .into_time_service_settings(era, genesis_time);
+    .into_time_service_settings(&eras);
 
     let (chain_service_config, chain_network_config, chain_leader_config) = CryptarchiaConfig {
         user: config.user.cryptarchia,
