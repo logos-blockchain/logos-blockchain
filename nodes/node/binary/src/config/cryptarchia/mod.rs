@@ -19,7 +19,7 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_cryptarchia_services_settings(
         self,
-        eras: &Eras<EraDefinition>,
+        eras: &Arc<Eras<EraDefinition>>,
         genesis_block: GenesisBlock,
         recovery_data: RecoveryData,
     ) -> (
@@ -27,10 +27,6 @@ impl ServiceConfig {
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
         lb_chain_leader_service::LeaderSettings,
     ) {
-        // The chain service and the leader apply each block under the ledger
-        // config of its era.
-        let ledger_eras = Arc::new(eras.map(|era| era.entry.parameters.parameters.ledger_config()));
-
         let chain_service_settings = lb_chain_service::CryptarchiaSettings {
             bootstrap: lb_chain_service::BootstrapConfig {
                 force_bootstrap: self.user.service.bootstrap.force_bootstrap,
@@ -50,7 +46,7 @@ impl ServiceConfig {
                         .state_recording_interval,
                 },
             },
-            ledger_eras: Arc::clone(&ledger_eras),
+            eras: Arc::clone(eras),
             recovery_data,
             starting_state: genesis_block.into(),
             sync: lb_chain_service::SyncConfig {
@@ -106,7 +102,7 @@ impl ServiceConfig {
             },
         };
         let chain_leader_settings = lb_chain_leader_service::LeaderSettings {
-            ledger_eras,
+            eras: Arc::clone(eras),
             wallet_config: lb_chain_leader_service::LeaderWalletConfig {
                 funding_pk: self.user.leader.wallet.funding_pk,
                 max_tx_fee: self.user.leader.wallet.max_tx_fee,

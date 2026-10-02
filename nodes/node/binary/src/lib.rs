@@ -5,7 +5,7 @@ pub mod generic_services;
 pub mod global_allocators;
 pub mod panic;
 
-use std::{collections::HashMap, panic::set_hook};
+use std::{collections::HashMap, panic::set_hook, sync::Arc};
 
 use color_eyre::eyre::{Result, eyre};
 pub use lb_blend_service::core::backends::libp2p::Libp2pBlendBackend as BlendBackend;
@@ -171,7 +171,7 @@ pub fn run_node_from_config(
     // the genesis era is in force, and its protocol names, derived from the
     // chain and its fork, go to every service that speaks a protocol or a
     // topic.
-    let eras = config.deployment.runnable_eras()?;
+    let eras = Arc::new(config.deployment.runnable_eras()?);
     let era = &eras.genesis().entry.parameters;
     let protocol_names = era.protocol_names.clone();
 

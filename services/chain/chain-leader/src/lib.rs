@@ -32,6 +32,7 @@ use lb_core::{
     sdp::blend::PolEpochState,
 };
 use lb_cryptarchia_engine::{Slot, era::Eras};
+use lb_era_parameters::EraDefinition;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
 use lb_ledger::{ConfigSchedule as _, LedgerState};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
@@ -188,9 +189,9 @@ impl Debug for LeaderMsg {
 
 #[derive(Debug, Clone)]
 pub struct LeaderSettings {
-    /// The ledger config of every era: each proposal is built under the
-    /// config of the era of the slot it is for.
-    pub ledger_eras: Arc<Eras<lb_ledger::Config>>,
+    /// The chain's eras: each proposal is built under the ledger config of the
+    /// era of the slot it is for.
+    pub eras: Arc<Eras<EraDefinition>>,
     pub wallet_config: LeaderWalletConfig,
 }
 
@@ -375,13 +376,14 @@ where
         );
 
         let LeaderSettings {
-            ledger_eras,
+            eras,
             wallet_config,
         } = self
             .service_resources_handle
             .settings_handle
             .notifier()
             .get_updated_settings();
+        let ledger_eras = Arc::new(lb_chain_service::ledger_eras(&eras));
 
         let wallet_api = WalletApi::<Wallet, RuntimeServiceId>::new(
             self.service_resources_handle

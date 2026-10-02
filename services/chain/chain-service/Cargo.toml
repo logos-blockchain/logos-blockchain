@@ -22,6 +22,7 @@ lb-chain-broadcast-service = { workspace = true }
 lb-core                    = { workspace = true }
 lb-cryptarchia-engine      = { workspace = true }
 lb-cryptarchia-sync        = { workspace = true }
+lb-era-parameters          = { workspace = true }
 lb-groth16                 = { workspace = true }
 lb-ledger                  = { workspace = true }
 lb-log-targets             = { workspace = true }

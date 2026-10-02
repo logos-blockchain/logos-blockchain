@@ -86,7 +86,7 @@ impl ServiceState for CryptarchiaConsensusState {
                 let epoch_nonce = genesis_tx.cryptarchia_parameter().epoch_nonce;
                 let (ledger, _events) = LedgerState::from_genesis_tx(
                     genesis_tx.clone(),
-                    &settings.ledger_eras,
+                    &crate::ledger_eras(&settings.eras),
                     epoch_nonce,
                 )?;
                 (lib_id, lib_id, ledger)
