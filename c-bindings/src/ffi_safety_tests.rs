@@ -162,7 +162,9 @@ impl TestConfigPaths {
     }
 
     fn start(&self) -> *mut LogosBlockchainNode {
-        let result = start_lb_node(self.node_config.as_ptr(), self.deployment_config.as_ptr());
+        let result = unsafe {
+            start_lb_node(self.node_config.as_ptr(), self.deployment_config.as_ptr())
+        };
         let node = result.value;
         let (status, message) = consume(result);
         assert_eq!(status, OperationStatusCode::Ok, "start failed: {message}");
@@ -224,6 +226,8 @@ mod no_node {
             assert_eq!(code(blend_info(node)), np);
             assert_eq!(code(shutdown_node(ptr::null_mut())), np);
 
+            assert_eq!(code(start_lb_node(null_s, null_s)), np);
+            assert_eq!(code(start_lb_node(null_s, s)), np);
             assert_eq!(code(get_peer_id(null_s)), np);
             assert_eq!(code(update_user_config(null_s, s)), np);
             assert_eq!(code(update_user_config(s, null_s)), np);
@@ -871,19 +875,10 @@ mod with_node {
 /// Each of these takes the process down. Run one at a time:
 ///
 /// ```text
-/// cargo test -p logos-blockchain-c -- --ignored --exact ffi_audit_tests::crashers::<name>
+/// cargo test -p logos-blockchain-c -- --ignored --exact ffi_safety_tests::crashers::<name>
 /// ```
 mod crashers {
     use super::*;
-
-    /// `start_lb_node` is a safe `extern "C" fn` that hands `config_path`
-    /// straight to `CStr::from_ptr`.
-    #[test]
-    #[ignore = "segfaults: start_lb_node does not check config_path for NULL"]
-    fn start_lb_node_null_config_path() {
-        let result = start_lb_node(ptr::null(), ptr::null());
-        eprintln!("AUDIT survived: {:?}", consume(result));
-    }
 
     /// An error message that carries a NUL byte panics inside
     /// `OperationStatus::error`, and a panic cannot leave an `extern "C"` fn.
@@ -899,7 +894,7 @@ mod crashers {
             .replace("type: traversal", "type: \"a\\0b\"");
         std::fs::write(&path, yaml).unwrap();
         let path = cstring(&path);
-        let result = start_lb_node(path.as_ptr(), ptr::null());
+        let result = unsafe { start_lb_node(path.as_ptr(), ptr::null()) };
         eprintln!("AUDIT survived: {:?}", consume(result));
     }
 
