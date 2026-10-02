@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use lb_cryptarchia_engine::era::Eras;
 use lb_era_parameters::EraDefinition;
 use lb_pow_service::PoWServiceSettings;
@@ -15,9 +17,14 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_pow_service_settings(
         self,
-        eras: &Eras<EraDefinition>,
+        eras: &Arc<Eras<EraDefinition>>,
         recovery_data: RecoveryData,
     ) -> PoWServiceSettings {
-        PoWServiceSettings::from_eras(eras, self.user.mining, self.user.auto_claim, recovery_data)
+        PoWServiceSettings {
+            mining: self.user.mining,
+            auto_claim: self.user.auto_claim,
+            eras: Arc::clone(eras),
+            recovery_data,
+        }
     }
 }
