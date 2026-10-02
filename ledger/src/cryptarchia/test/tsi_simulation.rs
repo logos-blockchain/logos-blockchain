@@ -47,7 +47,6 @@ use crate::{
     cryptarchia::{
         EpochState, LedgerState, UtxoTree,
         block_density::BlockDensity,
-        stake::StakeInference,
         tests::{config, generate_proof},
     },
     mantle::sdp::SdpLedger,
@@ -232,11 +231,6 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
             epoch: 1.into(),
             ..epoch_state.clone()
         },
-        stake_inference: Arc::new(StakeInference::new(
-            config.consensus_config.stake_inference_learning_rate(),
-            config.consensus_config.slot_activation_coeff().as_f64(),
-            config.total_stake_inference_period(),
-        )),
         block_density: BlockDensity::new(config.epoch(0.into()), config),
         epoch_state,
         fee_window: [0.into(); WINDOW_SIZE],

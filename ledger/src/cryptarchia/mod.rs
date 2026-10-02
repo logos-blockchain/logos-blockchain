@@ -226,9 +226,6 @@ pub struct LedgerState {
     pub epoch_state: EpochState,
     #[educe(PartialEq(ignore))]
     block_density: BlockDensity,
-    // Using an Arc wrapper here as this can be completely shared among instances of LedgerState
-    #[educe(PartialEq(ignore))]
-    stake_inference: Arc<StakeInference>,
     // rolling fee window of 120 blocks, used to derive block rewards
     #[serde(with = "serde_arrays")]
     fee_window: [GasCost; WINDOW_SIZE],
@@ -301,10 +298,11 @@ impl LedgerState {
             // case 2)
 
             // infer new total stake
-            let total_stake = self.stake_inference.total_stake_inference::<PRECISION>(
-                self.epoch_state.total_stake,
-                self.block_density.current_block_density(),
-            );
+            let total_stake = StakeInference::from_config(config)
+                .total_stake_inference::<PRECISION>(
+                    self.epoch_state.total_stake,
+                    self.block_density.current_block_density(),
+                );
             let (lottery_0, lottery_1) = config
                 .lottery_constants()
                 .compute_lottery_values(total_stake);
@@ -368,15 +366,14 @@ impl LedgerState {
             // case 3)
 
             // First, infer total stake using block density of the current epoch
-            let mut total_stake = self.stake_inference.total_stake_inference::<PRECISION>(
+            let stake_inference = StakeInference::from_config(config);
+            let mut total_stake = stake_inference.total_stake_inference::<PRECISION>(
                 self.epoch_state.total_stake,
                 self.block_density.current_block_density(),
             );
             // Adjust total stake with zero block density for skipped epochs
             for _ in u32::from(next_epoch_state.epoch())..u32::from(new_epoch) {
-                total_stake = self
-                    .stake_inference
-                    .total_stake_inference::<PRECISION>(total_stake, 0);
+                total_stake = stake_inference.total_stake_inference::<PRECISION>(total_stake, 0);
             }
             let (lottery_0, lottery_1) = config
                 .lottery_constants()
@@ -751,11 +748,6 @@ impl LedgerState {
             .lottery_constants()
             .compute_lottery_values(total_stake);
         let slot: Slot = 0.into();
-        let stake_inference = Arc::new(StakeInference::new(
-            config.consensus_config.stake_inference_learning_rate(),
-            config.consensus_config.slot_activation_coeff().as_f64(),
-            config.total_stake_inference_period(),
-        ));
         let block_density = BlockDensity::new(config.epoch(slot), config);
         Self {
             utxos: utxos.clone(),
@@ -785,7 +777,6 @@ impl LedgerState {
                 active_declarations: Arc::new(Declarations::default()),
             },
             block_density,
-            stake_inference,
             fee_window: [0.into(); 120],
             average_execution_gas: 0.into(),
             execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
@@ -1159,11 +1150,6 @@ pub mod tests {
             .map(|utxo| (utxo.id(), *utxo))
             .collect::<UtxoTree>();
         let slot = 0.into();
-        let stake_inference = Arc::new(StakeInference::new(
-            config.consensus_config.stake_inference_learning_rate(),
-            config.consensus_config.slot_activation_coeff().as_f64(),
-            config.total_stake_inference_period(),
-        ));
         let block_density = BlockDensity::new(config.epoch(slot), &config);
 
         let epoch_state = EpochState {
@@ -1194,7 +1180,6 @@ pub mod tests {
             slot,
             next_epoch_state,
             epoch_state,
-            stake_inference,
             fee_window: [0.into(); 120],
             average_execution_gas: 0.into(),
             block_density,
@@ -1821,7 +1806,7 @@ pub mod tests {
         let config = config();
         assert_eq!(config.epoch_length(), 100);
         let (mut ledger, genesis) = ledger(&[utxo], config.clone());
-        let inference = stake_inference_from_config(&config);
+        let inference = StakeInference::from_config(&config);
 
         let ts_genesis = ledger.states[&genesis]
             .cryptarchia_ledger
@@ -2318,14 +2303,6 @@ pub mod tests {
         assert_eq!(ledger_state_2.slot, slot);
         assert_ne!(ledger_state_2.nonce, ledger_state_1.nonce); // advanced
         assert_eq!(ledger_state_2.epoch_state.epoch, 2);
-    }
-
-    fn stake_inference_from_config(config: &Config) -> StakeInference {
-        StakeInference::new(
-            config.consensus_config.stake_inference_learning_rate(),
-            config.consensus_config.slot_activation_coeff().as_f64(),
-            config.total_stake_inference_period(),
-        )
     }
 
     /// If the network is constantly full, execution gas must get more
