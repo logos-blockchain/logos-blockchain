@@ -1,18 +1,19 @@
 use core::time::Duration;
 
+#[cfg(test)]
+use lb_core::era::Era;
 use lb_core::{
     block::genesis::GenesisBlock,
-    era::{Era, EraDigest, ForkDigest},
+    era::{EraDigest, ForkDigest},
     header::HeaderId,
     mantle::{
         traits::GenesisTx as _,
         transactions::genesis_tx::{ChainId, GenesisTime},
     },
 };
-use lb_cryptarchia_engine::{
-    Epoch,
-    era::{EraEntry, Eras, ErasError},
-};
+#[cfg(test)]
+use lb_cryptarchia_engine::Epoch;
+use lb_cryptarchia_engine::era::{EraEntry, Eras, ErasError};
 use lb_era_parameters::{EraDefinition, EraParameters, ProtocolNames, v1};
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
@@ -61,11 +62,13 @@ impl DeploymentSettings {
     /// after `era` are left out, so scheduling a new era changes neither this
     /// digest nor the protocol names derived from it until the new era
     /// activates. `None` if the schedule has no era `era`.
+    #[cfg(test)]
     #[must_use]
     pub fn fork_digest_at_era(&self, era: Era) -> Option<ForkDigest> {
         fork_digest_at_era(self.genesis_id(), &self.chain_id(), self.eras.iter(), era)
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn genesis_fork_digest(&self) -> ForkDigest {
         self.fork_digest_at_era(Era::GENESIS)
@@ -75,16 +78,19 @@ impl DeploymentSettings {
     /// The protocol and topic names of this deployment's chain while `era` is
     /// in force, derived from its chain ID and from the fork digest of `era`.
     /// `None` if the schedule has no era `era`.
+    #[cfg(test)]
     #[must_use]
     pub fn protocol_names_at_era(&self, era: Era) -> Option<ProtocolNames> {
         self.fork_digest_at_era(era)
             .map(|fork_digest| ProtocolNames::derive(&self.chain_id(), fork_digest))
     }
 
-    #[must_use]
-    pub fn genesis_protocol_names(&self) -> ProtocolNames {
-        self.protocol_names_at_era(Era::GENESIS)
-            .expect("every era schedule has a genesis era")
+    /// The protocol and topic names of this deployment's chain now: those of
+    /// the era in force by the wall clock.
+    pub fn protocol_names_in_force(&self) -> Result<ProtocolNames, ErasError> {
+        let eras = self.eras()?;
+        let now = eras.slot_at(time::OffsetDateTime::now_utc());
+        Ok(eras.at_slot(now).entry.parameters.protocol_names.clone())
     }
 
     /// The parameters of the genesis era, in version 1's layout, the only one
@@ -136,28 +142,6 @@ impl DeploymentSettings {
         }
         Eras::new(self.genesis_time().into(), entries)
     }
-
-    /// The schedule resolved, if this release can run it.
-    ///
-    /// Switching eras while running is not implemented yet, so a schedule of
-    /// more than one era is refused: a node would otherwise keep running the
-    /// first era past the second one's start, and fork off the chain.
-    pub fn runnable_eras(&self) -> Result<Eras<EraDefinition>, UnrunnableDeployment> {
-        let scheduled = self.eras.iter().len();
-        if scheduled > 1 {
-            return Err(UnrunnableDeployment::MultipleEras(scheduled));
-        }
-        Ok(self.eras()?)
-    }
-}
-
-/// Why this release cannot run a deployment.
-#[derive(Debug, thiserror::Error)]
-pub enum UnrunnableDeployment {
-    #[error(transparent)]
-    Schedule(#[from] ErasError),
-    #[error("this release runs single-era schedules only, but the deployment schedules {0} eras")]
-    MultipleEras(usize),
 }
 
 impl Default for DeploymentSettings {
@@ -171,6 +155,7 @@ impl Default for DeploymentSettings {
 /// `genesis_id` while `era` is in force, given every era of the chain's
 /// schedule in activation order: of the eras up to `era` only. `None` if the
 /// schedule has fewer eras.
+#[cfg(test)]
 fn fork_digest_at_era<'era, Eras>(
     genesis_id: HeaderId,
     chain_id: &ChainId,
@@ -202,7 +187,7 @@ mod tests {
 
     use crate::config::{
         DeploymentSettings,
-        deployment::{EraSchedule, UnrunnableDeployment, fork_digest_at_era},
+        deployment::{EraSchedule, fork_digest_at_era},
     };
 
     #[test]
@@ -309,23 +294,28 @@ mod tests {
     }
 
     #[test]
-    fn only_single_era_schedules_run() {
-        let settings = DeploymentSettings::default();
-        let eras = settings.runnable_eras().unwrap();
-        assert_eq!(
-            eras.genesis()
-                .entry
-                .parameters
-                .protocol_names
-                .blend
-                .as_ref(),
-            settings.genesis_protocol_names().blend.as_ref()
-        );
+    fn every_era_of_a_schedule_runs_on_a_fork_of_its_own() {
+        let settings = two_era_settings();
+        let eras = settings.eras().unwrap();
+        let [genesis, second] = [Era::GENESIS, Era::new(1)].map(|era| eras.get(era).unwrap());
 
-        assert!(matches!(
-            two_era_settings().runnable_eras(),
-            Err(UnrunnableDeployment::MultipleEras(2))
-        ));
+        assert_eq!(second.entry.first_epoch, Epoch::new(100));
+        assert_ne!(
+            genesis.entry.parameters.fork_digest,
+            second.entry.parameters.fork_digest
+        );
+        assert_ne!(
+            genesis.entry.parameters.protocol_names.blend.as_ref(),
+            second.entry.parameters.protocol_names.blend.as_ref()
+        );
+        assert_eq!(
+            second.entry.parameters.protocol_names.blend.as_ref(),
+            settings
+                .protocol_names_at_era(Era::new(1))
+                .unwrap()
+                .blend
+                .as_ref()
+        );
     }
 
     #[test]

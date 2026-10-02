@@ -58,15 +58,14 @@ async fn main() -> Result<()> {
             cli_args.user_config_path(),
             OnUnknownKeys::Fail,
         )?);
-        // If custom, check deployment config, and that this release can run
-        // its schedule.
+        // If custom, check deployment config, and that its schedule resolves.
         if let Some(custom_deployment_path) = cli_args.deployment_config_path() {
             drop(
                 deserialize_value_at_path::<DeploymentSettings>(
                     custom_deployment_path,
                     OnUnknownKeys::Fail,
                 )?
-                .runnable_eras()?,
+                .eras()?,
             );
         }
         #[expect(
@@ -91,9 +90,7 @@ async fn main() -> Result<()> {
         build_run_config(user_config, cli_args)?
     };
     let chain_id = run_config.deployment.chain_id();
-    // Only single-era schedules are supported for now, so the node follows the
-    // fork of the genesis era.
-    let fork_digest = run_config.deployment.genesis_fork_digest();
+    let forks = forks(&run_config.deployment)?;
 
     let app = run_node_from_config(run_config, None)
         .map_err(|e| eyre!("{e}"))
@@ -113,9 +110,26 @@ async fn main() -> Result<()> {
         })?;
     tracing::info!(
         target: node::ROOT,
-        "Running chain {chain_id} on fork {fork_digest}."
+        "Running chain {chain_id}: {forks}."
     );
 
     app.wait_finished().await;
     Ok(())
+}
+
+/// The fork of every era of `deployment`'s schedule, in activation order.
+fn forks(deployment: &DeploymentSettings) -> Result<String> {
+    Ok(deployment
+        .eras()?
+        .iter()
+        .map(|era| {
+            format!(
+                "era {} from epoch {} on fork {}",
+                era.era.into_inner(),
+                era.entry.first_epoch.into_inner(),
+                era.entry.parameters.fork_digest
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", "))
 }

@@ -33,9 +33,12 @@ pub struct DeploymentInfo {
 
 impl DeploymentInfo {
     fn new(deployment: &DeploymentSettings) -> Result<Self, OperationStatus> {
-        // Only single-era schedules are supported for now, so the genesis era
-        // is in force.
-        let protocol_names = deployment.genesis_protocol_names();
+        let protocol_names = deployment.protocol_names_in_force().map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::ConfigurationError,
+                format!("Failed to resolve the deployment's eras: {error}"),
+            )
+        })?;
         Ok(Self {
             chain_id: into_c_string(deployment.chain_id().as_ref())?,
             genesis_time: deployment.genesis_time().unix_timestamp(),

@@ -223,7 +223,7 @@ fn service_settings_receive_recovery_data() {
     };
 
     let deployment_settings = DeploymentSettings::default();
-    let eras = deployment_settings.runnable_eras().unwrap();
+    let eras = deployment_settings.eras().unwrap();
 
     let (_, blend_core_settings, _) = BlendServiceConfig {
         user: user_config.blend.clone(),

@@ -173,13 +173,14 @@ pub fn run_node_from_config(
     // front rather than querying a service for a value that cannot change.
     let chain_id = config.deployment.chain_id();
 
-    // The schedule, resolved. This release runs single-era schedules only, so
-    // the genesis era is in force, and its protocol names, derived from the
-    // chain and its fork, go to every service that speaks a protocol or a
-    // topic.
-    let eras = Arc::new(config.deployment.runnable_eras()?);
-    let era = &eras.genesis().entry.parameters;
-    let protocol_names = era.protocol_names.clone();
+    // The schedule, resolved once and shared by every service, each of which
+    // follows the era in force on its own.
+    let eras = Arc::new(config.deployment.eras()?);
+    // The names the network service starts with. Kademlia's and identify's are
+    // the chain's own, the same in every era; the chain sync protocols and the
+    // gossip topics follow the era in force, set by the services that use them
+    // once they start.
+    let protocol_names = eras.genesis().entry.parameters.protocol_names.clone();
 
     let genesis_block = config.deployment.genesis_block;
 
