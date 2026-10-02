@@ -9,7 +9,7 @@ use futures::StreamExt as _;
 use lb_core::{
     block::{Block, BlockTransactions, SignedHeader, UncleHeaders},
     mantle::{
-        Note, Op, OpProof, SignedOps, Utxo,
+        Note, Op, OpProof, SignedOps, TxHash, Utxo,
         channel::Channels,
         gas::{MainnetGasProfile, TxGasCalculator as _},
         ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
@@ -425,6 +425,104 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     assert!(lib_rx.try_recv().is_err());
 }
 
+/// A fork switch reports the transactions of every block that entered the
+/// canonical chain.
+#[tokio::test(flavor = "multi_thread")]
+async fn fork_switch_reports_transactions_of_every_newly_canonical_block() {
+    // G - b1                 (local chain)
+    //   \
+    //    f1(tx1) - f2(tx2)   (f2 becomes the new tip)
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    let _storage_svc = spawn_storage_service(storage_rx);
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays = CryptarchiaConsensusRelays::<_>::new(
+        OutboundRelay::new(broadcast_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
+        OutboundRelay::new(time_tx),
+    );
+    let (new_block_tx, _new_block_rx) = broadcast::channel(10);
+    let (lib_tx, _lib_rx) = broadcast::channel(10);
+
+    let config = ledger_config(3.try_into().unwrap());
+    let genesis_id: HeaderId = [0; 32].into();
+    let (zk_key, leader_utxo) = utxo();
+    let (_, funding_utxo_a) = utxo();
+    let (_, funding_utxo_b) = utxo();
+    let genesis = Cryptarchia::from_lib(
+        genesis_id,
+        LedgerState::from_utxos([leader_utxo, funding_utxo_a, funding_utxo_b], &config),
+        genesis_id,
+        config,
+        lb_cryptarchia_engine::State::Online,
+        Slot::genesis(),
+        0,
+        UncleSlots::default(),
+    );
+    let tx1 = burn_tx(funding_utxo_a, &zk_key);
+    let tx2 = burn_tx(funding_utxo_b, &zk_key);
+
+    // Build the fork on its own view, where each fork block is the tip when
+    // its child is built.
+    let mut fork_view = genesis.clone();
+    let (f1, _) = try_build_block_with_transactions(
+        &fork_view,
+        genesis_id,
+        leader_utxo,
+        &zk_key,
+        Slot::new(1),
+        UncleHeaders::empty(),
+        BlockTransactions::from([tx1.clone()]),
+    )
+    .unwrap();
+    fork_view
+        .try_apply_block(f1.clone(), f1.header().slot())
+        .unwrap();
+    let (f2, _) = try_build_block_with_transactions(
+        &fork_view,
+        f1.header().id(),
+        leader_utxo,
+        &zk_key,
+        f1.header().slot().strict_add(1.into()),
+        UncleHeaders::empty(),
+        BlockTransactions::from([tx2.clone()]),
+    )
+    .unwrap();
+
+    let mut cryptarchia = genesis;
+    let (b1, _) = try_build_block(
+        &cryptarchia,
+        genesis_id,
+        leader_utxo,
+        &zk_key,
+        Slot::new(1),
+        UncleHeaders::empty(),
+    )
+    .unwrap();
+
+    let mut apply = async |block: Block<SignedOps<Preverified, StandardMode>>| {
+        let slot = block.header().slot();
+        process_block(
+            &mut cryptarchia,
+            block,
+            slot,
+            BlockOrigin::Network,
+            &relays,
+            &new_block_tx,
+            &lib_tx,
+        )
+        .await
+        .unwrap()
+        .newly_canonical_txs
+    };
+
+    assert_eq!(apply(b1.clone()).await, Vec::<TxHash>::new());
+    // f1 only ties b1, so the local chain is kept and nothing enters it.
+    assert_eq!(apply(f1).await, Vec::<TxHash>::new());
+    assert_eq!(apply(f2.clone()).await, vec![tx1.hash(), tx2.hash()]);
+    assert_eq!(cryptarchia.tip(), f2.header().id());
+}
+
 #[test]
 fn ledger_is_not_commited_if_block_contains_invalid_zkp() {
     let config = ledger_config(NonZero::<u32>::new(1).unwrap());
@@ -477,6 +575,22 @@ fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedOps<Preverif
     transfer_tx(utxo, output_note, fake_key)
         .preverify()
         .expect("a fake signature is only caught by the stateful checks")
+}
+
+/// Creates a tx spending `utxo` with no outputs, so its whole value pays the
+/// fee.
+fn burn_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
+    let ops = Ops::from([Op::Transfer(TransferOp::new(
+        BoundedInputs::from(utxo.id()).into(),
+        Outputs::new([]),
+    ))]);
+    let op_proofs = OpProofs::from([OpProof::ZkSig(
+        ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap(),
+    )]);
+    SignedOps::from_parts(ops, op_proofs)
+        .unwrap()
+        .preverify()
+        .unwrap()
 }
 
 fn transfer_tx(utxo: Utxo, output_note: Note, key: &ZkKey) -> SignedOps<Unverified, StandardMode> {

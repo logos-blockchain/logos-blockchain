@@ -22,8 +22,8 @@ use tracing::{debug, error, info};
 
 use super::{InitialBlockDownload, Phase, PhaseTag};
 use crate::{
-    ConsensusMsg, Cryptarchia, CryptarchiaConsensusState, Error, LOG_TARGET, LibUpdate,
-    ProcessedBlockEvent, StartingState,
+    AppliedBlock, ConsensusMsg, Cryptarchia, CryptarchiaConsensusState, Error, LOG_TARGET,
+    LibUpdate, ProcessedBlockEvent, StartingState,
     notifier::ChainOnlineNotifier,
     relays::CryptarchiaConsensusRelays,
     service::{Service, reject_chain_sync_event},
@@ -148,7 +148,7 @@ where
 
     fn reject_apply_block_msg(
         &self,
-        reply_channel: oneshot::Sender<Result<(HeaderId, Vec<Tx>), Error>>,
+        reply_channel: oneshot::Sender<Result<AppliedBlock<Tx>, Error>>,
     ) {
         debug!(target: LOG_TARGET, "rejecting a block received during {:?} phase", self.phase);
         reply_channel

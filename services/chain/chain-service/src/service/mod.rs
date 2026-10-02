@@ -37,9 +37,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    BlockOrigin, ChainServiceInfo, ConsensusMsg, Cryptarchia, CryptarchiaConsensusState,
-    EpochStateQueryResult, Error, LOG_TARGET, LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo,
-    Query, metrics,
+    AppliedBlock, BlockOrigin, ChainServiceInfo, ConsensusMsg, Cryptarchia,
+    CryptarchiaConsensusState, EpochStateQueryResult, Error, LOG_TARGET, LibUpdate,
+    ProcessedBlockEvent, PrunedBlocksInfo, Query, metrics,
     notifier::ChainOnlineNotifier,
     relays::{BroadcastRelay, CryptarchiaConsensusRelays},
     sync::block_provider::BlockProvider,
@@ -49,6 +49,7 @@ pub struct ProcessBlockOutcome<Tx> {
     pub pruned_blocks: PrunedBlocks<HeaderId>,
     pub reorged_block_ids: Vec<HeaderId>,
     pub reorged_txs: Vec<Tx>,
+    pub newly_canonical_txs: Vec<TxHash>,
 }
 
 // Source tips normally leave this map when they pass the LIB. These small
@@ -174,12 +175,16 @@ where
     async fn apply_block_and_reply(
         &mut self,
         block: Block<Tx>,
-        reply_channel: oneshot::Sender<Result<(HeaderId, Vec<Tx>), Error>>,
+        reply_channel: oneshot::Sender<Result<AppliedBlock<Tx>, Error>>,
     ) {
         match self.process_block_and_update_state(block).await {
             Ok(outcome) => {
                 reply_channel
-                    .send(Ok((self.cryptarchia.tip(), outcome.reorged_txs)))
+                    .send(Ok(AppliedBlock {
+                        tip: self.cryptarchia.tip(),
+                        newly_canonical_txs: outcome.newly_canonical_txs,
+                        reorged_txs: outcome.reorged_txs,
+                    }))
                     .unwrap_or_else(|_| {
                         error!(target: LOG_TARGET, "Could not send process block result through channel");
                     });
@@ -872,23 +877,93 @@ where
         }
     }
 
-    let reorged_txs: Vec<_> = join_all(
-        applied
-            .reorged_blocks
-            .iter()
-            .map(|id| relays.storage().get_block(id)),
-    )
-    .await
-    .into_iter()
-    .flatten()
-    .flat_map(Block::into_transactions)
-    .collect();
+    let reorged_txs = load_block_txs(applied.reorged_blocks.iter(), relays.storage()).await;
+    let newly_canonical_txs =
+        newly_canonical_txs(&block, &applied.newly_canonical_blocks, relays.storage()).await;
 
     Ok(ProcessBlockOutcome {
         pruned_blocks: applied.pruned_blocks,
         reorged_block_ids: applied.reorged_blocks.iter().copied().collect(),
         reorged_txs,
+        newly_canonical_txs,
     })
+}
+
+/// Transactions carried by `block_ids`, loaded from storage.
+async fn load_block_txs<'a, Tx>(
+    block_ids: impl Iterator<Item = &'a HeaderId>,
+    storage: &StorageApi<Tx>,
+) -> Vec<Tx>
+where
+    Tx: Hashable<Hash = TxHash>
+        + StorageSize
+        + Serialize
+        + DeserializeOwned
+        + Clone
+        + Eq
+        + Send
+        + Sync
+        + 'static,
+{
+    join_all(block_ids.map(async move |block_id| {
+        let block = storage.get_block(block_id).await;
+        if block.is_none() {
+            warn!(target: LOG_TARGET, %block_id, "Could not load a block from storage");
+        }
+        block
+    }))
+    .await
+    .into_iter()
+    .flatten()
+    .flat_map(Block::into_transactions)
+    .collect()
+}
+
+/// Tx hashes carried by `newly_canonical_blocks`.
+///
+/// If `applied_block` is among the `newly_canonical_blocks`, its txs are loaded
+/// from `applied_block` instead of storage. This saves a storage read in the
+/// common case where the applied block extends the tip, which is the only newly
+/// canonical block then.
+async fn newly_canonical_txs<Tx>(
+    applied_block: &Block<Tx>,
+    newly_canonical_blocks: &[HeaderId],
+    storage: &StorageApi<Tx>,
+) -> Vec<TxHash>
+where
+    Tx: Hashable<Hash = TxHash>
+        + StorageSize
+        + Serialize
+        + DeserializeOwned
+        + Clone
+        + Eq
+        + Send
+        + Sync
+        + 'static,
+{
+    // Gather txs from all newly canonical blocks except `applied_block`.
+    let applied_block_id = applied_block.header().id();
+    let early_txs = load_block_txs(
+        newly_canonical_blocks
+            .iter()
+            .filter(|block_id| **block_id != applied_block_id),
+        storage,
+    )
+    .await;
+
+    // Gather txs from `applied_block` if it's among the newly canonical blocks.
+    let applied_txs = newly_canonical_blocks
+        .contains(&applied_block_id)
+        .then(|| applied_block.transactions_iter())
+        .into_iter()
+        .flatten();
+
+    // Return all gathered txs.
+    early_txs
+        .iter()
+        .chain(applied_txs)
+        .map(Hashable::hash)
+        .collect()
 }
 
 async fn log_newly_canonical_blocks<Tx>(
