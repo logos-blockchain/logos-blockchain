@@ -475,6 +475,31 @@ mod no_node {
             );
         }
     }
+
+    /// An error message that echoes a NUL byte from its input must still
+    /// reach the caller as a C string.
+    #[test]
+    #[serial]
+    fn error_message_with_interior_nul() {
+        let status = OperationStatus::error(OperationStatusCode::NotFound, "a\0b\0");
+        assert_eq!(
+            consume(status),
+            (OperationStatusCode::NotFound, "a\\0b\\0".into())
+        );
+
+        // End to end: serde's "unknown variant" message echoes the offending
+        // value verbatim, NUL included.
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("config.yaml");
+        let yaml = std::fs::read_to_string(node_dir().join("standalone-node-config.yaml"))
+            .unwrap()
+            .replace("type: traversal", "type: \"a\\0b\"");
+        std::fs::write(&path, yaml).unwrap();
+        let path = cstring(&path);
+        let (code, message) = consume(unsafe { start_lb_node(path.as_ptr(), ptr::null()) });
+        assert_eq!(code, OperationStatusCode::InitializationError);
+        assert!(message.contains("unknown variant `a\\0b`"), "{message}");
+    }
 }
 
 mod with_node {
@@ -879,24 +904,6 @@ mod with_node {
 /// ```
 mod crashers {
     use super::*;
-
-    /// An error message that carries a NUL byte panics inside
-    /// `OperationStatus::error`, and a panic cannot leave an `extern "C"` fn.
-    #[test]
-    #[ignore = "aborts: OperationStatus::error panics on interior NUL"]
-    fn config_error_with_interior_nul() {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("config.yaml");
-        // A NUL inside an unknown enum variant is echoed verbatim by serde's
-        // "unknown variant" message.
-        let yaml = std::fs::read_to_string(node_dir().join("standalone-node-config.yaml"))
-            .unwrap()
-            .replace("type: traversal", "type: \"a\\0b\"");
-        std::fs::write(&path, yaml).unwrap();
-        let path = cstring(&path);
-        let result = unsafe { start_lb_node(path.as_ptr(), ptr::null()) };
-        eprintln!("AUDIT survived: {:?}", consume(result));
-    }
 
     static NODE: AtomicPtr<LogosBlockchainNode> = AtomicPtr::new(ptr::null_mut());
     static CALLS: AtomicUsize = AtomicUsize::new(0);
