@@ -27,7 +27,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
-        batch::DeferredZkpVerifications,
+        batch::DeferredProofs,
         gas::MainnetGasProfile,
         ledger::{Inputs, Outputs, verification_mode::StandardMode},
         ops::transfer::TransferOp,
@@ -225,7 +225,7 @@ fn apply_sequential(
 fn apply(
     state: &LedgerState,
     txs: impl Iterator<Item = SignedOps<Preverified, StandardMode>>,
-) -> (LedgerState, DeferredZkpVerifications) {
+) -> (LedgerState, DeferredProofs) {
     let (state, _, deferred) = state
         .clone()
         .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(&TX_POOL.config, txs)

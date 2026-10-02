@@ -12,7 +12,7 @@ use crate::mantle::{Note, NoteId};
 use crate::{
     events::TxEvent,
     mantle::{
-        batch::DeferredZkpVerification,
+        batch::DeferredProof,
         channel::Channels,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
@@ -137,7 +137,7 @@ impl PreverifiableOperation<StandardMode>
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverified, StandardMode> {
-    type DeferredProof = DeferredZkpVerification;
+    type DeferredProof = DeferredProof;
     type Context<'a> = TransferValidationContext<'a>;
     type Error = TransferError;
 
@@ -155,10 +155,7 @@ impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverifi
         let pks = operation.inputs.get_pk(context.utxos)?;
         let inputs = public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &pks)
             .map_err(|_| TransferError::InvalidProof)?;
-        Ok(DeferredZkpVerification::ZkSig(
-            *self.proof().as_proof(),
-            inputs,
-        ))
+        Ok(DeferredProof::ZkSig(*self.proof().as_proof(), inputs))
     }
 }
 
@@ -190,7 +187,7 @@ mod test {
     use crate::{
         mantle::{
             Note, NoteId, TxHash, Utxo,
-            batch::{DeferredZkpVerification, Error as BatchError, test_utils::batch_verify},
+            batch::{DeferredProof, Error as BatchError, test_utils::batch_verify},
             channel::Channels,
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger,
@@ -290,7 +287,7 @@ mod test {
         ZkKey::from(BigUint::from(7u8))
     }
 
-    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> DeferredZkpVerification {
+    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredProof {
         let input_utxo = Utxo {
             op_id: [1u8; 32],
             output_index: 0,
@@ -321,14 +318,14 @@ mod test {
     }
 
     #[test]
-    fn deferred_zkp_is_accepted() {
-        assert!(batch_verify(deferred_zkp_signed_by(&[input_key()])).is_ok());
+    fn deferred_proof_is_accepted() {
+        assert!(batch_verify(deferred_proof_signed_by(&[input_key()])).is_ok());
     }
 
     #[test]
-    fn wrong_deferred_zkp_is_rejected() {
+    fn wrong_deferred_proof_is_rejected() {
         assert!(matches!(
-            batch_verify(deferred_zkp_signed_by(&[unrelated_key()])),
+            batch_verify(deferred_proof_signed_by(&[unrelated_key()])),
             Err(BatchError::InvalidZkSignatures)
         ));
     }

@@ -1,6 +1,6 @@
 use lb_core::{
     events::Events,
-    mantle::batch::{self, DeferredZkpVerifications},
+    mantle::batch::{self, DeferredProofs},
 };
 
 use crate::LedgerState;
@@ -9,7 +9,7 @@ pub struct PreparedUpdate<Id> {
     id: Id,
     state: LedgerState,
     events: Events,
-    deferred_zkps: DeferredZkpVerifications,
+    deferred_proofs: DeferredProofs,
 }
 
 impl<Id> PreparedUpdate<Id> {
@@ -18,18 +18,18 @@ impl<Id> PreparedUpdate<Id> {
         id: Id,
         state: LedgerState,
         events: Events,
-        deferred_zkps: DeferredZkpVerifications,
+        deferred_proofs: DeferredProofs,
     ) -> Self {
         Self {
             id,
             state,
             events,
-            deferred_zkps,
+            deferred_proofs,
         }
     }
 
     pub fn verify_batch_proofs(self) -> Result<BatchVerifiedUpdate<Id>, batch::Error> {
-        self.deferred_zkps.verify()?;
+        self.deferred_proofs.verify()?;
         Ok(BatchVerifiedUpdate {
             id: self.id,
             state: self.state,
@@ -48,7 +48,7 @@ pub struct BatchVerifiedUpdate<Id> {
 mod tests {
     use lb_core::{
         events::{Event, HeaderEvent},
-        mantle::batch::DeferredZkpVerification,
+        mantle::batch::DeferredProof,
         sdp::{DeclarationId, ServiceType},
     };
     use lb_groth16::Fr;
@@ -78,7 +78,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_batch_proofs_rejects_invalid_deferred_zkp() {
+    fn verify_batch_proofs_rejects_invalid_deferred_proof() {
         let update = PreparedUpdate::new(
             ID,
             LedgerState::from_utxos([utxo()], &config()),
@@ -100,21 +100,21 @@ mod tests {
         .into()
     }
 
-    fn valid_zk_sig() -> DeferredZkpVerification {
+    fn valid_zk_sig() -> DeferredProof {
         zk_sig(1, 1)
     }
 
-    fn invalid_zk_sig() -> DeferredZkpVerification {
+    fn invalid_zk_sig() -> DeferredProof {
         zk_sig(1, 2)
     }
 
     /// If `msg == msg_for_input`, a valid sig is produced.
     /// Otherwise, an invalid sig is produced.
-    fn zk_sig(msg: u64, msg_for_input: u64) -> DeferredZkpVerification {
+    fn zk_sig(msg: u64, msg_for_input: u64) -> DeferredProof {
         let key = ZkKey::from(BigUint::from(1u8));
         let signature = ZkKey::multi_sign(std::slice::from_ref(&key), &Fr::from(msg)).unwrap();
         let inputs =
             public_inputs_from_pks(Fr::from(msg_for_input).into(), &[key.to_public_key()]).unwrap();
-        DeferredZkpVerification::ZkSig(*signature.as_proof(), inputs)
+        DeferredProof::ZkSig(*signature.as_proof(), inputs)
     }
 }
