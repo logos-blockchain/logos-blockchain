@@ -1,3 +1,4 @@
+use futures::StreamExt as _;
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -52,6 +53,23 @@ where
             .map_err(|error| format!("Could not remove transactions from mempool: {error}"))?;
 
         Ok(())
+    }
+
+    async fn pending_transactions(&self) -> Result<Vec<Tx>, overwatch::DynError> {
+        let (reply_channel, receiver) = oneshot::channel();
+        self.mempool_relay
+            .send(MempoolMsg::View {
+                // The mempool keeps a single view, whatever the block.
+                ancestor_hint: HeaderId::from([0; 32]),
+                reply_channel,
+            })
+            .await
+            .map_err(|error| format!("Could not get the mempool's transactions: {error}"))?;
+        let transactions = receiver
+            .await
+            .map_err(|e| format!("Could not receive response: {e}"))?;
+
+        Ok(transactions.collect().await)
     }
 
     async fn get_transactions_by_prefix(

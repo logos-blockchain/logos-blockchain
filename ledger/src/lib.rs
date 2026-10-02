@@ -571,6 +571,42 @@ impl LedgerState {
         Ok((self, tx_events, deferred_zkps))
     }
 
+    /// The transactions of `txs` that no block at `slot` on top of this state
+    /// could include: those that still fail once every other one that applies
+    /// has been applied, to the state brought into the era of `slot`, as a
+    /// leader assembles a block. Their proofs are not verified.
+    pub fn inapplicable_transactions<'tx, Tx, Profile: GasProfile>(
+        &self,
+        slot: Slot,
+        eras: &Eras<Config>,
+        txs: &'tx [Tx],
+    ) -> Vec<&'tx Tx>
+    where
+        Tx: PreverifiedMantleTransaction + StorageSize + Clone,
+    {
+        let config = eras.config_at_slot(slot);
+        let mut state = self.in_era_of(slot, eras).into_owned();
+        let mut pending = txs.iter().collect::<Vec<_>>();
+        loop {
+            let still_pending = pending.len();
+            pending.retain(|tx| {
+                match state
+                    .clone()
+                    .try_apply_transaction::<_, BlockHash, Profile>(config, *tx)
+                {
+                    Ok((next_state, ..)) => {
+                        state = next_state;
+                        false
+                    }
+                    Err(_) => true,
+                }
+            });
+            if pending.len() == still_pending {
+                return pending;
+            }
+        }
+    }
+
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, eras: &Eras<Config>) -> Self {
         let cryptarchia_ledger = CryptarchiaLedger::from_utxos(utxos, eras, Fr::ZERO);
         let mantle_ledger = MantleLedger::new(
@@ -1025,7 +1061,7 @@ mod tests {
                 leader_claim::{LeaderClaimError, LeaderClaimOp, LeaderClaimVerificationContext},
                 transfer::TransferOp,
             },
-            traits::Hashable as _,
+            traits::Hashable,
             transactions::{
                 OpProofs, Ops,
                 hash::TxHashView,
@@ -2558,6 +2594,57 @@ mod tests {
     #[test]
     fn _test_sdp_withdraw_operation() {
         // This test has been disabled pending API updates
+    }
+
+    #[test]
+    fn transactions_that_never_apply_are_inapplicable() {
+        let (sk, utxo) = utxo_with_sk();
+        let eras = single_era(config());
+        let state = LedgerState::from_utxos([utxo], &eras);
+        let gas_context = OpsGasContext::from_channels(&Channels::new(), state.get_gas_prices());
+        let fees = |tx: &SignedOps<Unverified, StandardMode>| {
+            tx.op_refs()
+                .total_gas_cost::<MainnetGasProfile>(&gas_context)
+                .unwrap()
+                .into_inner()
+        };
+        // Spends `utxo`, keeping what its fees leave as change.
+        let mut change = Note::new(1, sk.to_public_key());
+        change.value = utxo.note.value
+            - fees(&create_tx(
+                vec![utxo.id()],
+                vec![change],
+                std::slice::from_ref(&sk),
+            ));
+        let spending = create_tx(vec![utxo.id()], vec![change], std::slice::from_ref(&sk))
+            .preverify()
+            .unwrap();
+        let OpRef::Transfer(transfer) = spending.op_refs().get(0).unwrap() else {
+            panic!("the first op is a transfer")
+        };
+        let change_utxo = transfer.outputs.utxo_by_index(0, transfer).unwrap();
+        // Spends the change, so it only applies once `spending` has.
+        let dependent = create_tx(vec![change_utxo.id()], vec![], std::slice::from_ref(&sk))
+            .preverify()
+            .unwrap();
+        // Spends a note the chain never had.
+        let unknown = create_tx(
+            vec![utxo_with_sk().1.id()],
+            vec![],
+            std::slice::from_ref(&sk),
+        )
+        .preverify()
+        .unwrap();
+        let unknown_hash = unknown.hash();
+
+        let txs = [dependent, spending, unknown];
+        let inapplicable = state
+            .inapplicable_transactions::<_, MainnetGasProfile>(Slot::from(1u64), &eras, &txs)
+            .into_iter()
+            .map(Hashable::hash)
+            .collect::<Vec<_>>();
+
+        assert_eq!(inapplicable, vec![unknown_hash]);
     }
 
     #[test]
