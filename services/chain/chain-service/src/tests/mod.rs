@@ -33,7 +33,7 @@ use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 use lb_ledger::{
     LedgerState,
-    config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+    config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig, single_era},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use lb_storage_service::{
@@ -68,9 +68,9 @@ fn cryptarchia_switch_to_online() {
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_lib(
         genesis_id,
-        LedgerState::from_utxos([utxo], &config),
+        LedgerState::from_utxos([utxo], &single_era(config.clone())),
         genesis_id,
-        config,
+        Arc::new(single_era(config)),
         lb_cryptarchia_engine::State::Bootstrapping,
         Slot::new(0),
         0,
@@ -150,9 +150,9 @@ async fn get_block_ids_from_memory_and_storage() {
     let (zk_key, utxo) = utxo();
     let mut cryptarchia = Cryptarchia::from_lib(
         genesis_id,
-        LedgerState::from_utxos([utxo], &config),
+        LedgerState::from_utxos([utxo], &single_era(config.clone())),
         genesis_id,
-        config,
+        Arc::new(single_era(config)),
         lb_cryptarchia_engine::State::Online,
         Slot::genesis(),
         0,
@@ -371,7 +371,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
     >::initialize_cryptarchia(
         &recovery_state,
         &bootstrap_config,
-        stored.ledger.config().clone(),
+        Arc::new(stored.ledger.eras().clone()),
         &relays,
         &new_block_tx,
         &lib_tx,
@@ -432,9 +432,9 @@ fn ledger_is_not_commited_if_block_contains_invalid_zkp() {
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_lib(
         genesis_id,
-        LedgerState::from_utxos([utxo], &config),
+        LedgerState::from_utxos([utxo], &single_era(config.clone())),
         genesis_id,
-        config,
+        Arc::new(single_era(config)),
         lb_cryptarchia_engine::State::Bootstrapping,
         Slot::new(0),
         0,
@@ -498,9 +498,9 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, St
     let (zk_key, utxo) = utxo();
     let cryptarchia = Cryptarchia::from_lib(
         genesis_id,
-        LedgerState::from_utxos([utxo], &config),
+        LedgerState::from_utxos([utxo], &single_era(config.clone())),
         genesis_id,
-        config,
+        Arc::new(single_era(config)),
         lb_cryptarchia_engine::State::Online,
         Slot::genesis(),
         0,
@@ -722,9 +722,9 @@ pub fn genesis_cryptarchia(utxo: Utxo) -> Cryptarchia {
     let config = ledger_config(3.try_into().unwrap());
     Cryptarchia::from_lib(
         GENESIS_ID.into(),
-        LedgerState::from_utxos([utxo], &config),
+        LedgerState::from_utxos([utxo], &single_era(config.clone())),
         GENESIS_ID.into(),
-        config,
+        Arc::new(single_era(config)),
         lb_cryptarchia_engine::State::Bootstrapping,
         Slot::genesis(),
         0,

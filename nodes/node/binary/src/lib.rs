@@ -197,7 +197,7 @@ pub fn run_node_from_config(
     let (chain_service_config, chain_network_config, chain_leader_config) = CryptarchiaConfig {
         user: config.user.cryptarchia,
     }
-    .into_cryptarchia_services_settings(era, genesis_block, recovery_data.clone());
+    .into_cryptarchia_services_settings(&eras, genesis_block, recovery_data.clone());
 
     let mempool_service_config = MempoolConfig {
         user: config.user.mempool,

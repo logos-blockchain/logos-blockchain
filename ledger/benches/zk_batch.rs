@@ -21,6 +21,7 @@ use std::{
     collections::HashMap,
     num::NonZero,
     sync::{Arc, LazyLock},
+    time::Duration,
 };
 
 use lb_core::{
@@ -36,7 +37,10 @@ use lb_core::{
     },
     sdp::{MinStake, ServiceParameters, ServiceType},
 };
-use lb_cryptarchia_engine::EpochConfig;
+use lb_cryptarchia_engine::{
+    EpochConfig,
+    era::{EraEntry, EraVersion, Eras},
+};
 use lb_key_management_system_keys::keys::ZkKey;
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 use lb_zksign::verify;
@@ -195,8 +199,22 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
         .map(|(utxo, key)| build_tx(*utxo, key))
         .collect();
 
+    // A single era, from genesis. The ledger reads neither its slot duration
+    // nor the genesis time.
+    let eras = Eras::new(
+        time::OffsetDateTime::UNIX_EPOCH,
+        [EraEntry {
+            first_epoch: 0.into(),
+            version: EraVersion::V1,
+            slot_duration: Duration::from_secs(1),
+            epoch_length: NonZero::new(config.epoch_length()).unwrap(),
+            parameters: config.clone(),
+        }],
+    )
+    .unwrap();
+
     TxPool {
-        genesis: LedgerState::from_utxos(utxos, &config),
+        genesis: LedgerState::from_utxos(utxos, &eras),
         config,
         txs,
     }

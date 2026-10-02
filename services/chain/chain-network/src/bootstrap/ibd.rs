@@ -936,12 +936,12 @@ mod tests {
     }
 
     fn new_cryptarchia() -> lb_chain_service::Cryptarchia {
-        let ledger_config = ledger_config();
+        let ledger_eras = lb_ledger::config::single_era(ledger_config());
         lb_chain_service::Cryptarchia::from_lib(
             [GENESIS_ID; 32].into(),
-            LedgerState::from_utxos(empty(), &ledger_config),
+            LedgerState::from_utxos(empty(), &ledger_eras),
             [GENESIS_ID; 32].into(),
-            ledger_config,
+            Arc::new(ledger_eras),
             lb_cryptarchia_engine::State::Bootstrapping,
             0.into(),
             0,

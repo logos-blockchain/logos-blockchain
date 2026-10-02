@@ -179,6 +179,7 @@ mod tests {
         },
     };
     use lb_key_management_system_service::keys::ZkKey;
+    use lb_ledger::config::single_era;
 
     use super::*;
     use crate::{leadership, txs_for_block};
@@ -235,7 +236,10 @@ mod tests {
             })
             .unzip();
 
-        let ledger_state = LedgerState::from_utxos(funding_utxos.into_iter().flatten(), &config);
+        let ledger_state = LedgerState::from_utxos(
+            funding_utxos.into_iter().flatten(),
+            &single_era(config.clone()),
+        );
         let gas_context = ledger_state.tx_context().gas_context;
         let individual_gas = candidates[0]
             .op_refs()

@@ -40,6 +40,9 @@ tokio-stream                     = { workspace = true }
 tracing                          = { workspace = true }
 tracing-futures                  = { workspace = true }
 
+[dev-dependencies]
+lb-ledger = { features = ["test-utils"], workspace = true }
+
 [features]
 default = []
 # Suppresses publishing of locally-proposed blocks over the blend network.

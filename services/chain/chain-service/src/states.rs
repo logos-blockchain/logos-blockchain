@@ -86,7 +86,7 @@ impl ServiceState for CryptarchiaConsensusState {
                 let epoch_nonce = genesis_tx.cryptarchia_parameter().epoch_nonce;
                 let (ledger, _events) = LedgerState::from_genesis_tx(
                     genesis_tx.clone(),
-                    &settings.config,
+                    &settings.ledger_eras,
                     epoch_nonce,
                 )?;
                 (lib_id, lib_id, ledger)
@@ -129,7 +129,7 @@ mod tests {
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
     use lb_ledger::{
-        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig, single_era},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
@@ -312,8 +312,8 @@ mod tests {
         // Empty ledger state.
         let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
-            LedgerState::from_utxos([], &ledger_config),
-            ledger_config,
+            LedgerState::from_utxos([], &single_era(ledger_config.clone())),
+            Arc::new(single_era(ledger_config)),
         );
 
         // Build [`CryptarchiaConsensusState`] with the pruned blocks.
@@ -436,8 +436,8 @@ mod tests {
             consensus: engine.clone(),
             ledger: lb_ledger::Ledger::new(
                 lib_id,
-                LedgerState::from_utxos([], &ledger_config),
-                ledger_config.clone(),
+                LedgerState::from_utxos([], &single_era(ledger_config.clone())),
+                Arc::new(single_era(ledger_config.clone())),
             ),
             genesis_id: genesis_header_id,
         };
@@ -458,7 +458,7 @@ mod tests {
             saved_state.lib,
             saved_state.lib_ledger_state.clone(),
             saved_state.genesis_id,
-            ledger_config,
+            Arc::new(single_era(ledger_config)),
             *engine.state(),
             saved_state.lib_block_slot,
             saved_state.lib_block_length,

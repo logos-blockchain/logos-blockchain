@@ -15,7 +15,7 @@ use tracing::debug;
 
 use crate::mantle::sdp::rewards::{
     Error,
-    blend::{LOG_TARGET, RewardsParameters, current_epoch::CurrentEpochState},
+    blend::{LOG_TARGET, current_epoch::CurrentEpochState},
     distribute_rewards,
 };
 
@@ -76,12 +76,14 @@ impl<ProofsVerifier> TargetEpochState<ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait,
 {
+    /// Verifies an activity proof for this target epoch. A target epoch only
+    /// exists with at least the minimum network size of its era, checked when
+    /// it was established (see `CurrentEpochTracker::finalize`).
     pub fn verify_proof(
         &self,
         provider_id: &ProviderId,
         proof: &lb_core::sdp::blend::ActivityProof,
         current_epoch_state: &CurrentEpochState,
-        settings: &RewardsParameters,
     ) -> Result<(ZkPublicKey, HammingDistance), Error> {
         if proof.epoch != self.epoch {
             return Err(Error::InvalidEpoch {
@@ -91,10 +93,6 @@ where
         }
 
         let num_providers = self.num_providers();
-        assert!(
-            num_providers >= settings.minimum_network_size.get(),
-            "number of providers must be >= minimum_network_size"
-        );
         let &(zk_id, index) = self
             .providers
             .get(provider_id)

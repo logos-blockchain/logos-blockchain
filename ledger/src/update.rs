@@ -56,13 +56,16 @@ mod tests {
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::cryptarchia::tests::{config, utxo};
+    use crate::{
+        config::single_era,
+        cryptarchia::tests::{config, utxo},
+    };
 
     const ID: [u8; 32] = [1; 32];
 
     #[test]
     fn verify_batch_proofs_carries_the_update_through() {
-        let state = LedgerState::from_utxos([utxo()], &config());
+        let state = LedgerState::from_utxos([utxo()], &single_era(config()));
         let utxos_root = state.latest_utxos().root();
         let update = PreparedUpdate::new(
             ID,
@@ -81,7 +84,7 @@ mod tests {
     fn verify_batch_proofs_rejects_invalid_deferred_zkp() {
         let update = PreparedUpdate::new(
             ID,
-            LedgerState::from_utxos([utxo()], &config()),
+            LedgerState::from_utxos([utxo()], &single_era(config())),
             Events::new(),
             std::iter::once(invalid_zk_sig()).collect(),
         );

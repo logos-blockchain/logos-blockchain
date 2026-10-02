@@ -247,16 +247,6 @@ impl EpochConfig {
             .try_into()
             .expect("Epoch should build from a correct configuration")
     }
-
-    #[must_use]
-    pub fn starting_slot(&self, epoch: &Epoch, base_period_length: NonZero<u64>) -> Slot {
-        Slot::from(u64::from(u32::from(*epoch)) * self.epoch_length(base_period_length))
-    }
-
-    #[must_use]
-    pub fn last_slot(&self, epoch: Epoch, base_period_length: NonZero<u64>) -> Slot {
-        Slot::from(u64::from(epoch.into_inner() + 1) * self.epoch_length(base_period_length) - 1)
-    }
 }
 
 #[must_use]

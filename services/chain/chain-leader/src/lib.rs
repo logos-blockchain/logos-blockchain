@@ -9,7 +9,7 @@ mod tx_selection;
 mod wallet;
 
 use core::fmt::Debug;
-use std::{fmt::Display, pin::Pin, time::Duration};
+use std::{fmt::Display, pin::Pin, sync::Arc, time::Duration};
 
 use futures::{Stream, StreamExt as _, stream};
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
@@ -31,9 +31,9 @@ use lb_core::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
     sdp::blend::PolEpochState,
 };
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Slot, era::Eras};
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
-use lb_ledger::LedgerState;
+use lb_ledger::{ConfigSchedule as _, LedgerState};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
@@ -50,7 +50,7 @@ use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
@@ -186,9 +186,11 @@ impl Debug for LeaderMsg {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct LeaderSettings {
-    pub config: lb_ledger::Config,
+    /// The ledger config of every era: each proposal is built under the
+    /// config of the era of the slot it is for.
+    pub ledger_eras: Arc<Eras<lb_ledger::Config>>,
     pub wallet_config: LeaderWalletConfig,
 }
 
@@ -373,7 +375,7 @@ where
         );
 
         let LeaderSettings {
-            config: ledger_config,
+            ledger_eras,
             wallet_config,
         } = self
             .service_resources_handle
@@ -451,7 +453,7 @@ where
                     Some(SlotTick { slot, epoch, .. }) = slot_timer.next() => {
                         trace!(target: LOG_TARGET, "Received SlotTick for slot {}, ep {}", u64::from(slot), u32::from(epoch));
                         let Some(SlotContext { wallet_tip, epoch_state, eligible_aged, .. }) =
-                            fetch_slot_context(&cryptarchia_api, &wallet_api, &ledger_config, slot).await
+                            fetch_slot_context(&cryptarchia_api, &wallet_api, &ledger_eras, slot).await
                         else {
                             error!(target: LOG_TARGET, "Failed to fetch epoch context for slot {slot:?}");
                             continue;
@@ -488,7 +490,7 @@ where
                                     target: LOG_TARGET,
                                     diagnostic = BLEND_REACHABILITY,
                                     event = "leadership_proof_failure",
-                                    epoch = u32::from(ledger_config.epoch(slot)),
+                                    epoch = u32::from(ledger_eras.epoch_of(slot)),
                                     slot = u64::from(slot),
                                     error = %e,
                                     "Failed to build leadership proof"
@@ -507,7 +509,7 @@ where
                                 &cryptarchia_api,
                                 &relays,
                                 tip_state,
-                                &ledger_config,
+                                &ledger_eras,
                             )
                             .await
                             {
@@ -523,7 +525,7 @@ where
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
-                        Self::handle_inbound_message(msg, &cryptarchia_api, &wallet_api, &kms_api, relays.time_relay(), &ledger_config, &wallet_config, relays.mempool_adapter()).await;
+                        Self::handle_inbound_message(msg, &cryptarchia_api, &wallet_api, &kms_api, relays.time_relay(), &ledger_eras, &wallet_config, relays.mempool_adapter()).await;
                     }
                 }
             }
@@ -615,7 +617,7 @@ where
         skip(
             relays,
             ledger_state,
-            ledger_config,
+            ledger_eras,
             cryptarchia_api,
             proof,
             signing_key
@@ -635,7 +637,7 @@ where
             RuntimeServiceId,
         >,
         mut ledger_state: LedgerState,
-        ledger_config: &lb_ledger::Config,
+        ledger_eras: &Eras<lb_ledger::Config>,
     ) -> Result<Block<Mempool::Item>, Error> {
         let txs_stream = relays
             .mempool_adapter()
@@ -660,7 +662,7 @@ where
                 slot,
                 &proof,
                 &uncle_headers.slots(),
-                ledger_config,
+                ledger_eras,
             )?;
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
@@ -668,7 +670,11 @@ where
             ledger_state,
             selected_txs,
             invalid_tx_hashes,
-        } = select_transactions(ledger_state, tx_stream.collect().await, ledger_config);
+        } = select_transactions(
+            ledger_state,
+            tx_stream.collect().await,
+            ledger_eras.config_at_slot(slot),
+        );
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays
@@ -734,7 +740,7 @@ where
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         kms: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
         time_relay: &OutboundRelay<TimeServiceMessage>,
-        ledger_config: &lb_ledger::Config,
+        ledger_eras: &Arc<Eras<lb_ledger::Config>>,
         config: &LeaderWalletConfig,
         mempool: &MempoolAdapter<Mempool::Item>,
     ) {
@@ -755,7 +761,7 @@ where
                         (*wallet).clone(),
                         (*kms).clone(),
                         (*time_relay).clone(),
-                        (*ledger_config).clone(),
+                        Arc::clone(ledger_eras),
                         epoch_handoff_sender,
                     ),
                 );

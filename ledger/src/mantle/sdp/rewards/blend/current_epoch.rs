@@ -90,11 +90,16 @@ impl CurrentEpochTracker {
     /// - No multi-epoch jump has occurred.
     ///
     /// Otherwise, it returns [`CurrentEpochTrackerOutput::WithoutTargetEpoch`].
+    ///
+    /// The new target epoch is evaluated under `target_settings`, the
+    /// parameters of its era, and the new current epoch is set up under
+    /// `settings`, the parameters of its own.
     pub fn finalize<ProofsVerifier>(
         &self,
         current_reward_epoch_state: &CurrentEpochState,
         last_epoch_state: &EpochState,
         next_epoch_state: &EpochState,
+        target_settings: &RewardsParameters,
         settings: &RewardsParameters,
     ) -> CurrentEpochTrackerOutput<ProofsVerifier>
     where
@@ -134,10 +139,10 @@ impl CurrentEpochTracker {
             .for_service(&ServiceType::BlendNetwork);
 
         let declaration_count = maybe_declarations.map_or(0, HashMap::len);
-        if declaration_count < settings.minimum_network_size.get() as usize {
+        if declaration_count < target_settings.minimum_network_size.get() as usize {
             debug!(target: LOG_TARGET, "Declaration count({}) is below minimum network size({}). Switching to WithoutTargetEpoch mode",
                 declaration_count,
-                settings.minimum_network_size.get()
+                target_settings.minimum_network_size.get()
             );
             return CurrentEpochTrackerOutput::WithoutTargetEpoch {
                 current_epoch_state: CurrentEpochState::new(next_epoch_state, settings),
@@ -151,7 +156,7 @@ impl CurrentEpochTracker {
                 .values(),
         );
 
-        let (core_quota, token_evaluation) = settings.core_quota_and_token_evaluation(
+        let (core_quota, token_evaluation) = target_settings.core_quota_and_token_evaluation(
             providers.size() as u64,
         ).expect("evaluation parameters shouldn't overflow. panicking since we can't process the new epoch");
 

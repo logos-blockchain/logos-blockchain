@@ -25,13 +25,13 @@ use lb_core::{
     },
     sdp::service_notes::ServiceNotes,
 };
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Slot, era::Eras};
 use lb_log_targets::ledger;
 use lb_mmr::MerkleMountainRange;
 use sdp::Error as SdpLedgerError;
 use tracing::error;
 
-use crate::{Config, EpochState, UtxoTree, mantle::sdp::HeaderEffect};
+use crate::{Config, EpochState, UtxoTree, config::ConfigSchedule as _, mantle::sdp::HeaderEffect};
 
 const LOG_TARGET: &str = ledger::mantle::ROOT;
 
@@ -148,17 +148,26 @@ impl LedgerState {
         self.leaders.reward_amount()
     }
 
+    /// Applies the header of a block of `epoch_state`'s epoch. When it is the
+    /// first block of a later epoch than `last_epoch_state`'s, the epoch that
+    /// ends is settled under the config of its era, and the epoch that starts
+    /// is set up under the config of its own.
     pub fn try_apply_header(
         mut self,
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
         voucher: VoucherCm,
-        config: &Config,
+        eras: &Eras<Config>,
     ) -> Result<(Self, HeaderEffect), Error> {
+        let last_config = eras.config_at_epoch(last_epoch_state.epoch);
+        let config = eras.config_at_epoch(epoch_state.epoch);
         self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
-        let (new_sdp, effect) =
-            self.sdp
-                .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
+        let (new_sdp, effect) = self.sdp.try_apply_header(
+            &last_config.sdp_config,
+            &config.sdp_config,
+            last_epoch_state,
+            epoch_state,
+        )?;
         self.sdp = new_sdp;
         self.pow = self
             .pow

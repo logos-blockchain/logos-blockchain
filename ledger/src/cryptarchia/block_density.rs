@@ -1,9 +1,9 @@
 use std::ops::RangeInclusive;
 
-use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
+use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots, era::Eras};
 use rpds::HashTrieSetSync;
 
-use crate::Config;
+use crate::{Config, config::ConfigSchedule as _};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockDensity {
@@ -14,24 +14,23 @@ pub struct BlockDensity {
 }
 
 impl BlockDensity {
-    pub fn new(epoch: Epoch, config: &Config) -> Self {
+    pub fn new(epoch: Epoch, eras: &Eras<Config>) -> Self {
         Self {
-            period_range: Self::compute_period_range(epoch, config),
+            period_range: Self::compute_period_range(epoch, eras),
             occupied_slots: HashTrieSetSync::new_sync(),
         }
     }
 
-    /// The range of slots used to compute the block density for a given epoch
+    /// The range of slots used to compute the block density for a given epoch:
+    /// its Stake Distribution Snapshot + Buffer phases, laid out by its era.
     ///
     /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
     /// the block density for epoch 2 will be computed during [200, 259],
     /// which is the Stake Distribution Snapshot + Buffer phases of epoch 2.
-    fn compute_period_range(epoch: Epoch, config: &Config) -> RangeInclusive<Slot> {
-        let snapshot_slot_for_next_epoch = config.total_stake_snapshot(epoch.strict_add(1.into()));
-        let start = snapshot_slot_for_next_epoch
-            .saturating_sub(config.total_stake_inference_period().into());
-        let end = snapshot_slot_for_next_epoch.saturating_sub(1.into());
-        start..=end
+    fn compute_period_range(epoch: Epoch, eras: &Eras<Config>) -> RangeInclusive<Slot> {
+        let start = eras.epoch_start(epoch);
+        let period = eras.config_at_epoch(epoch).total_stake_inference_period();
+        start..=Slot::new(start.into_inner().strict_add(period).strict_sub(1))
     }
 
     /// Marks the slots occupied by a block and the uncles it references.
@@ -72,18 +71,21 @@ mod tests {
     use lb_utils::math::NonNegativeRatio;
 
     use super::*;
-    use crate::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
+    use crate::{
+        config::single_era,
+        mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
+    };
 
     #[test]
     fn test_initial_block_density_is_zero() {
-        let density = BlockDensity::new(0.into(), &config());
+        let density = BlockDensity::new(0.into(), &single_era(config()));
         assert_eq!(density.period_range(), &(0.into()..=59.into()));
         assert_eq!(density.current_block_density(), 0);
     }
 
     #[test]
     fn test_mark_occupied_slots() {
-        let mut density = BlockDensity::new(1.into(), &config());
+        let mut density = BlockDensity::new(1.into(), &single_era(config()));
         assert_eq!(density.period_range(), &(100.into()..=159.into()));
         density.mark_occupied_slots(Slot::from(100), &UncleSlots::default());
         assert_eq!(density.current_block_density(), 1);
@@ -101,7 +103,7 @@ mod tests {
 
     #[test]
     fn test_mark_occupied_slots_with_uncles() {
-        let mut density = BlockDensity::new(1.into(), &config());
+        let mut density = BlockDensity::new(1.into(), &single_era(config()));
         assert_eq!(density.period_range(), &(100.into()..=159.into()));
 
         // A block and its uncles are marked together.

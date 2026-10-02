@@ -36,7 +36,6 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
         &self,
         declaration_id: ProviderId,
         metadata: &ActivityMetadata,
-        params: &Self::Params,
     ) -> Result<Self, Error>;
 
     /// Update rewards state when epoch transition and calculate rewards to
@@ -62,6 +61,10 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
         // The state of the new epoch
         next_epoch_state: &EpochState,
         config: &ServiceParameters,
+        // The parameters of the era of the epoch that just ended, which its
+        // rewards are settled under.
+        last_params: &Self::Params,
+        // The parameters of the era of the new epoch.
         params: &Self::Params,
     ) -> (Self, Vec<Utxo>);
 

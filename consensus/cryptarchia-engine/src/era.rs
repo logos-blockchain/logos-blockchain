@@ -241,6 +241,32 @@ impl<Parameters> Eras<Parameters> {
         self.last_started(|era| era.first_slot <= slot)
     }
 
+    /// The era `epoch` belongs to.
+    #[must_use]
+    pub fn at_epoch(&self, epoch: Epoch) -> &ScheduledEra<Parameters> {
+        self.last_started(|era| era.entry.first_epoch <= epoch)
+    }
+
+    /// The first slot of `epoch`, counted in the epoch length of its era.
+    ///
+    /// # Panics
+    ///
+    /// If the slot does not fit a [`Slot`].
+    #[must_use]
+    pub fn epoch_start(&self, epoch: Epoch) -> Slot {
+        let era = self.at_epoch(epoch);
+        let epochs_into_era = u64::from(
+            epoch
+                .into_inner()
+                .strict_sub(era.entry.first_epoch.into_inner()),
+        );
+        Slot::new(
+            era.first_slot
+                .into_inner()
+                .strict_add(epochs_into_era.strict_mul(era.entry.epoch_length.get())),
+        )
+    }
+
     /// The epoch `slot` belongs to, counted in the epoch length of its era.
     ///
     /// # Panics
@@ -443,6 +469,34 @@ mod tests {
                 (504.5, 403),
             ]
         );
+    }
+
+    #[test]
+    fn every_epoch_starts_where_its_era_lays_it_out() {
+        let eras = four_eras();
+        let starts = [0, 1, 2, 3, 4, 5, 6, 7]
+            .map(|epoch| (epoch, eras.epoch_start(Epoch::new(epoch)).into_inner()));
+        assert_eq!(
+            starts,
+            [
+                (0, 0),
+                (1, 100),
+                (2, 200),
+                // Era 1: epochs of 50 slots.
+                (3, 300),
+                (4, 350),
+                // Era 2: epochs of 3 slots.
+                (5, 400),
+                // Era 3: epochs of 100 slots.
+                (6, 403),
+                (7, 503),
+            ]
+        );
+        for epoch in (0..=7).map(Epoch::new) {
+            let start = eras.epoch_start(epoch);
+            assert_eq!(eras.epoch_of(start), epoch);
+            assert_eq!(eras.at_epoch(epoch).era, eras.at_slot(start).era);
+        }
     }
 
     #[test]

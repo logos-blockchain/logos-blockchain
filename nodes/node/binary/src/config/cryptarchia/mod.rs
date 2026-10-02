@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
 use lb_core::block::genesis::GenesisBlock;
+use lb_cryptarchia_engine::era::Eras;
 use lb_era_parameters::EraDefinition;
 use lb_libp2p::PeerId;
 use lb_services_utils::overwatch::RecoveryData;
@@ -16,7 +19,7 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_cryptarchia_services_settings(
         self,
-        era: &EraDefinition,
+        eras: &Eras<EraDefinition>,
         genesis_block: GenesisBlock,
         recovery_data: RecoveryData,
     ) -> (
@@ -24,7 +27,9 @@ impl ServiceConfig {
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
         lb_chain_leader_service::LeaderSettings,
     ) {
-        let ledger_config = era.parameters.ledger_config();
+        // The chain service and the leader apply each block under the ledger
+        // config of its era.
+        let ledger_eras = Arc::new(eras.map(|era| era.entry.parameters.parameters.ledger_config()));
 
         let chain_service_settings = lb_chain_service::CryptarchiaSettings {
             bootstrap: lb_chain_service::BootstrapConfig {
@@ -45,7 +50,7 @@ impl ServiceConfig {
                         .state_recording_interval,
                 },
             },
-            config: ledger_config.clone(),
+            ledger_eras: Arc::clone(&ledger_eras),
             recovery_data,
             starting_state: genesis_block.into(),
             sync: lb_chain_service::SyncConfig {
@@ -70,7 +75,13 @@ impl ServiceConfig {
                 },
             },
             network: LibP2pAdapterSettings {
-                topic: era.protocol_names.cryptarchia_topic.clone(),
+                topic: eras
+                    .genesis()
+                    .entry
+                    .parameters
+                    .protocol_names
+                    .cryptarchia_topic
+                    .clone(),
                 max_connected_peers_to_try_download: self
                     .user
                     .network
@@ -95,7 +106,7 @@ impl ServiceConfig {
             },
         };
         let chain_leader_settings = lb_chain_leader_service::LeaderSettings {
-            config: ledger_config,
+            ledger_eras,
             wallet_config: lb_chain_leader_service::LeaderWalletConfig {
                 funding_pk: self.user.leader.wallet.funding_pk,
                 max_tx_fee: self.user.leader.wallet.max_tx_fee,

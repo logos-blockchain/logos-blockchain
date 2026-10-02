@@ -15,6 +15,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
     pin::Pin,
+    sync::Arc,
     time::Duration,
 };
 
@@ -33,10 +34,10 @@ use lb_core::{
     },
     sdp::{Declaration, DeclarationId},
 };
-use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
+use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots, era::Eras};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 pub use lb_ledger::EpochState;
-use lb_ledger::LedgerState;
+use lb_ledger::{ConfigSchedule as _, LedgerState};
 use lb_log_targets::chain;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
@@ -342,7 +343,7 @@ impl Cryptarchia {
         lib_id: HeaderId,
         lib_ledger_state: LedgerState,
         genesis_id: HeaderId,
-        ledger_config: lb_ledger::Config,
+        ledger_eras: Arc<Eras<lb_ledger::Config>>,
         state: State,
         lib_slot: Slot,
         lib_length: u64,
@@ -351,13 +352,16 @@ impl Cryptarchia {
         Self {
             consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib_id,
-                ledger_config.consensus_config.clone(),
+                ledger_eras
+                    .config_at_slot(lib_slot)
+                    .consensus_config
+                    .clone(),
                 state,
                 lib_slot,
                 lib_length,
                 lib_uncle_slots,
             ),
-            ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, ledger_config),
+            ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, ledger_eras),
             genesis_id,
         }
     }
@@ -508,11 +512,9 @@ impl Cryptarchia {
         let tip = self.tip_branch();
         let lib = self.lib_branch();
         let state = self.ledger.state(&tip.id()).expect("no state for tip");
-        let config = self.ledger.config();
-        let epoch_state = state.epoch_state_for_slot(slot, config)?;
-        let requested_epoch = config
-            .epoch_config
-            .epoch(slot, config.consensus_config.base_period_length());
+        let eras = self.ledger.eras();
+        let epoch_state = state.epoch_state_for_slot(slot, eras)?;
+        let requested_epoch = eras.epoch_of(slot);
 
         Ok(EpochStateQueryResult {
             requested_slot: slot,
@@ -578,13 +580,13 @@ impl Cryptarchia {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct CryptarchiaSettings {
-    pub config: lb_ledger::Config,
+    /// The ledger config of every era.
+    pub ledger_eras: Arc<Eras<lb_ledger::Config>>,
     pub starting_state: StartingState,
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
-    #[serde(skip)]
     pub recovery_data: RecoveryData,
 }
 
@@ -693,7 +695,7 @@ where
             .await;
 
         let CryptarchiaSettings {
-            config: ledger_config,
+            ledger_eras,
             bootstrap: bootstrap_config,
             starting_state,
             sync: sync_config,
@@ -722,7 +724,7 @@ where
         } = Self::initialize_cryptarchia(
             &self.state,
             &bootstrap_config,
-            ledger_config.clone(),
+            Arc::clone(&ledger_eras),
             &relays,
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,
@@ -943,7 +945,7 @@ where
     /// # Arguments
     ///
     /// * `bootstrap_config` - The bootstrap configuration.
-    /// * `ledger_config` - The ledger configuration.
+    /// * `ledger_eras` - The ledger config of every era.
     /// * `relays` - The relays object containing all the necessary relays for
     ///   the consensus.
     ///
@@ -960,7 +962,7 @@ where
     async fn initialize_cryptarchia(
         recovery_state: &CryptarchiaConsensusState,
         bootstrap_config: &BootstrapConfig,
-        ledger_config: lb_ledger::Config,
+        ledger_eras: Arc<Eras<lb_ledger::Config>>,
         relays: &CryptarchiaConsensusRelays<Tx>,
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,
@@ -983,7 +985,7 @@ where
             lib_id,
             recovery_state.lib_ledger_state.clone(),
             genesis_id,
-            ledger_config,
+            ledger_eras,
             state,
             recovery_state.lib_block_slot,
             recovery_state.lib_block_length,

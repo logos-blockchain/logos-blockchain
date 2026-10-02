@@ -608,7 +608,7 @@ mod tests {
         };
 
         let genesis = HeaderId::from([0; 32]);
-        let ledger = LedgerState::from_utxos([], &ledger_config());
+        let ledger = LedgerState::from_utxos([], &lb_ledger::config::single_era(ledger_config()));
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
 

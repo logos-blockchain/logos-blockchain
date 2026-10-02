@@ -24,6 +24,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, GetTipResponseReason, ProviderResponse};
+use lb_ledger::ConfigSchedule as _;
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::api::StorageApi;
@@ -396,7 +397,11 @@ where
                 });
             }
             Query::GetEpochConfig { reply_channel } => {
-                let config = self.cryptarchia.ledger.config();
+                let config = self
+                    .cryptarchia
+                    .ledger
+                    .eras()
+                    .config_at_slot(self.cryptarchia.tip_branch().slot());
                 reply_channel
                     .send((config.epoch_config, config.consensus_config.clone()))
                     .unwrap_or_else(|_| {
@@ -581,7 +586,8 @@ where
             };
             let inactivity_period = cryptarchia
                 .ledger
-                .config()
+                .eras()
+                .config_at_slot(block.header().slot())
                 .sdp_config
                 .service_params
                 .get(&new_declaration.service_type)
@@ -721,7 +727,7 @@ fn log_canonical_blend_snapshots<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx
         );
     }
 
-    let config = cryptarchia.ledger.config();
+    let eras = cryptarchia.ledger.eras();
     for epoch_state in [
         committed_state.epoch_state(),
         committed_state.next_epoch_state(),
@@ -730,7 +736,7 @@ fn log_canonical_blend_snapshots<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx
         if target_epoch <= Epoch::new(1) {
             continue;
         }
-        let snapshot_slot = config.stake_distribution_snapshot(target_epoch);
+        let snapshot_slot = eras.stake_distribution_snapshot(target_epoch);
         if parent_state.slot() < snapshot_slot && committed_state.slot() >= snapshot_slot {
             log_blend_snapshot_provider_decisions(
                 target_epoch,

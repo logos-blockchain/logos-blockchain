@@ -44,6 +44,7 @@ use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
 
 use crate::{
     Config, Ledger, WINDOW_SIZE,
+    config::single_era,
     cryptarchia::{
         EpochState, LedgerState, UtxoTree,
         block_density::BlockDensity,
@@ -207,6 +208,7 @@ fn leader_utxo() -> Utxo {
 
 /// A ledger holding a single leader whose note is the entire stake.
 fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
+    let eras = single_era(config.clone());
     let total_stake = leader_utxo.note.value;
     let (lottery_0, lottery_1) = config
         .lottery_constants()
@@ -231,7 +233,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
             epoch: 1.into(),
             ..epoch_state.clone()
         },
-        block_density: BlockDensity::new(config.epoch(0.into()), config),
+        block_density: BlockDensity::new(0.into(), &eras),
         epoch_state,
         fee_window: [0.into(); WINDOW_SIZE],
         average_execution_gas: 0.into(),
@@ -245,7 +247,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
         mantle_ledger: crate::mantle::LedgerState::new(config, cryptarchia_ledger.epoch_state()),
         cryptarchia_ledger,
     };
-    Ledger::new(GENESIS, state, config.clone())
+    Ledger::new(GENESIS, state, Arc::new(eras))
 }
 
 fn block_id(parent: HeaderId, slot: Slot) -> HeaderId {
@@ -368,7 +370,7 @@ fn apply_block_to_ledger(
             slot,
             &SdpLedger::new(0.into()),
             &crate::cryptarchia::tests::pow_state(),
-            ledger.config(),
+            ledger.eras(),
         )
         .expect("epoch state update");
     let id = block_id(parent, slot);

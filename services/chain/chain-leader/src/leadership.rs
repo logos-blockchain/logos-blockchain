@@ -17,12 +17,12 @@ use lb_core::{
     },
     sdp::blend::{PolEpochState, PolEpochStateSource},
 };
-use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_cryptarchia_engine::{Epoch, Slot, era::Eras};
 use lb_key_management_system_service::{
     api::KmsServiceApi, backend::preload::KeyId, keys::Ed25519Key,
     operators::zk::leader::BuildPrivateInputsWithLeaderKey,
 };
-use lb_ledger::{EpochState, UtxoTree};
+use lb_ledger::{ConfigSchedule as _, EpochState, UtxoTree};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_time_service::{EpochSlotTickStream, SlotTick, TimeServiceMessage};
 use lb_utils::tokio::task::spawn_blocking;
@@ -286,7 +286,7 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
     wallet_api: WalletApi<Wallet, RuntimeServiceId>,
     kms: KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
     time_relay: OutboundRelay<TimeServiceMessage>,
-    ledger_config: lb_ledger::Config,
+    ledger_eras: Arc<Eras<lb_ledger::Config>>,
     epoch_handoff_sender: mpsc::Sender<WinningPolEpochSlots>,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -322,7 +322,7 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
     let mut current_slot_tick = slot_timer.next().await;
     while let Some(SlotTick { slot, epoch, .. }) = current_slot_tick {
         let Some(slot_context) =
-            fetch_slot_context(&cryptarchia_api, &wallet_api, &ledger_config, slot).await
+            fetch_slot_context(&cryptarchia_api, &wallet_api, &ledger_eras, slot).await
         else {
             tracing::debug!(target: LOG_TARGET, "Could not fetch slot context for slot {slot:?}; retrying on the next tick.");
             current_slot_tick = slot_timer.next().await;
@@ -367,7 +367,7 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
         // here. A scan made stale by an epoch rollover is implicitly abandoned:
         // the subscriber just stops polling it once it moves to the next epoch.
         let winning_slots_stream = epoch_winning_slots_stream(
-            &ledger_config,
+            &ledger_eras,
             epoch_state,
             &eligible_aged,
             kms.clone(),
@@ -416,7 +416,7 @@ async fn next_epoch_tick(
 pub async fn fetch_slot_context<CryptarchiaService, Wallet, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
-    ledger_config: &lb_ledger::Config,
+    ledger_eras: &Eras<lb_ledger::Config>,
     slot: Slot,
 ) -> Option<SlotContext>
 where
@@ -441,7 +441,7 @@ where
         .get_leader_aged_notes(Some(wallet_tip))
         .await
         .ok()?;
-    let eligible = match &ledger_config.faucet_pk {
+    let eligible = match &ledger_eras.config_at_slot(slot).faucet_pk {
         Some(faucet_pk) => eligible_utxos
             .response
             .into_iter()
@@ -477,21 +477,16 @@ where
 /// previous epoch, not that it is unspent. Slots earlier than `start_slot` are
 /// skipped so a mid-epoch subscriber wastes no work.
 fn epoch_winning_slots_stream<RuntimeServiceId>(
-    ledger_config: &lb_ledger::Config,
+    ledger_eras: &Eras<lb_ledger::Config>,
     epoch_state: EpochState,
     eligible_aged: &[UtxoWithKeyId],
     kms: impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Send + Sync + 'static,
     start_slot: Slot,
 ) -> WinningPolSlotStream {
-    let slots_per_epoch = ledger_config.epoch_length();
-    let epoch_first_slot: u64 = ledger_config
-        .epoch_config
-        .starting_slot(&epoch_state.epoch, ledger_config.base_period_length())
-        .into();
-    let epoch_last_slot = epoch_first_slot
-        .checked_add(slots_per_epoch)
-        .expect("Epoch slot calculation overflow.")
-        - 1;
+    // The epoch's slots, laid out by its era.
+    let epoch_first_slot = u64::from(ledger_eras.epoch_start(epoch_state.epoch));
+    let epoch_last_slot =
+        u64::from(ledger_eras.epoch_start(epoch_state.epoch.strict_add(1.into()))) - 1;
     // Skip slots earlier than the start slot: a mid-epoch subscriber does not
     // waste work on slots it has already passed.
     let scan_starting_slot = u64::from(start_slot).max(epoch_first_slot);
@@ -576,7 +571,7 @@ mod pol_tests {
     use lb_groth16::{Fr, fr_from_bytes_unchecked};
     use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkKey};
     use lb_ledger::{
-        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig, single_era},
         mantle::sdp::{
             Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
         },
@@ -735,16 +730,14 @@ mod pol_tests {
     async fn scan_emits_only_slots_in_range() {
         let (config, kms, eligible, _, epoch_state) = scan_test_fixtures();
 
-        let epoch_starting_slot: u64 = config
-            .epoch_config
-            .starting_slot(&epoch_state.epoch, config.base_period_length())
-            .into();
+        let eras = single_era(config.clone());
+        let epoch_starting_slot = u64::from(eras.epoch_start(epoch_state.epoch));
         let epoch_end = epoch_starting_slot + config.epoch_length();
         let start_slot = epoch_starting_slot + config.epoch_length() / 2;
 
         // Drive every per-slot future and keep the winning ones.
         let winners: Vec<_> =
-            epoch_winning_slots_stream(&config, epoch_state, &eligible, kms, start_slot.into())
+            epoch_winning_slots_stream(&eras, epoch_state, &eligible, kms, start_slot.into())
                 .filter_map(|winning_slot| winning_slot)
                 .collect()
                 .await;
@@ -769,14 +762,12 @@ mod pol_tests {
     async fn scan_past_epoch_end_emits_nothing() {
         let (config, kms, eligible, _, epoch_state) = scan_test_fixtures();
 
-        let epoch_starting_slot: u64 = config
-            .epoch_config
-            .starting_slot(&epoch_state.epoch, config.base_period_length())
-            .into();
+        let eras = single_era(config.clone());
+        let epoch_starting_slot = u64::from(eras.epoch_start(epoch_state.epoch));
         let epoch_end = epoch_starting_slot + config.epoch_length();
 
         let winners: Vec<_> =
-            epoch_winning_slots_stream(&config, epoch_state, &eligible, kms, epoch_end.into())
+            epoch_winning_slots_stream(&eras, epoch_state, &eligible, kms, epoch_end.into())
                 .filter_map(|winning_slot| winning_slot)
                 .collect()
                 .await;

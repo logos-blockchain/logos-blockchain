@@ -9,7 +9,7 @@ pub fn emit_consensus_metrics(consensus: &Cryptarchia<HeaderId>, ledger: &Ledger
     let height = tip_branch.length();
     let finalized_height = lib_branch.length();
     let current_slot = tip_branch.slot();
-    let current_epoch = ledger.config().epoch(current_slot);
+    let current_epoch = ledger.eras().epoch_of(current_slot);
     let forks_count = consensus.branches().branches().count();
 
     lb_tracing::metric_gauge_u64!(consensus_tip_height, height as usize);
