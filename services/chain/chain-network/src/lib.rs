@@ -1038,7 +1038,7 @@ where
 #[instrument(
     target = LOG_TARGET,
     level = "debug",
-    skip(block, cryptarchia, mempool_adapter),
+    skip(block, cryptarchia, mempool),
     fields(block_id = %block.header().id(), tx_count = block.transactions().len())
 )]
 async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool>(
