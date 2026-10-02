@@ -74,6 +74,13 @@ impl Keystore {
         self.secret_keys.insert(key_name, key);
     }
 
+    /// Returns `true` if a key with the given title already exists in the
+    /// keystore.
+    #[must_use]
+    pub fn contains(&self, name: impl Into<KeyTitle>) -> bool {
+        self.get(name).is_some()
+    }
+
     #[must_use]
     pub fn get(&self, name: impl Into<KeyTitle>) -> Option<(KeyId, &Key)> {
         self.secret_keys
