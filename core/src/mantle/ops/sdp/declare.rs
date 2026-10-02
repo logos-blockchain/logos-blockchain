@@ -186,13 +186,11 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<SDPDeclareOp, Preverified, StandardMode>
 {
+    type DeferredProof = DeferredZkpVerification;
     type Context<'a> = SDPDeclareVerificationContext<'a>;
     type Error = SdpError;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         // Check that the note exist
@@ -219,10 +217,10 @@ impl VerifiableOperation<StandardMode>
             context.min_stake,
         )?;
 
-        Ok(Some(DeferredZkpVerification::ZkSig(
+        Ok(DeferredZkpVerification::ZkSig(
             *self.proof().zk_sig.as_proof(),
             inputs,
-        )))
+        ))
     }
 }
 
@@ -240,13 +238,11 @@ impl PreverifiableOperation<GenesisMode>
 }
 
 impl VerifiableOperation<GenesisMode> for SignedOperation<SDPDeclareOp, Preverified, GenesisMode> {
+    type DeferredProof = ();
     type Context<'a> = SDPDeclareGenesisValidationContext<'a>;
     type Error = SdpError;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         // Check that the note exist
@@ -264,7 +260,7 @@ impl VerifiableOperation<GenesisMode> for SignedOperation<SDPDeclareOp, Preverif
             context.min_stake,
         )?;
 
-        Ok(None)
+        Ok(())
     }
 }
 
@@ -573,22 +569,19 @@ mod tests {
 
             let signed_operation = preverified(operation, zk_sig, &tx_hash_view);
 
-            assert!(
-                signed_operation
-                    .verify(&SDPDeclareVerificationContext {
-                        utxo_tree: &utxos,
-                        channels: &Channels::new(),
-                        service_notes: &ServiceNotes::new(),
-                        tx_hash_view: &tx_hash_view,
-                        declarations: &Declarations::new_sync(),
-                        min_stake: &MinStake {
-                            threshold: utxo.note.value,
-                            timestamp: 0,
-                        },
-                    })
-                    .unwrap()
-                    .is_some()
-            );
+            signed_operation
+                .verify(&SDPDeclareVerificationContext {
+                    utxo_tree: &utxos,
+                    channels: &Channels::new(),
+                    service_notes: &ServiceNotes::new(),
+                    tx_hash_view: &tx_hash_view,
+                    declarations: &Declarations::new_sync(),
+                    min_stake: &MinStake {
+                        threshold: utxo.note.value,
+                        timestamp: 0,
+                    },
+                })
+                .expect("a locked note exactly meeting the minimum stake is accepted");
         }
 
         #[test]
@@ -643,7 +636,7 @@ mod tests {
             ZkKey::from(BigUint::from(1u64))
         }
 
-        fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
+        fn deferred_zkp_signed_by(signers: &[ZkKey]) -> DeferredZkpVerification {
             let utxo = locked_utxo(&note_key());
             let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
             let operation = SDPDeclareOp {
@@ -702,22 +695,19 @@ mod tests {
 
             let signed_operation = preverified(operation, zk_sig, &tx_hash_view);
 
-            assert!(
-                signed_operation
-                    .verify(&SDPDeclareVerificationContext {
-                        utxo_tree: &utxos,
-                        channels: &Channels::new(),
-                        service_notes: &ServiceNotes::new(),
-                        tx_hash_view: &tx_hash_view,
-                        declarations: &Declarations::new_sync(),
-                        min_stake: &MinStake {
-                            threshold: 0,
-                            timestamp: 0,
-                        },
-                    })
-                    .unwrap()
-                    .is_some()
-            );
+            signed_operation
+                .verify(&SDPDeclareVerificationContext {
+                    utxo_tree: &utxos,
+                    channels: &Channels::new(),
+                    service_notes: &ServiceNotes::new(),
+                    tx_hash_view: &tx_hash_view,
+                    declarations: &Declarations::new_sync(),
+                    min_stake: &MinStake {
+                        threshold: 0,
+                        timestamp: 0,
+                    },
+                })
+                .expect("a well-formed declaration is accepted");
         }
 
         fn verified(
@@ -919,21 +909,18 @@ mod tests {
             let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
             let signed_operation = genesis_preverified(operation, &tx_hash_view);
 
-            assert!(
-                signed_operation
-                    .verify(&SDPDeclareGenesisValidationContext {
-                        utxo_tree: &utxos,
-                        channels: &Channels::new(),
-                        service_notes: &ServiceNotes::new(),
-                        declarations: &Declarations::new_sync(),
-                        min_stake: &MinStake {
-                            threshold: 0,
-                            timestamp: 0,
-                        },
-                    })
-                    .unwrap()
-                    .is_none()
-            );
+            let () = signed_operation
+                .verify(&SDPDeclareGenesisValidationContext {
+                    utxo_tree: &utxos,
+                    channels: &Channels::new(),
+                    service_notes: &ServiceNotes::new(),
+                    declarations: &Declarations::new_sync(),
+                    min_stake: &MinStake {
+                        threshold: 0,
+                        timestamp: 0,
+                    },
+                })
+                .expect("a genesis declaration needs no ZK signature");
         }
     }
 }

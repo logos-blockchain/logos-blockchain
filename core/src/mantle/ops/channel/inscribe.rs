@@ -14,7 +14,6 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
-        batch::DeferredZkpVerification,
         channel::{ChannelState, Channels, Error},
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
@@ -147,13 +146,11 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<InscriptionOp, Preverified, StandardMode>
 {
+    type DeferredProof = ();
     type Context<'a> = InscriptionValidationContext<'a>;
     type Error = Error;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         // Check if the channel exist otherwise the inscription is valid only if and
@@ -192,7 +189,7 @@ impl VerifiableOperation<StandardMode>
         }
 
         // No deferred proof verification because it's cheap and done by `preverify`.
-        Ok(None)
+        Ok(())
     }
 }
 
@@ -375,21 +372,6 @@ mod tests {
                 tx_hash_view: &tx_hash_view
             }),
             Err(Error::InvalidSignature)
-        );
-    }
-
-    #[test]
-    fn has_no_deferred_zkp() {
-        let signed_operation = preverified(InscriptionOp::sample());
-
-        assert!(
-            signed_operation
-                .verify(&InscriptionValidationContext {
-                    channels: &Channels::new(),
-                    block_slot: Slot::from(0),
-                })
-                .expect("an inscription rooted at the genesis message opens a new channel")
-                .is_none()
         );
     }
 

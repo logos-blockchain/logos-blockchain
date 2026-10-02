@@ -102,11 +102,8 @@ pub enum Error {
 pub mod test_utils {
     use super::{DeferredZkpVerification, DeferredZkpVerifications, Error};
 
-    pub fn batch_verify(deferred_zkp: Option<DeferredZkpVerification>) -> Result<(), Error> {
-        deferred_zkp
-            .into_iter()
-            .collect::<DeferredZkpVerifications>()
-            .verify()
+    pub fn batch_verify(deferred_zkp: DeferredZkpVerification) -> Result<(), Error> {
+        DeferredZkpVerifications::from_iter([deferred_zkp]).verify()
     }
 }
 
