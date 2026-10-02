@@ -2,7 +2,7 @@ use std::ffi::{CStr, CString};
 
 use lb_core::mantle::transactions::genesis_tx::ChainId;
 use lb_node::RuntimeServiceId;
-use overwatch::overwatch::{Overwatch, OverwatchHandle};
+use overwatch::overwatch::{Overwatch, OverwatchExit, OverwatchHandle};
 use tokio::runtime::{Handle, Runtime};
 
 use crate::{
@@ -70,11 +70,42 @@ impl LogosBlockchainNode {
 
     /// The handle the node functions block on.
     ///
-    /// Fails when the calling thread cannot block: see
-    /// [`ensure_blocking_allowed`].
+    /// Fails when the calling thread cannot block (see
+    /// [`ensure_blocking_allowed`]) and when the node has stopped (see
+    /// [`Self::ensure_running`]).
     pub(crate) fn get_runtime_handle(&self) -> StatusResult<&Handle> {
         ensure_blocking_allowed()?;
+        self.ensure_running()?;
         Ok(self.runtime.handle())
+    }
+
+    /// Fails when Overwatch is no longer running.
+    ///
+    /// Overwatch shuts itself down when a service panics. From then on every
+    /// request to a service fails, each in its own way; asking Overwatch first
+    /// turns all of them into one clear status. The reason it stopped is only
+    /// known once it is waited for, which is what `shutdown_node` does.
+    fn ensure_running(&self) -> StatusResult<()> {
+        if self.is_running() {
+            return Ok(());
+        }
+        Err(OperationStatus::error(
+            OperationStatusCode::NodeStopped,
+            "The node is no longer running, most likely because one of its services panicked. \
+             Call `shutdown_node` to learn why and to release it.",
+        ))
+    }
+
+    /// Whether Overwatch still answers.
+    ///
+    /// It has no query for this, so it is asked for something it can always
+    /// answer while it runs: the request only fails when the command channel
+    /// is closed or the reply is dropped, and both mean it is gone.
+    fn is_running(&self) -> bool {
+        self.runtime
+            .handle()
+            .block_on(self.overwatch.handle().retrieve_service_ids())
+            .is_ok()
     }
 
     /// Shuts down the node and waits for all services to finish
@@ -84,17 +115,41 @@ impl LogosBlockchainNode {
     /// Any raw pointers to [`LogosBlockchainNode`] will be invalidated after
     /// this call.
     pub(crate) fn shutdown(self) -> OperationStatus {
-        let Self {
-            overwatch, runtime, ..
-        } = self;
-        if let Err(error) = runtime.handle().block_on(overwatch.handle().shutdown()) {
+        // A failed request is only a problem if Overwatch is still running.
+        // If it already stopped on its own there was nothing left to ask for,
+        // and the reason is waiting to be collected below.
+        if let Err(error) = self
+            .runtime
+            .handle()
+            .block_on(self.overwatch.handle().shutdown())
+            && self.is_running()
+        {
             return OperationStatus::error(
                 OperationStatusCode::ShutdownError,
                 format!("Failed to shut down node: {error}"),
             );
         }
-        overwatch.blocking_wait_finished();
-        OperationStatus::OK
+        let Self {
+            overwatch, runtime, ..
+        } = self;
+        let exit = overwatch.blocking_wait_finished();
+        drop(runtime);
+        exit_status(&exit)
+    }
+}
+
+/// What `shutdown_node` reports for the way Overwatch finished.
+///
+/// A node that stopped because a service panicked is released like any other,
+/// but the caller is told: until this point all it could see was that the
+/// node had stopped.
+pub fn exit_status(exit: &OverwatchExit<RuntimeServiceId>) -> OperationStatus {
+    match exit {
+        OverwatchExit::Shutdown => OperationStatus::OK,
+        OverwatchExit::ServicePanicked(panic) => OperationStatus::error(
+            OperationStatusCode::NodeStopped,
+            format!("The node had already stopped: {panic}."),
+        ),
     }
 }
 
