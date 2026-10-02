@@ -1080,18 +1080,15 @@ where
 }
 
 /// Retire the transactions of every block that entered the canonical chain.
-/// For a block applied off the canonical chain, this function does nothing.
+///
+/// Called for every applied block, even when no txs entered the canonical
+/// chain, because a mempool removal also triggers TTL eviction.
 async fn remove_newly_canonical_txs_from_mempool<Tx>(
     newly_canonical_txs: Vec<TxHash>,
     mempool_adapter: &MempoolAdapter<Tx>,
 ) where
     Tx: Hashable<Hash = TxHash> + Send + 'static,
 {
-    if newly_canonical_txs.is_empty() {
-        debug!(target: LOG_TARGET, "no txs entered the canonical chain");
-        return;
-    }
-
     debug!(target: LOG_TARGET, "retiring {} newly canonical transactions from mempool", newly_canonical_txs.len());
     if let Err(e) = mempool_adapter
         .remove_transactions(&newly_canonical_txs)
