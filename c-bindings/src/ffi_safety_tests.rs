@@ -1165,8 +1165,9 @@ mod with_node {
         drop(paths);
     }
 
-    /// Starting a node must leave the host's panic hook in place: the node
-    /// binary's own hook exits the process, which would end this test.
+    /// Starting a node must leave the host's panic hook in place. The node
+    /// binary installs one that exits the process; if starting a node through
+    /// the bindings ever did the same, the panics below would end this test.
     #[test]
     #[ignore = "Runs under valgrind only: see the module docs."]
     #[serial]
