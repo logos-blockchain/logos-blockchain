@@ -10,6 +10,7 @@ use logos_blockchain_node::{
     panic::log_and_exit_hook,
     run_node_from_config,
 };
+use overwatch::overwatch::OverwatchExit;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -121,6 +122,8 @@ async fn main() -> Result<()> {
         "Running chain {chain_id} on fork {fork_digest}."
     );
 
-    app.wait_finished().await;
-    Ok(())
+    match app.wait_finished().await {
+        OverwatchExit::Shutdown => Ok(()),
+        OverwatchExit::ServicePanicked(panic) => Err(eyre!("{panic}")),
+    }
 }

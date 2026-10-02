@@ -22,6 +22,10 @@ pub enum OperationStatusCode {
     ShutdownError = 0xA,
     ConfigurationError = 0xB,
     ValidationError = 0xC,
+    /// The node is no longer running: its services were stopped, most likely
+    /// because one of them panicked. Only `shutdown_node` works on it, and
+    /// reports why it stopped.
+    NodeStopped = 0xD,
 }
 
 #[derive(Default)]

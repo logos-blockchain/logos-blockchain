@@ -36,8 +36,9 @@ use std::{
 };
 
 use lb_c_macros::panic_to_error;
-use lb_node::UserConfig;
+use lb_node::{RuntimeServiceId, UserConfig};
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
+use overwatch::overwatch::{OverwatchExit, ServicePanic};
 use serial_test::serial;
 use tempfile::TempDir;
 
@@ -83,6 +84,7 @@ use crate::{
         },
     },
     errors::free_operation_status,
+    node::exit_status,
     result::FfiResult,
     return_error_if_null_pointer,
 };
@@ -401,6 +403,23 @@ mod no_node {
         // Nothing to assert on: surviving the call is the test, and valgrind
         // checks the discarded status is released.
         panics_with_unit();
+    }
+
+    /// `shutdown_node` reports why Overwatch finished: nothing for an ordinary
+    /// shutdown, the service and its message when a service panicked.
+    #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
+    fn shutdown_reports_a_service_panic() {
+        assert!(exit_status(&OverwatchExit::Shutdown).is_ok());
+
+        let exit = OverwatchExit::ServicePanicked(ServicePanic {
+            service_id: RuntimeServiceId::BlendCore,
+            message: "index out of bounds".to_owned(),
+        });
+        let (code, message) = consume(exit_status(&exit));
+        assert_eq!(code, OperationStatusCode::NodeStopped);
+        assert!(message.contains("BlendCore"), "{message}");
+        assert!(message.contains("index out of bounds"), "{message}");
     }
 
     #[test]
@@ -1239,6 +1258,66 @@ mod with_node {
         let result = unsafe { get_time_info(node) };
         assert!(result.is_ok());
         assert!(unsafe { free_time_info(result.value) }.is_ok());
+        let (status, message) = consume(unsafe { shutdown_node(node) });
+        assert_eq!(status, OperationStatusCode::Ok, "{message}");
+    }
+
+    static STOPPED_NODE_EVENTS: Counters = Counters::new();
+
+    unsafe extern "C" fn on_stopped_node_event(data: *const c_char) {
+        STOPPED_NODE_EVENTS.record(data);
+    }
+
+    /// Overwatch shuts itself down when a service panics. From the bindings'
+    /// side that is a node that stopped without `shutdown_node`: every call
+    /// must say so with one clear status, subscriptions must end, and the
+    /// handle must still be releasable.
+    #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
+    #[serial]
+    fn calls_on_a_stopped_node_say_so() {
+        let paths = TestConfigPaths::new();
+        let node = paths.start();
+        assert!(
+            unsafe { subscribe_to_processed_blocks(node, Some(on_stopped_node_event)) }.is_ok()
+        );
+        std::thread::sleep(Duration::from_secs(2));
+
+        // Stop Overwatch behind the handle's back, as a panicking service
+        // would make it do.
+        {
+            let node = unsafe { &*node };
+            let runtime = node.get_runtime_handle().expect("The node is running");
+            runtime
+                .block_on(node.get_overwatch_handle().shutdown())
+                .expect("Overwatch shuts down");
+        }
+
+        let result = unsafe { get_time_info(node) };
+        assert!(result.value.is_null());
+        let (status, message) = consume(result);
+        assert_eq!(status, OperationStatusCode::NodeStopped, "{message}");
+        assert!(message.contains("shutdown_node"), "{message}");
+        assert_eq!(
+            code(unsafe { get_known_addresses(node) }),
+            OperationStatusCode::NodeStopped
+        );
+        assert_eq!(
+            code(unsafe { subscribe_to_lib_blocks(node, Some(on_lib)) }),
+            OperationStatusCode::NodeStopped
+        );
+        assert_eq!(
+            code(unsafe { pow_status(node) }),
+            OperationStatusCode::NodeStopped
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(wait_secs().max(30));
+        while Instant::now() < deadline && STOPPED_NODE_EVENTS.snapshot().1 == 0 {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert_eq!(STOPPED_NODE_EVENTS.snapshot().1, 1, "No end-of-stream call");
+
+        // An ordinary shutdown was what stopped it, so releasing it succeeds.
         let (status, message) = consume(unsafe { shutdown_node(node) });
         assert_eq!(status, OperationStatusCode::Ok, "{message}");
     }
