@@ -196,16 +196,18 @@ impl NtpStream {
     // NTP-derived timeline, potentially skipping slots.
     fn poll_slot_timer(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<SlotTick>> {
         let this = self.as_mut().get_mut();
-        match this.slot_timer.as_mut().poll_next_unpin(cx) {
-            Poll::Ready(Some(tick)) => {
-                // Clamp slot to never go backwards
-                if tick.slot <= this.last_emitted_slot {
-                    return Poll::Pending;
+        loop {
+            match this.slot_timer.as_mut().poll_next_unpin(cx) {
+                // Clamp slot to never go backwards. The timer is polled again,
+                // so that it wakes the task up for its next tick: a tick it has
+                // just returned leaves no wake-up behind.
+                Poll::Ready(Some(tick)) if tick.slot <= this.last_emitted_slot => {}
+                Poll::Ready(Some(tick)) => {
+                    this.last_emitted_slot = tick.slot;
+                    return Poll::Ready(Some(tick));
                 }
-                this.last_emitted_slot = tick.slot;
-                Poll::Ready(Some(tick))
+                other => return other,
             }
-            other => other,
         }
     }
 }
@@ -591,6 +593,31 @@ mod tests {
             futures::poll!(stream.next()),
             Poll::Ready(Some(SlotTick { slot, .. })) if slot == Slot::new(11)
         ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_dropped_tick_does_not_stall_the_stream() {
+        // After a backward correction, the timer catches up through slots 8 to
+        // 10, which were already emitted. A tick it has just returned leaves no
+        // wake-up behind, so the stream must poll it again rather than wait.
+        let mut stream = NtpStream {
+            interval: Box::pin(MockNtpResultStream {
+                data: vec![],
+                idx: 0,
+            }),
+            eras: Arc::new(test_eras()),
+            slot_timer: Box::pin(MockSlotTimerSequence {
+                slots: [8, 9, 10, 11].map(Slot::new).to_vec(),
+                idx: 0,
+            }),
+            last_emitted_slot: Slot::new(10),
+        };
+
+        let tick = tokio::time::timeout(Duration::from_secs(10), stream.next()).await;
+        assert!(
+            matches!(tick, Ok(Some(SlotTick { slot, .. })) if slot == Slot::new(11)),
+            "{tick:?}"
+        );
     }
 
     #[tokio::test(start_paused = true)]
