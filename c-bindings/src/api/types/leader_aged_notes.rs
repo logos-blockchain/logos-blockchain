@@ -30,6 +30,8 @@ pub struct LeaderAgedNote {
 #[repr(C)]
 pub struct LeaderAgedNotes {
     pub tip: HeaderId,
+    /// When the list is empty this pointer is not null, but it points to
+    /// nothing: check the length before reading through it.
     pub notes: *mut LeaderAgedNote,
     /// Number of entries in `notes`.
     pub len: usize,

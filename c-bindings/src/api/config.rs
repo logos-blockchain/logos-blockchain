@@ -47,9 +47,18 @@ pub struct GenerateConfigArgs {
     pub kms_file: *const c_char,
 }
 
-impl From<GenerateConfigArgs> for EmbeddedInitArgs {
-    fn from(value: GenerateConfigArgs) -> Self {
-        let mut init_args = Self::default();
+impl GenerateConfigArgs {
+    /// Reads the arguments into the node's own init arguments. Null pointers
+    /// leave the corresponding default in place.
+    ///
+    /// # Safety
+    ///
+    /// Every non-null pointer must be valid for its type: the strings
+    /// NUL-terminated, and `initial_peers` pointing to `initial_peers_count`
+    /// entries.
+    unsafe fn into_init_args(self) -> EmbeddedInitArgs {
+        let value = self;
+        let mut init_args = EmbeddedInitArgs::default();
 
         // ---- initial_peers ----
         if !value.initial_peers.is_null() && !value.initial_peers_count.is_null() {
@@ -178,7 +187,7 @@ pub fn generate_config_sync(args: EmbeddedInitArgs) -> OperationStatus {
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn generate_user_config(args: GenerateConfigArgs) -> OperationStatus {
-    let init_args = EmbeddedInitArgs::from(args);
+    let init_args = unsafe { args.into_init_args() };
     generate_config_sync(init_args)
 }
 

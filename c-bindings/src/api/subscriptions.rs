@@ -171,7 +171,7 @@ pub unsafe extern "C" fn subscribe_to_new_blocks(
         return OperationStatus::OK;
     };
     let node = unsafe { &*node };
-    let callback_per_block = into_boxed_callback(callback_per_block);
+    let callback_per_block = unsafe { into_boxed_callback(callback_per_block) };
     subscribe_to_new_blocks_sync(node, callback_per_block)
 }
 
@@ -267,7 +267,7 @@ pub unsafe extern "C" fn subscribe_to_processed_blocks(
         return OperationStatus::OK;
     };
     let node = unsafe { &*node };
-    subscribe_to_processed_blocks_sync(node, into_boxed_callback(callback_per_event))
+    subscribe_to_processed_blocks_sync(node, unsafe { into_boxed_callback(callback_per_event) })
 }
 
 #[must_use]
@@ -354,5 +354,5 @@ pub unsafe extern "C" fn subscribe_to_lib_blocks(
         return OperationStatus::OK;
     };
     let node = unsafe { &*node };
-    subscribe_to_lib_blocks_sync(node, into_boxed_callback(callback_per_event))
+    subscribe_to_lib_blocks_sync(node, unsafe { into_boxed_callback(callback_per_event) })
 }
