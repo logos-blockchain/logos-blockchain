@@ -145,6 +145,14 @@ pub struct EraInForce {
     pub retiring: Option<Era>,
 }
 
+impl EraInForce {
+    /// The eras the network accepts: the era in force, then the retiring era,
+    /// if any.
+    pub fn eras(self) -> impl Iterator<Item = Era> {
+        core::iter::once(self.era).chain(self.retiring)
+    }
+}
+
 /// Why a list of eras cannot be resolved.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ErasError {
@@ -227,6 +235,16 @@ impl<Parameters> Eras<Parameters> {
     #[must_use]
     pub const fn genesis(&self) -> &ScheduledEra<Parameters> {
         &self.genesis
+    }
+
+    /// Era `era`, if the schedule has it.
+    #[must_use]
+    pub fn get(&self, era: Era) -> Option<&ScheduledEra<Parameters>> {
+        usize::from(era.into_inner())
+            .checked_sub(1)
+            .map_or(Some(&self.genesis), |after_genesis| {
+                self.after_genesis.get(after_genesis)
+            })
     }
 
     /// Every era, in schedule order.
@@ -577,6 +595,15 @@ mod tests {
                 (413, era(3, None)),
             ]
         );
+    }
+
+    #[test]
+    fn eras_are_found_by_number() {
+        let eras = four_eras();
+        for era in eras.iter() {
+            assert_eq!(eras.get(era.era), Some(era));
+        }
+        assert_eq!(eras.get(Era::new(4)), None);
     }
 
     #[test]

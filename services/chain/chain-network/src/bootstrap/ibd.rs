@@ -836,6 +836,10 @@ mod tests {
             unimplemented!()
         }
 
+        async fn follow_eras_at(&self, _slot: Slot) {
+            unimplemented!()
+        }
+
         async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
             unimplemented!()
         }

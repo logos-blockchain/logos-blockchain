@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use futures::Stream;
 use lb_core::header::HeaderId;
+use lb_cryptarchia_engine::Slot;
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
 use overwatch::{
@@ -27,6 +28,12 @@ pub trait NetworkAdapter<RuntimeServiceId> {
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
     ) -> Self;
+
+    /// Follows the eras in force at `slot`: listens to the proposals of the
+    /// era in force and of the era it retires, if any, and stops listening to
+    /// the eras no longer in force. Every clone of the adapter follows them.
+    async fn follow_eras_at(&self, slot: Slot);
+
     async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError>;
 
     async fn chainsync_events_stream(&self) -> Result<BoxedStream<ChainSyncEvent>, DynError>;

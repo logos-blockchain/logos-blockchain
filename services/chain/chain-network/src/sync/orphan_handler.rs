@@ -659,6 +659,10 @@ mod tests {
             Self::new()
         }
 
+        async fn follow_eras_at(&self, _slot: lb_cryptarchia_engine::Slot) {
+            unimplemented!()
+        }
+
         async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
             unimplemented!()
         }

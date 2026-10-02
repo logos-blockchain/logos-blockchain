@@ -314,7 +314,38 @@ where
         )
         .await?;
 
+        // The slot clock: the adapter follows the eras in force through it, and
+        // the tip-poll watchdog below runs on it. Subscribed before the current
+        // slot is read, so that no tick falls between them.
+        let mut slot_ticks = {
+            let (sender, receiver) = oneshot::channel();
+            relays
+                .time_relay()
+                .send(TimeServiceMessage::Subscribe { sender })
+                .await
+                .map_err(|error| {
+                    DynError::from(format!("failed to subscribe to slot ticks: {error}"))
+                })?;
+            receiver
+                .await
+                .map_err(|e| DynError::from(format!("failed to receive slot tick stream: {e}")))?
+        };
+        let current_tick = {
+            let (sender, receiver) = oneshot::channel();
+            relays
+                .time_relay()
+                .send(TimeServiceMessage::CurrentSlot { sender })
+                .await
+                .map_err(|error| {
+                    DynError::from(format!("failed to request the current slot: {error}"))
+                })?;
+            receiver
+                .await
+                .map_err(|e| DynError::from(format!("failed to receive the current slot: {e}")))?
+        };
+
         let network_adapter = NetAdapter::new(network_config, relays.network_relay().clone()).await;
+        network_adapter.follow_eras_at(current_tick.slot).await;
 
         let initial_block_download = InitialBlockDownload::new(
             ChainNetworkIbdBlockProcessor::<_, Mempool> {
@@ -324,10 +355,19 @@ where
             network_adapter.clone(),
         );
 
-        match initial_block_download
-            .run(bootstrap_config.ibd, &sync_config.orphan)
-            .await
-        {
+        // The download may outlast an era boundary: the adapter keeps following
+        // the eras in force meanwhile, so it keeps speaking the network's
+        // protocols.
+        let initial_block_download =
+            initial_block_download.run(bootstrap_config.ibd, &sync_config.orphan);
+        tokio::pin!(initial_block_download);
+        let initial_block_download_result = loop {
+            tokio::select! {
+                result = &mut initial_block_download => break result,
+                Some(tick) = slot_ticks.next() => network_adapter.follow_eras_at(tick.slot).await,
+            }
+        };
+        match initial_block_download_result {
             Ok(_) => {
                 info!(target: LOG_TARGET, "Initial Block Download completed successfully");
                 // Notify chain-service that IBD is complete so it can start the prolonged
@@ -359,9 +399,10 @@ where
         let mut incoming_proposals = network_adapter.proposals_stream().await?;
         let mut chainsync_events = network_adapter.chainsync_events_stream().await?;
 
-        // Keep a handle to the adapter for the proactive tip-poll watchdog before
-        // the downloader takes ownership of it.
-        let tip_poll_adapter = network_adapter.clone();
+        // Keep a handle to the adapter, to follow the eras in force and for the
+        // proactive tip-poll watchdog, before the downloader takes ownership of
+        // it.
+        let adapter = network_adapter.clone();
 
         let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
             network_adapter,
@@ -369,23 +410,10 @@ where
             sync_config.orphan.max_rejected_cache_size,
         ));
 
-        // Set up the proactive tip-poll lag watchdog: subscribe to slot ticks and
-        // derive the polling cadence / lag threshold from the active slot
-        // coefficient `f`. If it can't be derived (or polling is disabled), the
-        // watchdog stays inert and the slot-tick arm is gated off.
-        let mut slot_ticks = {
-            let (sender, receiver) = oneshot::channel();
-            relays
-                .time_relay()
-                .send(TimeServiceMessage::Subscribe { sender })
-                .await
-                .map_err(|error| {
-                    DynError::from(format!("failed to subscribe to slot ticks: {error}"))
-                })?;
-            receiver
-                .await
-                .map_err(|e| DynError::from(format!("failed to receive slot tick stream: {e}")))?
-        };
+        // Set up the proactive tip-poll lag watchdog: derive the polling cadence
+        // / lag threshold from the active slot coefficient `f`. If it can't be
+        // derived (or polling is disabled), the watchdog stays inert on slot
+        // ticks.
         let tip_poll_params = if sync_config.tip_poll.enabled {
             match TipPollParams::derive(&sync_config.tip_poll, relays.cryptarchia()).await {
                 Ok(params) => {
@@ -482,21 +510,22 @@ where
                         }
                     }
 
-                    Some(tick) = slot_ticks.next(), if tip_poll_params.is_some() => {
+                    Some(tick) = slot_ticks.next() => {
+                        adapter.follow_eras_at(tick.slot).await;
+
+                        let Some(params) = tip_poll_params.clone() else {
+                            continue;
+                        };
                         // Don't start a new poll if the previous one is still running.
                         if tip_poll_task.as_ref().is_some_and(|handle| !handle.is_finished()) {
                             continue;
                         }
 
-                        let params = tip_poll_params
-                            .clone()
-                            .expect("tip_poll_params is Some, guaranteed by the select arm condition");
-
                         // Spawn a task to not block this event loop.
                         // The task makes `GetTip` requests handled by this event loop in peers' side.
                         // All two nodes make `GetTip` requests simultaneously to each other,
                         // `poll_peer_tips_if_behind` will cause deadlock unless it's spawned off.
-                        let adapter = tip_poll_adapter.clone();
+                        let adapter = adapter.clone();
                         let cryptarchia = relays.cryptarchia().clone();
                         let tx = polled_tip_tx.clone();
                         tip_poll_task = Some(spawn("logos/chain/tip-poll", async move {
@@ -1433,6 +1462,10 @@ mod tests {
                 <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
             >,
         ) -> Self {
+            unimplemented!()
+        }
+
+        async fn follow_eras_at(&self, _slot: Slot) {
             unimplemented!()
         }
 

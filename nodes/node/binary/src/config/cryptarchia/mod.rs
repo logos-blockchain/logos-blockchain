@@ -72,13 +72,6 @@ impl ServiceConfig {
             },
             network: LibP2pAdapterSettings {
                 eras: Arc::clone(eras),
-                topic: eras
-                    .genesis()
-                    .entry
-                    .parameters
-                    .protocol_names
-                    .cryptarchia_topic
-                    .clone(),
                 max_connected_peers_to_try_download: self
                     .user
                     .network
