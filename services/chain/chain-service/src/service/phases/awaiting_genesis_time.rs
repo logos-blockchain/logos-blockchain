@@ -81,6 +81,7 @@ where
         state_recording_timer: tokio::time::Interval,
         prolonged_bootstrap_period: Duration,
     ) -> Self {
+        let era = cryptarchia.ledger.eras().at_slot(current_slot).era;
         Self {
             phase: AwaitingGenesisTime {
                 genesis_timer: create_genesis_timer(starting_state),
@@ -92,6 +93,7 @@ where
             lib_subscription_sender,
             chain_online_notifier,
             current_slot,
+            era,
             storage_blocks_to_remove,
             relays,
             sync_blocks_provider,
@@ -140,7 +142,7 @@ where
                         ibd_skipped = true;
                     }
                 },
-                Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
+                Some(tick) = self.slot_timer.next() => self.on_slot_tick(tick).await,
                 _ = self.state_recording_timer.tick() => self.record_recovery_state(),
             }
         }

@@ -682,6 +682,18 @@ where
         (self, pruned_blocks)
     }
 
+    /// Enters an era running `config`: from now on, fork choice, the LIB and
+    /// the uncles a new block may reference follow it.
+    ///
+    /// The LIB never moves back, since the blocks below it are pruned: with a
+    /// larger `k`, it stays where it is until `k` blocks sit above it, and with
+    /// a smaller `k`, it moves up at once. The blocks of the previous era above
+    /// the LIB are judged under the new rules from now on.
+    pub fn enter_era(&mut self, config: Config) -> PrunedBlocks<Id> {
+        self.config = config;
+        self.update_lib()
+    }
+
     pub const fn config(&self) -> &Config {
         &self.config
     }
@@ -976,6 +988,40 @@ pub mod tests {
             parent = new_block;
         }
         engine
+    }
+
+    #[test]
+    fn entering_an_era_never_moves_the_lib_back() {
+        // b0 - b1 - ... - b5, online with k = 2: the LIB is b3.
+        let (mut cryptarchia, _) =
+            create_canonical_chain(6.try_into().unwrap(), Some(config_with(2))).online();
+        assert_eq!(cryptarchia.lib(), hash(&3u64));
+
+        // With k = 4 the LIB stays at b3, until 4 blocks sit above it.
+        assert!(cryptarchia.enter_era(config_with(4)).all().next().is_none());
+        assert_eq!(cryptarchia.lib(), hash(&3u64));
+        for i in 6..=7u64 {
+            cryptarchia
+                .receive_block(hash(&i), hash(&(i - 1)), i.into(), UncleSlots::default())
+                .unwrap();
+            assert_eq!(cryptarchia.lib(), hash(&3u64));
+        }
+        cryptarchia
+            .receive_block(hash(&8u64), hash(&7u64), 8.into(), UncleSlots::default())
+            .unwrap();
+        assert_eq!(cryptarchia.lib(), hash(&4u64));
+
+        // With k = 1 the LIB moves up at once, to the parent of the tip.
+        let pruned_blocks = cryptarchia.enter_era(config_with(1));
+        assert_eq!(cryptarchia.lib(), hash(&7u64));
+        assert_eq!(
+            pruned_blocks
+                .immutable_blocks()
+                .values()
+                .copied()
+                .collect::<Vec<_>>(),
+            [hash(&4u64), hash(&5u64), hash(&6u64)]
+        );
     }
 
     #[test]

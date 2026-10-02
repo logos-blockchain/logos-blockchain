@@ -552,6 +552,14 @@ impl Cryptarchia {
         log_pruned_ledger_states(pruned_states_count);
     }
 
+    /// Enters an era: the engine follows `config` from now on, and the ledger
+    /// states of the blocks it prunes are dropped.
+    fn enter_era(&mut self, config: lb_cryptarchia_engine::Config) -> PrunedBlocks<HeaderId> {
+        let pruned_blocks = self.consensus.enter_era(config);
+        self.prune_ledger_states(pruned_blocks.all());
+        pruned_blocks
+    }
+
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
         let (consensus, pruned_blocks) = self.consensus.online();
         let mut cryptarchia = Self {
@@ -981,6 +989,10 @@ where
             bootstrap_config,
             recovery_state.last_engine_state.as_ref(),
         );
+        let in_force = ledger_eras
+            .config_at_slot(current_slot)
+            .consensus_config
+            .clone();
         let mut cryptarchia = Cryptarchia::from_lib(
             lib_id,
             recovery_state.lib_ledger_state.clone(),
@@ -991,6 +1003,9 @@ where
             recovery_state.lib_block_length,
             recovery_state.lib_block_uncle_slots.clone(),
         );
+        // Follow the era in force, from the LIB. The block tree only holds the
+        // LIB yet, so nothing is pruned.
+        drop(cryptarchia.enter_era(in_force));
 
         // Stream the already applied state.
         let init_tip = cryptarchia.tip_branch();

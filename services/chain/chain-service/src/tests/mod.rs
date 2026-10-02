@@ -108,7 +108,7 @@ fn cryptarchia_switch_to_online() {
 
     // Now, the chain is [G, B1, B2, B3].
     // We now switch to Online and check that LIB advances to B2.
-    let (cryptarchia, pruned_blocks) = cryptarchia.online();
+    let (mut cryptarchia, pruned_blocks) = cryptarchia.online();
     assert_eq!(cryptarchia.lib(), block_ids[2]);
     // All immutable blocks (G, B1, excluding LIB) should have been pruned
     assert_eq!(
@@ -122,6 +122,14 @@ fn cryptarchia_switch_to_online() {
     // Check the ledger states of immutable blocks have been pruned
     assert!(cryptarchia.ledger.state(&block_ids[0]).is_none());
     assert!(cryptarchia.ledger.state(&block_ids[1]).is_none());
+
+    // An era with a larger k anchors the LIB where it is: nothing is pruned,
+    // and the LIB keeps its ledger state.
+    let pruned_blocks =
+        cryptarchia.enter_era(ledger_config(3.try_into().unwrap()).consensus_config);
+    assert!(pruned_blocks.is_empty());
+    assert_eq!(cryptarchia.lib(), block_ids[2]);
+    assert!(cryptarchia.ledger.state(&block_ids[2]).is_some());
 }
 
 #[tokio::test(flavor = "multi_thread")]

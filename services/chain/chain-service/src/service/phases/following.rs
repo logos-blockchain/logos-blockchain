@@ -63,7 +63,7 @@ where
                         debug!(target: LOG_TARGET, "ignoring IbdCompleted: already in {:?} phase", self.phase);
                     }
                 },
-                Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
+                Some(tick) = self.slot_timer.next() => self.on_slot_tick(tick).await,
                 _ = self.state_recording_timer.tick() => self.record_recovery_state(),
             }
         }
