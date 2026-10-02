@@ -1,7 +1,9 @@
 use std::{collections::HashSet, time::SystemTime};
 
+use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_core::{header::HeaderId, mantle::traits::GenesisTx as _};
 use lb_ledger::LedgerState;
+use lb_services_utils::overwatch::VersionedState;
 use overwatch::{DynError, services::state::ServiceState};
 use serde::{Deserialize, Serialize};
 
@@ -112,6 +114,16 @@ impl ServiceState for CryptarchiaConsensusState {
     }
 }
 
+impl VersionedState for CryptarchiaConsensusState {
+    const STATE_VERSION: u16 = 1;
+
+    /// The only version before 1 is 0, the records written before records
+    /// carried a version, in the layout of version 1.
+    fn migrate(_from: u16, bytes: &[u8]) -> Result<Self, DynError> {
+        Ok(Self::from_bytes(bytes)?)
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LastEngineState {
     pub timestamp: SystemTime,
@@ -125,7 +137,7 @@ mod tests {
         sync::Arc,
     };
 
-    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
+    use lb_binary_codec::bincode::SerializeOp as _;
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
     use lb_ledger::{

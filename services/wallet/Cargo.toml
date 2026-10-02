@@ -19,6 +19,7 @@ thiserror   = { workspace = true }
 tokio       = { features = ["sync"], workspace = true }
 tracing     = { workspace = true }
 
+lb-binary-codec                  = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }

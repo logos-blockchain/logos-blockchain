@@ -3,6 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
+use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -14,8 +15,9 @@ use lb_core::{
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
+use lb_services_utils::overwatch::VersionedState;
 use lb_wallet::{Voucher, Vouchers, WalletBlock, WalletError, WalletState};
-use overwatch::services::state::StateUpdater;
+use overwatch::{DynError, services::state::StateUpdater};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
@@ -220,6 +222,16 @@ impl overwatch::services::state::ServiceState for RecoveryState {
             lib_wallet_state: None,
             pending_claims: PendingClaims::default(),
         })
+    }
+}
+
+impl VersionedState for RecoveryState {
+    const STATE_VERSION: u16 = 1;
+
+    /// The only version before 1 is 0, the records written before records
+    /// carried a version, in the layout of version 1.
+    fn migrate(_from: u16, bytes: &[u8]) -> Result<Self, DynError> {
+        Ok(Self::from_bytes(bytes)?)
     }
 }
 
@@ -590,12 +602,17 @@ mod tests {
     fn lib_update_for_unapplied_block_skips_advance() {
         use std::sync::Arc;
 
+        use lb_core::era::ForkDigest;
         use lb_services_utils::overwatch::RecoveryData;
 
+        let eras = lb_ledger::config::single_era(ledger_config());
         let settings = WalletServiceSettings {
             known_keys: HashMap::new(),
             voucher_master_key_id: "voucher-master".into(),
-            recovery_data: RecoveryData::default(),
+            recovery_data: RecoveryData::new(
+                HashMap::new(),
+                Arc::new(eras.map(|_| ForkDigest::from([0; 32]))),
+            ),
             pending_note_expiry_blocks: 10,
         };
 
@@ -608,7 +625,7 @@ mod tests {
         };
 
         let genesis = HeaderId::from([0; 32]);
-        let ledger = LedgerState::from_utxos([], &lb_ledger::config::single_era(ledger_config()));
+        let ledger = LedgerState::from_utxos([], &eras);
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
 

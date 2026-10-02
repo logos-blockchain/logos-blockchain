@@ -595,7 +595,7 @@ fn get_startup_settings(
         .startup
         .deployment_config_override_path
         .clone()
-        .map(|path| load_run_config(&path))
+        .map(|path| deployment_config_from_yaml(&path))
         .transpose()?;
     let user_config_overrides = world.startup.user_config_overrides.clone();
     let deployment_config_overrides = world.startup.deployment_config_overrides.clone();
@@ -697,15 +697,6 @@ pub(super) fn remove_external_scenario_wallet_keys_from_maps(
         known_keys.remove(key_id);
         kms_keys.remove(key_id);
     }
-}
-
-fn load_run_config(path: &Path) -> Result<DeploymentSettings, StepError> {
-    let text = fs::read_to_string(path).map_err(|e| StepError::LogicalError {
-        message: format!("Failed to read '{}': {e}", path.display()),
-    })?;
-    serde_yaml::from_str::<DeploymentSettings>(&text).map_err(|e| StepError::LogicalError {
-        message: format!("Failed to parse '{}': {e}", path.display()),
-    })
 }
 
 fn populate_slots_per_epoch_from_deployment(

@@ -46,8 +46,9 @@ use crate::cucumber::{
         tokio_console::profile::TokioConsoleProfileNode,
     },
     utils::{
-        display_last_path_components, extract_child_dir_name, matching_child_dirs,
-        node_wallet_keys_from_node_yaml, peer_id_from_node_yaml, track_progress, truncate_hash,
+        deployment_config_from_yaml, display_last_path_components, extract_child_dir_name,
+        matching_child_dirs, node_wallet_keys_from_node_yaml, peer_id_from_node_yaml,
+        track_progress, truncate_hash,
     },
     wallet::snapshot::{create_and_save_all_wallets_snapshot, restore_wallet_snapshot_if_present},
     world::{

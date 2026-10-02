@@ -189,7 +189,10 @@ pub fn run_node_from_config(
     }
     .into_rocks_backend_settings(&config.user.state);
 
-    let recovery_data = load_recovery_data(storage_config.clone())?;
+    let recovery_data = load_recovery_data(
+        storage_config.clone(),
+        Arc::new(eras.map(|era| era.entry.parameters.fork_digest)),
+    )?;
 
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
         user: config.user.blend,

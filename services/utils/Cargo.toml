@@ -20,18 +20,21 @@ ignored = [
 workspace = true
 
 [dependencies]
-async-trait    = { workspace = true }
-bytes          = { workspace = true }
-futures        = { workspace = true }
-lb-log-targets = { workspace = true }
-log            = { workspace = true }
-overwatch      = { features = ["derive"], workspace = true }
-serde          = { workspace = true }
-thiserror      = { workspace = true }
-tracing        = { workspace = true }
+async-trait           = { workspace = true }
+bytes                 = { workspace = true }
+futures               = { workspace = true }
+lb-core               = { workspace = true }
+lb-cryptarchia-engine = { workspace = true }
+lb-log-targets        = { workspace = true }
+log                   = { workspace = true }
+overwatch             = { features = ["derive"], workspace = true }
+serde                 = { workspace = true }
+thiserror             = { workspace = true }
+tracing               = { workspace = true }
 
 [dev-dependencies]
 overwatch-derive = { workspace = true }
 serde            = { features = ["derive"], workspace = true }
+time             = { workspace = true }
 tokio            = { workspace = true }
 tracing          = { workspace = true }

@@ -1,12 +1,13 @@
-use std::{fmt::Display, marker::PhantomData};
+use std::{cmp::Ordering, fmt::Display, marker::PhantomData, sync::Arc};
 
 use bytes::Bytes;
-use lb_binary_codec::bincode::DeserializeOp as _;
-#[cfg(test)]
-use lb_binary_codec::bincode::SerializeOp as _;
+use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
+use lb_core::era::ForkDigest;
+use lb_cryptarchia_engine::era::Eras;
+use lb_log_targets::utils;
 pub use lb_services_utils::overwatch::recovery::StorageRecoverySettings;
 use lb_services_utils::overwatch::recovery::{
-    RecoveryBackend, RecoveryData, RecoveryError, RecoveryResult,
+    RecoveryBackend, RecoveryData, RecoveryError, RecoveryResult, VersionedState,
 };
 use overwatch::{
     DynError,
@@ -14,7 +15,9 @@ use overwatch::{
     services::{AsServiceId, state::ServiceState},
 };
 use serde::{Serialize, de::DeserializeOwned};
+use time::OffsetDateTime;
 use tokio::sync::OnceCell;
+use tracing::warn;
 
 use crate::{
     StorageService,
@@ -23,7 +26,13 @@ use crate::{
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
 
+const LOG_TARGET: &str = utils::RECOVERY;
+
 const RECOVERY_PREFIX: &[u8] = b"recovery/";
+
+/// Opens every stamped record. A record that does not start with it was
+/// written before records were stamped.
+const STAMP_TAG: [u8; 4] = *b"LBSR";
 
 #[must_use]
 pub fn recovery_key(suffix: &[u8]) -> Bytes {
@@ -33,21 +42,134 @@ pub fn recovery_key(suffix: &[u8]) -> Bytes {
     key.into()
 }
 
-pub fn load_recovery_data(settings: RocksBackendSettings) -> Result<RecoveryData, DynError> {
+/// The recovery records in storage, for the chain whose eras have the fork
+/// digests `forks`.
+pub fn load_recovery_data(
+    settings: RocksBackendSettings,
+    forks: Arc<Eras<ForkDigest>>,
+) -> Result<RecoveryData, DynError> {
     let backend = RocksBackend::new(settings)?;
-    recovery_data_from_backend(&backend)
+    recovery_data_from_backend(&backend, forks)
 }
 
-fn recovery_data_from_backend(backend: &RocksBackend) -> Result<RecoveryData, DynError> {
+fn recovery_data_from_backend(
+    backend: &RocksBackend,
+    forks: Arc<Eras<ForkDigest>>,
+) -> Result<RecoveryData, DynError> {
     backend
         .load_prefix_entries(RECOVERY_PREFIX)
-        .map(RecoveryData::new)
+        .map(|entries| RecoveryData::new(entries, forks))
         .map_err(Into::into)
+}
+
+/// Takes the record under `key_suffix` out of `data` and reads the state it
+/// carries, brought to the version this release writes.
+///
+/// A record written on another chain, and one written before records were
+/// stamped in a layout the state cannot read, are discarded with a warning.
+///
+/// # Errors
+///
+/// If the record is of a newer version than the state's, or if its state
+/// cannot be read or migrated.
+pub fn take_state<State>(data: &RecoveryData, key_suffix: &[u8]) -> RecoveryResult<Option<State>>
+where
+    State: VersionedState + DeserializeOwned,
+{
+    let key = recovery_key(key_suffix);
+    let Some(record) = data.take(&key)? else {
+        return Ok(None);
+    };
+    let Some((stamp, state)) = Stamp::read(&record) else {
+        return Ok(State::migrate(0, &record)
+            .inspect_err(|error| {
+                warn!(
+                    target: LOG_TARGET,
+                    "Discarding the recovery record {}, written before records were stamped in a \
+                    layout this release cannot read: {error}",
+                    String::from_utf8_lossy(&key)
+                );
+            })
+            .ok());
+    };
+    if !data
+        .forks()
+        .iter()
+        .any(|era| era.entry.parameters == stamp.fork_digest)
+    {
+        warn!(
+            target: LOG_TARGET,
+            "Discarding the recovery record {}, written on another chain, under fork {}",
+            String::from_utf8_lossy(&key),
+            stamp.fork_digest
+        );
+        return Ok(None);
+    }
+    match stamp.state_version.cmp(&State::STATE_VERSION) {
+        Ordering::Equal => State::from_bytes(state)
+            .map(Some)
+            .map_err(|error| RecoveryError::Backend(error.to_string())),
+        Ordering::Less => State::migrate(stamp.state_version, state)
+            .map(Some)
+            .map_err(|error| RecoveryError::Migration {
+                from: stamp.state_version,
+                error,
+            }),
+        Ordering::Greater => Err(RecoveryError::NewerVersion {
+            found: stamp.state_version,
+            current: State::STATE_VERSION,
+        }),
+    }
+}
+
+/// What a recovery record carries ahead of the state: the version of the
+/// state's layout, and the fork digest of the era in force when it was
+/// written.
+struct Stamp {
+    state_version: u16,
+    fork_digest: ForkDigest,
+}
+
+impl Stamp {
+    /// The record of `state`, stamped.
+    fn write(&self, state: &[u8]) -> Bytes {
+        [
+            &STAMP_TAG[..],
+            &self.state_version.to_le_bytes(),
+            &<[u8; 32]>::from(self.fork_digest),
+            state,
+        ]
+        .concat()
+        .into()
+    }
+
+    /// The stamp of `record` and the state after it, `None` when the record
+    /// is not stamped.
+    fn read(record: &[u8]) -> Option<(Self, &[u8])> {
+        let record = record.strip_prefix(&STAMP_TAG)?;
+        let (state_version, record) = record.split_first_chunk()?;
+        let (fork_digest, state) = record.split_first_chunk()?;
+        Some((
+            Self {
+                state_version: u16::from_le_bytes(*state_version),
+                fork_digest: ForkDigest::from(*fork_digest),
+            },
+            state,
+        ))
+    }
+}
+
+/// The fork digest of the era in force at `time`.
+fn fork_in_force(forks: &Eras<ForkDigest>, time: OffsetDateTime) -> ForkDigest {
+    forks.at_slot(forks.slot_at(time)).entry.parameters
 }
 
 pub struct StorageRecoveryBackend<State, Settings, RuntimeServiceId> {
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     storage: OnceCell<StorageApi>,
+    /// The fork digest of every era of the chain, the one in force stamping
+    /// each record written.
+    forks: Arc<Eras<ForkDigest>>,
     state: PhantomData<fn() -> State>,
     settings: PhantomData<fn() -> Settings>,
 }
@@ -61,6 +183,7 @@ where
         Self {
             overwatch_handle: self.overwatch_handle.clone(),
             storage: self.storage.clone(),
+            forks: Arc::clone(&self.forks),
             state: PhantomData,
             settings: PhantomData,
         }
@@ -71,7 +194,7 @@ where
 impl<State, Settings, RuntimeServiceId> RecoveryBackend<RuntimeServiceId>
     for StorageRecoveryBackend<State, Settings, RuntimeServiceId>
 where
-    State: ServiceState<Settings = Settings> + Serialize + DeserializeOwned + Send,
+    State: ServiceState<Settings = Settings> + VersionedState + Serialize + DeserializeOwned + Send,
     Settings: StorageRecoverySettings + Send,
     RuntimeServiceId: Clone
         + std::fmt::Debug
@@ -84,28 +207,20 @@ where
     type State = State;
 
     fn from_settings(
-        _settings: &Settings,
+        settings: &Settings,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     ) -> Self {
         Self {
             overwatch_handle,
             storage: OnceCell::new(),
+            forks: Arc::clone(settings.recovery_data().forks()),
             state: PhantomData,
             settings: PhantomData,
         }
     }
 
     fn load_state(settings: &Settings) -> RecoveryResult<Option<Self::State>> {
-        let Some(bytes) = settings
-            .recovery_data()
-            .take(&recovery_key(Settings::RECOVERY_KEY_SUFFIX))?
-        else {
-            return Ok(None);
-        };
-
-        State::from_bytes(&bytes)
-            .map(Some)
-            .map_err(|error| RecoveryError::Backend(error.to_string()))
+        take_state(settings.recovery_data(), Settings::RECOVERY_KEY_SUFFIX)
     }
 
     async fn save_state(&mut self, state: Self::State) -> RecoveryResult<()> {
@@ -117,9 +232,19 @@ where
                     .map_err(|error| RecoveryError::Backend(error.to_string()))
             })
             .await?;
+        let stamp = Stamp {
+            state_version: State::STATE_VERSION,
+            fork_digest: fork_in_force(&self.forks, OffsetDateTime::now_utc()),
+        };
+        let state = state
+            .to_bytes()
+            .map_err(|error| RecoveryError::Backend(error.to_string()))?;
 
         storage
-            .store(recovery_key(Settings::RECOVERY_KEY_SUFFIX), state)
+            .store_bytes(
+                recovery_key(Settings::RECOVERY_KEY_SUFFIX),
+                stamp.write(&state),
+            )
             .await
             .map_err(|error| RecoveryError::Backend(error.to_string()))
     }
@@ -127,6 +252,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::HashMap, num::NonZero, time::Duration};
+
+    use lb_cryptarchia_engine::{
+        Epoch,
+        era::{EraEntry, EraVersion},
+    };
     use serde::{Deserialize, Serialize};
 
     use super::*;
@@ -148,6 +279,7 @@ mod tests {
         const SERVICE_ID: Self = Self::Storage;
     }
 
+    /// A state at version 2, whose versions before were a bare string.
     #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
     struct TestState {
         value: String,
@@ -160,6 +292,17 @@ mod tests {
         fn from_settings(_settings: &Self::Settings) -> Result<Self, Self::Error> {
             Ok(Self {
                 value: String::new(),
+            })
+        }
+    }
+
+    impl VersionedState for TestState {
+        const STATE_VERSION: u16 = 2;
+
+        fn migrate(from: u16, bytes: &[u8]) -> Result<Self, DynError> {
+            let value = String::from_bytes(bytes)?;
+            Ok(Self {
+                value: format!("{value}, migrated from version {from}"),
             })
         }
     }
@@ -177,107 +320,176 @@ mod tests {
         }
     }
 
+    const ERA_0: [u8; 32] = [1; 32];
+    const ERA_1: [u8; 32] = [2; 32];
+
+    /// A chain of two eras of 10 one-second slots an epoch, from the Unix
+    /// epoch: era 1 starts at slot 10, 10 seconds in.
+    fn forks() -> Arc<Eras<ForkDigest>> {
+        let era = |first_epoch, parameters| EraEntry {
+            first_epoch: Epoch::new(first_epoch),
+            version: EraVersion::V1,
+            slot_duration: Duration::from_secs(1),
+            epoch_length: NonZero::new(10).unwrap(),
+            transition_slots: 0,
+            parameters,
+        };
+        Arc::new(
+            Eras::new(
+                OffsetDateTime::UNIX_EPOCH,
+                [era(0, ERA_0.into()), era(1, ERA_1.into())],
+            )
+            .unwrap(),
+        )
+    }
+
+    fn settings_with_record(record: impl Into<Bytes>) -> TestSettings {
+        TestSettings {
+            recovery_data: RecoveryData::new(
+                HashMap::from([(
+                    recovery_key(TestSettings::RECOVERY_KEY_SUFFIX).to_vec(),
+                    record.into(),
+                )]),
+                forks(),
+            ),
+        }
+    }
+
+    fn stamped(state_version: u16, fork_digest: [u8; 32], state: &[u8]) -> Bytes {
+        Stamp {
+            state_version,
+            fork_digest: fork_digest.into(),
+        }
+        .write(state)
+    }
+
+    fn load(settings: &TestSettings) -> RecoveryResult<Option<TestState>> {
+        <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(settings)
+    }
+
+    fn rocks_backend(directory: &tempfile::TempDir) -> RocksBackend {
+        RocksBackend::new(RocksBackendSettings {
+            db_path: directory.path().into(),
+            read_only: false,
+            column_family: None,
+        })
+        .unwrap()
+    }
+
     #[test]
     fn loads_and_removes_state_from_configured_key() {
         let expected = TestState {
             value: "restored".into(),
         };
         let directory = tempfile::tempdir().unwrap();
-        let reader = RocksBackend::new(RocksBackendSettings {
-            db_path: directory.path().into(),
-            read_only: false,
-            column_family: None,
-        })
-        .unwrap();
-        let bytes = expected.to_bytes().unwrap();
+        let reader = rocks_backend(&directory);
+        let record = stamped(2, ERA_0, &expected.to_bytes().unwrap());
         reader
             .txn(move |database| {
-                database.put(recovery_key(TestSettings::RECOVERY_KEY_SUFFIX), bytes)?;
+                database.put(recovery_key(TestSettings::RECOVERY_KEY_SUFFIX), record)?;
                 Ok(None)
             })
             .execute()
             .unwrap();
-        let recovery_data = recovery_data_from_backend(&reader).unwrap();
+        let recovery_data = recovery_data_from_backend(&reader, forks()).unwrap();
         let settings = TestSettings { recovery_data };
 
-        let state = <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(state, expected);
-        assert!(
-            <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings)
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn missing_recovery_state_returns_none() {
-        let settings = TestSettings {
-            recovery_data: RecoveryData::default(),
-        };
-
-        assert!(
-            <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings)
-                .unwrap()
-                .is_none()
-        );
+        assert_eq!(load(&settings).unwrap(), Some(expected));
+        assert!(load(&settings).unwrap().is_none());
     }
 
     #[test]
     fn missing_recovery_key_returns_none() {
         let directory = tempfile::tempdir().unwrap();
-        let backend = RocksBackend::new(RocksBackendSettings {
-            db_path: directory.path().into(),
-            read_only: false,
-            column_family: None,
-        })
-        .unwrap();
-        let recovery_data = recovery_data_from_backend(&backend).unwrap();
+        let backend = rocks_backend(&directory);
+        let recovery_data = recovery_data_from_backend(&backend, forks()).unwrap();
         let settings = TestSettings { recovery_data };
 
-        assert!(
-            <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings)
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings)
-                .unwrap()
-                .is_none()
+        assert!(load(&settings).unwrap().is_none());
+        assert!(load(&settings).unwrap().is_none());
+    }
+
+    #[test]
+    fn records_are_stamped_with_the_fork_of_the_era_in_force() {
+        let forks = forks();
+        let at = |seconds| OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(seconds);
+
+        assert_eq!(fork_in_force(&forks, at(-5)), ForkDigest::from(ERA_0));
+        assert_eq!(fork_in_force(&forks, at(9)), ForkDigest::from(ERA_0));
+        assert_eq!(fork_in_force(&forks, at(10)), ForkDigest::from(ERA_1));
+    }
+
+    #[test]
+    fn records_of_every_era_of_the_chain_are_read() {
+        for fork in [ERA_0, ERA_1] {
+            let state = TestState {
+                value: "restored".into(),
+            };
+            let settings = settings_with_record(stamped(2, fork, &state.to_bytes().unwrap()));
+
+            assert_eq!(load(&settings).unwrap(), Some(state));
+        }
+    }
+
+    #[test]
+    fn records_of_another_chain_are_discarded() {
+        let state = TestState {
+            value: "elsewhere".into(),
+        };
+        let settings = settings_with_record(stamped(2, [3; 32], &state.to_bytes().unwrap()));
+
+        assert!(load(&settings).unwrap().is_none());
+    }
+
+    #[test]
+    fn older_versions_are_migrated() {
+        let settings = settings_with_record(stamped(1, ERA_1, &"old".to_bytes().unwrap()));
+
+        assert_eq!(
+            load(&settings).unwrap(),
+            Some(TestState {
+                value: "old, migrated from version 1".into()
+            })
         );
     }
 
     #[test]
-    fn invalid_recovery_state_remains_an_error() {
-        let directory = tempfile::tempdir().unwrap();
-        let reader = RocksBackend::new(RocksBackendSettings {
-            db_path: directory.path().into(),
-            read_only: false,
-            column_family: None,
-        })
-        .unwrap();
-        reader
-            .txn(|database| {
-                database.put(
-                    recovery_key(TestSettings::RECOVERY_KEY_SUFFIX),
-                    b"invalid recovery state",
-                )?;
-                Ok(None)
-            })
-            .execute()
-            .unwrap();
-        let recovery_data = recovery_data_from_backend(&reader).unwrap();
-        let settings = TestSettings { recovery_data };
+    fn newer_versions_are_refused() {
+        let settings = settings_with_record(stamped(3, ERA_0, b"from a later release"));
 
-        assert!(
-            <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings).is_err()
+        assert!(matches!(
+            load(&settings),
+            Err(RecoveryError::NewerVersion {
+                found: 3,
+                current: 2
+            })
+        ));
+    }
+
+    #[test]
+    fn states_that_do_not_read_at_their_version_are_errors() {
+        let settings = settings_with_record(stamped(2, ERA_0, b"invalid recovery state"));
+
+        assert!(matches!(load(&settings), Err(RecoveryError::Backend(_))));
+        assert!(load(&settings).unwrap().is_none());
+    }
+
+    #[test]
+    fn unstamped_records_are_read_at_version_zero() {
+        let settings = settings_with_record("legacy".to_bytes().unwrap());
+
+        assert_eq!(
+            load(&settings).unwrap(),
+            Some(TestState {
+                value: "legacy, migrated from version 0".into()
+            })
         );
-        assert!(
-            <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings)
-                .unwrap()
-                .is_none()
-        );
+    }
+
+    #[test]
+    fn unreadable_unstamped_records_are_discarded() {
+        let settings = settings_with_record(&b"invalid recovery state"[..]);
+
+        assert!(load(&settings).unwrap().is_none());
     }
 }

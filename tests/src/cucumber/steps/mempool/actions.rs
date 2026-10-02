@@ -1,15 +1,18 @@
-use std::{collections::BTreeSet, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
-use lb_binary_codec::bincode::DeserializeOp as _;
-use lb_core::mantle::{
-    SignedOps, TxHash,
-    ledger::verification_mode::StandardMode,
-    traits::Hashable as _,
-    transactions::{OpProofs, states::Preverified},
+use lb_core::{
+    era::ForkDigest,
+    mantle::{
+        SignedOps, TxHash,
+        ledger::verification_mode::StandardMode,
+        traits::Hashable as _,
+        transactions::{OpProofs, states::Preverified},
+    },
 };
+use lb_cryptarchia_engine::era::Eras;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_storage_service::{
-    recovery::{load_recovery_data, recovery_key},
+    recovery::{load_recovery_data, take_state},
     rocksdb::RocksBackendSettings,
 };
 use lb_testing_framework::USER_CONFIG_FILE;
@@ -25,7 +28,7 @@ use crate::{
     cucumber::{
         error::StepError,
         steps::{TARGET, transactions::tracked_transactions::create_stateless_invalid_transaction},
-        utils::{tx_hash_to_hex, user_config_from_node_yaml},
+        utils::{deployment_config_from_yaml, tx_hash_to_hex, user_config_from_node_yaml},
         wallet::submissions::{
             SignedUserWalletSubmission, prepare_user_wallet_transaction_submission,
             record_signed_user_wallet_submission, sign_prepared_user_wallet_transaction,
@@ -198,9 +201,13 @@ async fn wait_for_transaction_in_recovery_data(
     node_info: &NodeInfo,
 ) -> Result<(), StepError> {
     let storage_settings = recovery_storage_settings(node_info)?;
+    let forks = recovery_forks(node_info)?;
     let wait_result = timeout(RECOVERY_FLUSH_TIMEOUT, async {
         loop {
-            let recovered_hashes = read_recovered_mempool_pending_hashes(storage_settings.clone())?;
+            let recovered_hashes = read_recovered_mempool_pending_hashes(
+                storage_settings.clone(),
+                Arc::clone(&forks),
+            )?;
 
             if recovered_hashes
                 .as_ref()
@@ -238,35 +245,42 @@ fn recovery_storage_settings(node_info: &NodeInfo) -> Result<RocksBackendSetting
     })
 }
 
+/// The fork digest of every era of the node's chain, which its recovery
+/// records are stamped with.
+fn recovery_forks(node_info: &NodeInfo) -> Result<Arc<Eras<ForkDigest>>, StepError> {
+    let deployment = deployment_config_from_yaml(&node_info.runtime_dir.join("deployment.yaml"))?;
+    let eras = deployment.eras().map_err(|error| StepError::LogicalError {
+        message: format!("Invalid era schedule in the node's deployment: {error}"),
+    })?;
+
+    Ok(Arc::new(eras.map(|era| era.entry.parameters.fork_digest)))
+}
+
 fn read_recovered_mempool_pending_hashes(
     storage_settings: RocksBackendSettings,
+    forks: Arc<Eras<ForkDigest>>,
 ) -> Result<Option<BTreeSet<TxHash>>, StepError> {
     if !storage_settings.db_path.exists() {
         return Ok(None);
     }
 
     let recovery_data =
-        load_recovery_data(storage_settings).map_err(|error| StepError::LogicalError {
+        load_recovery_data(storage_settings, forks).map_err(|error| StepError::LogicalError {
             message: format!("Failed to read mempool recovery data: {error}"),
         })?;
 
-    let Some(bytes) = recovery_data
-        .take(&recovery_key(RECOVERY_KEY_SUFFIX))
-        .map_err(|error| StepError::LogicalError {
-            message: format!("Failed to access mempool recovery data: {error}"),
-        })?
-    else {
-        return Ok(None);
-    };
-
-    let recovery_state: TxMempoolState<PoolRecoveryState<TxHash>, (), ()> =
-        TxMempoolState::from_bytes(&bytes).map_err(|error| StepError::LogicalError {
-            message: format!("Failed to decode mempool recovery data: {error}"),
+    let recovery_state: Option<TxMempoolState<PoolRecoveryState<TxHash>, (), ()>> =
+        take_state(&recovery_data, RECOVERY_KEY_SUFFIX).map_err(|error| {
+            StepError::LogicalError {
+                message: format!("Failed to decode mempool recovery data: {error}"),
+            }
         })?;
 
-    Ok(recovery_state
-        .pool()
-        .map(|pool| pool.pending_items.keys().copied().collect()))
+    Ok(recovery_state.and_then(|state| {
+        state
+            .pool()
+            .map(|pool| pool.pending_items.keys().copied().collect())
+    }))
 }
 
 fn wallet_transaction_error(error: &WalletTransactionError) -> StepError {

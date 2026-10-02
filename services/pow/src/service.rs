@@ -10,7 +10,7 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
-use lb_binary_codec::bincode::{Error as CodecError, SerializeOp};
+use lb_binary_codec::bincode::{DeserializeOp as _, Error as CodecError, SerializeOp};
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
     message::{DataPayload, MAX_PAYLOAD_BODY_SIZE, TransactionNotBlendable},
@@ -49,7 +49,7 @@ use lb_key_management_system_keys::keys::{
 use lb_ledger::LedgerState;
 use lb_log_targets::pow;
 use lb_services_utils::{
-    overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings},
+    overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings, VersionedState},
     wait_until_services_are_ready,
 };
 use lb_storage_service::{StorageService, recovery::StorageRecoveryBackend};
@@ -428,6 +428,16 @@ impl ServiceState for PoWServiceState {
 
     fn from_settings(_settings: &Self::Settings) -> Result<Self, Self::Error> {
         Ok(Self::default())
+    }
+}
+
+impl VersionedState for PoWServiceState {
+    const STATE_VERSION: u16 = 1;
+
+    /// The only version before 1 is 0, the records written before records
+    /// carried a version, in the layout of version 1.
+    fn migrate(_from: u16, bytes: &[u8]) -> Result<Self, DynError> {
+        Ok(Self::from_bytes(bytes)?)
     }
 }
 

@@ -60,7 +60,7 @@ pub enum SdpError {
     ChainApi(#[from] DynError),
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct SdpSettings {
     /// Declaration ID for this node (set after posting declaration).
     /// On startup, the full declaration info (`zk_id`, `service_note_id`,
@@ -68,7 +68,6 @@ pub struct SdpSettings {
     pub declaration_id: Option<DeclarationId>,
     pub wallet_config: SdpWalletConfig,
     pub active_message_tracker: intent::Config,
-    #[serde(skip)]
     pub recovery_data: RecoveryData,
 }
 

@@ -1,8 +1,10 @@
 use std::convert::Infallible;
 
+use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_core::sdp::DeclarationId;
+use lb_services_utils::overwatch::VersionedState;
 pub use lb_services_utils::overwatch::recovery::operators::RecoveryBackend as SdpStateStorage;
-use overwatch::services::state::ServiceState;
+use overwatch::{DynError, services::state::ServiceState};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -38,5 +40,15 @@ impl ServiceState for SdpState {
             updated: None,
             pending_activity: None,
         })
+    }
+}
+
+impl VersionedState for SdpState {
+    const STATE_VERSION: u16 = 1;
+
+    /// The only version before 1 is 0, the records written before records
+    /// carried a version, in the layout of version 1.
+    fn migrate(_from: u16, bytes: &[u8]) -> Result<Self, DynError> {
+        Ok(Self::from_bytes(bytes)?)
     }
 }

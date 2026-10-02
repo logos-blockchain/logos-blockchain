@@ -13,7 +13,7 @@ use lb_core::{
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{PeerId, identity, identity::ed25519};
-use lb_node::UserConfig;
+use lb_node::{UserConfig, config::DeploymentSettings};
 use lb_testing_framework::ScenarioBuilder;
 use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{info, warn};
@@ -190,6 +190,15 @@ pub(crate) fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, Step
     };
 
     Ok(config)
+}
+
+pub(crate) fn deployment_config_from_yaml(path: &Path) -> Result<DeploymentSettings, StepError> {
+    let text = fs::read_to_string(path).map_err(|e| StepError::LogicalError {
+        message: format!("Failed to read '{}': {e}", path.display()),
+    })?;
+    serde_yaml::from_str::<DeploymentSettings>(&text).map_err(|e| StepError::LogicalError {
+        message: format!("Failed to parse '{}': {e}", path.display()),
+    })
 }
 
 /// Reads and classifies the node-owned wallet keys in deterministic order.

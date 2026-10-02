@@ -355,17 +355,15 @@ impl WalletMsg {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug)]
 pub struct WalletServiceSettings {
     pub known_keys: HashMap<KeyId, ZkPublicKey>,
     pub voucher_master_key_id: KeyId,
-    #[serde(skip)]
     pub recovery_data: RecoveryData,
     /// How much LIB progress a pending note reservation survives before being
     /// evicted. Notes funded into in-flight transactions are excluded from
     /// funding until they are observed spent in a block or this many immutable
     /// blocks have passed since the reservation.
-    #[serde(default = "default_pending_note_expiry_blocks")]
     pub pending_note_expiry_blocks: u64,
 }
 

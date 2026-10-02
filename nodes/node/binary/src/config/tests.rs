@@ -2,12 +2,15 @@ use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr},
     path::Path,
+    sync::Arc,
 };
 
 use bytes::Bytes;
 use lb_blend_service::settings::user::{
     Config as BlendConfig, RequiredValues as BlendRequiredValues,
 };
+use lb_cryptarchia_engine::era::Eras;
+use lb_era_parameters::EraDefinition;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_services_utils::overwatch::RecoveryData;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
@@ -48,19 +51,22 @@ const MEMPOOL_RECOVERY_MARKER: &[u8] = b"recovery/test/mempool";
 const SDP_RECOVERY_MARKER: &[u8] = b"recovery/test/sdp";
 const WALLET_RECOVERY_MARKER: &[u8] = b"recovery/test/wallet";
 
-fn recovery_data_fixture() -> RecoveryData {
-    RecoveryData::new(HashMap::from([
-        (BLEND_RECOVERY_MARKER.to_vec(), Bytes::from_static(b"blend")),
-        (
-            MEMPOOL_RECOVERY_MARKER.to_vec(),
-            Bytes::from_static(b"mempool"),
-        ),
-        (SDP_RECOVERY_MARKER.to_vec(), Bytes::from_static(b"sdp")),
-        (
-            WALLET_RECOVERY_MARKER.to_vec(),
-            Bytes::from_static(b"wallet"),
-        ),
-    ]))
+fn recovery_data_fixture(eras: &Eras<EraDefinition>) -> RecoveryData {
+    RecoveryData::new(
+        HashMap::from([
+            (BLEND_RECOVERY_MARKER.to_vec(), Bytes::from_static(b"blend")),
+            (
+                MEMPOOL_RECOVERY_MARKER.to_vec(),
+                Bytes::from_static(b"mempool"),
+            ),
+            (SDP_RECOVERY_MARKER.to_vec(), Bytes::from_static(b"sdp")),
+            (
+                WALLET_RECOVERY_MARKER.to_vec(),
+                Bytes::from_static(b"wallet"),
+            ),
+        ]),
+        Arc::new(eras.map(|era| era.entry.parameters.fork_digest)),
+    )
 }
 
 #[test]
@@ -190,7 +196,9 @@ fn build_run_config_from_env_applies_environment_overrides() {
 #[test]
 fn service_settings_receive_recovery_data() {
     const STATE_PATH: &str = "./state";
-    let recovery_data = recovery_data_fixture();
+    let deployment_settings = DeploymentSettings::default();
+    let eras = deployment_settings.eras().unwrap();
+    let recovery_data = recovery_data_fixture(&eras);
 
     let blend_config = BlendConfig::with_required_values(BlendRequiredValues {
         non_ephemeral_signing_key_id: "non_ephemeral_signing_key_id".into(),
@@ -221,9 +229,6 @@ fn service_settings_receive_recovery_data() {
         base_config.storage = storage_config;
         base_config
     };
-
-    let deployment_settings = DeploymentSettings::default();
-    let eras = deployment_settings.eras().unwrap();
 
     let (_, blend_core_settings, _) = BlendServiceConfig {
         user: user_config.blend.clone(),

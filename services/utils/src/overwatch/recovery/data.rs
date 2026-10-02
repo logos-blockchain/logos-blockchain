@@ -5,11 +5,20 @@ use std::{
 };
 
 use bytes::Bytes;
+use lb_core::era::ForkDigest;
+use lb_cryptarchia_engine::era::Eras;
 
 use super::{RecoveryError, RecoveryResult};
 
-#[derive(Clone, Default)]
-pub struct RecoveryData(Arc<Mutex<HashMap<Vec<u8>, Bytes>>>);
+/// The recovery records a node found in its storage when it started, which
+/// its services take their states from, and the chain they belong to.
+#[derive(Clone)]
+pub struct RecoveryData {
+    entries: Arc<Mutex<HashMap<Vec<u8>, Bytes>>>,
+    /// The fork digest of every era of the chain: a record stamped with
+    /// another one was written on another chain.
+    forks: Arc<Eras<ForkDigest>>,
+}
 
 pub trait StorageRecoverySettings {
     const RECOVERY_KEY_SUFFIX: &'static [u8];
@@ -19,15 +28,24 @@ pub trait StorageRecoverySettings {
 
 impl RecoveryData {
     #[must_use]
-    pub fn new(entries: HashMap<Vec<u8>, Bytes>) -> Self {
-        Self(Arc::new(Mutex::new(entries)))
+    pub fn new(entries: HashMap<Vec<u8>, Bytes>, forks: Arc<Eras<ForkDigest>>) -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(entries)),
+            forks,
+        }
     }
 
     pub fn take(&self, key: &[u8]) -> RecoveryResult<Option<Bytes>> {
-        self.0
+        self.entries
             .lock()
             .map_err(|error| RecoveryError::Backend(error.to_string()))
             .map(|mut entries| entries.remove(key))
+    }
+
+    /// The fork digest of every era of the chain the records belong to.
+    #[must_use]
+    pub const fn forks(&self) -> &Arc<Eras<ForkDigest>> {
+        &self.forks
     }
 }
 
@@ -39,14 +57,37 @@ impl fmt::Debug for RecoveryData {
 
 #[cfg(test)]
 mod tests {
+    use std::{num::NonZero, time::Duration};
+
+    use lb_cryptarchia_engine::{
+        Epoch,
+        era::{EraEntry, EraVersion},
+    };
+    use time::OffsetDateTime;
+
     use super::*;
 
     #[test]
     fn clones_take_their_entries_from_shared_data() {
-        let data = RecoveryData::new(HashMap::from([
-            (b"recovery/one".to_vec(), Bytes::from_static(b"one")),
-            (b"recovery/two".to_vec(), Bytes::from_static(b"two")),
-        ]));
+        let forks = Eras::new(
+            OffsetDateTime::UNIX_EPOCH,
+            [EraEntry {
+                first_epoch: Epoch::new(0),
+                version: EraVersion::V1,
+                slot_duration: Duration::from_secs(1),
+                epoch_length: NonZero::new(10).unwrap(),
+                transition_slots: 0,
+                parameters: ForkDigest::from([0; 32]),
+            }],
+        )
+        .unwrap();
+        let data = RecoveryData::new(
+            HashMap::from([
+                (b"recovery/one".to_vec(), Bytes::from_static(b"one")),
+                (b"recovery/two".to_vec(), Bytes::from_static(b"two")),
+            ]),
+            Arc::new(forks),
+        );
         let cloned_data = data.clone();
 
         assert_eq!(

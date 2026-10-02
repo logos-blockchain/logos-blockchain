@@ -1,7 +1,9 @@
 use std::{convert::Infallible, marker::PhantomData};
 
-use overwatch::services::state::ServiceState;
-use serde::{Deserialize, Serialize};
+use lb_binary_codec::bincode::DeserializeOp as _;
+use lb_services_utils::overwatch::VersionedState;
+use overwatch::{DynError, services::state::ServiceState};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::TxMempoolSettings;
 
@@ -44,5 +46,19 @@ impl<PoolState, PoolSettings, NetworkSettings> ServiceState
             pool: None,
             _phantom: PhantomData,
         })
+    }
+}
+
+impl<PoolState, PoolSettings, NetworkSettings> VersionedState
+    for TxMempoolState<PoolState, PoolSettings, NetworkSettings>
+where
+    Self: DeserializeOwned,
+{
+    const STATE_VERSION: u16 = 1;
+
+    /// The only version before 1 is 0, the records written before records
+    /// carried a version, in the layout of version 1.
+    fn migrate(_from: u16, bytes: &[u8]) -> Result<Self, DynError> {
+        Ok(Self::from_bytes(bytes)?)
     }
 }

@@ -5120,6 +5120,7 @@ name = "logos-blockchain-sdp-service"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "logos-blockchain-binary-codec",
  "logos-blockchain-blend-proofs",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
@@ -5146,11 +5147,14 @@ dependencies = [
  "bytes",
  "futures",
  "log",
+ "logos-blockchain-core",
+ "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-log-targets",
  "overwatch",
  "overwatch-derive",
  "serde",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tracing",
 ]
@@ -5174,6 +5178,7 @@ dependencies = [
  "serde",
  "tempfile",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tracing",
 ]
@@ -5209,6 +5214,7 @@ dependencies = [
  "logos-blockchain-common-http-client",
  "logos-blockchain-config",
  "logos-blockchain-core",
+ "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-era-parameters",
  "logos-blockchain-faucet",
  "logos-blockchain-groth16",
@@ -5463,6 +5469,7 @@ dependencies = [
  "bytes",
  "futures",
  "hex",
+ "logos-blockchain-binary-codec",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",

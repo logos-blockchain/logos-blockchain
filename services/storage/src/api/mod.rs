@@ -70,7 +70,11 @@ impl<Tx> StorageApi<Tx> {
     }
 
     pub async fn store<Value: Serialize>(&self, key: Bytes, value: Value) -> Result<(), DynError> {
-        let value = value.to_bytes()?;
+        self.store_bytes(key, value.to_bytes()?).await
+    }
+
+    /// Stores `value` as it is.
+    pub async fn store_bytes(&self, key: Bytes, value: Bytes) -> Result<(), DynError> {
         self.relay.send(StorageMsg::Store { key, value }).await?;
         Ok(())
     }

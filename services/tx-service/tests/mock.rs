@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     convert::Infallible,
     pin::Pin,
     sync::{Arc, Mutex, atomic::AtomicBool},
@@ -12,6 +12,7 @@ use indexmap::IndexMap;
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
+    era::ForkDigest,
     header::HeaderId,
     mantle::{
         mock::{MockTransaction, MockTxId},
@@ -100,6 +101,19 @@ fn mock_pool_node_settings(
 ) -> (MockPoolNodeServiceSettings, TempDir) {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let db_path = temp_dir.path().join("test_db");
+    let eras = Eras::new(
+        time::OffsetDateTime::now_utc(),
+        [EraEntry {
+            first_epoch: Epoch::new(0),
+            version: EraVersion::V1,
+            slot_duration: Duration::from_secs(1),
+            epoch_length: 100.try_into().unwrap(),
+            transition_slots: 0,
+            parameters: (),
+        }],
+    )
+    .unwrap();
+    let forks = Arc::new(eras.map(|_| ForkDigest::from([0; 32])));
 
     (
         MockPoolNodeServiceSettings {
@@ -120,24 +134,10 @@ fn mock_pool_node_settings(
             mockpool: TxMempoolSettings {
                 pool: MempoolSettings::default(),
                 network_adapter: (),
-                recovery_data: RecoveryData::default(),
+                recovery_data: RecoveryData::new(HashMap::new(), forks),
             },
             logging: TracingSettings::default(),
-            time: TimeServiceSettings {
-                eras: Eras::new(
-                    time::OffsetDateTime::now_utc(),
-                    [EraEntry {
-                        first_epoch: Epoch::new(0),
-                        version: EraVersion::V1,
-                        slot_duration: Duration::from_secs(1),
-                        epoch_length: 100.try_into().unwrap(),
-                        transition_slots: 0,
-                        parameters: (),
-                    }],
-                )
-                .unwrap(),
-                backend: (),
-            },
+            time: TimeServiceSettings { eras, backend: () },
             no_service: (),
         },
         temp_dir,
@@ -695,6 +695,7 @@ fn test_mock_mempool() {
 
     run_with_mock_pool_node(predefined_messages.clone(), |settings, temp_dir| {
         let exp_txns: HashSet<MockMessage> = predefined_messages.iter().cloned().collect();
+        let forks = Arc::clone(settings.mockpool.recovery_data.forks());
         let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
             .map_err(|e| eprintln!("Error encountered: {e}"))
             .unwrap();
@@ -757,11 +758,14 @@ fn test_mock_mempool() {
         drop(app.runtime().handle().block_on(app.handle().shutdown()));
         app.blocking_wait_finished();
 
-        let recovery_data = load_recovery_data(rocksdb::RocksBackendSettings {
-            db_path: temp_dir.path().join("test_db"),
-            read_only: false,
-            column_family: None,
-        })
+        let recovery_data = load_recovery_data(
+            rocksdb::RocksBackendSettings {
+                db_path: temp_dir.path().join("test_db"),
+                read_only: false,
+                column_family: None,
+            },
+            forks,
+        )
         .expect("Should load recovery data from storage.");
         let recovery_settings = TxMempoolSettings {
             pool: MempoolSettings::default(),
