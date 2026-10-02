@@ -79,28 +79,16 @@ impl ServiceState for CryptarchiaConsensusState {
     fn from_settings(
         settings: &<Self as ServiceState>::Settings,
     ) -> Result<Self, <Self as ServiceState>::Error> {
-        let (lib_id, genesis_id, lib_ledger_state) = match &settings.starting_state {
-            StartingState::Genesis { genesis_block } => {
-                let lib_id = genesis_block.header().id();
-                let genesis_tx = genesis_block.genesis_tx();
-                let epoch_nonce = genesis_tx.cryptarchia_parameter().epoch_nonce;
-                let (ledger, _events) = LedgerState::from_genesis_tx(
-                    genesis_tx.clone(),
-                    &settings.config,
-                    epoch_nonce,
-                )?;
-                (lib_id, lib_id, ledger)
-            }
-            StartingState::Lib {
-                lib_id,
-                genesis_id,
-                lib_ledger_state,
-            } => (*lib_id, *genesis_id, lib_ledger_state.as_ref().clone()),
-        };
+        let StartingState::Genesis { genesis_block } = &settings.starting_state;
+        let genesis_id = genesis_block.header().id();
+        let genesis_tx = genesis_block.genesis_tx();
+        let epoch_nonce = genesis_tx.cryptarchia_parameter().epoch_nonce;
+        let (lib_ledger_state, _events) =
+            LedgerState::from_genesis_tx(genesis_tx.clone(), &settings.config, epoch_nonce)?;
 
         Ok(Self {
-            tip: lib_id,
-            lib: lib_id,
+            tip: genesis_id,
+            lib: genesis_id,
             lib_ledger_state,
             lib_block_length: 0,
             lib_block_slot: lb_cryptarchia_engine::Slot::default(),
