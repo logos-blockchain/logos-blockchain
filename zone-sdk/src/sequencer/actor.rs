@@ -464,8 +464,6 @@ where
             }
             changed = true;
         }
-        // The pending set moved outside a block event: keep the published
-        // checkpoint in step with it.
         if changed {
             self.publish_checkpoint();
         }
@@ -677,7 +675,6 @@ where
         if expired.is_empty() && expired_other.is_empty() {
             return;
         }
-        // The pending tail may have been cut: re-home the next publish.
         self.last_msg_id = state.publish_parent(tip);
         let shed = expired.into_iter().map(orphan_from_shed).chain(
             expired_other
