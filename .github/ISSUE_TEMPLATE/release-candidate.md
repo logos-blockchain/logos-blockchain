@@ -115,4 +115,4 @@ Most of the template content is the same or very similar to what is in `release.
 [node-docker-build-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/publish-node-image.yml
 [logos-blockchain-module]: https://github.com/logos-blockchain/logos-blockchain-module
 [blockchain-modules-release]: https://github.com/logos-blockchain/blockchain-modules-release
-[logos-blockchain-module-workflow]: https://github.com/logos-co/logos-modules-release/actions/workflows/release-logos-blockchain-module.yml
+[logos-blockchain-module-workflow]: https://github.com/logos-blockchain/blockchain-modules-release/actions/workflows/blockchain-module.yml
