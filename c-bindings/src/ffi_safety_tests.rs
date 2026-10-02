@@ -22,6 +22,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use lb_c_macros::panic_to_error;
 use lb_node::UserConfig;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use serial_test::serial;
@@ -46,8 +47,8 @@ use crate::{
         network::get_network_info,
         peer::get_peer_id,
         pow::{
-            PoWClaimableRewards, PoWStatus, free_pow_claimable_rewards, free_pow_status,
-            pow_claim, pow_claimable_rewards, pow_start_auto_claim, pow_start_mining, pow_status,
+            PoWClaimableRewards, PoWStatus, free_pow_claimable_rewards, free_pow_status, pow_claim,
+            pow_claimable_rewards, pow_start_auto_claim, pow_start_mining, pow_status,
             pow_stop_auto_claim, pow_stop_mining,
         },
         storage::{get_block, get_blocks, get_transaction},
@@ -63,12 +64,13 @@ use crate::{
         wallet::{
             ChannelDepositArguments, ChannelDepositWithNotesArguments, TransferFundsArguments,
             channel_deposit, channel_deposit_with_notes, free_claimable_vouchers,
-            free_known_addresses, free_leader_aged_notes, free_wallet_notes,
+            free_known_addresses, free_leader_aged_notes, free_wallet_notes, get_balance,
             get_claimable_vouchers, get_known_addresses, get_leader_aged_notes, get_wallet_notes,
-            get_balance, submit_signed_transaction, transfer_funds, wallet_fund_tx,
+            submit_signed_transaction, transfer_funds, wallet_fund_tx,
         },
     },
     result::FfiResult,
+    return_error_if_null_pointer,
 };
 
 trait IntoStatus {
@@ -171,9 +173,8 @@ impl TestConfigPaths {
     }
 
     fn start(&self) -> *mut LogosBlockchainNode {
-        let result = unsafe {
-            start_lb_node(self.node_config.as_ptr(), self.deployment_config.as_ptr())
-        };
+        let result =
+            unsafe { start_lb_node(self.node_config.as_ptr(), self.deployment_config.as_ptr()) };
         let node = result.value;
         let (status, message) = consume(result);
         assert_eq!(status, OperationStatusCode::Ok, "start failed: {message}");
@@ -323,6 +324,54 @@ mod no_node {
         }
     }
 
+    #[panic_to_error]
+    extern "C" fn panics_with_status(message: *const c_char) -> OperationStatus {
+        return_error_if_null_pointer!(message);
+        panic!("{}", unsafe { CStr::from_ptr(message) }.to_string_lossy());
+    }
+
+    #[panic_to_error]
+    extern "C" fn panics_with_result() -> FfiResult<*mut c_char, OperationStatus> {
+        panic!("static message");
+    }
+
+    #[panic_to_error]
+    extern "C" fn panics_with_unit() {
+        std::panic::panic_any(42_u8);
+    }
+
+    /// A panic inside an exported function comes back as a `RuntimeError`
+    /// instead of aborting the process, whatever the return type, and early
+    /// returns inside the body still work.
+    #[test]
+    fn panics_become_errors() {
+        assert_eq!(
+            consume(panics_with_status(c"formatted".as_ptr())),
+            (
+                OperationStatusCode::RuntimeError,
+                "Internal panic: formatted".into()
+            )
+        );
+        assert_eq!(
+            code(panics_with_status(ptr::null())),
+            OperationStatusCode::NullPointer
+        );
+
+        let result = panics_with_result();
+        assert!(result.value.is_null());
+        assert_eq!(
+            consume(result),
+            (
+                OperationStatusCode::RuntimeError,
+                "Internal panic: static message".into()
+            )
+        );
+
+        // Nothing to assert on: surviving the call is the test, and valgrind
+        // checks the discarded status is released.
+        panics_with_unit();
+    }
+
     #[test]
     fn status_helpers() {
         let ok = OperationStatus::OK;
@@ -330,7 +379,10 @@ mod no_node {
         assert!(!ok.is_error());
         let error = OperationStatus::error(OperationStatusCode::NotFound, "nope");
         assert!(error.is_error());
-        assert_eq!(consume(error), (OperationStatusCode::NotFound, "nope".into()));
+        assert_eq!(
+            consume(error),
+            (OperationStatusCode::NotFound, "nope".into())
+        );
     }
 
     #[test]
@@ -338,8 +390,7 @@ mod no_node {
         let result = get_build_version_info();
         assert!(result.is_ok());
         let json = unsafe { CStr::from_ptr(result.value) }.to_str().unwrap();
-        let _version: serde_json::Value =
-            serde_json::from_str(json).expect("Version info is JSON");
+        let _version: serde_json::Value = serde_json::from_str(json).expect("Version info is JSON");
         assert!(unsafe { free_cstring(result.value) }.is_ok());
     }
 
@@ -414,7 +465,8 @@ mod no_node {
         assert!(result.is_ok());
         assert!(unsafe { free_cstring(result.value) }.is_ok());
 
-        let result = unsafe { generate_key(output.as_ptr(), kms.as_ptr(), KeyType::Zk, ptr::null()) };
+        let result =
+            unsafe { generate_key(output.as_ptr(), kms.as_ptr(), KeyType::Zk, ptr::null()) };
         assert!(result.is_ok());
         assert!(unsafe { free_cstring(result.value) }.is_ok());
 
@@ -446,7 +498,10 @@ mod no_node {
                     code(start_lb_node(paths.node_config.as_ptr(), p)),
                     OperationStatusCode::Ok
                 );
-                assert_ne!(code(get_deployment_info(p, ptr::null())), OperationStatusCode::Ok);
+                assert_ne!(
+                    code(get_deployment_info(p, ptr::null())),
+                    OperationStatusCode::Ok
+                );
                 assert_ne!(
                     code(get_deployment_info(paths.node_config.as_ptr(), p)),
                     OperationStatusCode::Ok
@@ -454,17 +509,26 @@ mod no_node {
                 assert_ne!(code(get_peer_id(p)), OperationStatusCode::Ok);
                 assert_ne!(code(update_user_config(p, p)), OperationStatusCode::Ok);
                 assert_ne!(code(migrate_user_config(p, p)), OperationStatusCode::Ok);
-                assert_ne!(code(migrate_user_config_0_1_2(p, p, p)), OperationStatusCode::Ok);
+                assert_ne!(
+                    code(migrate_user_config_0_1_2(p, p, p)),
+                    OperationStatusCode::Ok
+                );
                 assert_ne!(
                     code(merge_user_config(p, p, ptr::null(), NO_INSERT)),
                     OperationStatusCode::Ok
                 );
-                assert_ne!(code(participate(p, p, p, ptr::null())), OperationStatusCode::Ok);
+                assert_ne!(
+                    code(participate(p, p, p, ptr::null())),
+                    OperationStatusCode::Ok
+                );
                 assert_ne!(
                     code(generate_key(p, p, KeyType::Ed25519, ptr::null())),
                     OperationStatusCode::Ok
                 );
-                assert_ne!(code(remove_key(p, p, c"title".as_ptr())), OperationStatusCode::Ok);
+                assert_ne!(
+                    code(remove_key(p, p, c"title".as_ptr())),
+                    OperationStatusCode::Ok
+                );
             }
             assert_eq!(
                 code(participate(
@@ -624,7 +688,10 @@ mod with_node {
             assert!(subscribe_to_lib_blocks(node, on_lib).is_ok());
 
             // ---- plain getters ----
-            assert_eq!(string_result("get_chain_id", get_chain_id(node)), OperationStatusCode::Ok);
+            assert_eq!(
+                string_result("get_chain_id", get_chain_id(node)),
+                OperationStatusCode::Ok
+            );
 
             let result = get_time_info(node);
             assert!(result.is_ok());
@@ -647,17 +714,32 @@ mod with_node {
                 string_result("get_block(zero)", get_block(node, &raw const zero)),
                 OperationStatusCode::NotFound
             );
-            string_result("get_block_events(tip)", get_block_events(node, &raw const tip));
-            string_result("get_block_events(zero)", get_block_events(node, &raw const zero));
-            string_result("get_transaction(zero)", get_transaction(node, &raw const zero));
+            string_result(
+                "get_block_events(tip)",
+                get_block_events(node, &raw const tip),
+            );
+            string_result(
+                "get_block_events(zero)",
+                get_block_events(node, &raw const zero),
+            );
+            string_result(
+                "get_transaction(zero)",
+                get_transaction(node, &raw const zero),
+            );
             string_result("get_blocks(0, 10)", get_blocks(node, 0, 10));
             string_result("get_blocks(10, 0)", get_blocks(node, 10, 0));
             string_result("get_blocks(0, MAX)", get_blocks(node, 0, u64::MAX));
-            string_result("get_channel_state(zero)", get_channel_state(node, zero.as_ptr()));
+            string_result(
+                "get_channel_state(zero)",
+                get_channel_state(node, zero.as_ptr()),
+            );
 
             // ---- wallet ----
             let result = get_known_addresses(node);
-            let FfiResult { value: addresses, error } = result;
+            let FfiResult {
+                value: addresses,
+                error,
+            } = result;
             assert_eq!(log("get_known_addresses", error), OperationStatusCode::Ok);
             eprintln!("AUDIT known addresses: {}", addresses.len);
             let mut first_address = None;
@@ -670,9 +752,15 @@ mod with_node {
                 let balance = result.value;
                 let status = log("get_balance", result);
                 eprintln!("AUDIT   balance[{index}] = {balance} ({status:?})");
-                log("get_balance(tip)", get_balance(node, address, &raw const tip));
+                log(
+                    "get_balance(tip)",
+                    get_balance(node, address, &raw const tip),
+                );
 
-                let FfiResult { value: notes, error } = get_wallet_notes(node, address, ptr::null());
+                let FfiResult {
+                    value: notes,
+                    error,
+                } = get_wallet_notes(node, address, ptr::null());
                 log("get_wallet_notes", error);
                 for note in 0..notes.len {
                     let _ = (*notes.notes.add(note)).value;
@@ -682,15 +770,26 @@ mod with_node {
             assert!(free_known_addresses(addresses).is_ok());
 
             assert_ne!(
-                log("get_balance(invalid)", get_balance(node, invalid_key.as_ptr(), ptr::null())),
+                log(
+                    "get_balance(invalid)",
+                    get_balance(node, invalid_key.as_ptr(), ptr::null())
+                ),
                 OperationStatusCode::Ok
             );
-            let FfiResult { value: notes, error } = get_wallet_notes(node, zero.as_ptr(), ptr::null());
+            let FfiResult {
+                value: notes,
+                error,
+            } = get_wallet_notes(node, zero.as_ptr(), ptr::null());
             log("get_wallet_notes(unknown)", error);
             freed(free_wallet_notes(notes));
-            let FfiResult { value: notes, error } =
-                get_wallet_notes(node, invalid_key.as_ptr(), ptr::null());
-            assert_ne!(log("get_wallet_notes(invalid)", error), OperationStatusCode::Ok);
+            let FfiResult {
+                value: notes,
+                error,
+            } = get_wallet_notes(node, invalid_key.as_ptr(), ptr::null());
+            assert_ne!(
+                log("get_wallet_notes(invalid)", error),
+                OperationStatusCode::Ok
+            );
             freed(free_wallet_notes(notes));
 
             for tip_pointer in [ptr::null(), &raw const tip, &raw const zero] {
@@ -730,10 +829,19 @@ mod with_node {
                 log("transfer_funds", transfer_funds(node, &raw const arguments))
             };
             let np = OperationStatusCode::NullPointer;
-            assert_eq!(transfer(ptr::null(), funding.as_ptr(), 1, key.as_ptr(), 1), np);
+            assert_eq!(
+                transfer(ptr::null(), funding.as_ptr(), 1, key.as_ptr(), 1),
+                np
+            );
             assert_eq!(transfer(key.as_ptr(), ptr::null(), 1, key.as_ptr(), 1), np);
-            assert_eq!(transfer(key.as_ptr(), null_funding.as_ptr(), 1, key.as_ptr(), 1), np);
-            assert_eq!(transfer(key.as_ptr(), funding.as_ptr(), 1, ptr::null(), 1), np);
+            assert_eq!(
+                transfer(key.as_ptr(), null_funding.as_ptr(), 1, key.as_ptr(), 1),
+                np
+            );
+            assert_eq!(
+                transfer(key.as_ptr(), funding.as_ptr(), 1, ptr::null(), 1),
+                np
+            );
             assert_ne!(
                 transfer(invalid_key.as_ptr(), funding.as_ptr(), 1, key.as_ptr(), 1),
                 OperationStatusCode::Ok
@@ -752,16 +860,29 @@ mod with_node {
                     channel_id: channel,
                     funding_public_key: funding_key,
                     amount,
-                    metadata: if len == usize::MAX { ptr::null() } else { metadata.as_ptr() },
+                    metadata: if len == usize::MAX {
+                        ptr::null()
+                    } else {
+                        metadata.as_ptr()
+                    },
                     metadata_len: if len == usize::MAX { 3 } else { len },
                 };
-                log("channel_deposit", channel_deposit(node, &raw const arguments))
+                log(
+                    "channel_deposit",
+                    channel_deposit(node, &raw const arguments),
+                )
             };
             assert_eq!(deposit(ptr::null(), key.as_ptr(), 1, 0), np);
             assert_eq!(deposit(zero.as_ptr(), ptr::null(), 1, 0), np);
             assert_eq!(deposit(zero.as_ptr(), key.as_ptr(), 1, usize::MAX), np);
-            assert_ne!(deposit(zero.as_ptr(), key.as_ptr(), 0, 0), OperationStatusCode::Ok);
-            assert_ne!(deposit(zero.as_ptr(), invalid_key.as_ptr(), 1, 3), OperationStatusCode::Ok);
+            assert_ne!(
+                deposit(zero.as_ptr(), key.as_ptr(), 0, 0),
+                OperationStatusCode::Ok
+            );
+            assert_ne!(
+                deposit(zero.as_ptr(), invalid_key.as_ptr(), 1, 3),
+                OperationStatusCode::Ok
+            );
             deposit(zero.as_ptr(), key.as_ptr(), 1, 3);
             deposit(zero.as_ptr(), key.as_ptr(), u64::MAX, 3);
 
@@ -785,8 +906,14 @@ mod with_node {
                 )
             };
             assert_eq!(deposit_with_notes(ptr::null(), 1), np);
-            assert_ne!(deposit_with_notes(note_ids.as_ptr(), 0), OperationStatusCode::Ok);
-            assert_ne!(deposit_with_notes(note_ids.as_ptr(), 2), OperationStatusCode::Ok);
+            assert_ne!(
+                deposit_with_notes(note_ids.as_ptr(), 0),
+                OperationStatusCode::Ok
+            );
+            assert_ne!(
+                deposit_with_notes(note_ids.as_ptr(), 2),
+                OperationStatusCode::Ok
+            );
             deposit_with_notes(note_ids.as_ptr(), 1);
 
             let not_utf8 = CString::new(vec![0xFF, 0xFE]).unwrap();
@@ -806,8 +933,11 @@ mod with_node {
 
             // ---- leader / blend / pow ----
             log("leader_claim", leader_claim(node));
-            for locator in [c"not a locator", c"/ip4/127.0.0.1/udp/3400/quic-v1", not_utf8.as_c_str()]
-            {
+            for locator in [
+                c"not a locator",
+                c"/ip4/127.0.0.1/udp/3400/quic-v1",
+                not_utf8.as_c_str(),
+            ] {
                 log(
                     "blend_join_as_core_node",
                     blend_join_as_core_node(node, locator.as_ptr(), zero.as_ptr()),
@@ -892,9 +1022,15 @@ mod with_node {
             "AUDIT after shutdown (events, sentinels): new_blocks={:?} processed={:?} lib={:?}",
             later.0, later.1, later.2
         );
-        assert_eq!(at_shutdown, later, "A callback ran after shutdown_node returned");
-        for (name, (_, sentinels)) in [("new_blocks", later.0), ("processed", later.1), ("lib", later.2)]
-        {
+        assert_eq!(
+            at_shutdown, later,
+            "A callback ran after shutdown_node returned"
+        );
+        for (name, (_, sentinels)) in [
+            ("new_blocks", later.0),
+            ("processed", later.1),
+            ("lib", later.2),
+        ] {
             assert!(sentinels <= 1, "{name}: more than one end-of-stream call");
         }
         drop(paths);

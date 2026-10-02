@@ -1,5 +1,6 @@
 use std::ffi::{CStr, CString, c_char};
 
+use lb_c_macros::panic_to_error;
 use lb_key_management_system_keys::keys::{Ed25519Key, Key, UnsecuredEd25519Key, ZkKey};
 use lb_node::cli::keys::{
     AddKeyArgs, GenerateKeyArgs, KeyType as NodeKeyType, RemoveKeyArgs, run_add_key, run_remove_key,
@@ -70,6 +71,7 @@ pub type FfiGenerateKeyResult = FfiStatusResult<*mut c_char>;
 /// This function allocates memory for the output C string. The caller must
 /// free this memory using the [`free_cstring`](super::free_cstring) function.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn generate_key(
     user_config_path: *const c_char,
@@ -128,6 +130,7 @@ pub unsafe extern "C" fn generate_key(
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all non-null pointers are valid NUL-terminated C strings.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn add_key(
     user_config_path: *const c_char,
@@ -205,6 +208,7 @@ fn parse_key_hex(key_type: KeyType, key_hex: &str) -> Result<Key, String> {
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid NUL-terminated C strings.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn remove_key(
     user_config_path: *const c_char,

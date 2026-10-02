@@ -1,5 +1,6 @@
 use std::ffi::{CString, c_char};
 
+use lb_c_macros::panic_to_error;
 use lb_node::config::DeploymentSettings;
 
 use crate::{
@@ -119,6 +120,7 @@ pub type FfiDeploymentInfoResult = FfiStatusResult<*mut DeploymentInfo>;
 /// This function allocates the struct and every string it holds. The caller
 /// must free all of it with [`free_deployment_info`].
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_deployment_info(
     config_path: *const c_char,
@@ -141,13 +143,14 @@ pub unsafe extern "C" fn get_deployment_info(
 ///
 /// # Arguments
 ///
-/// - `pointer`: A pointer to the [`DeploymentInfo`] to be freed. A null
-///   pointer frees nothing and returns a `NullPointer` error.
+/// - `pointer`: A pointer to the [`DeploymentInfo`] to be freed. A null pointer
+///   frees nothing and returns a `NullPointer` error.
 ///
 /// # Safety
 ///
 /// A non-null pointer must come from [`get_deployment_info`] and must not have
 /// been freed already.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_deployment_info(pointer: *mut DeploymentInfo) -> OperationStatus {
     return_error_if_null_pointer!(pointer);

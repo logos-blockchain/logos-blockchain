@@ -1,5 +1,6 @@
 use std::ptr;
 
+use lb_c_macros::panic_to_error;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_node::{PoWService, RuntimeServiceId};
@@ -59,6 +60,7 @@ pub(crate) fn pow_start_mining_sync(node: &LogosBlockchainNode) -> StatusResult<
 /// This function is unsafe because it dereferences a raw pointer. The caller
 /// must ensure that `node` is non-null and points to a valid
 /// [`LogosBlockchainNode`] instance.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pow_start_mining(node: *const LogosBlockchainNode) -> OperationStatus {
     return_error_if_null_pointer!(node);
@@ -113,6 +115,7 @@ pub(crate) fn pow_stop_mining_sync(node: &LogosBlockchainNode) -> StatusResult<(
 /// This function is unsafe because it dereferences a raw pointer. The caller
 /// must ensure that `node` is non-null and points to a valid
 /// [`LogosBlockchainNode`] instance.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pow_stop_mining(node: *const LogosBlockchainNode) -> OperationStatus {
     return_error_if_null_pointer!(node);
@@ -169,6 +172,7 @@ pub(crate) fn pow_start_auto_claim_sync(node: &LogosBlockchainNode) -> StatusRes
 /// This function is unsafe because it dereferences a raw pointer. The caller
 /// must ensure that `node` is non-null and points to a valid
 /// [`LogosBlockchainNode`] instance.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pow_start_auto_claim(node: *const LogosBlockchainNode) -> OperationStatus {
     return_error_if_null_pointer!(node);
@@ -223,6 +227,7 @@ pub(crate) fn pow_stop_auto_claim_sync(node: &LogosBlockchainNode) -> StatusResu
 /// This function is unsafe because it dereferences a raw pointer. The caller
 /// must ensure that `node` is non-null and points to a valid
 /// [`LogosBlockchainNode`] instance.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pow_stop_auto_claim(node: *const LogosBlockchainNode) -> OperationStatus {
     return_error_if_null_pointer!(node);
@@ -298,6 +303,7 @@ pub type FfiPoWClaimResult = FfiStatusResult<Hash>;
 /// must ensure that `node` is non-null and points to a valid
 /// [`LogosBlockchainNode`] instance, and that `claim_address` is either null
 /// or points to at least 32 readable bytes.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pow_claim(
     node: *const LogosBlockchainNode,
@@ -397,6 +403,7 @@ pub type FfiPoWClaimableRewardsResult = FfiStatusResult<PoWClaimableRewards>;
 /// This function allocates memory for the `slots_until_expiry` list. The caller
 /// must free the returned value using the [`free_pow_claimable_rewards`]
 /// function.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pow_claimable_rewards(
     node: *const LogosBlockchainNode,
@@ -430,6 +437,7 @@ pub unsafe extern "C" fn pow_claimable_rewards(
 /// This function is unsafe because it reconstructs a boxed slice from a raw
 /// pointer. The caller must only pass values returned by
 /// [`pow_claimable_rewards`] and must call this exactly once per result.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_pow_claimable_rewards(
     rewards: PoWClaimableRewards,
@@ -553,6 +561,7 @@ pub type FfiPoWStatusResult = FfiStatusResult<PoWStatus>;
 /// This function allocates memory for the `auto_claim.targets` list.
 /// The caller must free the returned value using the [`free_pow_status`]
 /// function.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pow_status(node: *const LogosBlockchainNode) -> FfiPoWStatusResult {
     return_error_if_null_pointer!(node);
@@ -604,6 +613,7 @@ pub unsafe extern "C" fn pow_status(node: *const LogosBlockchainNode) -> FfiPoWS
 /// pointer.
 /// The caller must only pass values returned by [`pow_status`] and must call
 /// this exactly once per result.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_pow_status(status: PoWStatus) -> OperationStatus {
     return_error_if_null_pointer!(status.auto_claim.targets);

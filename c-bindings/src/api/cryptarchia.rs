@@ -1,5 +1,6 @@
 use std::ffi::{CString, c_char};
 
+use lb_c_macros::panic_to_error;
 use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_node::{RuntimeServiceId, generic_services::CryptarchiaService};
 
@@ -137,6 +138,7 @@ pub type FfiCryptarchiaInfoResult = FfiStatusResult<*mut CryptarchiaInfo>;
 /// This function allocates memory for the output [`CryptarchiaInfo`] struct.
 /// The caller must free this memory using the [`free_cryptarchia_info`]
 /// function.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_cryptarchia_info(
     node: *const LogosBlockchainNode,
@@ -154,6 +156,7 @@ pub unsafe extern "C" fn get_cryptarchia_info(
 /// # Arguments
 ///
 /// - `pointer`: A pointer to the [`CryptarchiaInfo`] struct to be freed.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub extern "C" fn free_cryptarchia_info(pointer: *mut CryptarchiaInfo) -> OperationStatus {
     free::<CryptarchiaInfo>(pointer)
@@ -252,6 +255,7 @@ pub type FfiGetBlockEventsResult = FfiStatusResult<*mut c_char>;
 ///
 /// This function allocates memory for the output C string. The caller must
 /// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_block_events(
     node: *const LogosBlockchainNode,

@@ -1,5 +1,7 @@
 use std::ffi::{CString, c_char};
 
+use lb_c_macros::panic_to_error;
+
 use crate::{
     LogosBlockchainNode, OperationStatus, errors::OperationStatusCode, result::FfiStatusResult,
     return_error_if_null_pointer,
@@ -37,6 +39,7 @@ pub type FfiGetChainIdResult = FfiStatusResult<*mut c_char>;
 /// This function allocates memory for the output C string. The caller must
 /// free this memory using the [`free_cstring`](super::free_cstring) function.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_chain_id(node: *const LogosBlockchainNode) -> FfiGetChainIdResult {
     return_error_if_null_pointer!(node);

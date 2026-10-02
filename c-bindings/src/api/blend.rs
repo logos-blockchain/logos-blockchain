@@ -1,6 +1,7 @@
 use std::ffi::{CString, c_char};
 
 use lb_blend_service::message::NetworkInfo;
+use lb_c_macros::panic_to_error;
 use lb_core::{
     mantle::NoteId,
     sdp::{self, Locator},
@@ -75,6 +76,7 @@ unsafe fn parse_locator(ptr: *const c_char) -> Result<Locator, OperationStatus> 
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn blend_join_as_core_node(
     node: *const LogosBlockchainNode,
@@ -164,6 +166,7 @@ pub type FfiBlendInfoResult = FfiStatusResult<*mut c_char>;
 /// This function allocates memory for the output C string. The caller must
 /// free this memory using the [`free_cstring`](super::free_cstring) function.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn blend_info(node: *const LogosBlockchainNode) -> FfiBlendInfoResult {
     return_error_if_null_pointer!(node);

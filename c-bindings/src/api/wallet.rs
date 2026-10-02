@@ -5,6 +5,7 @@ use std::{
 };
 
 use lb_api_service::http::mempool;
+use lb_c_macros::panic_to_error;
 use lb_core::{
     header::HeaderId as CoreHeaderId,
     mantle::{
@@ -155,6 +156,7 @@ pub type FfiKnownAddressesResult = FfiStatusResult<KnownAddresses>;
 ///     free_known_addresses(addresses);
 /// }
 /// ```
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_known_addresses(
     node: *const LogosBlockchainNode,
@@ -233,6 +235,7 @@ pub unsafe extern "C" fn get_known_addresses(
 ///     free_known_addresses(addresses);
 /// }
 /// ```
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) -> OperationStatus {
     return_error_if_null_pointer!(addresses.addresses);
@@ -320,6 +323,7 @@ pub(crate) fn get_claimable_vouchers_sync(
 ///
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_claimable_vouchers(
     node: *const LogosBlockchainNode,
@@ -374,6 +378,7 @@ pub unsafe extern "C" fn get_claimable_vouchers(
 /// This function is unsafe because it reconstructs a boxed slice from a raw
 /// pointer. The caller must only pass values returned by
 /// [`get_claimable_vouchers`] and must call this exactly once per result.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_claimable_vouchers(vouchers: ClaimableVouchers) -> OperationStatus {
     return_error_if_null_pointer!(vouchers.vouchers);
@@ -447,6 +452,7 @@ pub type FfiBalanceResult = FfiStatusResult<Value>;
 ///
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_balance(
     node: *const LogosBlockchainNode,
@@ -555,6 +561,7 @@ pub type FfiWalletNotesResult = FfiStatusResult<WalletNotes>;
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid, and must free the returned
 /// [`WalletNotes`] with [`free_wallet_notes`] exactly once.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_wallet_notes(
     node: *const LogosBlockchainNode,
@@ -664,6 +671,7 @@ pub type FfiLeaderAgedNotesResult = FfiStatusResult<LeaderAgedNotes>;
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid, and must free the returned
 /// [`LeaderAgedNotes`] with [`free_leader_aged_notes`] exactly once.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_leader_aged_notes(
     node: *const LogosBlockchainNode,
@@ -708,6 +716,7 @@ pub unsafe extern "C" fn get_leader_aged_notes(
 /// This function is unsafe because it reconstructs a boxed slice from a raw
 /// pointer. The caller must only pass values returned by
 /// [`get_leader_aged_notes`] and must call this exactly once per result.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_leader_aged_notes(notes: LeaderAgedNotes) -> OperationStatus {
     return_error_if_null_pointer!(notes.notes);
@@ -723,6 +732,7 @@ pub unsafe extern "C" fn free_leader_aged_notes(notes: LeaderAgedNotes) -> Opera
 /// This function is unsafe because it reconstructs a boxed slice from a raw
 /// pointer. The caller must only pass values returned by [`get_wallet_notes`]
 /// and must call this exactly once per result.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_wallet_notes(notes: WalletNotes) -> OperationStatus {
     return_error_if_null_pointer!(notes.notes);
@@ -871,6 +881,7 @@ pub type FfiTransferFundsResult = FfiStatusResult<Hash>;
 ///
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn transfer_funds(
     node: *const LogosBlockchainNode,
@@ -1152,6 +1163,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid and that the array lengths are
 /// accurate.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn channel_deposit_with_notes(
     node: *const LogosBlockchainNode,
@@ -1501,6 +1513,7 @@ pub(crate) fn channel_deposit_sync(
 ///
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn channel_deposit(
     node: *const LogosBlockchainNode,
@@ -1688,6 +1701,7 @@ pub type FfiWalletFundResult = FfiStatusResult<*mut c_char>;
 ///
 /// This function allocates the returned C string. The caller must free it
 /// using the [`free_cstring`](crate::api::free_cstring) function.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn wallet_fund_tx(
     node: *const LogosBlockchainNode,
@@ -1760,6 +1774,7 @@ pub type FfiSubmitTransactionResult = FfiStatusResult<Hash>;
 ///
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn submit_signed_transaction(
     node: *const LogosBlockchainNode,
