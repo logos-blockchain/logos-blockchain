@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fmt::{Debug, Display},
     pin::Pin,
+    sync::Arc,
 };
 
 use futures::{Stream, TryStreamExt as _};
@@ -11,7 +12,7 @@ use lb_core::{
     header::HeaderId,
     sdp::{Declaration, DeclarationId},
 };
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Slot, era::Eras};
 use lb_network_service::message::ChainSyncEvent;
 use overwatch::{
     overwatch::OverwatchHandle,
@@ -302,27 +303,19 @@ where
         })
     }
 
-    /// Get the epoch and consensus configs
-    pub async fn get_epoch_config(
-        &self,
-    ) -> Result<
-        (
-            lb_cryptarchia_engine::EpochConfig,
-            lb_cryptarchia_engine::Config,
-        ),
-        ApiError,
-    > {
+    /// Get the ledger config of every era.
+    pub async fn get_ledger_eras(&self) -> Result<Arc<Eras<lb_ledger::Config>>, ApiError> {
         let (reply_channel, rx) = oneshot::channel();
 
         self.relay
-            .send(Query::GetEpochConfig { reply_channel }.into())
+            .send(Query::GetLedgerEras { reply_channel }.into())
             .await
             .map_err(|error| {
-                ApiError::CommsFailure(format!("{error} while sending GetEpochConfig"))
+                ApiError::CommsFailure(format!("{error} while sending GetLedgerEras"))
             })?;
 
         rx.await.map_err(|relay_error| {
-            ApiError::CommsFailure(format!("{relay_error} while receiving GetEpochConfig"))
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetLedgerEras"))
         })
     }
 

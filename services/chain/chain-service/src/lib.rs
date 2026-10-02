@@ -201,11 +201,9 @@ pub enum Query {
         slot: Slot,
         reply_channel: oneshot::Sender<Result<EpochStateQueryResult, Error>>,
     },
-    GetEpochConfig {
-        reply_channel: oneshot::Sender<(
-            lb_cryptarchia_engine::EpochConfig,
-            lb_cryptarchia_engine::Config,
-        )>,
+    /// Returns the ledger config of every era.
+    GetLedgerEras {
+        reply_channel: oneshot::Sender<Arc<Eras<lb_ledger::Config>>>,
     },
     GetBlockEvents {
         id: HeaderId,

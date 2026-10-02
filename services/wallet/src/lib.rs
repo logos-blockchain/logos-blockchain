@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _};
 use lb_chain_service::{
-    ChainServiceInfo, Epoch, LibUpdate, Slot,
+    ChainServiceInfo, LibUpdate,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
@@ -34,6 +34,7 @@ use lb_core::{
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
 };
+use lb_cryptarchia_engine::era::Eras;
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::{KMSBackend, preload::PreloadKMSBackend},
@@ -497,12 +498,17 @@ where
         // Subscribe to LIB updates for wallet state pruning
         let mut lib_receiver = cryptarchia_api.subscribe_lib_updates().await?;
 
-        let (epoch_config, consensus_config) = cryptarchia_api.get_epoch_config().await?;
-        let security_param = NonZeroU64::from(consensus_config.security_param()).get();
-        let epoch_config = EpochConfig {
-            epoch_config,
-            consensus_config,
-        };
+        let ledger_eras = cryptarchia_api.get_ledger_eras().await?;
+        // A pending claim is held until `k` blocks became immutable after its
+        // reservation. The largest `k` of the schedule holds it long enough in
+        // every era.
+        let security_param = ledger_eras
+            .iter()
+            .map(|era| {
+                NonZeroU64::from(era.entry.parameters.consensus_config.security_param()).get()
+            })
+            .max()
+            .expect("a schedule has at least one era");
 
         // Initialize wallet from LIB and LIB LedgerState
         let lib = cryptarchia_info.lib;
@@ -528,7 +534,7 @@ where
             &mut state,
             &storage,
             &cryptarchia_api,
-            &epoch_config,
+            &ledger_eras,
         )
         .await?;
 
@@ -538,13 +544,13 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &kms, &epoch_config)).await;
+                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &kms, &ledger_eras)).await;
                 }
                 Ok(event) = new_block_receiver.recv() => {
-                    Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &epoch_config).await;
+                    Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &ledger_eras).await;
                 }
                 Ok(lib_update) = lib_receiver.recv() => {
-                    Self::handle_lib_update(&lib_update, &storage, &mut state, &cryptarchia_api,  &epoch_config).await;
+                    Self::handle_lib_update(&lib_update, &storage, &mut state, &cryptarchia_api,  &ledger_eras).await;
                 }
             }
         }
@@ -603,11 +609,10 @@ where
         storage: &StorageApi<Tx>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        epoch_config: &EpochConfig,
+        ledger_eras: &Eras<lb_ledger::Config>,
     ) {
         if let Err(err) =
-            Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia, epoch_config)
-                .await
+            Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia, ledger_eras).await
         {
             warn!(
                 target: LOG_TARGET,
@@ -1440,7 +1445,7 @@ where
         state: &mut ServiceState<'_>,
         storage: &StorageApi<Tx>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
-        epoch_config: &EpochConfig,
+        ledger_eras: &Eras<lb_ledger::Config>,
     ) -> Result<(), WalletServiceError> {
         let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
 
@@ -1453,7 +1458,7 @@ where
         // To resolve this, we do a JIT backfill to try to sync the wallet with
         // cryptarchia. If we still have not caught up after the backfill, we return an
         // error to the caller
-        Self::backfill_missing_blocks(tip, state, storage, cryptarchia, epoch_config).await?;
+        Self::backfill_missing_blocks(tip, state, storage, cryptarchia, ledger_eras).await?;
 
         if state.wallet().has_processed_block(tip) {
             Ok(())
@@ -1472,7 +1477,7 @@ where
         state: &mut ServiceState<'_>,
         storage: &StorageApi<Tx>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
-        epoch_config: &EpochConfig,
+        ledger_eras: &Eras<lb_ledger::Config>,
     ) {
         let Ok(block) = Self::load_block(header_id, storage).await.inspect_err(|e| {
             error!(
@@ -1487,7 +1492,7 @@ where
 
         let events = Self::load_block_events(header_id, storage).await;
         let wallet_block =
-            WalletBlock::from_block(&block, epoch_config.epoch(block.header().slot()), &events);
+            WalletBlock::from_block(&block, ledger_eras.epoch_of(block.header().slot()), &events);
         match state.apply_block(&wallet_block) {
             Ok(()) => {
                 trace!(target: LOG_TARGET, block_id = ?wallet_block.id, "Applied block to wallet");
@@ -1503,7 +1508,7 @@ where
                     state,
                     storage,
                     cryptarchia_api,
-                    epoch_config,
+                    ledger_eras,
                 )
                 .await
                 {
@@ -1554,7 +1559,7 @@ where
         storage: &StorageApi<Tx>,
         state: &mut ServiceState<'_>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
-        epoch_config: &EpochConfig,
+        ledger_eras: &Eras<lb_ledger::Config>,
     ) {
         log_lib_update(lib_update);
 
@@ -1574,7 +1579,7 @@ where
                 state,
                 storage,
                 cryptarchia_api,
-                epoch_config,
+                ledger_eras,
             )
             .await
             {
@@ -1641,7 +1646,7 @@ where
         state: &mut ServiceState<'_>,
         storage: &StorageApi<Tx>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
-        epoch_config: &EpochConfig,
+        ledger_eras: &Eras<lb_ledger::Config>,
     ) -> Result<(), WalletServiceError> {
         debug!(
             target: LOG_TARGET,
@@ -1686,8 +1691,11 @@ where
 
             let block = Self::load_block(header_id, storage).await?;
             let events = Self::load_block_events(header_id, storage).await;
-            let wallet_block =
-                WalletBlock::from_block(&block, epoch_config.epoch(block.header().slot()), &events);
+            let wallet_block = WalletBlock::from_block(
+                &block,
+                ledger_eras.epoch_of(block.header().slot()),
+                &events,
+            );
 
             if let Err(e) = state.apply_block(&wallet_block) {
                 error!(
@@ -1768,18 +1776,5 @@ fn log_lib_update(lib_update: &LibUpdate) {
             immutable_blocks_count,
             "Received LIB update"
         );
-    }
-}
-
-/// A config to calculate epoch from slot
-struct EpochConfig {
-    epoch_config: lb_cryptarchia_engine::EpochConfig,
-    consensus_config: lb_cryptarchia_engine::Config,
-}
-
-impl EpochConfig {
-    fn epoch(&self, slot: Slot) -> Epoch {
-        self.epoch_config
-            .epoch(slot, self.consensus_config.base_period_length())
     }
 }

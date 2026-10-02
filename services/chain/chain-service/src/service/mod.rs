@@ -6,6 +6,7 @@ use core::fmt::Debug;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     pin::Pin,
+    sync::Arc,
     time::Duration,
 };
 
@@ -464,16 +465,11 @@ where
                     error!(target: LOG_TARGET, "Could not send epoch state through channel");
                 });
             }
-            Query::GetEpochConfig { reply_channel } => {
-                let config = self
-                    .cryptarchia
-                    .ledger
-                    .eras()
-                    .config_at_slot(self.cryptarchia.tip_branch().slot());
+            Query::GetLedgerEras { reply_channel } => {
                 reply_channel
-                    .send((config.epoch_config, config.consensus_config.clone()))
+                    .send(Arc::clone(self.cryptarchia.ledger.eras()))
                     .unwrap_or_else(|_| {
-                        error!(target: LOG_TARGET, "Could not send epoch config through channel");
+                        error!(target: LOG_TARGET, "Could not send the ledger eras through channel");
                     });
             }
             Query::GetBlockEvents { id, reply_channel } => {

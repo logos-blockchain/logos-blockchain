@@ -240,13 +240,6 @@ impl EpochConfig {
             base_period_length,
         )
     }
-
-    #[must_use]
-    pub fn epoch(&self, slot: Slot, base_period_length: NonZero<u64>) -> Epoch {
-        (u64::from(slot) / self.epoch_length(base_period_length))
-            .try_into()
-            .expect("Epoch should build from a correct configuration")
-    }
 }
 
 #[must_use]

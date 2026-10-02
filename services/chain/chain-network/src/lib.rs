@@ -391,8 +391,7 @@ where
                 Ok(params) => {
                     info!(
                         target: LOG_TARGET,
-                        cadence_slots = params.cadence_slots,
-                        lag_threshold_slots = params.lag_threshold_slots,
+                        lag_threshold_blocks = params.lag_threshold_blocks,
                         max_peers = params.max_peers,
                         "Tip-poll lag watchdog enabled"
                     );
@@ -489,8 +488,8 @@ where
                             continue;
                         }
 
-                        let params = *tip_poll_params
-                            .as_ref()
+                        let params = tip_poll_params
+                            .clone()
                             .expect("tip_poll_params is Some, guaranteed by the select arm condition");
 
                         // Spawn a task to not block this event loop.

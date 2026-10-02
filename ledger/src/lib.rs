@@ -222,7 +222,7 @@ where
 
     /// The config of every era.
     #[must_use]
-    pub fn eras(&self) -> &Eras<Config> {
+    pub const fn eras(&self) -> &Arc<Eras<Config>> {
         &self.eras
     }
 

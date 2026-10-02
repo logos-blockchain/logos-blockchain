@@ -217,6 +217,11 @@ impl<Parameters> Eras<Parameters> {
         &self.genesis
     }
 
+    /// Every era, in schedule order.
+    pub fn iter(&self) -> impl Iterator<Item = &ScheduledEra<Parameters>> {
+        core::iter::once(&self.genesis).chain(&self.after_genesis)
+    }
+
     /// The same schedule, each era carrying what `f` makes of it instead of
     /// its parameters. Numbers, boundaries, versions and lengths are kept.
     pub fn map<Mapped>(

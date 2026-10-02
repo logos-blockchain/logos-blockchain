@@ -379,7 +379,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
     >::initialize_cryptarchia(
         &recovery_state,
         &bootstrap_config,
-        Arc::new(stored.ledger.eras().clone()),
+        Arc::clone(stored.ledger.eras()),
         &relays,
         &new_block_tx,
         &lib_tx,

@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use futures::StreamExt as _;
 use lb_chain_service::{
     Slot,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
+use lb_cryptarchia_engine::era::Eras;
 use lb_cryptarchia_sync::{GetTipResponse, HeaderId};
 use lb_time_service::SlotTick;
 use overwatch::DynError;
@@ -12,9 +15,9 @@ use crate::{TipPollConfig, metrics, network::NetworkAdapter, sync::LOG_TARGET};
 
 /// Proactive tip-poll lag watchdog.
 ///
-/// Fires on a slot-tick cadence (`params.cadence_slots`, ≈ one expected
-/// block interval). When the local tip has fallen behind the current slot
-/// by more than `params.lag_threshold_slots`, it samples a handful of
+/// Fires on a slot-tick cadence (≈ one expected block interval in the era of
+/// the tick). When the local tip has fallen behind the current slot by more
+/// than the lag threshold of that era, it samples a handful of
 /// peers with `GetTip` and returns the most-advanced tip that is strictly
 /// ahead of the local height. The caller is expected to hand it to the
 /// orphan downloader, which performs the actual catch-up download and
@@ -37,12 +40,13 @@ where
     RuntimeServiceId: Send + Sync + 'static,
 {
     // Cadence gate: only act roughly once per expected block interval.
+    let (cadence_slots, lag_threshold_slots) = params.at_slot(tick.slot);
     let current_slot = u64::from(tick.slot);
-    if current_slot % params.cadence_slots != 0 {
+    if current_slot % cadence_slots != 0 {
         return None;
     }
 
-    let info = lagging_local_info(cryptarchia, current_slot, params.lag_threshold_slots).await?;
+    let info = lagging_local_info(cryptarchia, current_slot, lag_threshold_slots).await?;
     metrics::tip_poll_triggered_total();
 
     let tips: Vec<GetTipResponse> = network_adapter
@@ -128,21 +132,24 @@ pub struct PolledTip {
 }
 
 /// Derived parameters for the proactive tip-poll lag watchdog.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct TipPollParams {
-    /// Act every this many slots (≈ one expected block interval, `1/f`).
-    pub cadence_slots: u64,
-    /// Lag, in slots, beyond which we proactively poll peers for their tip.
-    pub lag_threshold_slots: u64,
+    /// The cadence of each era: act every this many slots (≈ one expected
+    /// block interval, `1/f`).
+    cadence_slots: Arc<Eras<u64>>,
+    /// Lag, in expected block intervals, beyond which we proactively poll
+    /// peers for their tip.
+    pub lag_threshold_blocks: u64,
     /// Maximum number of peers to sample with `GetTip` per poll.
     pub max_peers: usize,
 }
 
 impl TipPollParams {
-    /// Derive the polling cadence and lag threshold from the active slot
-    /// coefficient `f`. The expected number of slots between blocks is `1/f`,
-    /// so the cadence is `ceil(1/f)` slots and the lag threshold is
-    /// `lag_threshold_blocks` such intervals.
+    /// Derive the polling cadence and lag threshold of each era from its
+    /// active slot coefficient `f`. The expected number of slots between
+    /// blocks is `1/f`, so the cadence is `ceil(1/f)` slots and the lag
+    /// threshold is `lag_threshold_blocks` such intervals. Every era must
+    /// allow polling, checked once here.
     pub async fn derive<Cryptarchia>(
         config: &TipPollConfig,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
@@ -150,38 +157,75 @@ impl TipPollParams {
     where
         Cryptarchia: CryptarchiaServiceData<Tx: Send>,
     {
-        let (_, consensus_config) = cryptarchia
-            .get_epoch_config()
+        let ledger_eras = cryptarchia
+            .get_ledger_eras()
             .await
-            .map_err(|e| DynError::from(format!("failed to fetch epoch config: {e}")))?;
-
-        // `f = numerator / denominator`, so `1/f = denominator / numerator`.
-        // Compute `ceil(1/f)` with integer arithmetic to avoid float casts.
-        let coeff = consensus_config.slot_activation_coeff();
-        let numerator = u64::from(coeff.numerator);
-        let denominator = core::num::NonZeroU64::from(coeff.denominator).get();
-        if numerator == 0 {
+            .map_err(|e| DynError::from(format!("failed to fetch the ledger eras: {e}")))?;
+        if ledger_eras
+            .iter()
+            .any(|era| cadence_slots(&era.entry.parameters.consensus_config).is_none())
+        {
             return Err(DynError::from(
-                "active slot coefficient f must be > 0 for tip polling",
+                "active slot coefficient f must be > 0 in every era for tip polling",
             ));
         }
 
-        let cadence_slots = denominator.div_ceil(numerator).max(1);
-        let lag_threshold_slots = cadence_slots.saturating_mul(config.lag_threshold_blocks.get());
-
         Ok(Self {
-            cadence_slots,
-            lag_threshold_slots,
+            cadence_slots: Arc::new(ledger_eras.map(|era| {
+                cadence_slots(&era.entry.parameters.consensus_config)
+                    .expect("every era was checked to have a cadence")
+            })),
+            lag_threshold_blocks: config.lag_threshold_blocks.get(),
             max_peers: config.max_peers_to_sample.get(),
         })
     }
+
+    /// The cadence and the lag threshold, in slots, in the era of `slot`.
+    fn at_slot(&self, slot: Slot) -> (u64, u64) {
+        let cadence_slots = self.cadence_slots.at_slot(slot).entry.parameters;
+        (
+            cadence_slots,
+            cadence_slots.saturating_mul(self.lag_threshold_blocks),
+        )
+    }
+}
+
+/// `ceil(1/f)`, the expected number of slots between blocks under
+/// `consensus_config`. `None` when `f` is zero.
+fn cadence_slots(consensus_config: &lb_cryptarchia_engine::Config) -> Option<u64> {
+    // `f = numerator / denominator`, so `1/f = denominator / numerator`.
+    // Compute `ceil(1/f)` with integer arithmetic to avoid float casts.
+    let coeff = consensus_config.slot_activation_coeff();
+    let numerator = u64::from(coeff.numerator);
+    let denominator = core::num::NonZeroU64::from(coeff.denominator).get();
+    (numerator != 0).then(|| denominator.div_ceil(numerator).max(1))
 }
 
 #[cfg(test)]
 mod tests {
+    use core::num::NonZero;
+
     use lb_cryptarchia_sync::GetTipResponseReason;
+    use lb_utils::math::NonNegativeRatio;
 
     use super::*;
+
+    fn consensus_config(f_numerator: u32, f_denominator: u32) -> lb_cryptarchia_engine::Config {
+        lb_cryptarchia_engine::Config::new(
+            NonZero::new(10).unwrap(),
+            NonNegativeRatio::new(f_numerator, f_denominator.try_into().unwrap()),
+            1f64.try_into().unwrap(),
+            NonZero::new(12).unwrap(),
+        )
+    }
+
+    #[test]
+    fn the_cadence_is_one_expected_block_interval() {
+        assert_eq!(cadence_slots(&consensus_config(1, 10)), Some(10));
+        assert_eq!(cadence_slots(&consensus_config(1, 2)), Some(2));
+        // `ceil(3/2)`.
+        assert_eq!(cadence_slots(&consensus_config(2, 3)), Some(2));
+    }
 
     fn tip(height: u64, slot: u64, id: u8) -> GetTipResponse {
         GetTipResponse::Tip {
