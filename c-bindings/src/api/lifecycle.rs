@@ -54,6 +54,9 @@ pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlo
 ///   and none may be made afterwards: the handle is freed there.
 /// - It must not be used from inside a subscription callback. Such calls fail
 ///   with [`OperationStatusCode::RuntimeError`].
+/// - If one of the node's services panics, the whole node stops. Subscriptions
+///   end, and every call fails with [`OperationStatusCode::NodeStopped`] except
+///   [`shutdown_node`], which reports the cause and releases the handle.
 ///
 /// # Safety
 ///
@@ -235,6 +238,10 @@ unsafe fn get_deployment_config(
 /// # Returns
 ///
 /// An [`OperationStatus`] indicating success or failure.
+///
+/// If the node had already stopped because one of its services panicked, the
+/// node is still released, and the status is
+/// [`OperationStatusCode::NodeStopped`] with the service and the panic message.
 ///
 /// Calling this from inside a subscription callback fails with
 /// [`OperationStatusCode::RuntimeError`]. In that one case the node keeps
