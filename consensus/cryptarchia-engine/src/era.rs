@@ -166,6 +166,15 @@ pub enum ErasError {
         .previous.into_inner()
     )]
     OutOfOrder { previous: Epoch, next: Epoch },
+    #[error(
+        "era {} runs version {next:?}, older than the version {previous:?} of the era before it",
+        .era.into_inner()
+    )]
+    VersionGoesBack {
+        era: Era,
+        previous: EraVersion,
+        next: EraVersion,
+    },
     #[error("a chain has at most {} eras", u32::from(u16::MAX) + 1)]
     TooManyEras,
     #[error("era {} starts beyond the slots or the time this node can represent", .0.into_inner())]
@@ -213,6 +222,15 @@ impl<Parameters> Eras<Parameters> {
                 return Err(ErasError::OutOfOrder {
                     previous: previous.entry.first_epoch,
                     next: entry.first_epoch,
+                });
+            }
+            // A later era never runs an older rule set, so the state of a
+            // chain only ever crosses into a version from the one before.
+            if entry.version < previous.entry.version {
+                return Err(ErasError::VersionGoesBack {
+                    era,
+                    previous: previous.entry.version,
+                    next: entry.version,
                 });
             }
             let (first_slot, start_time) = previous
