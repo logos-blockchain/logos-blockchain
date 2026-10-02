@@ -466,9 +466,7 @@ impl Runtime {
                     }
                 }
             }
-            Event::BlocksProcessed { .. }
-            | Event::MempoolPending(_)
-            | Event::TurnNotification { .. } => {}
+            Event::BlocksProcessed { .. } | Event::TurnNotification { .. } => {}
         }
     }
 

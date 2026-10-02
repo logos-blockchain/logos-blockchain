@@ -18,8 +18,8 @@ use super::{
     slot_clock::{SlotClock, slot_to_u64},
     state::{ChannelUpdateInfo, TxState},
     types::{
-        ChannelUpdate, ChannelUpdateTx, DepositInfo, Error, Event, FinalizedTx, InscriptionInfo,
-        SequencerChannelView, SequencerCheckpoint, TurnNotification, TxSource, TxStatus,
+        ChannelUpdate, ChannelUpdateTx, DepositInfo, Error, Event, FinalizedTx,
+        SequencerChannelView, SequencerCheckpoint, TurnNotification,
     },
     zone_sequencer::{ZoneSequencer, build_checkpoint},
 };
@@ -116,9 +116,7 @@ where
         let reconnected = !self.connected;
         self.connected = true;
         let became_ready = self.maybe_signal_ready();
-        let (channel_update, deposits, finalized, mined) = self.apply_block_result(result);
-
-        self.queue_block_status_events(&channel_update, &finalized, &mined);
+        let (channel_update, deposits, finalized) = self.apply_block_result(result);
 
         let block_event = self
             .publish_checkpoint()
@@ -509,17 +507,11 @@ where
     fn apply_block_result(
         &mut self,
         result: BlockEventResult,
-    ) -> (
-        ChannelUpdate,
-        Vec<DepositInfo>,
-        Vec<FinalizedTx>,
-        Vec<InscriptionInfo>,
-    ) {
+    ) -> (ChannelUpdate, Vec<DepositInfo>, Vec<FinalizedTx>) {
         let BlockEventResult {
             finalized_items,
             channel_update,
             common_prefix,
-            mined_inscriptions,
             deposits,
         } = result;
         let (adopted, mut orphaned) = match channel_update {
@@ -590,46 +582,7 @@ where
             }
         };
 
-        (
-            channel_update,
-            deposits,
-            finalized_items,
-            mined_inscriptions,
-        )
-    }
-
-    fn queue_block_status_events(
-        &mut self,
-        channel_update: &ChannelUpdate,
-        finalized: &[FinalizedTx],
-        mined: &[InscriptionInfo],
-    ) {
-        for tx in channel_update.orphaned() {
-            let tx_hash = tx.tx_hash();
-            let source = self
-                .state
-                .as_ref()
-                .map_or(TxSource::Other, |state| state.tx_source(&tx_hash));
-            self.queue_tx_status(tx_hash, TxStatus::Orphaned(source));
-        }
-        // `OnChain` is a per-tx lifecycle signal — it fires when an inscription
-        // lands in a block, independent of whether it moved the channel lineage.
-        // Our own publishes never appear in extension-case `adopted` (already
-        // tracked); drive `OnChain` from what was actually mined this block.
-        for info in mined {
-            let source = self
-                .state
-                .as_ref()
-                .map_or(TxSource::Other, |state| state.tx_source(&info.tx_hash));
-            self.queue_tx_status(info.tx_hash, TxStatus::OnChain(source));
-        }
-        for tx in finalized {
-            let source = self
-                .state
-                .as_ref()
-                .map_or(TxSource::Other, |state| state.tx_source(&tx.tx_hash));
-            self.queue_tx_status(tx.tx_hash, TxStatus::Finalized(source));
-        }
+        (channel_update, deposits, finalized_items)
     }
 
     fn log_channel_update(update: &ChannelUpdateInfo) {
@@ -736,7 +689,7 @@ mod tests {
     use super::{
         super::{
             state::PendingBundle,
-            types::{FinalizedOp, SequencerConfig},
+            types::{FinalizedOp, InscriptionInfo, SequencerConfig},
             zone_sequencer::track_pending_tx,
         },
         *,
@@ -1331,7 +1284,6 @@ mod tests {
                     "our turn"
                 }
                 Event::TurnNotification { .. } => "not our turn",
-                Event::MempoolPending(_) => "mempool",
             })
             .collect();
         assert_eq!(
@@ -1612,7 +1564,6 @@ mod tests {
             }
         }
 
-        let mut status_rx = client.subscribe_tx_status();
         let publish = client.publish(b"survives-config".into());
         let (result, _checkpoint) =
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -1627,8 +1578,8 @@ mod tests {
         let p_hash = result.inscription_id();
 
         // Keep driving between the toggles so the down-edge is observed. The
-        // config block is recognized by the `OnChain` status of its tx; the
-        // `BlocksProcessed` that follows it carries the state to assert on.
+        // config block is recognized by its config entering `adopted`; that
+        // `BlocksProcessed` carries the state to assert on.
         up_tx.send(false).unwrap();
         let (checkpoint, update) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let toggle = async {
@@ -1636,19 +1587,16 @@ mod tests {
                 up_tx.send(true).unwrap();
             };
             let drive = async {
-                let mut config_on_chain = false;
                 loop {
-                    let event = sequencer.next_event().await;
-                    while let Ok(update) = status_rx.try_recv() {
-                        config_on_chain |= update.tx_hash == config_hash
-                            && matches!(update.status, TxStatus::OnChain(_));
-                    }
-                    if config_on_chain
-                        && let Event::BlocksProcessed {
-                            checkpoint,
-                            channel_update,
-                            ..
-                        } = event
+                    if let Event::BlocksProcessed {
+                        checkpoint,
+                        channel_update,
+                        ..
+                    } = sequencer.next_event().await
+                        && channel_update
+                            .adopted()
+                            .iter()
+                            .any(|tx| tx.tx_hash() == config_hash)
                     {
                         return (checkpoint, channel_update);
                     }
@@ -1832,7 +1780,7 @@ mod tests {
                 Event::BlocksProcessed { finalized, .. } => {
                     finalized_items.extend(finalized);
                 }
-                Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
+                Event::TurnNotification { .. } => {}
             }
         }
 
@@ -1902,7 +1850,7 @@ mod tests {
                 Event::BlocksProcessed { checkpoint, .. } => {
                     break checkpoint.finalized_config;
                 }
-                Event::Ready | Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
+                Event::Ready | Event::TurnNotification { .. } => {}
             }
         };
         assert_eq!(
@@ -1972,7 +1920,7 @@ mod tests {
                 Event::BlocksProcessed { checkpoint, .. } => {
                     break checkpoint.finalized_config;
                 }
-                Event::Ready | Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
+                Event::Ready | Event::TurnNotification { .. } => {}
             }
         };
         assert_eq!(
@@ -2124,7 +2072,6 @@ mod tests {
                     new_channel_tip: MsgId::root(),
                 }),
                 common_prefix: vec![entry(1), entry(2)],
-                mined_inscriptions: Vec::new(),
                 deposits: Vec::new(),
             };
 

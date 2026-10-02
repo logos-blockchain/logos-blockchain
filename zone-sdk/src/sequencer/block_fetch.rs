@@ -49,10 +49,6 @@ pub(super) struct BlockEventResult {
     pub(super) channel_update: Option<ChannelUpdateInfo>,
     /// The view above LIB minus `adopted`, in lineage order.
     pub(super) common_prefix: Vec<ChannelUpdateTx>,
-    /// Inscriptions that appeared in this block. Surfaced so a consumer learns
-    /// its tx reached the chain (`OnChain` status) even when the tx didn't move
-    /// the canonical channel chain.
-    pub(super) mined_inscriptions: Vec<InscriptionInfo>,
     /// Channel deposits observed in the blocks this event covers (canonical
     /// backfill first, then the live block), in block and op order. Surfaced
     /// non-finalized on `Event::BlocksProcessed` so a consumer can pin a
@@ -74,7 +70,6 @@ struct PreparedBlockEvent<'a> {
     channel_txs: Vec<BlockChannelTx>,
     /// Channel-note ops of the live block, computed in the prepare phase.
     note_ops: Vec<NoteOp>,
-    mined_inscriptions: Vec<InscriptionInfo>,
     deposits: Vec<DepositInfo>,
 }
 
@@ -151,14 +146,6 @@ where
         .map(|tx| tx.op_refs().hash())
         .collect();
     let channel_txs = classify_channel_txs(&event.block.transactions, channel_id);
-    let mut mined_inscriptions: Vec<InscriptionInfo> = channel_txs
-        .iter()
-        .flat_map(BlockChannelTx::infos)
-        .cloned()
-        .collect();
-    let config_entries =
-        mined_config_entries(&event.block.transactions, channel_id, &mined_inscriptions);
-    mined_inscriptions.extend(config_entries);
 
     // Deposit events + wallet note ops for the live block: fetched here (the
     // prepare phase) so the apply phase mutates state without any `.await`.
@@ -193,7 +180,6 @@ where
         our_txs,
         channel_txs,
         note_ops,
-        mined_inscriptions,
         deposits,
     })
 }
@@ -235,7 +221,6 @@ fn apply_prepared_block_event(
         our_txs,
         mut channel_txs,
         note_ops,
-        mined_inscriptions,
         deposits,
     } = prepared;
 
@@ -351,7 +336,6 @@ fn apply_prepared_block_event(
         finalized_items: finalized_batch.items,
         channel_update,
         common_prefix,
-        mined_inscriptions,
         deposits,
     }
 }
@@ -529,27 +513,6 @@ pub fn channel_configs(
                 signer: None,
             }),
             _ => None,
-        })
-        .collect()
-}
-
-/// Configs are not in `mined`, but their txs still need `OnChain`
-/// status events: one entry per config-carrying tx, with its config-lineage
-/// ids. Status is keyed on the tx, so a tx already covered by an inscription
-/// entry in `mined` needs nothing more.
-fn mined_config_entries(
-    transactions: &[SignedOps<Unverified, StandardMode>],
-    channel_id: ChannelId,
-    mined: &[InscriptionInfo],
-) -> Vec<InscriptionInfo> {
-    transactions
-        .iter()
-        .filter_map(|tx| {
-            let tx_hash = tx.hash();
-            if mined.iter().any(|info| info.tx_hash == tx_hash) {
-                return None;
-            }
-            channel_configs(tx, channel_id).into_iter().next()
         })
         .collect()
 }
@@ -1257,7 +1220,6 @@ mod tests {
     use super::*;
     use crate::{
         adapter::DepositEvent,
-        sequencer::types::TxSource,
         test_support::{
             MockNode, api_block, deposit_event, header_id, inscribe_op, live_event,
             unverified_tx_with_ops,
@@ -1482,7 +1444,6 @@ mod tests {
             state.is_tracked(&tx_hash),
             "custom tx is mirrored for retry"
         );
-        assert_eq!(state.tx_source(&tx_hash), TxSource::Other);
         let update = state
             .detect_channel_update(&old_lineage, block, &HashSet::new())
             .expect("update");
@@ -1640,7 +1601,6 @@ mod tests {
             state.is_tracked(&tx_hash),
             "non-identity bundle is mirrored for retry"
         );
-        assert_eq!(state.tx_source(&tx_hash), TxSource::Other);
         let update = state
             .detect_channel_update(&old_lineage, block, &HashSet::new())
             .expect("update");
@@ -1780,7 +1740,6 @@ mod tests {
             state.is_tracked(&tx_hash),
             "multi-inscribe is mirrored for retry"
         );
-        assert_eq!(state.tx_source(&tx_hash), TxSource::Other);
         let update = state
             .detect_channel_update(&old_lineage, block, &HashSet::new())
             .expect("update");

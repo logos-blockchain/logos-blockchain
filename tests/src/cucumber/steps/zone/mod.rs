@@ -19,9 +19,7 @@ use operations::{
     submit_atomic_zone_deposit, submit_zone_channel_split, submit_zone_deposit,
     submit_zone_withdraw, wait_for_channel_transfer_input_count, wait_for_channel_view,
     wait_for_channel_wallet_counts, wait_for_channel_wallet_note, wait_for_deposit,
-    wait_for_exact_indexed_payload_count,
-    wait_for_finalized_deposit_via_sequencer_and_collect_mempool_pending,
-    wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pending, wait_for_lib_advance,
-    wait_for_on_chain_statuses_and_collect_mempool_pending, wait_for_transactions_finalized,
-    wait_for_turn_to_write, wait_for_tx_status_lifecycle, wait_for_withdraw,
+    wait_for_exact_indexed_payload_count, wait_for_finalized_deposit_via_sequencer,
+    wait_for_finalized_withdraw_via_sequencer, wait_for_lib_advance,
+    wait_for_transactions_finalized, wait_for_turn_to_write, wait_for_withdraw,
 };

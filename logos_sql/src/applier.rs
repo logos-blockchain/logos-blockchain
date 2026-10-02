@@ -94,7 +94,7 @@ pub fn on_event(db: &mut Databases, event: &Event, channel_id: ChannelId) -> Res
             tracing::info!(target: TARGET, "sequencer ready");
             Ok(())
         }
-        Event::MempoolPending(_) | Event::TurnNotification { .. } => Ok(()),
+        Event::TurnNotification { .. } => Ok(()),
     }
 }
 

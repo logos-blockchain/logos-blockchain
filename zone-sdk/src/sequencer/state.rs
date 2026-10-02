@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use lb_core::{
     header::HeaderId,
@@ -33,7 +33,7 @@ use super::{
     channel_wallet::{ChannelWallet, NoteOp},
     types::{
         AtomicWithdrawInfo, ChannelNote, ChannelUpdateTx, ChannelWalletView, Error,
-        InscriptionInfo, PendingTx, PinDepositInfo, TxSource, WithdrawInfo,
+        InscriptionInfo, PendingTx, PinDepositInfo, WithdrawInfo,
     },
 };
 
@@ -207,9 +207,6 @@ pub struct TxState {
     /// Opaque pending txs, ours or mirrored: retried byte-identically until
     /// finalized or shed.
     pending_other: HashMap<TxHash, PendingOtherTx>,
-    /// Bounded insertion-ordered tx hashes accepted locally by this sequencer
-    /// runtime or restored from its checkpoint.
-    local_txs: VecDeque<TxHash>,
     /// Per-block cumulative safe sets.
     block_states: BTreeMap<HeaderId, HashTrieSetSync<TxHash>>,
     /// Block parent relationships for pruning.
@@ -335,7 +332,6 @@ impl TxState {
             displaced: Vec::new(),
             displaced_other: Vec::new(),
             pending_other: HashMap::new(),
-            local_txs: VecDeque::new(),
             block_states,
             parent_map: HashMap::new(),
             current_lib: lib,
@@ -455,7 +451,6 @@ impl TxState {
                 by,
             });
         }
-        self.track_local_tx(tx_hash);
         self.pending_by_parent.insert(parent_msg, tx_hash);
         self.pending.insert(
             tx_hash,
@@ -600,7 +595,6 @@ impl TxState {
         {
             return Err(ParentTaken { parent, by });
         }
-        self.track_local_tx(tx_hash);
         Ok(self.insert_other(signed_tx, channel_id, lineage))
     }
 
@@ -661,22 +655,6 @@ impl TxState {
             },
         );
         last_msg
-    }
-
-    fn track_local_tx(&mut self, tx_hash: TxHash) {
-        if !self.local_txs.contains(&tx_hash) {
-            self.local_txs.push_back(tx_hash);
-        }
-    }
-
-    pub fn prune_local_tx_tracking(&mut self, max_tracked: usize) {
-        while self.local_txs.len() > max_tracked {
-            self.local_txs.pop_front();
-        }
-    }
-
-    pub fn remove_local_tx(&mut self, tx_hash: &TxHash) {
-        self.local_txs.retain(|tracked| tracked != tx_hash);
     }
 
     /// Process a new block. Finalization is handled by backfill ground
@@ -1192,15 +1170,6 @@ impl TxState {
     #[must_use]
     pub fn pending_inscription(&self, tx_hash: &TxHash) -> Option<&PendingInscription> {
         self.pending.get(tx_hash)
-    }
-
-    #[must_use]
-    pub fn tx_source(&self, tx_hash: &TxHash) -> TxSource {
-        if self.local_txs.contains(tx_hash) {
-            TxSource::Local
-        } else {
-            TxSource::Other
-        }
     }
 
     /// Mark a pending inscription as posted. Returns true only for the first
