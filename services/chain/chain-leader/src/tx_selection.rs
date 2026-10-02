@@ -276,7 +276,7 @@ mod tests {
 
         let block_txs = txs_for_block(stream::iter(selection.selected_txs)).await;
         assert_eq!(block_txs.len(), CANDIDATE_COUNT - 1);
-        ledger_state
+        let _apply_result = ledger_state
             .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
                 &config,
                 block_txs.into_iter(),

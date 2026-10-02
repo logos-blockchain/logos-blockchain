@@ -2575,7 +2575,7 @@ mod tests {
             );
         // The `unwrap` should succeed because the user pays at least the base fee of
         // 2705
-        result.unwrap();
+        let _apply_result = result.unwrap();
 
         ledger.cryptarchia_ledger = ledger.cryptarchia_ledger.set_execution_base_fee(10.into());
 
