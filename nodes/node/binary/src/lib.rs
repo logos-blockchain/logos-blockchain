@@ -193,7 +193,7 @@ pub fn run_node_from_config(
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
         user: config.user.blend,
     }
-    .into_blend_services_settings(era, &eras, recovery_data.clone());
+    .into_blend_services_settings(&eras, recovery_data.clone());
 
     let time_service_config = TimeConfig {
         user: config.user.time,
@@ -258,7 +258,7 @@ pub fn run_node_from_config(
             blend: blend_config.clone(),
             blend_core: blend_core_config,
             blend_edge: blend_edge_config,
-            blend_broadcast: blend_config.into(),
+            blend_broadcast: blend_config.map(|era| era.entry.parameters.clone().into()),
             block_broadcast: (),
             mempool: mempool_service_config,
             cryptarchia: chain_service_config,

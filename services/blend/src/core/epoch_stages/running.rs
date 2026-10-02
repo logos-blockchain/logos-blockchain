@@ -190,6 +190,12 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
         Self { current, previous }
     }
 
+    pub const fn current(
+        &self,
+    ) -> &CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng> {
+        &self.current
+    }
+
     pub const fn current_mut(
         &mut self,
     ) -> &mut CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng> {

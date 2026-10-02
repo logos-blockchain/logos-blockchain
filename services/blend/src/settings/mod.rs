@@ -35,7 +35,6 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
                 CommonSettings {
                     minimum_network_size,
                     time,
-                    recovery_data,
                     non_ephemeral_signing_key_id,
                     num_blend_layers,
                     data_replication_factor,
@@ -60,7 +59,6 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
             non_ephemeral_signing_key_id,
             num_blend_layers,
             minimum_network_size,
-            recovery_data,
             data_replication_factor,
             activity_threshold_sensitivity,
             network: broadcast,
@@ -84,7 +82,6 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
                     data_replication_factor,
                     broadcast,
                     abstain_on_failure,
-                    ..
                 },
             edge: EdgeSettings { backend },
             core:

@@ -2,6 +2,7 @@ use core::time::Duration;
 use std::{num::NonZeroU64, sync::Arc};
 
 use lb_core::blend::core_quota;
+use lb_cryptarchia_engine::era::Eras;
 use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
 use lb_poq::Quota;
 use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
@@ -11,6 +12,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::settings::{TimingSettings, max_data_message_delay_in_rounds};
 
+/// The core service's settings: its settings in every era of the chain, each
+/// epoch running under its era's, and the state a previous run left.
+#[derive(Clone, Debug)]
+pub struct CoreServiceSettings<BackendSettings, NetworkSettings> {
+    pub eras: Eras<StartingBlendConfig<BackendSettings, NetworkSettings>>,
+    pub recovery_data: RecoveryData,
+}
+
+/// The core service's settings in an era.
 #[derive(Clone, Debug)]
 pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
     pub backend: BackendSettings,
@@ -21,7 +31,6 @@ pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
     pub non_ephemeral_signing_key_id: KeyId,
     pub num_blend_layers: NonZeroU64,
     pub minimum_network_size: NonZeroU64,
-    pub recovery_data: RecoveryData,
     /// `R_c`: replication factor for data messages.
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
@@ -99,7 +108,7 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
 }
 
 impl<BackendSettings, NetworkSettings> StorageRecoverySettings
-    for StartingBlendConfig<BackendSettings, NetworkSettings>
+    for CoreServiceSettings<BackendSettings, NetworkSettings>
 {
     const RECOVERY_KEY_SUFFIX: &'static [u8] = b"blend/core";
 

@@ -14,6 +14,7 @@ use lb_core::{
     mantle::NoteId,
     sdp::{DeclarationId, DeclarationMessage, Locator, ProviderId, ServiceType},
 };
+use lb_cryptarchia_engine::era::Eras;
 use lb_key_management_system_service::{
     api::KmsServiceApi,
     keys::{Ed25519PublicKey, PublicKeyEncoding, ZkPublicKey},
@@ -44,8 +45,9 @@ use crate::{
         },
     },
     edge::service_components::ServiceComponents as EdgeServiceComponents,
+    era::{settings_in, transition_period},
     kms::PreloadKmsService,
-    membership::node_id,
+    membership::{chain::BlendEpoch, node_id},
     message::{ProxyServiceMessage, ServiceMessage},
     mode::ModeMembership,
     orchestrator::Instance,
@@ -59,6 +61,7 @@ pub mod delivery;
 pub mod edge;
 pub mod epoch;
 pub mod epoch_info;
+mod era;
 pub mod membership;
 pub mod message;
 pub(crate) mod metrics;
@@ -91,10 +94,12 @@ where
     CoreService: ServiceData + CoreServiceComponents<RuntimeServiceId>,
     EdgeService: EdgeServiceComponents,
 {
-    type Settings = Settings<
-        BlendBackendSettingsOfService<CoreService, RuntimeServiceId>,
-        <EdgeService as EdgeServiceComponents>::BackendSettings,
-        PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
+    type Settings = Eras<
+        Settings<
+            BlendBackendSettingsOfService<CoreService, RuntimeServiceId>,
+            <EdgeService as EdgeServiceComponents>::BackendSettings,
+            PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
+        >,
     >;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
@@ -181,8 +186,12 @@ where
             ..
         } = self;
 
-        let settings = settings_handle.notifier().get_updated_settings();
-        let minimal_network_size = settings.common.minimum_network_size;
+        let settings_in_every_era = settings_handle.notifier().get_updated_settings();
+        // What the node is configured with, the same in every era.
+        let settings = &settings_in_every_era.genesis().entry.parameters;
+        let minimum_network_sizes =
+            settings_in_every_era.map(|era| era.entry.parameters.common.minimum_network_size);
+        let timings = settings_in_every_era.map(|era| era.entry.parameters.common.time.clone());
 
         wait_until_services_are_ready!(
             &overwatch_handle,
@@ -209,7 +218,7 @@ where
         };
 
         let PublicKeyEncoding::Ed25519(non_ephemeral_signing_key_public) = kms
-            .public_key(settings.common.non_ephemeral_signing_key_id)
+            .public_key(settings.common.non_ephemeral_signing_key_id.clone())
             .await
             .expect("KMS does not have key with the specified ID.")
         else {
@@ -244,15 +253,14 @@ where
             None,
             "blend_orchestrator_service",
         )
-        .await
-        // We take only the membership info from the epoch stream since the proxy service does not
-        // need anything else.
-        .map(|(_, membership_info)| membership_info);
+        .await;
 
-        let (membership_info, mut remaining_membership_stream) =
+        let ((epoch, membership_info), mut remaining_membership_stream) =
             UninitializedEpochEventStream::new(
                 membership_stream,
-                settings.common.time.epoch_transition_period,
+                move |(epoch, _): &BlendEpoch<_>| {
+                    transition_period(&timings, epoch.era, epoch.epoch, |time| time)
+                },
             )
             .await_first_ready()
             .await
@@ -266,7 +274,11 @@ where
 
         let mut instance =
             Instance::<CoreService, EdgeService, BroadcastService, RuntimeServiceId>::new(
-                ModeMembership::resolve(membership_info, minimal_network_size).mode(),
+                ModeMembership::resolve(
+                    membership_info,
+                    *settings_in(&minimum_network_sizes, epoch.era),
+                )
+                .mode(),
                 overwatch_handle,
             )
             .await?;
@@ -286,7 +298,7 @@ where
                         .handle_epoch_event(
                             epoch_event,
                             overwatch_handle,
-                            minimal_network_size,
+                            &minimum_network_sizes,
                         )
                         .await?;
                 },

@@ -53,6 +53,7 @@ use lb_blend::{
 };
 use lb_chain_service::{Epoch, api::CryptarchiaServiceData};
 use lb_core::sdp::ActivityMetadata;
+use lb_cryptarchia_engine::era::{Era, Eras};
 use lb_key_management_system_service::{
     api::KmsServiceApi,
     keys::{KeyOperators, PublicKeyEncoding},
@@ -99,12 +100,13 @@ use crate::{
             ReceiverCryptographicProcessor,
         },
         scheduler::SchedulerWrapper,
-        settings::{RunningBlendConfig, StartingBlendConfig},
+        settings::{CoreServiceSettings, RunningBlendConfig},
         state::{RecoveryServiceState, ServiceState, StateUpdater as ServiceStateUpdater},
     },
     delivery::{broadcast_undelivered_messages, next_undelivered_messages},
     epoch::{CoreEpochInfo, CoreEpochPublicInfo, CoreEpochStateInfo, MismatchedZkId},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
+    era::{settings_in, transition_period},
     kms::PreloadKmsService,
     membership::{
         self,
@@ -216,7 +218,7 @@ where
         > + Send
         + Sync,
 {
-    type Settings = StartingBlendConfig<Backend::Settings, Dispatcher::Settings>;
+    type Settings = CoreServiceSettings<Backend::Settings, Dispatcher::Settings>;
     type State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>;
     type StateOperator = RecoveryOperator<StateStorage>;
     type Message = ServiceMessage<NodeId>;
@@ -324,7 +326,12 @@ where
             ..
         } = self;
 
-        let blend_config = settings_handle.notifier().get_updated_settings();
+        let CoreServiceSettings {
+            eras: blend_configs,
+            ..
+        } = settings_handle.notifier().get_updated_settings();
+        // What the node is configured with, the same in every era.
+        let blend_config = &blend_configs.genesis().entry.parameters;
 
         wait_until_services_are_ready!(
             &overwatch_handle,
@@ -406,20 +413,25 @@ where
             .await
             .expect("Relay with SDP service should be available.");
 
-        // Initialize components for the service.
-        let running_blend_config = RunningBlendConfig {
-            backend: blend_config.backend,
-            non_ephemeral_signing_key,
-            num_blend_layers: blend_config.num_blend_layers,
-            minimum_network_size: blend_config.minimum_network_size,
-            scheduler: blend_config.scheduler,
-            time: blend_config.time,
-            zk: blend_config.zk,
-            data_replication_factor: blend_config.data_replication_factor,
-            activity_threshold_sensitivity: blend_config.activity_threshold_sensitivity,
-            pow_mining_pool: new_mining_pool(),
-            abstain_on_failure: blend_config.abstain_on_failure,
-        };
+        // Initialize components for the service, with their settings in every
+        // era.
+        let pow_mining_pool = new_mining_pool();
+        let running_blend_configs = blend_configs.map(|era| {
+            let blend_config = era.entry.parameters.clone();
+            RunningBlendConfig {
+                backend: blend_config.backend,
+                non_ephemeral_signing_key: non_ephemeral_signing_key.clone(),
+                num_blend_layers: blend_config.num_blend_layers,
+                minimum_network_size: blend_config.minimum_network_size,
+                scheduler: blend_config.scheduler,
+                time: blend_config.time,
+                zk: blend_config.zk,
+                data_replication_factor: blend_config.data_replication_factor,
+                activity_threshold_sensitivity: blend_config.activity_threshold_sensitivity,
+                pow_mining_pool: Arc::clone(&pow_mining_pool),
+                abstain_on_failure: blend_config.abstain_on_failure,
+            }
+        });
         let (
             mut remaining_epoch_stream,
             current_public_info,
@@ -438,7 +450,7 @@ where
             KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
             RuntimeServiceId,
         >(
-            running_blend_config.clone(),
+            running_blend_configs.clone(),
             public_epoch_stream,
             overwatch_handle.clone(),
             kms_api,
@@ -462,12 +474,13 @@ where
 
         let mut blend_messages = backend.listen_to_incoming_messages();
 
-        let mut failure_detector = if running_blend_config.abstain_on_failure {
+        let current_blend_config = settings_in(&running_blend_configs, current_public_info.era);
+        let mut failure_detector = if current_blend_config.abstain_on_failure {
             None
         } else {
             Some(FailureDetector::new(
-                running_blend_config.max_data_message_delay_in_rounds(),
-                running_blend_config.time.round_duration_in_seconds,
+                current_blend_config.max_data_message_delay_in_rounds(),
+                current_blend_config.time.round_duration_in_seconds,
                 payload_dispatcher.observe_broadcasts().await,
             ))
         };
@@ -480,7 +493,7 @@ where
             &mut blend_messages,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &running_blend_config,
+            &running_blend_configs,
             &mut backend,
             &payload_dispatcher,
             &sdp_relay,
@@ -534,7 +547,7 @@ async fn initialize<
     KmsAdapter,
     RuntimeServiceId,
 >(
-    blend_config: RunningBlendConfig<Backend::Settings>,
+    blend_configs: Eras<RunningBlendConfig<Backend::Settings>>,
     public_epoch_stream: impl Stream<Item = BlendEpoch<NodeId>> + Send + Unpin + 'static,
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     kms_adapter: KmsAdapter,
@@ -577,11 +590,18 @@ where
 {
     // Initialize epoch stream for all public PoQ inputs.
     let epoch_stream = async {
-        let config = blend_config.clone();
-        let zk_sk_id = config.zk.secret_key_kms_id.clone();
+        let configs = blend_configs.clone();
+        let zk_sk_id = configs
+            .genesis()
+            .entry
+            .parameters
+            .zk
+            .secret_key_kms_id
+            .clone();
         public_epoch_stream.map(
             move |(
                 BlendEpochState {
+                    era,
                     aged,
                     epoch,
                     lottery_0,
@@ -591,6 +611,7 @@ where
                 },
                 membership_info,
             )| {
+                let config = settings_in(&configs, era);
                 let membership_size = membership_info.membership.size();
                 let zk_path = membership_info
                     .zk
@@ -603,6 +624,7 @@ where
                 }) = ModeMembership::resolve(membership_info, config.minimum_network_size)
                 else {
                     return Ok(CoreEpochStateInfo::NotCore {
+                        era,
                         epoch,
                         epoch_nonce: nonce,
                     });
@@ -614,6 +636,7 @@ where
                     .core_poq_generator(zk_sk_id.clone(), Box::new(core_and_path_selectors));
                 Ok(CoreEpochInfo {
                     public: CoreEpochPublicInfo {
+                        era,
                         poq_core_public_inputs: CoreInputs {
                             quota: config.epoch_core_quota(membership_size),
                             zk_root,
@@ -639,9 +662,18 @@ where
         )
     }
     .await;
+    let timings = blend_configs.map(|era| era.entry.parameters.time.clone());
     let (current_epoch_info, remaining_epoch_stream) = Box::pin(
-        UninitializedEpochEventStream::new(epoch_stream, blend_config.time.epoch_transition_period)
-            .await_first_ready(),
+        UninitializedEpochEventStream::new(
+            epoch_stream,
+            move |epoch_info: &Result<CoreEpochStateInfo<_, _>, MismatchedZkId>| {
+                // A mismatched ID stops the service before any transition.
+                epoch_info.as_ref().map_or(Duration::ZERO, |epoch_info| {
+                    transition_period(&timings, epoch_info.era(), epoch_info.epoch(), |time| time)
+                })
+            },
+        )
+        .await_first_ready(),
     )
     .await
     .map(|(epoch_info, remaining_epoch_stream)| {
@@ -671,6 +703,7 @@ where
         public: current_epoch_public_info,
         core_poq_generator: current_epoch_core_poq_generator,
     } = *current_epoch_info;
+    let blend_config = settings_in(&blend_configs, current_epoch_public_info.era);
 
     info!(
         target: LOG_TARGET,
@@ -885,7 +918,7 @@ async fn run_event_loop<
     remaining_epoch_stream: &mut (
              impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
          ),
-    blend_config: &RunningBlendConfig<Backend::Settings>,
+    blend_configs: &Eras<RunningBlendConfig<Backend::Settings>>,
     backend: &mut Backend,
     payload_dispatcher: &Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
@@ -915,7 +948,7 @@ where
                     blend_messages,
                     &mut secret_pol_info_stream,
                     remaining_epoch_stream,
-                    blend_config,
+                    blend_configs,
                     backend,
                     payload_dispatcher,
                     sdp_relay,
@@ -934,7 +967,7 @@ where
                     blend_messages,
                     &mut secret_pol_info_stream,
                     remaining_epoch_stream,
-                    blend_config,
+                    blend_configs,
                     backend,
                     payload_dispatcher,
                     sdp_relay,
@@ -953,12 +986,34 @@ where
                 next,
                 recovery_checkpoint: checkpoint,
             } => {
+                // The delivery deadlines follow the timing of the epoch's era.
+                if let Some(failure_detector) = failure_detector.as_deref_mut() {
+                    let blend_config = settings_in(blend_configs, next.era());
+                    failure_detector.enter_era(
+                        blend_config.max_data_message_delay_in_rounds(),
+                        blend_config.time.round_duration_in_seconds,
+                    );
+                }
                 current_epoch_stage = next;
                 recovery_checkpoint = *checkpoint;
             }
             StageOutcome::Retiring(retiring_epoch) => {
                 tracing::info!(target: LOG_TARGET, "Exiting from the main event loop");
                 return *retiring_epoch;
+            }
+        }
+    }
+}
+
+impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
+    Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
+{
+    /// The era of the current epoch.
+    const fn era(&self) -> Era {
+        match self {
+            Self::Current(current) => current.epoch_info().era,
+            Self::DuringTransition(during_transition) => {
+                during_transition.current().epoch_info().era
             }
         }
     }
@@ -1057,7 +1112,7 @@ async fn run_current_epoch<
     remaining_epoch_stream: &mut (
              impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
          ),
-    blend_config: &RunningBlendConfig<Backend::Settings>,
+    blend_configs: &Eras<RunningBlendConfig<Backend::Settings>>,
     backend: &mut Backend,
     payload_dispatcher: &Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
@@ -1089,6 +1144,7 @@ where
     loop {
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
+                let blend_config = settings_in(blend_configs, current_epoch.epoch_info().era);
                 recovery_checkpoint = handle_service_message(msg, current_epoch.proposals_mut(), pending_transactions, blend_config, backend, recovery_checkpoint).await;
             }
             Some(undelivered) = next_undelivered_messages(failure_detector.as_deref_mut()) => {
@@ -1113,7 +1169,7 @@ where
                         recovery_checkpoint = complete_transition_period(backend, sdp_relay, recovery_checkpoint).await;
                     }
                     EpochEvent::NewEpoch(new_epoch_info) => {
-                        return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(new_epoch_info, current_epoch.into_components(), latest_secret_pol_info, blend_config, backend, recovery_checkpoint).await;
+                        return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(new_epoch_info, current_epoch.into_components(), latest_secret_pol_info, blend_configs, backend, recovery_checkpoint).await;
                     }
                 }
             }
@@ -1145,7 +1201,7 @@ async fn run_during_transition<
     remaining_epoch_stream: &mut (
              impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
          ),
-    blend_config: &RunningBlendConfig<Backend::Settings>,
+    blend_configs: &Eras<RunningBlendConfig<Backend::Settings>>,
     backend: &mut Backend,
     payload_dispatcher: &Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
@@ -1183,7 +1239,9 @@ where
     loop {
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
-                recovery_checkpoint = handle_service_message(msg, during_transition.current_mut().proposals_mut(), pending_transactions, blend_config, backend, recovery_checkpoint).await;
+                let current_epoch = during_transition.current_mut();
+                let blend_config = settings_in(blend_configs, current_epoch.epoch_info().era);
+                recovery_checkpoint = handle_service_message(msg, current_epoch.proposals_mut(), pending_transactions, blend_config, backend, recovery_checkpoint).await;
             }
             Some(undelivered) = next_undelivered_messages(failure_detector.as_deref_mut()) => {
                 broadcast_undelivered_messages(undelivered.into_iter(), payload_dispatcher).await;
@@ -1222,7 +1280,7 @@ where
                         };
                     }
                     EpochEvent::NewEpoch(new_epoch_info) => {
-                        return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(new_epoch_info, during_transition.into_components(), latest_secret_pol_info, blend_config, backend, recovery_checkpoint).await;
+                        return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(new_epoch_info, during_transition.into_components(), latest_secret_pol_info, blend_configs, backend, recovery_checkpoint).await;
                     }
                 }
             }
@@ -1423,7 +1481,7 @@ async fn rotate<
     new_epoch_info: CoreEpochStateInfo<NodeId, CorePoQGenerator>,
     components: Components<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
     latest_secret_pol_info: &mut Option<PolEpochInfo>,
-    blend_config: &RunningBlendConfig<Backend::Settings>,
+    blend_configs: &Eras<RunningBlendConfig<Backend::Settings>>,
     backend: &mut Backend,
     recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> StageOutcome<
@@ -1446,6 +1504,8 @@ where
     // The epoch's own components go in; whatever it also held — its queued
     // proposals — is dropped here, which is the whole reason they live on it.
     let (crypto_processor, message_scheduler, _) = components;
+    // The new epoch runs under the settings of its own era.
+    let blend_config = settings_in(blend_configs, new_epoch_info.era());
     match handle_epoch_event(
         new_epoch_info,
         blend_config,
@@ -1843,7 +1903,9 @@ where
                 new_recovery_checkpoint: Box::new(new_recovery_checkpoint),
             }
         }
-        CoreEpochStateInfo::NotCore { epoch, epoch_nonce } => {
+        CoreEpochStateInfo::NotCore {
+            epoch, epoch_nonce, ..
+        } => {
             tracing::info!(target: LOG_TARGET, "New epoch no longer calls for core mode. Retiring.");
             let old_cryptographic_processor = current_cryptographic_processor.rotate_epoch();
             let (_, _, _, _, _, current_epoch_blending_token_collector, _, _) =

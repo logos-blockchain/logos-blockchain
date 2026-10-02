@@ -11,6 +11,7 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
+    sync::Arc,
     time::Duration,
 };
 
@@ -21,6 +22,7 @@ use lb_blend::scheduling::{
     message_blend::provers::{leader_and_pow::LeaderAndPowProofsGenerator, pow::new_mining_pool},
 };
 use lb_chain_service::api::CryptarchiaServiceData;
+use lb_cryptarchia_engine::era::Eras;
 use lb_key_management_system_service::{
     api::KmsServiceApi, keys::KeyOperators,
     operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
@@ -47,6 +49,7 @@ use crate::{
     delivery::{FailureDetector, broadcast_undelivered_messages, next_undelivered_messages},
     edge::{current_epoch::CurrentEpoch, handlers::Error, settings::RunningBlendConfig},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
+    era::{settings_in, transition_period},
     kms::PreloadKmsService,
     membership::{self, chain::BlendEpoch, node_id},
     message::{DataPayload, NetworkInfo, ServiceMessage},
@@ -107,7 +110,7 @@ where
     NodeId: Clone,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
-    type Settings = StartingBlendConfig<Backend::Settings, Dispatcher::Settings>;
+    type Settings = Eras<StartingBlendConfig<Backend::Settings, Dispatcher::Settings>>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = ServiceMessage<NodeId>;
@@ -184,7 +187,9 @@ where
             ..
         } = self;
 
-        let settings = settings_handle.notifier().get_updated_settings();
+        let settings_in_every_era = settings_handle.notifier().get_updated_settings();
+        // What the node is configured with, the same in every era.
+        let settings = settings_in_every_era.genesis().entry.parameters.clone();
 
         wait_until_services_are_ready!(
             &overwatch_handle,
@@ -248,25 +253,32 @@ where
             )
             .await;
 
+        let timings = settings_in_every_era.map(|era| era.entry.parameters.time.clone());
+        let pow_mining_pool = new_mining_pool();
         run::<Backend, _, ProofsGenerator, _, PolInfoProvider, _>(
             UninitializedEpochEventStream::new(
                 public_epoch_stream,
-                settings.time.epoch_transition_period,
+                move |(epoch, _): &BlendEpoch<_>| {
+                    transition_period(&timings, epoch.era, epoch.epoch, |time| time)
+                },
             ),
             Box::pin(inbound_relay),
             local_node_id,
-            RunningSettings::<Backend, _, _> {
-                backend: settings.backend,
-                cover: settings.cover,
-                non_ephemeral_signing_key,
-                num_blend_layers: settings.num_blend_layers,
-                minimum_network_size: settings.minimum_network_size,
-                time: settings.time,
-                data_replication_factor: settings.data_replication_factor,
-                pow_mining_pool: new_mining_pool(),
-                abstain_on_failure: settings.abstain_on_failure,
-                max_blend_delay_in_rounds: settings.max_blend_delay_in_rounds,
-            },
+            settings_in_every_era.map(|era| {
+                let settings = era.entry.parameters.clone();
+                RunningSettings::<Backend, _, _> {
+                    backend: settings.backend,
+                    cover: settings.cover,
+                    non_ephemeral_signing_key: non_ephemeral_signing_key.clone(),
+                    num_blend_layers: settings.num_blend_layers,
+                    minimum_network_size: settings.minimum_network_size,
+                    time: settings.time,
+                    data_replication_factor: settings.data_replication_factor,
+                    pow_mining_pool: Arc::clone(&pow_mining_pool),
+                    abstain_on_failure: settings.abstain_on_failure,
+                    max_blend_delay_in_rounds: settings.max_blend_delay_in_rounds,
+                }
+            }),
             payload_dispatcher,
             &overwatch_handle,
             || {
@@ -314,10 +326,11 @@ where
 async fn run<Backend, NodeId, ProofsGenerator, Dispatcher, PolInfoProvider, RuntimeServiceId>(
     public_epoch_stream: UninitializedEpochEventStream<
         impl Stream<Item = BlendEpoch<NodeId>> + Unpin,
+        impl Fn(&BlendEpoch<NodeId>) -> Duration + Unpin,
     >,
     mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
     local_node_id: NodeId,
-    settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
+    settings: Eras<RunningSettings<Backend, NodeId, RuntimeServiceId>>,
     payload_dispatcher: Dispatcher,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     notify_ready: impl Fn(),
@@ -343,8 +356,9 @@ where
         "current membership is ready"
     );
 
+    let current_settings = settings_in(&settings, current_epoch_info.0.era).clone();
     let mut current_epoch: CurrentEpoch<Backend, NodeId, ProofsGenerator, RuntimeServiceId> =
-        CurrentEpoch::try_new(current_epoch_info, &settings)
+        CurrentEpoch::try_new(current_epoch_info, &current_settings)
             .expect("The initial membership should satisfy the edge node condition");
 
     notify_ready();
@@ -361,12 +375,12 @@ where
 
     // `None` when the operator has turned the fallback off, which records
     // nothing, watches nothing and can reveal nothing.
-    let mut failure_detection = if settings.abstain_on_failure {
+    let mut failure_detection = if current_settings.abstain_on_failure {
         None
     } else {
         Some(FailureDetector::new(
-            settings.max_data_message_delay_in_rounds(),
-            settings.time.round_duration_in_seconds,
+            current_settings.max_data_message_delay_in_rounds(),
+            current_settings.time.round_duration_in_seconds,
             payload_dispatcher.observe_broadcasts().await,
         ))
     };
@@ -374,26 +388,40 @@ where
     loop {
         tokio::select! {
             Some(epoch_event) = remaining_public_epoch_stream.next() => match epoch_event {
-                EpochEvent::NewEpoch(new_public_epoch_info) => match CurrentEpoch::try_new(new_public_epoch_info, &settings) {
-                    Err(Error::NetworkIsTooSmall(_)) => {
-                        info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
-                        if let Some(failure_detection) = failure_detection {
-                            failure_detection.drain_pending_message_queue(&payload_dispatcher).await;
+                // The new epoch runs under the settings of its own era.
+                EpochEvent::NewEpoch(new_public_epoch_info) => {
+                    let new_settings = settings_in(&settings, new_public_epoch_info.0.era);
+                    match CurrentEpoch::try_new(new_public_epoch_info, new_settings) {
+                        Err(Error::NetworkIsTooSmall(_)) => {
+                            info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
+                            if let Some(failure_detection) = failure_detection {
+                                failure_detection.drain_pending_message_queue(&payload_dispatcher).await;
+                            }
+                            return Ok(());
                         }
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        error!(target: LOG_TARGET, "Error when handling new public epoch: {e:?}, edge service shutting down.");
-                        if let Some(failure_detection) = failure_detection {
-                            failure_detection.drain_pending_message_queue(&payload_dispatcher).await;
+                        Err(e) => {
+                            error!(target: LOG_TARGET, "Error when handling new public epoch: {e:?}, edge service shutting down.");
+                            if let Some(failure_detection) = failure_detection {
+                                failure_detection.drain_pending_message_queue(&payload_dispatcher).await;
+                            }
+                            return Err(e);
                         }
-                        return Err(e);
+                        // The epoch this replaces takes its queued proposals with
+                        // it: they were built for slots it owned, and blending them
+                        // under the new one would spend the quota its own block
+                        // needs.
+                        Ok(next) => {
+                            let next_settings = settings_in(&settings, next.era()).clone();
+                            // The delivery deadlines follow the timing of the epoch's era.
+                            if let Some(failure_detection) = failure_detection.as_mut() {
+                                failure_detection.enter_era(
+                                    next_settings.max_data_message_delay_in_rounds(),
+                                    next_settings.time.round_duration_in_seconds,
+                                );
+                            }
+                            current_epoch = next.with_available_secret_info(&mut current_secret_epoch_info, next_settings, overwatch_handle.clone());
+                        }
                     }
-                    // The epoch this replaces takes its queued proposals with
-                    // it: they were built for slots it owned, and blending them
-                    // under the new one would spend the quota its own block
-                    // needs.
-                    Ok(next) => current_epoch = next.with_available_secret_info(&mut current_secret_epoch_info, settings.clone(), overwatch_handle.clone()),
                 },
                 // A pattern mismatch in the select arm would stop polling
                 // epochs until another branch completes.
@@ -404,7 +432,8 @@ where
             }
             Some(new_secret_pol_info) = secret_pol_info_stream.next() => {
                 current_secret_epoch_info = Some(new_secret_pol_info);
-                current_epoch = current_epoch.with_available_secret_info(&mut current_secret_epoch_info, settings.clone(), overwatch_handle.clone());
+                let current_settings = settings_in(&settings, current_epoch.era()).clone();
+                current_epoch = current_epoch.with_available_secret_info(&mut current_secret_epoch_info, current_settings, overwatch_handle.clone());
             }
             Some(message) = inbound_relay.next() => {
                 match message {
@@ -412,7 +441,8 @@ where
                         pending_transactions.queue(transaction);
                     }
                     ServiceMessage::Blend(DataPayload::BlockProposal(proposal)) => {
-                        let proposal_copies = NonZeroU64::new(settings.data_replication_factor.checked_add(1).expect("Data replication factor should not overflow when incremented.")).expect("Number of block proposal copies cannot be zero by definition.");
+                        let data_replication_factor = settings_in(&settings, current_epoch.era()).data_replication_factor;
+                        let proposal_copies = NonZeroU64::new(data_replication_factor.checked_add(1).expect("Data replication factor should not overflow when incremented.")).expect("Number of block proposal copies cannot be zero by definition.");
                         current_epoch.queue_proposal(proposal, proposal_copies);
                     }
                     ServiceMessage::GetNetworkInfo { reply } => {

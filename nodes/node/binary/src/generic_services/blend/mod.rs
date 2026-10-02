@@ -36,7 +36,7 @@ pub type BlendCoreRecoveryBackend<RuntimeServiceId> = StorageRecoveryBackend<
         lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
         BlendBroadcastSettings<RuntimeServiceId>,
     >,
-    lb_blend_service::core::settings::StartingBlendConfig<
+    lb_blend_service::core::settings::CoreServiceSettings<
         lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
         BlendBroadcastSettings<RuntimeServiceId>,
     >,

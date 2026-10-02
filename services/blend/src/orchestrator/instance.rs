@@ -5,6 +5,7 @@ use std::{
 };
 
 use lb_blend::scheduling::epoch::EpochEvent;
+use lb_cryptarchia_engine::era::Eras;
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use overwatch::{
     overwatch::OverwatchHandle,
@@ -13,7 +14,8 @@ use overwatch::{
 use tracing::{debug, info};
 
 use crate::{
-    membership::MembershipInfo,
+    era::settings_in,
+    membership::chain::BlendEpoch,
     mode::{Mode, ModeMembership},
     orchestrator::{self, OnDemandServiceMode},
 };
@@ -102,18 +104,21 @@ where
         }
     }
 
-    /// Reacts to an epoch event, possibly switching modes.
+    /// Reacts to an epoch event, possibly switching modes: the mode of a new
+    /// epoch follows from its membership and the minimum network size of its
+    /// era.
     pub async fn handle_epoch_event<NodeId>(
         self,
-        event: EpochEvent<MembershipInfo<NodeId>>,
+        event: EpochEvent<BlendEpoch<NodeId>>,
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-        minimum_network_size: NonZeroU64,
+        minimum_network_sizes: &Eras<NonZeroU64>,
     ) -> Result<Self, orchestrator::Error<CoreService::Message>>
     where
         NodeId: Eq + Hash,
     {
         match event {
-            EpochEvent::NewEpoch(membership_info) => {
+            EpochEvent::NewEpoch((epoch, membership_info)) => {
+                let minimum_network_size = *settings_in(minimum_network_sizes, epoch.era);
                 self.transition(
                     ModeMembership::resolve(membership_info, minimum_network_size).mode(),
                     overwatch_handle,
@@ -272,7 +277,10 @@ mod tests {
     use tokio::time::sleep;
 
     use super::*;
-    use crate::message::ServiceMessage;
+    use crate::{
+        message::ServiceMessage,
+        test_utils::{membership::blend_epoch, single_era},
+    };
 
     const LOCAL_NODE_ID: u8 = 99;
 
@@ -443,11 +451,11 @@ mod tests {
             let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
 
             // Core -> BroadcastAfterCore
-            let minimal_network_size = NonZeroU64::MIN;
+            let minimal_network_size = &single_era(NonZeroU64::MIN);
             let instance = instance
                 .handle_epoch_event(
                     // With an empty membership smaller than the minimal size.
-                    EpochEvent::NewEpoch(membership(&[], LOCAL_NODE_ID).into()),
+                    EpochEvent::NewEpoch(blend_epoch(membership(&[], LOCAL_NODE_ID).into())),
                     handle,
                     minimal_network_size,
                 )
@@ -469,7 +477,7 @@ mod tests {
             // Broadcast -> Edge
             let instance = instance
                 .handle_epoch_event(
-                    EpochEvent::NewEpoch(membership(&[1], LOCAL_NODE_ID).into()),
+                    EpochEvent::NewEpoch(blend_epoch(membership(&[1], LOCAL_NODE_ID).into())),
                     handle,
                     minimal_network_size,
                 )
@@ -480,7 +488,7 @@ mod tests {
             // Edge -> Edge (stay)
             let instance = instance
                 .handle_epoch_event(
-                    EpochEvent::NewEpoch(membership(&[1], LOCAL_NODE_ID).into()),
+                    EpochEvent::NewEpoch(blend_epoch(membership(&[1], LOCAL_NODE_ID).into())),
                     handle,
                     minimal_network_size,
                 )
@@ -491,7 +499,7 @@ mod tests {
             // Edge -> Core
             let instance = instance
                 .handle_epoch_event(
-                    EpochEvent::NewEpoch(membership(&[1], 1).into()),
+                    EpochEvent::NewEpoch(blend_epoch(membership(&[1], 1).into())),
                     handle,
                     minimal_network_size,
                 )

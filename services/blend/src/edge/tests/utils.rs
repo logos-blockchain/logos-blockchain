@@ -41,6 +41,7 @@ use crate::{
         dispatcher::{TestBroadcastingChannel, TestPayloadDispatcher},
         epoch::OncePolStreamProvider,
         membership::key,
+        single_era,
     },
 };
 
@@ -163,10 +164,10 @@ where
             PolProvider,
             _,
         >(
-            UninitializedEpochEventStream::new(epoch_stream, Duration::ZERO),
+            UninitializedEpochEventStream::new(epoch_stream, |_: &_| Duration::ZERO),
             ReceiverStream::new(msg_receiver),
             local_node,
-            settings,
+            single_era(settings),
             payload_dispatcher,
             &overwatch_handle(),
             || {},

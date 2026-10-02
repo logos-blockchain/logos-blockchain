@@ -15,6 +15,7 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::mantle::ops::pow::PowTarget;
+use lb_cryptarchia_engine::era::Era;
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
@@ -29,6 +30,8 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub struct BlendEpochState {
+    /// The era of the epoch, whose settings the services run it under.
+    pub era: Era,
     pub epoch: Epoch,
     pub nonce: Fr,
     pub aged: Fr,
@@ -141,7 +144,7 @@ where
         ),
         async move |(mut ticks, mut last_epoch, chain_api, signing_pk, zk_pk, component)| {
             loop {
-                let SlotTick { epoch, slot, .. } = ticks.next().await?;
+                let SlotTick { era, epoch, slot } = ticks.next().await?;
                 if Some(epoch) == last_epoch {
                     continue;
                 }
@@ -200,6 +203,7 @@ where
                         );
                         let item = (
                             BlendEpochState {
+                                era,
                                 epoch,
                                 nonce: epoch_state.nonce,
                                 aged: epoch_state.utxo_merkle_root(),

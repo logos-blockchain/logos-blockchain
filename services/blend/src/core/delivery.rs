@@ -40,6 +40,17 @@ impl FailureDetector {
         }
     }
 
+    /// Moves to the timing of an epoch's era (see
+    /// [`InnerFailureDetector::enter_era`]).
+    pub fn enter_era(
+        &mut self,
+        maximum_blending_delay: NonZeroU64,
+        round_duration_in_seconds: NonZeroU64,
+    ) {
+        self.inner
+            .enter_era(maximum_blending_delay, round_duration_in_seconds);
+    }
+
     /// Register the link between a payload and its outermost encapsulation, so
     /// that when the encapsulated message is actually released, we can record
     /// what payload it belongs to.

@@ -25,6 +25,7 @@ struct BlendedPayloadDetails {
 
 pub struct FailureDetector {
     maximum_blending_delay: NonZeroU64,
+    round_duration_in_seconds: NonZeroU64,
     round_clock: RoundClock,
     current_round: Round,
     payload_broadcasts: Fuse<BoxStream<'static, DataPayload>>,
@@ -42,10 +43,32 @@ impl FailureDetector {
         let round_clock = RoundClock::new(round_duration_in_seconds);
         Self {
             maximum_blending_delay,
+            round_duration_in_seconds,
             current_round: round_clock.current_round(),
             round_clock,
             payload_broadcasts: payload_broadcasts.fuse(),
             unacknowledged_blended_payloads: HashMap::new(),
+        }
+    }
+
+    /// Moves to the timing of an epoch's era: its delivery deadline, and its
+    /// round duration. A new round duration restarts the round clock, and
+    /// the payloads still awaited count their deadline from the restart, so
+    /// none is revealed early.
+    pub fn enter_era(
+        &mut self,
+        maximum_blending_delay: NonZeroU64,
+        round_duration_in_seconds: NonZeroU64,
+    ) {
+        self.maximum_blending_delay = maximum_blending_delay;
+        if round_duration_in_seconds == self.round_duration_in_seconds {
+            return;
+        }
+        self.round_duration_in_seconds = round_duration_in_seconds;
+        self.round_clock = RoundClock::new(round_duration_in_seconds);
+        self.current_round = self.round_clock.current_round();
+        for blended in self.unacknowledged_blended_payloads.values_mut() {
+            blended.released_at = self.current_round;
         }
     }
 
@@ -168,6 +191,7 @@ impl Stream for FailureDetector {
 #[cfg(test)]
 mod tests {
     use core::{
+        num::NonZeroU64,
         pin::Pin,
         task::{Context, Poll},
     };
@@ -268,6 +292,27 @@ mod tests {
             released_at.elapsed() >= ROUND * rounds,
             "revealing a proposal before the network has had its full deadline is the one thing the deadline exists to prevent"
         );
+    }
+
+    /// An era whose rounds last longer restarts the clock: a payload still
+    /// awaited is owed its whole deadline in the new era's rounds, never less.
+    #[tokio::test(start_paused = true)]
+    async fn a_new_round_duration_restarts_the_deadlines_still_awaited() {
+        let (mut detection, _start, _channel) = watching();
+        detection.mark_payload_as_blended(proposal());
+        tokio::time::advance(ROUND * 4).await;
+
+        let longer_round = ROUND_IN_SECONDS.saturating_mul(NonZeroU64::new(2).unwrap());
+        detection.enter_era(DEADLINE, longer_round);
+        let era_started = Instant::now();
+
+        let expired = detection
+            .next()
+            .await
+            .expect("an interval never ends, so neither does the detector");
+        assert_eq!(expired, vec![proposal()]);
+        let deadline = ROUND * 2 * u32::try_from(DEADLINE.get()).expect("a few rounds");
+        assert!(era_started.elapsed() >= deadline);
     }
 
     #[tokio::test(start_paused = true)]

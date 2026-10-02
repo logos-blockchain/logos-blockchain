@@ -226,17 +226,12 @@ fn service_settings_receive_recovery_data() {
     let protocol_names = deployment_settings.genesis_protocol_names();
     let eras = deployment_settings.runnable_eras().unwrap();
 
-    let (blend_service_settings, _, _) = BlendServiceConfig {
+    let (_, blend_core_settings, _) = BlendServiceConfig {
         user: user_config.blend.clone(),
     }
-    .into_blend_services_settings(
-        &eras.genesis().entry.parameters,
-        &eras,
-        recovery_data.clone(),
-    );
+    .into_blend_services_settings(&eras, recovery_data.clone());
     assert_eq!(
-        blend_service_settings
-            .common
+        blend_core_settings
             .recovery_data
             .take(BLEND_RECOVERY_MARKER)
             .unwrap(),

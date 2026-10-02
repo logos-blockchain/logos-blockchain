@@ -4,6 +4,7 @@ use lb_blend::{
 };
 use lb_chain_service::Epoch;
 use lb_core::crypto::ZkHash;
+use lb_cryptarchia_engine::era::Era;
 
 #[derive(Clone, Debug)]
 // TODO: Refactor this so that it's a struct with the common fields, and
@@ -15,7 +16,31 @@ pub enum CoreEpochStateInfo<NodeId, CorePoQGenerator> {
     ///   broadcast mode now
     /// - The node is simply not a core node for the new epoch, so it has
     ///   transitioned to edge mode.
-    NotCore { epoch: Epoch, epoch_nonce: ZkHash },
+    NotCore {
+        era: Era,
+        epoch: Epoch,
+        epoch_nonce: ZkHash,
+    },
+}
+
+impl<NodeId, CorePoQGenerator> CoreEpochStateInfo<NodeId, CorePoQGenerator> {
+    /// The era of the epoch.
+    #[must_use]
+    pub const fn era(&self) -> Era {
+        match self {
+            Self::Core(info) => info.public.era,
+            Self::NotCore { era, .. } => *era,
+        }
+    }
+
+    /// The epoch.
+    #[must_use]
+    pub const fn epoch(&self) -> Epoch {
+        match self {
+            Self::Core(info) => info.public.epoch,
+            Self::NotCore { epoch, .. } => *epoch,
+        }
+    }
 }
 
 /// The node is in the membership, but the core Merkle tree has no path for the
@@ -25,14 +50,6 @@ pub enum CoreEpochStateInfo<NodeId, CorePoQGenerator> {
     "The node is part of the membership but it declared a different zk ID than what has been configured. Please update your config with a matching zk ID and restart."
 )]
 pub struct MismatchedZkId;
-
-impl<NodeId, CorePoQGenerator> From<(Epoch, ZkHash)>
-    for CoreEpochStateInfo<NodeId, CorePoQGenerator>
-{
-    fn from((epoch, epoch_nonce): (Epoch, ZkHash)) -> Self {
-        Self::NotCore { epoch, epoch_nonce }
-    }
-}
 
 impl<NodeId, CorePoQGenerator> From<CoreEpochInfo<NodeId, CorePoQGenerator>>
     for CoreEpochStateInfo<NodeId, CorePoQGenerator>
@@ -54,6 +71,8 @@ pub struct CoreEpochInfo<NodeId, CorePoQGenerator> {
 #[derive(Clone, Debug)]
 /// All public info that Blend services need to be available on new epochs.
 pub struct CoreEpochPublicInfo<NodeId> {
+    /// The era of the epoch, whose settings the epoch runs under.
+    pub era: Era,
     pub epoch: Epoch,
     pub poq_leadership_public_inputs: LeaderInputs,
     pub poq_core_public_inputs: CoreInputs,

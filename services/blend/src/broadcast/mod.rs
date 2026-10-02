@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt as _};
 use lb_blend::scheduling::epoch::{EpochEvent, UninitializedEpochEventStream};
 use lb_chain_service::api::CryptarchiaServiceData;
+use lb_cryptarchia_engine::era::Eras;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
 use lb_log_targets::blend;
 use lb_network_service::NetworkService;
@@ -23,8 +24,9 @@ use tracing::{debug, info};
 use crate::{
     broadcast::settings::StartingBlendConfig,
     core::dispatcher::PayloadDispatcher,
+    era::{settings_in, transition_period},
     kms::PreloadKmsService,
-    membership::{self, MembershipInfo, node_id},
+    membership::{self, chain::BlendEpoch, node_id},
     message::{NetworkInfo, ServiceMessage},
     mode::{Mode, ModeMembership},
 };
@@ -56,7 +58,7 @@ impl<NodeId, Dispatcher, TimeBackend, ChainService, RuntimeServiceId> ServiceDat
 where
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
-    type Settings = StartingBlendConfig<Dispatcher::Settings>;
+    type Settings = Eras<StartingBlendConfig<Dispatcher::Settings>>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = ServiceMessage<NodeId>;
@@ -108,7 +110,12 @@ where
             ..
         } = self;
 
-        let settings = settings_handle.notifier().get_updated_settings();
+        let settings_in_every_era = settings_handle.notifier().get_updated_settings();
+        // What the node is configured with, the same in every era.
+        let settings = settings_in_every_era.genesis().entry.parameters.clone();
+        let minimum_network_sizes =
+            settings_in_every_era.map(|era| era.entry.parameters.minimum_network_size);
+        let timings = settings_in_every_era.map(|era| era.entry.parameters.time.clone());
 
         wait_until_services_are_ready!(
             &overwatch_handle,
@@ -159,19 +166,24 @@ where
                 None,
                 "blend_broadcast_service",
             )
-            .await
-            .map(|(_, membership_info)| membership_info);
-        let (membership_info, mut remaining_membership_stream) =
+            .await;
+        let ((epoch, membership_info), mut remaining_membership_stream) =
             UninitializedEpochEventStream::new(
                 membership_stream,
-                settings.time.epoch_transition_period,
+                move |(epoch, _): &BlendEpoch<_>| {
+                    transition_period(&timings, epoch.era, epoch.epoch, |time| time)
+                },
             )
             .await_first_ready()
             .await
             .expect("The current epoch state must be ready");
 
         assert!(
-            ModeMembership::resolve(membership_info, settings.minimum_network_size).mode()
+            ModeMembership::resolve(
+                membership_info,
+                *settings_in(&minimum_network_sizes, epoch.era)
+            )
+            .mode()
                 == Mode::Broadcast,
             "The initial membership must satisfy the broadcast node condition."
         );
@@ -188,7 +200,7 @@ where
             &mut remaining_membership_stream,
             &payload_dispatcher,
             &local_node_id,
-            settings.minimum_network_size,
+            &minimum_network_sizes,
         )
         .await;
 
@@ -204,10 +216,10 @@ where
 /// about what this node should be doing.
 async fn run<NodeId, Dispatcher, RuntimeServiceId>(
     inbound_relay: &mut (impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin),
-    membership_stream: &mut (impl Stream<Item = EpochEvent<MembershipInfo<NodeId>>> + Send + Unpin),
+    membership_stream: &mut (impl Stream<Item = EpochEvent<BlendEpoch<NodeId>>> + Send + Unpin),
     payload_dispatcher: &Dispatcher,
     local_node_id: &NodeId,
-    minimum_network_size: core::num::NonZeroU64,
+    minimum_network_sizes: &Eras<core::num::NonZeroU64>,
 ) where
     NodeId: Clone + Eq + Hash + Sync,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
@@ -220,8 +232,12 @@ async fn run<NodeId, Dispatcher, RuntimeServiceId>(
             Some(epoch_event) = membership_stream.next() => {
                 // A transition period expiring is not a mode change: there is
                 // nothing draining here to expire.
-                if let EpochEvent::NewEpoch(membership_info) = epoch_event
-                    && ModeMembership::resolve(membership_info, minimum_network_size).mode()
+                if let EpochEvent::NewEpoch((epoch, membership_info)) = epoch_event
+                    && ModeMembership::resolve(
+                        membership_info,
+                        *settings_in(minimum_network_sizes, epoch.era),
+                    )
+                    .mode()
                         != Mode::Broadcast
                 {
                     info!(target: LOG_TARGET, "New membership no longer calls for broadcast mode, shutting down.");
@@ -280,8 +296,9 @@ mod tests {
     use crate::{
         message::DataPayload,
         test_utils::{
-            membership::membership,
+            membership::{blend_epoch, membership},
             mocks::{TestChainNetworkService, TestMempoolService},
+            single_era,
         },
     };
 
@@ -293,8 +310,8 @@ mod tests {
         core::num::NonZeroU64::new(n).expect("test minimum is non-zero")
     }
 
-    fn epoch(members: &[NodeId]) -> EpochEvent<MembershipInfo<NodeId>> {
-        EpochEvent::NewEpoch(membership(members, LOCAL).into())
+    fn epoch(members: &[NodeId]) -> EpochEvent<BlendEpoch<NodeId>> {
+        EpochEvent::NewEpoch(blend_epoch(membership(members, LOCAL).into()))
     }
 
     /// A broadcast node's only collaborator, recording what it was handed.
@@ -424,7 +441,7 @@ mod tests {
                 &mut ReceiverStream::new(epochs),
                 &RecordingDispatcher(dispatched_sender),
                 &LOCAL,
-                minimum(2),
+                &single_era(minimum(2)),
             ),
         )
         .await
@@ -452,7 +469,7 @@ mod tests {
                 &mut ReceiverStream::new(epochs),
                 &RecordingDispatcher(dispatched_sender),
                 &LOCAL,
-                minimum(2),
+                &single_era(minimum(2)),
             ),
         )
         .await;

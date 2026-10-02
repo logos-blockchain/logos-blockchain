@@ -8,6 +8,7 @@ use lb_blend::{
 };
 use lb_chain_service::{Epoch, Slot};
 use lb_core::{crypto::ZkHash, header::HeaderId};
+use lb_cryptarchia_engine::era::Era;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use tokio::{
     sync::{mpsc, oneshot},
@@ -472,6 +473,7 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
 fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> BlendEpoch<NodeId> {
     (
         BlendEpochState {
+            era: Era::GENESIS,
             pow_difficulty: ZkHash::ZERO,
             epoch,
             nonce: Fr::ZERO,

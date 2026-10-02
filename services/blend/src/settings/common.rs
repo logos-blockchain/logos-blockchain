@@ -1,7 +1,6 @@
 use core::num::NonZeroU64;
 
 use lb_key_management_system_service::backend::preload::KeyId;
-use lb_services_utils::overwatch::RecoveryData;
 use serde::{Deserialize, Serialize};
 
 use crate::settings::timing::TimingSettings;
@@ -15,8 +14,6 @@ pub struct CommonSettings<BroadcastSettings> {
     pub num_blend_layers: NonZeroU64,
     pub time: TimingSettings,
     pub minimum_network_size: NonZeroU64,
-    #[serde(skip)]
-    pub recovery_data: RecoveryData,
     pub data_replication_factor: u64,
     pub broadcast: BroadcastSettings,
     pub abstain_on_failure: bool,

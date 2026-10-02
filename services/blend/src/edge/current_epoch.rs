@@ -11,6 +11,7 @@ use lb_blend::{
     scheduling::message_blend::provers::leader_and_pow::LeaderAndPowProofsGenerator,
 };
 use lb_chain_service::Epoch;
+use lb_cryptarchia_engine::era::Era;
 use overwatch::overwatch::OverwatchHandle;
 use tracing::debug;
 
@@ -95,6 +96,11 @@ impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
 
     const fn awaiting_epoch(&self) -> Epoch {
         self.awaiting().info.epoch
+    }
+
+    /// The era of the epoch, whose settings it runs under.
+    pub const fn era(&self) -> Era {
+        self.awaiting().info.era
     }
 
     #[cfg(test)]

@@ -1,7 +1,6 @@
 use ::core::time::Duration;
 use lb_cryptarchia_engine::era::Eras;
 use lb_era_parameters::{EraDefinition, EraParameters, v1::blend::Settings as BlendParameters};
-use lb_services_utils::overwatch::RecoveryData;
 
 use crate::{
     core::{
@@ -17,12 +16,7 @@ impl Settings<Libp2pCoreBackendSettings, Libp2pEdgeBackendSettings, Libp2pBroadc
     /// The settings of the Blend services while `era` is in force, on a chain
     /// whose eras are `eras`, for a node configured with `user`.
     #[must_use]
-    pub fn from_era(
-        user: user::Config,
-        era: &EraDefinition,
-        eras: &Eras<EraDefinition>,
-        recovery_data: RecoveryData,
-    ) -> Self {
+    pub fn from_era(user: user::Config, era: &EraDefinition, eras: &Eras<EraDefinition>) -> Self {
         let EraParameters::V1(parameters) = &era.parameters;
         let blend = &parameters.blend;
         let slots_per_epoch = parameters.cryptarchia.slots_per_epoch();
@@ -47,7 +41,6 @@ impl Settings<Libp2pCoreBackendSettings, Libp2pEdgeBackendSettings, Libp2pBroadc
                     }),
                 },
                 abstain_on_failure: user.abstain_on_failure,
-                recovery_data,
                 time: timing_settings(blend, slots_per_epoch, slots_per_block, &slot_duration),
                 data_replication_factor: blend.common.data_replication_factor,
             },

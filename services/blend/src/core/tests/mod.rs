@@ -20,6 +20,7 @@ use lb_blend::{
 };
 use lb_chain_service::{Epoch, Slot};
 use lb_core::{crypto::ZkHash, header::HeaderId, sdp::ActivityMetadata};
+use lb_cryptarchia_engine::era::{Era, EraEntry, EraVersion, Eras};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
@@ -70,6 +71,7 @@ use crate::{
         },
         dispatcher::{TestBroadcastingChannel, TestPayloadDispatcher as ObservingDispatcher},
         epoch::{GatedPolStreamProvider, OncePolStreamProvider, PolGate},
+        single_era,
     },
 };
 
@@ -123,6 +125,7 @@ fn test_blend_epoch_state(
 ) -> BlendEpoch<NodeId> {
     (
         BlendEpochState {
+            era: Era::GENESIS,
             pow_difficulty: ZkHash::ZERO,
             epoch: epoch.into(),
             nonce: ZkHash::ZERO,
@@ -855,6 +858,7 @@ async fn test_handle_epoch_event() {
     // and the service retires on it.
     let output = handle_epoch_event(
         CoreEpochStateInfo::NotCore {
+            era: Era::GENESIS,
             epoch: epoch.strict_add(2.into()),
             epoch_nonce: ZkHash::ZERO,
         },
@@ -1130,7 +1134,11 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     // Handle a NewEpoch(Empty) event - empty membership triggers Retiring.
     let empty_epoch = epoch.strict_add(1.into());
     let output = handle_epoch_event(
-        (empty_epoch, ZkHash::from(1)).into(),
+        CoreEpochStateInfo::NotCore {
+            era: Era::GENESIS,
+            epoch: empty_epoch,
+            epoch_nonce: ZkHash::from(1),
+        },
         &settings,
         crypto_processor,
         scheduler,
@@ -1204,6 +1212,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
 
     let output = handle_epoch_event(
         CoreEpochStateInfo::NotCore {
+            era: Era::GENESIS,
             epoch: epoch.strict_add(1.into()),
             epoch_nonce: ZkHash::ZERO,
         },
@@ -1291,7 +1300,7 @@ async fn complete_old_epoch_after_main_loop_done() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -1314,7 +1323,7 @@ async fn complete_old_epoch_after_main_loop_done() {
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings_cloned,
+            &single_era(settings_cloned.clone()),
             &mut backend,
             &TestPayloadDispatcher,
             &sdp_relay,
@@ -1439,7 +1448,7 @@ async fn stop_on_empty_epoch() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -1462,7 +1471,7 @@ async fn stop_on_empty_epoch() {
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings_cloned,
+            &single_era(settings_cloned.clone()),
             &mut backend,
             &TestPayloadDispatcher,
             &sdp_relay,
@@ -1576,7 +1585,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -1598,7 +1607,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings_cloned,
+            &single_era(settings_cloned.clone()),
             &mut backend,
             &TestPayloadDispatcher,
             &sdp_relay,
@@ -1884,7 +1893,7 @@ async fn test_initialize_recovers_matching_saved_state() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
         membership_stream,
         overwatch_handle,
         MockKmsAdapter,
@@ -1974,7 +1983,7 @@ async fn test_initialize_recovers_matching_saved_state() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
         membership_stream2,
         overwatch_handle2,
         MockKmsAdapter,
@@ -2082,7 +2091,7 @@ async fn test_initialize_submits_activity_proof_for_the_previous_epoch() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
         membership_stream,
         overwatch_handle,
         MockKmsAdapter,
@@ -2106,6 +2115,92 @@ async fn test_initialize_submits_activity_proof_for_the_previous_epoch() {
             })
         ),
         "the previous epoch's tokens should be submitted as an activity proof, not dropped"
+    );
+}
+
+/// An epoch runs under the settings of its own era: a node that starts in an
+/// epoch of era 1 computes its quotas with era 1's number of blending layers,
+/// not genesis's.
+#[test_log::test(tokio::test)]
+async fn test_initialize_runs_the_epoch_under_the_settings_of_its_era() {
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let genesis_settings = settings(
+        local_private_key,
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    let mut era_1_settings = genesis_settings.clone();
+    era_1_settings.num_blend_layers = 3.try_into().unwrap();
+    // Era 1 starts at epoch 1.
+    let eras = Eras::new(
+        time::OffsetDateTime::UNIX_EPOCH,
+        [(0, genesis_settings.clone()), (1, era_1_settings.clone())].map(
+            |(first_epoch, settings)| EraEntry {
+                first_epoch: Epoch::new(first_epoch),
+                version: EraVersion::V1,
+                slot_duration: Duration::from_secs(1),
+                epoch_length: 100.try_into().unwrap(),
+                transition_slots: 0,
+                parameters: settings,
+            },
+        ),
+    )
+    .unwrap();
+
+    let membership_info = MembershipInfo {
+        membership,
+        zk: Some(ZkInfo {
+            root: ZkHash::ZERO,
+            core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+        }),
+    };
+    let (membership_stream, membership_sender) = new_stream();
+    let (mut epoch_state, membership_info) = test_blend_epoch_state(1, membership_info);
+    epoch_state.era = Era::new(1);
+    membership_sender
+        .send((epoch_state, membership_info))
+        .await
+        .unwrap();
+
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources();
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+    let (_, current_public_info, ..) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        TestPayloadDispatcher,
+        MockCoreAndLeaderProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+    >(
+        eras,
+        membership_stream,
+        overwatch_handle,
+        MockKmsAdapter,
+        &sdp_relay,
+        None,
+        state_updater,
+        seeded_release_delay_rng(),
+    )
+    .await;
+
+    assert_eq!(current_public_info.era, Era::new(1));
+    assert_eq!(
+        current_public_info.poq_pow_public_inputs.pow_quota,
+        era_1_settings.epoch_pow_quota()
+    );
+    assert_ne!(
+        current_public_info.poq_pow_public_inputs.pow_quota,
+        genesis_settings.epoch_pow_quota()
+    );
+    assert_eq!(
+        current_public_info
+            .poq_leadership_public_inputs
+            .message_quota,
+        era_1_settings.epoch_leadership_quota()
     );
 }
 
@@ -2171,7 +2266,7 @@ async fn test_initialize_drops_activity_proof_older_than_one_epoch() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
         membership_stream,
         overwatch_handle,
         MockKmsAdapter,
@@ -2263,7 +2358,7 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -2288,7 +2383,7 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings,
+            &single_era(settings.clone()),
             &mut backend,
             &payload_dispatcher,
             &sdp_relay,
@@ -2432,7 +2527,7 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -2451,7 +2546,7 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings,
+            &single_era(settings.clone()),
             &mut backend,
             &TestPayloadDispatcher,
             &sdp_relay,
@@ -2572,7 +2667,7 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -2591,7 +2686,7 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings,
+            &single_era(settings.clone()),
             &mut backend,
             &TestPayloadDispatcher,
             &sdp_relay,
@@ -2715,7 +2810,7 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -2734,7 +2829,7 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings,
+            &single_era(settings.clone()),
             &mut backend,
             &TestPayloadDispatcher,
             &sdp_relay,
@@ -2845,7 +2940,7 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -2864,7 +2959,7 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings,
+            &single_era(settings.clone()),
             &mut backend,
             &TestPayloadDispatcher,
             &sdp_relay,
