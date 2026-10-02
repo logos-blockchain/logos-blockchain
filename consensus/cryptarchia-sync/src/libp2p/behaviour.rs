@@ -446,6 +446,9 @@ impl NetworkBehaviour for Behaviour {
             debug!(target: LOG_TARGET, "Incoming stream closed");
         }
 
+        // Each branch below handles one item and returns: it wakes the task up
+        // to handle the next, since a stream that just yielded an item does not
+        // wake it up for the items queued behind it.
         if let Poll::Ready(Some(result)) = self.sending_block_requests.poll_next_unpin(cx) {
             match result {
                 Ok(request_stream) => {
@@ -453,6 +456,7 @@ impl NetworkBehaviour for Behaviour {
                 }
                 Err(err) => {
                     error!(target: LOG_TARGET, %err, "failed to send a block download request");
+                    self.try_notify_waker();
                 }
             }
 
@@ -466,6 +470,7 @@ impl NetworkBehaviour for Behaviour {
                 }
                 Err(err) => {
                     error!(target: LOG_TARGET, %err, "failed to send a tip request");
+                    self.try_notify_waker();
                 }
             }
 
@@ -473,10 +478,12 @@ impl NetworkBehaviour for Behaviour {
         }
 
         if let Poll::Ready(Some(_)) = self.receiving_block_responses.poll_next_unpin(cx) {
+            self.try_notify_waker();
             return Poll::Pending;
         }
 
         if let Poll::Ready(Some(_)) = self.receiving_tip_responses.poll_next_unpin(cx) {
+            self.try_notify_waker();
             return Poll::Pending;
         }
 
@@ -650,6 +657,28 @@ mod tests {
         assert_eq!(tip, HeaderId::from([0; 32]));
         assert_eq!(slot, Slot::from(0));
         assert_eq!(height, 0);
+    }
+
+    /// Concurrent requests to a peer are all answered, not only the first
+    /// to complete.
+    #[tokio::test]
+    async fn concurrent_tip_requests_are_all_answered() {
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(1),
+            max_inbound_requests: 4.try_into().unwrap(),
+        };
+        let (mut downloader_swarm, provider_peer_id) =
+            start_provider_and_downloader(0, config).await;
+        let first = request_tip(&mut downloader_swarm, provider_peer_id);
+        let second = request_tip(&mut downloader_swarm, provider_peer_id);
+        tokio::spawn(async move { downloader_swarm.loop_on_next().await });
+
+        for receiver in [first, second] {
+            let response = tokio::time::timeout(Duration::from_secs(5), receiver)
+                .await
+                .expect("every request is answered");
+            assert!(matches!(response.unwrap(), Ok(Tip { .. })));
+        }
     }
 
     #[tokio::test]
