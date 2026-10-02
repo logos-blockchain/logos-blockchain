@@ -6,6 +6,7 @@ use std::{
     str::FromStr as _,
 };
 
+use lb_c_macros::panic_to_error;
 use lb_node::cli::{
     EmbeddedInitArgs, InitArgs, MigrateArgs, ParticipateArgs, UpdateArgs, config::merge::MergeFlags,
 };
@@ -46,9 +47,18 @@ pub struct GenerateConfigArgs {
     pub kms_file: *const c_char,
 }
 
-impl From<GenerateConfigArgs> for EmbeddedInitArgs {
-    fn from(value: GenerateConfigArgs) -> Self {
-        let mut init_args = Self::default();
+impl GenerateConfigArgs {
+    /// Reads the arguments into the node's own init arguments. Null pointers
+    /// leave the corresponding default in place.
+    ///
+    /// # Safety
+    ///
+    /// Every non-null pointer must be valid for its type: the strings
+    /// NUL-terminated, and `initial_peers` pointing to `initial_peers_count`
+    /// entries.
+    unsafe fn into_init_args(self) -> EmbeddedInitArgs {
+        let value = self;
+        let mut init_args = EmbeddedInitArgs::default();
 
         // ---- initial_peers ----
         if !value.initial_peers.is_null() && !value.initial_peers_count.is_null() {
@@ -123,7 +133,9 @@ impl From<GenerateConfigArgs> for EmbeddedInitArgs {
 
         // ---- skip_ibd ----
         if !value.skip_ibd.is_null() {
-            init_args.skip_ibd = unsafe { *value.skip_ibd };
+            // Read as a byte: C can store any value in a `bool`, and anything
+            // but 0 or 1 is not a valid Rust `bool`.
+            init_args.skip_ibd = unsafe { *value.skip_ibd.cast::<u8>() } != 0;
         }
 
         // ---- log_filter ----
@@ -172,9 +184,10 @@ pub fn generate_config_sync(args: EmbeddedInitArgs) -> OperationStatus {
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn generate_user_config(args: GenerateConfigArgs) -> OperationStatus {
-    let init_args = EmbeddedInitArgs::from(args);
+    let init_args = unsafe { args.into_init_args() };
     generate_config_sync(init_args)
 }
 
@@ -196,6 +209,7 @@ pub unsafe extern "C" fn generate_user_config(args: GenerateConfigArgs) -> Opera
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid NUL-terminated C strings.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn update_user_config(
     user_config_path: *const c_char,
@@ -237,6 +251,7 @@ pub unsafe extern "C" fn update_user_config(
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid NUL-terminated C strings.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn migrate_user_config(
     output_path: *const c_char,
@@ -278,6 +293,7 @@ pub unsafe extern "C" fn migrate_user_config(
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid NUL-terminated C strings.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn migrate_user_config_0_1_2(
     new_config_path: *const c_char,
@@ -304,21 +320,25 @@ pub unsafe extern "C" fn migrate_user_config_0_1_2(
 }
 
 /// Merge behaviour flags. Mirror of [`MergeFlags`] for the C API.
+///
+/// Each flag is a byte: zero is off, anything else is on. They are not `bool`
+/// because C can store any value in one, and anything but 0 or 1 is not a
+/// valid Rust `bool`.
 #[repr(C)]
 pub struct MergeConfigFlags {
     /// Insert source keys missing from the destination instead of reporting
     /// them.
-    pub source_insert_missing: bool,
+    pub source_insert_missing: u8,
     /// Insert extra keys missing from the destination instead of reporting
     /// them.
-    pub extra_insert_missing: bool,
+    pub extra_insert_missing: u8,
 }
 
 impl From<MergeConfigFlags> for MergeFlags {
     fn from(value: MergeConfigFlags) -> Self {
         Self {
-            source_insert_missing: value.source_insert_missing,
-            extra_insert_missing: value.extra_insert_missing,
+            source_insert_missing: value.source_insert_missing != 0,
+            extra_insert_missing: value.extra_insert_missing != 0,
         }
     }
 }
@@ -376,6 +396,7 @@ pub type FfiMergeUserConfigResult = FfiStatusResult<*mut c_char>;
 /// caller must free it using the [`free_cstring`](super::free_cstring)
 /// function.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn merge_user_config(
     source_path: *const c_char,
@@ -457,6 +478,7 @@ pub unsafe extern "C" fn merge_user_config(
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all non-null pointers are valid NUL-terminated C strings.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn participate(
     config_path: *const c_char,
@@ -507,14 +529,14 @@ mod test {
 
     use super::*;
     use crate::api::{
-        free_cstring,
+        free_cstring, free_operation_status,
         keys::{KeyType, add_key, generate_key, remove_key},
         peer::get_peer_id,
     };
 
     const NO_INSERT: MergeConfigFlags = MergeConfigFlags {
-        source_insert_missing: false,
-        extra_insert_missing: false,
+        source_insert_missing: 0,
+        extra_insert_missing: 0,
     };
 
     fn cstring(path: &Path) -> CString {
@@ -550,7 +572,7 @@ mod test {
             generate_key(
                 config_c.as_ptr(),
                 keystore_c.as_ptr(),
-                KeyType::Zk,
+                KeyType::Zk as u32,
                 generated_title.as_ptr(),
             )
         };
@@ -569,7 +591,7 @@ mod test {
             add_key(
                 config_c.as_ptr(),
                 keystore_c.as_ptr(),
-                KeyType::Ed25519,
+                KeyType::Ed25519 as u32,
                 key_hex.as_ptr(),
                 added_title.as_ptr(),
             )
@@ -701,6 +723,7 @@ mod test {
             )
         };
         assert_eq!(result.error.code, OperationStatusCode::ValidationError);
+        unsafe { free_operation_status(result.error) };
         let destination =
             std::fs::read_to_string(&destination_path).expect("Failed to read destination");
         assert_eq!(destination, "a: 1");

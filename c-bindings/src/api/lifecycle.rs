@@ -1,5 +1,6 @@
 use std::ffi::c_char;
 
+use lb_c_macros::panic_to_error;
 use lb_node::{
     UserConfig,
     cli::build_run_config_from_env,
@@ -12,8 +13,9 @@ use tokio::runtime::Runtime;
 use crate::{
     LogosBlockchainNode, OperationStatus,
     errors::OperationStatusCode,
+    node::ensure_blocking_allowed,
     result::{FfiStatusResult, StatusResult},
-    return_error_if_null_pointer,
+    return_error_if_null_pointer, unwrap_or_return_error,
 };
 
 pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlockchainNode>;
@@ -40,12 +42,33 @@ pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlo
 ///
 /// An [`FfiInitializedLogosBlockchainNodeResult`] containing either a pointer
 /// to the initialized [`LogosBlockchainNode`] or an error code.
+///
+/// # The node handle
+///
+/// The returned pointer is an opaque handle, owned by the caller until it is
+/// passed to [`shutdown_node`]. The rules for it apply to every function that
+/// takes a [`LogosBlockchainNode`]:
+///
+/// - It may be used from several threads at the same time.
+/// - No call may be in progress on any thread when [`shutdown_node`] is called,
+///   and none may be made afterwards: the handle is freed there.
+/// - It must not be used from inside a subscription callback. Such calls fail
+///   with [`OperationStatusCode::RuntimeError`].
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. The caller
+/// must ensure that `config_path` is a valid NUL-terminated C string, and that
+/// `custom_deployment_path` is either null or one as well.
+#[panic_to_error]
 #[unsafe(no_mangle)]
-pub extern "C" fn start_lb_node(
+pub unsafe extern "C" fn start_lb_node(
     config_path: *const c_char,
     custom_deployment_path: *const c_char,
 ) -> FfiInitializedLogosBlockchainNodeResult {
-    initialize_lb_node(config_path, custom_deployment_path).map_or_else(
+    return_error_if_null_pointer!(config_path);
+
+    unsafe { initialize_lb_node(config_path, custom_deployment_path) }.map_or_else(
         FfiInitializedLogosBlockchainNodeResult::err,
         FfiInitializedLogosBlockchainNodeResult::from_value,
     )
@@ -73,11 +96,16 @@ pub extern "C" fn start_lb_node(
 ///
 /// A [`Result`] containing either the initialized [`LogosBlockchainNode`] or an
 /// error code.
-fn initialize_lb_node(
+///
+/// # Safety
+///
+/// `config_path` must be a valid NUL-terminated C string, and
+/// `custom_deployment_path` either null or one as well.
+unsafe fn initialize_lb_node(
     config_path: *const c_char,
     custom_deployment_path: *const c_char,
 ) -> StatusResult<LogosBlockchainNode> {
-    let run_config = resolve_run_config(config_path, custom_deployment_path)?;
+    let run_config = unsafe { resolve_run_config(config_path, custom_deployment_path) }?;
 
     // Captured before the run config is consumed, so the node handle can answer
     // for its chain without querying a service for a value that cannot change.
@@ -124,11 +152,11 @@ fn initialize_lb_node(
 ///
 /// `config_path` must be a valid NUL-terminated C string, and
 /// `custom_deployment_path` either null or one as well.
-pub(crate) fn resolve_run_config(
+pub(crate) unsafe fn resolve_run_config(
     config_path: *const c_char,
     custom_deployment_path: *const c_char,
 ) -> StatusResult<RunConfig> {
-    let user_config = get_user_config(config_path)?;
+    let user_config = unsafe { get_user_config(config_path) }?;
 
     let mut run_config = build_run_config_from_env(user_config).map_err(|e| {
         OperationStatus::error(
@@ -138,13 +166,16 @@ pub(crate) fn resolve_run_config(
     })?;
 
     if !custom_deployment_path.is_null() {
-        run_config.deployment = get_deployment_config(custom_deployment_path)?;
+        run_config.deployment = unsafe { get_deployment_config(custom_deployment_path) }?;
     }
 
     Ok(run_config)
 }
 
-fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
+/// # Safety
+///
+/// `config_path` must be a valid NUL-terminated C string.
+unsafe fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
     let user_config_path = unsafe { std::ffi::CStr::from_ptr(config_path) }
         .to_str()
         .map_err(|e| {
@@ -163,7 +194,10 @@ fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
     )
 }
 
-fn get_deployment_config(
+/// # Safety
+///
+/// `custom_deployment_path` must be null or a valid NUL-terminated C string.
+unsafe fn get_deployment_config(
     custom_deployment_path: *const c_char,
 ) -> StatusResult<DeploymentSettings> {
     if custom_deployment_path.is_null() {
@@ -202,15 +236,26 @@ fn get_deployment_config(
 ///
 /// An [`OperationStatus`] indicating success or failure.
 ///
+/// Calling this from inside a subscription callback fails with
+/// [`OperationStatusCode::RuntimeError`]. In that one case the node keeps
+/// running and `node` stays valid.
+///
 /// # Safety
 ///
 /// The caller must ensure that:
 /// - `node` is a valid pointer to a [`LogosBlockchainNode`] instance
 /// - The [`LogosBlockchainNode`] instance was created by this library
-/// - The pointer will not be used after this function returns
+/// - No other call using `node` is in progress on any thread
+/// - The pointer will not be used after this function returns. The node is
+///   consumed and freed even when the shutdown itself reports an error; the one
+///   exception is the callback case above.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn shutdown_node(node: *mut LogosBlockchainNode) -> OperationStatus {
     return_error_if_null_pointer!(node);
+    // Checked before taking ownership: on this error the node keeps running
+    // and the pointer stays valid.
+    unwrap_or_return_error!(ensure_blocking_allowed());
     let node = unsafe { Box::from_raw(node) };
     node.shutdown()
 }
@@ -224,7 +269,10 @@ mod test {
     use serial_test::serial;
     use tempfile::TempDir;
 
-    use crate::api::lifecycle::{shutdown_node, start_lb_node};
+    use crate::api::{
+        free_operation_status,
+        lifecycle::{shutdown_node, start_lb_node},
+    };
 
     static REPOSITORY_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
         let crate_dir = env!("CARGO_MANIFEST_DIR");
@@ -318,10 +366,12 @@ mod test {
     fn test_basic_lifecycle() {
         let test_paths = TestConfigPaths::new();
 
-        let start_status = start_lb_node(
-            test_paths.node_config.as_ptr(),
-            test_paths.deployment_config.as_ptr(),
-        );
+        let start_status = unsafe {
+            start_lb_node(
+                test_paths.node_config.as_ptr(),
+                test_paths.deployment_config.as_ptr(),
+            )
+        };
 
         assert!(
             start_status.is_ok(),
@@ -353,10 +403,12 @@ mod test {
         // no other test observes it.
         unsafe { std::env::set_var("HTTP_HOST", "not-a-socket-address") };
 
-        let start_status = start_lb_node(
-            test_paths.node_config.as_ptr(),
-            test_paths.deployment_config.as_ptr(),
-        );
+        let start_status = unsafe {
+            start_lb_node(
+                test_paths.node_config.as_ptr(),
+                test_paths.deployment_config.as_ptr(),
+            )
+        };
 
         unsafe { std::env::remove_var("HTTP_HOST") };
 
@@ -365,5 +417,6 @@ mod test {
             "An invalid HTTP_HOST env override should fail node start, proving env \
              overrides are applied"
         );
+        unsafe { free_operation_status(start_status.error) };
     }
 }

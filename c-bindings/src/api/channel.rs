@@ -1,5 +1,6 @@
 use std::ffi::{CString, c_char};
 
+use lb_c_macros::panic_to_error;
 use lb_core::mantle::ops::channel::ChannelId;
 use lb_node::RuntimeServiceId;
 
@@ -29,7 +30,7 @@ pub(crate) fn get_channel_state_sync(
     node: &LogosBlockchainNode,
     channel_id: ChannelId,
 ) -> StatusResult<CString> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     let overwatch_handle = node.get_overwatch_handle();
 
     let state = runtime_handle
@@ -96,6 +97,7 @@ pub type FfiGetChannelStateResult = FfiStatusResult<*mut c_char>;
 ///
 /// This function allocates memory for the output C string. The caller must
 /// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_channel_state(
     node: *const LogosBlockchainNode,
