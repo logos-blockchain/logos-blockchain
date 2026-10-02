@@ -14,6 +14,8 @@ pub struct ClaimableVoucher {
 #[repr(C)]
 pub struct ClaimableVouchers {
     pub tip: HeaderId,
+    /// When the list is empty this pointer is not null, but it points to
+    /// nothing: check the length before reading through it.
     pub vouchers: *mut ClaimableVoucher,
     pub len: usize,
     /// What a single voucher pays out at `tip`.

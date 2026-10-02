@@ -333,6 +333,9 @@ pub struct PoWClaimableRewards {
     /// For each claimable ticket, how many more slots it stays within the
     /// reward window before it can no longer be claimed. Points to `len`
     /// contiguous `u64` values.
+    ///
+    /// When the list is empty this pointer is not null, but it points to
+    /// nothing: check the length before reading through it.
     pub slots_until_expiry: *mut u64,
     /// Number of entries in `slots_until_expiry`.
     pub len: usize,
@@ -437,6 +440,9 @@ pub unsafe extern "C" fn pow_claimable_rewards(
 /// This function is unsafe because it reconstructs a boxed slice from a raw
 /// pointer. The caller must only pass values returned by
 /// [`pow_claimable_rewards`] and must call this exactly once per result.
+///
+/// The value must be passed back exactly as it was returned: its pointer and
+/// length decide what is freed.
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_pow_claimable_rewards(
@@ -481,6 +487,9 @@ pub struct PoWAutoClaimStatus {
     pub tick_unit: PoWAutoClaimTickUnit,
     /// The configured claim targets. Points to `targets_len` contiguous
     /// [`PoWClaimTargetStatus`] values.
+    ///
+    /// When the list is empty this pointer is not null, but it points to
+    /// nothing: check the length before reading through it.
     pub targets: *mut PoWClaimTargetStatus,
     /// Number of entries in `targets`.
     pub targets_len: usize,
@@ -613,6 +622,9 @@ pub unsafe extern "C" fn pow_status(node: *const LogosBlockchainNode) -> FfiPoWS
 /// pointer.
 /// The caller must only pass values returned by [`pow_status`] and must call
 /// this exactly once per result.
+///
+/// The value must be passed back exactly as it was returned: its pointer and
+/// length decide what is freed.
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_pow_status(status: PoWStatus) -> OperationStatus {

@@ -104,7 +104,7 @@ impl LogosBlockchainNode {
 /// runtime, and blocking on a thread that is itself driving async tasks
 /// panics. That is the thread subscription callbacks run on, so this is what
 /// turns a call made from inside a callback into an error.
-pub(crate) fn ensure_blocking_allowed() -> StatusResult<()> {
+pub fn ensure_blocking_allowed() -> StatusResult<()> {
     if Handle::try_current().is_ok() {
         return Err(OperationStatus::error(
             OperationStatusCode::RuntimeError,
