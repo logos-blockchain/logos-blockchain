@@ -39,7 +39,7 @@ use crate::{
         },
         cryptarchia::{free_cryptarchia_info, get_block_events, get_cryptarchia_info},
         deployment::{free_deployment_info, get_deployment_info},
-        free_cstring,
+        free_cstring, free_operation_status,
         keys::{KeyType, add_key, generate_key, remove_key},
         leader::leader_claim,
         lifecycle::{shutdown_node, start_lb_node},
@@ -91,16 +91,25 @@ impl<Value> IntoStatus for FfiResult<Value, OperationStatus> {
 /// code and message.
 fn consume(status: impl IntoStatus) -> (OperationStatusCode, String) {
     let status = status.into_status();
+    let code = status.code;
     let message = if status.message.is_null() {
         String::new()
     } else {
-        let message = unsafe { CStr::from_ptr(status.message) }
+        unsafe { CStr::from_ptr(status.message) }
             .to_string_lossy()
-            .into_owned();
-        assert!(unsafe { free_cstring(status.message) }.is_ok());
-        message
+            .into_owned()
     };
-    (status.code, message)
+    unsafe { free_operation_status(status) };
+    (code, message)
+}
+
+/// For values that may come from an error result: the free either succeeds or
+/// reports the null pointer. The status is released either way.
+fn freed(status: OperationStatus) {
+    assert!(matches!(
+        code(status),
+        OperationStatusCode::Ok | OperationStatusCode::NullPointer
+    ));
 }
 
 fn code(status: impl IntoStatus) -> OperationStatusCode {
@@ -250,54 +259,67 @@ mod no_node {
             assert_eq!(code(remove_key(s, null_s, s)), np);
             assert_eq!(code(remove_key(s, s, null_s)), np);
             assert_eq!(code(get_deployment_info(null_s, null_s)), np);
-            assert_eq!(code(free_deployment_info(ptr::null_mut())), np);
-            assert_eq!(code(free_cstring(ptr::null_mut())), np);
         }
     }
 
     unsafe extern "C" fn noop_callback(_data: *const c_char) {}
 
-    /// What each `free_*` does with the value an *error* result carries (the
-    /// `Default`, i.e. null pointers). A C caller that frees unconditionally
-    /// hits exactly this.
+    /// Every `free_*` reports a null pointer (the value an *error* result
+    /// carries) as a `NullPointer` error with a message, and that status is
+    /// released like any other.
     #[test]
-    fn free_functions_on_error_values() {
-        let report = |name: &str, status: OperationStatus| {
-            let allocated = !status.message.is_null();
-            let (code, _) = consume(status);
-            eprintln!("AUDIT free-on-default {name}: code={code:?} allocates_message={allocated}");
-            code
-        };
-        unsafe {
-            report("free_time_info", free_time_info(ptr::null_mut()));
-            report("free_cryptarchia_info", free_cryptarchia_info(ptr::null_mut()));
-            report(
-                "free_known_addresses",
+    fn free_functions_report_null() {
+        let statuses = unsafe {
+            [
+                free_cstring(ptr::null_mut()),
+                free_time_info(ptr::null_mut()),
+                free_cryptarchia_info(ptr::null_mut()),
+                free_deployment_info(ptr::null_mut()),
                 free_known_addresses(KnownAddresses::default()),
-            );
-            report(
-                "free_claimable_vouchers",
                 free_claimable_vouchers(ClaimableVouchers::default()),
-            );
-            report(
-                "free_pow_claimable_rewards",
                 free_pow_claimable_rewards(PoWClaimableRewards::default()),
-            );
-            assert_eq!(
-                report("free_wallet_notes", free_wallet_notes(WalletNotes::default())),
-                OperationStatusCode::Ok
-            );
-            assert_eq!(
-                report(
-                    "free_leader_aged_notes",
-                    free_leader_aged_notes(LeaderAgedNotes::default())
-                ),
-                OperationStatusCode::Ok
-            );
-            assert_eq!(
-                report("free_pow_status", free_pow_status(PoWStatus::default())),
-                OperationStatusCode::Ok
-            );
+                free_wallet_notes(WalletNotes::default()),
+                free_leader_aged_notes(LeaderAgedNotes::default()),
+                free_pow_status(PoWStatus::default()),
+            ]
+        };
+        for status in statuses {
+            let (code, message) = consume(status);
+            assert_eq!(code, OperationStatusCode::NullPointer);
+            assert!(message.contains("null"), "{message}");
+        }
+    }
+
+    /// A null entry in the list must not keep the entries after it from being
+    /// freed. Valgrind is what catches a regression here.
+    #[test]
+    fn free_known_addresses_skips_null_entries() {
+        let entry = || Box::into_raw(Box::new([7u8; 32])).cast::<u8>();
+        let entries: Box<[*mut u8]> = Box::new([entry(), ptr::null_mut(), entry()]);
+        let len = entries.len();
+        let addresses = KnownAddresses {
+            addresses: Box::leak(entries).as_mut_ptr(),
+            len,
+        };
+        assert!(unsafe { free_known_addresses(addresses) }.is_ok());
+    }
+
+    /// Any status can be handed to `free_operation_status`, whether or not it
+    /// carries a message. Valgrind is what catches a regression here.
+    #[test]
+    fn free_operation_status_releases_any_status() {
+        unsafe {
+            free_operation_status(OperationStatus::OK);
+            free_operation_status(free_cstring(ptr::null_mut()));
+            free_operation_status(OperationStatus::error(
+                OperationStatusCode::NotFound,
+                "nope",
+            ));
+            // The `error` field of a result, on both outcomes.
+            let result = get_build_version_info();
+            assert!(free_cstring(result.value).is_ok());
+            free_operation_status(result.error);
+            free_operation_status(get_peer_id(ptr::null()).error);
         }
     }
 
@@ -655,7 +677,7 @@ mod with_node {
                 for note in 0..notes.len {
                     let _ = (*notes.notes.add(note)).value;
                 }
-                assert!(free_wallet_notes(notes).is_ok());
+                freed(free_wallet_notes(notes));
             }
             assert!(free_known_addresses(addresses).is_ok());
 
@@ -665,11 +687,11 @@ mod with_node {
             );
             let FfiResult { value: notes, error } = get_wallet_notes(node, zero.as_ptr(), ptr::null());
             log("get_wallet_notes(unknown)", error);
-            assert!(free_wallet_notes(notes).is_ok());
+            freed(free_wallet_notes(notes));
             let FfiResult { value: notes, error } =
                 get_wallet_notes(node, invalid_key.as_ptr(), ptr::null());
             assert_ne!(log("get_wallet_notes(invalid)", error), OperationStatusCode::Ok);
-            assert!(free_wallet_notes(notes).is_ok());
+            freed(free_wallet_notes(notes));
 
             for tip_pointer in [ptr::null(), &raw const tip, &raw const zero] {
                 let FfiResult { value, error } = get_leader_aged_notes(node, tip_pointer);
@@ -677,7 +699,7 @@ mod with_node {
                 for note in 0..value.len {
                     let _ = (*value.notes.add(note)).value;
                 }
-                assert!(free_leader_aged_notes(value).is_ok());
+                freed(free_leader_aged_notes(value));
 
                 let FfiResult { value, error } = get_claimable_vouchers(node, tip_pointer);
                 let status = log("get_claimable_vouchers", error);
@@ -808,7 +830,7 @@ mod with_node {
             for target in 0..value.auto_claim.targets_len {
                 let _ = (*value.auto_claim.targets.add(target)).threshold;
             }
-            assert!(free_pow_status(value).is_ok());
+            freed(free_pow_status(value));
 
             let FfiResult { value, error } = pow_claimable_rewards(node);
             if log("pow_claimable_rewards", error) == OperationStatusCode::Ok {
