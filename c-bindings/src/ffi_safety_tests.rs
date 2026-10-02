@@ -213,9 +213,15 @@ mod no_node {
             assert_eq!(code(get_block(node, &raw const id)), np);
             assert_eq!(code(get_transaction(node, &raw const id)), np);
             assert_eq!(code(get_blocks(node, 0, 1)), np);
-            assert_eq!(code(subscribe_to_new_blocks(node, noop_callback)), np);
-            assert_eq!(code(subscribe_to_processed_blocks(node, noop_callback)), np);
-            assert_eq!(code(subscribe_to_lib_blocks(node, noop_callback)), np);
+            assert_eq!(code(subscribe_to_new_blocks(node, Some(noop_callback))), np);
+            assert_eq!(
+                code(subscribe_to_processed_blocks(node, Some(noop_callback))),
+                np
+            );
+            assert_eq!(code(subscribe_to_lib_blocks(node, Some(noop_callback))), np);
+            assert_eq!(code(subscribe_to_new_blocks(node, None)), np);
+            assert_eq!(code(subscribe_to_processed_blocks(node, None)), np);
+            assert_eq!(code(subscribe_to_lib_blocks(node, None)), np);
             assert_eq!(code(get_known_addresses(node)), np);
             assert_eq!(code(get_claimable_vouchers(node, ptr::null())), np);
             assert_eq!(code(get_balance(node, id.as_ptr(), ptr::null())), np);
@@ -775,9 +781,14 @@ mod with_node {
         let invalid_key = [0xFFu8; 32];
 
         unsafe {
-            assert!(subscribe_to_new_blocks(node, on_new_block).is_ok());
-            assert!(subscribe_to_processed_blocks(node, on_processed).is_ok());
-            assert!(subscribe_to_lib_blocks(node, on_lib).is_ok());
+            assert!(subscribe_to_new_blocks(node, Some(on_new_block)).is_ok());
+            assert!(subscribe_to_processed_blocks(node, Some(on_processed)).is_ok());
+            assert!(subscribe_to_lib_blocks(node, Some(on_lib)).is_ok());
+
+            // A null callback subscribes to nothing and is not an error.
+            assert!(subscribe_to_new_blocks(node, None).is_ok());
+            assert!(subscribe_to_processed_blocks(node, None).is_ok());
+            assert!(subscribe_to_lib_blocks(node, None).is_ok());
 
             // ---- plain getters ----
             assert_eq!(
@@ -1168,7 +1179,9 @@ mod with_node {
         assert!(result.value.is_null());
         results.push(consume(result));
         results.push(consume(unsafe { get_known_addresses(node) }));
-        results.push(consume(unsafe { subscribe_to_lib_blocks(node, on_lib) }));
+        results.push(consume(unsafe {
+            subscribe_to_lib_blocks(node, Some(on_lib))
+        }));
         results.push(consume(unsafe { shutdown_node(node) }));
     }
 
@@ -1181,7 +1194,9 @@ mod with_node {
         let paths = TestConfigPaths::new();
         let node = paths.start();
         CALLBACK_NODE.store(node, Ordering::SeqCst);
-        assert!(unsafe { subscribe_to_processed_blocks(node, calls_back_into_the_node) }.is_ok());
+        assert!(
+            unsafe { subscribe_to_processed_blocks(node, Some(calls_back_into_the_node)) }.is_ok()
+        );
 
         let deadline = Instant::now() + Duration::from_secs(wait_secs().max(180));
         while Instant::now() < deadline && CALLBACK_RESULTS.lock().unwrap().len() < 4 {
