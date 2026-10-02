@@ -937,15 +937,11 @@ mod tests {
 
     fn new_cryptarchia() -> lb_chain_service::Cryptarchia {
         let ledger_config = ledger_config();
-        lb_chain_service::Cryptarchia::from_lib(
+        lb_chain_service::Cryptarchia::from_genesis(
             [GENESIS_ID; 32].into(),
             LedgerState::from_utxos(empty(), &ledger_config),
-            [GENESIS_ID; 32].into(),
             ledger_config,
             lb_cryptarchia_engine::State::Bootstrapping,
-            0.into(),
-            0,
-            UncleSlots::default(),
         )
     }
 
