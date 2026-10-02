@@ -63,6 +63,15 @@ pub trait PreverifiableOperation<Mode: VerificationMode> {
 }
 
 pub trait VerifiableOperation<Mode: VerificationMode> {
+    /// The proof [`verify`](Self::verify) hands off for batch verification, or
+    /// `()` if there is none.
+    ///
+    /// Unbounded on purpose:
+    /// [`SignedOperation`](crate::mantle::ops::SignedOperation) only provides
+    /// [`into_verified`](crate::mantle::ops::SignedOperation::into_verified)
+    /// for `()` and
+    /// [`into_verified_deferred`](crate::mantle::ops::SignedOperation::into_verified_deferred) for
+    /// [`DeferrableProof`](crate::mantle::batch::DeferrableProof) types.
     type DeferredProof;
     type Context<'a>;
     type Error;

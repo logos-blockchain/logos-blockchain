@@ -947,17 +947,14 @@ impl LedgerState {
                 config,
             );
 
-            let Some((remaining_verified_operations, (signed_op, deferred_zkp))) =
-                verified_operations.next(&helper).transpose()?
+            let Some((remaining_verified_operations, signed_op)) = verified_operations
+                .next(&helper, &mut deferred_zkps)
+                .transpose()?
             else {
                 // All operations have been processed, exit the loop.
                 break;
             };
             verified_operations = remaining_verified_operations;
-
-            if let Some(deferred) = deferred_zkp {
-                deferred_zkps.push(deferred);
-            }
 
             // Price the operation against the state it was just verified
             // against, before executing it.
@@ -2625,7 +2622,7 @@ mod tests {
             );
         // The `unwrap` should succeed because the user pays at least the base fee of
         // 2705
-        result.unwrap();
+        let _apply_result = result.unwrap();
 
         ledger.cryptarchia_ledger = ledger.cryptarchia_ledger.set_execution_base_fee(10.into());
 
