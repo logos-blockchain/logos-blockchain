@@ -562,10 +562,15 @@ impl Runtime {
         Ok(())
     }
 
+    /// Whether the retry tick has anything to do. An applier retry and a
+    /// pending checkpoint are local work. A pending publish needs the node, so
+    /// it only counts while the sequencer is connected: ticking for it while
+    /// disconnected would fail fast and, worse, cancel the reconnect that
+    /// `next_event` has in progress.
     fn has_pending_work(&self) -> Result<bool, Error> {
         Ok(self.event_pending_retry.is_some()
             || matches!(self.publish_state, PublishState::CheckpointPending { .. })
-            || self.db.pending_publish()?.is_some())
+            || (self.sequencer.is_connected() && self.db.pending_publish()?.is_some()))
     }
 
     fn shutdown_result(&mut self) -> Result<(), Error> {
