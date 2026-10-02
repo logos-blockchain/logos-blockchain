@@ -13,7 +13,7 @@
 use std::{
     collections::{HashMap, HashSet},
     iter,
-    num::{NonZeroU64, NonZeroUsize},
+    num::NonZeroUsize,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -31,6 +31,7 @@ use lb_core::{
         ops::pow::{ClaimPowRewardOp, PowTarget},
     },
 };
+use lb_cryptarchia_engine::era::Eras;
 use lb_key_management_system_keys::keys::UnsecuredZkKey;
 use lb_ledger::LedgerState;
 use lb_log_targets::pow;
@@ -42,6 +43,8 @@ use tokio_stream::{
     wrappers::{BroadcastStream, errors::BroadcastStreamRecvError},
 };
 use tracing::{error, log::warn};
+
+use crate::service::{EraSettings, era_settings_at};
 
 const LOG_TARGET: &str = pow::ROOT;
 
@@ -102,9 +105,10 @@ pub struct TicketGenerator {
     /// is a concurrency degree, not a cap on the winners a search yields: that
     /// is set by [`block_ticket_limit`].
     max_tickets_per_block: NonZeroUsize,
-    /// Acceptance window, in slots: a block older than this leaves the reward
-    /// window and its search is pruned. Matches the consensus `slot_window`.
-    slot_window: NonZeroU64,
+    /// What the service follows of every era, the acceptance window among it:
+    /// a block older than the window of the tip's era leaves the reward window
+    /// and its search is pruned.
+    eras: Eras<EraSettings>,
     /// Winning tickets the node already holds but whose reward has not been
     /// paid out of the pool yet (ready plus pending claims). They count against
     /// the pool when sizing a new block's search. Kept current by the consumer
@@ -127,7 +131,7 @@ impl TicketGenerator {
         cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData>,
         pool: Arc<ThreadPool>,
         max_tickets_per_block: NonZeroUsize,
-        slot_window: NonZeroU64,
+        eras: Eras<EraSettings>,
     ) -> Result<Self, lb_chain_service::api::ApiError>
     where
         CryptarchiaServiceData:
@@ -148,7 +152,7 @@ impl TicketGenerator {
             tip: HeaderId::from([0u8; 32]),
             pool,
             max_tickets_per_block,
-            slot_window,
+            eras,
             outstanding_tickets: 0,
         })
     }
@@ -343,7 +347,8 @@ impl Stream for TicketGenerator {
                 ))) => {
                     this.tip = tip;
                     // compute which slot is old enough
-                    let frontier_slot = tip_slot.saturating_sub(Slot::new(this.slot_window.get()));
+                    let slot_window = era_settings_at(&this.eras, tip_slot).slot_window();
+                    let frontier_slot = tip_slot.saturating_sub(Slot::new(slot_window.get()));
                     // trigger new stream if its new enough and the pool can
                     // still pay for what it would find
                     let pow = &ledger_state.mantle_ledger().pow;
@@ -398,7 +403,7 @@ impl Stream for TicketGenerator {
 mod tests {
     use std::{
         collections::{HashMap, HashSet},
-        num::{NonZeroU64, NonZeroUsize},
+        num::NonZeroUsize,
         pin::Pin,
         sync::Arc,
         task::{Context, Poll},
@@ -417,8 +422,6 @@ mod tests {
         TicketGenerator, WinnerTicketStream, WinningTicket, block_ticket_limit,
         new_block_search_stream, prune_out_of_window_streams, search_winner_ticket,
     };
-
-    const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
 
     /// A never-resolving search stream, used to populate the map under test.
     fn pending_stream() -> WinnerTicketStream {
@@ -616,7 +619,7 @@ mod tests {
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
-            slot_window: SLOT_WINDOW,
+            eras: crate::service::tests::eras(),
             outstanding_tickets: 0,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
@@ -638,7 +641,7 @@ mod tests {
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
-            slot_window: SLOT_WINDOW,
+            eras: crate::service::tests::eras(),
             outstanding_tickets: 0,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
@@ -655,7 +658,7 @@ mod tests {
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
-            slot_window: SLOT_WINDOW,
+            eras: crate::service::tests::eras(),
             outstanding_tickets: 0,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Pending));
@@ -679,7 +682,7 @@ mod tests {
             tip,
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
-            slot_window: SLOT_WINDOW,
+            eras: crate::service::tests::eras(),
             outstanding_tickets: 0,
         };
 
@@ -705,7 +708,7 @@ mod tests {
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
-            slot_window: SLOT_WINDOW,
+            eras: crate::service::tests::eras(),
             outstanding_tickets: 0,
         };
 

@@ -239,7 +239,7 @@ pub fn run_node_from_config(
     let pow_config = PoWConfig {
         user: config.user.pow,
     }
-    .into_pow_service_settings(era, recovery_data);
+    .into_pow_service_settings(&eras, recovery_data);
 
     let tracing_config = config::tracing::ServiceConfig {
         user: config.user.tracing,

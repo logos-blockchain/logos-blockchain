@@ -24,6 +24,7 @@ lb-binary-codec               = { workspace = true }
 lb-blend-service              = { workspace = true }
 lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
+lb-cryptarchia-engine         = { workspace = true }
 lb-era-parameters             = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
@@ -39,6 +40,7 @@ overwatch                     = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+time       = { workspace = true }
 tokio      = { features = ["macros", "rt"], workspace = true }
 
 [lints]
