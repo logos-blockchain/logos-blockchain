@@ -35,7 +35,6 @@ opentelemetry-otlp = { features = [
 ], workspace = true }
 opentelemetry-semantic-conventions = { workspace = true }
 opentelemetry_sdk = { features = ["logs", "rt-tokio"], workspace = true }
-rand = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
