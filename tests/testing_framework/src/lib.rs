@@ -42,7 +42,7 @@ pub use framework::{
 pub use node::configs::deployment::{
     DeploymentBuilder, TopologyConfig, resolve_automatic_genesis_time,
 };
-pub use node::{NodeHttpClient, configs};
+pub use node::{NodeHttpClient, configs, configs::SharedDeployment};
 pub use testing_framework_runner_compose::ComposeRunnerError;
 pub use testing_framework_runner_k8s::ManualClusterError as K8sManualClusterError;
 pub use workloads::{ClusterForkMonitor, ConsensusLiveness, inscription, transaction};

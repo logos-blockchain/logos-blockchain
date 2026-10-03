@@ -30,9 +30,9 @@ use rand::Rng as _;
 use testing_framework_core::scenario::{Application, DynError, PeerSelection, StartNodeOptions};
 use testing_framework_runner_local::{
     BinaryProviderRef, BuildBinaryProvider, BuildCommand, DownloadBinaryProvider, DownloadChecksum,
-    DownloadUrl, EnvBinaryProvider, FallbackBinaryProvider, LaunchEnvVar, LaunchFile,
-    LocalBuildContext, LocalDeployerEnv, LocalPeerNode, NodeEndpointPort, NodeEndpoints,
-    PathBinaryProvider, PreparedNode, ProcessSpawnError, env::Node, process::LaunchSpec,
+    DownloadUrl, LaunchEnvVar, LaunchFile, LocalBuildContext, LocalDeployerEnv, LocalPeerNode,
+    NodeEndpointPort, NodeEndpoints, PathBinaryProvider, PreparedNode, ProcessSpawnError,
+    env::Node, process::LaunchSpec,
 };
 use tracing::debug;
 
@@ -331,22 +331,44 @@ fn node_binary_provider(
 ) -> Result<BinaryProviderRef, DynError> {
     let release_download_requested =
         env::var_os(LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL).is_some_and(|url| !url.is_empty());
+
+    select_node_binary_provider(
+        node_binary_profile,
+        env::var_os("LOGOS_BLOCKCHAIN_NODE_BIN").map(PathBuf::from),
+        release_download_requested,
+    )
+}
+
+fn select_node_binary_provider(
+    node_binary_profile: &NodeBinaryProfile,
+    binary_path: Option<PathBuf>,
+    release_download_requested: bool,
+) -> Result<BinaryProviderRef, DynError> {
     validate_node_binary_selection(node_binary_profile, release_download_requested)?;
 
-    let mut providers: Vec<BinaryProviderRef> = vec![Arc::new(EnvBinaryProvider::new(
-        "LOGOS_BLOCKCHAIN_NODE_BIN",
-    ))];
+    if let Some(path) = binary_path {
+        if !path.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "LOGOS_BLOCKCHAIN_NODE_BIN does not point to a file: '{}'",
+                    path.display()
+                ),
+            )
+            .into());
+        }
 
-    if release_download_requested {
-        providers.push(Arc::new(release_binary_provider()));
+        return Ok(Arc::new(PathBinaryProvider::new(path.canonicalize()?)));
     }
 
-    providers.push(match node_binary_profile {
+    if release_download_requested {
+        return Ok(Arc::new(release_binary_provider()));
+    }
+
+    Ok(match node_binary_profile {
         NodeBinaryProfile::Normal => default_node_binary_provider(),
         NodeBinaryProfile::TokioConsole => tokio_console_node_binary_provider(),
-    });
-
-    Ok(Arc::new(FallbackBinaryProvider::new(providers)))
+    })
 }
 
 fn validate_node_binary_selection(
@@ -898,6 +920,38 @@ mod tests {
 
     use super::*;
     use crate::node::configs::deployment::DeploymentBuilder;
+
+    #[test]
+    fn invalid_explicit_binary_does_not_fall_back() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        for path in [
+            temp_dir.path().join("missing-node"),
+            temp_dir.path().to_path_buf(),
+            PathBuf::new(),
+        ] {
+            let error = select_node_binary_provider(&NodeBinaryProfile::Normal, Some(path), true)
+                .err()
+                .expect("invalid explicit paths must fail before downloading or building");
+
+            assert!(error.to_string().contains("LOGOS_BLOCKCHAIN_NODE_BIN"));
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_binary_takes_precedence_over_release_download() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let binary = temp_dir.path().join("node");
+        fs::write(&binary, b"selected binary").unwrap();
+
+        let provider =
+            select_node_binary_provider(&NodeBinaryProfile::Normal, Some(binary.clone()), true)
+                .unwrap();
+
+        assert_eq!(
+            provider.resolve().await.unwrap(),
+            binary.canonicalize().unwrap()
+        );
+    }
 
     #[test]
     fn release_download_rejects_tokio_console_profile() {
