@@ -1916,7 +1916,7 @@ mod cache_removal_tests {
         let (sender_inputs, fee_sponsor_inputs) = work_item
             .reserved_inputs()
             .into_sender_and_fee_sponsor_inputs();
-        assert!(fee_sponsor_inputs.is_empty());
+        assert_eq!(fee_sponsor_inputs, Vec::new());
         sender_inputs
             .into_iter()
             .map(|utxo| utxo.note.value)
@@ -2312,7 +2312,7 @@ mod cache_removal_tests {
                 .expect("large primary should fund the workload transaction");
             let reserved = work_item.reserved_inputs();
             let (sender_inputs, fee_sponsor_inputs) = reserved.into_sender_and_fee_sponsor_inputs();
-            assert!(fee_sponsor_inputs.is_empty());
+            assert_eq!(fee_sponsor_inputs, Vec::new());
             for input in &sender_inputs {
                 assert!(reserved_ids.insert(input.id()), "workload input was reused");
             }

@@ -117,7 +117,7 @@ mod tests {
         let ops = builder.build().expect("transfer builder");
 
         assert_eq!(sender_output_total, 10);
-        assert!(inscription_signers.is_empty());
+        assert_eq!(inscription_signers, Vec::new());
         assert_eq!(ops.len(), 1);
         assert!(matches!(ops.iter().next(), Some(Op::Transfer(_))));
     }
