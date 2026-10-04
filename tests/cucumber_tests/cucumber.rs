@@ -1,3 +1,7 @@
+/// `CUCUMBER_IMPLEMENTATION` selects the local node adapter; it defaults to
+/// Logos. Shared lifecycle steps use TF control, while typed configuration
+/// steps and automatic workloads currently require the Logos adapter.
+///
 /// Usage: Set `CUCUMBER_DEPLOYER_K8S` or `CUCUMBER_DEPLOYER_COMPOSE` to choose
 /// the deployer. Otherwise, the Local deployer is used by default.
 ///
@@ -38,6 +42,7 @@ use logos_blockchain_tests::cucumber::{
         create_scenario_output_dir, get_feature_path, get_retries, init_logging_defaults,
         init_tracing,
     },
+    deployment::LocalImplementation,
     world::{CucumberWorld, DeployerKind},
 };
 
@@ -74,7 +79,8 @@ async fn main() {
     println!("args: {:?}", std::env::args());
 
     let deployer = selected_deployer();
-    println!("Running with '{deployer:?}'");
+    let implementation = selected_implementation(deployer);
+    println!("Running with '{deployer:?}' and '{implementation:?}'");
 
     init_logging_defaults();
     init_tracing();
@@ -122,6 +128,7 @@ async fn main() {
                         "\nStarting - {}: {} ({}: {})\n",
                         scenario.keyword, scenario.name, feature.keyword, feature.name,
                     );
+                    world.cluster.implementation = implementation;
                     prepare_world_for_scenario(
                         world,
                         deployer,
@@ -197,6 +204,17 @@ async fn main() {
     if failed.execution_has_failed() {
         std::process::exit(1);
     }
+}
+
+fn selected_implementation(deployer: DeployerKind) -> LocalImplementation {
+    let implementation =
+        LocalImplementation::from_env().expect("valid Cucumber implementation selection");
+    if deployer != DeployerKind::Local {
+        implementation
+            .require_logos("non-local deployment")
+            .expect("supported implementation");
+    }
+    implementation
 }
 
 fn selected_deployer() -> DeployerKind {

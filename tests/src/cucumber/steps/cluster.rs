@@ -2,16 +2,12 @@ use std::{collections::HashMap, hash::BuildHasher, time::Duration};
 
 use lb_libp2p::{Multiaddr, PeerId, Protocol};
 use lb_testing_framework::{
-    DeploymentBuilder, LbcClusterApp, LbcEnv, NodeHttpClient, TopologyConfig,
+    DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig,
     configs::{deployment::NodeBinaryProfile, wallet::WalletAccount},
     internal::DeploymentPlan,
     resolve_automatic_genesis_time,
 };
-use testing_framework_app::AppDeployer;
-use testing_framework_core::{
-    scenario::{StartNodeOptions, StartedNode},
-    topology::FixedDeploymentProvider,
-};
+use testing_framework_core::scenario::{StartNodeOptions, StartedNode};
 use tokio::time::{Instant, sleep};
 use tracing::warn;
 
@@ -127,13 +123,10 @@ pub async fn install_local_manual_cluster(
     spec: ManualClusterSpec,
 ) -> Result<(), StepError> {
     let deployment = build_manual_cluster_from_spec(world, spec)?;
-    world.cluster.local_cluster = None;
-    world.cluster.k8s_manual_cluster = None;
-
-    let app = LbcClusterApp::new(Box::new(FixedDeploymentProvider::new(deployment)))
-        .with_on_demand_start();
-    world.cluster.local_cluster = Some(AppDeployer::new().deploy(app).await?);
+    let app = world.cluster.implementation.deploy(deployment).await?;
+    world.cluster.install_local(app)?;
     world.cluster.manual_cluster_spec = Some(spec);
+
     Ok(())
 }
 
@@ -203,8 +196,8 @@ pub async fn rebuild_pending_local_manual_cluster(world: &mut CucumberWorld) -> 
 }
 
 pub async fn stop_active_manual_cluster(world: &CucumberWorld) -> StepResult {
-    if let Some(cluster) = world.cluster.local_cluster() {
-        cluster.stop_all().await?;
+    if world.cluster.local_app.is_some() {
+        world.cluster.local_control()?.stop_all().await?;
         return Ok(());
     }
     if let Some(cluster) = world.cluster.k8s_manual_cluster.as_ref() {
@@ -221,7 +214,7 @@ pub async fn start_manual_node(
     node_name: &str,
     options: StartNodeOptions<LbcEnv>,
 ) -> Result<StartedNode<LbcEnv>, StepError> {
-    if let Some(cluster) = world.cluster.local_cluster() {
+    if let Some(cluster) = world.cluster.logos_cluster() {
         return Box::pin(cluster.start_node_with(node_name, options))
             .await
             .map_err(|e| StepError::LogicalError {
@@ -243,8 +236,10 @@ pub async fn start_manual_node(
 }
 
 pub async fn wait_manual_node_ready(world: &CucumberWorld, node_name: &str) -> StepResult {
-    if let Some(cluster) = world.cluster.local_cluster() {
-        return cluster
+    if world.cluster.local_app.is_some() {
+        return world
+            .cluster
+            .local_control()?
             .wait_node_ready(node_name)
             .await
             .map_err(|e| StepError::LogicalError {
@@ -266,16 +261,17 @@ pub async fn wait_manual_node_ready(world: &CucumberWorld, node_name: &str) -> S
     })
 }
 
-pub fn manual_node_client(
+pub async fn manual_node_client(
     world: &CucumberWorld,
     node_name: &str,
 ) -> Result<NodeHttpClient, StepError> {
-    if let Some(cluster) = world.cluster.local_cluster() {
-        return cluster
-            .node_client(node_name)
-            .ok_or_else(|| StepError::LogicalError {
-                message: format!("missing client for node '{node_name}'"),
-            });
+    if world.cluster.local_app.is_some() {
+        let access = world
+            .cluster
+            .local_control()?
+            .node_access(node_name)
+            .await?;
+        return Ok(NodeHttpClient::from_url(access.api_base_url()?));
     }
 
     if let Some(cluster) = world.cluster.k8s_manual_cluster.as_ref() {
@@ -303,7 +299,7 @@ pub async fn assert_manual_node_has_peers(
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
 
     loop {
-        let client = manual_node_client(world, &runtime_node_name)?;
+        let client = manual_node_client(world, &runtime_node_name).await?;
         let network = client.network_info().await?;
         if network.n_peers >= min_peers {
             return Ok(());
@@ -423,8 +419,8 @@ pub async fn insert_started_node_info<S: BuildHasher>(
         logical_node_name.to_owned(),
         NodeInfo {
             name: logical_node_name.to_owned(),
-            started_node,
-            run_config: None,
+            runtime_name: started_node.name,
+            client: started_node.client,
             chain_info: HashMap::new(),
             wallet_info,
             runtime_dir: std::path::PathBuf::new(),

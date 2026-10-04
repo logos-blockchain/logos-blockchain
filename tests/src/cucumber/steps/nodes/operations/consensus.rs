@@ -47,7 +47,7 @@ async fn fetch_and_update_chain_info(
         let max_height = node_info.best_height().unwrap_or_default();
         best_node_heights.push(max_height);
 
-        let started_node_name = node_info.started_node.name.clone();
+        let started_node_name = node_info.runtime_name.clone();
         let chain =
             nodes_chain_info
                 .get_mut(&started_node_name)
@@ -132,7 +132,7 @@ pub async fn nodes_converged(
     // Pre-initialize so lookups are deterministic
     for node_info in nodes_info {
         nodes_chain_info
-            .entry(node_info.started_node.name.clone())
+            .entry(node_info.runtime_name.clone())
             .or_default();
     }
 
@@ -207,7 +207,7 @@ pub async fn ensure_all_nodes_agree_on_lib(
 
     loop {
         let snapshots = try_join_all(world.nodes_info.values().map(async |node| {
-            let consensus = node.started_node.client.consensus_info().await?;
+            let consensus = node.client.consensus_info().await?;
             Ok::<_, StepError>((
                 node.name.clone(),
                 consensus.cryptarchia_info.height,
@@ -274,7 +274,7 @@ pub async fn poll_all_nodes_and_update_consensus_cache<S: ::std::hash::BuildHash
     // Query every node, but do not fail-fast on the first error.
     let info_futures = nodes.iter().map(async |node| {
         let node_name = node.name.clone();
-        let result = node.started_node.client.consensus_info().await;
+        let result = node.client.consensus_info().await;
         (node_name, result)
     });
 
@@ -365,7 +365,7 @@ async fn poll_network_info(
     let start = TokioInstant::now();
     let time_out = Duration::from_secs(time_out_seconds);
     while start.elapsed() <= time_out {
-        if node_info.started_node.client.network_info().await.is_ok() {
+        if node_info.client.network_info().await.is_ok() {
             return Ok(());
         }
         sleep(Duration::from_millis(250)).await;
