@@ -456,7 +456,7 @@ async fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
     let runtime_dir_by_node_name: Vec<(String, String)> = world
         .nodes_info
         .iter()
-        .map(|(node_name, info)| (node_name.clone(), info.started_node.name.clone()))
+        .map(|(node_name, info)| (node_name.clone(), info.runtime_name.clone()))
         .collect();
 
     if world.snapshots.save.extensions.is_some() {
@@ -513,7 +513,6 @@ async fn step_send_multiple_transactions_to_blend_core_zk_key(
         .ok_or_else(|| StepError::LogicalError {
             message: format!("Node '{sender_node_name}' not found in world state"),
         })?
-        .started_node
         .client
         .clone();
 
@@ -592,7 +591,6 @@ async fn wait_for_blend_funded_note(
         .ok_or_else(|| StepError::LogicalError {
             message: format!("Node '{node_name}' not found in world state"),
         })?
-        .started_node
         .client
         .base_url()
         .clone();
@@ -655,7 +653,6 @@ async fn step_run_blend_sdp_declaration_cli(
         .ok_or_else(|| StepError::LogicalError {
             message: format!("Node '{declarer_node_name}' not found in world state"),
         })?
-        .started_node
         .client
         .base_url()
         .clone();
@@ -717,7 +714,6 @@ async fn step_run_blend_sdp_declaration_api(
         .ok_or_else(|| StepError::LogicalError {
             message: format!("Node '{declarer_node_name}' not found in world state"),
         })?
-        .started_node
         .client
         .clone();
 
@@ -777,7 +773,6 @@ async fn step_verify_blend_sdp_declaration_included(
             .ok_or_else(|| StepError::LogicalError {
                 message: format!("Node '{api_node_name}' not found in world state"),
             })?
-            .started_node
             .client
             .get_sdp_declarations()
             .await;

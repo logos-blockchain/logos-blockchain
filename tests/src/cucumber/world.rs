@@ -39,9 +39,8 @@ use lb_testing_framework::{
     workloads,
 };
 use reqwest::Url;
-use testing_framework_app::DeployedApp;
 use testing_framework_core::{
-    scenario::{ClusterHandle, PeerSelection, StartedNode},
+    scenario::{ClusterHandle, NodeControl, PeerSelection},
     topology::DeploymentSeed,
 };
 use tokio::task::JoinHandle;
@@ -64,6 +63,7 @@ use crate::{
         defaults::{
             CUCUMBER_NODE_CONFIG_OVERRIDE, LOGOS_BLOCKCHAIN_NODE_BIN, init_node_log_dir_defaults,
         },
+        deployment::{LocalDeployment, LocalImplementation, runtime_info::NodeRuntimeInfo},
         error::{StepError, StepResult},
         fee_reserve::{SCENARIO_FEE_ACCOUNT_NAME, ScenarioFeeState},
         logos_sql::LogosSqlState,
@@ -984,12 +984,24 @@ pub struct ChainParameters {
 }
 
 /// Manual-cluster deployment state: cluster instances, build recipe, and
-/// node-level deployment facts.
+/// node runtime information.
 #[derive(Default)]
 pub struct ClusterState {
-    /// Manual: Optional local cluster instance for scenarios that use the local
-    /// deployer.
-    pub local_cluster: Option<DeployedApp<ClusterHandle<LbcEnv>>>,
+    /// Implementation selected once by the Cucumber runner.
+    pub implementation: LocalImplementation,
+
+    /// Logos handle for steps that need typed Logos configuration.
+    ///
+    /// The world stays concrete because the Cucumber step macros do not support
+    /// a world generic over the node implementation. Shared steps use
+    /// `local_app` instead; this handle is present only when this checkout
+    /// generates the Logos configuration.
+    pub logos_cluster: Option<ClusterHandle<LbcEnv>>,
+
+    /// Owns the selected local app, including its cleanup guards.
+    pub local_app: Option<LocalDeployment>,
+    pub node_runtime_info: Vec<NodeRuntimeInfo>,
+
     /// Manual: Optional k8s manual cluster instance for scenarios that use the
     /// k8s deployer.
     pub k8s_manual_cluster: Option<LbcK8sManualCluster>,
@@ -1046,8 +1058,32 @@ impl NodeHeightSnapshots {
 }
 
 impl ClusterState {
-    pub fn local_cluster(&self) -> Option<&ClusterHandle<LbcEnv>> {
-        self.local_cluster.as_ref().map(DeployedApp::handle)
+    pub(crate) fn install_local(&mut self, app: LocalDeployment) -> StepResult {
+        self.node_runtime_info =
+            app.runtime()
+                .get::<Vec<NodeRuntimeInfo>>()
+                .ok_or_else(|| StepError::LogicalError {
+                    message: "Local app does not provide node runtime information".into(),
+                })?;
+        self.logos_cluster = app.runtime().get::<ClusterHandle<LbcEnv>>();
+        self.local_app = Some(app);
+        self.k8s_manual_cluster = None;
+        Ok(())
+    }
+
+    pub const fn logos_cluster(&self) -> Option<&ClusterHandle<LbcEnv>> {
+        self.logos_cluster.as_ref()
+    }
+
+    pub fn local_control(&self) -> Result<&dyn NodeControl, StepError> {
+        let app = self
+            .local_app
+            .as_ref()
+            .ok_or_else(|| StepError::LogicalError {
+                message: "No local app available".into(),
+            })?;
+
+        Ok(app.handle().as_ref())
     }
 }
 
@@ -1479,8 +1515,8 @@ impl Debug for CucumberWorld {
             )
             .field("genesis_block_id", &self.chain.genesis_block_id)
             .field("slots_per_epoch", &self.chain.slots_per_epoch)
-            .field("local_cluster", {
-                if self.cluster.local_cluster.is_some() {
+            .field("local_app", {
+                if self.cluster.local_app.is_some() {
                     &"Has local app cluster"
                 } else {
                     &"None"
@@ -1798,10 +1834,9 @@ pub type WalletInfoMap = HashMap<String, WalletInfo>;
 pub struct NodeInfo {
     /// Node name
     pub name: String,
-    /// The actual started node instance
-    pub started_node: StartedNode<LbcEnv>,
-    /// General node configuration used to start the node
-    pub run_config: Option<RunConfig>,
+    /// Name assigned to the node by TF.
+    pub runtime_name: String,
+    pub client: NodeHttpClient,
     /// Chain height vs. hash at that height
     pub chain_info: ChainInfoMap,
     /// The wallets associated with this node.
@@ -2169,6 +2204,10 @@ impl CucumberWorld {
     /// a built scenario ready for deployment.
     pub fn build_local_scenario(&self) -> Result<LbcScenario, StepError> {
         let builder = self.make_builder_for_deployer(DeployerKind::Local)?;
+        self.cluster
+            .implementation
+            .require_logos("automatic workload scenarios")?;
+
         builder
             .build()
             .map_err(|source| StepError::ScenarioBuild { source })
@@ -2177,6 +2216,9 @@ impl CucumberWorld {
     /// Build a scenario for k8s deployment based on the current world
     /// configuration.
     pub fn build_k8s_scenario(&self) -> Result<LbcScenario, StepError> {
+        self.cluster
+            .implementation
+            .require_logos("Kubernetes scenarios")?;
         let builder = self.make_builder_for_deployer(DeployerKind::K8s)?;
         builder
             .build()
@@ -2188,7 +2230,7 @@ impl CucumberWorld {
     pub fn preflight(&self, expected: DeployerKind) -> Result<(), StepError> {
         self.ensure_expected_deployer(expected)?;
 
-        if expected.requires_local_node_binary() {
+        if expected.requires_local_node_binary() && self.cluster.implementation.is_logos() {
             Self::ensure_local_node_binary()?;
         }
 
@@ -2290,8 +2332,7 @@ impl CucumberWorld {
             .ok_or(StepError::LogicalError {
                 message: format!("Runtime node '{node_name}' not found"),
             })?
-            .started_node
-            .name
+            .runtime_name
             .clone())
     }
 
@@ -2374,7 +2415,6 @@ impl CucumberWorld {
             .ok_or(StepError::LogicalError {
                 message: format!("Node info for '{node_name}' not found in world"),
             })?
-            .started_node
             .client
             .clone())
     }
@@ -2648,17 +2688,15 @@ impl CucumberWorld {
                     wallet.node_name, wallet.wallet_name
                 ),
             })?;
-        let response = tokio::time::timeout(
-            Duration::from_secs(10),
-            node.started_node.client.transfer_funds(body),
-        )
-        .await
-        .map_err(|_| StepError::Timeout {
-            message: format!(
-                "Submit transaction '{}/{}' ",
-                wallet.wallet_name, wallet.node_name
-            ),
-        })??;
+        let response =
+            tokio::time::timeout(Duration::from_secs(10), node.client.transfer_funds(body))
+                .await
+                .map_err(|_| StepError::Timeout {
+                    message: format!(
+                        "Submit transaction '{}/{}' ",
+                        wallet.wallet_name, wallet.node_name
+                    ),
+                })??;
 
         Ok(response.hash)
     }
@@ -2726,8 +2764,8 @@ impl CucumberWorld {
                 &format!("{:?}", self.chain.genesis_block_utxos),
             )
             .field("genesis_block_id", &self.chain.genesis_block_id)
-            .field("local_cluster", {
-                if self.cluster.local_cluster.is_some() {
+            .field("local_app", {
+                if self.cluster.local_app.is_some() {
                     &"Has local app cluster"
                 } else {
                     &"None"
@@ -2899,7 +2937,7 @@ fn nodes_info_display(nodes_info: &HashMap<String, NodeInfo>) -> String {
                 .map(|w| w.wallet_name.clone())
                 .collect();
             let wallets_str = format!("[{}]", wallets.join(", "));
-            format!("'{k}: {} {wallets_str}'", v.started_node.name)
+            format!("'{k}: {} {wallets_str}'", v.runtime_name)
         })
         .collect();
     format!("HashMap<String, NodeInfo>({})", nodes.join(", "))

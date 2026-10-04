@@ -197,7 +197,7 @@ async fn all_local_nodes_match_sync_target(
             return false;
         };
 
-        let Ok(consensus) = node_info.started_node.client.consensus_info().await else {
+        let Ok(consensus) = node_info.client.consensus_info().await else {
             return false;
         };
         if SyncTargetStats::from_cryptarchia_info(&consensus.cryptarchia_info) != target.stats {

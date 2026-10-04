@@ -712,7 +712,7 @@ async fn get_best_n_nodes_for_submissions(
     let mut started_nodes = Vec::with_capacity(n.max(1));
     for node_name in same_tip_node_names {
         if let Some(node_info) = world.nodes_info.get(&node_name) {
-            started_nodes.push((node_name, node_info.started_node.client.clone()));
+            started_nodes.push((node_name, node_info.client.clone()));
         } else {
             return Err(StepError::LogicalError {
                 message: format!("No node info available for {node_name} in world"),
@@ -1188,7 +1188,6 @@ pub async fn wait_for_wallet_submitted_transactions_inclusion(
         .ok_or_else(|| StepError::LogicalError {
             message: format!("Node for wallet '{wallet_name}' not found"),
         })?
-        .started_node
         .client;
 
     wait_for_transactions_inclusion(client, &tx_hashes, timeout).await
