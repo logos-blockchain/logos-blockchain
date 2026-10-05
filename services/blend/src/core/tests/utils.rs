@@ -33,7 +33,7 @@ use lb_blend::{
 };
 use lb_chain_service::Epoch;
 use lb_core::crypto::ZkHash;
-use lb_cryptarchia_engine::era::{Era, EraVersion, Eras};
+use lb_cryptarchia_engine::era::{Era, Eras};
 use lb_groth16::{AdditiveGroup as _, Fr, fr_from_bytes_unchecked, fr_to_bytes};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_network_service::{NetworkService, backends::NetworkBackend};
@@ -114,7 +114,6 @@ pub fn settings<BackendSettings>(
         activity_threshold_sensitivity: 1,
         pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         abstain_on_failure: false,
-        era_version: EraVersion::V1,
     }
 }
 

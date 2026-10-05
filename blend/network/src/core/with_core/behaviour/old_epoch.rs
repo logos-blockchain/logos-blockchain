@@ -11,7 +11,7 @@ use either::Either;
 use lb_blend_message::encap::{
     ProofsVerifier as ProofsVerifierTrait, validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
-use lb_cryptarchia_engine::{Epoch, era::EraVersion};
+use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 use libp2p::{
     PeerId,
@@ -62,7 +62,6 @@ pub struct OldEpoch<ProofsVerifier> {
     message_cache: MessageCache,
     epoch: Epoch,
     num_blend_layers: NonZeroU64,
-    era_version: EraVersion,
     /// Verifier for the `PoQ`s of the messages still arriving for this epoch.
     proofs_verifier: Arc<ProofsVerifier>,
 }
@@ -73,7 +72,7 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
         negotiated_peers: HashMap<PeerId, ConnectionId>,
         message_cache: MessageCache,
         epoch: Epoch,
-        (era_version, num_blend_layers): (EraVersion, NonZeroU64),
+        num_blend_layers: NonZeroU64,
         proofs_verifier: Arc<ProofsVerifier>,
     ) -> Self {
         Self {
@@ -83,7 +82,6 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
             waker: None,
             epoch,
             num_blend_layers,
-            era_version,
             proofs_verifier,
         }
     }
@@ -303,7 +301,7 @@ where
             pending_verifications,
             &mut self.waker,
             self.epoch,
-            (self.era_version, self.num_blend_layers),
+            self.num_blend_layers,
             &self.proofs_verifier,
         ).inspect_err(|receive_error| {
             tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old epoch: {receive_error:?}.");

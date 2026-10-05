@@ -19,7 +19,7 @@ use lb_blend_message::encap::{
     validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_blend_primitives::time::{Round, RoundClock, RoundCount};
-use lb_cryptarchia_engine::{Epoch, era::EraVersion};
+use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_log_targets::blend;
 use libp2p::{
@@ -209,8 +209,6 @@ pub struct Behaviour<ProofsVerifier> {
     /// `ß_c`: the fixed number of encapsulation layers every well-formed Blend
     /// message carries.
     num_blend_layers: NonZeroU64,
-    /// The version of the current epoch's era, which decodes its messages.
-    era_version: EraVersion,
     /// States for processing messages from the old epoch
     /// before the transition period has passed.
     old_epoch: Option<OldEpoch<ProofsVerifier>>,
@@ -369,7 +367,6 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             protocol_name,
             minimum_network_size: common_config.minimum_network_size,
             num_blend_layers: common_config.num_blend_layers,
-            era_version: common_config.era_version,
             old_epoch: None,
             round_clock,
             current_round,
@@ -426,7 +423,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                 .collect(),
             mem::take(&mut self.message_cache),
             current_epoch_number,
-            (self.era_version, self.num_blend_layers),
+            self.num_blend_layers,
             current_epoch_proofs_verifier,
         ));
 
@@ -465,7 +462,6 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         self.protocol_name = protocol_name;
         self.minimum_network_size = common_config.minimum_network_size;
         self.num_blend_layers = common_config.num_blend_layers;
-        self.era_version = common_config.era_version;
         self.connection_share_per_round = core_config.connection_share_per_round;
         self.send_deadline = core_config.send_deadline_in_rounds;
         self.handshake_deadline = core_config.handshake_deadline_in_rounds;
@@ -1377,7 +1373,7 @@ where
             &self.pending_poq_verifications,
             &mut self.waker,
             self.current_epoch_info.1,
-            (self.era_version, self.num_blend_layers),
+            self.num_blend_layers,
             &self.proofs_verifier,
         ) {
             tracing::debug!(target: LOG_TARGET, "Failed to handle message from the current epoch: {receive_error:?}");
