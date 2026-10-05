@@ -249,8 +249,8 @@ opentelemetry-http                 = { default-features = false, version = "0.32
 opentelemetry-otlp                 = { default-features = false, version = "0.32.0" }
 opentelemetry-semantic-conventions = { default-features = false, version = "0.32.1" }
 opentelemetry_sdk                  = { default-features = false, version = "0.32.1" }
-overwatch                          = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "96ce71049c3a72e973873c051a30b4ca42202d66" }
-overwatch-derive                   = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "96ce71049c3a72e973873c051a30b4ca42202d66" }
+overwatch                          = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "fc71a844886f9fb8f382ecfadcebff455e33474b" }
+overwatch-derive                   = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "fc71a844886f9fb8f382ecfadcebff455e33474b" }
 owo-colors                         = { default-features = false, version = "4.2.3" }
 percent-encoding                   = { default-features = false, version = "2.3.2" }
 pprof                              = { default-features = false, version = "0.15" }

@@ -45,7 +45,7 @@ use logos_blockchain_tx_service::{
     tx::{service::GenericTxMempoolService, state::TxMempoolState},
 };
 use overwatch::{
-    overwatch::OverwatchRunner,
+    overwatch::{OverwatchRunner, Shutdown},
     services::{ServiceData, relay::OutboundRelay},
 };
 use overwatch_derive::*;
@@ -71,7 +71,7 @@ type MockMempoolService = GenericTxMempoolService<
     RuntimeServiceId,
 >;
 
-#[derive_services(panic_policy = overwatch::overwatch::ShutdownOverwatch)]
+#[derive_services(panic_policy = Shutdown)]
 struct MockPoolNode {
     logging: Tracing<RuntimeServiceId>,
     network: NetworkService<Mock, RuntimeServiceId>,

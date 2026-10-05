@@ -575,7 +575,11 @@ mod tests {
     use lb_storage_service::{StorageMsg, StorageService, rocksdb::RocksBackendSettings};
     use lb_utils::math::NonNegativeRatio;
     use lb_utxotree::UtxoTree;
-    use overwatch::{derive_services, overwatch::OverwatchRunner, services::relay::OutboundRelay};
+    use overwatch::{
+        derive_services,
+        overwatch::{OverwatchRunner, Shutdown},
+        services::relay::OutboundRelay,
+    };
     use tempfile::TempDir;
     use tokio::{
         runtime::Handle,
@@ -726,7 +730,7 @@ mod tests {
     const TEST_BATCH_SIZE: NonZeroUsize =
         NonZeroUsize::new(1000).expect("TEST_BATCH_SIZE must be non-zero");
 
-    #[derive_services(panic_policy = overwatch::overwatch::ShutdownOverwatch)]
+    #[derive_services(panic_policy = Shutdown)]
     pub struct TestServices {
         pub storage: StorageService<RuntimeServiceId>,
     }

@@ -41,7 +41,7 @@ pub use lb_tx_service::{
 };
 use overwatch::{
     DynError, derive_services,
-    overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
+    overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner, Shutdown},
 };
 use tokio::runtime;
 
@@ -136,7 +136,7 @@ pub type StorageService = lb_storage_service::StorageService<RuntimeServiceId>;
 
 pub type SystemSigService = SystemSig<RuntimeServiceId>;
 
-#[derive_services(panic_policy = overwatch::overwatch::ShutdownOverwatch)]
+#[derive_services(panic_policy = Shutdown)]
 pub struct LogosBlockchain {
     network: NetworkService,
     blend: BlendService,
