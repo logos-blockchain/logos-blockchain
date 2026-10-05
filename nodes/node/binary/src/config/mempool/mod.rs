@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use lb_core::mantle::{
     SignedOps,
     ledger::verification_mode::StandardMode,
@@ -26,7 +24,7 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_mempool_service_settings(
         self,
-        eras: &Arc<Eras<EraDefinition>>,
+        eras: &Eras<EraDefinition>,
         recovery_data: RecoveryData,
     ) -> TxMempoolSettings<
         MempoolSettings,
@@ -35,7 +33,7 @@ impl ServiceConfig {
         TxMempoolSettings {
             network_adapter: Libp2pNetworkAdapterSettings {
                 id: SignedOps::<Preverified, StandardMode>::hash,
-                eras: Arc::clone(eras),
+                topics: eras.map(|era| era.entry.parameters.protocol_names.mempool_topic.clone()),
             },
             pool: MempoolSettings {
                 tx_ttl: self.user.tx_ttl,

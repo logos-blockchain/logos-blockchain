@@ -8,7 +8,6 @@ use lb_cryptarchia_engine::{
     Slot,
     era::{Era, EraInForce, EraVersion, Eras},
 };
-use lb_era_parameters::EraDefinition;
 use lb_log_targets::mempool;
 use lb_network_service::{
     NetworkService,
@@ -43,8 +42,6 @@ pub struct Libp2pAdapter<Item, Key, Clock, RuntimeServiceId> {
     network_relay:
         OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
     settings: Settings<Key, Item>,
-    /// The topic of every era.
-    topics: Arc<Eras<String>>,
     /// The eras in force the adapter follows, shared by its clones: `None`
     /// until it follows a slot.
     in_force: Arc<watch::Sender<Option<EraInForce>>>,
@@ -58,7 +55,6 @@ impl<Item, Key, Clock, RuntimeServiceId> Clone
         Self {
             network_relay: self.network_relay.clone(),
             settings: self.settings.clone(),
-            topics: Arc::clone(&self.topics),
             in_force: Arc::clone(&self.in_force),
             _clock: PhantomData,
         }
@@ -69,6 +65,7 @@ impl<Item, Key, Clock, RuntimeServiceId> Libp2pAdapter<Item, Key, Clock, Runtime
     /// The topic the items of `era` are gossiped on.
     fn topic(&self, era: Era) -> &str {
         &self
+            .settings
             .topics
             .get(era)
             .expect("an era in force is scheduled")
@@ -107,20 +104,16 @@ where
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
     ) -> Self {
-        let topics = settings
-            .eras
-            .map(|era| era.entry.parameters.protocol_names.mempool_topic.clone());
         Self {
             network_relay,
             settings,
-            topics: Arc::new(topics),
             in_force: Arc::new(watch::Sender::new(None)),
             _clock: PhantomData,
         }
     }
 
     async fn follow_eras_at(&self, slot: Slot) {
-        let in_force = self.topics.in_force(slot);
+        let in_force = self.settings.topics.in_force(slot);
         let previous = self.in_force.send_replace(Some(in_force));
         if previous == Some(in_force) {
             return;
@@ -155,6 +148,7 @@ where
         &self,
     ) -> Box<dyn Stream<Item = (Self::Key, Self::Payload)> + Unpin + Send> {
         let topics = self
+            .settings
             .topics
             .map(|era| TopicHash::from_raw(era.entry.parameters.clone()));
         let in_force = self.in_force.subscribe();
@@ -222,8 +216,8 @@ fn version_in_force(
 
 #[derive(Debug)]
 pub struct Settings<K, V> {
-    /// The chain's eras, whose transaction topics the adapter follows.
-    pub eras: Arc<Eras<EraDefinition>>,
+    /// The topic of every era.
+    pub topics: Eras<String>,
     pub id: fn(&V) -> K,
 }
 
@@ -231,7 +225,7 @@ pub struct Settings<K, V> {
 impl<K, V> Clone for Settings<K, V> {
     fn clone(&self) -> Self {
         Self {
-            eras: Arc::clone(&self.eras),
+            topics: self.topics.clone(),
             id: self.id,
         }
     }
