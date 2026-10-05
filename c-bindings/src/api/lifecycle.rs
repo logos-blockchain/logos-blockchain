@@ -12,6 +12,7 @@ use tokio::runtime::Runtime;
 
 use crate::{
     LogosBlockchainNode, OperationStatus,
+    api::message::SigningKeyIds,
     errors::OperationStatusCode,
     node::ensure_blocking_allowed,
     result::{FfiStatusResult, StatusResult},
@@ -99,8 +100,10 @@ unsafe fn initialize_lb_node(
     let run_config = unsafe { resolve_run_config(config_path, custom_deployment_path) }?;
 
     // Captured before the run config is consumed, so the node handle can answer
-    // for its chain without querying a service for a value that cannot change.
+    // for its chain and signing keys without querying a service for values that
+    // cannot change.
     let chain_id = run_config.deployment.chain_id();
+    let signing_key_ids = SigningKeyIds::from(&run_config.user.blend);
 
     let runtime = Runtime::new().expect("Failed to create Tokio runtime");
     let app = run_node_from_config(run_config, Some(runtime.handle().clone())).map_err(|e| {
@@ -131,7 +134,12 @@ unsafe fn initialize_lb_node(
         Ok(())
     })?;
 
-    Ok(LogosBlockchainNode::new(app, runtime, &chain_id))
+    Ok(LogosBlockchainNode::new(
+        app,
+        runtime,
+        &chain_id,
+        signing_key_ids,
+    ))
 }
 
 /// Builds the run configuration a node started with these paths would use.

@@ -8,6 +8,7 @@ pub mod keys;
 pub mod leader;
 pub mod lifecycle;
 pub(crate) mod memory;
+pub mod message;
 pub mod network;
 pub mod peer;
 pub mod pow;
