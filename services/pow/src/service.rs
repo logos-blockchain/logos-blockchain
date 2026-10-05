@@ -41,7 +41,6 @@ use lb_core::{
     },
 };
 use lb_cryptarchia_engine::era::Eras;
-use lb_era_parameters::{EraDefinition, EraParameters};
 use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_key_management_system_keys::keys::{
     MAX_ZK_SIGNING_KEYS, UnsecuredZkKey, ZkPublicKey, ZkSignature,
@@ -203,9 +202,8 @@ pub struct PoWServiceSettings {
     /// Unattended claiming: which keys to pay and how often to try. Omitting
     /// it leaves auto-claim off, so rewards are only claimed on demand.
     pub auto_claim: AutoClaimSettings,
-    /// The chain's eras, from which the service builds what it follows of
-    /// each when it starts.
-    pub eras: Arc<Eras<EraDefinition>>,
+    /// What the service follows of every era.
+    pub eras: Eras<EraSettings>,
     /// Storage-recovery bookkeeping, populated by the runtime on startup.
     pub recovery_data: RecoveryData,
 }
@@ -226,15 +224,6 @@ pub enum EraSettings {
 }
 
 impl EraSettings {
-    const fn from_era(era: &EraDefinition) -> Self {
-        let EraParameters::V1(parameters) = &era.parameters;
-        let reward = &parameters.cryptarchia.pow_config.reward;
-        Self::V1 {
-            slot_window: reward.slot_window,
-            rewards_enabled: reward.rate_num > 0,
-        }
-    }
-
     pub(crate) const fn slot_window(self) -> NonZeroU64 {
         match self {
             Self::V1 { slot_window, .. } => slot_window,
@@ -518,10 +507,6 @@ where
             mut state,
             _phantom,
         } = self;
-        // What the service follows of every era of the chain.
-        let eras = settings
-            .eras
-            .map(|era| EraSettings::from_era(&era.entry.parameters));
 
         // The PoW service must not mine or claim until the chain is synced:
         // wait for the chain service to become ready and reach the
@@ -589,7 +574,7 @@ where
             cryptarchia_api.clone(),
             pool,
             settings.mining.max_tickets_per_block,
-            eras.clone(),
+            settings.eras.clone(),
         )
         .await?;
 
@@ -612,8 +597,8 @@ where
         // flag, so a restart re-arms it and the thresholds are re-evaluated
         // against fresh balances.
         let auto_claim = &settings.auto_claim;
-        let mut auto_claiming =
-            rewards_enabled_now(&cryptarchia_api, &eras).await? && !auto_claim.targets.is_empty();
+        let mut auto_claiming = rewards_enabled_now(&cryptarchia_api, &settings.eras).await?
+            && !auto_claim.targets.is_empty();
 
         // One stream for either pacing, so the run loop has a single arm and
         // neither kind needs a guard. Slot pacing rides the time service's own
@@ -647,7 +632,7 @@ where
                             is_mining = false;
                         }
                         PoWServiceMessage::StartAutoClaim => {
-                            if !rewards_enabled_now(&cryptarchia_api, &eras).await.unwrap_or(false) {
+                            if !rewards_enabled_now(&cryptarchia_api, &settings.eras).await.unwrap_or(false) {
                                 warn!(target: LOG_TARGET, "PoW auto-claim not started: rewards disabled");
                             } else if auto_claim.targets.is_empty() {
                                 warn!(target: LOG_TARGET, "PoW auto-claim not started: no claim targets configured");
@@ -672,7 +657,7 @@ where
                                 claim_address,
                                 &auto_claim.targets,
                                 &mut state,
-                                &eras,
+                                &settings.eras,
                             )
                             .await
                             .inspect_err(|e| {
@@ -684,12 +669,12 @@ where
                             }
                         }
                         PoWServiceMessage::ClaimableRewardsInfo { response } => {
-                            respond_claimable_rewards(&cryptarchia_api, &mut state, &state_updater, response, &eras).await;
+                            respond_claimable_rewards(&cryptarchia_api, &mut state, &state_updater, response, &settings.eras).await;
                         }
                         PoWServiceMessage::Status { response } => {
                             let status = PoWStatus {
                                 is_mining,
-                                are_rewards_enabled: rewards_enabled_now(&cryptarchia_api, &eras).await.unwrap_or(false),
+                                are_rewards_enabled: rewards_enabled_now(&cryptarchia_api, &settings.eras).await.unwrap_or(false),
                                 auto_claim: auto_claim_status(&wallet_api, auto_claim, auto_claiming).await,
                             };
                             if response.send(status).is_err() {
@@ -705,7 +690,7 @@ where
                     // previously stored tickets whose window has since closed.
                     let current_slot = winning_ticket.block_slot;
                     state.ready_to_claim.push(winning_ticket);
-                    prune_expired_tickets(&mut state, current_slot, &eras);
+                    prune_expired_tickets(&mut state, current_slot, &settings.eras);
                     info!(
                         target: LOG_TARGET,
                         "Mined a winning ticket 💲; total claimable tickets {}",
@@ -716,7 +701,7 @@ where
                 // A block was processed: retire any pending claim whose reward
                 // note it minted (i.e. the claim has settled on chain).
                 Some(processed_block) = processed_blocks.next() => {
-                    retire_settled_claims(&cryptarchia_api, &mut state, &state_updater, processed_block, &eras).await;
+                    retire_settled_claims(&cryptarchia_api, &mut state, &state_updater, processed_block, &settings.eras).await;
                 }
                 // Auto-claim tick: drain the ready tickets into the neediest
                 // target. Once every target is funded, stop both auto-claim
@@ -729,7 +714,7 @@ where
                         &auto_claim.targets,
                         &mut state,
                         &state_updater,
-                        &eras,
+                        &settings.eras,
                     )
                     .await;
                     if !auto_claiming && is_mining {

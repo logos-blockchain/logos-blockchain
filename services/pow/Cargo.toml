@@ -25,7 +25,6 @@ lb-blend-service              = { workspace = true }
 lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
-lb-era-parameters             = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-ledger                     = { workspace = true }
