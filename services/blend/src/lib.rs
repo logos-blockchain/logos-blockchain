@@ -51,7 +51,7 @@ use crate::{
     message::{ProxyServiceMessage, ServiceMessage},
     mode::ModeMembership,
     orchestrator::Instance,
-    settings::{FromEra, ServiceSettings, Settings},
+    settings::EraSettings,
 };
 
 pub mod api;
@@ -94,7 +94,13 @@ where
     CoreService: ServiceData + CoreServiceComponents<RuntimeServiceId>,
     EdgeService: EdgeServiceComponents,
 {
-    type Settings = ServiceSettings;
+    type Settings = Eras<
+        EraSettings<
+            BlendBackendSettingsOfService<CoreService, RuntimeServiceId>,
+            <EdgeService as EdgeServiceComponents>::BackendSettings,
+            PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
+        >,
+    >;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = ProxyServiceMessage<CoreService::Message>;
@@ -133,11 +139,6 @@ where
         > + Send
         + 'static,
     SdpService: ServiceData<Message = SdpMessage> + Send,
-    Settings<
-        BlendBackendSettingsOfService<CoreService, RuntimeServiceId>,
-        <EdgeService as EdgeServiceComponents>::BackendSettings,
-        PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
-    >: FromEra,
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<CoreService>
         + AsServiceId<EdgeService>
@@ -185,16 +186,13 @@ where
             ..
         } = self;
 
-        let settings_in_every_era: Eras<
-            Settings<
-                BlendBackendSettingsOfService<CoreService, RuntimeServiceId>,
-                <EdgeService as EdgeServiceComponents>::BackendSettings,
-                PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
-            >,
-        > = settings_handle
+        // Every era runs version 1, the only version of Blend.
+        let settings_in_every_era = settings_handle
             .notifier()
             .get_updated_settings()
-            .in_every_era();
+            .map(|era| match &era.entry.parameters {
+                EraSettings::V1(settings) => settings.clone(),
+            });
         // What the node is configured with, the same in every era.
         let settings = &settings_in_every_era.genesis().entry.parameters;
         let minimum_network_sizes =

@@ -22,14 +22,13 @@ use overwatch::{
 use tracing::{debug, info};
 
 use crate::{
-    broadcast::settings::StartingBlendConfig,
+    broadcast::settings::EraSettings,
     core::dispatcher::PayloadDispatcher,
     era::{settings_in, transition_period},
     kms::PreloadKmsService,
     membership::{self, chain::BlendEpoch, node_id},
     message::{NetworkInfo, ServiceMessage},
     mode::{Mode, ModeMembership},
-    settings::{FromEra, ServiceSettings},
 };
 
 pub mod service_components;
@@ -59,7 +58,7 @@ impl<NodeId, Dispatcher, TimeBackend, ChainService, RuntimeServiceId> ServiceDat
 where
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
-    type Settings = ServiceSettings;
+    type Settings = Eras<EraSettings<Dispatcher::Settings>>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = ServiceMessage<NodeId>;
@@ -71,7 +70,6 @@ impl<NodeId, Dispatcher, TimeBackend, ChainService, RuntimeServiceId> ServiceCor
 where
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
-    StartingBlendConfig<Dispatcher::Settings>: FromEra,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send>,
     RuntimeServiceId: AsServiceId<Self>
@@ -112,11 +110,13 @@ where
             ..
         } = self;
 
-        let settings_in_every_era: Eras<StartingBlendConfig<Dispatcher::Settings>> =
-            settings_handle
-                .notifier()
-                .get_updated_settings()
-                .in_every_era();
+        // Every era runs version 1, the only version of Blend.
+        let settings_in_every_era = settings_handle
+            .notifier()
+            .get_updated_settings()
+            .map(|era| match &era.entry.parameters {
+                EraSettings::V1(settings) => settings.clone(),
+            });
         // What the node is configured with, the same in every era.
         let settings = settings_in_every_era.genesis().entry.parameters.clone();
         let minimum_network_sizes =

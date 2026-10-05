@@ -10,6 +10,12 @@ use crate::{
     settings::{TimingSettings, max_data_message_delay_in_rounds},
 };
 
+/// The edge service's settings in an era, in Blend's own versions.
+#[derive(Clone, Debug)]
+pub enum EraSettings<BackendSettings, NetworkSettings> {
+    V1(StartingBlendConfig<BackendSettings, NetworkSettings>),
+}
+
 #[derive(Clone, Debug)]
 pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
     pub backend: BackendSettings,

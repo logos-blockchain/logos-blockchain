@@ -616,7 +616,7 @@ mod recovery_state {
         for RecoveryServiceState<BackendSettings, NetworkSettings>
     {
         type Error = Infallible;
-        type Settings = CoreServiceSettings;
+        type Settings = CoreServiceSettings<BackendSettings, NetworkSettings>;
 
         fn from_settings(_: &Self::Settings) -> Result<Self, Self::Error> {
             Ok(Self {

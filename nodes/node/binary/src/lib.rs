@@ -194,10 +194,11 @@ pub fn run_node_from_config(
         Arc::new(eras.map(|era| era.entry.parameters.fork_digest)),
     )?;
 
-    let (blend_config, blend_core_config) = BlendConfig {
-        user: config.user.blend,
-    }
-    .into_blend_services_settings(&eras, recovery_data.clone());
+    let (blend_config, blend_core_config, blend_edge_config, blend_broadcast_config) =
+        BlendConfig {
+            user: config.user.blend,
+        }
+        .into_blend_services_settings(&eras, recovery_data.clone());
 
     let time_service_config = TimeConfig {
         user: config.user.time,
@@ -259,10 +260,10 @@ pub fn run_node_from_config(
     let app = OverwatchRunner::<LogosBlockchain>::run(
         LogosBlockchainServiceSettings {
             network: network_service_config,
-            blend: blend_config.clone(),
+            blend: blend_config,
             blend_core: blend_core_config,
-            blend_edge: blend_config.clone(),
-            blend_broadcast: blend_config,
+            blend_edge: blend_edge_config,
+            blend_broadcast: blend_broadcast_config,
             block_broadcast: (),
             mempool: mempool_service_config,
             cryptarchia: chain_service_config,

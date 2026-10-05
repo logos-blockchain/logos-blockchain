@@ -100,7 +100,7 @@ use crate::{
             ReceiverCryptographicProcessor,
         },
         scheduler::SchedulerWrapper,
-        settings::{CoreServiceSettings, RunningBlendConfig, StartingBlendConfig},
+        settings::{CoreServiceSettings, EraSettings, RunningBlendConfig},
         state::{RecoveryServiceState, ServiceState, StateUpdater as ServiceStateUpdater},
     },
     delivery::{broadcast_undelivered_messages, next_undelivered_messages},
@@ -118,7 +118,6 @@ use crate::{
         EncapsulationResult, LocalEncapsulation, MessageKind, NextLocalMessage, PendingProposals,
         PendingTransactions, next_local_message, resolve_encapsulation,
     },
-    settings::FromEra,
 };
 
 pub mod backends;
@@ -219,7 +218,7 @@ where
         > + Send
         + Sync,
 {
-    type Settings = CoreServiceSettings;
+    type Settings = CoreServiceSettings<Backend::Settings, Dispatcher::Settings>;
     type State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>;
     type StateOperator = RecoveryOperator<StateStorage>;
     type Message = ServiceMessage<NodeId>;
@@ -256,7 +255,6 @@ where
     Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
     NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
-    StartingBlendConfig<Backend::Settings, Dispatcher::Settings>: FromEra,
     ProofsGenerator:
         CoreLeaderAndPowProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
     SdpService: ServiceData<Message = SdpMessage> + Send,
@@ -328,12 +326,11 @@ where
             ..
         } = self;
 
-        let blend_configs: Eras<StartingBlendConfig<Backend::Settings, Dispatcher::Settings>> =
-            settings_handle
-                .notifier()
-                .get_updated_settings()
-                .service
-                .in_every_era();
+        let CoreServiceSettings { eras, .. } = settings_handle.notifier().get_updated_settings();
+        // Every era runs version 1, the only version of Blend.
+        let blend_configs = eras.map(|era| match &era.entry.parameters {
+            EraSettings::V1(config) => config.clone(),
+        });
         // What the node is configured with, the same in every era.
         let blend_config = &blend_configs.genesis().entry.parameters;
 

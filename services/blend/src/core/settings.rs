@@ -2,7 +2,7 @@ use core::time::Duration;
 use std::{num::NonZeroU64, sync::Arc};
 
 use lb_core::blend::core_quota;
-use lb_cryptarchia_engine::era::EraVersion;
+use lb_cryptarchia_engine::era::{EraVersion, Eras};
 use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
 use lb_poq::Quota;
 use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
@@ -10,15 +10,20 @@ use lb_utils::math::PositiveF64;
 use rayon::ThreadPool;
 use serde::{Deserialize, Serialize};
 
-use crate::settings::{ServiceSettings, TimingSettings, max_data_message_delay_in_rounds};
+use crate::settings::{TimingSettings, max_data_message_delay_in_rounds};
 
-/// What the node hands the core service: what every Blend service gets, from
-/// which it builds its settings for every era, each epoch running under its
-/// era's, and the state a previous run left.
+/// The core service's settings: its settings in every era of the chain, each
+/// epoch running under its era's, and the state a previous run left.
 #[derive(Clone, Debug)]
-pub struct CoreServiceSettings {
-    pub service: ServiceSettings,
+pub struct CoreServiceSettings<BackendSettings, NetworkSettings> {
+    pub eras: Eras<EraSettings<BackendSettings, NetworkSettings>>,
     pub recovery_data: RecoveryData,
+}
+
+/// The core service's settings in an era, in Blend's own versions.
+#[derive(Clone, Debug)]
+pub enum EraSettings<BackendSettings, NetworkSettings> {
+    V1(StartingBlendConfig<BackendSettings, NetworkSettings>),
 }
 
 /// The core service's settings in an era.
@@ -110,7 +115,9 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
     }
 }
 
-impl StorageRecoverySettings for CoreServiceSettings {
+impl<BackendSettings, NetworkSettings> StorageRecoverySettings
+    for CoreServiceSettings<BackendSettings, NetworkSettings>
+{
     const RECOVERY_KEY_SUFFIX: &'static [u8] = b"blend/core";
 
     fn recovery_data(&self) -> &RecoveryData {

@@ -2,9 +2,13 @@ use ::core::num::NonZeroU64;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    broadcast::settings::StartingBlendConfig as BroadcastConfig,
-    core::settings::{SchedulerSettings, StartingBlendConfig as CoreConfig},
-    edge::settings::StartingBlendConfig as EdgeConfig,
+    broadcast::settings::{
+        EraSettings as BroadcastEraSettings, StartingBlendConfig as BroadcastConfig,
+    },
+    core::settings::{
+        EraSettings as CoreEraSettings, SchedulerSettings, StartingBlendConfig as CoreConfig,
+    },
+    edge::settings::{EraSettings as EdgeEraSettings, StartingBlendConfig as EdgeConfig},
 };
 
 mod common;
@@ -15,10 +19,56 @@ mod edge;
 pub use self::edge::EdgeSettings;
 mod timing;
 pub use self::timing::TimingSettings;
-mod era;
-pub use self::era::{FromEra, ServiceSettings};
 pub mod user;
 
+/// The settings of the Blend services in an era, in Blend's own versions:
+/// the node builds them from the era's parameters, and each service takes its
+/// part of them.
+#[derive(Clone, Debug)]
+pub enum EraSettings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings> {
+    V1(Settings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>),
+}
+
+impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
+    From<EraSettings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>>
+    for CoreEraSettings<CoreBackendSettings, BroadcastSettings>
+{
+    fn from(
+        settings: EraSettings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>,
+    ) -> Self {
+        match settings {
+            EraSettings::V1(settings) => Self::V1(settings.into()),
+        }
+    }
+}
+
+impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
+    From<EraSettings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>>
+    for EdgeEraSettings<EdgeBackendSettings, BroadcastSettings>
+{
+    fn from(
+        settings: EraSettings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>,
+    ) -> Self {
+        match settings {
+            EraSettings::V1(settings) => Self::V1(settings.into()),
+        }
+    }
+}
+
+impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
+    From<EraSettings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>>
+    for BroadcastEraSettings<BroadcastSettings>
+{
+    fn from(
+        settings: EraSettings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>,
+    ) -> Self {
+        match settings {
+            EraSettings::V1(settings) => Self::V1(settings.into()),
+        }
+    }
+}
+
+/// The settings of the Blend services in an era of version 1.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Settings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings> {
     pub common: CommonSettings<BroadcastSettings>,
