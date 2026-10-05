@@ -8,6 +8,7 @@ use lb_log_targets::utils;
 pub use lb_services_utils::overwatch::recovery::StorageRecoverySettings;
 use lb_services_utils::overwatch::recovery::{
     RecoveryBackend, RecoveryData, RecoveryError, RecoveryResult, VersionedState,
+    versioned::StateVersion,
 };
 use overwatch::{
     DynError,
@@ -105,7 +106,7 @@ where
         );
         return Ok(None);
     }
-    match stamp.state_version.cmp(&State::STATE_VERSION) {
+    match stamp.state_version.cmp(&State::VERSION) {
         Ordering::Equal => State::from_bytes(state)
             .map(Some)
             .map_err(|error| RecoveryError::Backend(error.to_string())),
@@ -117,7 +118,7 @@ where
             }),
         Ordering::Greater => Err(RecoveryError::NewerVersion {
             found: stamp.state_version,
-            current: State::STATE_VERSION,
+            current: State::VERSION,
         }),
     }
 }
@@ -126,7 +127,7 @@ where
 /// state's layout, and the fork digest of the era in force when it was
 /// written.
 struct Stamp {
-    state_version: u16,
+    state_version: StateVersion,
     fork_digest: ForkDigest,
 }
 
@@ -135,7 +136,7 @@ impl Stamp {
     fn write(&self, state: &[u8]) -> Bytes {
         [
             &STAMP_TAG[..],
-            &self.state_version.to_le_bytes(),
+            &self.state_version.get().to_le_bytes(),
             &<[u8; 32]>::from(self.fork_digest),
             state,
         ]
@@ -151,7 +152,7 @@ impl Stamp {
         let (fork_digest, state) = record.split_first_chunk()?;
         Some((
             Self {
-                state_version: u16::from_le_bytes(*state_version),
+                state_version: StateVersion::new(u16::from_le_bytes(*state_version)),
                 fork_digest: ForkDigest::from(*fork_digest),
             },
             state,
@@ -234,7 +235,7 @@ where
             })
             .await?;
         let stamp = Stamp {
-            state_version: State::STATE_VERSION,
+            state_version: State::VERSION,
             fork_digest: fork_in_force(&self.forks, OffsetDateTime::now_utc()),
         };
         let state = state
@@ -295,7 +296,7 @@ mod tests {
     }
 
     impl VersionedState for TestState {
-        const STATE_VERSION: u16 = 2;
+        const VERSION: u16 = 2;
 
         fn migrate(from: u16, bytes: &[u8]) -> Result<Self, DynError> {
             let value = String::from_bytes(bytes)?;

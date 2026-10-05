@@ -403,7 +403,7 @@ impl ServiceState for PoWServiceState {
 }
 
 impl VersionedState for PoWServiceState {
-    const STATE_VERSION: u16 = 1;
+    const VERSION: u16 = 1;
 
     /// The only version before 1 is 0, the records written before records
     /// carried a version, in the layout of version 1.
