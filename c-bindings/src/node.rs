@@ -6,7 +6,6 @@ use overwatch::overwatch::{Overwatch, OverwatchHandle, ServicePanic};
 use tokio::runtime::{Handle, Runtime};
 
 use crate::{
-    api::kms::SigningKeyIds,
     errors::{OperationStatus, OperationStatusCode},
     logging,
     result::StatusResult,
@@ -41,19 +40,10 @@ pub struct LogosBlockchainNode {
     // be represented as a C string, which `get_chain_id` reports as an error
     // rather than failing node start.
     chain_id: Option<CString>,
-    /// The KMS key IDs.
-    /// They're copied at startup from the config since blend settings can't
-    /// change at runtime.
-    signing_key_ids: SigningKeyIds,
 }
 
 impl LogosBlockchainNode {
-    pub fn new(
-        overwatch: LogosBlockchainOverwatch,
-        runtime: Runtime,
-        chain_id: &ChainId,
-        signing_key_ids: SigningKeyIds,
-    ) -> Self {
+    pub fn new(overwatch: LogosBlockchainOverwatch, runtime: Runtime, chain_id: &ChainId) -> Self {
         // A `ChainId` is only bounded and UTF-8, so nothing stops it from
         // carrying an interior NUL that no C string can hold. That is a broken
         // deployment rather than a reason to refuse to run, so the node starts
@@ -72,7 +62,6 @@ impl LogosBlockchainNode {
             overwatch,
             runtime,
             chain_id,
-            signing_key_ids,
         }
     }
 
@@ -81,11 +70,6 @@ impl LogosBlockchainNode {
     #[must_use]
     pub(crate) fn chain_id(&self) -> Option<&CStr> {
         self.chain_id.as_deref()
-    }
-
-    #[must_use]
-    pub(crate) const fn signing_key_ids(&self) -> &SigningKeyIds {
-        &self.signing_key_ids
     }
 
     #[must_use]
