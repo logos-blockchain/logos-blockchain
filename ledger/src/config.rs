@@ -1,7 +1,8 @@
 use core::num::NonZeroU32;
 use std::num::{NonZero, NonZeroU64, NonZeroU128};
 
-use lb_core::mantle::ops::pow::PowReward;
+use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
+use lb_core::mantle::{Value, ops::pow::PowReward};
 use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_groth16::ModulusShift;
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -147,19 +148,24 @@ pub struct RewardPoWConfig {
     pub reward_pool_genesis: PowReward,
     /// `sigma_e` genesis: initial per-claim reward.
     pub epoch_reward_genesis: PowReward,
-    /// `d_reward` at genesis, as the exponent `n` in `p / 2^n` — the same way
-    /// [`BlendPoWConfig::base_difficulty`] states the Blend threshold.
+    /// `d_reward` floor, as the exponent `n` in `p / 2^n` — the same way
+    /// [`BlendPoWConfig::base_difficulty`] states the Blend threshold. It is
+    /// both the genesis difficulty and the minimum: the retarget controller
+    /// never eases the target past it.
     ///
     /// Stated directly rather than derived: a difficulty is a fraction of the
     /// scalar field, and the retarget controller can only ever scale a target
     /// it is already given. Seeding it from a token amount cannot express a
     /// field-scale value, so the chain would start ~60 orders of magnitude
-    /// too hard. Spec: 26.
-    pub initial_difficulty: ModulusShift,
-    /// EMA smoothing factor `F` (weight of the prior estimate). Must not
-    /// exceed [`Self::ema_smoothing_precision`].
+    /// too hard. Spec: 19.
+    pub minimum_difficulty: ModulusShift,
+    /// EMA smoothing factor `F` (weight of the prior estimate). Must be below
+    /// [`Self::ema_smoothing_precision`]: `P - F` is a divisor in
+    /// [`Self::reward_target_floor`].
     pub ema_smoothing_factor: u64,
     /// EMA smoothing precision `P`; the smoothing fraction is `F / P`.
+    /// Must be above [`Self::ema_smoothing_factor`]: `P - F` is a divisor in
+    /// [`Self::reward_target_floor`].
     pub ema_smoothing_precision: NonZeroU64,
     /// Target reward claims per block the controller aims for.
     pub target_claims_per_block: u64,
@@ -172,6 +178,13 @@ pub struct RewardPoWConfig {
     /// epoch, is derived from the consensus schedule — see
     /// [`Config::expected_blocks_per_epoch`].
     pub target_claim_per_block: NonZeroU64,
+    /// `POW_SHARE`: numerator of the share of each block's collected fees
+    /// diverted to the `PoW` reward pool. `0` disables refilling.
+    /// Must not exceed [`Self::share_den`].
+    pub pow_share: u64,
+    /// `SHARE_DEN`: denominator of the share of each block's collected fees
+    /// diverted to the `PoW` reward pool.
+    pub share_den: NonZeroU64,
     /// Acceptance window, in slots: how far back a claim's anchor block (and
     /// its nullifier) may be from the current block.
     pub slot_window: NonZeroU64,
@@ -183,13 +196,15 @@ pub struct RewardPoWConfig {
 struct RewardPoWConfigFields {
     reward_pool_genesis: PowReward,
     epoch_reward_genesis: PowReward,
-    initial_difficulty: ModulusShift,
+    minimum_difficulty: ModulusShift,
     ema_smoothing_factor: u64,
     ema_smoothing_precision: NonZeroU64,
     target_claims_per_block: u64,
     rate_num: u64,
     rate_den: NonZeroU64,
     target_claim_per_block: NonZeroU64,
+    pow_share: u64,
+    share_den: NonZeroU64,
     slot_window: NonZeroU64,
 }
 
@@ -200,13 +215,15 @@ impl TryFrom<RewardPoWConfigFields> for RewardPoWConfig {
         let config = Self {
             reward_pool_genesis: fields.reward_pool_genesis,
             epoch_reward_genesis: fields.epoch_reward_genesis,
-            initial_difficulty: fields.initial_difficulty,
+            minimum_difficulty: fields.minimum_difficulty,
             ema_smoothing_factor: fields.ema_smoothing_factor,
             ema_smoothing_precision: fields.ema_smoothing_precision,
             target_claims_per_block: fields.target_claims_per_block,
             rate_num: fields.rate_num,
             rate_den: fields.rate_den,
             target_claim_per_block: fields.target_claim_per_block,
+            pow_share: fields.pow_share,
+            share_den: fields.share_den,
             slot_window: fields.slot_window,
         };
         config.validate()?;
@@ -217,10 +234,8 @@ impl TryFrom<RewardPoWConfigFields> for RewardPoWConfig {
 /// Invariant violations in a [`RewardPoWConfig`], surfaced at config-load time.
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum RewardPoWConfigError {
-    #[error(
-        "EMA smoothing factor ({factor}) must not exceed EMA smoothing precision ({precision})"
-    )]
-    EmaSmoothingFactorExceedsPrecision { factor: u64, precision: NonZeroU64 },
+    #[error("EMA smoothing factor ({factor}) must be below EMA smoothing precision ({precision})")]
+    EmaSmoothingFactorNotBelowPrecision { factor: u64, precision: NonZeroU64 },
     #[error(
         "claim rate scale overflows u64: rate_den ({rate_den}) * \
          target_claim_per_block ({target_claim_per_block})"
@@ -228,6 +243,11 @@ pub enum RewardPoWConfigError {
     ClaimRateScaleOverflow {
         rate_den: NonZeroU64,
         target_claim_per_block: NonZeroU64,
+    },
+    #[error("PoW fee share ({pow_share}) must not exceed its denominator ({share_den})")]
+    PowShareExceedsDenominator {
+        pow_share: u64,
+        share_den: NonZeroU64,
     },
 }
 
@@ -239,19 +259,66 @@ impl RewardPoWConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`RewardPoWConfigError`] if the EMA smoothing factor exceeds the
-    /// precision, or the configured part of the payout-rate denominator
-    /// overflows `u64`.
+    /// Returns [`RewardPoWConfigError`] if the EMA smoothing factor is not
+    /// below the precision, or the configured part of the payout-rate
+    /// denominator overflows `u64`.
     pub fn validate(&self) -> Result<(), RewardPoWConfigError> {
-        if self.ema_smoothing_factor > self.ema_smoothing_precision.get() {
-            return Err(RewardPoWConfigError::EmaSmoothingFactorExceedsPrecision {
+        if self.ema_smoothing_factor >= self.ema_smoothing_precision.get() {
+            return Err(RewardPoWConfigError::EmaSmoothingFactorNotBelowPrecision {
                 factor: self.ema_smoothing_factor,
                 precision: self.ema_smoothing_precision,
             });
         }
-        // Discard the value; this call only checks that it does not overflow.
+
+        if self.pow_share > self.share_den.get() {
+            return Err(RewardPoWConfigError::PowShareExceedsDenominator {
+                pow_share: self.pow_share,
+                share_den: self.share_den,
+            });
+        }
+
+        // Only the errors matter here; the computed values are unused.
+        self.checked_reward_target_floor()?;
         self.checked_claim_rate_scale()?;
         Ok(())
+    }
+
+    /// `REWARD_TARGET_FLOOR`: the retarget never returns a target below this to
+    /// prevent it from falling to a value it can never recover from.
+    ///
+    /// It is computed from `ceil(F / (P - F))`.
+    /// The formula is designed to prevent the floor from being too small.
+    /// If it is too small, the target stays the same value.
+    ///
+    /// With `F = 0` the formula gives 0, which defeats its purpose,
+    /// so the function sets a minimum of 1.
+    fn checked_reward_target_floor(&self) -> Result<NonZeroU64, RewardPoWConfigError> {
+        Ok(self
+            .ema_smoothing_factor
+            .div_ceil(
+                self.ema_smoothing_precision
+                    .get()
+                    .checked_sub(self.ema_smoothing_factor)
+                    .and_then(NonZeroU64::new)
+                    .ok_or(RewardPoWConfigError::EmaSmoothingFactorNotBelowPrecision {
+                        factor: self.ema_smoothing_factor,
+                        precision: self.ema_smoothing_precision,
+                    })?
+                    .get(),
+            )
+            .max(1)
+            .try_into()
+            .expect("floor is at least one"))
+    }
+
+    /// `REWARD_TARGET_FLOOR`: the retarget never returns a target below this to
+    /// prevent it from falling to a value it can never recover from.
+    ///
+    /// It is computed from `ceil(F / (P - F))` and at least 1.
+    #[must_use]
+    pub fn reward_target_floor(&self) -> NonZeroU64 {
+        self.checked_reward_target_floor()
+            .expect("reward_target_floor must be computed successfully")
     }
 
     /// The configured factors of the payout-rate denominator,
@@ -282,7 +349,111 @@ impl RewardPoWConfig {
         self.checked_claim_rate_scale()
             .expect("claim rate scale overflow is rejected at config-load time")
     }
+
+    /// The share of a block's collected fees diverted to the `PoW` reward
+    /// pool: `collected_fees * POW_SHARE / SHARE_DEN`, rounded down.
+    ///
+    /// Never exceeds `collected_fees`, since `pow_share <= share_den` is
+    /// guaranteed by [`Self::validate`].
+    #[must_use]
+    pub(crate) fn pow_fee_share(&self, collected_fees: Value) -> Value {
+        assert!(
+            self.pow_share <= self.share_den.get(),
+            "PoW share must not exceed its denominator; guaranteed by RewardPoWConfig::validate"
+        );
+
+        // Convert u64 values to u128 to avoid overflow. Safe to use `strict_mul`.
+        let share = u128::from(collected_fees).strict_mul(u128::from(self.pow_share))
+            / NonZeroU128::from(self.share_den);
+        Value::try_from(share).expect("share cannot exceed collected_fees")
+    }
 }
+
+// The reward parameters: every field in declaration order. A node's era digest
+// commits to them through this encoding.
+impl BinaryEncode for RewardPoWConfig {
+    fn encoded_length(&self) -> usize {
+        // We destructure (in declaration order) so we know we are not forgetting to
+        // encode new fields.
+        let Self {
+            reward_pool_genesis,
+            epoch_reward_genesis,
+            minimum_difficulty,
+            ema_smoothing_factor,
+            ema_smoothing_precision,
+            target_claims_per_block,
+            rate_num,
+            rate_den,
+            target_claim_per_block,
+            pow_share,
+            share_den,
+            slot_window,
+        } = self;
+        reward_pool_genesis.encoded_length()
+            + epoch_reward_genesis.encoded_length()
+            + minimum_difficulty.encoded_length()
+            + ema_smoothing_factor.encoded_length()
+            + ema_smoothing_precision.encoded_length()
+            + target_claims_per_block.encoded_length()
+            + rate_num.encoded_length()
+            + rate_den.encoded_length()
+            + target_claim_per_block.encoded_length()
+            + pow_share.encoded_length()
+            + share_den.encoded_length()
+            + slot_window.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let Self {
+            reward_pool_genesis,
+            epoch_reward_genesis,
+            minimum_difficulty,
+            ema_smoothing_factor,
+            ema_smoothing_precision,
+            target_claims_per_block,
+            rate_num,
+            rate_den,
+            target_claim_per_block,
+            pow_share,
+            share_den,
+            slot_window,
+        } = self;
+        reward_pool_genesis.encode_into(out);
+        epoch_reward_genesis.encode_into(out);
+        minimum_difficulty.encode_into(out);
+        ema_smoothing_factor.encode_into(out);
+        ema_smoothing_precision.encode_into(out);
+        target_claims_per_block.encode_into(out);
+        rate_num.encode_into(out);
+        rate_den.encode_into(out);
+        target_claim_per_block.encode_into(out);
+        pow_share.encode_into(out);
+        share_den.encode_into(out);
+        slot_window.encode_into(out);
+    }
+}
+
+/// The encoding of the fixture below, one field per group.
+const REWARD_POW_CONFIG_HEX: &str = "1e00000000000000 1f00000000000000 20000000 2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000 2600000000000000 2700000000000000 2800000000000000 2900000000000000";
+
+codec_fixtures!(
+    RewardPoWConfig,
+    encode_only,
+    RewardPoWConfig {
+        reward_pool_genesis: 30,
+        epoch_reward_genesis: 31,
+        minimum_difficulty: ModulusShift::new::<32>(),
+        ema_smoothing_factor: 33,
+        ema_smoothing_precision: NonZeroU64::new(34).unwrap(),
+        target_claims_per_block: 35,
+        rate_num: 36,
+        rate_den: NonZeroU64::new(37).unwrap(),
+        target_claim_per_block: NonZeroU64::new(38).unwrap(),
+        pow_share: 39,
+        share_den: NonZeroU64::new(40).unwrap(),
+        slot_window: NonZeroU64::new(41).unwrap(),
+    } => REWARD_POW_CONFIG_HEX
+);
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct BlendPoWConfig {
@@ -337,13 +508,15 @@ mod tests {
         RewardPoWConfig {
             reward_pool_genesis: 1_000_000_000,
             epoch_reward_genesis: 1_000_000,
-            initial_difficulty: ModulusShift::new::<26>(),
+            minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
             target_claims_per_block: 100,
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
             target_claim_per_block: NonZeroU64::MIN,
+            pow_share: 0,
+            share_den: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
         }
     }
@@ -359,7 +532,7 @@ mod tests {
         config.ema_smoothing_factor = config.ema_smoothing_precision.get() + 1;
         assert_eq!(
             config.validate(),
-            Err(RewardPoWConfigError::EmaSmoothingFactorExceedsPrecision {
+            Err(RewardPoWConfigError::EmaSmoothingFactorNotBelowPrecision {
                 factor: config.ema_smoothing_factor,
                 precision: config.ema_smoothing_precision,
             })
@@ -367,10 +540,54 @@ mod tests {
     }
 
     #[test]
-    fn reward_config_accepts_ema_factor_equal_to_precision() {
-        // F == P is q = 1 (full smoothing): a valid boundary, not a rejection.
+    fn reward_config_rejects_ema_factor_equal_to_precision() {
+        // F == P leaves P - F at zero, so the reward target floor is undefined.
         let mut config = disabled_reward_config();
         config.ema_smoothing_factor = config.ema_smoothing_precision.get();
+        assert_eq!(
+            config.validate(),
+            Err(RewardPoWConfigError::EmaSmoothingFactorNotBelowPrecision {
+                factor: config.ema_smoothing_factor,
+                precision: config.ema_smoothing_precision,
+            })
+        );
+    }
+
+    #[test]
+    fn reward_target_floor() {
+        let reward_target_floor = |factor: u64, precision: u64| {
+            let mut config = disabled_reward_config();
+            config.ema_smoothing_factor = factor;
+            config.ema_smoothing_precision = NonZeroU64::new(precision).unwrap();
+            config.reward_target_floor().get()
+        };
+        // As per spec: ceil(9 / (10-9)).
+        assert_eq!(reward_target_floor(9, 10), 9);
+        // ceil(7 / (10-7)).
+        assert_eq!(reward_target_floor(7, 10), 3);
+        // ceil(0 / (10-0)) is 0, so the floor is raised to 1.
+        assert_eq!(reward_target_floor(0, 10), 1);
+    }
+
+    #[test]
+    fn reward_config_rejects_pow_share_above_denominator() {
+        let mut config = disabled_reward_config();
+        config.pow_share = 11;
+        config.share_den = NonZeroU64::new(10).unwrap();
+        assert_eq!(
+            config.validate(),
+            Err(RewardPoWConfigError::PowShareExceedsDenominator {
+                pow_share: config.pow_share,
+                share_den: config.share_den,
+            })
+        );
+    }
+
+    #[test]
+    fn reward_config_accepts_pow_share_equal_to_denominator() {
+        let mut config = disabled_reward_config();
+        config.pow_share = 10;
+        config.share_den = NonZeroU64::new(10).unwrap();
         assert_eq!(config.validate(), Ok(()));
     }
 

@@ -1,11 +1,10 @@
 use std::{env, time::Duration};
 
 use lb_testing_framework::{
-    CoreBuilderExt as _, LbcLocalDeployer, ScenarioBuilder, ScenarioBuilderExt as _,
-    run_with_failure_diagnostics,
+    AppHostDeployer, ScenarioBuilder, ScenarioBuilderExt as _, run_with_failure_diagnostics,
 };
 use logos_blockchain_tests::common::manual_cluster::unique_scenario_base_dir;
-use testing_framework_core::scenario::{Deployer as _, ExternalNodeSource};
+use testing_framework_core::scenario::ExternalNodeSource;
 use thiserror::Error;
 
 const DEFAULT_CHANNELS: usize = 8;
@@ -120,8 +119,6 @@ async fn external_urls_inscription_workload() -> Result<(), Box<dyn std::error::
     let inscription_payload_bytes = inscription_payload_bytes_from_env()?;
     let run_duration = run_duration_from_env()?;
 
-    let deployer = LbcLocalDeployer::new();
-
     // External-only sources: no managed nodes.
     let scenario_base_dir = unique_scenario_base_dir("tf-external-urls-inscription", None);
     let mut builder =
@@ -140,7 +137,7 @@ async fn external_urls_inscription_workload() -> Result<(), Box<dyn std::error::
         .with_run_duration(run_duration)
         .build()?;
 
-    let runner = deployer.deploy(&scenario).await?;
+    let runner = AppHostDeployer.deploy(&scenario).await?;
     let _handle = run_with_failure_diagnostics(runner, &mut scenario).await?;
 
     Ok(())

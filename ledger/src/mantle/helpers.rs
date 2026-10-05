@@ -16,7 +16,7 @@ use lb_core::{
     sdp::{DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
 use rpds::{HashTrieMapSync, HashTrieSetSync};
 
 use crate::mantle::LedgerState;
@@ -116,7 +116,7 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         &self,
         channel_id: &ChannelId,
         key_index: &ChannelKeyIndex,
-    ) -> Result<Ed25519PublicKey, VerificationError> {
+    ) -> Result<UnverifiedEd25519PublicKey, VerificationError> {
         self.ledger_state
             .channels()
             .channel_state(channel_id)

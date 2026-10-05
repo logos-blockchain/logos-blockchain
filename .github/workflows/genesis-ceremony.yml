@@ -12,7 +12,7 @@ on:
           - devnet
           - testnet
       version:
-        description: "Protocol version string"
+        description: "Release version, named in the ceremony's commit message"
         required: true
 
 jobs:
@@ -27,15 +27,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
-      - name: Inject Variables into Template
-        run: |
-          cp deployment/ceremony/genesis/$LB_TARGET_ENV/deployment-template.yaml \
-            /tmp/deployment-generated.yaml
-
-          # We use '|' as a delimiter so that slashes in paths don't break the command
-          sed -i "s|ENV_PLACEHOLDER|$LB_TARGET_ENV|g" /tmp/deployment-generated.yaml
-          sed -i "s|VERSION_PLACEHOLDER|$LB_VERSION|g" /tmp/deployment-generated.yaml
-
       - name: Run Ceremony
         run: |
           cargo run --locked --bin logos-blockchain-tools-genesis -- ceremony \
@@ -43,7 +34,7 @@ jobs:
             --stake-holders deployment/ceremony/genesis/$LB_TARGET_ENV/stakeholders.yaml \
             --providers deployment/ceremony/genesis/$LB_TARGET_ENV/providers.yaml \
             --faucet deployment/ceremony/genesis/$LB_TARGET_ENV/faucet.yaml \
-            --deployment /tmp/deployment-generated.yaml \
+            --template deployment/ceremony/genesis/$LB_TARGET_ENV/deployment-template.yaml \
             --output nodes/node/binary/src/config/deployment/settings.yaml
 
       - name: Commit and Push changes

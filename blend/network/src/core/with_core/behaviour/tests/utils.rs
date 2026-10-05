@@ -1,6 +1,6 @@
 use core::{
-    num::{NonZeroU64, NonZeroUsize},
-    ops::RangeInclusive,
+    iter::repeat_n,
+    num::{NonZeroU64, NonZeroU128, NonZeroUsize},
     time::Duration,
 };
 use std::{
@@ -10,62 +10,30 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt as _, select};
+use futures::{StreamExt as _, select};
 use lb_blend_membership::{Membership, Node};
 use lb_blend_message::crypto::key_ext::Ed25519SecretKeyExt as _;
+use lb_blend_primitives::time::{Round, RoundClock, RoundCount};
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_libp2p::{NetworkBehaviour, SwarmEvent};
 use libp2p::{
     Multiaddr, PeerId, Swarm,
     identity::{PublicKey, ed25519},
+    swarm::ConnectionId,
 };
 use libp2p_swarm_test::SwarmExt as _;
-use tokio::time::{MissedTickBehavior, interval};
-use tokio_stream::wrappers::IntervalStream;
 
 use crate::core::{
     poq_verification::PendingPoQVerifications,
     tests::utils::{PROTOCOL_NAME, TestProofsVerifier, TestSwarm},
-    with_core::behaviour::{Behaviour, Event, IntervalStreamProvider, message_cache::MessageCache},
+    with_core::behaviour::{
+        Behaviour, ConnectionDirection, Event, PendingUpgrade, RemotePeerConnectionDetails,
+        blacklist::PeerBlacklist, liveness::PeerLivenessMap, message_cache::MessageCache,
+    },
 };
 
 /// The behaviour under test, with the `PoQ` verifier the tests use.
-pub type TestBehaviour = Behaviour<IntervalProvider, TestProofsVerifier>;
-
-#[derive(Clone)]
-pub struct IntervalProvider(Duration, RangeInclusive<u64>);
-
-impl IntervalStreamProvider for IntervalProvider {
-    type IntervalStream = Box<dyn Stream<Item = RangeInclusive<u64>> + Send + Unpin + 'static>;
-    type IntervalItem = RangeInclusive<u64>;
-
-    fn interval_stream(&self) -> Self::IntervalStream {
-        let range = self.1.clone();
-        let interval = {
-            let mut interval = interval(self.0);
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-            interval
-        };
-        Box::new(IntervalStream::new(interval).map(move |_| range.clone()))
-    }
-}
-
-#[derive(Default)]
-pub struct IntervalProviderBuilder {
-    range: Option<RangeInclusive<u64>>,
-}
-
-impl IntervalProviderBuilder {
-    pub fn with_range(mut self, range: RangeInclusive<u64>) -> Self {
-        self.range = Some(range);
-        self
-    }
-
-    pub fn build(self) -> IntervalProvider {
-        IntervalProvider(Duration::from_secs(1), self.range.unwrap_or(0..=1))
-    }
-}
+pub type TestBehaviour = Behaviour<TestProofsVerifier>;
 
 /// Generates `count` nodes with randomly generated identities and empty
 /// addresses.
@@ -90,11 +58,30 @@ pub fn new_nodes_with_empty_address(
     (identities.into_iter(), nodes)
 }
 
+/// `Φ_CC` the tests build behaviours with unless they say otherwise.
+pub const PEERING_DEGREE: NonZeroUsize = NonZeroUsize::new(4).expect("must be non-zero");
+
+/// `Φ_CC + 1`: the most connections a test behaviour holds at once.
+pub const fn maximum_peers() -> usize {
+    PEERING_DEGREE.get() + 1
+}
+
+/// The most connections a test behaviour accepts, which is what is left of the
+/// maximum once the dial-out floor is reserved.
+pub const fn maximum_accepted_peers() -> usize {
+    maximum_peers() - (PEERING_DEGREE.get() - 2)
+}
+
 pub struct BehaviourBuilder {
     local_public_key: ed25519::PublicKey,
     membership: Option<Membership<PeerId>>,
-    provider: Option<IntervalProvider>,
-    peering_degree: Option<RangeInclusive<usize>>,
+    round_duration_in_seconds: Option<NonZeroU64>,
+    liveness_window_in_rounds: Option<NonZeroU128>,
+    handshake_deadline_in_rounds: Option<RoundCount>,
+    handshakes_in_progress: Option<usize>,
+    peering_degree: Option<NonZeroUsize>,
+    connection_share_per_round: Option<NonZeroU64>,
+    existing_connections: Option<(usize, usize)>,
     minimum_network_size: Option<NonZeroUsize>,
     num_blend_layers: Option<NonZeroU64>,
     proofs_verifier: TestProofsVerifier,
@@ -105,8 +92,13 @@ impl BehaviourBuilder {
         Self {
             local_public_key: identity.public(),
             membership: None,
-            provider: None,
+            round_duration_in_seconds: None,
+            liveness_window_in_rounds: None,
+            handshake_deadline_in_rounds: None,
+            handshakes_in_progress: None,
             peering_degree: None,
+            connection_share_per_round: None,
+            existing_connections: None,
             minimum_network_size: None,
             num_blend_layers: None,
             proofs_verifier: TestProofsVerifier::accepting(),
@@ -128,12 +120,39 @@ impl BehaviourBuilder {
         self
     }
 
-    pub fn with_provider(mut self, provider: IntervalProvider) -> Self {
-        self.provider = Some(provider);
+    pub fn with_handshake_deadline_in_rounds(mut self, rounds: RoundCount) -> Self {
+        self.handshake_deadline_in_rounds = Some(rounds);
         self
     }
 
-    pub fn with_peering_degree(mut self, peering_degree: RangeInclusive<usize>) -> Self {
+    pub fn with_liveness(
+        mut self,
+        round_duration_in_seconds: NonZeroU64,
+        window_in_rounds: NonZeroU128,
+    ) -> Self {
+        self.round_duration_in_seconds = Some(round_duration_in_seconds);
+        self.liveness_window_in_rounds = Some(window_in_rounds);
+        self
+    }
+
+    pub fn with_existing_connections(mut self, accepted: usize, dialed: usize) -> Self {
+        self.existing_connections = Some((accepted, dialed));
+        self
+    }
+
+    pub fn with_handshakes_in_progress(mut self, count: usize) -> Self {
+        self.handshakes_in_progress = Some(count);
+        self
+    }
+
+    /// Sets `r₁`: the messages a connection may carry in a round, in each
+    /// direction.
+    pub fn with_connection_share_per_round(mut self, share: NonZeroU64) -> Self {
+        self.connection_share_per_round = Some(share);
+        self
+    }
+
+    pub fn with_peering_degree(mut self, peering_degree: NonZeroUsize) -> Self {
         self.peering_degree = Some(peering_degree);
         self
     }
@@ -149,20 +168,26 @@ impl BehaviourBuilder {
     }
 
     pub fn build(self) -> TestBehaviour {
-        Behaviour {
+        let existing_connections = self.existing_connections;
+        let round_duration = self
+            .round_duration_in_seconds
+            .unwrap_or_else(|| 1.try_into().unwrap());
+        // A window long enough that no connection in a test goes stale by accident.
+        // Tests that exercise liveness set their own.
+        let liveness_window = self
+            .liveness_window_in_rounds
+            .unwrap_or_else(|| 1_000_000.try_into().unwrap());
+        let mut behaviour = Behaviour {
             negotiated_peers: HashMap::new(),
             connections_waiting_upgrade: HashMap::new(),
             events: VecDeque::new(),
             waker: None,
-            observation_window_clock_provider: self
-                .provider
-                .unwrap_or_else(|| IntervalProviderBuilder::default().build()),
             current_epoch_info: (
                 self.membership
                     .unwrap_or_else(|| Membership::new_without_local(&[])),
                 0.into(),
             ),
-            peering_degree: self.peering_degree.unwrap_or(1..=1),
+            target_peering_degree: self.peering_degree.unwrap_or(PEERING_DEGREE),
             local_peer_id: PublicKey::from(self.local_public_key).into(),
             protocol_name: PROTOCOL_NAME,
             minimum_network_size: self
@@ -172,10 +197,59 @@ impl BehaviourBuilder {
                 .num_blend_layers
                 .unwrap_or_else(|| 3.try_into().unwrap()),
             old_epoch: None,
+            connection_share_per_round: self
+                .connection_share_per_round
+                .unwrap_or(NonZeroU64::new(1_000).unwrap()),
+            send_deadline: RoundCount::new(NonZeroU128::new(2).unwrap()),
+            handshake_deadline: self
+                .handshake_deadline_in_rounds
+                .unwrap_or_else(|| RoundCount::new(NonZeroU128::new(2).unwrap())),
+            handshake_upgrade_timeout: Duration::from_mins(1),
+            round_clock: RoundClock::new(round_duration),
+            liveness: PeerLivenessMap::new(RoundCount::new(liveness_window)),
+            current_round: Round::from(0),
             message_cache: MessageCache::new(),
             proofs_verifier: Arc::new(self.proofs_verifier),
             pending_poq_verifications: PendingPoQVerifications::new(),
+            below_target_degree_since: None,
+            blacklist: PeerBlacklist::new(
+                self.peering_degree
+                    .unwrap_or(PEERING_DEGREE)
+                    .checked_mul(NonZeroUsize::new(2).unwrap())
+                    .unwrap(),
+                RoundCount::new(liveness_window),
+            ),
+        };
+
+        for index in 0..self.handshakes_in_progress.unwrap_or(0) {
+            behaviour.connections_waiting_upgrade.insert(
+                (PeerId::random(), ConnectionId::new_unchecked(2_000 + index)),
+                PendingUpgrade {
+                    direction: ConnectionDirection::Incoming,
+                    started_at: behaviour.current_round,
+                },
+            );
         }
+
+        if let Some((accepted, dialed)) = existing_connections {
+            let now = behaviour.round_clock.current_round();
+            behaviour.current_round = now;
+            let roles = repeat_n(ConnectionDirection::Incoming, accepted)
+                .chain(repeat_n(ConnectionDirection::Outgoing, dialed));
+            for (index, role) in roles.enumerate() {
+                let peer_id = PeerId::random();
+                behaviour.negotiated_peers.insert(
+                    peer_id,
+                    RemotePeerConnectionDetails {
+                        direction: role,
+                        connection_id: ConnectionId::new_unchecked(1_000 + index),
+                    },
+                );
+                behaviour.liveness.start_or_resume_observing(peer_id);
+            }
+        }
+
+        behaviour
     }
 }
 

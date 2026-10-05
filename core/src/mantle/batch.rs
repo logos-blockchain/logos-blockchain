@@ -7,6 +7,7 @@ use lb_zksign::{ZkSignProof, ZkSignVerifierInputs};
     reason = "This is short-lived; each is pushed into DeferredZkpVerifications almost immediately, \
     which stores the two kinds in separate vectors. Also, most of them are the larger ZkSig variant."
 )]
+#[derive(Debug)]
 pub enum DeferredZkpVerification {
     ZkSig(ZkSignProof, ZkSignVerifierInputs),
     LeaderClaim(PoCProof, PoCVerifierInput),
@@ -95,6 +96,18 @@ pub enum Error {
     InvalidLeaderClaimProofs,
     #[error("deferred leader claim proof is malformed: {0}")]
     MalformedLeaderClaimProof(String),
+}
+
+#[cfg(test)]
+pub mod test_utils {
+    use super::{DeferredZkpVerification, DeferredZkpVerifications, Error};
+
+    pub fn batch_verify(deferred_zkp: Option<DeferredZkpVerification>) -> Result<(), Error> {
+        deferred_zkp
+            .into_iter()
+            .collect::<DeferredZkpVerifications>()
+            .verify()
+    }
 }
 
 #[cfg(test)]

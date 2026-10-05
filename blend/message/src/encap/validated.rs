@@ -1,10 +1,10 @@
-use derivative::Derivative;
+use educe::Educe;
+use lb_binary_codec::canonical::BinaryEncode;
 use lb_blend_crypto::random_sized_bytes;
 use lb_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
     selection::inputs::VerifyInputs,
 };
-use lb_codec::BinaryEncode;
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, UnsecuredEd25519Key, X25519PrivateKey,
 };
@@ -23,12 +23,12 @@ use crate::{
     reward::BlendingToken,
 };
 
-#[derive(Derivative, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
-#[derivative(Debug)]
+#[derive(Educe, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[educe(Debug)]
 /// An encapsulated message whose public header signature has been verified.
 pub struct EncapsulatedMessageWithVerifiedSignature {
     public_header_with_verified_signature: PublicHeaderWithVerifiedSignature,
-    #[derivative(Debug = "ignore")] // too long
+    #[educe(Debug(ignore))] // too long
     encapsulated_part: EncapsulatedPart,
 }
 
@@ -66,7 +66,7 @@ impl EncapsulatedMessageWithVerifiedSignature {
     where
         Verifier: ProofsVerifier,
     {
-        let (_, signing_key, proof_of_quota, signature) =
+        let (signing_key, proof_of_quota, signature) =
             self.public_header_with_verified_signature.into_components();
         let verified_proof_of_quota = verifier
             .verify_proof_of_quota(proof_of_quota, &signing_key)
@@ -130,11 +130,11 @@ pub struct RequiredProofOfSelectionVerificationInputs {
 }
 
 /// An encapsulated message whose public header has been verified.
-#[derive(Derivative, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
-#[derivative(Debug)]
+#[derive(Educe, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[educe(Debug)]
 pub struct EncapsulatedMessageWithVerifiedPublicHeader {
     validated_public_header: VerifiedPublicHeader,
-    #[derivative(Debug = "ignore")] // too long
+    #[educe(Debug(ignore))] // too long
     encapsulated_part: EncapsulatedPart,
 }
 
@@ -253,13 +253,10 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
         Verifier: ProofsVerifier,
     {
         let (validated_public_header, encapsulated_part) = self.into_components();
-        let (_, signing_key, verified_proof_of_quota, _) =
-            validated_public_header.into_components();
+        let (signing_key, verified_proof_of_quota, _) = validated_public_header.into_components();
 
         // Derive the shared key.
-        let Some(shared_key) = private_key.derive_shared_key(&signing_key.derive_x25519()) else {
-            return Err(Error::InvalidSharedSecret);
-        };
+        let shared_key = private_key.derive_shared_key(&signing_key.derive_x25519());
 
         // Decapsulate the encapsulated part.
         match encapsulated_part.decapsulate(
@@ -293,7 +290,7 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
                 payload,
                 verified_proof_of_selection,
             } => {
-                let (payload_type, payload_body) = payload.try_into_components()?;
+                let (payload_type, payload_body) = payload.into_components();
                 let blending_token = BlendingToken::new(
                     signing_key,
                     verified_proof_of_quota,

@@ -4,8 +4,8 @@ mod test_utils;
 
 use std::collections::HashMap;
 
+use lb_binary_codec::bincode::SerializeOp as _;
 use lb_core::{
-    codec::SerializeOp as _,
     crypto::{Digest, Hash, Hasher},
     mantle::{Note, Utxo, Value},
     sdp::{ActivityMetadata, ProviderId, ServiceParameters, ServiceType},
@@ -94,9 +94,8 @@ pub enum Error {
 
 /// Creates a deterministic transaction hash for reward distribution.
 ///
-/// The hash is computed from a version constant, epoch number, and service
-/// type, ensuring all nodes produce identical transaction hashes for reward
-/// notes.
+/// The hash is computed from the service type and the epoch number, ensuring
+/// all nodes produce identical transaction hashes for reward notes.
 fn create_reward_op_id(epoch: Epoch, service_type: ServiceType) -> Hash {
     let mut hasher = Hasher::default();
     let epoch_u8 = epoch.into_inner().to_le_bytes().to_vec();

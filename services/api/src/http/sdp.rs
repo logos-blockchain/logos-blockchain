@@ -36,8 +36,7 @@ where
             declaration: Box::new(declaration),
             reply_channel,
         })
-        .await
-        .map_err(|(e, _)| e)?;
+        .await?;
 
     reply_rx.await?
 }
@@ -69,8 +68,7 @@ where
 
     relay
         .send(lb_sdp_service::SdpMessage::PostActivity { metadata })
-        .await
-        .map_err(|(e, _)| e)?;
+        .await?;
 
     Ok(())
 }
@@ -102,8 +100,7 @@ where
 
     relay
         .send(lb_sdp_service::SdpMessage::PostWithdrawal { declaration_id })
-        .await
-        .map_err(|(e, _)| e)?;
+        .await?;
 
     Ok(())
 }
@@ -139,8 +136,7 @@ where
             declaration_id,
             reply_channel,
         })
-        .await
-        .map_err(|(e, _)| Box::new(e) as DynError)?;
+        .await?;
 
     reply_rx.await?.map_err(|e| Box::new(e) as DynError)?;
 

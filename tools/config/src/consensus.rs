@@ -1,6 +1,6 @@
 use core::time::Duration;
 
-use lb_codec::BinaryEncode as _;
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
@@ -8,7 +8,7 @@ use lb_core::{
         ops::{
             Op, OpId as _, ZkAndEd25519Proof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId,
+                ChannelId, MsgId,
                 inscribe::{Inscription, InscriptionOp},
             },
             transfer::TransferOp,
@@ -19,7 +19,7 @@ use lb_core::{
 };
 use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
 use lb_key_management_system_service::keys::{
-    Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
+    Ed25519Key, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey, ZkSignature,
 };
 use lb_node::{Hashable as _, SignedOps};
 use num_bigint::BigUint;
@@ -204,7 +204,7 @@ fn inscription_for_current_test(
             .encode_to_vec(),
         ),
         parent: MsgId::root(),
-        signer: Ed25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),
+        signer: UnverifiedEd25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),
     }
 }
 
@@ -495,7 +495,7 @@ pub fn create_genesis_block_with_declarations(
                 .unwrap();
         let ed25519_sig = provider
             .provider_sk
-            .sign_payload(mantle_tx_hash.as_signing_bytes().as_ref());
+            .sign_payload(mantle_tx_hash.as_signing_bytes());
         let proof = ZkAndEd25519Proof {
             zk_sig,
             ed25519_sig,

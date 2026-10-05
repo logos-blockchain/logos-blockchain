@@ -82,20 +82,25 @@ pub use handle::SequencerHandle;
 // Re-exported so consumers can inspect and assemble the signature set for
 // `prepare_channel_config` / `submit_channel_config` without depending on
 // `lb-core` / the key-management crate directly.
+// Re-exported so a signer can inspect the whole prepared tx
+// (`PreparedChannelConfig::tx`) and match on every op it would authorize.
 pub use lb_core::{
-    mantle::ops::channel::config::ChannelConfigOp,
-    proofs::channel_multi_sig_proof::IndexedSignature,
+    mantle::{
+        Op,
+        ops::{OpProof, channel::config::ChannelConfigOp},
+        transactions::Ops,
+    },
+    proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
 };
-pub use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
-// Pure key-only signing primitive for prepared multi-sig artifacts — sign a
-// prepared bundle/config received out of band (e.g. over gossip) with just this
-// participant's key, no sequencer or chain state needed.
+pub use lb_key_management_system_service::keys::{Ed25519Key, UnverifiedEd25519PublicKey};
+// Pure key-only signing primitive for prepared multi-sig artifacts — usable by
+// an offline key holder with no sequencer or chain state.
 pub use tx_builder::sign_prepared;
 pub use types::{
     AtomicWithdrawInfo, ChannelNote, ChannelTransferInfo, ChannelUpdate, ChannelUpdateTx,
     ChannelWalletView, DepositInfo, Error, Event, FinalizedOp, FinalizedTx, FundingConfig,
-    InscriptionId, InscriptionInfo, PendingTx, PreparedAtomicBundle, PreparedChannelConfig,
-    PublishResult, SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification,
-    TxSource, TxStatus, TxStatusUpdate, WithdrawArg, WithdrawInfo, WithdrawInputs,
+    InscriptionId, InscriptionInfo, PendingFunding, PendingTx, PreparedAtomicBundle,
+    PreparedChannelConfig, PublishResult, SequencerChannelView, SequencerCheckpoint,
+    SequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo, WithdrawInputs,
 };
 pub use zone_sequencer::ZoneSequencer;

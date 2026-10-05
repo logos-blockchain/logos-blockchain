@@ -2,6 +2,7 @@ pub mod blend;
 pub mod service_notes;
 
 use core::{
+    cmp::Ordering,
     fmt::{self, Display, Formatter},
     str::FromStr,
 };
@@ -9,29 +10,37 @@ use std::{collections::HashMap, hash::Hash};
 
 use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
-use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::{
+    bincode::{self, BoundedSerializeOp, DeserializeOp as _, SerializeOp as _},
+    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
+};
+#[cfg(any(test, feature = "test-utils"))]
+use lb_blend_proofs::{
+    quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
+    selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
+};
 use lb_cryptarchia_engine::Epoch;
+#[cfg(any(test, feature = "test-utils"))]
+use lb_groth16::Fr;
 use lb_groth16::fr_to_bytes;
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
-use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec};
+#[cfg(any(test, feature = "test-utils"))]
+use lb_key_management_system_keys::keys::Ed25519Key;
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, ZkPublicKey};
+use lb_utils::bounded::{BoundedVec, NonEmptyBoundedOrderedSet};
 use multiaddr::{Multiaddr, Protocol};
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
 use crate::{
     block::BlockNumber,
-    codec::{self, DeserializeOp as _, SerializeOp as _},
-    mantle::{
-        NoteId,
-        ops::{channel::Ed25519PublicKey, sdp::SdpError},
-        transactions::hash::TxHashView,
-    },
+    mantle::{NoteId, ops::sdp::SdpError, transactions::hash::TxHashView},
+    sdp::blend::ActivityProof,
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
 pub type StakeThreshold = u64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct MinStake {
     pub threshold: StakeThreshold,
     pub timestamp: BlockNumber,
@@ -70,6 +79,17 @@ impl InactivityPeriod {
     #[must_use]
     pub const fn into_inner(self) -> NumberOfEpochs {
         self.0
+    }
+}
+
+// An inactivity period: the number of epochs it wraps.
+impl BinaryEncode for InactivityPeriod {
+    fn encoded_length(&self) -> usize {
+        self.0.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
     }
 }
 
@@ -295,6 +315,20 @@ impl AsRef<u8> for ServiceType {
     }
 }
 
+impl PartialOrd for ServiceType {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Service types are ordered by the byte each is encoded as, so a map keyed by
+/// service type iterates in the order of their encodings.
+impl Ord for ServiceType {
+    fn cmp(&self, other: &Self) -> Ordering {
+        <Self as AsRef<u8>>::as_ref(self).cmp(<Self as AsRef<u8>>::as_ref(other))
+    }
+}
+
 impl BinaryEncode for ServiceType {
     fn encoded_length(&self) -> usize {
         <Self as AsRef<u8>>::as_ref(self).encoded_length()
@@ -341,6 +375,12 @@ pub type Nonce = u64;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ProviderId(pub Ed25519PublicKey);
 
+impl AsRef<[u8; 32]> for ProviderId {
+    fn as_ref(&self) -> &[u8; 32] {
+        self.0.as_bytes()
+    }
+}
+
 #[derive(Debug)]
 pub struct InvalidKeyBytesError;
 
@@ -361,14 +401,14 @@ impl TryFrom<[u8; 32]> for ProviderId {
 }
 
 impl PartialOrd for ProviderId {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for ProviderId {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.as_bytes().cmp(other.0.as_bytes())
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_ref().cmp(other.as_ref())
     }
 }
 
@@ -376,6 +416,16 @@ impl Ord for ProviderId {
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
 display_hex_bytes_newtype!(DeclarationId);
+
+impl AsRef<[u8; 32]> for DeclarationId {
+    fn as_ref(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl BoundedSerializeOp for DeclarationId {
+    type Bytes = [u8; 32];
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Declaration {
@@ -458,7 +508,7 @@ impl FromIterator<(ServiceType, HashMap<DeclarationId, Declaration>)> for Declar
 }
 
 impl TryFrom<Bytes> for Declarations {
-    type Error = codec::Error;
+    type Error = bincode::Error;
 
     fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
         Self::from_bytes(&bytes)
@@ -466,7 +516,7 @@ impl TryFrom<Bytes> for Declarations {
 }
 
 impl TryFrom<Declarations> for Bytes {
-    type Error = codec::Error;
+    type Error = bincode::Error;
 
     fn try_from(this: Declarations) -> Result<Self, Self::Error> {
         this.to_bytes()
@@ -474,7 +524,7 @@ impl TryFrom<Declarations> for Bytes {
 }
 
 pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
-pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
+pub type Locators = NonEmptyBoundedOrderedSet<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct DeclarationMessage {
@@ -497,7 +547,7 @@ impl DeclarationMessage {
         // [spec](https://lip.logos.co/blockchain/raw/bedrock-service-declaration-protocol.html#declaration-storage):
         // declaration_id = Hash(service||provider_id||zk_id||locators)
         hasher.update(service.as_bytes());
-        hasher.update(self.provider_id.0);
+        hasher.update(self.provider_id.as_ref());
         hasher.update(fr_to_bytes(self.zk_id.as_fr()));
         // The locators go in through the wire encoding, which prefixes the list
         // with its count and every locator with its byte length.
@@ -519,6 +569,21 @@ impl DeclarationMessage {
 
         Ok(())
     }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn sample() -> Self {
+        Self {
+            service_type: ServiceType::BlendNetwork,
+            locators: "/ip4/127.0.0.1/udp/3000/quic-v1"
+                .parse::<Locator>()
+                .expect("Locator is valid.")
+                .into(),
+            provider_id: ProviderId(Ed25519Key::from_bytes(&[24; 32]).public_key()),
+            zk_id: ZkPublicKey::from(Fr::from(25u64)),
+            service_note_id: NoteId(Fr::from(26u64)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
@@ -538,7 +603,7 @@ pub struct ActiveMessage {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ActivityMetadata {
-    Blend(Box<blend::ActivityProof>),
+    Blend(Box<ActivityProof>),
 }
 
 impl ActivityMetadata {
@@ -590,7 +655,7 @@ impl BinaryDecode for ActivityMetadata {
         let (input, metadata_type) = u8::decode(input, &())?;
         match metadata_type {
             ACTIVE_METADATA_BLEND_TYPE => {
-                let (input, proof) = blend::ActivityProof::decode(input, &())?;
+                let (input, proof) = ActivityProof::decode(input, &())?;
                 Ok((input, Self::Blend(Box::new(proof))))
             }
             other => Err(DecodeError::unknown_discriminant::<Self>(u64::from(other))),
@@ -600,12 +665,15 @@ impl BinaryDecode for ActivityMetadata {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp as _};
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
     use multiaddr::Multiaddr;
 
-    use crate::sdp::{Declaration, DeclarationMessage, Locator, Locators, ServiceType};
+    use crate::sdp::{
+        Declaration, DeclarationId, DeclarationMessage, Locator, Locators, ProviderId, ServiceType,
+    };
 
     #[test]
     fn locator_rejects_multiaddr_with_peer_id() {
@@ -725,5 +793,64 @@ mod tests {
 
         assert_eq!(concatenated(&joined), concatenated(&split));
         assert_ne!(joined.id(), split.id());
+    }
+
+    #[test]
+    fn declaration_id_has_exact_bincode_size() {
+        let id = DeclarationId([0x66; 32]);
+        let ordinary = id.to_bytes().unwrap();
+        let bounded = id.to_bounded_bytes().unwrap();
+
+        assert_eq!(ordinary.len(), 32);
+        assert_eq!(bounded.as_ref(), ordinary.as_ref());
+    }
+
+    #[test]
+    fn sdp_byte_types_borrow_their_stored_bytes() {
+        let provider_id = ProviderId(Ed25519Key::from_bytes(&[0; 32]).public_key());
+        let declaration_id = DeclarationId([0x66; 32]);
+
+        assert_eq!(provider_id.as_ref(), provider_id.0.as_bytes());
+        assert_eq!(declaration_id.as_ref(), &declaration_id.0);
+        assert!(std::ptr::eq(provider_id.as_ref(), provider_id.0.as_bytes()));
+        assert!(std::ptr::eq(
+            declaration_id.as_ref(),
+            &raw const declaration_id.0
+        ));
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl WithdrawMessage {
+    #[must_use]
+    pub fn sample() -> Self {
+        Self {
+            declaration_id: DeclarationId([27u8; 32]),
+            service_note_id: NoteId(Fr::from(28u64)),
+            nonce: 29,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl ActiveMessage {
+    #[must_use]
+    pub fn sample() -> Self {
+        let activity = ActivityProof {
+            epoch: Epoch::new(10),
+            signing_key: Ed25519Key::from_bytes(&[1; 32]).public_key(),
+            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([2u8; PROOF_OF_QUOTA_SIZE])
+                .into(),
+            proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked(
+                [3u8; PROOF_OF_SELECTION_SIZE],
+            )
+            .into(),
+        };
+
+        Self {
+            declaration_id: DeclarationId([30u8; 32]),
+            nonce: 31,
+            metadata: ActivityMetadata::Blend(Box::new(activity)),
+        }
     }
 }

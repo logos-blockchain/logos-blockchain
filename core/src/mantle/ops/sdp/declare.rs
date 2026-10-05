@@ -5,10 +5,10 @@ use super::{SDPDeclareOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        Note, Value,
+        Note,
         batch::DeferredZkpVerification,
         channel::Channels,
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation,
@@ -17,7 +17,7 @@ use crate::{
         ops::{SignedOperation, ZkAndEd25519Proof},
         transactions::{
             hash::TxHashView,
-            states::{Preverified, Unverified, VerificationState, Verified},
+            states::{Preverified, Unverified, Verified},
         },
     },
     sdp::{Declaration, MinStake, service_notes::ServiceNotes},
@@ -169,6 +169,8 @@ impl OperationGas<MainnetGasProfile> for SDPDeclareOp {
     const GAS_COST: Gas = Gas::new(646);
 }
 
+impl OpGasCalculator<MainnetGasProfile> for SDPDeclareOp {}
+
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<SDPDeclareOp, Unverified, StandardMode>
 {
@@ -224,6 +226,7 @@ impl VerifiableOperation<StandardMode>
     }
 }
 
+// TODO: Collapse into generic over Mode
 impl PreverifiableOperation<GenesisMode>
     for SignedOperation<SDPDeclareOp, Unverified, GenesisMode>
 {
@@ -277,26 +280,37 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<SDPDeclareO
     }
 }
 
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOperation<SDPDeclareOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{AdditiveGroup as _, Fr};
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkSignature};
     use num_bigint::BigUint;
 
-    use super::{SDPDeclareOp, SdpError, validate_service_scoped_uniqueness};
+    use super::{
+        Channels, GenesisMode, MinStake, Note, PreverifiableOperation as _, Preverified,
+        ProvableOperation, SDPDeclareExecutionContext, SDPDeclareGenesisValidationContext,
+        SDPDeclareOp, SDPDeclarePreverificationContext, SDPDeclareVerificationContext, SdpError,
+        SignedOperation, StandardMode, TxHashView, Unverified, Utxos, VerifiableOperation as _,
+        Verified, ZkAndEd25519Proof, validate_service_scoped_uniqueness,
+    };
     use crate::{
-        mantle::ledger::Declarations,
+        mantle::{
+            TxHash, Utxo,
+            gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
+            ledger::Declarations,
+            ops::{channel::ChannelId, op_proof::samples::SampleProof as _},
+        },
         sdp::{Declaration, ServiceType},
     };
+
+    fn locked_utxo(zk_key: &ZkKey) -> Utxo {
+        Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: Note::new(10_000, zk_key.to_public_key()),
+        }
+    }
 
     fn declare_op(provider_sk: u8, zk_sk: u64, locator: &str) -> SDPDeclareOp {
         SDPDeclareOp {
@@ -342,5 +356,584 @@ mod tests {
             validate_service_scoped_uniqueness(&declare_b, &declarations),
             Err(SdpError::DuplicateZkId { .. })
         ));
+    }
+
+    mod standard_mode {
+        use super::*;
+        use crate::{
+            mantle::batch::{
+                DeferredZkpVerification, Error as BatchError, test_utils::batch_verify,
+            },
+            sdp::service_notes::ServiceNotes,
+        };
+
+        fn preverified(
+            operation: SDPDeclareOp,
+            zk_sig: ZkSignature,
+            tx_hash_view: &TxHashView,
+        ) -> SignedOperation<SDPDeclareOp, Preverified, StandardMode> {
+            let ed25519_sig =
+                Ed25519Key::from_bytes(&[1; 32]).sign_payload(tx_hash_view.as_bytes().as_ref());
+
+            SignedOperation::<_, Unverified, StandardMode>::new(
+                operation,
+                ZkAndEd25519Proof::new(zk_sig, ed25519_sig),
+            )
+            .into_preverified(&SDPDeclarePreverificationContext { tx_hash_view })
+            .expect("the provider key signed this transaction hash")
+        }
+
+        #[test]
+        fn preverify_rejects_a_signature_over_another_transaction() {
+            let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+            let signed_view = TxHashView::from(TxHash::from([11u8; 32]));
+            let other_view = TxHashView::from(TxHash::from([12u8; 32]));
+
+            let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+                declare_op(1, 1, "/ip4/1.1.1.1/udp/0"),
+                ZkAndEd25519Proof::new(
+                    ZkSignature::sample(),
+                    signing_key.sign_payload(signed_view.as_bytes().as_ref()),
+                ),
+            );
+
+            assert_eq!(
+                signed_operation.preverify(&SDPDeclarePreverificationContext {
+                    tx_hash_view: &signed_view
+                }),
+                Ok(())
+            );
+            assert_eq!(
+                signed_operation.preverify(&SDPDeclarePreverificationContext {
+                    tx_hash_view: &other_view
+                }),
+                Err(SdpError::InvalidEddsaSignature)
+            );
+        }
+
+        #[test]
+        fn verify_rejects_a_locked_note_that_is_not_in_the_ledger() {
+            let operation = declare_op(1, 1, "/ip4/1.1.1.1/udp/0");
+            let service_note_id = operation.service_note_id;
+
+            let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
+            let signed_operation = preverified(operation, ZkSignature::sample(), &tx_hash_view);
+
+            assert_eq!(
+                signed_operation
+                    .verify(&SDPDeclareVerificationContext {
+                        utxo_tree: &Utxos::new(),
+                        channels: &Channels::new(),
+                        service_notes: &ServiceNotes::new(),
+                        tx_hash_view: &tx_hash_view,
+                        declarations: &Declarations::new_sync(),
+                        min_stake: &MinStake {
+                            threshold: 0,
+                            timestamp: 0,
+                        },
+                    })
+                    .unwrap_err(),
+                SdpError::InexistingNote(service_note_id)
+            );
+        }
+
+        #[test]
+        fn verify_rejects_a_declaration_that_is_already_registered() {
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let utxo = locked_utxo(&note_key);
+            let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
+
+            let operation = SDPDeclareOp {
+                service_note_id: utxo.id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+            let declaration_id = operation.id();
+            let declarations = Declarations::new_sync()
+                .insert(declaration_id, Declaration::new(Epoch::new(0), &operation));
+            let declaration_key = ZkKey::from(BigUint::from(1u64));
+
+            let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
+            let zk_sig = ZkKey::multi_sign(&[note_key, declaration_key], tx_hash_view.as_fr())
+                .expect("signing should succeed");
+
+            let signed_operation = preverified(operation, zk_sig, &tx_hash_view);
+
+            assert_eq!(
+                signed_operation
+                    .verify(&SDPDeclareVerificationContext {
+                        utxo_tree: &utxos,
+                        channels: &Channels::new(),
+                        service_notes: &ServiceNotes::new(),
+                        tx_hash_view: &tx_hash_view,
+                        declarations: &declarations,
+                        min_stake: &MinStake {
+                            threshold: 0,
+                            timestamp: 0,
+                        },
+                    })
+                    .unwrap_err(),
+                SdpError::DuplicateDeclaration(declaration_id)
+            );
+        }
+
+        #[test]
+        fn verify_rejects_a_locked_note_owned_by_a_channel() {
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let utxo = locked_utxo(&note_key);
+            let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
+
+            let operation = SDPDeclareOp {
+                service_note_id: utxo.id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+            let declaration_key = ZkKey::from(BigUint::from(1u64));
+
+            let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
+            let zk_sig = ZkKey::multi_sign(&[note_key, declaration_key], tx_hash_view.as_fr())
+                .expect("signing should succeed");
+
+            let channels = Channels::new()
+                .register_channel_note(&utxo.id(), &ChannelId::from([21u8; 32]))
+                .expect("the note is not owned by another channel");
+
+            let signed_operation = preverified(operation, zk_sig, &tx_hash_view);
+
+            assert_eq!(
+                signed_operation
+                    .verify(&SDPDeclareVerificationContext {
+                        utxo_tree: &utxos,
+                        channels: &channels,
+                        service_notes: &ServiceNotes::new(),
+                        tx_hash_view: &tx_hash_view,
+                        declarations: &Declarations::new_sync(),
+                        min_stake: &MinStake {
+                            threshold: 0,
+                            timestamp: 0,
+                        },
+                    })
+                    .unwrap_err(),
+                SdpError::ChannelNote(utxo.id())
+            );
+        }
+
+        #[test]
+        fn verify_rejects_a_locked_note_below_the_minimum_stake() {
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let utxo = locked_utxo(&note_key);
+            let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
+
+            let operation = SDPDeclareOp {
+                service_note_id: utxo.id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+            let declaration_key = ZkKey::from(BigUint::from(1u64));
+
+            let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
+            let zk_sig = ZkKey::multi_sign(&[note_key, declaration_key], tx_hash_view.as_fr())
+                .expect("signing should succeed");
+
+            let signed_operation = preverified(operation, zk_sig, &tx_hash_view);
+
+            assert_eq!(
+                signed_operation
+                    .verify(&SDPDeclareVerificationContext {
+                        utxo_tree: &utxos,
+                        channels: &Channels::new(),
+                        service_notes: &ServiceNotes::new(),
+                        tx_hash_view: &tx_hash_view,
+                        declarations: &Declarations::new_sync(),
+                        min_stake: &MinStake {
+                            threshold: utxo.note.value + 1,
+                            timestamp: 0,
+                        },
+                    })
+                    .unwrap_err(),
+                SdpError::NoteInsufficientValue {
+                    note_id: utxo.id(),
+                    value: utxo.note.value,
+                }
+            );
+        }
+
+        #[test]
+        fn verify_accepts_a_locked_note_exactly_meeting_the_minimum_stake() {
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let utxo = locked_utxo(&note_key);
+            let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
+
+            let operation = SDPDeclareOp {
+                service_note_id: utxo.id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+            let declaration_key = ZkKey::from(BigUint::from(1u64));
+
+            let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
+            let zk_sig = ZkKey::multi_sign(&[note_key, declaration_key], tx_hash_view.as_fr())
+                .expect("signing should succeed");
+
+            let signed_operation = preverified(operation, zk_sig, &tx_hash_view);
+
+            assert!(
+                signed_operation
+                    .verify(&SDPDeclareVerificationContext {
+                        utxo_tree: &utxos,
+                        channels: &Channels::new(),
+                        service_notes: &ServiceNotes::new(),
+                        tx_hash_view: &tx_hash_view,
+                        declarations: &Declarations::new_sync(),
+                        min_stake: &MinStake {
+                            threshold: utxo.note.value,
+                            timestamp: 0,
+                        },
+                    })
+                    .unwrap()
+                    .is_some()
+            );
+        }
+
+        #[test]
+        fn verify_rejects_a_locked_note_already_locked_for_the_service() {
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let utxo = locked_utxo(&note_key);
+            let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
+
+            let operation = SDPDeclareOp {
+                service_note_id: utxo.id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+            let declaration_key = ZkKey::from(BigUint::from(1u64));
+
+            let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
+            let zk_sig = ZkKey::multi_sign(&[note_key, declaration_key], tx_hash_view.as_fr())
+                .expect("signing should succeed");
+
+            let min_stake = MinStake {
+                threshold: 0,
+                timestamp: 0,
+            };
+            let locked_notes = ServiceNotes::new()
+                .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &utxo.id())
+                .expect("the note covers the minimum stake");
+
+            let signed_operation = preverified(operation, zk_sig, &tx_hash_view);
+
+            assert_eq!(
+                signed_operation
+                    .verify(&SDPDeclareVerificationContext {
+                        utxo_tree: &utxos,
+                        channels: &Channels::new(),
+                        service_notes: &locked_notes,
+                        tx_hash_view: &tx_hash_view,
+                        declarations: &Declarations::new_sync(),
+                        min_stake: &min_stake,
+                    })
+                    .unwrap_err(),
+                SdpError::NoteAlreadyUsedForService {
+                    note_id: utxo.id(),
+                    service_type: ServiceType::BlendNetwork,
+                }
+            );
+        }
+
+        fn note_key() -> ZkKey {
+            ZkKey::from(BigUint::from(3u64))
+        }
+
+        fn declaration_key() -> ZkKey {
+            ZkKey::from(BigUint::from(1u64))
+        }
+
+        fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
+            let utxo = locked_utxo(&note_key());
+            let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
+            let operation = SDPDeclareOp {
+                service_note_id: utxo.id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+            let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
+            let zk_sig =
+                ZkKey::multi_sign(signers, tx_hash_view.as_fr()).expect("signing should succeed");
+
+            preverified(operation, zk_sig, &tx_hash_view)
+                .verify(&SDPDeclareVerificationContext {
+                    utxo_tree: &utxos,
+                    channels: &Channels::new(),
+                    service_notes: &ServiceNotes::new(),
+                    tx_hash_view: &tx_hash_view,
+                    declarations: &Declarations::new_sync(),
+                    min_stake: &MinStake {
+                        threshold: 0,
+                        timestamp: 0,
+                    },
+                })
+                .expect("verify leaves the proof to the batch")
+        }
+
+        #[test]
+        fn deferred_zkp_is_accepted() {
+            assert!(
+                batch_verify(deferred_zkp_signed_by(&[note_key(), declaration_key(),])).is_ok()
+            );
+        }
+
+        #[test]
+        fn wrong_deferred_zkp_is_rejected() {
+            assert!(matches!(
+                batch_verify(deferred_zkp_signed_by(&[declaration_key()])),
+                Err(BatchError::InvalidZkSignatures)
+            ));
+        }
+
+        #[test]
+        fn verify_accepts_a_well_formed_declaration() {
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let utxo = locked_utxo(&note_key);
+            let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
+
+            let operation = SDPDeclareOp {
+                service_note_id: utxo.id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+            let declaration_key = ZkKey::from(BigUint::from(1u64));
+
+            let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
+            let zk_sig = ZkKey::multi_sign(&[note_key, declaration_key], tx_hash_view.as_fr())
+                .expect("signing should succeed");
+
+            let signed_operation = preverified(operation, zk_sig, &tx_hash_view);
+
+            assert!(
+                signed_operation
+                    .verify(&SDPDeclareVerificationContext {
+                        utxo_tree: &utxos,
+                        channels: &Channels::new(),
+                        service_notes: &ServiceNotes::new(),
+                        tx_hash_view: &tx_hash_view,
+                        declarations: &Declarations::new_sync(),
+                        min_stake: &MinStake {
+                            threshold: 0,
+                            timestamp: 0,
+                        },
+                    })
+                    .unwrap()
+                    .is_some()
+            );
+        }
+
+        fn verified(
+            operation: SDPDeclareOp,
+        ) -> SignedOperation<SDPDeclareOp, Verified, StandardMode> {
+            SignedOperation::<_, Unverified, StandardMode>::new(
+                operation,
+                <SDPDeclareOp as ProvableOperation>::Proof::sample(),
+            )
+            .into_state_trusted()
+        }
+
+        #[test]
+        fn execute_registers_the_declaration_and_locks_the_note() {
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let utxo = locked_utxo(&note_key);
+            let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
+
+            let operation = SDPDeclareOp {
+                service_note_id: utxo.id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+            let declaration_id = operation.id();
+            let service_type = operation.service_type;
+            let epoch = Epoch::new(4);
+            let expected = Declaration::new(epoch, &operation);
+
+            let (context, events) = verified(operation)
+                .execute(SDPDeclareExecutionContext {
+                    utxo_tree: utxos,
+                    epoch,
+                    declarations: Declarations::new_sync(),
+                    service_notes: ServiceNotes::new(),
+                    min_stake: MinStake {
+                        threshold: 0,
+                        timestamp: 0,
+                    },
+                })
+                .expect("the locked note is in the ledger");
+
+            assert_eq!(context.declarations.get(&declaration_id), Some(&expected));
+            assert!(
+                context
+                    .service_notes
+                    .is_used_for_service(&utxo.id(), &service_type)
+            );
+            assert_eq!(events, []);
+        }
+
+        #[test]
+        #[should_panic(expected = "The operation should have been checked")]
+        fn execute_panics_on_a_locked_note_missing_from_the_ledger() {
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let operation = SDPDeclareOp {
+                service_note_id: locked_utxo(&note_key).id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+
+            drop(verified(operation).execute(SDPDeclareExecutionContext {
+                utxo_tree: Utxos::new(),
+                epoch: Epoch::new(4),
+                declarations: Declarations::new_sync(),
+                service_notes: ServiceNotes::new(),
+                min_stake: MinStake {
+                    threshold: 0,
+                    timestamp: 0,
+                },
+            }));
+        }
+
+        #[test]
+        fn execute_rejects_a_locked_note_below_the_minimum_stake() {
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let utxo = locked_utxo(&note_key);
+            let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
+
+            let operation = SDPDeclareOp {
+                service_note_id: utxo.id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+
+            assert_eq!(
+                verified(operation)
+                    .execute(SDPDeclareExecutionContext {
+                        utxo_tree: utxos,
+                        epoch: Epoch::new(4),
+                        declarations: Declarations::new_sync(),
+                        service_notes: ServiceNotes::new(),
+                        min_stake: MinStake {
+                            threshold: utxo.note.value + 1,
+                            timestamp: 0,
+                        },
+                    })
+                    .map(|_| ())
+                    .map_err(|(_, error)| error),
+                Err(SdpError::UnexpectedError)
+            );
+        }
+
+        #[test]
+        fn sdp_declare_op_execution_gas_does_not_scale_with_the_threshold() {
+            for threshold in [0, 1, 3] {
+                assert_eq!(
+                    SDPDeclareOp::sample().execution_gas(&FixedThresholds(threshold)),
+                    Ok(Gas::new(646))
+                );
+            }
+        }
+    }
+
+    mod genesis_mode {
+        use super::*;
+        use crate::sdp::service_notes::ServiceNotes;
+
+        fn genesis_preverified(
+            operation: SDPDeclareOp,
+            tx_hash_view: &TxHashView,
+        ) -> SignedOperation<SDPDeclareOp, Preverified, GenesisMode> {
+            let ed25519_sig =
+                Ed25519Key::from_bytes(&[1; 32]).sign_payload(tx_hash_view.as_bytes().as_ref());
+
+            SignedOperation::<_, Unverified, GenesisMode>::new(
+                operation,
+                ZkAndEd25519Proof::new(ZkSignature::sample(), ed25519_sig),
+            )
+            .into_preverified(&SDPDeclarePreverificationContext { tx_hash_view })
+            .expect("the provider key signed this transaction hash")
+        }
+
+        #[test]
+        fn genesis_verify_rejects_a_locked_note_that_is_not_in_the_ledger() {
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let service_note_id = locked_utxo(&note_key).id();
+
+            let operation = SDPDeclareOp {
+                service_note_id,
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+
+            let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
+            let signed_operation = genesis_preverified(operation, &tx_hash_view);
+
+            assert_eq!(
+                signed_operation
+                    .verify(&SDPDeclareGenesisValidationContext {
+                        utxo_tree: &Utxos::new(),
+                        channels: &Channels::new(),
+                        service_notes: &ServiceNotes::new(),
+                        declarations: &Declarations::new_sync(),
+                        min_stake: &MinStake {
+                            threshold: 0,
+                            timestamp: 0,
+                        },
+                    })
+                    .unwrap_err(),
+                SdpError::InexistingNote(service_note_id)
+            );
+        }
+
+        #[test]
+        fn genesis_preverify_rejects_a_signature_over_another_transaction() {
+            let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+            let signed_view = TxHashView::from(TxHash::from([11u8; 32]));
+            let other_view = TxHashView::from(TxHash::from([12u8; 32]));
+
+            let signed_operation = SignedOperation::<_, Unverified, GenesisMode>::new(
+                declare_op(1, 1, "/ip4/1.1.1.1/udp/0"),
+                ZkAndEd25519Proof::new(
+                    ZkSignature::sample(),
+                    signing_key.sign_payload(signed_view.as_bytes().as_ref()),
+                ),
+            );
+
+            assert_eq!(
+                signed_operation.preverify(&SDPDeclarePreverificationContext {
+                    tx_hash_view: &signed_view
+                }),
+                Ok(())
+            );
+            assert_eq!(
+                signed_operation.preverify(&SDPDeclarePreverificationContext {
+                    tx_hash_view: &other_view
+                }),
+                Err(SdpError::InvalidEddsaSignature)
+            );
+        }
+
+        #[test]
+        fn genesis_verify_accepts_a_declaration_without_a_zk_signature() {
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let utxo = locked_utxo(&note_key);
+            let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
+
+            let operation = SDPDeclareOp {
+                service_note_id: utxo.id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+
+            let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
+            let signed_operation = genesis_preverified(operation, &tx_hash_view);
+
+            assert!(
+                signed_operation
+                    .verify(&SDPDeclareGenesisValidationContext {
+                        utxo_tree: &utxos,
+                        channels: &Channels::new(),
+                        service_notes: &ServiceNotes::new(),
+                        declarations: &Declarations::new_sync(),
+                        min_stake: &MinStake {
+                            threshold: 0,
+                            timestamp: 0,
+                        },
+                    })
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 }

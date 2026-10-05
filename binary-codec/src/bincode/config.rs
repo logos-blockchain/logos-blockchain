@@ -1,0 +1,121 @@
+use std::sync::LazyLock;
+
+use ::bincode::{
+    Options as _,
+    config::{
+        FixintEncoding, LittleEndian, RejectTrailing, WithOtherEndian, WithOtherIntEncoding,
+        WithOtherLimit, WithOtherTrailing,
+    },
+};
+
+/// The width of an enum discriminant in the configured bincode format.
+pub const BINCODE_ENUM_DISCRIMINANT_SIZE: usize = size_of::<u32>();
+
+/// The width of a u8 in the configured bincode format.
+pub const BINCODE_U8_SIZE: usize = size_of::<u8>();
+
+/// The width of a u64 in the configured bincode format.
+pub const BINCODE_U64_SIZE: usize = size_of::<u64>();
+
+/// The width of sequence and byte-sequence length prefixes in the configured
+/// bincode format.
+pub const BINCODE_LENGTH_PREFIX_SIZE: usize = BINCODE_U64_SIZE;
+
+// Type composition is cool but also makes naming types a bit awkward
+pub type BincodeOptions = WithOtherTrailing<
+    WithOtherIntEncoding<
+        WithOtherLimit<
+            WithOtherEndian<::bincode::DefaultOptions, LittleEndian>,
+            ::bincode::config::Infinite,
+        >,
+        FixintEncoding,
+    >,
+    RejectTrailing,
+>;
+
+pub static OPTIONS: LazyLock<BincodeOptions> = LazyLock::new(|| {
+    ::bincode::DefaultOptions::new()
+        .with_little_endian()
+        .with_no_limit()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+});
+
+// Serialization functions
+use bytes::Bytes;
+use lb_utils::bounded::UpperBoundedVec;
+use serde::{Serialize, de::DeserializeOwned};
+
+use super::{Error as WireError, Result};
+
+/// Serialize an object directly into bytes
+pub fn serialize<T: Serialize>(item: &T) -> Result<Bytes> {
+    Ok(OPTIONS
+        .serialize(&item)
+        .map_err(|e| WireError::Serialize(Box::new(e)))?
+        .into())
+}
+
+/// Serialize an object while enforcing a maximum encoded size.
+pub fn serialize_bounded<T: Serialize, const MAX: usize>(
+    item: &T,
+) -> Result<UpperBoundedVec<u8, MAX>> {
+    let bytes = OPTIONS
+        .with_limit(MAX as u64)
+        .serialize(item)
+        .map_err(|e| WireError::Serialize(Box::new(e)))?;
+
+    UpperBoundedVec::try_from(bytes).map_err(|e| WireError::Serialize(Box::new(e)))
+}
+
+/// Get the serialized size of an object without actually serializing it
+pub fn serialized_size<T: Serialize>(item: &T) -> Result<u64> {
+    OPTIONS
+        .serialized_size(item)
+        .map_err(|e| WireError::Serialize(Box::new(e)))
+}
+
+/// Deserialize an object directly from bytes
+pub fn deserialize<T: DeserializeOwned>(data: &[u8]) -> Result<T> {
+    OPTIONS
+        .deserialize(data)
+        .map_err(|e| WireError::Deserialize(Box::new(e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Serialize;
+
+    use super::*;
+
+    #[derive(Serialize)]
+    enum TestEnum {
+        Value,
+    }
+
+    #[test]
+    fn enum_discriminant_size_matches_configured_bincode() {
+        assert_eq!(
+            serialize(&TestEnum::Value).unwrap().len(),
+            BINCODE_ENUM_DISCRIMINANT_SIZE
+        );
+    }
+
+    #[test]
+    fn u8_size_matches_configured_bincode() {
+        assert_eq!(serialize(&u8::MAX).unwrap().len(), BINCODE_U8_SIZE);
+    }
+
+    #[test]
+    fn u64_size_matches_configured_bincode() {
+        assert_eq!(serialize(&u64::MAX).unwrap().len(), BINCODE_U64_SIZE);
+    }
+
+    #[test]
+    fn sequence_length_prefix_size_matches_configured_bincode() {
+        assert_eq!(
+            serialize(&Vec::<u8>::new()).unwrap().len(),
+            BINCODE_LENGTH_PREFIX_SIZE
+        );
+    }
+}

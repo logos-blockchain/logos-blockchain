@@ -1,19 +1,17 @@
-use std::cmp::Ordering;
-
-use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_utils::bounded::UpperBoundedVec;
+use lb_utils::bounded::UpperBoundedBTreeMap;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 use crate::mantle::ops::channel::ChannelKeyIndex;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
+/// A signature together with the index of the channel key that made it, as a
+/// key holder hands it over before the signatures are gathered into a
+/// [`ChannelMultiSigProof`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexedSignature {
     pub signature: Ed25519Signature,
-    pub channel_key_index: ChannelKeyIndex, /* Using ChannelKeyIndex ensures indices are
-                                             * bounded, and MAX provides an upper limit for the
-                                             * number of unique signatures (one per index) */
+    pub channel_key_index: ChannelKeyIndex,
 }
 
 impl IndexedSignature {
@@ -32,80 +30,61 @@ impl From<(ChannelKeyIndex, Ed25519Signature)> for IndexedSignature {
     }
 }
 
-impl PartialOrd<Self> for IndexedSignature {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+impl From<IndexedSignature> for (ChannelKeyIndex, Ed25519Signature) {
+    fn from(
+        IndexedSignature {
+            signature,
+            channel_key_index,
+        }: IndexedSignature,
+    ) -> Self {
+        (channel_key_index, signature)
     }
-}
-
-impl Ord for IndexedSignature {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.channel_key_index
-            .cmp(&other.channel_key_index)
-            .then_with(|| self.signature.to_bytes().cmp(&other.signature.to_bytes()))
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("Signature indices are not strictly increasing: {0:?}.")]
-    IndicesNotStrictlyIncreasing(Vec<ChannelKeyIndex>),
-    #[error("Too many signatures: got {actual}, maximum allowed is {maximum}.")]
-    TooManySignatures { actual: usize, maximum: usize },
 }
 
 pub const MAX_SIGNATURES: usize = u16::MAX as usize;
-pub type IndexedSignatures = UpperBoundedVec<IndexedSignature, MAX_SIGNATURES>;
+
+/// Signatures keyed by the index of the channel key that made them.
+///
+/// Being a map, it holds at most one signature per key and lists them in
+/// ascending index order, as the spec requires of a proof. Its canonical
+/// decoding rejects a repeated or out-of-order index, so each proof has a
+/// single encoding.
+pub type IndexedSignatures =
+    UpperBoundedBTreeMap<ChannelKeyIndex, Ed25519Signature, MAX_SIGNATURES>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-// Serde goes through `ChannelMultiSigProofRepr` via `try_from`/`into`: `Deserialize`
-// routes through `new`, so the well-formedness invariant (strictly-increasing
-// indices) is upheld on every serde path too — a non-monotonic proof is
-// unrepresentable no matter how it is constructed, and no consumer needs to
-// re-check. The repr keeps the `{ "signatures": [..] }` wire form.
-#[serde(
-    try_from = "ChannelMultiSigProofRepr",
-    into = "ChannelMultiSigProofRepr"
-)]
 pub struct ChannelMultiSigProof {
-    // Invariant: signature indices are strictly increasing (hence ordered and
-    // unique), as required by the spec.
     signatures: IndexedSignatures,
 }
 
 impl ChannelMultiSigProof {
     #[must_use]
-    pub const fn new_unchecked(signatures: IndexedSignatures) -> Self {
+    pub const fn new(signatures: IndexedSignatures) -> Self {
         Self { signatures }
     }
 
-    pub fn try_new(signatures: IndexedSignatures) -> Result<Self, Error> {
-        let signatures = Self::validate_well_formedness(signatures)?;
-        Ok(Self { signatures })
-    }
-
-    /// Validates that the proof is structurally well-formed: signature indices
-    /// must be strictly increasing (so they are ordered and unique, per the
-    /// `CHANNEL_CONFIG` / `CHANNEL_WITHDRAW` spec).
-    ///
-    /// This validates structural correctness only. Cryptographic validity
-    /// (signature verification, threshold requirements, index-to-key
-    /// correspondence) must be checked separately.
-    fn validate_well_formedness(signatures: IndexedSignatures) -> Result<IndexedSignatures, Error> {
-        if signatures
-            .windows(2)
-            .any(|w| w[0].channel_key_index >= w[1].channel_key_index)
-        {
-            return Err(Error::IndicesNotStrictlyIncreasing(
-                signatures.iter().map(|s| s.channel_key_index).collect(),
-            ));
-        }
-        Ok(signatures)
+    /// The proof without signatures, which configures a channel that no key
+    /// has claimed yet.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self::new(IndexedSignatures::empty())
     }
 
     #[must_use]
-    pub fn signatures(&self) -> &[IndexedSignature] {
-        self.signatures.as_slice()
+    pub const fn signatures(&self) -> &IndexedSignatures {
+        &self.signatures
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn sample_with_signatures(signature_count: u16) -> Self {
+        let signatures = IndexedSignatures::try_from_iter((0..signature_count).map(|index| {
+            let [low, _] = index.to_le_bytes();
+            (index, Ed25519Signature::from_bytes(&[low; 64]))
+        }))
+        .expect("`signature_count` is bounded by `MAX_SIGNATURES`");
+
+        Self::new(signatures)
     }
 }
 
@@ -126,35 +105,8 @@ impl BinaryDecode for ChannelMultiSigProof {
         input: &'input [u8],
         (): &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (rest, inner) = IndexedSignatures::decode(input, &())?;
-        let proof = Self::try_new(inner)
-            .map_err(|_| DecodeError::invalid_value::<Self>("Invalid channel multi-sig proof"))?;
-        Ok((rest, proof))
-    }
-}
-
-/// Serde wire representation of [`ChannelMultiSigProof`] — a struct with a
-/// `signatures` field. Kept separate so the public type's (de)serialization
-/// is forced through `new` (via the `TryFrom`/`From` impls below) while
-/// preserving the `{ "signatures": [..] }` JSON shape.
-#[derive(Serialize, Deserialize)]
-struct ChannelMultiSigProofRepr {
-    signatures: IndexedSignatures,
-}
-
-impl TryFrom<ChannelMultiSigProofRepr> for ChannelMultiSigProof {
-    type Error = Error;
-
-    fn try_from(repr: ChannelMultiSigProofRepr) -> Result<Self, Self::Error> {
-        Self::try_new(repr.signatures)
-    }
-}
-
-impl From<ChannelMultiSigProof> for ChannelMultiSigProofRepr {
-    fn from(proof: ChannelMultiSigProof) -> Self {
-        Self {
-            signatures: proof.signatures,
-        }
+        let (rest, signatures) = IndexedSignatures::decode(input, &((), ()))?;
+        Ok((rest, Self::new(signatures)))
     }
 }
 
@@ -165,8 +117,22 @@ pub mod codec {
 
     #[must_use]
     pub const fn calculate_channel_multi_sig_proof_byte_size(threshold: ChannelKeyIndex) -> usize {
-        // Encoding: u16 signature count + N * (Ed25519 sig + u16 key index)
-        2 + (threshold as usize) * (ED25519_SIGNATURE_SIZE + 2)
+        // Encoding: u16 signature count + N * (u16 key index + Ed25519 sig)
+        2 + (threshold as usize) * (2 + ED25519_SIGNATURE_SIZE)
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub mod sample {
+    use crate::{
+        mantle::ops::op_proof::samples::SampleProof,
+        proofs::channel_multi_sig_proof::ChannelMultiSigProof,
+    };
+
+    impl SampleProof for ChannelMultiSigProof {
+        fn sample() -> Self {
+            Self::sample_with_signatures(2)
+        }
     }
 }
 
@@ -178,120 +144,98 @@ mod tests {
         Ed25519Signature::from_bytes(&[byte; 64])
     }
 
-    #[test]
-    fn rejects_repeated_index() {
-        // Same index twice (distinct sigs): not strictly increasing, so rejected.
-        let signatures = [
-            IndexedSignature::new(0, sig(1)),
-            IndexedSignature::new(0, sig(2)),
-        ];
-        assert!(matches!(
-            ChannelMultiSigProof::try_new(signatures.into()),
-            Err(Error::IndicesNotStrictlyIncreasing(_))
-        ));
+    fn signature_json(byte: u8) -> String {
+        serde_json::to_string(&sig(byte)).unwrap()
+    }
+
+    /// Encodes `entries` as a proof would, keeping their order and repeats,
+    /// so the bytes can describe a proof that cannot be built.
+    fn encode_entries(entries: &[(ChannelKeyIndex, u8)]) -> Vec<u8> {
+        let count = u16::try_from(entries.len()).expect("a handful of entries");
+        let mut bytes = count.to_le_bytes().to_vec();
+        for (index, byte) in entries {
+            bytes.extend_from_slice(&index.to_le_bytes());
+            bytes.extend_from_slice(&[*byte; 64]);
+        }
+        bytes
     }
 
     #[test]
-    fn rejects_unsorted_indices() {
-        // Unique but not strictly increasing (descending): rejected (we no longer
-        // silently sort — the spec asserts monotonic order).
-        let signatures = [
-            IndexedSignature::new(1, sig(1)),
-            IndexedSignature::new(0, sig(2)),
-        ];
-        assert!(matches!(
-            ChannelMultiSigProof::try_new(signatures.into()),
-            Err(Error::IndicesNotStrictlyIncreasing(_))
-        ));
-    }
-
-    #[test]
-    fn accepts_strictly_increasing_indices() {
-        let signatures = [
-            IndexedSignature::new(0, sig(1)),
-            IndexedSignature::new(1, sig(2)),
-        ];
-        let proof = ChannelMultiSigProof::try_new(signatures.into())
-            .expect("strictly-increasing indices are well-formed");
-        assert_eq!(proof.signatures().len(), 2);
-    }
-
-    /// Regression test for #2985: a non-monotonic proof must be unrepresentable
-    /// via serde too, not just via `new`. A derived `Deserialize` would have
-    /// let the JSON mempool path bypass the well-formedness check; routing
-    /// serde through `new` (via `#[serde(try_from)]`) makes deserialization
-    /// fail.
-    #[test]
-    fn deserialize_rejects_non_monotonic_indices() {
-        // Two distinct signatures sharing index 0 — not strictly increasing, so
-        // `new` (and now `Deserialize`) must reject it.
-        let raw = [
-            IndexedSignature::new(0, sig(1)),
-            IndexedSignature::new(0, sig(2)),
-        ];
-        let json = format!(
-            "{{\"signatures\":{}}}",
-            serde_json::to_string(&raw).expect("serialize signatures")
-        );
-        assert!(
-            serde_json::from_str::<ChannelMultiSigProof>(&json).is_err(),
-            "a non-monotonic proof must not be deserializable"
+    fn encodes_signatures_in_ascending_index_order() {
+        let proof = ChannelMultiSigProof::new(
+            IndexedSignatures::try_from([(7, sig(2)), (0, sig(1))]).unwrap(),
         );
 
-        // A well-formed proof still round-trips, and keeps the `{ "signatures": [..] }`
-        // JSON shape.
-        let ok = ChannelMultiSigProof::try_new(
-            [
-                IndexedSignature::new(0, sig(1)),
-                IndexedSignature::new(1, sig(2)),
-            ]
-            .into(),
-        )
-        .expect("distinct indices are well-formed");
-        let serialized = serde_json::to_string(&ok).expect("serialize proof");
-        assert!(
-            serialized.starts_with("{\"signatures\":"),
-            "expected the `{{ signatures: [..] }}` shape, got {serialized}"
-        );
-        let round_tripped: ChannelMultiSigProof =
-            serde_json::from_str(&serialized).expect("well-formed proof round-trips");
-        assert_eq!(round_tripped, ok);
+        assert_eq!(proof.encode_to_vec(), encode_entries(&[(0, 1), (7, 2)]));
     }
 
-    /// The decoder must uphold the same well-formedness invariant as `new`:
-    /// a wire-encoded vector with a repeated index is not strictly increasing,
-    /// so `decode` must fail (the `try_new` inside `decode` maps to a wire
-    /// error).
     #[test]
     fn decode_rejects_repeated_index() {
-        // Encode a raw vector (bypassing `ChannelMultiSigProof`) with the same
-        // index twice, then decode it back through the proof's wire path.
-        let raw: IndexedSignatures = [
-            IndexedSignature::new(0, sig(1)),
-            IndexedSignature::new(0, sig(2)),
-        ]
-        .into();
-        let bytes = raw.encode();
-        assert!(
-            ChannelMultiSigProof::decode(&bytes, &()).is_err(),
-            "decoding a proof with a repeated index must fail"
+        let bytes = encode_entries(&[(0, 1), (0, 2)]);
+
+        assert!(matches!(
+            ChannelMultiSigProof::decode(&bytes, &()),
+            Err(DecodeError::DuplicateItem { index: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn decode_rejects_out_of_order_indices() {
+        let bytes = encode_entries(&[(1, 1), (0, 2)]);
+
+        assert!(matches!(
+            ChannelMultiSigProof::decode(&bytes, &()),
+            Err(DecodeError::OutOfOrderItem { index: 1, .. })
+        ));
+    }
+
+    /// Regression test for #2985: a proof read through serde must be as
+    /// well-formed as one built in code. The signatures are a map keyed by
+    /// index, so they come back in ascending index order whatever order the
+    /// input lists them in.
+    #[test]
+    fn deserialize_orders_signatures_by_index() {
+        let proof = ChannelMultiSigProof::new(
+            IndexedSignatures::try_from([(0, sig(1)), (7, sig(2))]).unwrap(),
+        );
+
+        let reversed = format!(
+            "{{\"signatures\":{{\"7\":{},\"0\":{}}}}}",
+            signature_json(2),
+            signature_json(1)
+        );
+        assert_eq!(
+            serde_json::from_str::<ChannelMultiSigProof>(&reversed).unwrap(),
+            proof
+        );
+        assert_eq!(
+            serde_json::to_string(&proof).unwrap(),
+            format!(
+                "{{\"signatures\":{{\"0\":{},\"7\":{}}}}}",
+                signature_json(1),
+                signature_json(2)
+            )
         );
     }
 
-    /// Companion to the above: a wire-encoded vector whose indices are unique
-    /// but out of order (descending) is also not strictly increasing, so the
-    /// wire decoder must reject it.
+    /// A key counts at most once towards a threshold, however a proof read
+    /// through serde lists it: index 0 given twice reads back as a single
+    /// signature, the later one, as a `BTreeMap` keeps it. One key holder
+    /// therefore cannot meet a threshold of 2 alone by repeating their index.
     #[test]
-    fn decode_rejects_out_of_order_indices() {
-        let raw: IndexedSignatures = [
-            IndexedSignature::new(1, sig(1)),
-            IndexedSignature::new(0, sig(2)),
-        ]
-        .into();
-        let bytes = raw.encode();
-        assert!(
-            ChannelMultiSigProof::decode(&bytes, &()).is_err(),
-            "decoding a proof with out-of-order indices must fail"
+    fn deserialize_keeps_one_signature_per_index() {
+        let repeated = format!(
+            "{{\"signatures\":{{\"0\":{},\"0\":{}}}}}",
+            signature_json(1),
+            signature_json(2)
+        );
+
+        let proof = serde_json::from_str::<ChannelMultiSigProof>(&repeated).unwrap();
+
+        assert_eq!(proof.signatures().len(), 1);
+        assert_eq!(
+            proof,
+            ChannelMultiSigProof::new(IndexedSignatures::from((0, sig(2))))
         );
     }
 }

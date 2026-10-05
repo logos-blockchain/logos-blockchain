@@ -133,13 +133,12 @@ static FIXTURE: LazyLock<(EncapsulatedMessage, RealProofsVerifier)> = LazyLock::
 
     // The `PoSel` is carried in the private header and plays no role in
     // public-header verification, so an unchecked stand-in is enough.
-    let input = EncapsulationInput::try_new(
+    let input = EncapsulationInput::new(
         ephemeral_signing_key,
         &UnsecuredEd25519Key::from_bytes(&[9u8; 32]).public_key(),
         proof_of_quota,
         VerifiedProofOfSelection::from_bytes_unchecked([0u8; PROOF_OF_SELECTION_SIZE]),
-    )
-    .expect("shared secret derivation succeeds for the fixture keys");
+    );
 
     let message: EncapsulatedMessage = EncapsulatedMessageWithVerifiedPublicHeader::try_new(
         &[input],

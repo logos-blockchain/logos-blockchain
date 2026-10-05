@@ -9,7 +9,7 @@ use lb_blend::message::encap::{
     ProofsVerifier as ProofsVerifierTrait, validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_chain_service::Epoch;
-use lb_log_targets::blend;
+use lb_log_targets::{blend, diagnostic::BLEND_REACHABILITY};
 use lb_utils::tokio::task::spawn_on;
 use libp2p::PeerId;
 use overwatch::overwatch::handle::OverwatchHandle;
@@ -21,10 +21,7 @@ use crate::{
     core::{
         backends::{
             BackendEpochInfo, BlendBackend,
-            libp2p::{
-                swarm::{BlendSwarm, BlendSwarmMessage, SwarmParams},
-                tokio_provider::ObservationWindowTokioIntervalProvider,
-            },
+            libp2p::swarm::{BlendSwarm, BlendSwarmMessage, SwarmParams},
         },
         settings::RunningBlendConfig as BlendConfig,
     },
@@ -38,7 +35,6 @@ pub(crate) mod behaviour;
 pub mod settings;
 pub use self::settings::Libp2pBlendBackendSettings;
 pub(crate) mod swarm;
-pub(crate) mod tokio_provider;
 
 #[cfg(test)]
 mod tests;
@@ -75,7 +71,7 @@ where
         let (incoming_message_sender, _) = broadcast::channel(CHANNEL_SIZE);
         let minimum_network_size = config.minimum_network_size.try_into().unwrap();
 
-        let swarm = BlendSwarm::<_, ObservationWindowTokioIntervalProvider, _>::new(SwarmParams {
+        let swarm = BlendSwarm::<_, _>::new(SwarmParams {
             config: &config,
             current_epoch_info,
             incoming_message_sender: incoming_message_sender.clone(),
@@ -117,7 +113,7 @@ where
         {
             tracing::error!(
                 target: LOG_TARGET,
-                diagnostic = "blend_tsi_outage",
+                diagnostic = BLEND_REACHABILITY,
                 event = "blend_send_failure",
                 epoch = u32::from(intended_epoch),
                 error = %e,

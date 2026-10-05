@@ -2,6 +2,8 @@ pub mod bounded;
 pub mod math;
 pub mod net;
 pub mod noop_service;
+pub mod ordered_map;
+pub mod ordered_set;
 pub mod types;
 pub mod yaml;
 
@@ -297,7 +299,7 @@ pub mod serde {
             de::{Error, SeqAccess, Visitor},
         };
 
-        use crate::bounded::UpperBoundedVec;
+        use crate::bounded::{UpperBoundedVec, allocation_size_for_hint};
 
         pub fn serialize<Bytes: AsRef<[u8]>, S: Serializer>(
             bytes: &Bytes,
@@ -393,7 +395,7 @@ pub mod serde {
                 A: SeqAccess<'de>,
             {
                 // An empty vector always satisfies an upper-only bound.
-                let capacity = sequence.size_hint().unwrap_or(0).min(MAX);
+                let capacity = allocation_size_for_hint::<u8, MAX>(sequence.size_hint());
                 let mut bytes = UpperBoundedVec::new_unchecked(Vec::with_capacity(capacity));
 
                 while let Some(byte) = sequence.next_element()? {
@@ -401,6 +403,47 @@ pub mod serde {
                 }
 
                 Ok(bytes)
+            }
+        }
+
+        #[cfg(test)]
+        mod tests {
+            use serde::de::{
+                Visitor as _,
+                value::{Error, SeqDeserializer},
+            };
+
+            use super::BoundedBytesVisitor;
+
+            /// Yields one byte while claiming, through an exact size hint, to
+            /// hold `usize::MAX` of them.
+            struct Overclaiming(Option<u8>);
+
+            impl Iterator for Overclaiming {
+                type Item = u8;
+
+                fn next(&mut self) -> Option<u8> {
+                    self.0.take()
+                }
+
+                fn size_hint(&self) -> (usize, Option<usize>) {
+                    (usize::MAX, Some(usize::MAX))
+                }
+            }
+
+            /// Bincode never reaches this path, but a binary format that sends
+            /// bytes as a sequence would. Reserving the declared length
+            /// outright asks for `usize::MAX` bytes and panics on
+            /// capacity overflow.
+            #[test]
+            fn a_huge_declared_sequence_length_does_not_preallocate() {
+                let sequence = SeqDeserializer::<_, Error>::new(Overclaiming(Some(7)));
+
+                let bytes = BoundedBytesVisitor::<{ usize::MAX }>
+                    .visit_seq(sequence)
+                    .unwrap();
+
+                assert_eq!(bytes.as_slice(), &[7]);
             }
         }
     }

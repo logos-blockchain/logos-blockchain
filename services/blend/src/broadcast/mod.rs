@@ -14,6 +14,7 @@ use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
         AsServiceId, ServiceCore, ServiceData,
+        resources::ServiceResourcesHandle,
         state::{NoOperator, NoState},
     },
 };
@@ -68,7 +69,7 @@ where
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
-    ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+    ChainService: CryptarchiaServiceData<Tx: Send>,
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
         + AsServiceId<ChainService>
@@ -97,7 +98,7 @@ where
     async fn run(mut self) -> Result<(), DynError> {
         let Self {
             service_resources_handle:
-                OpaqueServiceResourcesHandle::<Self, RuntimeServiceId> {
+                ServiceResourcesHandle {
                     ref mut inbound_relay,
                     ref overwatch_handle,
                     ref settings_handle,

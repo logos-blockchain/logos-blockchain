@@ -1,27 +1,26 @@
-use std::{marker::PhantomData, time::Duration};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::future::join_all;
 use lb_chain_service::ChainServiceInfo;
+use testing_framework_app::AppHostEnv;
 use testing_framework_core::scenario::{DynError, Expectation, RunContext};
 use thiserror::Error;
 use tokio::time::sleep;
 
-use crate::{TopologyConfig, framework::LbcEnv, node::NodeHttpClient, workloads::LbcScenarioEnv};
+use crate::{node::NodeHttpClient, workloads::LbcRunContextExt as _};
 
 #[derive(Clone, Copy, Debug)]
 /// Checks that every node reaches near the highest observed height within an
 /// allowance.
-pub struct ConsensusLiveness<E = LbcEnv> {
+pub struct ConsensusLiveness {
     lag_allowance: u64,
-    _env: PhantomData<fn() -> E>,
 }
 
-impl<E> Default for ConsensusLiveness<E> {
+impl Default for ConsensusLiveness {
     fn default() -> Self {
         Self {
             lag_allowance: LAG_ALLOWANCE,
-            _env: PhantomData,
         }
     }
 }
@@ -34,15 +33,12 @@ const PROGRESS_PROBE_DELAY: Duration = Duration::from_secs(5);
 const MAX_LAG_ALLOWANCE: u64 = 5;
 
 #[async_trait]
-impl<E> Expectation<E> for ConsensusLiveness<E>
-where
-    E: LbcScenarioEnv,
-{
+impl Expectation<AppHostEnv> for ConsensusLiveness {
     fn name(&self) -> &'static str {
         "consensus_liveness"
     }
 
-    async fn evaluate(&mut self, ctx: &RunContext<E>) -> Result<(), DynError> {
+    async fn evaluate(&mut self, ctx: &RunContext<AppHostEnv>) -> Result<(), DynError> {
         Self::ensure_participants(ctx)?;
 
         let target_hint = Self::target_blocks(ctx);
@@ -53,13 +49,16 @@ where
         self.report(target_hint, check)
     }
 
-    async fn check_during_capture(&mut self, ctx: &RunContext<E>) -> Result<(), DynError> {
+    async fn check_during_capture(&mut self, ctx: &RunContext<AppHostEnv>) -> Result<(), DynError> {
         Self::ensure_participants(ctx)
     }
 }
 
-fn consensus_target_blocks<E: LbcScenarioEnv>(ctx: &RunContext<E>) -> u64 {
-    let config: &TopologyConfig = ctx.descriptors().config();
+fn consensus_target_blocks(ctx: &RunContext<AppHostEnv>) -> u64 {
+    let Ok(deployment) = ctx.lbc_deployment() else {
+        return 0;
+    };
+    let config = deployment.config();
     let Some(slot_duration) = config.slot_duration else {
         return 0;
     };
@@ -106,23 +105,20 @@ struct ViolationIssues {
     message: String,
 }
 
-impl<E> ConsensusLiveness<E>
-where
-    E: LbcScenarioEnv,
-{
-    fn target_blocks(ctx: &RunContext<E>) -> u64 {
+impl ConsensusLiveness {
+    fn target_blocks(ctx: &RunContext<AppHostEnv>) -> u64 {
         consensus_target_blocks(ctx)
     }
 
-    fn ensure_participants(ctx: &RunContext<E>) -> Result<(), DynError> {
-        if ctx.node_clients().is_empty() {
+    fn ensure_participants(ctx: &RunContext<AppHostEnv>) -> Result<(), DynError> {
+        if ctx.lbc_clients()?.is_empty() {
             Err(Box::new(ConsensusLivenessError::MissingParticipants))
         } else {
             Ok(())
         }
     }
 
-    async fn collect_results_with_progress(ctx: &RunContext<E>) -> LivenessCheck {
+    async fn collect_results_with_progress(ctx: &RunContext<AppHostEnv>) -> LivenessCheck {
         for probe in 0..PROGRESS_PROBES {
             let check = Self::collect_results(ctx).await;
             if check.max_height() > 0 || probe + 1 == PROGRESS_PROBES {
@@ -141,8 +137,8 @@ where
         LivenessCheck::default()
     }
 
-    async fn collect_results(ctx: &RunContext<E>) -> LivenessCheck {
-        let clients = ctx.node_clients().snapshot();
+    async fn collect_results(ctx: &RunContext<AppHostEnv>) -> LivenessCheck {
+        let clients = ctx.lbc_clients().unwrap_or_default();
         let results = join_all(
             clients
                 .iter()
@@ -215,11 +211,11 @@ where
         self
     }
 
-    fn effective_lag_allowance(&self, target: u64) -> u64 {
+    fn effective_lag_allowance(self, target: u64) -> u64 {
         (target / 10).clamp(self.lag_allowance, MAX_LAG_ALLOWANCE)
     }
 
-    fn report(&self, target_hint: u64, check: LivenessCheck) -> Result<(), DynError> {
+    fn report(self, target_hint: u64, check: LivenessCheck) -> Result<(), DynError> {
         if check.samples.is_empty() {
             return Err(Box::new(ConsensusLivenessError::MissingParticipants));
         }

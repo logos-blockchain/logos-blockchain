@@ -20,7 +20,7 @@ use ark_ff::{BigInteger as _, PrimeField as _};
 pub use circuit_integer::{CircuitInteger, CircuitIntegerOutOfRange};
 pub use modulus_shift::{ModulusShift, ModulusShiftOutOfRange};
 use num_bigint::BigUint;
-pub use verifier::{groth16_batch_verify, groth16_verify};
+pub use verifier::{VerificationError, groth16_batch_verify, groth16_verify};
 
 pub const GROTH16_SAFE_BYTES_SIZE: usize = 31;
 
@@ -38,7 +38,10 @@ pub type Groth16VerificationKeyJsonDeser = verification_key::VerificationKeyJson
 pub type Groth16Input = public_input::Input<Bn254>;
 pub type Groth16InputDeser = public_input::InputDeser;
 
-pub type FrBytes = [u8; 32];
+/// The fixed-width byte representation used for a field element.
+pub const FR_BYTES_SIZE: usize = 32;
+
+pub type FrBytes = [u8; FR_BYTES_SIZE];
 
 #[must_use]
 pub fn fr_to_bytes(fr: &Fr) -> FrBytes {

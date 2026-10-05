@@ -6,9 +6,10 @@ use std::{
 };
 
 use cucumber::{gherkin::Step, given, then, when};
+use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_common_http_client::CommonHttpClient;
 use lb_config::kms::key_id_for_preload_backend;
-use lb_core::{codec::DeserializeOp as _, mantle::GenesisTime};
+use lb_core::mantle::GenesisTime;
 use lb_key_management_system_service::keys::{Key, ZkPublicKey};
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_pow_service::{AutoClaimSettings, AutoClaimTick, ClaimTarget};
@@ -36,17 +37,17 @@ use crate::{
                 stop_active_manual_cluster,
             },
             nodes::{
-                NodesToStartUnordered,
+                BlendReachabilityTransition, NodesToStartUnordered, apply_blend_reachability_set,
                 config_override::{set_deployment_config_override, set_user_config_override},
                 create_snapshot_all_nodes_with_wallet_state,
                 create_snapshot_node_with_wallet_state, create_snapshots_all_nodes,
-                diagnostics::set_blend_diagnostic_parameter_set,
+                diagnostics::{BlendDiagnosticEventLogger, set_blend_diagnostic_parameter_set},
                 ensure_all_nodes_agree_on_lib,
                 ensure_fee_sponsorship_and_fork_groups_are_not_mixed,
                 get_cryptarchia_info_all_nodes, nodes_converged, parse_genesis_wallet_tokens_row,
                 parse_mining_wallet_resources_table_row, parse_url,
                 parse_wallet_resources_table_row, poll_all_nodes_and_update_consensus_cache,
-                restart_node, set_blend_reachability,
+                restart_node, restore_all_blend_reachability, set_blend_reachability,
                 snapshots::validate_snapshot_path_component,
                 start_node, start_nodes_order_respecting_dependencies, stop_node,
                 verify_genesis_wallet_resources_table_indexes,

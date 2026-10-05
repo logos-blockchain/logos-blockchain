@@ -5,6 +5,7 @@ pub mod gas;
 pub mod genesis_tx;
 pub mod hash;
 pub mod states;
+pub mod thresholds;
 pub mod tx_list;
 pub mod verification_helper;
 pub mod verified_ops;

@@ -2,9 +2,14 @@ use core::fmt::Debug;
 use std::sync::LazyLock;
 
 use ark_ff::{AdditiveGroup as _, PrimeField as _};
-use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
-use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, fr_from_bytes, serde::serde_fr};
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_binary_codec::{
+    bincode::BoundedSerializeOp,
+    canonical::{BinaryDecode, BinaryEncode, DecodeError},
+};
+use lb_groth16::{COMPRESSED_PROOF_SIZE, FR_BYTES_SIZE, Fr, fr_from_bytes, serde::serde_fr};
+use lb_key_management_system_keys::keys::{
+    ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, UnverifiedEd25519PublicKey, ZkPublicKey,
+};
 use lb_log_targets::proofs;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use lb_utxotree::MerklePath;
@@ -13,23 +18,31 @@ use thiserror::Error;
 use tracing::error;
 
 use crate::{
-    mantle::{
-        ledger::Utxo,
-        ops::{channel::Ed25519PublicKey, leader_claim::VoucherCm},
-    },
+    mantle::{ledger::Utxo, ops::leader_claim::VoucherCm},
     proofs::merkle::merkle_path_to_witness,
 };
 
 const LOG_TARGET: &str = proofs::LEADER;
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Groth16LeaderProof {
     #[serde(with = "proof_serde")]
     proof: lb_pol::PoLProof,
     #[serde(with = "serde_fr")]
     entropy_contribution: Fr,
-    leader_key: Ed25519PublicKey,
+    // We cannot use the verified one because a key of `0`s is used in the genesis block, and that
+    // would fail verification during deserialization.
+    leader_key: UnverifiedEd25519PublicKey,
     voucher_cm: VoucherCm,
+}
+
+const GROTH16_LEADER_PROOF_BINCODE_SIZE: usize = COMPRESSED_PROOF_SIZE
+    + FR_BYTES_SIZE
+    + <UnverifiedEd25519PublicKey as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + <VoucherCm as BoundedSerializeOp>::MAX_ENCODED_SIZE;
+
+impl BoundedSerializeOp for Groth16LeaderProof {
+    type Bytes = [u8; GROTH16_LEADER_PROOF_BINCODE_SIZE];
 }
 
 impl Debug for Groth16LeaderProof {
@@ -48,13 +61,7 @@ impl Debug for Groth16LeaderProof {
 
 impl BinaryEncode for Groth16LeaderProof {
     fn encoded_length(&self) -> usize {
-        COMPRESSED_PROOF_SIZE
-            .checked_add(self.entropy_contribution.encoded_length())
-            .unwrap()
-            .checked_add(self.leader_key.encoded_length())
-            .unwrap()
-            .checked_add(self.voucher_cm.encoded_length())
-            .unwrap()
+        Self::CANONICAL_ENCODED_SIZE
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -74,7 +81,7 @@ impl BinaryDecode for Groth16LeaderProof {
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (rest, proof_bytes) = <[u8; COMPRESSED_PROOF_SIZE]>::decode(input, &())?;
         let (rest, entropy_contribution) = Fr::decode(rest, &())?;
-        let (rest, leader_key) = Ed25519PublicKey::decode(rest, &())?;
+        let (rest, leader_key) = UnverifiedEd25519PublicKey::decode(rest, &())?;
         let (rest, voucher_cm) = VoucherCm::decode(rest, &())?;
         Ok((
             rest,
@@ -95,6 +102,12 @@ pub enum Error {
 }
 
 impl Groth16LeaderProof {
+    /// The fixed-size canonical representation of a proof of leadership.
+    pub const CANONICAL_ENCODED_SIZE: usize = COMPRESSED_PROOF_SIZE
+        + FR_BYTES_SIZE
+        + ED25519_PUBLIC_KEY_SIZE
+        + VoucherCm::CANONICAL_ENCODED_SIZE;
+
     pub fn prove(witness: LeaderPrivate, voucher_cm: VoucherCm) -> Result<Self, Error> {
         let start_t = std::time::Instant::now();
         let leader_key = witness.pk;
@@ -104,7 +117,7 @@ impl Groth16LeaderProof {
         Ok(Self {
             proof,
             entropy_contribution,
-            leader_key,
+            leader_key: leader_key.into_unverified(),
             voucher_cm,
         })
     }
@@ -114,7 +127,7 @@ impl Groth16LeaderProof {
         Self {
             proof: lb_pol::PoLProof::from_bytes(&[0u8; 128]),
             entropy_contribution: Fr::ZERO,
-            leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            leader_key: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
         }
     }
@@ -146,7 +159,7 @@ impl Groth16LeaderProof {
         Self {
             proof,
             entropy_contribution,
-            leader_key,
+            leader_key: leader_key.into_unverified(),
             voucher_cm,
         }
     }
@@ -161,7 +174,7 @@ pub trait LeaderProof {
     /// Get the entropy used in the proof.
     fn entropy(&self) -> Fr;
 
-    fn leader_key(&self) -> &Ed25519PublicKey;
+    fn leader_key(&self) -> &UnverifiedEd25519PublicKey;
 
     fn voucher_cm(&self) -> &VoucherCm;
 }
@@ -200,7 +213,7 @@ impl LeaderProof for Groth16LeaderProof {
         self.entropy_contribution
     }
 
-    fn leader_key(&self) -> &Ed25519PublicKey {
+    fn leader_key(&self) -> &UnverifiedEd25519PublicKey {
         &self.leader_key
     }
 
@@ -295,7 +308,7 @@ impl LeaderPrivate {
         leader_pk: &Ed25519PublicKey,
     ) -> Self {
         let public_key = *leader_pk;
-        let leader_pk = ed25519_pk_to_fr_tuple(leader_pk);
+        let leader_pk = ed25519_pk_to_fr_tuple(leader_pk.as_unverified());
         let chain = lb_pol::PolChainInputsData {
             slot_number: public.slot,
             epoch_nonce: public.epoch_nonce,
@@ -337,6 +350,7 @@ impl From<LeaderPrivate> for lb_pol::PolWitnessInputsData {
 }
 
 mod proof_serde {
+    use lb_groth16::COMPRESSED_PROOF_SIZE;
     use serde::{Deserializer, Serializer};
 
     // Hex string for human-readable formats; a fixed-size 128-byte array
@@ -352,12 +366,13 @@ mod proof_serde {
     where
         D: Deserializer<'de>,
     {
-        let proof_array = lb_utils::serde::deserialize_bytes_array::<128, D>(deserializer)?;
+        let proof_array =
+            lb_utils::serde::deserialize_bytes_array::<{ COMPRESSED_PROOF_SIZE }, D>(deserializer)?;
         Ok(lb_pol::PoLProof::from_bytes(&proof_array))
     }
 }
 
-fn ed25519_pk_to_fr_tuple(pk: &Ed25519PublicKey) -> (Fr, Fr) {
+fn ed25519_pk_to_fr_tuple(pk: &UnverifiedEd25519PublicKey) -> (Fr, Fr) {
     let pk_bytes = pk.as_bytes();
     // Convert each half of the public key to Fr so that they alwasy fit
     (

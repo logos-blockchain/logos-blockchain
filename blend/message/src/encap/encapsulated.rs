@@ -1,13 +1,13 @@
 use core::num::NonZeroU64;
 
-use derivative::Derivative;
+use educe::Educe;
 use itertools::Itertools as _;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError, take};
 use lb_blend_crypto::{ZkHash, cipher::Cipher, pseudo_random_sized_bytes, random_sized_bytes};
 use lb_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
     selection::{self, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
-use lb_codec::{BinaryDecode, BinaryEncode, DecodeError, take};
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, SharedKey, UnsecuredEd25519Key,
 };
@@ -39,13 +39,13 @@ const LOG_TARGET: &str = blend::message::ROOT;
 pub type MessageIdentifier = ZkHash;
 
 /// An unverified encapsulated message that is received from a peer.
-#[derive(Derivative, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[derivative(Debug)]
+#[derive(Educe, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[educe(Debug)]
 pub struct EncapsulatedMessage {
     /// A public header that is not encapsulated.
     public_header: PublicHeader,
     /// Encapsulated parts
-    #[derivative(Debug = "ignore")] // too long
+    #[educe(Debug(ignore))] // too long
     encapsulated_part: EncapsulatedPart,
 }
 
@@ -95,7 +95,7 @@ impl EncapsulatedMessage {
             &self.encapsulated_part.private_header,
             &self.encapsulated_part.payload,
         ))?;
-        let (_, signing_key, proof_of_quota, signature) = self.public_header.into_components();
+        let (signing_key, proof_of_quota, signature) = self.public_header.into_components();
         // Verify the Proof of Quota according to the Blend spec: <https://lip.logos.co/blockchain/raw/blend-protocol.html#processing>.
         let verified_proof_of_quota = verifier
             .verify_proof_of_quota(proof_of_quota, &signing_key)

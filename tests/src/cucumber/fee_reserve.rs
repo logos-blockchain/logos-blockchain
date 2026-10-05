@@ -25,7 +25,7 @@ pub struct SponsoredGenesisFeeAccount {
     pub token_value: NonZero<u64>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ScenarioFeeState {
     pub sponsored_genesis_account: Option<SponsoredGenesisFeeAccount>,
     pub wallet_account: Option<WalletAccount>,
@@ -125,12 +125,12 @@ impl ScenarioFeeState {
 }
 
 /// Scenario fee UTXOs reserved while grouped transactions are being planned.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct ScenarioFeeReservations {
     reserved_by_wallet: HashMap<String, ScenarioFeeReservation>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct ScenarioFeeReservation {
     group_key: String,
     utxos: Vec<Utxo>,

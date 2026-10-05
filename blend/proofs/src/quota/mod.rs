@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 use ::serde::{Deserialize, Serialize};
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, VerifyingKey};
 use generic_array::{ArrayLength, GenericArray};
-use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::{Bn254, CompressSize, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
 use lb_poq::{PoQProof, PoQVerifierInput, PoQWitnessInputs, ProveError, prove, verify};
 use thiserror::Error;

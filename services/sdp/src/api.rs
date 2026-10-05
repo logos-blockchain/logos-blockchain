@@ -6,7 +6,7 @@ use overwatch::{
     overwatch::OverwatchHandle,
     services::{
         AsServiceId, ServiceData,
-        relay::{OutboundRelay, RelayError},
+        relay::{OutboundRelay, OutboundRelayError},
     },
 };
 use tokio::sync::{oneshot, oneshot::error::RecvError};
@@ -16,7 +16,7 @@ use crate::SdpMessage;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Failed to send a message to the SDP service: {0}")]
-    RelaySend(#[from] RelayError),
+    RelaySend(#[from] OutboundRelayError<SdpMessage>),
     #[error("Failed to receive a message from the SDP service: {0}")]
     RelayReceive(#[from] RecvError),
     #[error(transparent)]
@@ -53,10 +53,7 @@ where
     }
 
     pub async fn publish(&self, message: SdpMessage) -> Result<(), Error> {
-        self.relay
-            .send(message)
-            .await
-            .map_err(|(error, _)| Error::RelaySend(error))
+        self.relay.send(message).await.map_err(Error::RelaySend)
     }
 
     pub async fn post_declaration(

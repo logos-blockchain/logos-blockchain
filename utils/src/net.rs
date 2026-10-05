@@ -4,6 +4,10 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
+/// Fallback Gossipsub wire-message safety ceiling for topics without an
+/// explicit per-topic envelope limit.
+pub const MAX_WIRE_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
+
 const TEST_PORT_BLOCK_SIZE: u16 = 256;
 const TEST_PORT_RANGE_START: u16 = 20_000;
 const TEST_PORT_RANGE_END: u16 = 55_000;

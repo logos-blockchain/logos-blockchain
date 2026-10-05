@@ -1,3 +1,4 @@
+use core::fmt::{self, Display, Formatter};
 use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
     convert::Infallible,
@@ -26,7 +27,7 @@ use crate::core::{
             message_cache::MessageCache,
             utils::{
                 forward_validated_message_and_update_cache,
-                handle_received_serialized_encapsulated_message_and_update_cache,
+                handle_received_serialized_encapsulated_message,
             },
         },
         error::{ReceiveError, SendError},
@@ -34,6 +35,23 @@ use crate::core::{
 };
 
 const LOG_TARGET: &str = blend::network::core::core::behaviour::OLD;
+
+#[derive(Debug, Clone, Copy)]
+enum CloseReason {
+    EpochTransitionOver,
+    PeerBlacklisted,
+    MessageHandlingFailed,
+}
+
+impl Display for CloseReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::EpochTransitionOver => "the epoch transition period has passed",
+            Self::PeerBlacklisted => "the peer is blacklisted",
+            Self::MessageHandlingFailed => "the received message could not be handled",
+        })
+    }
+}
 
 /// Defines behaviours for processing messages from the old epoch
 /// until the epoch transition period has passed.
@@ -119,7 +137,7 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
     #[cfg(any(test, feature = "unsafe-test-functions"))]
     pub(super) fn force_send_serialized_message_to_peer_at_epoch(
         &mut self,
-        serialized_message: Vec<u8>,
+        serialized_message: &[u8],
         peer_id: PeerId,
         epoch: Epoch,
     ) -> Result<(), SendError> {
@@ -137,7 +155,9 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
         self.events.push_back(ToSwarm::NotifyHandler {
             peer_id,
             handler: NotifyHandler::One(*connection_id),
-            event: Either::Left(FromBehaviour::Message(serialized_message)),
+            event: Either::Left(FromBehaviour::Message(crate::OutgoingMessage::from_bytes(
+                serialized_message,
+            ))),
         });
         self.try_wake();
         Ok(())
@@ -154,14 +174,37 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
     /// handlers before the corresponding substreams are closed.
     pub fn stop(mut self) -> VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>> {
         self.events.reserve(self.negotiated_peers.len());
-        for (&peer_id, &connection_id) in &self.negotiated_peers {
-            self.events.push_back(ToSwarm::NotifyHandler {
-                peer_id,
-                handler: NotifyHandler::One(connection_id),
-                event: Either::Left(FromBehaviour::CloseSubstreams),
-            });
+        let closing = self
+            .negotiated_peers
+            .iter()
+            .map(|(&peer_id, &connection_id)| (peer_id, connection_id))
+            .collect::<Vec<_>>();
+        for connection in closing {
+            self.close(connection, CloseReason::EpochTransitionOver);
         }
         self.events
+    }
+
+    /// Drops the connection this epoch holds with `peer_id`, if it holds one.
+    pub fn close_connection_with_peer(&mut self, peer_id: &PeerId) {
+        let Some(&connection_id) = self.negotiated_peers.get(peer_id) else {
+            return;
+        };
+        self.close((*peer_id, connection_id), CloseReason::PeerBlacklisted);
+        self.try_wake();
+    }
+
+    /// Asks a handler of this epoch to close its substreams, saying why.
+    fn close(&mut self, (peer_id, connection_id): (PeerId, ConnectionId), reason: CloseReason) {
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Closing old-epoch connection {connection_id:?} with peer {peer_id:?}: {reason}."
+        );
+        self.events.push_back(ToSwarm::NotifyHandler {
+            peer_id,
+            handler: NotifyHandler::One(connection_id),
+            event: Either::Left(FromBehaviour::CloseSubstreams),
+        });
     }
 
     /// Checks if the connection is part of the old epoch.
@@ -204,7 +247,6 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
             && entry.get() == connection_id
         {
             entry.remove();
-            self.message_cache.remove_peer_info(peer_id);
             return true;
         }
         false
@@ -252,9 +294,9 @@ where
             return Ok(false);
         }
 
-        handle_received_serialized_encapsulated_message_and_update_cache(
+        handle_received_serialized_encapsulated_message(
             serialized_message,
-            &mut self.message_cache,
+            &self.message_cache,
             (from_peer_id, from_connection_id),
             pending_verifications,
             &mut self.waker,
@@ -262,12 +304,11 @@ where
             self.num_blend_layers,
             &self.proofs_verifier,
         ).inspect_err(|receive_error| {
-            tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old epoch: {receive_error:?}. Closing connection with spammy peer.");
-            self.events.push_back(ToSwarm::NotifyHandler {
-                peer_id: from_peer_id,
-                handler: NotifyHandler::One(from_connection_id),
-                event: Either::Left(FromBehaviour::CloseSubstreams),
-            });
+            tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old epoch: {receive_error:?}.");
+            self.close(
+                (from_peer_id, from_connection_id),
+                CloseReason::MessageHandlingFailed,
+            );
             self.try_wake();
         })?;
 

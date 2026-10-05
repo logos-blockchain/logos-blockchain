@@ -9,7 +9,7 @@ use lb_blend_message::encap::{
     },
 };
 use lb_cryptarchia_engine::Epoch;
-use lb_log_targets::blend;
+use lb_log_targets::{blend, diagnostic::BLEND_REACHABILITY};
 use lb_utils::tokio::task::spawn_blocking;
 use libp2p::{PeerId, swarm::ConnectionId};
 
@@ -69,7 +69,7 @@ pub fn spawn_poq_verification<Verifier>(
             Ok(Ok(message)) => {
                 tracing::trace!(
                     target: LOG_TARGET,
-                    diagnostic = "blend_tsi_outage",
+                    diagnostic = BLEND_REACHABILITY,
                     event = "blend_poq_verification",
                     result = "success",
                     blend_epoch = u32::from(epoch),
@@ -87,7 +87,7 @@ pub fn spawn_poq_verification<Verifier>(
             Ok(Err(e)) => {
                 tracing::debug!(
                     target: LOG_TARGET,
-                    diagnostic = "blend_tsi_outage",
+                    diagnostic = BLEND_REACHABILITY,
                     event = "blend_poq_verification_failed",
                     result = "failure",
                     blend_epoch = u32::from(epoch),
@@ -105,7 +105,7 @@ pub fn spawn_poq_verification<Verifier>(
             Err(e) => {
                 tracing::error!(
                     target: LOG_TARGET,
-                    diagnostic = "blend_tsi_outage",
+                    diagnostic = BLEND_REACHABILITY,
                     event = "blend_poq_verification_task_failed",
                     result = "error",
                     blend_epoch = u32::from(epoch),

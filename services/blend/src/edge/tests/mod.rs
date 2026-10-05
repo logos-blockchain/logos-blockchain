@@ -6,8 +6,8 @@ use lb_blend::{
     proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
     scheduling::membership::Membership,
 };
-use lb_chain_service::Epoch;
-use lb_core::crypto::ZkHash;
+use lb_chain_service::{Epoch, Slot};
+use lb_core::{crypto::ZkHash, header::HeaderId};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use tokio::{
     sync::{mpsc, oneshot},
@@ -20,11 +20,11 @@ use crate::{
         handlers::Error,
         tests::utils::{
             MockLeaderProofsGenerator, NodeId, RunningEdgeService, TEST_DELIVERY_DEADLINE,
-            TEST_ROUND, TestBackend, overwatch_handle, settings, spawn_run, spawn_run_with_pol,
-            spawn_run_without_direct_broadcast,
+            TEST_ROUND_IN_SECONDS, TestBackend, overwatch_handle, settings, spawn_run,
+            spawn_run_with_pol, spawn_run_without_direct_broadcast,
         },
     },
-    epoch_info::PolEpochInfo,
+    epoch_info::{PolEpochInfo, PolEpochState, PolEpochStateSource},
     membership::chain::{BlendEpoch, BlendEpochState},
     message::{DataPayload, ServiceMessage},
     pending::{NextLocalMessage, PendingTransactions, next_local_message},
@@ -119,7 +119,8 @@ async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
     );
 
     let broadcast = timeout(
-        TEST_ROUND * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
+        Duration::from_secs(TEST_ROUND_IN_SECONDS.get())
+            * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
         broadcasting_channel.dispatched.recv(),
     )
     .await
@@ -159,7 +160,8 @@ async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
 
     assert!(
         timeout(
-            TEST_ROUND * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
+            Duration::from_secs(TEST_ROUND_IN_SECONDS.get())
+                * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
             broadcasting_channel.dispatched.recv(),
         )
         .await
@@ -197,7 +199,8 @@ async fn a_node_that_does_not_bypass_never_broadcasts_in_the_clear() {
 
     assert!(
         timeout(
-            TEST_ROUND * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
+            Duration::from_secs(TEST_ROUND_IN_SECONDS.get())
+                * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
             broadcasting_channel.dispatched.recv(),
         )
         .await
@@ -230,7 +233,8 @@ async fn a_transaction_the_network_never_delivers_is_broadcast_in_the_clear() {
     );
 
     let broadcast = timeout(
-        TEST_ROUND * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
+        Duration::from_secs(TEST_ROUND_IN_SECONDS.get())
+            * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
         broadcasting_channel.dispatched.recv(),
     )
     .await
@@ -299,6 +303,83 @@ async fn run_shuts_down_if_new_membership_is_small() {
     assert!(matches!(join_handle.await.unwrap(), Ok(())));
 }
 
+#[test_log::test(tokio::test(start_paused = true))]
+async fn run_processes_new_epoch_after_transition_expiry_while_idle() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+    let mut service = spawn_run_without_direct_broadcast(
+        local_node,
+        1,
+        Some(membership(&[core_node], local_node)),
+    )
+    .await;
+
+    service
+        .epochs
+        .send(membership(&[core_node], local_node))
+        .await
+        .expect("channel opened");
+    // The fixture uses a zero-length transition period. Let it expire while
+    // the message channel stays open and idle.
+    sleep(Duration::from_secs(TEST_ROUND_IN_SECONDS.get())).await;
+
+    service
+        .epochs
+        .send(membership(&[], local_node))
+        .await
+        .expect("channel opened");
+    let result = timeout(
+        Duration::from_secs(TEST_ROUND_IN_SECONDS.get()),
+        &mut service.handle,
+    )
+    .await;
+    service.handle.abort();
+    assert!(
+        matches!(result, Ok(Ok(Ok(())))),
+        "the next epoch must be processed without an inbound message: {result:?}"
+    );
+}
+
+#[test_log::test(tokio::test(start_paused = true))]
+async fn run_processes_new_epoch_after_transition_expiry_with_closed_messages() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+    let RunningEdgeService {
+        handle: mut join_handle,
+        epochs: epoch_sender,
+        messages: msg_sender,
+        ..
+    } = spawn_run_without_direct_broadcast(
+        local_node,
+        1,
+        Some(membership(&[core_node], local_node)),
+    )
+    .await;
+    drop(msg_sender);
+
+    epoch_sender
+        .send(membership(&[core_node], local_node))
+        .await
+        .expect("channel opened");
+    sleep(Duration::from_secs(TEST_ROUND_IN_SECONDS.get())).await;
+    assert!(!join_handle.is_finished());
+
+    epoch_sender
+        .send(membership(&[], local_node))
+        .await
+        .expect("channel opened");
+    let result = timeout(
+        Duration::from_secs(TEST_ROUND_IN_SECONDS.get()),
+        &mut join_handle,
+    )
+    .await;
+    join_handle.abort();
+    assert!(
+        matches!(result, Ok(Ok(Ok(())))),
+        "the next epoch must be processed after the message channel closes: {result:?}"
+    );
+}
+
 /// [`run`] fails if the local node is not edge in a new membership.
 #[test_log::test(tokio::test(start_paused = true))]
 async fn run_fails_if_local_is_core_in_new_membership() {
@@ -330,6 +411,18 @@ async fn run_fails_if_local_is_core_in_new_membership() {
 fn test_pol_epoch_info(epoch: Epoch) -> PolEpochInfo {
     PolEpochInfo {
         epoch,
+        state: PolEpochState {
+            nonce: Fr::ZERO,
+            aged_utxo_root: Fr::ZERO,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ZERO,
+            source: PolEpochStateSource {
+                tip_id: HeaderId::from([0; 32]),
+                tip_slot: Slot::from(0),
+                lib_id: HeaderId::from([0; 32]),
+                lib_slot: Slot::from(0),
+            },
+        },
         winning_pol_info_stream: Box::pin(repeat(ProofOfLeadershipQuotaInputs {
             slot: 1,
             note_value: 1,

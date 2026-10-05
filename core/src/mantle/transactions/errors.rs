@@ -19,8 +19,6 @@ pub enum VerificationError {
         actual: usize,
         required: ChannelKeyIndex,
     },
-    #[error("Duplicate signature indices in ChannelMultiSigProof at index {op_index}")]
-    ChannelMultiSigProofDuplicateIndices { op_index: usize },
     #[error(
         "Invalid signature in ChannelMultiSigProof at index {op_index} for signature index {signature_index}"
     )]

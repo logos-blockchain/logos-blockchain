@@ -2,7 +2,7 @@ blend:
   common:
     num_blend_layers: 1
     minimum_network_size: 2
-    protocol_name: /logos-blockchain-ENV_PLACEHOLDER-VERSION_PLACEHOLDER/blend/1.0.0
+    network_absorption_in_rounds: 2
     data_replication_factor: 1
   core:
     scheduler:
@@ -10,13 +10,11 @@ blend:
         message_frequency_per_round: 1.0
       delayer:
         maximum_release_delay_in_rounds: 1
-    minimum_messages_coefficient: 1
-    normalization_constant: 1.03
+    target_peering_degree: 4
+    verification_rate_per_second: 156
+    edge_node_send_deadline_in_rounds: 1
+    core_handshake_deadline_in_rounds: 2
     activity_threshold_sensitivity: 1
-network:
-  kademlia_protocol_name: /logos-blockchain-ENV_PLACEHOLDER-VERSION_PLACEHOLDER/kad/1.0.0
-  identify_protocol_name: /logos-blockchain-ENV_PLACEHOLDER-VERSION_PLACEHOLDER/identify/1.0.0
-  chain_sync_protocol_name: /logos-blockchain-ENV_PLACEHOLDER-VERSION_PLACEHOLDER/chainsync/1.0.0
 cryptarchia:
   epoch_config:
     epoch_stake_distribution_stabilization: 3
@@ -60,7 +58,8 @@ cryptarchia:
       epoch_reward_genesis: 25000000
       # Genesis `d_reward`, as the exponent n in p / 2^n — the same form as
       # the Blend `base_difficulty` above. Fixed by the specification.
-      initial_difficulty: 26
+      # Also the minimum difficulty: the retarget never eases past it.
+      minimum_difficulty: 19
       ema_smoothing_factor: 9
       ema_smoothing_precision: 10
       # One claim per block: claims are transactions, and the per-block
@@ -71,6 +70,10 @@ cryptarchia:
       rate_num: 1
       rate_den: 10
       target_claim_per_block: 1
+      # `pow_share / share_den` of the fees each block collects is
+      # diverted to the pow reward pool at the epoch boundary.
+      pow_share: 10
+      share_den: 100
       # Acceptance window in slots; must match the mining service. Ten
       # block-intervals of tolerance for a claim to reach a block.
       slot_window: 300
@@ -82,23 +85,5 @@ cryptarchia:
     min_stake:
       threshold: 1000000000
       timestamp: 0
-  gossipsub_protocol: /logos-blockchain-ENV_PLACEHOLDER-VERSION_PLACEHOLDER/cryptarchia/1.0.0
-  genesis_block:
-    header:
-      version: Bedrock
-      parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
-      slot: 0
-      body_root: 273a6e9869625d85c45e53afff1d3100aec613d403be494c173030e6a05e4c9c
-      proof_of_leadership:
-        proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
-        entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
-        leader_key: '0000000000000000000000000000000000000000000000000000000000000000'
-        voucher_cm: '0000000000000000000000000000000000000000000000000000000000000000'
-    signature: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
-    uncle_headers: []
-    transactions: []
-  faucet_pk: 0000000000000000000000000000000000000000000000000000000000000000
 time:
   slot_duration: '1.000000000'
-mempool:
-  pubsub_topic: /logos-blockchain-ENV_PLACEHOLDER-VERSION_PLACEHOLDER/mempool/1.0.0

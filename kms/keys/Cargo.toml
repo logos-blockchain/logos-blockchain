@@ -13,12 +13,15 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
+arbitrary-int                   = { workspace = true }
 async-trait                     = { workspace = true }
+bip39                           = { features = ["rand", "std", "zeroize"], workspace = true }
+blake2                          = { workspace = true }
 bytes                           = { workspace = true }
-ed25519-dalek                   = { features = ["rand_core", "serde", "zeroize"], workspace = true }
+ed25519-dalek                   = { features = ["rand_core", "serde", "std", "zeroize"], workspace = true }
 generic-array                   = { workspace = true }
 hex                             = { workspace = true }
-lb-codec                        = { workspace = true }
+lb-binary-codec                 = { workspace = true }
 lb-groth16                      = { workspace = true }
 lb-key-management-system-macros = { workspace = true }
 lb-log-targets                  = { workspace = true }
@@ -37,9 +40,10 @@ x25519-dalek                    = { features = ["serde", "static_secrets", "zero
 zeroize                         = { workspace = true }
 
 [dev-dependencies]
-rand       = { workspace = true }
-serde_json = { workspace = true }
-serde_yaml = { workspace = true }
+curve25519-dalek = { workspace = true }
+rand             = { workspace = true }
+serde_json       = { workspace = true }
+serde_yaml       = { workspace = true }
 
 [features]
 openapi = ["dep:utoipa", "lb-utils/openapi"]

@@ -1,20 +1,32 @@
 use std::collections::HashMap;
 
-use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+#[cfg(any(test, feature = "test-utils"))]
+use crate::mantle::ops::{
+    channel::{
+        channel_transfer::ChannelTransferOp, config::ChannelConfigOp, deposit::DepositOp,
+        inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
+    },
+    leader_claim::LeaderClaimOp,
+    pow::ClaimPowRewardOp,
+    sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
+    transfer::TransferOp,
+};
 use crate::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
     mantle::{
         GasProfile, Op, OpRef, TxHash, Value,
         channel::Channels,
-        gas::{Gas, GasCost, GasOverflow},
+        gas::{Gas, GasCost, GasOverflow, TxGasCalculator},
         ops::channel::{ChannelId, ChannelKeyIndex},
         traits::{Hashable, MantleTx, StorageSize, hashable},
         transactions::{
             GasPrices,
             codec::minimum_signed_transaction_size,
+            thresholds::RunningThresholds,
             tx_list::{
                 OpRefs,
                 common::{TxBoundedVec, TxList},
@@ -82,29 +94,6 @@ pub struct OpsContext {
     pub leader_reward_amount: Value,
 }
 
-fn contextual_op_execution_gas<Profile: GasProfile>(
-    op: &Op,
-    context: &OpsGasContext,
-) -> Result<Gas, GasOverflow> {
-    let multiplier = match op {
-        // Existing channels require the `configuration_threshold` proofs.
-        // For new channels, the ledger skips proof verification. So, use 0.
-        Op::ChannelConfig(operation) => context
-            .configuration_threshold(&operation.channel)
-            .unwrap_or(0),
-        Op::ChannelWithdraw(operation) => context
-            .transfer_threshold(&operation.channel_id)
-            .unwrap_or(0),
-        Op::ChannelTransfer(operation) => context
-            .transfer_threshold(&operation.channel_id)
-            .unwrap_or(0),
-        _ => return Ok(op.gas_cost::<Profile>()),
-    };
-
-    op.gas_cost::<Profile>()
-        .checked_mul(Value::from(multiplier))
-}
-
 pub type Ops = TxList<Op>;
 
 impl Ops {
@@ -113,47 +102,69 @@ impl Ops {
         TxList(self.0.map_ref(OpRef::from))
     }
 
-    /// Predicts the minimum total gas cost of the transaction once signed.
-    ///
-    /// See [`minimum_signed_transaction_size`] for why this doesn't implement
-    /// [`crate::mantle::TxGasCalculator`] which calculates an exact gas cost.
-    pub fn minimum_total_gas_cost<Profile: GasProfile>(
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn sample() -> Self {
+        Self::from([
+            Op::Transfer(TransferOp::sample()),               // 0x00
+            Op::ChannelConfig(ChannelConfigOp::sample()),     // 0x10
+            Op::ChannelInscribe(InscriptionOp::sample()),     // 0x11
+            Op::ChannelDeposit(DepositOp::sample()),          // 0x12
+            Op::ChannelWithdraw(ChannelWithdrawOp::sample()), // 0x13
+            Op::ChannelTransfer(ChannelTransferOp::sample()), // 0x14
+            Op::SDPDeclare(SDPDeclareOp::sample()),           // 0x20
+            Op::SDPWithdraw(SDPWithdrawOp::sample()),         // 0x21
+            Op::SDPActive(SDPActiveOp::sample()),             // 0x22
+            Op::LeaderClaim(LeaderClaimOp::sample()),         // 0x30
+            Op::ClaimPowReward(ClaimPowRewardOp::sample()),   // 0x40
+        ])
+    }
+}
+
+impl TxGasCalculator for OpRefs<'_> {
+    type Context = OpsGasContext;
+
+    fn total_gas_cost<Profile: GasProfile>(
         &self,
-        context: &OpsGasContext,
+        context: &Self::Context,
     ) -> Result<GasCost, GasOverflow> {
-        let execution_gas = self.minimum_execution_gas_consumption::<Profile>(context)?;
+        let execution_gas = self.execution_gas_consumption::<Profile>(context)?;
         let execution_gas_cost =
             GasCost::calculate(execution_gas, context.gas_prices.execution_base_gas_price)?;
-        let storage_gas_cost = self.minimum_storage_gas_cost(context)?;
+        let storage_gas_cost = self.storage_gas_cost(context)?;
 
         execution_gas_cost.checked_add(storage_gas_cost)
     }
 
-    /// Predicts the minimum execution gas the transaction will consume once
-    /// signed.
-    pub fn minimum_execution_gas_consumption<Profile: GasProfile>(
-        &self,
-        context: &OpsGasContext,
-    ) -> Result<Gas, GasOverflow> {
-        self.iter()
-            .map(|op| contextual_op_execution_gas::<Profile>(op, context))
-            .try_fold(Gas::from(0), |total, gas| total.checked_add(gas?))
-    }
-
-    /// Predicts the minimum storage gas cost of the transaction once signed.
-    /// See [`minimum_signed_transaction_size`] for why this is a
-    /// minimum, not an exact value.
-    fn minimum_storage_gas_cost(&self, context: &OpsGasContext) -> Result<GasCost, GasOverflow> {
+    fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow> {
         GasCost::calculate(
-            self.minimum_signed_serialized_size(context).into(),
+            self.storage_gas_consumption(context)?,
             context.gas_prices.storage_gas_price,
         )
     }
 
-    /// Predicts the minimum serialized size of the transaction once signed.
-    #[must_use]
-    fn minimum_signed_serialized_size(&self, context: &OpsGasContext) -> u64 {
-        minimum_signed_transaction_size(&self.by_ref(), context) as u64
+    fn execution_gas_consumption<Profile: GasProfile>(
+        &self,
+        context: &Self::Context,
+    ) -> Result<Gas, GasOverflow> {
+        // The thresholds carry across the fold: an Operation is priced against
+        // the ones in force before it, then moves them for the ones after.
+        self.iter()
+            .try_fold(
+                (RunningThresholds::new(context), Gas::new(0)),
+                |(mut thresholds, total), op| {
+                    let total = total.checked_add(op.execution_gas::<Profile>(&thresholds)?)?;
+                    thresholds.apply(*op);
+                    Ok((thresholds, total))
+                },
+            )
+            .map(|(_, total)| total)
+    }
+
+    fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow> {
+        Ok(Gas::new(
+            minimum_signed_transaction_size(self, context) as u64
+        ))
     }
 }
 
@@ -321,23 +332,182 @@ pub mod mantle_spec {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
+
     use super::*;
+    use crate::mantle::gas::MainnetGasProfile;
+
+    const CONFIGURATION_THRESHOLD: ChannelKeyIndex = 3;
+    const TRANSFER_THRESHOLD: ChannelKeyIndex = 2;
 
     #[test]
-    fn binary_serde_rejects_trailing_bytes_inside_transaction_envelope() {
-        let tx = Ops::empty();
-        let mut encoded_tx = tx.encode().into_vec();
-        encoded_tx.push(0);
-        let envelope = bincode::serialize(&encoded_tx).unwrap();
+    fn total_gas_cost_sums_execution_and_storage() {
+        let ops = Ops::from([Op::ChannelInscribe(InscriptionOp::sample())]);
+        let context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(2, 3));
+
+        assert_eq!(
+            ops.by_ref().total_gas_cost::<MainnetGasProfile>(&context),
+            Ok(GasCost::new(643))
+        );
+    }
+
+    #[test]
+    fn execution_gas_consumption_uses_channel_thresholds() {
+        let ops = Ops::from([
+            Op::ChannelConfig(ChannelConfigOp::sample()),
+            Op::ChannelDeposit(DepositOp::sample()),
+            Op::ChannelWithdraw(ChannelWithdrawOp::sample()),
+        ]);
+        let context = OpsGasContext::new(
+            [(ChannelWithdrawOp::sample().channel_id, TRANSFER_THRESHOLD)].into(),
+            [(ChannelConfigOp::sample().channel, CONFIGURATION_THRESHOLD)].into(),
+            GasPrices::new(1, 0),
+        );
+
+        assert_eq!(
+            ops.by_ref()
+                .execution_gas_consumption::<MainnetGasProfile>(&context),
+            Ok(Gas::from(168 + 590 + 112))
+        );
+    }
+
+    #[test]
+    fn execution_gas_consumption_charges_nothing_for_a_channel_the_context_does_not_hold() {
+        let ops = Ops::from([
+            Op::ChannelConfig(ChannelConfigOp::sample()),
+            Op::ChannelWithdraw(ChannelWithdrawOp::sample()),
+            Op::ChannelTransfer(ChannelTransferOp::sample()),
+        ]);
+
+        assert_eq!(
+            ops.by_ref()
+                .execution_gas_consumption::<MainnetGasProfile>(&OpsGasContext::default()),
+            Ok(Gas::from(0))
+        );
+    }
+
+    #[test]
+    fn execution_gas_consumption_charges_the_flat_cost_of_an_op_without_a_channel() {
+        let ops = Ops::from([Op::ChannelDeposit(DepositOp::sample())]);
+
+        assert_eq!(
+            ops.by_ref()
+                .execution_gas_consumption::<MainnetGasProfile>(&OpsGasContext::default()),
+            Ok(Gas::from(590))
+        );
+    }
+
+    #[test]
+    fn storage_gas_cost_prices_the_signed_size() {
+        let ops = Ops::from([Op::ChannelInscribe(InscriptionOp::sample())]);
+        let context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(2, 3));
+
+        assert_eq!(
+            ops.by_ref().storage_gas_cost(&context),
+            Ok(GasCost::new(531))
+        );
+    }
+
+    #[test]
+    fn storage_gas_consumption_counts_the_length_prefix_of_an_empty_column() {
+        assert_eq!(
+            Ops::empty()
+                .by_ref()
+                .storage_gas_consumption(&OpsGasContext::default()),
+            Ok(Gas::new(1))
+        );
+    }
+
+    #[test]
+    fn storage_gas_consumption_adds_the_proof_each_op_will_carry() {
+        let ops = Ops::from([Op::ChannelInscribe(InscriptionOp::sample())]);
+
+        assert_eq!(
+            ops.by_ref()
+                .storage_gas_consumption(&OpsGasContext::default()),
+            Ok(Gas::new(177))
+        );
+    }
+
+    #[test]
+    fn serialize_to_json() {
+        let ops = Ops::sample();
+
+        assert_eq!(
+            serde_json::to_value(&ops).expect("the human-readable arm serializes"),
+            serde_json::to_value(ops.inner()).expect("the inner column serializes")
+        );
+    }
+
+    #[test]
+    fn serialize_to_binary() {
+        let ops = Ops::sample();
+
+        assert_eq!(
+            ops.to_bytes().expect("the binary arm serializes"),
+            bincode::serialize(&ops.encode().into_vec()).expect("the envelope serializes")
+        );
+    }
+
+    #[test]
+    fn deserialize_from_json() {
+        let ops = Ops::sample();
+        let json = serde_json::to_value(ops.inner()).expect("the inner column serializes");
+
+        assert_eq!(
+            serde_json::from_value::<Ops>(json).expect("the human-readable arm deserializes"),
+            ops
+        );
+    }
+
+    #[test]
+    fn deserialize_from_binary() {
+        let ops = Ops::sample();
+        let envelope =
+            bincode::serialize(&ops.encode().into_vec()).expect("the envelope serializes");
+
+        assert_eq!(
+            Ops::from_bytes(&envelope).expect("the binary arm deserializes"),
+            ops
+        );
+    }
+
+    #[test]
+    fn deserialize_from_binary_rejects_trailing_bytes() {
+        let mut encoded_ops = Ops::empty().encode().into_vec();
+        encoded_ops.push(0);
+        let envelope = bincode::serialize(&encoded_ops).expect("the envelope serializes");
 
         assert!(bincode::deserialize::<Ops>(&envelope).is_err());
     }
 
     #[test]
-    fn binary_serde_rejects_oversized_transaction_envelope() {
+    fn deserialize_from_binary_rejects_an_oversized_envelope() {
         let oversized = vec![0u8; MAX_BLOCK_TRANSACTIONS_SIZE + 1];
-        let envelope = bincode::serialize(&oversized).unwrap();
+        let envelope = bincode::serialize(&oversized).expect("the envelope serializes");
 
         assert!(bincode::deserialize::<Ops>(&envelope).is_err());
+    }
+
+    #[test]
+    fn mantle_spec_serialize_wraps_the_column_in_an_ops_field() {
+        let ops = Ops::sample();
+
+        assert_eq!(
+            mantle_spec::serialize(&ops, serde_json::value::Serializer)
+                .expect("the human-readable arm serializes"),
+            serde_json::json!({ "ops": serde_json::to_value(&ops).expect("the column serializes") })
+        );
+    }
+
+    #[test]
+    fn mantle_spec_deserialize_reads_the_ops_field() {
+        let ops = Ops::sample();
+        let json = serde_json::json!({ "ops": serde_json::to_value(&ops).expect("the column serializes") });
+
+        assert_eq!(
+            mantle_spec::deserialize(json).expect("the human-readable arm deserializes"),
+            ops
+        );
     }
 }

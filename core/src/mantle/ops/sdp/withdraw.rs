@@ -7,9 +7,8 @@ use super::{SDPWithdrawOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        Value,
         batch::DeferredZkpVerification,
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
             VerifiableOperation,
@@ -18,7 +17,7 @@ use crate::{
         ops::SignedOperation,
         transactions::{
             hash::TxHashView,
-            states::{Preverified, Unverified, VerificationState, Verified},
+            states::{Preverified, Unverified, Verified},
         },
     },
     sdp::{self, service_notes::ServiceNotes},
@@ -47,6 +46,8 @@ impl ProvableOperation for SDPWithdrawOp {
 impl OperationGas<MainnetGasProfile> for SDPWithdrawOp {
     const GAS_COST: Gas = Gas::new(590);
 }
+
+impl OpGasCalculator<MainnetGasProfile> for SDPWithdrawOp {}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<SDPWithdrawOp, Unverified, StandardMode>
@@ -169,10 +170,313 @@ impl<Mode: VerificationMode> ExecutableOperation
     }
 }
 
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOperation<SDPWithdrawOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
+#[cfg(test)]
+mod tests {
+    use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::ZkKey;
+    use num_bigint::BigUint;
+
+    use super::*;
+    use crate::{
+        mantle::{
+            Note, NoteId, TxHash,
+            batch::{Error as BatchError, test_utils::batch_verify},
+            gas::test_utils::FixedThresholds,
+            ops::op_proof::samples::SampleProof as _,
+        },
+        sdp::{Declaration, DeclarationMessage, MinStake, ServiceType},
+    };
+
+    fn note_key() -> ZkKey {
+        ZkKey::from(BigUint::from(1u8))
+    }
+
+    fn declaration_key() -> ZkKey {
+        ZkKey::from(BigUint::from(2u8))
+    }
+
+    fn locked_notes(service_note_id: &NoteId) -> ServiceNotes {
+        ServiceNotes::new()
+            .lock(
+                &MinStake {
+                    threshold: 0,
+                    timestamp: 0,
+                },
+                ServiceType::BlendNetwork,
+                Note::new(10_000, note_key().to_public_key()),
+                service_note_id,
+            )
+            .expect("the note covers the minimum stake")
+    }
+
+    fn declaration(service_note_id: NoteId) -> Declaration {
+        Declaration::new(
+            Epoch::from(0),
+            &DeclarationMessage {
+                zk_id: declaration_key().to_public_key(),
+                service_note_id,
+                ..DeclarationMessage::sample()
+            },
+        )
+    }
+
+    fn declarations(operation: &SDPWithdrawOp, declaration: Declaration) -> Declarations {
+        Declarations::new_sync().insert(operation.declaration_id, declaration)
+    }
+
+    fn preverified(
+        operation: SDPWithdrawOp,
+        tx_hash_view: &TxHashView,
+    ) -> SignedOperation<SDPWithdrawOp, Preverified, StandardMode> {
+        let proof = ZkKey::multi_sign(&[note_key(), declaration_key()], tx_hash_view.as_fr())
+            .expect("signing should succeed");
+
+        SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+            .into_preverified(&())
+            .expect("preverify accepts every withdraw message")
+    }
+
+    #[test]
+    fn preverify_accepts_every_withdraw_message() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            SDPWithdrawOp::sample(),
+            <SDPWithdrawOp as ProvableOperation>::Proof::sample(),
+        );
+
+        assert_eq!(signed_operation.preverify(&()), Ok(()));
+    }
+
+    #[test]
+    fn verify_rejects_an_unknown_declaration() {
+        let operation = SDPWithdrawOp::sample();
+        let declaration_id = operation.declaration_id;
+        let service_notes = locked_notes(&operation.service_note_id);
+        let declarations = Declarations::new_sync();
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let signed_operation = preverified(operation, &signed_view);
+
+        assert_eq!(
+            signed_operation
+                .verify(&SDPWithdrawValidationContext {
+                    declarations: &declarations,
+                    epoch: Epoch::from(0),
+                    service_notes: &service_notes,
+                    tx_hash_view: &signed_view,
+                })
+                .unwrap_err(),
+            SdpError::DeclarationNotFound(declaration_id)
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_declaration_already_scheduled_for_withdrawal() {
+        let operation = SDPWithdrawOp::sample();
+        let declaration_id = operation.declaration_id;
+        let service_notes = locked_notes(&operation.service_note_id);
+
+        let withdraw_at = Epoch::from(7);
+        let declaration = Declaration {
+            withdraw_at: Some(withdraw_at),
+            ..declaration(operation.service_note_id)
+        };
+        let declarations = declarations(&operation, declaration);
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let signed_operation = preverified(operation, &signed_view);
+
+        assert_eq!(
+            signed_operation
+                .verify(&SDPWithdrawValidationContext {
+                    declarations: &declarations,
+                    epoch: Epoch::from(0),
+                    service_notes: &service_notes,
+                    tx_hash_view: &signed_view,
+                })
+                .unwrap_err(),
+            SdpError::DeclarationWithdrawn {
+                declaration_id,
+                withdraw_at,
+            }
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_note_not_locked_for_the_service() {
+        let operation = SDPWithdrawOp::sample();
+        let note_id = operation.service_note_id;
+        let service_notes = ServiceNotes::new();
+        let declarations = declarations(&operation, declaration(operation.service_note_id));
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let signed_operation = preverified(operation, &signed_view);
+
+        assert_eq!(
+            signed_operation
+                .verify(&SDPWithdrawValidationContext {
+                    declarations: &declarations,
+                    epoch: Epoch::from(0),
+                    service_notes: &service_notes,
+                    tx_hash_view: &signed_view,
+                })
+                .unwrap_err(),
+            SdpError::NoteNotUsedForService {
+                note_id,
+                service_type: ServiceType::BlendNetwork,
+            }
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_locked_note_the_declaration_does_not_own() {
+        let operation = SDPWithdrawOp::sample();
+        let note_id = operation.service_note_id;
+        let expected = NoteId(Fr::from(99u64));
+        let service_notes = locked_notes(&note_id);
+        let declarations = declarations(&operation, declaration(expected));
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let signed_operation = preverified(operation, &signed_view);
+
+        assert_eq!(
+            signed_operation
+                .verify(&SDPWithdrawValidationContext {
+                    declarations: &declarations,
+                    epoch: Epoch::from(0),
+                    service_notes: &service_notes,
+                    tx_hash_view: &signed_view,
+                })
+                .unwrap_err(),
+            SdpError::InvalidServiceNote { note_id, expected }
+        );
+    }
+
+    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
+        let operation = SDPWithdrawOp::sample();
+        let service_notes = locked_notes(&operation.service_note_id);
+        let declarations = declarations(&operation, declaration(operation.service_note_id));
+        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let proof =
+            ZkKey::multi_sign(signers, tx_hash_view.as_fr()).expect("signing should succeed");
+
+        SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+            .into_preverified(&())
+            .expect("preverify accepts every withdraw message")
+            .verify(&SDPWithdrawValidationContext {
+                declarations: &declarations,
+                epoch: Epoch::from(0),
+                service_notes: &service_notes,
+                tx_hash_view: &tx_hash_view,
+            })
+            .expect("verify leaves the proof to the batch")
+    }
+
+    #[test]
+    fn deferred_zkp_is_accepted() {
+        assert!(batch_verify(deferred_zkp_signed_by(&[note_key(), declaration_key()])).is_ok());
+    }
+
+    #[test]
+    fn wrong_deferred_zkp_is_rejected() {
+        assert!(matches!(
+            batch_verify(deferred_zkp_signed_by(&[declaration_key()])),
+            Err(BatchError::InvalidZkSignatures)
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_a_nonce_that_does_not_increase() {
+        let operation = SDPWithdrawOp {
+            nonce: 0,
+            ..SDPWithdrawOp::sample()
+        };
+        let service_notes = locked_notes(&operation.service_note_id);
+        let declarations = declarations(&operation, declaration(operation.service_note_id));
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let signed_operation = preverified(operation, &signed_view);
+
+        assert_eq!(
+            signed_operation
+                .verify(&SDPWithdrawValidationContext {
+                    declarations: &declarations,
+                    epoch: Epoch::from(0),
+                    service_notes: &service_notes,
+                    tx_hash_view: &signed_view,
+                })
+                .unwrap_err(),
+            SdpError::InvalidNonce {
+                message_nonce: 0,
+                declaration_nonce: 0,
+            }
+        );
+    }
+
+    fn verified(
+        operation: SDPWithdrawOp,
+    ) -> SignedOperation<SDPWithdrawOp, Verified, StandardMode> {
+        SignedOperation::<_, Unverified, StandardMode>::new(
+            operation,
+            <SDPWithdrawOp as ProvableOperation>::Proof::sample(),
+        )
+        .into_state_trusted()
+    }
+
+    #[test]
+    fn execute_schedules_the_withdrawal_after_the_snapshot_delay() {
+        let operation = SDPWithdrawOp::sample();
+        let declaration_id = operation.declaration_id;
+        let locked_note_id = operation.service_note_id;
+        let nonce = operation.nonce;
+        let service_notes = locked_notes(&locked_note_id);
+        let declarations = declarations(&operation, declaration(locked_note_id));
+        let epoch = Epoch::from(4);
+
+        let (context, events) = verified(operation)
+            .execute(SDPWithdrawExecutionContext {
+                declarations,
+                service_notes,
+                epoch,
+            })
+            .expect("the declaration is registered");
+
+        let updated = context
+            .declarations
+            .get(&declaration_id)
+            .expect("the declaration stays registered");
+        assert_eq!(
+            updated.withdraw_at,
+            Some(epoch.strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY))
+        );
+        assert_eq!(updated.nonce, nonce);
+        assert!(
+            context
+                .service_notes
+                .is_used_for_service(&locked_note_id, &ServiceType::BlendNetwork)
+        );
+        assert_eq!(events, []);
+    }
+
+    #[test]
+    #[should_panic(expected = "The operation should have been validated")]
+    fn execute_panics_on_a_declaration_the_ledger_does_not_hold() {
+        let operation = SDPWithdrawOp::sample();
+        let service_notes = locked_notes(&operation.service_note_id);
+
+        drop(verified(operation).execute(SDPWithdrawExecutionContext {
+            declarations: Declarations::new_sync(),
+            service_notes,
+            epoch: Epoch::from(4),
+        }));
+    }
+
+    #[test]
+    fn sdp_withdraw_op_execution_gas_does_not_scale_with_the_threshold() {
+        for threshold in [0, 1, 3] {
+            assert_eq!(
+                SDPWithdrawOp::sample().execution_gas(&FixedThresholds(threshold)),
+                Ok(Gas::new(590))
+            );
+        }
     }
 }

@@ -5,7 +5,6 @@ mod notifier;
 mod relays;
 mod service;
 mod states;
-pub mod storage;
 mod sync;
 #[cfg(test)]
 mod tests;
@@ -19,8 +18,7 @@ use std::{
     time::Duration,
 };
 
-use bytes::Bytes;
-use derivative::Derivative;
+use educe::Educe;
 use futures::{Stream, TryStreamExt as _};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
@@ -28,11 +26,10 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        TxGasCalculator,
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
-        traits::{PreverifiedMantleTransaction, SignedMantleTx},
-        transactions::{GasPrices, states::Preverified},
+        traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
+        transactions::states::Preverified,
     },
     sdp::{Declaration, DeclarationId},
 };
@@ -48,8 +45,7 @@ use lb_services_utils::{
 };
 use lb_storage_service::{
     StorageService,
-    api::chain::StorageChainApi,
-    backends::StorageBackend,
+    api::StorageApi,
     recovery::{StorageRecoveryBackend, StorageRecoverySettings},
 };
 use lb_time_service::TimeService;
@@ -79,7 +75,6 @@ use crate::{
         Service, delete_stale_blocks_from_storage, load_block_ids_from_storage,
         persist_recovery_state, process_block,
     },
-    storage::{StorageAdapter as _, adapters::StorageAdapter},
     sync::block_provider::BlockProvider,
 };
 
@@ -107,7 +102,7 @@ pub enum Error {
     #[error("Consensus error: {0}")]
     Consensus(#[from] lb_cryptarchia_engine::Error<HeaderId>),
     #[error("Serialization error: {0}")]
-    Serialisation(#[from] lb_core::codec::Error),
+    Serialisation(#[from] lb_binary_codec::bincode::Error),
     #[error("Invalid block: {0}")]
     InvalidBlock(String),
     #[error("Storage error: {0}")]
@@ -137,8 +132,8 @@ struct RecoveryBlocks<Tx> {
     fell_back_to_lib: bool,
 }
 
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Educe)]
+#[educe(Debug)]
 pub enum ConsensusMsg<Tx> {
     /// Read-only queries and subscriptions.
     /// These are served in every service phase.
@@ -165,8 +160,8 @@ impl<Tx> From<Query> for ConsensusMsg<Tx> {
 }
 
 /// Read-only queries and subscriptions, served in every service phase.
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Educe)]
+#[educe(Debug)]
 pub enum Query {
     Info {
         reply_channel: oneshot::Sender<ChainServiceInfo>,
@@ -180,7 +175,7 @@ pub enum Query {
     GetHeaders {
         from_descendant: Option<HeaderId>,
         to_ancestor: Option<HeaderId>,
-        #[derivative(Debug = "ignore")]
+        #[educe(Debug(ignore))]
         reply_channel: oneshot::Sender<HeaderIdStream>,
     },
     GetLedgerState {
@@ -410,9 +405,10 @@ impl Cryptarchia {
         current_slot: Slot,
     ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>, Events), Error>
     where
-        Tx: PreverifiedMantleTransaction + TxGasCalculator<Context = GasPrices> + Clone,
+        Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
-        let outcome = self.try_apply_block_with_state_retention(block, current_slot)?;
+        let outcome =
+            self.try_apply_block_with_state_retention(block, current_slot, BlockOrigin::Network)?;
         self.prune_ledger_states(outcome.pruned_blocks.all());
         Ok((
             outcome.pruned_blocks,
@@ -427,9 +423,10 @@ impl Cryptarchia {
         &mut self,
         block: Block<Tx>,
         current_slot: Slot,
+        origin: BlockOrigin,
     ) -> Result<TryApplyBlockOutcome, Error>
     where
-        Tx: PreverifiedMantleTransaction + TxGasCalculator<Context = GasPrices> + Clone,
+        Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
         let header = block.header();
         let id = header.id();
@@ -449,7 +446,9 @@ impl Cryptarchia {
         }
 
         // A block is valid only if every uncle it carries is valid.
-        self.verify_uncles(&block)?;
+        if origin == BlockOrigin::Network {
+            self.verify_uncles(&block)?;
+        }
 
         let block_uncle_headers_slots = block.uncle_headers().slots();
         let leader_proof = header.leader_proof().clone();
@@ -618,11 +617,9 @@ impl From<GenesisBlock> for StartingState {
 }
 
 #[expect(clippy::allow_attributes_without_reason)]
-pub struct CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
+pub struct CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     TimeBackend: lb_time_service::backends::TimeBackend,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -631,29 +628,26 @@ where
     state: <Self as ServiceData>::State,
 }
 
-impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceData
-    for CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
+impl<Tx, TimeBackend, RuntimeServiceId> ServiceData
+    for CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     TimeBackend: lb_time_service::backends::TimeBackend,
 {
     type Settings = CryptarchiaSettings;
     type State = CryptarchiaConsensusState;
-    type StateOperator = RecoveryOperator<
-        StorageRecoveryBackend<Self::State, Self::Settings, Storage, RuntimeServiceId>,
-    >;
+    type StateOperator =
+        RecoveryOperator<StorageRecoveryBackend<Self::State, Self::Settings, RuntimeServiceId>>;
     type Message = ConsensusMsg<Tx>;
 }
 
 #[async_trait::async_trait]
-impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
+impl<Tx, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -663,10 +657,6 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     RuntimeServiceId: Debug
@@ -676,7 +666,7 @@ where
         + 'static
         + AsServiceId<Self>
         + AsServiceId<BlockBroadcastService<RuntimeServiceId>>
-        + AsServiceId<StorageService<Storage, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
 {
     fn init(
@@ -695,10 +685,11 @@ where
     }
 
     async fn run(self) -> Result<(), DynError> {
-        let relays: CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId> =
-            CryptarchiaConsensusRelays::from_service_resources_handle::<TimeBackend>(
-                &self.service_resources_handle,
-            )
+        let relays: CryptarchiaConsensusRelays<Tx> =
+            CryptarchiaConsensusRelays::from_service_resources_handle::<
+                TimeBackend,
+                RuntimeServiceId,
+            >(&self.service_resources_handle)
             .await;
 
         let CryptarchiaSettings {
@@ -717,7 +708,7 @@ where
             &self.service_resources_handle.overwatch_handle,
             Some(Duration::from_mins(1)),
             BlockBroadcastService<_>,
-            StorageService<_, _>,
+            StorageService<_>,
             TimeService<_, _>
         )
         .await?;
@@ -737,14 +728,15 @@ where
             &self.lib_subscription_sender,
             current_slot,
         )
-        .await;
+        .await
+        .expect("The chain can't be recovered from storage. Remove the chain data, and sync from genesis");
 
         // These are blocks that have been pruned by the cryptarchia engine but have not
         // yet been deleted from the storage layer.
         let storage_blocks_to_remove = delete_stale_blocks_from_storage(
             pruned_blocks.stale_blocks().copied(),
             &self.state.storage_blocks_to_remove,
-            relays.storage_adapter(),
+            relays.storage(),
         )
         .await;
 
@@ -756,10 +748,8 @@ where
             );
         }
 
-        let sync_blocks_provider: BlockProvider<_, _> = BlockProvider::new(
-            relays.storage_adapter().storage_relay.clone(),
-            sync_config.block_provider,
-        );
+        let sync_blocks_provider: BlockProvider<_> =
+            BlockProvider::new(relays.storage().clone(), sync_config.block_provider);
 
         // Start the timer for periodic state recording for offline grace period
         let state_recording_timer = tokio::time::interval(
@@ -827,12 +817,11 @@ where
     }
 }
 
-impl<Tx, Storage, TimeBackend, RuntimeServiceId>
-    CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
+impl<Tx, TimeBackend, RuntimeServiceId> CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -842,10 +831,6 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     TimeBackend: lb_time_service::backends::TimeBackend,
     RuntimeServiceId: Display + AsServiceId<Self> + 'static,
 {
@@ -860,7 +845,7 @@ where
 
     /// Get current slot and slot timer from time service.
     async fn get_slot_timer(
-        relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
+        relays: &CryptarchiaConsensusRelays<Tx>,
     ) -> Result<(Slot, lb_time_service::EpochSlotTickStream), DynError> {
         let slot_timer = {
             let (sender, receiver) = oneshot::channel();
@@ -890,7 +875,7 @@ where
     async fn load_recovery_blocks_from_storage(
         tip: HeaderId,
         lib: HeaderId,
-        storage: StorageAdapter<Storage, Tx, RuntimeServiceId>,
+        storage: StorageApi<Tx>,
     ) -> Result<Vec<Block<Tx>>, Error> {
         let ids = load_block_ids_from_storage(tip, lib, storage.clone())
             .try_collect::<Vec<_>>()
@@ -914,7 +899,7 @@ where
     async fn load_recovery_blocks_or_fall_back_to_lib(
         tip: HeaderId,
         lib: HeaderId,
-        storage: StorageAdapter<Storage, Tx, RuntimeServiceId>,
+        storage: StorageApi<Tx>,
     ) -> RecoveryBlocks<Tx> {
         if tip == lib {
             // Cryptarchia already starts from LIB, so there is no branch to replay.
@@ -929,6 +914,8 @@ where
                 blocks,
                 fell_back_to_lib: false,
             },
+            // TODO: Check if it's safe to remove this. We shouldn't fall back to LIB
+            // since uncle validations would fail without enough ancestor blocks.
             Err(error @ (Error::ParentIdNotFound(_) | Error::HeaderIdNotFound(_))) => {
                 warn!(
                     target: LOG_TARGET, ?tip, ?lib, ?error,
@@ -959,6 +946,13 @@ where
     /// * `ledger_config` - The ledger configuration.
     /// * `relays` - The relays object containing all the necessary relays for
     ///   the consensus.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any stored block fails to be replayed, without
+    /// continuing with a partially recovered chain. Otherwise, the remaining
+    /// blocks are downloaded from peers, and their uncles can't be verified if
+    /// the parent of an uncle is older than LIB.
     #[expect(
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
@@ -967,11 +961,11 @@ where
         recovery_state: &CryptarchiaConsensusState,
         bootstrap_config: &BootstrapConfig,
         ledger_config: lb_ledger::Config,
-        relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
+        relays: &CryptarchiaConsensusRelays<Tx>,
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,
         current_slot: Slot,
-    ) -> InitializedCryptarchia {
+    ) -> Result<InitializedCryptarchia, Error> {
         info!(
             target: LOG_TARGET, tip = ?recovery_state.tip, lib = ?recovery_state.lib, lib_height = recovery_state.lib_block_length, genesis = ?recovery_state.genesis_id,
             "recovering Cryptarchia",
@@ -1024,7 +1018,7 @@ where
         } = Self::load_recovery_blocks_or_fall_back_to_lib(
             recovery_state.tip,
             lib_id,
-            relays.storage_adapter().clone(),
+            relays.storage().clone(),
         )
         .await;
         info!(
@@ -1037,24 +1031,22 @@ where
         let mut pruned_blocks = PrunedBlocks::new();
         let n_blocks = blocks.len();
         for (i, block) in blocks.into_iter().enumerate() {
-            match process_block(
+            let block_id = block.header().id();
+            let outcome = process_block(
                 &mut cryptarchia,
                 block,
                 current_slot,
+                BlockOrigin::Storage,
                 relays,
                 new_block_subscription_sender,
                 lib_subscription_sender,
             )
             .await
-            {
-                Ok(outcome) => {
-                    debug!(target: LOG_TARGET, "{}/{} blocks applied during initialization", i + 1, n_blocks);
-                    pruned_blocks.extend(&outcome.pruned_blocks);
-                }
-                Err(e) => {
-                    error!(target: LOG_TARGET, "Error processing block: {:?}", e);
-                }
-            }
+            .inspect_err(|error| {
+                error!(target: LOG_TARGET, ?block_id, ?error, "failed to replay the stored block ({}/{n_blocks})", i + 1);
+            })?;
+            debug!(target: LOG_TARGET, "{}/{} blocks applied during initialization", i + 1, n_blocks);
+            pruned_blocks.extend(&outcome.pruned_blocks);
         }
 
         info!(
@@ -1062,10 +1054,24 @@ where
             "{n_blocks} blocks replayed. Chain recovery finished",
         );
 
-        InitializedCryptarchia {
+        Ok(InitializedCryptarchia {
             cryptarchia,
             pruned_blocks,
             fell_back_to_lib,
-        }
+        })
     }
+}
+
+/// Where a block being applied comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockOrigin {
+    /// A block received from the network, or proposed by this node.
+    Network,
+    /// A block that was already verified and stored by this node, which is
+    /// being replayed during the chain recovery.
+    ///
+    /// The uncle validity rules are skipped for it, since the parent of an
+    /// uncle may be older than LIB, and blocks older than LIB are not
+    /// recovered.
+    Storage,
 }

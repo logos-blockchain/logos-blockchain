@@ -37,33 +37,31 @@ pub trait IbdBlockProcessor<B> {
     async fn has_processed_block(&self, header: HeaderId) -> Result<bool, Error>;
 }
 
-pub struct ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, RuntimeServiceId>
+pub struct ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
-    RuntimeServiceId: Send + Sync,
 {
-    pub cryptarchia: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    pub cryptarchia: CryptarchiaServiceApi<Cryptarchia>,
     pub mempool_adapter: MempoolAdapter<Mempool::Item>,
 }
 
-impl<Cryptarchia, Mempool, RuntimeServiceId> IbdBlockProcessor<Block<Cryptarchia::Tx>>
-    for ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, RuntimeServiceId>
+impl<Cryptarchia, Mempool> IbdBlockProcessor<Block<Cryptarchia::Tx>>
+    for ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
-    RuntimeServiceId: Send + Sync,
 {
     async fn info(&self) -> Result<CryptarchiaInfo, Error> {
         Ok(self.cryptarchia.info().await?.cryptarchia_info)
     }
 
     async fn process_block(&mut self, block: Block<Cryptarchia::Tx>) -> Result<(), Error> {
-        crate::apply_block_and_reconcile_mempool::<_, Mempool, _>(
+        crate::apply_block_and_reconcile_mempool::<_, Mempool>(
             block,
             &self.cryptarchia,
             &self.mempool_adapter,
@@ -957,13 +955,15 @@ mod tests {
         RewardPoWConfig {
             reward_pool_genesis: 1_000_000_000,
             epoch_reward_genesis: 1_000_000,
-            initial_difficulty: ModulusShift::new::<26>(),
+            minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
             target_claims_per_block: 100,
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
             target_claim_per_block: NonZeroU64::MIN,
+            pow_share: 0,
+            share_den: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).unwrap(),
         }
     }

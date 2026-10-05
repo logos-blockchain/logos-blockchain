@@ -78,7 +78,7 @@ deployment/ceremony/genesis/
   shared/                         # (optional) inputs common to ALL environments
   <env>/
     inscribe.yaml                 # TEMPLATE entropy + PER-RELEASE chain_id/genesis_time
-    deployment-template.yaml      # PER-TYPE consensus / network / blend params
+    deployment-template.yaml      # PER-TYPE era-zero params (consensus / blend / time)
     stakeholders.yaml             # PER-TYPE genesis stake distribution
     providers.yaml                # PER-TYPE bootstrap providers (id, locators)
     faucet.yaml                   # PER-TYPE faucet identity + funds
@@ -97,6 +97,13 @@ tests validate:
 | --- | --- | --- |
 | `.github/workflows/genesis-ceremony.yml` (devnet / testnet) | `deployment/ceremony/genesis/<env>/*` | `nodes/node/binary/src/config/deployment/settings.yaml` |
 | `scripts/standalone-genesis-ceremony.sh` (local) | `deployment/ceremony/genesis/standalone/*` | `nodes/node/standalone-deployment-config.yaml` |
+
+Protocol and gossipsub topic names are not configured: every node derives them
+from its deployment. Blend, chain sync and the cryptarchia and mempool topics are
+named `/logos-blockchain/<fork digest>/<protocol>`, so nodes on different forks
+never talk to each other. Kademlia and identify are named
+`/logos-blockchain/<percent-encoded chain ID>/<protocol>`, so peers of a chain
+still find each other across its forks.
 
 ### 1. Template for all deployments (any type)
 Shared blueprints reused by every deployment type; not edited per release.
@@ -119,7 +126,7 @@ Per-type blueprints; change only when a network type is re-defined.
 
 - The `# PER-RELEASE` section (`chain_id`, `genesis_time`) of `deployment/ceremony/genesis/<env>/inscribe.yaml`
 - `NODE_IMAGE_LABEL` in `.env.<env>` (its `# PER-RELEASE` section)
-- The `version` input of the genesis ceremony workflow (fills `VERSION_PLACEHOLDER`)
+- The `version` input of the genesis ceremony workflow (named in the ceremony's commit message)
 
 Generated each release (by the ceremony, not hand-edited):
 `nodes/node/binary/src/config/deployment/settings.yaml`,

@@ -1,19 +1,40 @@
-use std::{error::Error, ops::Mul as _};
+use core::fmt::{Display, Formatter};
+use std::{error::Error, fmt, ops::Mul as _};
 
 use ark_ec::{CurveGroup as _, VariableBaseMSM as _, pairing::Pairing};
 use ark_ff::{UniformRand as _, Zero as _};
 use ark_groth16::{Groth16, r1cs_to_qap::LibsnarkReduction};
+use ark_relations::r1cs::SynthesisError;
 use rand::thread_rng;
 
 use crate::{proof::Proof, verification_key::PreparedVerificationKey};
+
+/// Error returned when Groth16 verification cannot be carried out.
+///
+/// Wraps `ark_relations`' `SynthesisError`. That type only implements
+/// [`std::error::Error`] when `ark-relations/std` is on, and we deliberately
+/// keep it off: it is an optional dependency that drags in `tracing-subscriber`
+/// 0.2 (RUSTSEC-2025-0055). Wrapping it here lets callers keep treating the
+/// failure as a `std` error without pulling that in.
+#[derive(Debug)]
+pub struct VerificationError(SynthesisError);
+
+impl Display for VerificationError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Error for VerificationError {}
 
 pub fn groth16_verify<E: Pairing>(
     vk: &PreparedVerificationKey<E>,
     proof: &Proof<E>,
     public_inputs: &[E::ScalarField],
-) -> Result<bool, impl Error + use<E>> {
+) -> Result<bool, VerificationError> {
     let proof: ark_groth16::Proof<E> = proof.into();
     Groth16::<E, LibsnarkReduction>::verify_proof(vk.as_ref(), &proof, public_inputs)
+        .map_err(VerificationError)
 }
 
 pub fn groth16_batch_verify<E: Pairing>(

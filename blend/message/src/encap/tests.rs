@@ -1,11 +1,13 @@
 use core::convert::Infallible;
 
+use lb_binary_codec::{
+    bincode::{DeserializeOp as _, SerializeOp as _},
+    canonical::{BinaryDecode as _, BinaryEncode as _},
+};
 use lb_blend_proofs::{
     quota::{ProofOfQuota, VerifiedProofOfQuota},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
-use lb_codec::{BinaryDecode as _, BinaryEncode as _};
-use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key, X25519PrivateKey,
 };
@@ -644,13 +646,12 @@ fn generate_inputs(cnt: usize) -> (Vec<EncapsulationInput>, Vec<X25519PrivateKey
     let inputs = recipient_signing_keys
         .iter()
         .map(|recipient_signing_key| {
-            EncapsulationInput::try_new(
+            EncapsulationInput::new(
                 UnsecuredEd25519Key::generate_with_chacha_rng(),
                 &recipient_signing_key.public_key(),
                 VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
                 VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
             )
-            .unwrap()
         })
         .collect::<Vec<_>>();
     (

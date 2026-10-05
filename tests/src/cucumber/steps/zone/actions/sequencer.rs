@@ -176,8 +176,8 @@ async fn start_named_sequencer_with_config(
         runtime.checkpoint_rx,
         runtime.channel_view_rx,
         runtime.turn_to_write_rx,
-        runtime.tx_status_rx,
         runtime.discarded_payloads,
+        runtime.view_violation,
     );
 
     Ok(())
@@ -237,13 +237,13 @@ fn from_policy_runtime(
 ) -> StartedSequencerRuntime {
     StartedSequencerRuntime {
         task: rt.task,
+        view_violation: rt.view_violation,
         client: rt.client,
         events: rt.events,
         checkpoint_rx: rt.checkpoint_rx,
         ready_rx: rt.ready_rx,
         channel_view_rx: rt.channel_view_rx,
         turn_to_write_rx: rt.turn_to_write_rx,
-        tx_status_rx: rt.tx_status_rx,
         discarded_payloads,
     }
 }

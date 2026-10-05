@@ -2,7 +2,8 @@ use core::{hash::Hash, num::NonZeroU64};
 
 use lb_blend::scheduling::membership::Membership;
 use lb_core::crypto::ZkHash;
-use tracing::info;
+use lb_log_targets::diagnostic::BLEND_REACHABILITY;
+use tracing::debug;
 
 use crate::membership::{MembershipInfo, ZkInfo};
 
@@ -75,9 +76,9 @@ impl<NodeId> ModeMembership<NodeId> {
         };
 
         let chosen = mode.mode();
-        info!(
+        debug!(
             target: crate::LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "blend_mode_chosen",
             mode = chosen.as_ref(),
             membership_count,

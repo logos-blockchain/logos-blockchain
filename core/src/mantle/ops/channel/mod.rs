@@ -7,15 +7,26 @@ pub mod withdraw;
 
 use std::fmt::{Display, Formatter};
 
-use lb_codec::BinaryCodec;
+use lb_binary_codec::{bincode::BoundedSerializeOp, canonical::BinaryCodec};
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnverifiedEd25519PublicKey};
+use lb_utils::bounded::NonEmptyBoundedVec;
 
 use crate::utils::serde_bytes_newtype;
 
 pub type ChannelKeyIndex = u16;
 
+pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
+type ChannelKeys<Key> = NonEmptyBoundedVec<Key, CHANNEL_MAX_KEYS>;
+pub type VerifiedChannelKeys = ChannelKeys<Ed25519PublicKey>;
+pub type UnverifiedChannelKeys = ChannelKeys<UnverifiedEd25519PublicKey>;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryCodec)]
 pub struct ChannelId([u8; 32]);
 serde_bytes_newtype!(ChannelId, 32);
+
+impl BoundedSerializeOp for ChannelId {
+    type Bytes = [u8; 32];
+}
 
 impl Display for ChannelId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -29,14 +40,16 @@ impl Display for ChannelId {
 pub struct MsgId([u8; 32]);
 serde_bytes_newtype!(MsgId, 32);
 
+impl BoundedSerializeOp for MsgId {
+    type Bytes = [u8; 32];
+}
+
 impl Display for MsgId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let hex_string = hex::encode(self.0);
         write!(f, "{hex_string}")
     }
 }
-
-pub type Ed25519PublicKey = lb_key_management_system_keys::keys::Ed25519PublicKey;
 
 impl MsgId {
     #[must_use]
@@ -77,5 +90,32 @@ impl AsRef<[u8; 32]> for ChannelId {
 impl From<ChannelId> for [u8; 32] {
     fn from(channel_id: ChannelId) -> Self {
         channel_id.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp as _};
+
+    use super::{ChannelId, MsgId};
+
+    #[test]
+    fn channel_ids_have_exact_bincode_size() {
+        let channel_id = ChannelId::from([0x11; 32]);
+        let msg_id = MsgId::from([0x22; 32]);
+
+        for (ordinary, bounded) in [
+            (
+                channel_id.to_bytes().unwrap(),
+                channel_id.to_bounded_bytes().unwrap().to_vec(),
+            ),
+            (
+                msg_id.to_bytes().unwrap(),
+                msg_id.to_bounded_bytes().unwrap().to_vec(),
+            ),
+        ] {
+            assert_eq!(ordinary.len(), 32);
+            assert_eq!(ordinary.as_ref(), bounded.as_slice());
+        }
     }
 }

@@ -51,9 +51,14 @@ where
             .ok()?;
         let winning_pol_epoch_slots_stream = receiver.await.ok()?;
         Some(Box::new(winning_pol_epoch_slots_stream.map(
-            |WinningPolEpochSlots { epoch, slots }| {
+            |WinningPolEpochSlots {
+                 epoch,
+                 state,
+                 slots,
+             }| {
                 PolEpochInfo {
                     epoch,
+                    state,
                     // Just drive each per-slot future and drop the non-winners.
                     winning_pol_info_stream: Box::pin(
                         slots

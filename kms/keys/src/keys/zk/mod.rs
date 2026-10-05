@@ -1,7 +1,7 @@
 use core::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 
-use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::Fr;
 use lb_zksign::ZkSignError;
 use num_bigint::BigUint;

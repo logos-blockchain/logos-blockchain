@@ -271,8 +271,7 @@ async fn step_wait_all_nodes_responsive(
 ) -> StepResult {
     let cluster = world
         .cluster
-        .local_cluster
-        .as_ref()
+        .local_cluster()
         .ok_or(StepError::LogicalError {
             message: "No local cluster available".into(),
         })?;

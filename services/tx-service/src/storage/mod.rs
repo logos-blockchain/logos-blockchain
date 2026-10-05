@@ -2,14 +2,11 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::Stream;
-use lb_storage_service::backends::StorageBackend;
 
 pub mod adapters;
 
 #[async_trait]
 pub trait MempoolStorageAdapter<RuntimeServiceId>: Send + Sync {
-    type Backend: StorageBackend + Send + Sync + 'static;
-
     type Item: Send;
 
     type Key: Send + Sync;
@@ -18,7 +15,7 @@ pub trait MempoolStorageAdapter<RuntimeServiceId>: Send + Sync {
 
     fn new(
         storage_relay: overwatch::services::relay::OutboundRelay<
-            <lb_storage_service::StorageService<Self::Backend, RuntimeServiceId> as overwatch::services::ServiceData>::Message,
+            <lb_storage_service::StorageService<RuntimeServiceId> as overwatch::services::ServiceData>::Message,
         >,
     ) -> Self;
 

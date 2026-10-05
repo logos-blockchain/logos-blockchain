@@ -1,6 +1,6 @@
 use core::fmt::{self, Display, Formatter};
 
-use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::Fr;
 use lb_utils::bounded::{BoundedString, BoundedVec, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,6 @@ use time::OffsetDateTime;
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        gas::{Gas, GasCost, GasOverflow, GasProfile, TxGasCalculator},
         ledger::verification_mode::GenesisMode,
         ops::{
             Op, OpRef, SignedOp, SignedOperation,
@@ -167,36 +166,6 @@ impl Hashable for GenesisTx {
     }
 }
 
-impl TxGasCalculator for GenesisTx {
-    type Context = ();
-
-    fn total_gas_cost<Profile: GasProfile>(
-        &self,
-        _context: &Self::Context,
-    ) -> Result<GasCost, GasOverflow> {
-        // Genesis transactions have zero gas cost as per spec
-        Ok(0.into())
-    }
-
-    fn storage_gas_cost(&self, _context: &Self::Context) -> Result<GasCost, GasOverflow> {
-        // Genesis transactions have zero gas cost as per spec
-        Ok(0.into())
-    }
-
-    fn execution_gas_consumption<Profile: GasProfile>(
-        &self,
-        _context: &Self::Context,
-    ) -> Result<Gas, GasOverflow> {
-        // Genesis transactions have zero gas cost as per spec
-        Ok(0.into())
-    }
-
-    fn storage_gas_consumption(&self, _context: &Self::Context) -> Result<Gas, GasOverflow> {
-        // Genesis transactions have zero gas cost as per spec
-        Ok(0.into())
-    }
-}
-
 impl MantleTx for GenesisTx {
     fn op_refs(&self) -> OpRefs<'_> {
         self.signed_ops.op_refs()
@@ -263,8 +232,8 @@ impl<'de> Deserialize<'de> for GenesisTx {
     where
         D: serde::Deserializer<'de>,
     {
-        let tx = SignedOps::<Unverified, GenesisMode>::deserialize(deserializer)?
-            .into_preverified_trusted_genesis();
+        let tx =
+            SignedOps::<Unverified, GenesisMode>::deserialize(deserializer)?.into_state_trusted();
         Self::from_tx(tx).map_err(serde::de::Error::custom)
     }
 }
@@ -389,6 +358,12 @@ impl GenesisTime {
     pub const fn new(seconds_since_epoch: u32) -> Self {
         Self(seconds_since_epoch)
     }
+
+    /// Seconds since the Unix epoch, the unit a Unix timestamp is defined in.
+    #[must_use]
+    pub const fn unix_timestamp(self) -> u32 {
+        self.0
+    }
 }
 
 impl From<GenesisTime> for OffsetDateTime {
@@ -417,19 +392,18 @@ pub struct CryptarchiaParameter {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof};
-    use lb_key_management_system_keys::keys::{Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature};
+    use lb_groth16::AdditiveGroup as _;
+    use lb_key_management_system_keys::keys::{
+        Ed25519PublicKey, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey,
+    };
     use num_bigint::BigUint;
 
     use super::*;
     use crate::{
         mantle::{
             OpProof,
-            ledger::{Inputs, Note, Outputs, Utxo, Value},
-            ops::{
-                ZkAndEd25519Proof,
-                channel::{Ed25519PublicKey, inscribe::Inscription},
-            },
+            ledger::{BoundedInputs, Inputs, Note, Outputs, Utxo, Value},
+            ops::channel::inscribe::Inscription,
             transactions::{OpProofs, Ops},
         },
         sdp::{Locator, ProviderId, ServiceType},
@@ -439,7 +413,7 @@ mod tests {
         channel_id: ChannelId,
         cryptarchia_param: &CryptarchiaParameter,
         parent: MsgId,
-        signer: Ed25519PublicKey,
+        signer: UnverifiedEd25519PublicKey,
     ) -> InscriptionOp {
         InscriptionOp {
             channel_id,
@@ -476,31 +450,21 @@ mod tests {
         Note::new(value, ZkPublicKey::from(BigUint::from(123u64)))
     }
 
-    // Helper function to build a proof of the variant expected for a given op
-    fn placeholder_proof(op: &Op) -> OpProof {
-        match op {
-            Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
-            Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
-                CompressedGroth16Proof::from_bytes(&[0u8; 128]),
-            )),
-            Op::SDPDeclare(_) => {
-                let proof = ZkAndEd25519Proof {
-                    zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
-                    ed25519_sig: Ed25519Signature::zero(),
-                };
-                OpProof::ZkAndEd25519Sigs(proof)
-            }
-            other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
-        }
-    }
-
     // Helper function to create a basic signed transaction
     // Genesis transactions don't need verified proofs for Blob/Inscription ops
     fn create_trusted_tx(
-        mut ops: Vec<Op>,
+        ops: Vec<Op>,
         op_proofs_vec: Vec<OpProof>,
     ) -> SignedOps<Preverified, GenesisMode> {
         let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
+        create_trusted_tx_with_transfer(transfer_op, ops.into_iter().collect(), op_proofs_vec)
+    }
+
+    fn create_trusted_tx_with_transfer(
+        transfer_op: TransferOp,
+        mut ops: Vec<Op>,
+        op_proofs_vec: Vec<OpProof>,
+    ) -> SignedOps<Preverified, GenesisMode> {
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
         let mantle_tx = Ops::new_unchecked(new_ops);
@@ -512,7 +476,6 @@ mod tests {
         }
         SignedOps::from_parts_trusted(mantle_tx, op_proofs).unwrap()
     }
-
     #[test]
     fn test_inscription_fields() {
         // check inscription with channel id [1; 32] fails
@@ -521,7 +484,7 @@ mod tests {
                 ChannelId::from([1; 32]),
                 &cryptarchia_param(),
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
                 &[0u8; 64],
@@ -538,7 +501,7 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
                 MsgId::from([1; 32]),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
                 &[0u8; 64],
@@ -555,7 +518,7 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[1; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[1; 32]).unwrap(),
             ))],
             vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
                 &[0u8; 64],
@@ -572,7 +535,7 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
                 &[0u8; 64],
@@ -588,7 +551,7 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             )
         };
 
@@ -610,7 +573,7 @@ mod tests {
 
         // Execute all test cases
         for (ops, expected_err) in test_cases {
-            let ops_proofs = ops.iter().map(placeholder_proof).collect::<Vec<_>>();
+            let ops_proofs = ops.iter().map(Op::sample_proof).collect::<Vec<_>>();
             let tx = create_trusted_tx(ops, ops_proofs);
             let result = GenesisTx::from_tx(tx);
             match expected_err {
@@ -627,10 +590,10 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             )
         };
-        let verifying_key = Ed25519PublicKey::from_bytes(&[0; 32]).unwrap();
+        let verifying_key = Ed25519PublicKey::from_bytes(&[1; 32]).unwrap();
         let utxo1 = Utxo::new([0u8; 32], 0, create_test_note(1000));
         let utxo2 = Utxo::new([1u8; 32], 1, create_test_note(2000));
         let sdp_declare_op_helper = |utxo_to_use: Utxo, zk_id_value: u8| {
@@ -664,7 +627,7 @@ mod tests {
 
         // Execute all test cases
         for (ops, expected_err) in test_cases {
-            let ops_proofs = ops.iter().map(placeholder_proof).collect::<Vec<_>>();
+            let ops_proofs = ops.iter().map(Op::sample_proof).collect::<Vec<_>>();
             let tx = create_trusted_tx(ops, ops_proofs);
             let result = GenesisTx::from_tx(tx);
             match expected_err {
@@ -682,7 +645,7 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
                 &[0u8; 64],
@@ -759,11 +722,71 @@ mod tests {
                 ChannelId::from([0; 32]),
                 &param,
                 MsgId::root(),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::Ed25519Sig(Ed25519Signature::zero())],
         );
         let genesis_tx = GenesisTx::from_tx(tx).unwrap();
         assert_eq!(genesis_tx.cryptarchia_parameter(), param);
+    }
+
+    #[test]
+    fn from_tx_rejects_a_transfer_that_spends_an_input() {
+        let utxo = Utxo::new([0u8; 32], 0, create_test_note(1000));
+        let transfer_op = TransferOp::new(
+            BoundedInputs::from(utxo.id()).into(),
+            Outputs::new([create_test_note(1000)]),
+        );
+        let tx = create_trusted_tx_with_transfer(
+            transfer_op,
+            vec![Op::ChannelInscribe(inscription_op(
+                ChannelId::from([0; 32]),
+                &cryptarchia_param(),
+                MsgId::root(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+            ))],
+            vec![OpProof::Ed25519Sig(Ed25519Signature::zero())],
+        );
+
+        assert_eq!(GenesisTx::from_tx(tx), Err(Error::UnexpectedInput));
+    }
+
+    #[test]
+    fn into_genesis_ops_splits_the_transfer_the_inscription_and_the_declarations() {
+        let verifying_key = Ed25519PublicKey::from_bytes(&[1; 32]).unwrap();
+        let utxo = Utxo::new([0u8; 32], 0, create_test_note(1000));
+        let declare_op = sdp_declare_op(utxo, 0, verifying_key);
+        let inscribe_op = inscription_op(
+            ChannelId::from([0; 32]),
+            &cryptarchia_param(),
+            MsgId::root(),
+            UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+        );
+        let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
+        let tx = create_trusted_tx_with_transfer(
+            transfer_op.clone(),
+            vec![
+                Op::ChannelInscribe(inscribe_op.clone()),
+                Op::SDPDeclare(declare_op.clone()),
+            ],
+            vec![
+                OpProof::Ed25519Sig(Ed25519Signature::zero()),
+                Op::SDPDeclare(declare_op.clone()).sample_proof(),
+            ],
+        );
+        let genesis_tx = GenesisTx::from_tx(tx).expect("the genesis transaction is well formed");
+
+        let genesis_ops = genesis_tx.into_genesis_ops();
+
+        assert_eq!(genesis_ops.inscription.operation(), &inscribe_op);
+        assert_eq!(genesis_ops.transfer.operation(), &transfer_op);
+        assert_eq!(
+            genesis_ops
+                .declarations
+                .iter()
+                .map(SignedOperation::operation)
+                .collect::<Vec<_>>(),
+            vec![&declare_op]
+        );
     }
 }

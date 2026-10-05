@@ -1,12 +1,19 @@
-use lb_codec::codec_fixtures;
+use lb_binary_codec::canonical::codec_fixtures;
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
 
-use crate::mantle::{Note, NoteId, ops::transfer::TransferOp};
+use crate::mantle::{
+    Note, NoteId,
+    fixtures::ops::op_values::{TRANSFER, TRANSFER_PAYLOAD_HEX},
+    ledger::{BoundedInputs, Inputs},
+    ops::transfer::TransferOp,
+};
 
 codec_fixtures!(
     TransferOp,
-    Self { inputs: [].into(), outputs: [].into() } => "0000",
-    Self { inputs: [NoteId::from(Fr::ONE)].into(), outputs: [].into() } => "01010000000000000000000000000000000000000000000000000000000000000000",
-    Self { inputs: [].into(), outputs: [Note { value: 0, pk: Fr::ZERO.into() }].into() } => "000100000000000000000000000000000000000000000000000000000000000000000000000000000000",
-    Self { inputs: [NoteId::from(Fr::ZERO)].into(), outputs: [Note { value: 0, pk: Fr::ONE.into() }].into() } => "0100000000000000000000000000000000000000000000000000000000000000000100000000000000000100000000000000000000000000000000000000000000000000000000000000",
+    Self { inputs: Inputs::empty(), outputs: [].into() } => "0000",
+    Self { inputs: BoundedInputs::from(NoteId::from(Fr::ONE)).into(), outputs: [].into() } => "01010000000000000000000000000000000000000000000000000000000000000000",
+    Self { inputs: Inputs::empty(), outputs: [Note { value: 0, pk: Fr::ZERO.into() }].into() } => "000100000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    Self { inputs: BoundedInputs::from(NoteId::from(Fr::ZERO)).into(), outputs: [Note { value: 0, pk: Fr::ONE.into() }].into() } => "0100000000000000000000000000000000000000000000000000000000000000000100000000000000000100000000000000000000000000000000000000000000000000000000000000",
+    Self { inputs: BoundedInputs::from(NoteId::from(Fr::ZERO)).into(), outputs: [Note { value: 0, pk: Fr::ZERO.into() }].into() } => "0100000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    TRANSFER.clone() => TRANSFER_PAYLOAD_HEX,
 );

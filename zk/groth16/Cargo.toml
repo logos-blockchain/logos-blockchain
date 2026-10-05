@@ -13,7 +13,8 @@ version     = { workspace = true }
 ark-bn254     = { features = ["curve"], workspace = true }
 ark-ec        = { workspace = true }
 ark-ff        = { workspace = true }
-ark-groth16   = { features = ["std"], workspace = true }
+ark-groth16   = { workspace = true }
+ark-relations = { workspace = true }
 ark-serialize = { workspace = true }
 generic-array = { features = ["serde"], workspace = true }
 hex           = { features = ["alloc"], workspace = true }

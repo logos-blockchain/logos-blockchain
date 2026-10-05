@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use lb_codec::DecodeError;
+use lb_binary_codec::canonical::DecodeError;
 use serde::{Deserialize, Deserializer};
 
 use crate::mantle::{
@@ -30,6 +30,33 @@ impl OpProofs {
 
         Ok((remaining_input, op_proofs))
     }
+
+    /// One sample of every [`OpProof`] variant, in declaration order.
+    ///
+    /// Exhaustive over the enum, so it carries no alignment with any [`Ops`] —
+    /// pairing proofs to their ops is `SignedOps`' job, not this column's.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn sample() -> Self {
+        use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
+
+        use crate::{
+            mantle::ops::{NoOpProof, ZkAndEd25519Proof, op_proof::samples::SampleProof as _},
+            proofs::{
+                channel_multi_sig_proof::ChannelMultiSigProof,
+                leader_claim_proof::Groth16LeaderClaimProof,
+            },
+        };
+
+        Self::from([
+            OpProof::Ed25519Sig(Ed25519Signature::sample()),
+            OpProof::ZkSig(ZkSignature::sample()),
+            OpProof::ZkAndEd25519Sigs(ZkAndEd25519Proof::sample()),
+            OpProof::PoC(Groth16LeaderClaimProof::sample()),
+            OpProof::ChannelMultiSigProof(ChannelMultiSigProof::sample()),
+            OpProof::None(NoOpProof::sample()),
+        ])
+    }
 }
 
 /// A bare sequence, mirroring [`OpProofRefs`]' `Serialize`, which is what
@@ -44,7 +71,7 @@ impl OpProofs {
 /// round-trips fine.
 ///
 /// Refusing binary also neuters the blanket `DeserializeOp` impl in
-/// [`crate::codec`]: `OpProofs::from_bytes` still exists, but fails instead of
+/// [`lb_binary_codec::bincode`]: `OpProofs::from_bytes` still exists, but fails instead of
 /// decoding a column that carries no way to type itself.
 impl<'de> Deserialize<'de> for OpProofs {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -58,5 +85,28 @@ impl<'de> Deserialize<'de> for OpProofs {
                 "OpProofs has no standalone binary form: proofs are typed by their ops, so only SignedOps can decode them",
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_binary_codec::bincode::DeserializeOp as _;
+
+    use super::*;
+
+    #[test]
+    fn deserialize_from_json() {
+        let op_proofs = OpProofs::sample();
+        let json = serde_json::to_value(op_proofs.inner()).expect("the inner column serializes");
+
+        assert_eq!(
+            serde_json::from_value::<OpProofs>(json).expect("the human-readable arm deserializes"),
+            op_proofs
+        );
+    }
+
+    #[test]
+    fn deserialize_rejects_binary() {
+        OpProofs::from_bytes(&[0u8; 8]).expect_err("Context-less binary decoding is unsupported.");
     }
 }

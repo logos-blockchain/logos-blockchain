@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},

@@ -10,20 +10,20 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse as _, Response},
 };
-use futures::FutureExt as _;
+use futures::TryStreamExt as _;
 use lb_api_service::http::{
     DynError, blend,
     consensus::{self, Cryptarchia, leader::LeaderClaimResponseBody},
     libp2p, mantle, mempool, pow,
-    storage::StorageAdapter,
 };
 use lb_blend_service::message::ProxyServiceMessage;
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
-use lb_chain_service::{ChainServiceInfo, ConsensusMsg, Slot, api::CryptarchiaServiceApi};
+use lb_chain_service::{
+    ChainServiceInfo, Slot,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+};
 use lb_core::{
-    block::Block,
-    events::Events,
     header::HeaderId,
     mantle::{
         Op, OpProof, SignedOps, TxHash,
@@ -56,21 +56,20 @@ use lb_http_api_common::{
     paths,
     queries::BlocksStreamQuery,
 };
-use lb_libp2p::{Multiaddr, libp2p::bytes::Bytes};
+use lb_libp2p::Multiaddr;
 use lb_log_targets::node;
 use lb_network_service::{NetworkService, backends::libp2p::Libp2p as Libp2pNetworkBackend};
 use lb_pow_service::api::PoWServiceData;
 use lb_sdp_service::{
     mempool::SdpMempoolAdapter, state::SdpStateStorage, wallet::SdpWalletAdapter,
 };
-use lb_storage_service::{
-    StorageService, api::chain::StorageChainApi, backends::rocksdb::RocksBackend,
-};
+use lb_storage_service::{StorageService, api::StorageApi};
 use lb_time_service::TimeServiceMessage;
 use lb_tx_service::{
     MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
 };
+use lb_version::BuildVersionInfo;
 use lb_wallet_service::api::{WalletApi, WalletServiceData};
 use overwatch::{
     overwatch::handle::OverwatchHandle,
@@ -213,7 +212,7 @@ fn default_slot_from_for_blocks_stream(
     slot_to.saturating_sub(Slot::new(estimated_slot_span))
 }
 
-async fn fetch_blocks_stream_chunk<StorageBackend, RuntimeServiceId>(
+async fn fetch_blocks_stream_chunk<RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,
     chain_info: &lb_chain_service::CryptarchiaInfo,
     slot_from: Slot,
@@ -223,21 +222,15 @@ async fn fetch_blocks_stream_chunk<StorageBackend, RuntimeServiceId>(
     immutable_only: bool,
 ) -> Result<Vec<ApiProcessedBlockEventOwned<Unverified, StandardMode>>, DynError>
 where
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    StorageBackend::Block: Serialize,
-    <StorageBackend as StorageChainApi>::Block: TryFrom<Block<SignedOps<Unverified, StandardMode>>>
-        + TryInto<Block<SignedOps<Unverified, StandardMode>>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
         + Display
         + 'static
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+        + AsServiceId<StorageService<RuntimeServiceId>>,
 {
-    let chunk = mantle::get_blocks_in_slot_range_with_snapshot::<_, _, RuntimeServiceId>(
+    let chunk = mantle::get_blocks_in_slot_range_with_snapshot::<_, RuntimeServiceId>(
         handle,
         slot_from,
         slot_to,
@@ -268,7 +261,7 @@ struct BlocksStreamState<RuntimeServiceId> {
 }
 
 #[expect(clippy::too_many_arguments, reason = "Need all args")]
-fn build_blocks_stream<StorageBackend, RuntimeServiceId>(
+fn build_blocks_stream<RuntimeServiceId>(
     handle: OverwatchHandle<RuntimeServiceId>,
     chain_info: lb_chain_service::CryptarchiaInfo,
     first_chunk: Vec<ApiProcessedBlockEventOwned<Unverified, StandardMode>>,
@@ -281,19 +274,13 @@ fn build_blocks_stream<StorageBackend, RuntimeServiceId>(
     immutable_only: bool,
 ) -> impl futures::Stream<Item = Result<ApiProcessedBlockEventOwned<Unverified, StandardMode>, DynError>>
 where
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    StorageBackend::Block: Serialize,
-    <StorageBackend as StorageChainApi>::Block: TryFrom<Block<SignedOps<Unverified, StandardMode>>>
-        + TryInto<Block<SignedOps<Unverified, StandardMode>>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
         + Display
         + 'static
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+        + AsServiceId<StorageService<RuntimeServiceId>>,
 {
     let state = BlocksStreamState {
         buffered: first_chunk.into_iter(),
@@ -327,7 +314,7 @@ where
                 (cursor, state.slot_to)
             };
 
-            let fetched_blocks = fetch_blocks_stream_chunk::<StorageBackend, RuntimeServiceId>(
+            let fetched_blocks = fetch_blocks_stream_chunk::<RuntimeServiceId>(
                 &state.handle,
                 &state.chain_info,
                 chunk_from,
@@ -401,7 +388,7 @@ where
         + Sync
         + Display
         + 'static
-        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
@@ -455,7 +442,7 @@ where
         + Sync
         + Display
         + 'static
-        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
@@ -485,11 +472,11 @@ where
     get,
     path = paths::NODE_VERSION,
     responses(
-        (status = 200, description = "Version of the running node, e.g. `0.1.2 (abcdefaa)`", body = String),
+        (status = 200, description = "Version and build provenance of the running node", body = BuildVersionInfo),
     )
 )]
 pub async fn version() -> Response {
-    Json(crate::version::node_version()).into_response()
+    Json(lb_version::build_version_info()).into_response()
 }
 
 /// The chain ID is fixed by the deployment the node was built with, so it is
@@ -551,7 +538,7 @@ where
         }
     };
     let (sender, receiver) = oneshot::channel();
-    if let Err((error, _)) = relay.send(TimeServiceMessage::Info { sender }).await {
+    if let Err(error) = relay.send(TimeServiceMessage::Info { sender }).await {
         return ApiError::internal(error).into_response();
     }
     match receiver.await {
@@ -561,6 +548,7 @@ where
                 genesis_time_unix_ms: service_info.genesis_time_unix_ms,
                 current_slot: u64::from(service_info.current_slot),
                 current_epoch: u32::from(service_info.current_epoch),
+                slots_per_epoch: service_info.slots_per_epoch,
             };
             (StatusCode::OK, Json(api_info)).into_response()
         }
@@ -786,7 +774,7 @@ where
         + Send
         + Display
         + 'static
-        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
@@ -847,7 +835,7 @@ where
         + Sync
         + Display
         + 'static
-        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
@@ -892,7 +880,7 @@ where
         + Sync
         + Display
         + 'static
-        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
@@ -939,7 +927,7 @@ where
         + Sync
         + Display
         + 'static
-        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
@@ -984,8 +972,7 @@ where
             ancestor_hint,
             reply_channel: sender,
         })
-        .await
-        .map_err(|(error, _)| error)?;
+        .await?;
 
     let txs = receiver.await?;
 
@@ -1053,7 +1040,7 @@ where
         + Send
         + Sync
         + 'static
-        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<WalletService>
         + AsServiceId<
             TxMempoolService<
@@ -1140,7 +1127,7 @@ pub async fn post_declaration<
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
-    ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData + Send + Sync + 'static,
     StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Debug
         + Sync
@@ -1188,7 +1175,7 @@ pub async fn post_activity<
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
-    ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData + Send + Sync + 'static,
     StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Debug
         + Sync
@@ -1236,7 +1223,7 @@ pub async fn post_withdrawal<
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
-    ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData + Send + Sync + 'static,
     StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Debug
         + Sync
@@ -1284,7 +1271,7 @@ pub async fn post_set_declaration_id<
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
-    ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData + Send + Sync + 'static,
     StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Debug
         + Sync
@@ -1482,6 +1469,24 @@ where
 
 #[utoipa::path(
     get,
+    path = paths::POW_STATUS,
+    responses(
+        (status = 200, description = "PoW mining and auto-claim state as the running node holds it"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn pow_status<PoW, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    make_request_and_return_response!(pow::status::<PoW, RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    get,
     path = paths::BLOCKS,
     params(BlockRangeQuery),
     responses(
@@ -1489,31 +1494,32 @@ where
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn immutable_blocks<StorageBackend, RuntimeServiceId>(
+pub async fn immutable_blocks<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Query(query): Query<BlockRangeQuery>,
 ) -> Response
 where
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static, /* TODO: StorageChainApi */
-    StorageBackend::Block: Serialize,
-    <StorageBackend as StorageChainApi>::Block: TryFrom<Block<SignedOps<Unverified, StandardMode>>>
-        + TryInto<Block<SignedOps<Unverified, StandardMode>>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
+        + Send
         + Sync
         + Display
         + 'static
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>,
 {
-    let api_blocks =
-        mantle::get_immutable_blocks(&handle, query.slot_from, query.slot_to).map(|blocks| {
-            let api_blocks = blocks?
-                .into_iter()
-                .map(ApiBlockOwned::from)
-                .collect::<Vec<_>>();
-            Ok::<Vec<ApiBlockOwned<Unverified, StandardMode>>, DynError>(api_blocks)
-        });
+    let api_blocks = async {
+        let blocks = mantle::get_immutable_blocks::<
+            SignedOps<Unverified, StandardMode>,
+            RuntimeServiceId,
+        >(&handle, query.slot_from, query.slot_to)
+        .await?;
+
+        let api_blocks = blocks
+            .into_iter()
+            .map(ApiBlockOwned::from)
+            .collect::<Vec<_>>();
+        Ok::<Vec<ApiBlockOwned<Unverified, StandardMode>>, DynError>(api_blocks)
+    };
     make_request_and_return_response!(api_blocks)
 }
 
@@ -1526,21 +1532,21 @@ where
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn block<HttpStorageAdapter, RuntimeServiceId>(
+pub async fn block<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Path(id): Path<HeaderId>,
 ) -> Response
 where
-    HttpStorageAdapter: StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    RuntimeServiceId:
-        AsServiceId<StorageService<RocksBackend, RuntimeServiceId>> + Debug + Sync + Display,
+    RuntimeServiceId: AsServiceId<StorageService<RuntimeServiceId>> + Debug + Sync + Display,
 {
-    let relay = match get_relay(&handle).await {
-        Ok(relay) => relay,
-        Err(error) => return error.into_response(),
-    };
-    let block =
-        HttpStorageAdapter::get_block::<SignedOps<Unverified, StandardMode>>(relay, id).await;
+    let storage =
+        match StorageApi::<SignedOps<Unverified, StandardMode>>::from_overwatch_handle(&handle)
+            .await
+        {
+            Ok(storage) => storage,
+            Err(error) => return ApiError::internal(error).into_response(),
+        };
+    let block = storage.try_get_block(&id).await;
     match block {
         Ok(Some(block)) => {
             let api_block = ApiBlock::from(&block);
@@ -1568,12 +1574,9 @@ where
     RuntimeServiceId:
         AsServiceId<Cryptarchia<RuntimeServiceId>> + Debug + Sync + Display + Send + 'static,
 {
-    let relay = match get_relay(&handle).await {
-        Ok(relay) => relay,
-        Err(error) => return error.into_response(),
-    };
     let chain_api =
-        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(relay);
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(&handle)
+            .await;
 
     match chain_api.get_block_events(id).await {
         Ok(Some(events)) => (StatusCode::OK, Json(events)).into_response(),
@@ -1603,12 +1606,9 @@ where
     RuntimeServiceId:
         AsServiceId<Cryptarchia<RuntimeServiceId>> + Debug + Sync + Display + Send + 'static,
 {
-    let relay = match get_relay(&handle).await {
-        Ok(relay) => relay,
-        Err(error) => return error.into_response(),
-    };
     let chain_api =
-        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(relay);
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(&handle)
+            .await;
 
     let block_id = match query.tip {
         Some(tip) => tip,
@@ -1643,26 +1643,19 @@ where
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn blocks_stream<StorageBackend, ConsensusService, RuntimeServiceId>(
+pub async fn blocks_stream<ConsensusService, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    StorageBackend::Block: Serialize,
-    <StorageBackend as StorageChainApi>::Block: TryFrom<Block<SignedOps<Preverified, StandardMode>>>
-        + TryInto<Block<SignedOps<Preverified, StandardMode>>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    ConsensusService:
-        ServiceData<Message = ConsensusMsg<SignedOps<Preverified, StandardMode>>> + 'static,
+    ConsensusService: CryptarchiaServiceData<Tx = SignedOps<Preverified, StandardMode>>,
     RuntimeServiceId: Debug
         + Sync
         + Display
         + 'static
         + AsServiceId<ConsensusService>
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+        + AsServiceId<StorageService<RuntimeServiceId>>,
 {
-    let stream = mantle::get_new_blocks_stream::<_, _, ConsensusService, _>(&handle)
+    let stream = mantle::get_new_blocks_stream::<_, ConsensusService, _>(&handle)
         .await
         .map(|stream| stream.map(ApiProcessedBlockEventOwned::from));
     match stream {
@@ -1683,24 +1676,18 @@ where
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn blocks_range_stream<StorageBackend, RuntimeServiceId>(
+pub async fn blocks_range_stream<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Query(query): Query<BlocksStreamQuery>,
 ) -> Result<Response, BlocksStreamHandlerError>
 where
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    StorageBackend::Block: Serialize,
-    <StorageBackend as StorageChainApi>::Block: TryFrom<Block<SignedOps<Unverified, StandardMode>>>
-        + TryInto<Block<SignedOps<Unverified, StandardMode>>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
         + Display
         + 'static
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+        + AsServiceId<StorageService<RuntimeServiceId>>,
 {
     let request = BlocksStreamRequest::try_from(query)?;
 
@@ -1718,7 +1705,7 @@ where
     )
     .expect("chunk size min blocks limit should be non-zero");
 
-    let first_chunk = fetch_blocks_stream_chunk::<StorageBackend, RuntimeServiceId>(
+    let first_chunk = fetch_blocks_stream_chunk::<RuntimeServiceId>(
         &handle,
         &chain_info.cryptarchia_info,
         slot_from,
@@ -1745,7 +1732,7 @@ where
     let next_cursor =
         next_blocks_stream_cursor(request.descending, slot_from, slot_to, boundary_slot);
 
-    let stream = build_blocks_stream::<StorageBackend, RuntimeServiceId>(
+    let stream = build_blocks_stream::<RuntimeServiceId>(
         handle,
         chain_info.cryptarchia_info,
         first_chunk,
@@ -1770,23 +1757,24 @@ where
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn transaction<HttpStorageAdapter, RuntimeServiceId>(
+pub async fn transaction<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Path(id): Path<TxHash>,
 ) -> Response
 where
-    HttpStorageAdapter: StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    RuntimeServiceId:
-        AsServiceId<StorageService<RocksBackend, RuntimeServiceId>> + Debug + Sync + Display,
+    RuntimeServiceId: AsServiceId<StorageService<RuntimeServiceId>> + Debug + Sync + Display,
 {
-    let relay = match get_relay(&handle).await {
-        Ok(relay) => relay,
-        Err(error) => return error.into_response(),
-    };
-    let Ok(transactions) =
-        HttpStorageAdapter::get_transactions::<SignedOps<Unverified, StandardMode>>(relay, id)
+    let storage =
+        match StorageApi::<SignedOps<Unverified, StandardMode>>::from_overwatch_handle(&handle)
             .await
-    else {
+        {
+            Ok(storage) => storage,
+            Err(error) => return ApiError::internal(error).into_response(),
+        };
+    let Ok(transactions) = storage.try_get_transactions(vec![id]).await else {
+        return ApiError::InternalServerError.into_response();
+    };
+    let Ok(transactions) = transactions.try_collect::<Vec<_>>().await else {
         return ApiError::InternalServerError.into_response();
     };
     match transactions.as_slice() {
@@ -1805,6 +1793,7 @@ where
 
 pub mod wallet {
     use lb_http_api_common::bodies::wallet::{
+        aged_notes::{LeaderAgedNoteResponseBody, LeaderAgedNotesResponseBody},
         fund::{WalletFundRequestBody, WalletFundResponseBody},
         sign::{
             WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody,
@@ -1860,6 +1849,53 @@ pub mod wallet {
             Ok(lb_wallet_service::TipResponse { response: None, .. }) => {
                 ApiError::NotFound("The requested address could not be found in the wallet".into())
                     .into_response()
+            }
+            Err(error) => ApiError::internal(error).into_response(),
+        }
+    }
+
+    #[utoipa::path(
+    get,
+    path = paths::LEADER_AGED_NOTES,
+    responses(
+        (status = 200, description = "Get the wallet notes eligible to lead"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+    )]
+    pub async fn get_leader_aged_notes<WalletService, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Query(query): Query<TipQuery>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData + 'static,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+    {
+        let wallet_relay = match get_relay::<WalletService, _>(&handle).await {
+            Ok(relay) => relay,
+            Err(error) => return error.into_response(),
+        };
+        let wallet_api = WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay);
+
+        match wallet_api.get_leader_aged_notes_info(query.tip).await {
+            Ok(lb_wallet_service::TipResponse { tip, response }) => {
+                let count = response.count();
+                let notes = response
+                    .notes
+                    .into_iter()
+                    .map(|note| LeaderAgedNoteResponseBody {
+                        note_id: note.note_id,
+                        value: note.value,
+                        public_key: note.public_key,
+                    })
+                    .collect();
+
+                LeaderAgedNotesResponseBody {
+                    tip,
+                    notes,
+                    count,
+                    total_value: response.total_value,
+                }
+                .into_response()
             }
             Err(error) => ApiError::internal(error).into_response(),
         }
@@ -1939,7 +1975,7 @@ pub mod wallet {
             + Sync
             + Display
             + 'static
-            + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+            + AsServiceId<StorageService<RuntimeServiceId>>
             + AsServiceId<WalletService>
             + AsServiceId<
                 TxMempoolService<
@@ -2036,7 +2072,7 @@ pub mod wallet {
             + Send
             + Sync
             + 'static
-            + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+            + AsServiceId<StorageService<RuntimeServiceId>>
             + AsServiceId<WalletService>
             + AsServiceId<
                 TxMempoolService<
@@ -2096,7 +2132,7 @@ pub mod wallet {
             + Send
             + Sync
             + 'static
-            + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+            + AsServiceId<StorageService<RuntimeServiceId>>
             + AsServiceId<WalletService>
             + AsServiceId<
                 TxMempoolService<
@@ -2156,7 +2192,7 @@ pub mod wallet {
             + Send
             + Sync
             + 'static
-            + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+            + AsServiceId<StorageService<RuntimeServiceId>>
             + AsServiceId<WalletService>
             + AsServiceId<
                 TxMempoolService<
@@ -2237,9 +2273,10 @@ mod tests {
         mantle::{
             channel::{ChannelState, SlotTimeframe, SlotTimeout},
             gas::GasCost,
-            ops::channel::{Ed25519PublicKey, MsgId, config::Keys},
+            ops::channel::{MsgId, UnverifiedChannelKeys},
         },
     };
+    use lb_key_management_system_service::keys::UnverifiedEd25519PublicKey;
 
     use super::{channel_response, validate_max_tx_fee};
     use crate::api::{
@@ -2276,9 +2313,10 @@ mod tests {
     }
 
     fn channel_state() -> ChannelState {
-        let accredited_keys: Keys =
-            [Ed25519PublicKey::from_bytes(&[0; 32]).expect("test public key should be valid")]
-                .into();
+        let accredited_keys: UnverifiedChannelKeys =
+            [UnverifiedEd25519PublicKey::from_bytes(&[0; 32])
+                .expect("test public key should be valid")]
+            .into();
 
         ChannelState {
             accredited_keys: Arc::new(accredited_keys),

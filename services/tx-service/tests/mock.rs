@@ -9,9 +9,9 @@ use std::{
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _, stream};
 use indexmap::IndexMap;
+use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
-    codec::{DeserializeOp as _, SerializeOp as _},
     header::HeaderId,
     mantle::{
         mock::{MockTransaction, MockTxId},
@@ -29,8 +29,8 @@ use lb_services_utils::overwatch::{
 };
 use lb_storage_service::{
     StorageService,
-    backends::rocksdb::{self, RocksBackend},
     recovery::{StorageRecoveryBackend, load_recovery_data},
+    rocksdb,
 };
 use lb_tracing_service::{Tracing, TracingSettings};
 use lb_utils::noop_service::NoService;
@@ -54,7 +54,6 @@ use tempfile::TempDir;
 type MockRecoveryBackend = StorageRecoveryBackend<
     TxMempoolState<PoolRecoveryState<MockTxId>, MempoolSettings, ()>,
     TxMempoolSettings<MempoolSettings, ()>,
-    RocksBackend,
     RuntimeServiceId,
 >;
 
@@ -76,7 +75,7 @@ type MockMempoolService = GenericTxMempoolService<
 struct MockPoolNode {
     logging: Tracing<RuntimeServiceId>,
     network: NetworkService<Mock, RuntimeServiceId>,
-    storage: StorageService<RocksBackend, RuntimeServiceId>,
+    storage: StorageService<RuntimeServiceId>,
     mockpool: MockMempoolService,
     no_service: NoService,
 }
@@ -199,15 +198,12 @@ struct FailingStorageAdapter;
 
 #[async_trait]
 impl MempoolStorageAdapter<RuntimeServiceId> for InMemoryStorageAdapter {
-    type Backend = RocksBackend;
     type Item = MockTransaction<MockMessage>;
     type Key = MockTxId;
     type Error = Infallible;
 
     fn new(
-        _storage_relay: OutboundRelay<
-            <StorageService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        _storage_relay: OutboundRelay<<StorageService<RuntimeServiceId> as ServiceData>::Message>,
     ) -> Self {
         Self::default()
     }
@@ -250,15 +246,12 @@ impl MempoolStorageAdapter<RuntimeServiceId> for InMemoryStorageAdapter {
 
 #[async_trait]
 impl MempoolStorageAdapter<RuntimeServiceId> for FailingStorageAdapter {
-    type Backend = RocksBackend;
     type Item = MockTransaction<MockMessage>;
     type Key = MockTxId;
     type Error = MempoolError;
 
     fn new(
-        _storage_relay: OutboundRelay<
-            <StorageService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        _storage_relay: OutboundRelay<<StorageService<RuntimeServiceId> as ServiceData>::Message>,
     ) -> Self {
         Self
     }
@@ -497,7 +490,7 @@ async fn removed_items_are_not_pending_but_still_fetchable() {
         .expect("pending view should still work")
         .collect::<Vec<_>>()
         .await;
-    assert!(pending_after_remove.is_empty());
+    assert_eq!(pending_after_remove, []);
 
     let fetched_after_remove = pool
         .get_items_by_keys([tx_id])
@@ -590,11 +583,11 @@ fn local_submission_rejects_oversized_tx() {
             } if size > MAX_BLOCK_TRANSACTIONS_SIZE
         ));
 
-        assert!(
+        assert_eq!(
             app.runtime()
                 .handle()
-                .block_on(pending_txs(&mempool_outbound))
-                .is_empty()
+                .block_on(pending_txs(&mempool_outbound)),
+            []
         );
 
         drop(app.runtime().handle().block_on(app.handle().shutdown()));

@@ -5,11 +5,12 @@ use std::{
 };
 
 use lb_blend::scheduling::epoch::EpochEvent;
+use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{AsServiceId, ServiceData},
 };
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::{
     membership::MembershipInfo,
@@ -73,7 +74,7 @@ where
     pub async fn new(
         mode: Mode,
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-    ) -> Result<Self, orchestrator::Error> {
+    ) -> Result<Self, orchestrator::Error<CoreService::Message>> {
         Ok(match mode {
             Mode::Core => Self::Core(OnDemandServiceMode::new(overwatch_handle.clone()).await?),
             Mode::Edge => Self::Edge(OnDemandServiceMode::new(overwatch_handle.clone()).await?),
@@ -89,7 +90,7 @@ where
     pub async fn handle_inbound_message(
         &self,
         message: CoreService::Message,
-    ) -> Result<(), orchestrator::Error> {
+    ) -> Result<(), orchestrator::Error<CoreService::Message>> {
         match self {
             Self::Core(mode) => mode.handle_inbound_message(message).await,
             Self::Edge(mode) | Self::EdgeAfterCore { mode, .. } => {
@@ -107,7 +108,7 @@ where
         event: EpochEvent<MembershipInfo<NodeId>>,
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
         minimum_network_size: NonZeroU64,
-    ) -> Result<Self, orchestrator::Error>
+    ) -> Result<Self, orchestrator::Error<CoreService::Message>>
     where
         NodeId: Eq + Hash,
     {
@@ -136,7 +137,7 @@ where
         self,
         to_mode: Mode,
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-    ) -> Result<Self, orchestrator::Error> {
+    ) -> Result<Self, orchestrator::Error<CoreService::Message>> {
         let previous_mode = self.mode();
         if previous_mode == to_mode {
             // Already serving this mode. If a core is still draining behind
@@ -231,9 +232,9 @@ where
 /// operator sees a node's mode decisions in the log.
 fn log_mode_applied(previous_mode: Mode, selected_mode: Mode, resulting_mode: Mode) {
     let mode_changed = previous_mode != resulting_mode;
-    info!(
+    debug!(
         target: crate::LOG_TARGET,
-        diagnostic = "blend_tsi_outage",
+        diagnostic = BLEND_REACHABILITY,
         event = "blend_mode_applied",
         selected_mode = selected_mode.as_ref(),
         previous_mode = previous_mode.as_ref(),
@@ -244,7 +245,7 @@ fn log_mode_applied(previous_mode: Mode, selected_mode: Mode, resulting_mode: Mo
     if mode_changed {
         info!(
             target: crate::LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = "blend_mode_changed",
             previous_mode = previous_mode.as_ref(),
             new_mode = resulting_mode.as_ref(),
@@ -264,6 +265,7 @@ mod tests {
         overwatch::OverwatchRunner,
         services::{
             ServiceCore,
+            resources::ServiceResourcesHandle,
             state::{NoOperator, NoState},
         },
     };
@@ -533,7 +535,7 @@ mod tests {
         async fn run(self) -> Result<(), DynError> {
             let Self {
                 service_resources_handle:
-                    OpaqueServiceResourcesHandle::<Self, RuntimeServiceId> {
+                    ServiceResourcesHandle {
                         ref status_updater, ..
                     },
                 ..
@@ -571,7 +573,7 @@ mod tests {
         async fn run(self) -> Result<(), DynError> {
             let Self {
                 service_resources_handle:
-                    OpaqueServiceResourcesHandle::<Self, RuntimeServiceId> {
+                    ServiceResourcesHandle {
                         ref status_updater, ..
                     },
                 ..
@@ -609,7 +611,7 @@ mod tests {
         async fn run(self) -> Result<(), DynError> {
             let Self {
                 service_resources_handle:
-                    OpaqueServiceResourcesHandle::<Self, RuntimeServiceId> {
+                    ServiceResourcesHandle {
                         ref status_updater, ..
                     },
                 ..

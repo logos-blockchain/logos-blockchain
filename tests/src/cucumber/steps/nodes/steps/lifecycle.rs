@@ -14,7 +14,11 @@ use super::{
 
 #[given(expr = "I have a cluster with capacity of {int} nodes")]
 #[when(expr = "I have a cluster with capacity of {int} nodes")]
-fn step_manual_cluster(world: &mut CucumberWorld, step: &Step, nodes_count: usize) -> StepResult {
+async fn step_manual_cluster(
+    world: &mut CucumberWorld,
+    step: &Step,
+    nodes_count: usize,
+) -> StepResult {
     install_local_manual_cluster(
         world,
         ManualClusterSpec {
@@ -22,6 +26,7 @@ fn step_manual_cluster(world: &mut CucumberWorld, step: &Step, nodes_count: usiz
             capacity: nodes_count,
         },
     )
+    .await
     .inspect_err(|e| {
         warn!(target: TARGET, "Step '{step}' error: {e}");
     })
@@ -29,7 +34,7 @@ fn step_manual_cluster(world: &mut CucumberWorld, step: &Step, nodes_count: usiz
 
 #[given(expr = "I have a devnet cluster with capacity of {int} nodes")]
 #[when(expr = "I have a devnet cluster with capacity of {int} nodes")]
-fn step_manual_devnet_cluster(
+async fn step_manual_devnet_cluster(
     world: &mut CucumberWorld,
     step: &Step,
     nodes_count: usize,
@@ -41,6 +46,7 @@ fn step_manual_devnet_cluster(
             capacity: nodes_count,
         },
     )
+    .await
     .inspect_err(|e| {
         warn!(target: TARGET, "Step '{step}' error: {e}");
     })
@@ -528,15 +534,20 @@ async fn step_restart_node(
     node_name: String,
 ) -> StepResult {
     let diagnostic_restart = world.blend_diagnostics.observation_count > 0;
-    let previous_phase = world.blend_diagnostics.phase;
+    let previous_phase = world.blend_diagnostics.reachability.phase();
     if diagnostic_restart {
-        world.blend_diagnostics.phase =
-            Some(crate::cucumber::world::BlendDiagnosticPhase::Recovery);
+        world
+            .blend_diagnostics
+            .reachability
+            .set_phase(Some(crate::cucumber::world::BlendDiagnosticPhase::Recovery));
     }
 
     if let Err(error) = restart_node(world, &step.value, &node_name).await {
         if diagnostic_restart {
-            world.blend_diagnostics.phase = previous_phase;
+            world
+                .blend_diagnostics
+                .reachability
+                .set_phase(previous_phase);
         }
         return Err(error);
     }
@@ -550,7 +561,10 @@ async fn step_restart_node(
 #[when(expr = "I stop node {string}")]
 async fn step_stop_node(world: &mut CucumberWorld, step: &Step, node_name: String) -> StepResult {
     if world.blend_diagnostics.observation_count > 0 {
-        world.blend_diagnostics.phase = Some(crate::cucumber::world::BlendDiagnosticPhase::Outage);
+        world
+            .blend_diagnostics
+            .reachability
+            .set_phase(Some(crate::cucumber::world::BlendDiagnosticPhase::Outage));
     }
     stop_node(world, &step.value, &node_name).await?;
     if world.blend_diagnostics.observation_count > 0 {

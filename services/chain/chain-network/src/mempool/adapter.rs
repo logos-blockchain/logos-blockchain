@@ -26,7 +26,7 @@ impl<Tx> MempoolAdapter<Tx> {
 #[async_trait::async_trait]
 impl<Tx> MempoolAdapterTrait<Tx> for MempoolAdapter<Tx>
 where
-    Tx: Hashable<Hash = TxHash> + Send + Sync + 'static,
+    Tx: Hashable<Hash = TxHash> + Send + 'static,
 {
     async fn add_transaction(&self, tx: Tx) -> Result<(), overwatch::DynError> {
         let (reply_sender, reply_receiver) = oneshot::channel();
@@ -37,7 +37,7 @@ where
                 reply_channel: reply_sender,
             })
             .await
-            .map_err(|(e, _)| format!("Could not add transactions to mempool: {e}"))?;
+            .map_err(|error| format!("Could not add transactions to mempool: {error}"))?;
         reply_receiver
             .await
             .map_err(|e| format!("Could not receive response: {e}"))?
@@ -49,7 +49,7 @@ where
         self.mempool_relay
             .send(MempoolMsg::Remove { ids: ids.to_vec() })
             .await
-            .map_err(|(e, _)| format!("Could not remove transactions from mempool: {e}"))?;
+            .map_err(|error| format!("Could not remove transactions from mempool: {error}"))?;
 
         Ok(())
     }
@@ -66,7 +66,7 @@ where
                 reply_channel: resp_tx,
             })
             .await
-            .map_err(|(e, _)| format!("Could not get transactions by prefix: {e}"))?;
+            .map_err(|error| format!("Could not get transactions by prefix: {error}"))?;
 
         let response = resp_rx
             .await

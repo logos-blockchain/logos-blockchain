@@ -1,7 +1,7 @@
 use std::{collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, time::Instant};
 
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
-use lb_codec::BinaryDecodeExt as _;
+use lb_binary_codec::canonical::BinaryDecodeExt as _;
 use lb_core::{
     block::{Block, Proposal},
     header::HeaderId,
@@ -128,13 +128,13 @@ where
     }
 
     async fn subscribe(relay: &Relay<Libp2p, RuntimeServiceId>, topic: &str) {
-        if let Err((e, _)) = relay
+        if let Err(error) = relay
             .send(NetworkMsg::Process(Command::PubSub(Subscribe(
                 topic.into(),
             ))))
             .await
         {
-            tracing::error!(target: LOG_TARGET, "error subscribing to {topic}: {e}");
+            tracing::error!(target: LOG_TARGET, "error subscribing to {topic}: {error}");
         }
     }
 
@@ -142,7 +142,7 @@ where
         relay: &Relay<Libp2p, RuntimeServiceId>,
     ) -> Result<HashSet<PeerId>, DynError> {
         let (reply_sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = relay
+        if let Err(error) = relay
             .send(NetworkMsg::Process(Command::Network(
                 NetworkCommand::ConnectedPeers {
                     reply: reply_sender,
@@ -150,18 +150,34 @@ where
             )))
             .await
         {
-            return Err(Box::new(e));
+            return Err(Box::new(error));
         }
 
         let connected_peers = receiver.await.map_err(|e| Box::new(e) as DynError)?;
         Ok(connected_peers)
     }
 
+    async fn get_chainsync_eligible_peers(
+        relay: &Relay<Libp2p, RuntimeServiceId>,
+    ) -> Result<HashSet<PeerId>, DynError> {
+        let (reply_sender, receiver) = oneshot::channel();
+        if let Err(error) = relay
+            .send(NetworkMsg::Process(Command::ChainSync(
+                ChainSyncCommand::EligiblePeers { reply_sender },
+            )))
+            .await
+        {
+            return Err(Box::new(error));
+        }
+
+        receiver.await.map_err(|e| Box::new(e) as DynError)
+    }
+
     async fn get_discovered_peers(
         relay: &Relay<Libp2p, RuntimeServiceId>,
     ) -> Result<HashSet<PeerId>, DynError> {
         let (reply_sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = relay
+        if let Err(error) = relay
             .send(NetworkMsg::Process(Command::Discovery(
                 DiscoveryCommand::GetDiscoveredPeers {
                     reply: reply_sender,
@@ -169,7 +185,7 @@ where
             )))
             .await
         {
-            return Err(Box::new(e));
+            return Err(Box::new(error));
         }
 
         let discovered_peers = receiver.await.map_err(|e| Box::new(e) as DynError)?;
@@ -219,24 +235,25 @@ where
 
     async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
         let (sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = self
+        if let Err(error) = self
             .network_relay
             .send(NetworkMsg::SubscribeToPubSub { sender })
             .await
         {
-            return Err(Box::new(e));
+            return Err(Box::new(error));
         }
         let topic_hash = TopicHash::from_raw(self.settings.topic.clone());
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
-            Ok(message) if message.topic == topic_hash => match Proposal::decode_all(&message.data)
-            {
-                Ok(proposal) => Some(proposal),
-                Err(e) => {
-                    tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
-                    None
+            Ok(message) if message.topic == topic_hash => {
+                match Proposal::decode_all(&message.data) {
+                    Ok(proposal) => Some(proposal),
+                    Err(e) => {
+                        tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
+                        None
+                    }
                 }
-            },
+            }
             Ok(_) => None,
             Err(BroadcastStreamRecvError::Lagged(n)) => {
                 tracing::error!(target: LOG_TARGET, "lagged messages: {n}");
@@ -248,12 +265,12 @@ where
     async fn chainsync_events_stream(&self) -> Result<BoxedStream<ChainSyncEvent>, DynError> {
         let (sender, receiver) = oneshot::channel();
 
-        if let Err((e, _)) = self
+        if let Err(error) = self
             .network_relay
             .send(NetworkMsg::SubscribeToChainSync { sender })
             .await
         {
-            return Err(Box::new(e));
+            return Err(Box::new(error));
         }
 
         let stream = receiver.await.map_err(Box::new)?;
@@ -268,14 +285,14 @@ where
         let started_at = Instant::now();
         tracing::debug!(target: LOG_TARGET, "Requesting chain tip from peer {peer:?}");
         let (reply_sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = self
+        if let Err(error) = self
             .network_relay
             .send(NetworkMsg::Process(Command::ChainSync(
                 ChainSyncCommand::RequestTip { peer, reply_sender },
             )))
             .await
         {
-            return Err(Box::new(e));
+            return Err(Box::new(error));
         }
 
         let response = receiver
@@ -295,6 +312,17 @@ where
                 return Box::new(stream::empty::<GetTipResponse>());
             }
         };
+        let chainsync_peers = match Self::get_chainsync_eligible_peers(&self.network_relay).await {
+            Ok(peers) => peers,
+            Err(e) => {
+                tracing::warn!(target: LOG_TARGET, "tip poll: failed to fetch chainsync-eligible peers: {e}");
+                return Box::new(stream::empty::<GetTipResponse>());
+            }
+        };
+        let connected_peers = connected_peers
+            .intersection(&chainsync_peers)
+            .copied()
+            .collect::<HashSet<_>>();
 
         let sampled: Vec<PeerId> = connected_peers
             .into_iter()
@@ -312,13 +340,13 @@ where
             ),
             async |(peer, relay)| {
                 let (reply_sender, receiver) = oneshot::channel();
-                if let Err((e, _)) = relay
+                if let Err(error) = relay
                     .send(NetworkMsg::Process(Command::ChainSync(
                         ChainSyncCommand::RequestTip { peer, reply_sender },
                     )))
                     .await
                 {
-                    tracing::debug!(target: LOG_TARGET, "tip poll: failed to send GetTip to peer {peer:?}: {e}");
+                    tracing::debug!(target: LOG_TARGET, "tip poll: failed to send GetTip to peer {peer:?}: {error}");
                     None
                 } else {
                     match receiver.await.ok() {
@@ -352,7 +380,7 @@ where
             "Requesting blocks from peer {peer:?} for target block {target_block:?} from local tip {local_tip:?} with immutable block {latest_immutable_block:?} and {additional_blocks_len} additional blocks"
         );
         let (reply_sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = self
+        if let Err(error) = self
             .network_relay
             .send(NetworkMsg::Process(Command::ChainSync(
                 ChainSyncCommand::DownloadBlocks {
@@ -366,7 +394,7 @@ where
             )))
             .await
         {
-            return Err(Box::new(e));
+            return Err(Box::new(error));
         }
 
         let stream = receiver.await?;
@@ -390,29 +418,41 @@ where
     ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
         let connected_peers = Self::get_connected_peers(&self.network_relay).await?;
 
+        let chainsync_peers = Self::get_chainsync_eligible_peers(&self.network_relay).await?;
+
         // All peers we know about, including those that are not connected.
         let discovered_peers = Self::get_discovered_peers(&self.network_relay).await?;
 
-        let peers_to_request: Vec<_> = choose_peers_to_request_download(
+        // Discovery membership and protocol capability are independent.
+        let peers_to_request = choose_eligible_peers_to_request_download(
             &connected_peers,
-            self.settings.max_connected_peers_to_try_download,
             &discovered_peers,
+            &chainsync_peers,
+            self.settings.max_connected_peers_to_try_download,
             self.settings.max_discovered_peers_to_try_download,
-        )
-        .collect();
+        );
         tracing::debug!(
             target: LOG_TARGET,
-            "Selecting peers for target block {target_block:?} from local tip {local_tip:?} with immutable block {latest_immutable_block:?}; selected_peers={peers_to_request:?}, connected={}, discovered={}, additional_blocks={}",
+            "Selecting peers for target block {target_block:?} from local tip {local_tip:?} with \
+            immutable block {latest_immutable_block:?}; selected_peers={peers_to_request:?}, \
+            connected={}, discovered={}, eligible_connected={}, eligible_discovered={}, \
+            additional_blocks={}",
             connected_peers.len(),
             discovered_peers.len(),
+            connected_peers.intersection(&chainsync_peers).count(),
+            discovered_peers.intersection(&chainsync_peers).count(),
             additional_blocks.len()
         );
 
         if peers_to_request.is_empty() {
             return Err(format!(
-                "no candidate peers available to download orphan ancestors for target block {target_block:?} (connected={}, discovered={})",
+                "no candidate peers available to download orphan ancestors for target block \
+                {target_block:?} (connected={}, discovered={}, eligible_connected={}, \
+                eligible_discovered={})",
                 connected_peers.len(),
-                discovered_peers.len()
+                discovered_peers.len(),
+                connected_peers.intersection(&chainsync_peers).count(),
+                discovered_peers.intersection(&chainsync_peers).count()
             )
             .into());
         }
@@ -477,6 +517,34 @@ where
     discovered_selected.into_iter().chain(connected_selected)
 }
 
+fn choose_eligible_peers_to_request_download<PeerId>(
+    connected_peers: &HashSet<PeerId>,
+    discovered_peers: &HashSet<PeerId>,
+    eligible_peers: &HashSet<PeerId>,
+    max_connected_peers: usize,
+    max_discovered_peers: usize,
+) -> Vec<PeerId>
+where
+    PeerId: Eq + Hash + Copy,
+{
+    let connected_peers = connected_peers
+        .intersection(eligible_peers)
+        .copied()
+        .collect::<HashSet<_>>();
+    let discovered_peers = discovered_peers
+        .intersection(eligible_peers)
+        .copied()
+        .collect::<HashSet<_>>();
+
+    choose_peers_to_request_download(
+        &connected_peers,
+        max_connected_peers,
+        &discovered_peers,
+        max_discovered_peers,
+    )
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use lb_cryptarchia_sync::{BlocksUnavailableReason, ChainSyncError, ChainSyncErrorKind};
@@ -502,9 +570,7 @@ mod tests {
     fn validate_first_block_response_rejects_other_provider_errors() {
         let unknown = ChainSyncError::new(
             PeerId::random(),
-            ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::Unknown(
-                "oops".to_owned(),
-            )),
+            ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::Unknown),
         );
         let first_item: Result<(HeaderId, Block<()>), DynError> = Err(Box::new(unknown));
 
@@ -600,5 +666,17 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert!(result.contains(&[4; 32]));
         assert!(result.contains(&[5; 32]));
+    }
+
+    #[test]
+    fn chainsync_filter_is_applied_before_candidate_limits() {
+        let connected: HashSet<[i32; 32]> = HashSet::from_iter(vec![[1; 32], [2; 32]]);
+        let discovered: HashSet<[i32; 32]> = HashSet::from_iter(vec![[3; 32], [4; 32]]);
+        let eligible: HashSet<[i32; 32]> = HashSet::from_iter(vec![[2; 32], [4; 32]]);
+
+        let result =
+            choose_eligible_peers_to_request_download(&connected, &discovered, &eligible, 1, 1);
+
+        assert_eq!(result, vec![[4; 32], [2; 32]]);
     }
 }

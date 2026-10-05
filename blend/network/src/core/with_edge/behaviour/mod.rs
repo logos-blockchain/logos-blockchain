@@ -14,10 +14,11 @@ use lb_blend_membership::Membership;
 use lb_blend_message::{
     deserialize_encapsulated_message,
     encap::{
-        ProofsVerifier as ProofsVerifierTrait,
+        ProofsVerifier as ProofsVerifierTrait, encapsulated_message_encoded_size,
         validated::EncapsulatedMessageWithVerifiedPublicHeader,
     },
 };
+use lb_blend_primitives::time::RoundClock;
 use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 use libp2p::{
@@ -31,6 +32,8 @@ use libp2p::{
 };
 
 use crate::core::{
+    CommonConfig,
+    admission::RoundShare,
     poq_verification::{PendingPoQVerifications, PoQVerificationOutcome, spawn_poq_verification},
     with_edge::behaviour::handler::{ConnectionHandler, FromBehaviour, ToBehaviour},
 };
@@ -63,13 +66,13 @@ pub enum Event {
 
 #[derive(Debug)]
 pub struct Config {
+    /// `T_E`: how long an edge node is given to send its message, from the
+    /// moment its connection is accepted.
     pub connection_timeout: Duration,
+    /// `Φ_CE^Max`: the edge connections this node holds at once.
     pub max_incoming_connections: usize,
-    pub minimum_network_size: NonZeroUsize,
-    /// `ß_c`: the fixed number of encapsulation layers every well-formed Blend
-    /// message carries. Used to validate the layout of messages received from
-    /// remote peers before processing them.
-    pub num_blend_layers: NonZeroU64,
+    /// `r_E`: the edge connections this node accepts in one round.
+    pub accepted_connections_per_round: NonZeroU64,
 }
 
 /// A [`NetworkBehaviour`]:
@@ -94,6 +97,9 @@ pub struct Behaviour<ProofsVerifier> {
     connection_timeout: Duration,
     upgraded_edge_peers: HashSet<(PeerId, ConnectionId)>,
     max_incoming_connections: usize,
+    /// `r_E`: what is left of this round's allowance of new edge connections.
+    accept_share: RoundShare,
+    round_clock: RoundClock,
     protocol_name: StreamProtocol,
     minimum_network_size: NonZeroUsize,
     num_blend_layers: NonZeroU64,
@@ -102,8 +108,9 @@ pub struct Behaviour<ProofsVerifier> {
 impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     #[must_use]
     pub fn new(
-        config: &Config,
+        (common_config, edge_config): (&CommonConfig, &Config),
         current_epoch_info: (Membership<PeerId>, Epoch),
+        round_clock: RoundClock,
         proofs_verifier: ProofsVerifier,
         protocol_name: StreamProtocol,
     ) -> Self {
@@ -114,12 +121,17 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             current_epoch: current_epoch_info.1,
             proofs_verifier: Arc::new(proofs_verifier),
             pending_poq_verifications: PendingPoQVerifications::new(),
-            connection_timeout: config.connection_timeout,
-            upgraded_edge_peers: HashSet::with_capacity(config.max_incoming_connections),
-            max_incoming_connections: config.max_incoming_connections,
+            connection_timeout: edge_config.connection_timeout,
+            upgraded_edge_peers: HashSet::with_capacity(edge_config.max_incoming_connections),
+            max_incoming_connections: edge_config.max_incoming_connections,
+            accept_share: RoundShare::new(
+                edge_config.accepted_connections_per_round,
+                round_clock.current_round(),
+            ),
+            round_clock,
             protocol_name,
-            minimum_network_size: config.minimum_network_size,
-            num_blend_layers: config.num_blend_layers,
+            minimum_network_size: common_config.minimum_network_size,
+            num_blend_layers: common_config.num_blend_layers,
         }
     }
 
@@ -277,19 +289,28 @@ where
 
         // Allow only inbound connections from edge nodes, if the Blend network is large
         // enough.
-        Ok(if !self.is_network_large_enough() {
+        if !self.is_network_large_enough() {
             tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer:?} with addr {remote_addr:?} because membership size is too small.");
-            Either::Right(DummyConnectionHandler)
-        } else if self.current_membership.contains(&peer) {
+            return Ok(Either::Right(DummyConnectionHandler));
+        }
+        if self.current_membership.contains(&peer) {
             tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with core peer {peer:?} with addr {remote_addr:?}.");
-            Either::Right(DummyConnectionHandler)
-        } else {
-            tracing::debug!(target: LOG_TARGET, "Upgrading inbound connection {connection_id:?} with edge peer {peer:?} with addr {remote_addr:?}.");
-            Either::Left(ConnectionHandler::new(
-                self.connection_timeout,
-                self.protocol_name.clone(),
-            ))
-        })
+            return Ok(Either::Right(DummyConnectionHandler));
+        }
+
+        // `Φ_CE^Max` bounds how many edge connections are open at once; `r_E`
+        // bounds how fast new ones arrive.
+        if !self.accept_share.try_spend() {
+            tracing::trace!(target: LOG_TARGET, "Connected peer {peer:?} with addr {remote_addr:?} on connection {connection_id:?} will not be upgraded: this round's allowance of new edge connections is spent.");
+            return Ok(Either::Right(DummyConnectionHandler));
+        }
+
+        tracing::debug!(target: LOG_TARGET, "Upgrading inbound connection {connection_id:?} with edge peer {peer:?} with addr {remote_addr:?}.");
+        Ok(Either::Left(ConnectionHandler::new(
+            self.connection_timeout,
+            self.protocol_name.clone(),
+            encapsulated_message_encoded_size(self.num_blend_layers),
+        )))
     }
 
     fn handle_established_outbound_connection(
@@ -325,7 +346,7 @@ where
         match event {
             Either::Left(ToBehaviour::Message(message)) => {
                 self.handle_received_serialized_encapsulated_message(
-                    &message,
+                    message.as_ref(),
                     (peer_id, connection_id),
                 );
             }
@@ -342,6 +363,8 @@ where
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
+        self.accept_share.refresh(self.round_clock.poll_current(cx));
+
         if let Some(event) = self.events.pop_front() {
             return Poll::Ready(event);
         }

@@ -4,6 +4,7 @@ use std::{
 };
 
 use lb_log_targets::node;
+use lb_tracing::logging::local::flush_appenders;
 
 const LOG_TARGET: &str = node::ROOT;
 
@@ -29,8 +30,17 @@ pub fn log_and_exit_hook(panic_info: &PanicHookInfo) {
         "A panic occurred",
     );
 
+    // Write to stderr directly so the panic shows up in output.
+    eprintln!(
+        "A panic occurred: {}{}",
+        payload.unwrap_or("<non-string payload>"),
+        location.map(|l| format!(" at {l}")).unwrap_or_default()
+    );
+
     #[cfg(feature = "dhat-heap")]
     crate::global_allocators::dhat_heap::drop_dhat_profiler();
+
+    flush_appenders();
 
     std::process::exit(1);
 }

@@ -14,30 +14,26 @@ use lb_core::{
 use lb_key_management_system_service::keys::{
     Ed25519Key, ZkPublicKey, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
 };
-use lb_storage_service::backends::StorageBackend;
 use lb_utils::bounded::BoundedError;
 use lb_wallet::WalletBalance;
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{
         AsServiceId, ServiceData,
-        relay::{OutboundRelay, RelayError},
+        relay::{OutboundRelay, OutboundRelayError},
     },
 };
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
-    ClaimableVouchersInfo, TipResponse, UtxoWithKeyId, WalletMsg, WalletServiceError,
-    WalletServiceSettings,
+    ClaimableVouchersInfo, LeaderAgedNotesInfo, TipResponse, UtxoWithKeyId, WalletMsg,
+    WalletServiceError, WalletServiceSettings,
 };
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletApiError {
-    #[error("Failed to relay message with wallet:{relay_error:?}, msg={msg:?}")]
-    RelaySend {
-        relay_error: RelayError,
-        msg: Box<WalletMsg>,
-    },
+    #[error("Failed to relay message: {0}")]
+    RelaySend(#[from] Box<OutboundRelayError<WalletMsg>>),
     #[error("Failed to recv message from wallet: {0}")]
     RelayRecv(#[from] RecvError),
     #[error(transparent)]
@@ -48,10 +44,9 @@ pub enum WalletApiError {
     BoundedError(#[from] BoundedError),
 }
 
-impl From<(RelayError, WalletMsg)> for WalletApiError {
-    fn from((relay_error, msg): (RelayError, WalletMsg)) -> Self {
-        let msg = Box::new(msg);
-        Self::RelaySend { relay_error, msg }
+impl From<OutboundRelayError<WalletMsg>> for WalletApiError {
+    fn from(value: OutboundRelayError<WalletMsg>) -> Self {
+        Self::RelaySend(Box::new(value))
     }
 }
 
@@ -61,18 +56,14 @@ pub trait WalletServiceData:
     type Kms;
     type Cryptarchia;
     type Tx;
-    type Storage;
 }
 
-impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> WalletServiceData
-    for crate::WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
-where
-    Storage: StorageBackend + Send + Sync + 'static,
+impl<Kms, Cryptarchia, Tx, RuntimeServiceId> WalletServiceData
+    for crate::WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId>
 {
     type Kms = Kms;
     type Cryptarchia = Cryptarchia;
     type Tx = Tx;
-    type Storage = Storage;
 }
 
 pub struct WalletApi<Wallet, RuntimeServiceId>
@@ -283,6 +274,25 @@ where
         Ok(rx.await??)
     }
 
+    /// Reports which of the wallet's notes are old enough to take part in the
+    /// leadership lottery at `tip`, or at the current tip when `tip` is
+    /// `None`, along with the total value they stake.
+    ///
+    /// Unlike [`Self::get_leader_aged_notes`], this does not expose the key
+    /// ids, so it is the variant to use for external reporting (HTTP, FFI).
+    pub async fn get_leader_aged_notes_info(
+        &self,
+        tip: Option<HeaderId>,
+    ) -> Result<TipResponse<LeaderAgedNotesInfo>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(WalletMsg::GetLeaderAgedNotesInfo { tip, resp_tx })
+            .await?;
+
+        Ok(rx.await??)
+    }
+
     pub async fn generate_new_voucher(&self) -> Result<VoucherCm, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
         self.relay
@@ -329,7 +339,6 @@ mod tests {
         type Kms = ();
         type Cryptarchia = ();
         type Tx = ();
-        type Storage = ();
     }
 
     #[derive(Debug)]

@@ -12,7 +12,7 @@ use lb_blend_proofs::{
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_log_targets::blend;
-use lb_utils::tokio::{stream::Buffered, task::spawn};
+use lb_utils::tokio::{stream::BufferedOrdered, task::spawn};
 use tokio::time::Instant;
 
 use crate::{
@@ -109,7 +109,7 @@ where
     tracing::trace!(target: LOG_TARGET, "Generating {proofs_to_generate} core quota proofs starting from index: {starting_key_index} with public inputs: {public_inputs:?}.");
 
     let quota = public_inputs.core.quota;
-    Buffered::new(
+    BufferedOrdered::new(
         stream::iter(quota.values_range_from(starting_key_index))
         .map(move |key_index| {
             let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_chacha_rng();

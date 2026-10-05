@@ -1,5 +1,5 @@
 use const_hex::FromHex as _;
-use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
+use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_groth16::{AdditiveGroup as _, Field as _, fr_from_bytes_unchecked};
 
 use crate::{

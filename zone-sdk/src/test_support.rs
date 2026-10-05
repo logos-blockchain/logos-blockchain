@@ -2,7 +2,10 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use async_trait::async_trait;
@@ -22,8 +25,7 @@ use lb_core::{
         ops::{
             OpId as _,
             channel::{
-                ChannelId, MsgId,
-                config::Keys,
+                ChannelId, MsgId, UnverifiedChannelKeys,
                 deposit::DepositOp,
                 inscribe::{Inscription, InscriptionOp},
             },
@@ -85,6 +87,8 @@ pub struct MockNode {
     pub scripts: Arc<Mutex<VecDeque<StreamScript>>>,
     /// Served by `block()`, keyed by header id; unknown ids yield `None`.
     pub blocks: Vec<ApiBlock>,
+    /// How many `block()` calls fail before `blocks` is served normally.
+    pub block_fetch_failures: Arc<AtomicUsize>,
     /// Served by `immutable_blocks()`, filtered by the queried slot range.
     pub immutable: Vec<ApiBlock>,
     /// Optional gate for pausing `immutable_blocks()` calls in cancellation
@@ -104,6 +108,10 @@ pub struct MockNode {
     pub events: HashMap<HeaderId, Events>,
     /// Receives the priority-fee percentages from funding requests.
     pub funding_priority_fees: Option<mpsc::Sender<u64>>,
+    /// Served by `time_info()`.
+    pub slot_duration_ms: u64,
+    pub slots_per_epoch: u64,
+    pub genesis_time_unix_ms: i64,
 }
 
 impl Default for MockNode {
@@ -120,6 +128,7 @@ impl Default for MockNode {
                 then: StreamEnd::Hang,
             }]),
             blocks: Vec::new(),
+            block_fetch_failures: Arc::new(AtomicUsize::new(0)),
             immutable: Vec::new(),
             immutable_blocks_gate: None,
             immutable_blocks_calls: None,
@@ -128,6 +137,9 @@ impl Default for MockNode {
             posted: None,
             events: HashMap::new(),
             funding_priority_fees: None,
+            slot_duration_ms: 1_000,
+            slots_per_epoch: 1_000,
+            genesis_time_unix_ms: 0,
         }
     }
 }
@@ -176,10 +188,11 @@ impl adapter::Node for MockNode {
 
     async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
         Ok(TimeInfo {
-            slot_duration_ms: 1_000,
-            genesis_time_unix_ms: 0,
+            slot_duration_ms: self.slot_duration_ms,
+            genesis_time_unix_ms: self.genesis_time_unix_ms,
             current_slot: 0,
             current_epoch: 0,
+            slots_per_epoch: self.slots_per_epoch,
         })
     }
 
@@ -241,6 +254,17 @@ impl adapter::Node for MockNode {
     }
 
     async fn block(&self, id: HeaderId) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
+        if self
+            .block_fetch_failures
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(lb_common_http_client::Error::Client(
+                "block fetch failed".to_owned(),
+            ));
+        }
         Ok(self.blocks.iter().find(|b| b.header.id == id).cloned())
     }
 
@@ -350,7 +374,12 @@ pub fn funding_config() -> FundingConfig {
 /// thresholds at 1.
 pub fn single_key_channel_state() -> ChannelState {
     ChannelState {
-        accredited_keys: Keys::from(Ed25519Key::from_bytes(&[0; 32]).public_key()).into(),
+        accredited_keys: UnverifiedChannelKeys::from(
+            Ed25519Key::from_bytes(&[0; 32])
+                .public_key()
+                .into_unverified(),
+        )
+        .into(),
         configuration_threshold: 1,
         tip_message: MsgId::root(),
         config_tip_hash: MsgId::root(),
@@ -400,11 +429,11 @@ pub fn live_event(block: &ApiBlock) -> ProcessedBlockEvent {
     }
 }
 
-/// Build a `SignedOps` carrying the given ops, with placeholder proofs.
+/// Build a `SignedOps` carrying the given ops, with sample proofs.
 /// Suitable for tests that only care about op extraction, not verification.
 pub fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedOps<Unverified, StandardMode> {
     let ops = Ops::try_from(ops).expect("ops fit");
-    SignedOps::from_ops_with_placeholder_proofs(ops)
+    SignedOps::from_ops_with_sample_proofs(ops)
 }
 
 /// An inscription op signed by the zero Ed25519 key.
@@ -413,7 +442,9 @@ pub fn inscribe_op(channel_id: ChannelId, parent: MsgId, payload: &[u8]) -> Insc
         channel_id,
         inscription: Inscription::new_unchecked(payload.to_vec()),
         parent,
-        signer: Ed25519Key::from_bytes(&[0u8; 32]).public_key(),
+        signer: Ed25519Key::from_bytes(&[0u8; 32])
+            .public_key()
+            .into_unverified(),
     }
 }
 

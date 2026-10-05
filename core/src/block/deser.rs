@@ -73,7 +73,6 @@ mod tests {
 
     #[test]
     fn test_bincode_fixed_size_fields_have_no_length_prefix() {
-        const VERSION: usize = 1;
         const PARENT_BLOCK: usize = 32;
         const SLOT: usize = 8;
         const BODY_ROOT: usize = 32;
@@ -85,8 +84,7 @@ mod tests {
         const TX_COUNT: usize = 8; // u64 Vec length (genuinely variable)
         // bincode uses 8-byte for a length prefix, unlike the wire codec.
         const UNCLE_HEADERS_COUNT: usize = 8;
-        const EXPECTED: usize = VERSION
-            + PARENT_BLOCK
+        const EXPECTED: usize = PARENT_BLOCK
             + SLOT
             + BODY_ROOT
             + UNCLE_HEADERS_COUNT

@@ -1,7 +1,6 @@
 use std::ffi::{CString, c_char};
 
 use futures::StreamExt as _;
-use lb_api_service::http::storage::StorageAdapter as _;
 use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
     block::{Block as CoreBlock, BlockTransactions},
@@ -15,9 +14,10 @@ use lb_core::{
     },
 };
 use lb_node::{
-    ApiStorageAdapter, RocksBackend, RuntimeServiceId, SignedOps, StorageService,
-    api::serializers::blocks::ApiProcessedBlockEventOwned, generic_services::CryptarchiaService,
+    RuntimeServiceId, SignedOps, api::serializers::blocks::ApiProcessedBlockEventOwned,
+    generic_services::CryptarchiaService,
 };
+use lb_storage_service::api::StorageApi;
 use serde::Serialize;
 
 use crate::{
@@ -63,33 +63,25 @@ pub fn subscribe_to_new_blocks_sync(
     let runtime_handler = node.get_runtime_handle();
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
-        let Ok(relay) = overwatch
-            .relay::<CryptarchiaService<RuntimeServiceId>>()
-            .await
+        let Ok(storage) =
+            StorageApi::<SignedOps<Unverified, StandardMode>>::from_overwatch_handle(overwatch)
+                .await
         else {
-            return OperationStatus::error(
-                OperationStatusCode::RelayError,
-                "Failed to get relay to CryptarchiaService.",
-            );
-        };
-        let Ok(storage_relay) = overwatch.relay::<StorageService>().await else {
             return OperationStatus::error(
                 OperationStatusCode::RelayError,
                 "Failed to get relay to StorageService.",
             );
         };
         let api =
-            CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>::new(
-                relay,
-            );
+            CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>>::from_overwatch_handle(
+                overwatch,
+            )
+            .await;
         match api.subscribe_new_blocks().await {
             Ok(mut block_stream) => {
                 runtime_handler.spawn(async move {
                     while let Ok(event) = block_stream.recv().await {
-                        let relay = storage_relay.clone();
-                        let res: Result<Option<CoreBlock<SignedOps<Unverified, StandardMode>>>, _> =
-                            ApiStorageAdapter::<RuntimeServiceId>::get_block(relay, event.block_id)
-                                .await;
+                        let res = storage.load_block(&event.block_id).await;
                         if let Ok(Some(block)) = res {
                             let txs_with_id: Vec<TxWithId> = block
                                 .transactions_iter()
@@ -119,6 +111,7 @@ pub fn subscribe_to_new_blocks_sync(
                         "subscribe_to_new_blocks_sync",
                         "Block stream closed, subscription to new blocks ended."
                     );
+                    callback_per_block(std::ptr::null());
                 });
                 OperationStatus::OK
             }
@@ -145,8 +138,9 @@ pub fn subscribe_to_new_blocks_sync(
 /// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
 /// - `callback_per_block`: A callback function that will be called with a
 ///   pointer to a C string containing the JSON representation of each new
-///   block. The callback is declared as unsafe extern "C" and must be
-///   thread-safe.
+///   block. When the stream ends (e.g. the consumer falls behind or the node
+///   shuts down) the callback is called exactly once with NULL, after which no
+///   further blocks are delivered.
 ///
 /// # Returns
 ///
@@ -187,7 +181,6 @@ pub fn subscribe_to_processed_blocks_sync(
     runtime_handler.block_on(async move {
         let stream = match lb_api_service::http::mantle::get_new_blocks_stream::<
             SignedOps<Preverified, StandardMode>,
-            RocksBackend,
             CryptarchiaService<RuntimeServiceId>,
             RuntimeServiceId,
         >(overwatch)

@@ -128,7 +128,6 @@ where
     }
 
     /// Iterates over the stored `(key, item)` pairs, in no particular order
-    #[must_use]
     pub fn iter(&self) -> <&Self as IntoIterator>::IntoIter {
         self.into_iter()
     }
@@ -360,12 +359,15 @@ where
                 A: ::serde::de::MapAccess<'de>,
             {
                 let mut items = BTreeMap::new();
-                while let Some((position, item)) = access.next_entry()? {
-                    if items.insert(position, item).is_some() {
+                while let Some(position) = access.next_key()? {
+                    if items.contains_key(&position) {
                         return Err(::serde::de::Error::custom(
                             "compressed Merkle tree contains duplicate positions",
                         ));
                     }
+
+                    let item = access.next_value()?;
+                    items.insert(position, item);
                 }
                 Ok(CompressedMerkleTree { items })
             }

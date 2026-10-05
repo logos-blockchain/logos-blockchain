@@ -6,15 +6,15 @@ use std::{
 };
 
 use hex::ToHex as _;
+use lb_binary_codec::bincode::SerializeOp as _;
 use lb_core::{
-    codec::SerializeOp as _,
     mantle::{GenesisTime, TxHash},
     sdp::Locator,
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{PeerId, identity, identity::ed25519};
 use lb_node::UserConfig;
-use lb_testing_framework::{CoreBuilderExt as _, ScenarioBuilder};
+use lb_testing_framework::ScenarioBuilder;
 use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{info, warn};
 

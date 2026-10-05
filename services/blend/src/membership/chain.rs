@@ -11,12 +11,13 @@ use std::fmt::{Debug, Display};
 
 use futures::{Stream, StreamExt as _, stream::unfold};
 use lb_chain_service::{
-    Epoch,
+    Epoch, EpochStateQueryResult,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::mantle::ops::pow::PowTarget;
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
+use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage, backends::TimeBackend};
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use tokio::sync::oneshot;
@@ -54,7 +55,7 @@ fn log_membership_transition<NodeId>(
 ) where
     NodeId: Debug + Eq + Hash,
 {
-    if !tracing::enabled!(target: LOG_TARGET, tracing::Level::INFO) {
+    if !tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG) {
         return;
     }
     let local_node_id = membership
@@ -65,9 +66,9 @@ fn log_membership_transition<NodeId>(
         .filter_map(|index| membership.get_node_at(index))
         .map(|node| format!("{:?}", node.id))
         .collect();
-    tracing::info!(
+    tracing::debug!(
         target: LOG_TARGET,
-        diagnostic = "blend_tsi_outage",
+        diagnostic = BLEND_REACHABILITY,
         event = "blend_membership_latched",
         component,
         epoch = u32::from(epoch),
@@ -97,7 +98,7 @@ pub async fn subscribe<ChainService, NodeId, TimeRuntimeBackend, RuntimeServiceI
     component: &'static str,
 ) -> BlendEpochStateStream<NodeId>
 where
-    ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+    ChainService: CryptarchiaServiceData<Tx: Send>,
     NodeId: node_id::TryFrom + Clone + Debug + Hash + Eq + Send + Sync + 'static,
     TimeRuntimeBackend: TimeBackend + Send,
     RuntimeServiceId: AsServiceId<ChainService>
@@ -110,12 +111,8 @@ where
         + Unpin
         + 'static,
 {
-    let chain_service = CryptarchiaServiceApi::<ChainService, RuntimeServiceId>::new(
-        overwatch_handle
-            .relay::<ChainService>()
-            .await
-            .expect("Relay with chain service should be available."),
-    );
+    let chain_service =
+        CryptarchiaServiceApi::<ChainService>::from_overwatch_handle(overwatch_handle).await;
 
     let slot_ticks = {
         let time_relay = overwatch_handle
@@ -149,22 +146,21 @@ where
                     continue;
                 }
                 match chain_api.get_epoch_state_with_source(slot).await {
-                    Ok(Ok(query_result)) => {
-                        let lb_chain_service::EpochStateQueryResult {
-                            epoch_state,
-                            source_tip_id,
-                            source_tip_slot,
-                            source_tip_height,
-                            source_lib_id,
-                            source_lib_slot,
-                            ..
-                        } = query_result;
+                    Ok(Ok(EpochStateQueryResult {
+                        epoch_state,
+                        source_tip_id,
+                        source_tip_slot,
+                        source_tip_height,
+                        source_lib_id,
+                        source_lib_slot,
+                        ..
+                    })) => {
                         let membership_info = membership_info_from_epoch_state::<NodeId>(
                             &epoch_state,
                             &signing_pk,
                             zk_pk,
                         );
-                        let membership_node_ids = if tracing::enabled!(target: LOG_TARGET, tracing::Level::INFO)
+                        let membership_node_ids = if tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG)
                         {
                             (0..membership_info.membership.size())
                                 .filter_map(|index| membership_info.membership.get_node_at(index))
@@ -173,9 +169,9 @@ where
                         } else {
                             Vec::new()
                         };
-                        tracing::info!(
+                        tracing::debug!(
                             target: LOG_TARGET,
-                            diagnostic = "blend_tsi_outage",
+                            diagnostic = BLEND_REACHABILITY,
                             event = "blend_epoch_state_latched",
                             component,
                             clock_epoch = u32::from(epoch),

@@ -1,20 +1,26 @@
 use core::{iter::once, num::NonZeroU64, time::Duration};
 use std::{collections::VecDeque, sync::Arc};
 
-use futures::{StreamExt as _, stream::repeat};
+use futures::{
+    StreamExt as _,
+    stream::{empty, repeat},
+};
 use lb_blend::{
     message::{
         MAX_PAYLOAD_BODY_SIZE,
         reward::{ActivityProof, BlendingToken, EpochBlendingTokenCollector},
     },
-    proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
+    proofs::{
+        quota::{VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
+        selection::VerifiedProofOfSelection,
+    },
     scheduling::{
         EpochMessageScheduler, message_blend::crypto::EpochCryptographicProcessorSettings,
     },
 };
-use lb_chain_service::Epoch;
-use lb_core::{crypto::ZkHash, sdp::ActivityMetadata};
-use lb_groth16::AdditiveGroup as _;
+use lb_chain_service::{Epoch, Slot};
+use lb_core::{crypto::ZkHash, header::HeaderId, sdp::ActivityMetadata};
+use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
 use rand::SeedableRng as _;
@@ -50,7 +56,7 @@ use crate::{
         },
     },
     epoch::{CoreEpochInfo, CoreEpochPublicInfo, CoreEpochStateInfo},
-    epoch_info::PolEpochInfo,
+    epoch_info::{PolEpochInfo, PolEpochState, PolEpochStateSource},
     membership::{
         MembershipInfo, ZkInfo,
         chain::{BlendEpoch, BlendEpochState},
@@ -70,6 +76,46 @@ use crate::{
 mod utils;
 
 type RuntimeServiceId = ();
+
+#[test]
+fn pol_state_match_detects_fingerprint_mismatch() {
+    let public = LeaderInputs {
+        pol_ledger_aged: ZkHash::ZERO,
+        pol_epoch_nonce: ZkHash::ZERO,
+        message_quota: Quota::ZERO,
+        lottery_0: Fr::ZERO,
+        lottery_1: Fr::ZERO,
+    };
+    let mut private = PolEpochInfo {
+        epoch: Epoch::new(7),
+        state: PolEpochState {
+            nonce: public.pol_epoch_nonce,
+            aged_utxo_root: public.pol_ledger_aged,
+            lottery_0: public.lottery_0,
+            lottery_1: public.lottery_1,
+            source: PolEpochStateSource {
+                tip_id: HeaderId::from([0; 32]),
+                tip_slot: Slot::from(0),
+                lib_id: HeaderId::from([0; 32]),
+                lib_slot: Slot::from(0),
+            },
+        },
+        winning_pol_info_stream: Box::pin(empty()),
+    };
+
+    assert!(super::diagnostics::pol_state_matches(
+        &private,
+        Epoch::new(7),
+        &public
+    ));
+
+    private.state.lottery_1 = Fr::from(1u64);
+    assert!(!super::diagnostics::pol_state_matches(
+        &private,
+        Epoch::new(7),
+        &public
+    ));
+}
 
 fn test_blend_epoch_state(
     epoch: u32,
@@ -972,6 +1018,18 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
 
     let secret_info = PolEpochInfo {
         epoch: secret_epoch,
+        state: PolEpochState {
+            nonce: ZkHash::ZERO,
+            aged_utxo_root: ZkHash::ZERO,
+            lottery_0: ZkHash::ZERO,
+            lottery_1: ZkHash::ZERO,
+            source: PolEpochStateSource {
+                tip_id: HeaderId::from([0; 32]),
+                tip_slot: Slot::from(0),
+                lib_id: HeaderId::from([0; 32]),
+                lib_slot: Slot::from(0),
+            },
+        },
         winning_pol_info_stream: Box::pin(repeat(dummy_pol_private_inputs())),
     };
 
@@ -2135,7 +2193,7 @@ async fn test_initialize_drops_activity_proof_older_than_one_epoch() {
 ///
 /// Sitting through a whole delivery deadline costs them nothing: they run on a
 /// paused clock, which jumps to the next timer the moment every task is idle.
-const FALLBACK_TEST_ROUND: Duration = Duration::from_secs(1);
+const FALLBACK_TEST_ROUND_IN_SECONDS: NonZeroU64 = NonZeroU64::new(1).unwrap();
 
 /// Runs the core event loop over a two-node membership, with both sides of
 /// Blend's exit door in the test's hands.
@@ -2160,10 +2218,10 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
     // See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
     settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
-    settings.time.round_duration = FALLBACK_TEST_ROUND;
-    let deadline = FALLBACK_TEST_ROUND
-        * u32::try_from(settings.max_data_message_delay_in_rounds().get())
-            .expect("The test deadline is a handful of rounds.");
+    settings.time.round_duration_in_seconds = FALLBACK_TEST_ROUND_IN_SECONDS;
+    let deadline = Duration::from_secs(
+        FALLBACK_TEST_ROUND_IN_SECONDS.get() * settings.max_data_message_delay_in_rounds().get(),
+    );
 
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
@@ -2222,7 +2280,7 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
         let mut deliveries = FailureDetector::new(
             settings.max_data_message_delay_in_rounds(),
-            settings.time.round_duration,
+            settings.time.round_duration_in_seconds,
             PayloadDispatcher::<RuntimeServiceId>::observe_broadcasts(&payload_dispatcher).await,
         );
         run_event_loop(
@@ -2252,7 +2310,7 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
 
 /// Long enough that reaching it means the assertion has already failed.
 fn past(deadline: Duration) -> Duration {
-    deadline + FALLBACK_TEST_ROUND * 4
+    deadline + Duration::from_secs(FALLBACK_TEST_ROUND_IN_SECONDS.get()) * 4
 }
 
 /// A core node reacts to a delivery failure exactly as an edge node does: at
@@ -2445,8 +2503,8 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
 /// The previous epoch keeps releasing through its own scheduler for the length
 /// of its transition period, and each message it releases is published under
 /// that epoch so it reaches the peers still negotiated for it. Publishing it
-/// under the new epoch would fail their `PoQ` check and earn this node a
-/// `SpamReason::InvalidProofOfQuota`.
+/// under the new epoch would fail their `PoQ` check and get this node
+/// blacklisted for `BlacklistReason::InvalidProofOfQuota`.
 ///
 /// What is pinned here is that the message survives the rotation and is
 /// published under the epoch it was minted for. *Which* scheduler releases it

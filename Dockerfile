@@ -2,8 +2,8 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-ARG LC_CORE_VERSION=0.2.0
-ARG LB_NODE_VERSION=0.2.0
+ARG LC_CORE_VERSION=X.Y.Z
+ARG LB_NODE_VERSION=X.Y.Z
 
 # ===========================
 # BUILD IMAGE
@@ -13,6 +13,8 @@ FROM debian:trixie-slim AS builder
 
 ARG LC_CORE_VERSION
 ARG LB_NODE_VERSION
+
+ENV LOGOSCTL_CONFIG_DIR=/logos-blockchain/session
 
 WORKDIR /logos-blockchain
 COPY . .
@@ -25,16 +27,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN scripts/setup-logos-core.sh "$LC_CORE_VERSION" "$(uname -m)-linux"
 
 # Patch the AppImage magic bytes to restore standard ELF matching for QEMU
-RUN dd if=/dev/zero of=lgpd bs=1 count=3 seek=8 conv=notrunc && \
-    dd if=/dev/zero of=lgpm bs=1 count=3 seek=8 conv=notrunc && \
-    dd if=/dev/zero of=logoscore bs=1 count=3 seek=8 conv=notrunc
+RUN dd if=/dev/zero of=logosctl bs=1 count=3 seek=8 conv=notrunc
 
-RUN ./lgpd --appimage-extract && mv squashfs-root ext-lgpd && \
-    ./lgpm --appimage-extract && mv squashfs-root ext-lgpm && \
-    ./logoscore --appimage-extract && mv squashfs-root ext-logoscore
+RUN ./logosctl --appimage-extract && mv squashfs-root ext-logosctl
 
-RUN ./ext-lgpd/AppRun download blockchain_module --version "$LB_NODE_VERSION" --output ./ && \
-    ./ext-lgpm/AppRun --modules-dir ./modules install --file "blockchain_module-${LB_NODE_VERSION}.lgx"
+RUN ./ext-logosctl/AppRun daemon start --detach && \
+    ./ext-logosctl/AppRun catalog add \
+    https://raw.githubusercontent.com/logos-blockchain/blockchain-modules-release/refs/heads/main/logos-repo.json && \
+    ./ext-logosctl/AppRun catalog refresh && \
+    ./ext-logosctl/AppRun package download blockchain_module \
+    --version "$LB_NODE_VERSION" --output ./ && \
+    ./ext-logosctl/AppRun install "./blockchain_module-${LB_NODE_VERSION}.lgx" -y && \
+    ./ext-logosctl/AppRun daemon stop
 
 # ===========================
 # NODE IMAGE
@@ -51,9 +55,19 @@ LABEL maintainer="augustinas@status.im" \
 RUN apt-get update && apt-get install -y --no-install-recommends curl yq && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /logos-blockchain/ext-logoscore /opt/logoscore
-COPY --from=builder /logos-blockchain/modules /opt/modules
+COPY --from=builder /logos-blockchain/ext-logosctl /opt/logosctl
+COPY --from=builder /logos-blockchain/session/modules /opt/modules
+
+RUN ln -s /opt/logosctl/AppRun /usr/local/bin/logosctl
+
+# `modules_dirs` is the replacement for `logoscore -m`, read-only directory
+# for modules.
+ENV LOGOSCTL_CONFIG_DIR=/opt/logos-session
+
+RUN printf 'version: 2\nmodules_dirs:\n  - /opt/modules\n' > /tmp/daemon.yaml && \
+    logosctl daemon config set /tmp/daemon.yaml && \
+    rm /tmp/daemon.yaml
 
 EXPOSE 3000 8080 9000 60000
 
-ENTRYPOINT ["logoscore"]
+ENTRYPOINT ["logosctl", "daemon", "start"]

@@ -1,4 +1,4 @@
-use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,5 +20,16 @@ impl BinaryDecode for NoOpProof {
         _context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         Ok((input, Self))
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub mod samples {
+    use crate::mantle::ops::{NoOpProof, op_proof::samples::SampleProof};
+
+    impl SampleProof for NoOpProof {
+        fn sample() -> Self {
+            Self
+        }
     }
 }

@@ -33,7 +33,7 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
         >,
     ) -> Self {
         // send message to boot the network producer
-        if let Err(e) = network_relay
+        if let Err(error) = network_relay
             .send(NetworkMsg::Process(MockBackendMessage::BootProducer {
                 spawner: Box::new(move |fut| {
                     tokio::spawn(fut);
@@ -42,19 +42,16 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
             }))
             .await
         {
-            panic!(
-                "Couldn't send boot producer message to the network service: {:?}",
-                e.0
-            );
+            panic!("Couldn't send boot producer message to the network service: {error}");
         }
 
-        if let Err((e, _)) = network_relay
+        if let Err(error) = network_relay
             .send(NetworkMsg::Process(MockBackendMessage::RelaySubscribe {
                 topic: MOCK_PUB_SUB_TOPIC.to_owned(),
             }))
             .await
         {
-            panic!("Couldn't send subscribe message to the network service: {e}");
+            panic!("Couldn't send subscribe message to the network service: {error}");
         }
         Self { network_relay }
     }
@@ -63,12 +60,12 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
         &self,
     ) -> Box<dyn Stream<Item = (Self::Key, Self::Payload)> + Unpin + Send> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        if let Err((_, e)) = self
+        if let Err(error) = self
             .network_relay
             .send(NetworkMsg::SubscribeToPubSub { sender })
             .await
         {
-            tracing::error!(target: LOG_TARGET, err = ?e);
+            tracing::error!(target: LOG_TARGET, err = ?error);
         }
 
         let stream = receiver.await.unwrap();
@@ -85,7 +82,7 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
     }
 
     async fn send(&self, msg: Self::Payload) {
-        if let Err((e, _)) = self
+        if let Err(error) = self
             .network_relay
             .send(NetworkMsg::Process(MockBackendMessage::Broadcast {
                 topic: MOCK_PUB_SUB_TOPIC.into(),
@@ -93,7 +90,7 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
             }))
             .await
         {
-            tracing::error!(target: LOG_TARGET, "failed to send item to topic: {e}");
+            tracing::error!(target: LOG_TARGET, "failed to send item to topic: {error}");
         }
     }
 }

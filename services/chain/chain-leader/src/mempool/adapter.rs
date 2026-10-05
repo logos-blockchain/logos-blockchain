@@ -25,7 +25,7 @@ impl<Tx> MempoolAdapter<Tx> {
 #[async_trait::async_trait]
 impl<Tx> MempoolAdapterTrait<Tx> for MempoolAdapter<Tx>
 where
-    Tx: Hashable<Hash = TxHash> + Send + Sync + 'static,
+    Tx: Hashable<Hash = TxHash> + Send + 'static,
 {
     async fn get_mempool_view(
         &self,
@@ -39,7 +39,7 @@ where
                 reply_channel,
             })
             .await
-            .map_err(|(e, _)| format!("Could not get mempool view: {e}"))?;
+            .map_err(|error| format!("Could not get mempool view: {error}"))?;
 
         let view_stream = receiver
             .await
@@ -52,7 +52,7 @@ where
         self.mempool_relay
             .send(MempoolMsg::Remove { ids: ids.to_vec() })
             .await
-            .map_err(|(e, _)| format!("Could not remove transactions from mempool: {e}"))?;
+            .map_err(|error| format!("Could not remove transactions from mempool: {error}"))?;
 
         Ok(())
     }
@@ -66,7 +66,7 @@ where
                 reply_channel,
             })
             .await
-            .map_err(|(e, _)| format!("Failed to send MempoolMsg::Add: {e}"))?;
+            .map_err(|error| format!("Failed to send MempoolMsg::Add: {error}"))?;
 
         receiver
             .await?

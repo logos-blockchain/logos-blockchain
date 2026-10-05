@@ -2,7 +2,7 @@ use core::fmt::Debug;
 use std::fmt::Display;
 
 use async_trait::async_trait;
-use derivative::Derivative;
+use educe::Educe;
 use lb_core::header::HeaderId;
 use lb_log_targets::chain;
 use overwatch::{
@@ -25,8 +25,8 @@ pub struct BlockInfo {
     pub header_id: HeaderId,
 }
 
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Educe)]
+#[educe(Debug)]
 pub enum BlockBroadcastMsg {
     BroadcastFinalizedBlock(BlockInfo),
     SubscribeToFinalizedBlocks {

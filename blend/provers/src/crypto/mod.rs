@@ -1,6 +1,6 @@
 use std::{num::NonZeroU64, sync::Arc};
 
-use derivative::Derivative;
+use educe::Educe;
 pub use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
 use lb_blend_proofs::quota::Quota;
 use lb_key_management_system_keys::keys::X25519PrivateKey;
@@ -18,12 +18,12 @@ pub use self::leader::send::EpochCryptographicProcessor as LeaderSenderOnlyEpoch
 #[cfg(test)]
 mod test_utils;
 
-#[derive(Clone, Derivative)]
-#[derivative(Debug)]
+#[derive(Clone, Educe)]
+#[educe(Debug)]
 pub struct EpochCryptographicProcessorSettings {
     /// The non-ephemeral encryption key (NEK) derived from the secret key
     /// corresponding to the public key registered in the membership (SDP).
-    #[derivative(Debug = "ignore")]
+    #[educe(Debug(ignore))]
     pub non_ephemeral_encryption_key: X25519PrivateKey,
     /// `ß_c`: number of blending operations for each locally generated message.
     pub num_blend_layers: NonZeroU64,

@@ -7,9 +7,8 @@ use super::{SDPActiveOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        Value,
         batch::DeferredZkpVerification,
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
             VerifiableOperation,
@@ -18,7 +17,7 @@ use crate::{
         ops::SignedOperation,
         transactions::{
             hash::TxHashView,
-            states::{Preverified, Unverified, VerificationState, Verified},
+            states::{Preverified, Unverified, Verified},
         },
     },
 };
@@ -44,6 +43,8 @@ impl ProvableOperation for SDPActiveOp {
 impl OperationGas<MainnetGasProfile> for SDPActiveOp {
     const GAS_COST: Gas = Gas::new(590);
 }
+
+impl OpGasCalculator<MainnetGasProfile> for SDPActiveOp {}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<SDPActiveOp, Unverified, StandardMode>
@@ -132,14 +133,6 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<SDPActiveOp
     }
 }
 
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOperation<SDPActiveOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
@@ -151,15 +144,222 @@ mod tests {
     use super::{SDPActiveOp, SDPActiveValidationContext, SdpError};
     use crate::{
         mantle::{
-            ledger::{Declarations, VerifiableOperation as _, verification_mode::StandardMode},
-            ops::{SignedOperation, sdp::SDPDeclareOp},
+            TxHash,
+            batch::{DeferredZkpVerification, Error as BatchError, test_utils::batch_verify},
+            gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
+            ledger::{
+                Declarations, PreverifiableOperation as _, ProvableOperation,
+                VerifiableOperation as _, verification_mode::StandardMode,
+            },
+            ops::{
+                SignedOperation,
+                op_proof::samples::SampleProof as _,
+                sdp::{SDPActiveExecutionContext, SDPDeclareOp},
+            },
             transactions::{
-                hash::{TxHash, TxHashView},
-                states::Preverified,
+                hash::TxHashView,
+                states::{Preverified, Unverified, Verified},
             },
         },
-        sdp::{ActivityMetadata, Declaration, ServiceType, blend::ActivityProof},
+        sdp::{
+            ActivityMetadata, Declaration, DeclarationMessage, ServiceType, blend::ActivityProof,
+        },
     };
+
+    fn declaration_key() -> ZkKey {
+        ZkKey::from(BigUint::from(1u8))
+    }
+
+    fn declaration() -> (DeclarationMessage, Declaration) {
+        let message = DeclarationMessage {
+            zk_id: declaration_key().to_public_key(),
+            ..DeclarationMessage::sample()
+        };
+        let declaration = Declaration::new(Epoch::from(0), &message);
+
+        (message, declaration)
+    }
+
+    fn preverified(
+        operation: SDPActiveOp,
+        tx_hash_view: &TxHashView,
+    ) -> SignedOperation<SDPActiveOp, Preverified, StandardMode> {
+        let proof = ZkKey::multi_sign(&[declaration_key()], tx_hash_view.as_fr())
+            .expect("signing should succeed");
+
+        SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+            .into_preverified(&())
+            .expect("preverify accepts every active message")
+    }
+
+    #[test]
+    fn preverify_accepts_every_active_message() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            SDPActiveOp::sample(),
+            <SDPActiveOp as ProvableOperation>::Proof::sample(),
+        );
+
+        assert_eq!(signed_operation.preverify(&()), Ok(()));
+    }
+
+    #[test]
+    fn verify_rejects_an_unknown_declaration() {
+        let operation = SDPActiveOp::sample();
+        let declaration_id = operation.declaration_id;
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let signed_operation = preverified(operation, &signed_view);
+
+        assert_eq!(
+            signed_operation
+                .verify(&SDPActiveValidationContext {
+                    declarations: &Declarations::new_sync(),
+                    tx_hash_view: &signed_view,
+                    epoch: Epoch::from(0),
+                })
+                .unwrap_err(),
+            SdpError::DeclarationNotFound(declaration_id)
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_declaration_whose_withdrawal_epoch_has_passed() {
+        let (message, declaration) = declaration();
+        let declaration_id = message.id();
+        let withdraw_at = Epoch::from(3);
+        let declarations = Declarations::new_sync().insert(
+            declaration_id,
+            Declaration {
+                withdraw_at: Some(withdraw_at),
+                ..declaration
+            },
+        );
+
+        let operation = SDPActiveOp {
+            declaration_id,
+            ..SDPActiveOp::sample()
+        };
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let signed_operation = preverified(operation, &signed_view);
+
+        assert_eq!(
+            signed_operation
+                .verify(&SDPActiveValidationContext {
+                    declarations: &declarations,
+                    tx_hash_view: &signed_view,
+                    epoch: withdraw_at.strict_add(Epoch::from(1)),
+                })
+                .unwrap_err(),
+            SdpError::DeclarationWithdrawn {
+                declaration_id,
+                withdraw_at,
+            }
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_nonce_that_does_not_increase() {
+        let (message, declaration) = declaration();
+        let declaration_id = message.id();
+        let declaration_nonce = declaration.nonce;
+        let declarations = Declarations::new_sync().insert(declaration_id, declaration);
+
+        let operation = SDPActiveOp {
+            declaration_id,
+            nonce: declaration_nonce,
+            ..SDPActiveOp::sample()
+        };
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let signed_operation = preverified(operation, &signed_view);
+
+        assert_eq!(
+            signed_operation
+                .verify(&SDPActiveValidationContext {
+                    declarations: &declarations,
+                    tx_hash_view: &signed_view,
+                    epoch: Epoch::from(0),
+                })
+                .unwrap_err(),
+            SdpError::InvalidNonce {
+                message_nonce: declaration_nonce,
+                declaration_nonce,
+            }
+        );
+    }
+
+    fn unrelated_key() -> ZkKey {
+        ZkKey::from(BigUint::from(7u8))
+    }
+
+    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
+        let (message, declaration) = declaration();
+        let declaration_id = message.id();
+        let declarations = Declarations::new_sync().insert(declaration_id, declaration);
+        let operation = SDPActiveOp {
+            declaration_id,
+            ..SDPActiveOp::sample()
+        };
+        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let proof =
+            ZkKey::multi_sign(signers, tx_hash_view.as_fr()).expect("signing should succeed");
+
+        SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+            .into_preverified(&())
+            .expect("preverify accepts every active message")
+            .verify(&SDPActiveValidationContext {
+                declarations: &declarations,
+                tx_hash_view: &tx_hash_view,
+                epoch: Epoch::from(0),
+            })
+            .expect("verify leaves the proof to the batch")
+    }
+
+    #[test]
+    fn deferred_zkp_is_accepted() {
+        assert!(batch_verify(deferred_zkp_signed_by(&[declaration_key()])).is_ok());
+    }
+
+    #[test]
+    fn wrong_deferred_zkp_is_rejected() {
+        assert!(matches!(
+            batch_verify(deferred_zkp_signed_by(&[unrelated_key()])),
+            Err(BatchError::InvalidZkSignatures)
+        ));
+    }
+
+    #[test]
+    fn verify_accepts_a_declaration_whose_withdrawal_epoch_is_still_ahead() {
+        let (message, declaration) = declaration();
+        let declaration_id = message.id();
+        let declarations = Declarations::new_sync().insert(
+            declaration_id,
+            Declaration {
+                withdraw_at: Some(Epoch::from(3)),
+                ..declaration
+            },
+        );
+
+        let operation = SDPActiveOp {
+            declaration_id,
+            ..SDPActiveOp::sample()
+        };
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let signed_operation = preverified(operation, &signed_view);
+
+        assert!(
+            signed_operation
+                .verify(&SDPActiveValidationContext {
+                    declarations: &declarations,
+                    tx_hash_view: &signed_view,
+                    epoch: Epoch::from(2),
+                })
+                .unwrap()
+                .is_some()
+        );
+    }
 
     const WITHDRAW_AT: Epoch = Epoch::new(5);
 
@@ -176,6 +376,54 @@ mod tests {
             verify_active_at(WITHDRAW_AT.strict_add(Epoch::new(1))),
             Err(SdpError::DeclarationWithdrawn { .. })
         ));
+    }
+
+    fn verified(operation: SDPActiveOp) -> SignedOperation<SDPActiveOp, Verified, StandardMode> {
+        SignedOperation::<_, Unverified, StandardMode>::new(
+            operation,
+            <SDPActiveOp as ProvableOperation>::Proof::sample(),
+        )
+        .into_state_trusted()
+    }
+
+    #[test]
+    #[should_panic(expected = "The operation should have been validated")]
+    fn execute_panics_on_a_declaration_the_ledger_does_not_hold() {
+        drop(
+            verified(SDPActiveOp::sample()).execute(SDPActiveExecutionContext {
+                epoch: Epoch::from(4),
+                declarations: Declarations::new_sync(),
+            }),
+        );
+    }
+
+    #[test]
+    fn execute_marks_the_declaration_active_for_the_current_epoch() {
+        let (message, declaration) = declaration();
+        let declaration_id = message.id();
+        let declarations = Declarations::new_sync().insert(declaration_id, declaration);
+
+        let operation = SDPActiveOp {
+            declaration_id,
+            ..SDPActiveOp::sample()
+        };
+        let nonce = operation.nonce;
+        let epoch = Epoch::from(4);
+
+        let (context, events) = verified(operation)
+            .execute(SDPActiveExecutionContext {
+                epoch,
+                declarations,
+            })
+            .expect("the declaration is registered");
+
+        let updated = context
+            .declarations
+            .get(&declaration_id)
+            .expect("the declaration stays registered");
+        assert_eq!(updated.active, epoch);
+        assert_eq!(updated.nonce, nonce);
+        assert_eq!(events, []);
     }
 
     /// Verifies an active message at `epoch` against a declaration whose
@@ -220,5 +468,15 @@ mod tests {
                 epoch,
             })
             .map(|_| ())
+    }
+
+    #[test]
+    fn sdp_active_op_execution_gas_does_not_scale_with_the_threshold() {
+        for threshold in [0, 1, 3] {
+            assert_eq!(
+                SDPActiveOp::sample().execution_gas(&FixedThresholds(threshold)),
+                Ok(Gas::new(590))
+            );
+        }
     }
 }

@@ -5,7 +5,6 @@ use either::Either;
 use lb_blend_message::{
     deserialize_encapsulated_message,
     encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
-    serialize_encapsulated_message_with_verified_public_header,
 };
 use lb_cryptarchia_engine::Epoch;
 use libp2p::{
@@ -14,11 +13,14 @@ use libp2p::{
 };
 
 use super::LOG_TARGET;
-use crate::core::{
-    poq_verification::{PendingPoQVerifications, spawn_poq_verification},
-    with_core::{
-        behaviour::{Event, handler::FromBehaviour, message_cache::MessageCache},
-        error::{ReceiveError, SendError},
+use crate::{
+    OutgoingMessage,
+    core::{
+        poq_verification::{PendingPoQVerifications, spawn_poq_verification},
+        with_core::{
+            behaviour::{Event, handler::FromBehaviour, message_cache::MessageCache},
+            error::{ReceiveError, SendError},
+        },
     },
 };
 
@@ -51,7 +53,9 @@ where
         return Err(SendError::NoPeers);
     }
 
-    let serialized_message = serialize_encapsulated_message_with_verified_public_header(message);
+    // Serialized once and then put inside an `Arc` to avoid serializing each copy
+    // or cloning the serialized bytes multiple times.
+    let serialized_message = OutgoingMessage::from(message);
 
     peer_connections.for_each(|(peer_id, connection_id)| {
         tracing::trace!(target: LOG_TARGET, "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message.");
@@ -72,22 +76,15 @@ where
 /// Validates the signature of a received message and dispatches the
 /// verification of its `PoQ`, if it hasn't been processed already.
 ///
-/// The message cache is updated accordingly to mark the message as processed if
-/// it is valid and hasn't been processed before, or to ignore it if it has
-/// already been processed before. If the message is a duplicate of a previously
-/// received message from the same peer, it is also ignored and an error is
-/// returned to avoid processing the same message multiple times from the same
-/// peer, which could be a sign of a malicious peer.
-///
 /// The message is only reported to the swarm — and only entered into the
 /// message cache — once its `PoQ` verifies, which happens off the task polling
 /// this behaviour. Entering it any earlier would let anyone claim a nullifier
 /// by replaying someone else's `PoQ` under their own signing key, suppressing
 /// the genuine message that carries it.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
-pub fn handle_received_serialized_encapsulated_message_and_update_cache<Verifier>(
+pub fn handle_received_serialized_encapsulated_message<Verifier>(
     serialized_message: &[u8],
-    message_cache: &mut MessageCache,
+    message_cache: &MessageCache,
     (sender, connection_id): (PeerId, ConnectionId),
     pending_verifications: &PendingPoQVerifications,
     waker: &mut Option<Waker>,
@@ -102,12 +99,6 @@ where
     let deserialized_encapsulated_message =
         deserialize_encapsulated_message(serialized_message, &num_blend_layers)
             .map_err(|_| ReceiveError::UndeserializableMessage)?;
-
-    // Add the message to the set of exchanged message identifiers with the sender,
-    // returning `Err` if the message was already sent by this peer previously.
-    if !message_cache.mark_message_as_seen_from_peer(&deserialized_encapsulated_message, sender) {
-        return Err(ReceiveError::DuplicateMessageFromPeer(sender));
-    }
 
     // Exit early if we've received this message already and we know it's a valid
     // one.

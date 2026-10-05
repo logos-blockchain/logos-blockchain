@@ -11,7 +11,9 @@ use lb_core::{
         },
         ops::{
             OpId as _, OpRef,
-            channel::{ChannelId, MsgId, inscribe::Inscription},
+            channel::{
+                ChannelId, MsgId, channel_transfer::ChannelTransferOp, inscribe::Inscription,
+            },
         },
         traits::Hashable as _,
         transactions::{
@@ -20,7 +22,7 @@ use lb_core::{
         },
     },
 };
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use super::{
     TARGET,
@@ -45,14 +47,13 @@ pub(super) struct BlockEventResult {
     /// inscription+withdraw bundle).
     pub(super) finalized_items: Vec<FinalizedTx>,
     pub(super) channel_update: Option<ChannelUpdateInfo>,
-    /// Inscriptions that appeared in this block. Surfaced so a consumer learns
-    /// its tx reached the chain (`OnChain` status) even when the tx didn't move
-    /// the canonical channel chain.
-    pub(super) mined_inscriptions: Vec<InscriptionInfo>,
-    /// Channel deposits observed in this block, in op order. Surfaced
-    /// non-finalized as `ChannelUpdate::adopted_deposits` so a consumer can
-    /// pin a deposit without waiting for finalization.
-    pub(super) adopted_deposits: Vec<DepositInfo>,
+    /// The view above LIB minus `adopted`, in lineage order.
+    pub(super) common_prefix: Vec<ChannelUpdateTx>,
+    /// Channel deposits observed in the blocks this event covers (canonical
+    /// backfill first, then the live block), in block and op order. Surfaced
+    /// non-finalized on `Event::BlocksProcessed` so a consumer can pin a
+    /// deposit without waiting for finalization.
+    pub(super) deposits: Vec<DepositInfo>,
 }
 
 struct PreparedBlockEvent<'a> {
@@ -69,8 +70,7 @@ struct PreparedBlockEvent<'a> {
     channel_txs: Vec<BlockChannelTx>,
     /// Channel-note ops of the live block, computed in the prepare phase.
     note_ops: Vec<NoteOp>,
-    mined_inscriptions: Vec<InscriptionInfo>,
-    adopted_deposits: Vec<DepositInfo>,
+    deposits: Vec<DepositInfo>,
 }
 
 /// Process a block event. Returns finalized tx hashes and optional channel
@@ -130,12 +130,12 @@ where
         finalized.iter().map(|block| block.block_id).collect();
     let parent_id = event.block.header.parent_block;
     let parent_known = block_is_known(state, &finalized_block_ids, state_lib, parent_id);
-    let canonical_backfill = if parent_known {
-        Vec::new()
+    let (canonical_backfill, mut deposits) = if parent_known {
+        (Vec::new(), Vec::new())
     } else {
         let blocks =
-            walk_back_to_known(state, &finalized_block_ids, state_lib, parent_id, node).await;
-        prepare_backfill_note_ops(blocks, channel_id, node).await
+            walk_back_to_known(state, &finalized_block_ids, state_lib, parent_id, node).await?;
+        prepare_backfill_blocks(blocks, channel_id, node).await?
     };
 
     let our_txs: Vec<TxHash> = event
@@ -146,14 +146,6 @@ where
         .map(|tx| tx.op_refs().hash())
         .collect();
     let channel_txs = classify_channel_txs(&event.block.transactions, channel_id);
-    let mut mined_inscriptions: Vec<InscriptionInfo> = channel_txs
-        .iter()
-        .flat_map(BlockChannelTx::infos)
-        .cloned()
-        .collect();
-    let config_entries =
-        mined_config_entries(&event.block.transactions, channel_id, &mined_inscriptions);
-    mined_inscriptions.extend(config_entries);
 
     // Deposit events + wallet note ops for the live block: fetched here (the
     // prepare phase) so the apply phase mutates state without any `.await`.
@@ -170,12 +162,12 @@ where
         &deposit_events,
         event.block.header.slot,
     );
-    let adopted_deposits = block_channel_deposits(
+    deposits.extend(block_channel_deposits(
         &event.block.transactions,
         channel_id,
         event.block.header.slot,
         &deposit_events,
-    );
+    ));
 
     Ok(PreparedBlockEvent {
         block: &event.block,
@@ -188,8 +180,7 @@ where
         our_txs,
         channel_txs,
         note_ops,
-        mined_inscriptions,
-        adopted_deposits,
+        deposits,
     })
 }
 
@@ -230,8 +221,7 @@ fn apply_prepared_block_event(
         our_txs,
         mut channel_txs,
         note_ops,
-        mined_inscriptions,
-        adopted_deposits,
+        deposits,
     } = prepared;
 
     if state.is_none() {
@@ -246,6 +236,7 @@ fn apply_prepared_block_event(
     // sequencer already knew about (its own publishes and previously
     // observed ones) from genuinely new network entries.
     let tracked_before = s.tracked_tx_hashes();
+    let tracked_msgs_before = s.tracked_msg_ids();
 
     // Install finalized history first. It is not mirrored into pending: the
     // matching local entries are removed below using the returned hashes.
@@ -268,10 +259,16 @@ fn apply_prepared_block_event(
     // or mirrored, so both the `adopted` surface and the pending set agree.
     demote_non_identity_pin_deposits(&mut channel_txs, &block.transactions, channel_id, s);
 
-    // Mirror this block's inscriptions into the pending set BEFORE
-    // `process_block`, so on-branch entries land in the block's safe set and
-    // are excluded from re-posting while canonical.
-    observe_channel_inscriptions(s, &channel_txs, &block.transactions);
+    // Pending = canonical channel txs above LIB + our own unmined publishes:
+    // mirror only the canonical tip; a fork's content joins from the store if
+    // its branch wins.
+    if block.header.id == tip {
+        mirror_channel_txs(s, &channel_txs, &block.transactions, channel_id);
+    }
+    s.store_block_signed_txs(
+        block.header.id,
+        mirrorable_txs(&channel_txs, &block.transactions),
+    );
 
     // Process the actual event block
     s.process_block(
@@ -283,38 +280,34 @@ fn apply_prepared_block_event(
         note_ops,
     );
 
-    // Remove our pending txs that were finalized in the backfilled LIB blocks.
-    // `finalized_items` already carries the typed payloads (built before
-    // pending was mutated) so we just need to clean up state here.
+    // Remove our pending txs that were finalized in the backfilled LIB blocks,
+    // by tx hash and by message id. `finalized_items` already carries the
+    // typed payloads (built before pending was mutated).
+    let finalized_now: HashSet<MsgId> = finalized_batch
+        .items
+        .iter()
+        .flat_map(|tx| tx.ops.iter())
+        .filter_map(|op| match op {
+            FinalizedOp::Inscription(i) | FinalizedOp::Config(i) => Some(i.this_msg),
+            _ => None,
+        })
+        .collect();
     for tx_hash in &finalized_batch.our_tx_hashes {
         s.remove_pending(tx_hash);
     }
+    s.take_landed(&finalized_now);
 
     *current_tip = Some(tip);
 
-    // Detect channel changes.
-    // On first event (old_tip is None), check for existing inscriptions on
-    // the channel — this handles clean start on an existing channel.
-    // On subsequent events, detect channel update if tip changed.
-    let channel_update = match (old_tip, old_lineage) {
-        (Some(old), Some(old_lineage)) if old != tip => s.detect_channel_update(&old_lineage, tip),
-        (None, _) => {
-            // First event — no old canonical exists yet, so nothing can be
-            // orphaned. Report any inscriptions on the initial tip as adopted.
-            let channel_tip = s.channel_tip_at(tip);
-            if channel_tip == MsgId::root() {
-                None
-            } else {
-                let adopted = s.collect_update_txs_on_branch(tip);
-                (!adopted.is_empty()).then_some(ChannelUpdateInfo {
-                    orphaned: Vec::new(),
-                    adopted,
-                    new_channel_tip: channel_tip,
-                })
-            }
-        }
-        _ => None, // tip unchanged
-    };
+    mirror_branch_from_store(s, tip, channel_id);
+
+    // Detect channel changes by diffing the channel view on every block. On
+    // the first event there is no old tip: what restored pending chains on
+    // was the view before the restart, and the rest of the channel is new
+    // (a clean start on an existing channel).
+    let old_lineage =
+        old_lineage.unwrap_or_else(|| s.lineage_under(tip, &tracked_before, &tracked_msgs_before));
+    let channel_update = s.detect_channel_update(&old_lineage, tip, &finalized_now);
 
     // On a pure extension (nothing orphaned — including the first event,
     // whose `orphaned` is empty by construction), report only entries the
@@ -330,21 +323,54 @@ fn apply_prepared_block_event(
         update
     });
 
+    // LIB to the fork point, then the pending tail still chaining on it: what
+    // the view had before this event. A pending entry survives a branch
+    // change only by chaining on the fork point, since anything adopted
+    // above it takes its slot and sheds it.
+    // Matched by message or config id; by tx hash for an entry carrying
+    // neither.
+    let old_txs: HashSet<TxHash> = old_lineage.iter().map(|info| info.tx_hash).collect();
+    let old_msgs: HashSet<MsgId> = old_lineage.iter().map(|info| info.this_msg).collect();
+    let common_prefix = s
+        .channel_view_txs(tip, &finalized_now)
+        .into_iter()
+        .filter(|tx| {
+            let mut ids = update_tx_msg_ids(tx, channel_id).peekable();
+            if ids.peek().is_some() {
+                ids.any(|id| old_msgs.contains(&id))
+            } else {
+                old_txs.contains(&tx.tx_hash())
+            }
+        })
+        .collect();
+
     BlockEventResult {
         finalized_items: finalized_batch.items,
         channel_update,
-        mined_inscriptions,
-        adopted_deposits,
+        common_prefix,
+        deposits,
     }
 }
 
-/// Mirror a block's channel inscriptions into the pending set
-/// (insert-if-absent) so a later retry re-posts the original bytes. Custom
-/// shapes are ignored.
-fn observe_channel_inscriptions(
+/// (Re-)mirror stored blocks now on the canonical path: arrived as a fork,
+/// or shed on an earlier switch.
+fn mirror_branch_from_store(s: &mut TxState, tip: HeaderId, channel_id: ChannelId) {
+    let untracked = s.untracked_signed_txs_on_branch(tip);
+    if untracked.is_empty() {
+        return;
+    }
+    let mut classified = classify_channel_txs(&untracked, channel_id);
+    demote_non_identity_pin_deposits(&mut classified, &untracked, channel_id, s);
+    mirror_channel_txs(s, &classified, &untracked, channel_id);
+}
+
+/// Mirror a block's channel txs into the pending set (insert-if-absent) so a
+/// later retry re-posts the original bytes.
+fn mirror_channel_txs(
     state: &mut TxState,
     classified: &[BlockChannelTx],
     transactions: &[SignedOps<Unverified, StandardMode>],
+    channel_id: ChannelId,
 ) {
     let by_hash: HashMap<TxHash, &SignedOps<Unverified, StandardMode>> =
         transactions.iter().map(|tx| (tx.hash(), tx)).collect();
@@ -362,7 +388,16 @@ fn observe_channel_inscriptions(
                 &a.inscription,
                 PendingBundle::PinDeposit(a.consumed_notes.clone()),
             ),
-            BlockChannelTx::Config(_) | BlockChannelTx::Custom { .. } => continue,
+            BlockChannelTx::Config(_) | BlockChannelTx::Custom { .. } => {
+                let tx_hash = block_tx
+                    .tx_hash()
+                    .expect("custom and config shapes carry their tx hash");
+                let tx = by_hash
+                    .get(&tx_hash)
+                    .expect("classified entries come from these transactions");
+                state.observe_other_tx((*tx).clone(), channel_id);
+                continue;
+            }
         };
         let tx = by_hash
             .get(&info.tx_hash)
@@ -399,7 +434,7 @@ fn demote_non_identity_pin_deposits(
         if !is_identity_deposit_transfer(state, tx, channel_id) {
             *block_tx = BlockChannelTx::Custom {
                 tx: (*tx).clone(),
-                entries: vec![a.inscription.clone()],
+                message_entries: vec![a.inscription.clone()],
                 config_entries: Vec::new(),
             };
         }
@@ -414,10 +449,7 @@ fn is_identity_deposit_transfer(
     tx: &SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
 ) -> bool {
-    let Some(transfer) = tx.op_refs_iter().find_map(|op| match op {
-        OpRef::ChannelTransfer(t) if t.channel_id == channel_id => Some(t),
-        _ => None,
-    }) else {
+    let Some(transfer) = channel_transfers(tx, channel_id).next() else {
         return false;
     };
     let mut outputs: Vec<_> = transfer
@@ -439,6 +471,17 @@ fn is_identity_deposit_transfer(
         }
     }
     outputs.is_empty()
+}
+
+/// A tx's `ChannelTransfer` ops for `channel_id`, in op order.
+pub(super) fn channel_transfers(
+    tx: &SignedOps<Unverified, StandardMode>,
+    channel_id: ChannelId,
+) -> impl Iterator<Item = &ChannelTransferOp> {
+    tx.op_refs_iter().filter_map(move |op| match op {
+        OpRef::ChannelTransfer(t) if t.channel_id == channel_id => Some(t),
+        _ => None,
+    })
 }
 
 /// Extract a tx's channel inscriptions, in op order. `ChannelConfig` ops are
@@ -466,33 +509,46 @@ pub fn channel_inscriptions(
     entries
 }
 
-/// Configs yield no lineage entries, but their txs still need `OnChain`
-/// status events: one entry per config-carrying tx, with its config-lineage
-/// ids. Status is keyed on the tx, so a tx already covered by an inscription
-/// entry in `mined` needs nothing more.
-fn mined_config_entries(
-    transactions: &[SignedOps<Unverified, StandardMode>],
+/// The message and config ids an update entry carries for `channel_id`.
+fn update_tx_msg_ids(
+    tx: &ChannelUpdateTx,
     channel_id: ChannelId,
-    mined: &[InscriptionInfo],
+) -> impl Iterator<Item = MsgId> + '_ {
+    let typed = tx.inscription().map(|info| info.this_msg);
+    let opaque = match tx {
+        ChannelUpdateTx::Config(signed) | ChannelUpdateTx::Custom(signed) => {
+            let mut ids: Vec<MsgId> = channel_inscriptions(signed, channel_id)
+                .iter()
+                .map(|info| info.this_msg)
+                .collect();
+            ids.extend(
+                channel_configs(signed, channel_id)
+                    .iter()
+                    .map(|info| info.this_msg),
+            );
+            ids
+        }
+        _ => Vec::new(),
+    };
+    typed.into_iter().chain(opaque)
+}
+
+/// A tx's config-lineage entries for `channel_id`, in op order.
+pub fn channel_configs(
+    tx: &SignedOps<Unverified, StandardMode>,
+    channel_id: ChannelId,
 ) -> Vec<InscriptionInfo> {
-    transactions
-        .iter()
-        .filter_map(|tx| {
-            let tx_hash = tx.hash();
-            if mined.iter().any(|info| info.tx_hash == tx_hash) {
-                return None;
-            }
-            let config = tx.op_refs_iter().find_map(|op| match op {
-                OpRef::ChannelConfig(config) if config.channel == channel_id => Some(config),
-                _ => None,
-            })?;
-            Some(InscriptionInfo {
+    let tx_hash = tx.op_refs().hash();
+    tx.op_refs_iter()
+        .filter_map(|op| match op {
+            OpRef::ChannelConfig(config) if config.channel == channel_id => Some(InscriptionInfo {
                 tx_hash,
                 parent_msg: config.parent,
                 this_msg: config.id(),
-                payload: [].into(),
+                payload: Inscription::new_unchecked(Vec::new()),
                 signer: None,
-            })
+            }),
+            _ => None,
         })
         .collect()
 }
@@ -851,13 +907,17 @@ fn block_is_known(
         || state.is_some_and(|state| state.has_block(&block))
 }
 
+/// The unknown ancestors of `from` back to a known block, oldest first. A
+/// block that cannot be fetched fails the event: applying the live block over
+/// a hole would cut every branch walk short of LIB, and the hole would never
+/// be revisited since the next event's parent is then known.
 async fn walk_back_to_known<Node>(
     state: Option<&TxState>,
     additionally_known: &HashSet<HeaderId>,
     lib: HeaderId,
     from: HeaderId,
     node: &Node,
-) -> Vec<ApiBlock>
+) -> Result<Vec<ApiBlock>, Error>
 where
     Node: adapter::Node + Sync,
 {
@@ -867,82 +927,68 @@ where
     let mut current = from;
 
     while !block_is_known(state, additionally_known, lib, current) {
-        let Some(block) = fetch_backfill_block(node, current).await else {
-            break;
-        };
-
+        let block = fetch_backfill_block(node, current).await?;
         current = block.header.parent_block;
         blocks.push(block);
     }
 
     blocks.reverse();
     debug!(target: TARGET, blocks = blocks.len(), "Canonical backfill prepared");
-    blocks
+    Ok(blocks)
 }
 
-/// [`fetch_block_deposit_events`] with the canonical-backfill error contract:
-/// `None` (after a warn) tells the caller to stop applying blocks.
-async fn backfill_deposit_events<Node>(
-    node: &Node,
-    block: &ApiBlock,
-    channel_id: ChannelId,
-) -> Option<DepositEvents>
-where
-    Node: adapter::Node + Sync,
-{
-    match fetch_block_deposit_events(node, block.header.id, &block.transactions, channel_id).await {
-        Ok(events) => Some(events),
-        Err(e) => {
-            warn!(
-                target: TARGET,
-                "Failed to fetch deposit events during canonical backfill: {e}"
-            );
-            None
-        }
-    }
-}
-
-/// Prepare each canonical-backfill block with its channel-note ops. Each needs
+/// Prepare each canonical-backfill block with its channel-note ops, and
+/// collect the deposits those blocks carry, in block order. Each block needs
 /// a deposit-events fetch, so this runs in the prepare phase, keeping apply
-/// await-free. Best-effort: on a fetch failure, stop and keep the prefix
-/// already prepared — the rest is retried on the next event.
-async fn prepare_backfill_note_ops<Node>(
+/// await-free; a failed fetch fails the event, like the live block's.
+async fn prepare_backfill_blocks<Node>(
     blocks: Vec<ApiBlock>,
     channel_id: ChannelId,
     node: &Node,
-) -> Vec<(ApiBlock, Vec<NoteOp>)>
+) -> Result<(Vec<(ApiBlock, Vec<NoteOp>)>, Vec<DepositInfo>), Error>
 where
     Node: adapter::Node + Sync,
 {
     let mut prepared = Vec::with_capacity(blocks.len());
+    let mut deposits = Vec::new();
     for block in blocks {
-        let Some(deposit_events) = backfill_deposit_events(node, &block, channel_id).await else {
-            break;
-        };
+        let deposit_events =
+            fetch_block_deposit_events(node, block.header.id, &block.transactions, channel_id)
+                .await?;
         let note_ops = note_ops_from_txs(
             &block.transactions,
             channel_id,
             &deposit_events,
             block.header.slot,
         );
+        deposits.extend(block_channel_deposits(
+            &block.transactions,
+            channel_id,
+            block.header.slot,
+            &deposit_events,
+        ));
         prepared.push((block, note_ops));
     }
-    prepared
+    Ok((prepared, deposits))
 }
 
-async fn fetch_backfill_block<Node>(node: &Node, block_id: HeaderId) -> Option<ApiBlock>
+async fn fetch_backfill_block<Node>(node: &Node, block_id: HeaderId) -> Result<ApiBlock, Error>
 where
     Node: adapter::Node + Sync,
 {
     match node.block(block_id).await {
-        Ok(Some(block)) => Some(block),
+        Ok(Some(block)) => Ok(block),
         Ok(None) => {
-            warn!(target: TARGET, ?block_id, "Block not found during canonical backfill");
-            None
+            error!(target: TARGET, ?block_id, "Block not found during canonical backfill");
+            Err(Error::Network(format!(
+                "block {block_id} not found during canonical backfill"
+            )))
         }
         Err(error) => {
-            warn!(target: TARGET, ?block_id, %error, "Failed to fetch block during canonical backfill");
-            None
+            error!(target: TARGET, ?block_id, %error, "Failed to fetch block during canonical backfill");
+            Err(Error::Network(format!(
+                "failed to fetch block {block_id} during canonical backfill: {error}"
+            )))
         }
     }
 }
@@ -969,10 +1015,28 @@ fn apply_backfilled_block(
 
     // Mirror inscriptions into pending before the safe-set build, matching
     // the live-block path in `handle_block_event`.
-    observe_channel_inscriptions(state, &channel_txs, &block.transactions);
+    mirror_channel_txs(state, &channel_txs, &block.transactions, channel_id);
 
+    let mirrorable = mirrorable_txs(&channel_txs, &block.transactions);
     // Use current state lib to avoid premature finalization
     state.process_block(block_id, parent_id, lib, our_txs, channel_txs, note_ops);
+    state.store_block_signed_txs(block_id, mirrorable);
+}
+
+/// The block's txs the mirror re-posts: every classified channel tx.
+fn mirrorable_txs(
+    classified: &[BlockChannelTx],
+    transactions: &[SignedOps<Unverified, StandardMode>],
+) -> Vec<SignedOps<Unverified, StandardMode>> {
+    let mirrorable: HashSet<TxHash> = classified
+        .iter()
+        .filter_map(BlockChannelTx::tx_hash)
+        .collect();
+    transactions
+        .iter()
+        .filter(|tx| mirrorable.contains(&tx.hash()))
+        .cloned()
+        .collect()
 }
 
 /// Classify a block's channel-touching txs in tx-then-op order: a `publish`
@@ -1108,7 +1172,7 @@ pub(super) fn classify_channel_tx(
         } else {
             BlockChannelTx::Custom {
                 tx: tx.clone(),
-                entries,
+                message_entries: entries,
                 config_entries,
             }
         },
@@ -1119,7 +1183,7 @@ pub(super) fn classify_channel_tx(
 /// config-only shape [`classify_channel_tx`] reports as
 /// [`BlockChannelTx::Config`]. Mirrors that rule so a shed config is typed the
 /// same way it was classified on chain.
-fn is_pure_config<Mode: VerificationMode>(
+pub(super) fn is_pure_config<Mode: VerificationMode>(
     tx: &SignedOps<Unverified, Mode>,
     channel_id: ChannelId,
 ) -> bool {
@@ -1172,11 +1236,12 @@ mod tests {
         mantle::{
             Note, NoteId, Op, Value,
             channel::{SlotTimeframe, SlotTimeout},
+            ledger::BoundedInputs,
             ops::{
                 OpProof,
                 channel::{
-                    channel_transfer::ChannelTransferOp,
-                    config::{ChannelConfigOp, Keys},
+                    VerifiedChannelKeys,
+                    config::ChannelConfigOp,
                     deposit::{DepositOp, Metadata},
                     inscribe::InscriptionOp,
                     withdraw::ChannelWithdrawOp,
@@ -1200,7 +1265,7 @@ mod tests {
     fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: Metadata) -> DepositOp {
         DepositOp {
             channel_id,
-            inputs: Inputs::new([NoteId::from(Fr::from(input_seed))]),
+            inputs: BoundedInputs::from(NoteId::from(Fr::from(input_seed))).into(),
             metadata,
         }
     }
@@ -1334,7 +1399,9 @@ mod tests {
             channel_id,
             parent: MsgId::root(),
             inscription: Inscription::new_unchecked(Vec::new()),
-            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+            signer: Ed25519Key::from_bytes(&[0; 32])
+                .public_key()
+                .into_unverified(),
         };
 
         let tx =
@@ -1387,14 +1454,19 @@ mod tests {
         let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
         assert_eq!(classified.len(), 1);
         assert!(
-            matches!(&classified[0], BlockChannelTx::Custom { entries, .. } if entries.len() == 1)
+            matches!(&classified[0], BlockChannelTx::Custom { message_entries, .. } if message_entries.len() == 1)
         );
 
         let genesis = header_id(0);
         let block = header_id(1);
         let mut state = TxState::new(genesis, MsgId::root());
         let old_lineage = state.channel_lineage(genesis);
-        observe_channel_inscriptions(&mut state, &classified, std::slice::from_ref(&tx));
+        mirror_channel_txs(
+            &mut state,
+            &classified,
+            std::slice::from_ref(&tx),
+            channel_id,
+        );
         state.process_block(
             block,
             genesis,
@@ -1405,11 +1477,11 @@ mod tests {
         );
 
         assert!(
-            !state.is_tracked(&tx_hash),
-            "custom tx is not mirrored for retry"
+            state.is_tracked(&tx_hash),
+            "custom tx is mirrored for retry"
         );
         let update = state
-            .detect_channel_update(&old_lineage, block)
+            .detect_channel_update(&old_lineage, block, &HashSet::new())
             .expect("update");
         assert_eq!(update.new_channel_tip, msg_id);
         assert_eq!(update.adopted.len(), 1);
@@ -1432,7 +1504,7 @@ mod tests {
     /// unchanged is a sound `PinDeposit`.
     #[test]
     fn inscribe_plus_identity_transfer_is_pin_deposit() {
-        use super::super::types::ChannelNote;
+        use crate::sequencer::types::ChannelNote;
 
         let channel_id = ChannelId::from([0; 32]);
         let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
@@ -1442,7 +1514,7 @@ mod tests {
         let msg_id = inscribe.id();
         let transfer = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([input_id]),
+            inputs: BoundedInputs::from(input_id).into(),
             outputs: Outputs::new([Note::new(50, pk)]),
         };
         let tx = unverified_tx_with_ops(vec![
@@ -1471,7 +1543,12 @@ mod tests {
         );
         assert!(matches!(&classified[0], BlockChannelTx::PinDeposit(_)));
 
-        observe_channel_inscriptions(&mut state, &classified, std::slice::from_ref(&tx));
+        mirror_channel_txs(
+            &mut state,
+            &classified,
+            std::slice::from_ref(&tx),
+            channel_id,
+        );
         state.process_block(
             block,
             genesis,
@@ -1482,13 +1559,13 @@ mod tests {
         );
 
         let update = state
-            .detect_channel_update(&old_lineage, block)
+            .detect_channel_update(&old_lineage, block, &HashSet::new())
             .expect("update");
         assert_eq!(update.new_channel_tip, msg_id);
         assert_eq!(update.adopted.len(), 1);
         match &update.adopted[0] {
             ChannelUpdateTx::PinDeposit(a) => {
-                assert_eq!(a.consumed_notes, Inputs::new([input_id]));
+                assert_eq!(a.consumed_notes, BoundedInputs::from(input_id).into());
             }
             other => panic!("expected PinDeposit, got {other:?}"),
         }
@@ -1499,7 +1576,7 @@ mod tests {
     /// via `adopted`, and it is not mirrored for retry.
     #[test]
     fn inscribe_plus_non_identity_transfer_is_custom() {
-        use super::super::types::ChannelNote;
+        use crate::sequencer::types::ChannelNote;
 
         let channel_id = ChannelId::from([0; 32]);
         let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
@@ -1510,7 +1587,7 @@ mod tests {
         let msg_id = inscribe.id();
         let transfer = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([input_id]),
+            inputs: BoundedInputs::from(input_id).into(),
             outputs: Outputs::new([Note::new(50, rekeyed)]),
         };
         let tx = unverified_tx_with_ops(vec![
@@ -1538,10 +1615,15 @@ mod tests {
             &state,
         );
         assert!(
-            matches!(&classified[0], BlockChannelTx::Custom { entries, .. } if entries.len() == 1)
+            matches!(&classified[0], BlockChannelTx::Custom { message_entries, .. } if message_entries.len() == 1)
         );
 
-        observe_channel_inscriptions(&mut state, &classified, std::slice::from_ref(&tx));
+        mirror_channel_txs(
+            &mut state,
+            &classified,
+            std::slice::from_ref(&tx),
+            channel_id,
+        );
         state.process_block(
             block,
             genesis,
@@ -1552,11 +1634,11 @@ mod tests {
         );
 
         assert!(
-            !state.is_tracked(&tx_hash),
-            "non-identity bundle is not mirrored for retry"
+            state.is_tracked(&tx_hash),
+            "non-identity bundle is mirrored for retry"
         );
         let update = state
-            .detect_channel_update(&old_lineage, block)
+            .detect_channel_update(&old_lineage, block, &HashSet::new())
             .expect("update");
         assert_eq!(update.new_channel_tip, msg_id);
         assert_eq!(update.adopted.len(), 1);
@@ -1668,14 +1750,19 @@ mod tests {
         let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
         assert_eq!(classified.len(), 1);
         assert!(
-            matches!(&classified[0], BlockChannelTx::Custom { entries, .. } if entries.len() == 2)
+            matches!(&classified[0], BlockChannelTx::Custom { message_entries, .. } if message_entries.len() == 2)
         );
 
         let genesis = header_id(0);
         let block = header_id(1);
         let mut state = TxState::new(genesis, MsgId::root());
         let old_lineage = state.channel_lineage(genesis);
-        observe_channel_inscriptions(&mut state, &classified, std::slice::from_ref(&tx));
+        mirror_channel_txs(
+            &mut state,
+            &classified,
+            std::slice::from_ref(&tx),
+            channel_id,
+        );
         state.process_block(
             block,
             genesis,
@@ -1686,11 +1773,11 @@ mod tests {
         );
 
         assert!(
-            !state.is_tracked(&tx_hash),
-            "multi-inscribe is not mirrored for retry"
+            state.is_tracked(&tx_hash),
+            "multi-inscribe is mirrored for retry"
         );
         let update = state
-            .detect_channel_update(&old_lineage, block)
+            .detect_channel_update(&old_lineage, block, &HashSet::new())
             .expect("update");
         assert_eq!(update.new_channel_tip, second_msg, "tip stays ledger-true");
         // The tx is reported once, whole; its payloads are recoverable via
@@ -1722,7 +1809,7 @@ mod tests {
         let withdrawn_note = NoteId::from(Fr::from(3u64));
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([withdrawn_note]),
+            inputs: BoundedInputs::from(withdrawn_note).into(),
         };
         let tx = unverified_tx_with_ops(vec![
             Op::ChannelInscribe(inscribe),
@@ -1737,7 +1824,12 @@ mod tests {
         let block = header_id(1);
         let mut state = TxState::new(genesis, MsgId::root());
         let old_lineage = state.channel_lineage(genesis);
-        observe_channel_inscriptions(&mut state, &classified, std::slice::from_ref(&tx));
+        mirror_channel_txs(
+            &mut state,
+            &classified,
+            std::slice::from_ref(&tx),
+            channel_id,
+        );
         state.process_block(
             block,
             genesis,
@@ -1748,14 +1840,17 @@ mod tests {
         );
 
         let update = state
-            .detect_channel_update(&old_lineage, block)
+            .detect_channel_update(&old_lineage, block, &HashSet::new())
             .expect("update");
         assert_eq!(update.adopted.len(), 1);
         match &update.adopted[0] {
             ChannelUpdateTx::AtomicWithdraw(a) => {
                 assert_eq!(a.inscription.this_msg, msg_id);
                 assert_eq!(a.withdraws.len(), 1);
-                assert_eq!(a.withdraws[0].op.inputs, Inputs::new([withdrawn_note]));
+                assert_eq!(
+                    a.withdraws[0].op.inputs,
+                    BoundedInputs::from(withdrawn_note).into()
+                );
             }
             other => panic!("expected AtomicWithdraw, got {other:?}"),
         }
@@ -1771,11 +1866,11 @@ mod tests {
         let other_channel = ChannelId::from([9; 32]);
         let withdraw_for_us = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([NoteId::from(Fr::from(7u64))]),
+            inputs: BoundedInputs::from(NoteId::from(Fr::from(7u64))).into(),
         };
         let withdraw_other = ChannelWithdrawOp {
             channel_id: other_channel,
-            inputs: Inputs::new([NoteId::from(Fr::from(0u64))]),
+            inputs: BoundedInputs::from(NoteId::from(Fr::from(0u64))).into(),
         };
 
         let tx = unverified_tx_with_ops(vec![
@@ -1799,7 +1894,10 @@ mod tests {
             FinalizedOp::Withdraw(w) => {
                 assert_eq!(w.tx_hash, tx_hash);
                 assert_eq!(w.op.channel_id, channel_id);
-                assert_eq!(w.op.inputs, Inputs::new([NoteId::from(Fr::from(7u64))]));
+                assert_eq!(
+                    w.op.inputs,
+                    BoundedInputs::from(NoteId::from(Fr::from(7u64))).into()
+                );
             }
             other => panic!("expected Withdraw, got {other:?}"),
         }
@@ -1810,7 +1908,7 @@ mod tests {
         ChannelConfigOp {
             channel: channel_id,
             parent,
-            keys: Keys::try_from(vec![signer]).unwrap(),
+            keys: VerifiedChannelKeys::try_from(vec![signer]).unwrap(),
             posting_timeframe: SlotTimeframe::from(0u32),
             posting_timeout: SlotTimeout::from(0u32),
             configuration_threshold: 1,
@@ -1823,7 +1921,9 @@ mod tests {
             channel_id: [0u8; 32].into(),
             inscription: Inscription::new_unchecked(vec![seed]),
             parent: MsgId::root(),
-            signer: Ed25519Key::from_bytes(&[seed; 32]).public_key(),
+            signer: Ed25519Key::from_bytes(&[seed; 32])
+                .public_key()
+                .into_unverified(),
         })]);
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(Ed25519Signature::zero())]);
         SignedOps::from_parts(mantle_tx, op_proofs)
@@ -1873,22 +1973,26 @@ mod tests {
         // Pending chained from I1 — its position is taken by the mined I2.
         let pending_stale = dummy_pending_tx(1);
         let pending_stale_hash = pending_stale.hash();
-        state.submit_inscription(
-            pending_stale,
-            i1_id,
-            MsgId::from([99u8; 32]),
-            Inscription::new_unchecked(b"chained-from-i1".to_vec()),
-        );
+        state
+            .submit_inscription(
+                pending_stale,
+                i1_id,
+                MsgId::from([99u8; 32]),
+                Inscription::new_unchecked(b"chained-from-i1".to_vec()),
+            )
+            .unwrap();
 
         // Pending chained from the block tip — should remain on-branch.
         let pending_live = dummy_pending_tx(2);
         let pending_live_hash = pending_live.hash();
-        state.submit_inscription(
-            pending_live,
-            i2_id,
-            MsgId::from([88u8; 32]),
-            Inscription::new_unchecked(b"chained-from-i2".to_vec()),
-        );
+        state
+            .submit_inscription(
+                pending_live,
+                i2_id,
+                MsgId::from([88u8; 32]),
+                Inscription::new_unchecked(b"chained-from-i2".to_vec()),
+            )
+            .unwrap();
 
         let extracted = run_with_timeout(std::time::Duration::from_secs(2), move || {
             classify_channel_txs(std::slice::from_ref(&tx), channel_id)
@@ -1948,6 +2052,197 @@ mod tests {
             }
             other => panic!("expected Config, got {other:?}"),
         }
+    }
+
+    /// A deposit mined in a block the stream skipped is observed when the
+    /// canonical backfill fetches that block, ahead of the live block's own.
+    #[tokio::test]
+    async fn canonical_backfill_gap_deposits_are_observed() {
+        // G(0) <- B1 (live) <- B2 (deposit D2, missed) <- B3 (deposit D3, live)
+        let ch = ChannelId::from([0u8; 32]);
+        let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
+        let deposit = |n: u32| {
+            let tag = u8::try_from(n).unwrap();
+            let op = deposit_op(ch, n, Metadata::try_from(vec![tag]).unwrap());
+            let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
+            let note = DepositNote {
+                note_id: NoteId::from(Fr::from(1000 + u64::from(n))),
+                value: 50,
+                pk,
+            };
+            let event = deposit_event(&tx, &op, 50, vec![note]);
+            (op.op_id(), tx, event)
+        };
+        let (d2, d2_tx, d2_event) = deposit(2);
+        let (d3, d3_tx, d3_event) = deposit(3);
+        let b1 = api_block(1, 0, 1, Vec::new());
+        let b2 = api_block(2, 1, 2, vec![d2_tx]);
+        let b3 = api_block(3, 2, 3, vec![d3_tx]);
+        let node = MockNode {
+            blocks: vec![b2],
+            events: HashMap::from([(header_id(2), d2_event), (header_id(3), d3_event)]),
+            ..MockNode::default()
+        };
+
+        let mut state = None;
+        let r = drive_with(&node, &mut state, ch, &[live_event(&b1), live_event(&b3)]).await;
+
+        let observed: Vec<_> = r[1].result.deposits.iter().map(|d| d.op_id).collect();
+        assert_eq!(observed, vec![d2, d3]);
+    }
+
+    /// A deposit-events fetch failing on a later gap block, after an earlier
+    /// gap block was prepared, fails the event with nothing applied: no
+    /// partial deposits, no partial blocks, tip unchanged. The retry reports
+    /// every gap block's deposits and the live block's, in order.
+    #[tokio::test]
+    async fn deposit_events_failure_on_a_later_gap_block_applies_nothing() {
+        // G(0) <- B1 (live) <- B2 (D2, missed) <- B3 (D3, missed) <- B4 (D4, live)
+        let ch = ChannelId::from([0u8; 32]);
+        let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
+        let deposit = |n: u32| {
+            let tag = u8::try_from(n).unwrap();
+            let op = deposit_op(ch, n, Metadata::try_from(vec![tag]).unwrap());
+            let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
+            let note = DepositNote {
+                note_id: NoteId::from(Fr::from(1000 + u64::from(n))),
+                value: 50,
+                pk,
+            };
+            let event = deposit_event(&tx, &op, 50, vec![note]);
+            (op.op_id(), tx, event)
+        };
+        let (d2, d2_tx, d2_event) = deposit(2);
+        let (d3, d3_tx, d3_event) = deposit(3);
+        let (d4, d4_tx, d4_event) = deposit(4);
+        let b1 = api_block(1, 0, 1, Vec::new());
+        let b2 = api_block(2, 1, 2, vec![d2_tx]);
+        let b3 = api_block(3, 2, 3, vec![d3_tx]);
+        let b4 = api_block(4, 3, 4, vec![d4_tx]);
+        let without_b3_events = MockNode {
+            blocks: vec![b2.clone(), b3.clone()],
+            events: HashMap::from([
+                (header_id(2), d2_event.clone()),
+                (header_id(4), d4_event.clone()),
+            ]),
+            ..MockNode::default()
+        };
+        let with_b3_events = MockNode {
+            blocks: vec![b2, b3],
+            events: HashMap::from([
+                (header_id(2), d2_event),
+                (header_id(3), d3_event),
+                (header_id(4), d4_event),
+            ]),
+            ..MockNode::default()
+        };
+        let mut state = None;
+        let mut current_tip = None;
+        let mut lib_slot = Slot::genesis();
+
+        handle_block_event(
+            &live_event(&b1),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            ch,
+            &without_b3_events,
+        )
+        .await
+        .expect("B1 processes");
+        let failed = handle_block_event(
+            &live_event(&b4),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            ch,
+            &without_b3_events,
+        )
+        .await;
+        assert!(
+            matches!(failed, Err(Error::Network(_))),
+            "B3's deposit events cannot be served"
+        );
+        assert_eq!(current_tip, Some(header_id(1)), "tip unchanged");
+        assert!(
+            !state.as_ref().unwrap().has_block(&header_id(2)),
+            "the gap block prepared before the failure is not applied either"
+        );
+        let retried = handle_block_event(
+            &live_event(&b4),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            ch,
+            &with_b3_events,
+        )
+        .await
+        .expect("B4 processes once B3's events are served");
+
+        let observed: Vec<_> = retried.deposits.iter().map(|d| d.op_id).collect();
+        assert_eq!(observed, vec![d2, d3, d4]);
+    }
+
+    /// A gap block the node cannot serve fails the event and leaves state
+    /// untouched, so the re-delivered event backfills the gap once the block
+    /// is available. Applying the live block over the hole instead would cut
+    /// every branch walk short of LIB and never revisit the gap.
+    #[tokio::test]
+    async fn unfetchable_gap_block_fails_the_event_until_it_is_served() {
+        // G(0) <- B1 (live) <- B2 (Y, missed) <- B3 (live)
+        let ch = ChannelId::from([0u8; 32]);
+        let (a_id, a_tx) = ins(ch, MsgId::root(), b"a");
+        let (y_id, y_tx) = ins(ch, a_id, b"y");
+        let b1 = api_block(1, 0, 1, vec![a_tx]);
+        let b2 = api_block(2, 1, 2, vec![y_tx]);
+        let b3 = api_block(3, 2, 3, Vec::new());
+        let mut state = None;
+        let mut current_tip = None;
+        let mut lib_slot = Slot::genesis();
+        let without_b2 = MockNode::default();
+        let with_b2 = MockNode {
+            blocks: vec![b2],
+            ..MockNode::default()
+        };
+
+        handle_block_event(
+            &live_event(&b1),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            ch,
+            &without_b2,
+        )
+        .await
+        .expect("B1 processes");
+        let failed = handle_block_event(
+            &live_event(&b3),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            ch,
+            &without_b2,
+        )
+        .await;
+        assert!(
+            matches!(failed, Err(Error::Network(_))),
+            "B2 cannot be served"
+        );
+        assert_eq!(current_tip, Some(header_id(1)), "state untouched");
+        let retried = handle_block_event(
+            &live_event(&b3),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            ch,
+            &with_b2,
+        )
+        .await
+        .expect("B3 processes once B2 is served");
+
+        assert_eq!(current_tip, Some(header_id(3)));
+        let u = retried.channel_update.expect("Y adopted from the gap");
+        assert_eq!(msg_ids(&u.adopted), vec![y_id]);
     }
 
     #[tokio::test]
@@ -2037,6 +2332,959 @@ mod tests {
              got adopted={:?}, orphaned={:?}",
             update.adopted,
             update.orphaned,
+        );
+    }
+
+    // ---- channel-view scenarios: chain diagram + what the consumer sees ----
+
+    /// An inscription tx: `(msg id, tx)`.
+    fn ins(
+        channel_id: ChannelId,
+        parent: MsgId,
+        payload: &[u8],
+    ) -> (MsgId, SignedOps<Unverified, StandardMode>) {
+        let op = inscribe_op(channel_id, parent, payload);
+        let id = op.id();
+        (id, unverified_tx_with_ops(vec![Op::ChannelInscribe(op)]))
+    }
+
+    /// A fork block event: `block` processed, tip unchanged at `tip`.
+    fn fork_event(block: &ApiBlock, tip: &ApiBlock) -> ProcessedBlockEvent {
+        ProcessedBlockEvent {
+            block: block.clone(),
+            tip: tip.header.id,
+            tip_slot: tip.header.slot,
+            lib: header_id(0),
+            lib_slot: Slot::genesis(),
+        }
+    }
+
+    /// One driven event: the handler's result and what the sheds drained.
+    struct Driven {
+        result: BlockEventResult,
+        shed: Vec<PendingTx>,
+        shed_other: Vec<SignedOps<Unverified, StandardMode>>,
+    }
+
+    /// Run `events` as the actor would: handle each, then the shed passes.
+    async fn drive(
+        state: &mut Option<TxState>,
+        channel_id: ChannelId,
+        events: &[ProcessedBlockEvent],
+    ) -> Vec<Driven> {
+        drive_with(&MockNode::default(), state, channel_id, events).await
+    }
+
+    async fn drive_with(
+        node: &MockNode,
+        state: &mut Option<TxState>,
+        channel_id: ChannelId,
+        events: &[ProcessedBlockEvent],
+    ) -> Vec<Driven> {
+        let mut current_tip = None;
+        let mut lib_slot = Slot::genesis();
+        let mut driven = Vec::with_capacity(events.len());
+        for event in events {
+            let result = handle_block_event(
+                event,
+                state,
+                &mut current_tip,
+                &mut lib_slot,
+                channel_id,
+                node,
+            )
+            .await
+            .unwrap();
+            let s = state.as_mut().unwrap();
+            let tip = current_tip.unwrap();
+            let mut shed = s.shed_bundles_with_missing_inputs(tip, channel_id);
+            shed.extend(s.shed_off_branch_pending(tip));
+            let shed_other = s.shed_off_branch_pending_other(tip);
+            driven.push(Driven {
+                result,
+                shed,
+                shed_other,
+            });
+        }
+        driven
+    }
+
+    fn msg_ids(txs: &[ChannelUpdateTx]) -> Vec<MsgId> {
+        txs.iter()
+            .filter_map(|t| t.inscription().map(|i| i.this_msg))
+            .collect()
+    }
+
+    /// LEZ "missing 12375" (2026-09-13): a fork block's inscription is not in
+    /// the view until its branch is canonical; then it is adopted.
+    #[tokio::test]
+    async fn fork_block_inscription_is_adopted_on_the_switch() {
+        // G <- F(a) canonical; G <- C(a, y) fork; C <- E empty: C wins.
+        let ch = ChannelId::from([0u8; 32]);
+        let (a_id, a_tx) = ins(ch, MsgId::root(), b"a");
+        let (y_id, y_tx) = ins(ch, a_id, b"y");
+        let bf = api_block(1, 0, 1, vec![a_tx.clone()]);
+        let bc = api_block(2, 0, 2, vec![a_tx, y_tx]);
+        let be = api_block(3, 2, 3, Vec::new());
+
+        let mut state = None;
+        let r = drive(
+            &mut state,
+            ch,
+            &[live_event(&bf), fork_event(&bc, &bf), live_event(&be)],
+        )
+        .await;
+
+        assert!(
+            r[0].result.channel_update.is_some(),
+            "a adopted on the first event"
+        );
+        assert!(
+            r[1].result.channel_update.is_none(),
+            "fork block: not in the view"
+        );
+        let u = r[2]
+            .result
+            .channel_update
+            .as_ref()
+            .expect("y canonical on the switch");
+        assert_eq!(msg_ids(&u.adopted), vec![y_id]);
+        assert!(u.orphaned.is_empty());
+        assert_eq!(u.new_channel_tip, y_id);
+        // The re-mirrored y is mined on the new branch: the shed must keep it,
+        // and it must not be offered for resubmission.
+        assert!(
+            r[2].shed.is_empty(),
+            "re-mirrored fork tx shed as off-branch: {:?}",
+            r[2].shed
+        );
+        let s = state.as_ref().unwrap();
+        assert_eq!(s.pending_publish_count(), 2, "a and y mirrored");
+        assert!(
+            s.pending_txs(be.header.id).is_empty(),
+            "nothing to resubmit: both are safe at the tip"
+        );
+    }
+
+    /// Pending suffix vs. forks: a bare un-mine keeps it, a fork competitor
+    /// changes nothing, the fork winning replaces it in one report.
+    #[tokio::test]
+    async fn pending_suffix_survives_forks_until_a_competitor_is_canonical() {
+        // G <- B1(i1, i2) <- B2(i3, i4); B1 <- B3 empty (tip: i3, i4 pending);
+        // B1 <- B4(i3') fork; B4 <- B5(i4') canonical: B4's branch wins.
+        let ch = ChannelId::from([0u8; 32]);
+        let (i1_id, i1_tx) = ins(ch, MsgId::root(), b"i1");
+        let (i2_id, i2_tx) = ins(ch, i1_id, b"i2");
+        let (i3_id, i3_tx) = ins(ch, i2_id, b"i3");
+        let (i4_id, i4_tx) = ins(ch, i3_id, b"i4");
+        let (i3a_id, i3a_tx) = ins(ch, i2_id, b"i3'");
+        let (i4a_id, i4a_tx) = ins(ch, i3a_id, b"i4'");
+        let (i3_hash, i4_hash) = (i3_tx.hash(), i4_tx.hash());
+        let b1 = api_block(1, 0, 1, vec![i1_tx, i2_tx]);
+        let b2 = api_block(2, 1, 2, vec![i3_tx, i4_tx]);
+        let b3 = api_block(3, 1, 3, Vec::new());
+        let b4 = api_block(4, 1, 4, vec![i3a_tx]);
+        let b5 = api_block(5, 4, 5, vec![i4a_tx]);
+
+        let mut state = None;
+        let r = drive(
+            &mut state,
+            ch,
+            &[
+                live_event(&b1),
+                live_event(&b2),
+                live_event(&b3),
+                fork_event(&b4, &b3),
+                live_event(&b5),
+            ],
+        )
+        .await;
+
+        assert!(
+            r[2].result.channel_update.is_none(),
+            "bare un-mine keeps i3, i4"
+        );
+        assert!(
+            r[3].result.channel_update.is_none(),
+            "fork competitor: nothing decided"
+        );
+        let u = r[4].result.channel_update.as_ref().expect("the switch");
+        assert_eq!(msg_ids(&u.orphaned), vec![i3_id, i4_id]);
+        assert_eq!(msg_ids(&u.adopted), vec![i3a_id, i4a_id]);
+        assert_eq!(u.new_channel_tip, i4a_id);
+        // Only the displaced suffix is shed; the re-mirrored i3', i4' read as
+        // mined on the new branch.
+        assert!(r[2].shed.is_empty() && r[3].shed.is_empty());
+        let shed: Vec<TxHash> = r[4].shed.iter().map(PendingTx::tx_hash).collect();
+        assert_eq!(shed, vec![i3_hash, i4_hash]);
+        let s = state.as_ref().unwrap();
+        assert_eq!(s.pending_publish_count(), 4, "i1, i2, i3', i4' mirrored");
+        assert_eq!(s.pending_txs(b5.header.id), []);
+    }
+
+    /// Our opaque (custom-shaped) pending tx is part of the view like any
+    /// pending inscription: a bare un-mine keeps it, a mined competitor
+    /// displaces it, reported whole as `Custom`.
+    #[tokio::test]
+    async fn opaque_pending_tx_stays_in_the_view_across_a_bare_unmine() {
+        // G <- B0 empty; B0 <- B1(custom [x1, x2]); B0 <- B2 empty (tip);
+        // B2 <- B3(y, parent root).
+        let ch = ChannelId::from([0u8; 32]);
+        let x1 = inscribe_op(ch, MsgId::root(), b"x1");
+        let x2 = inscribe_op(ch, x1.id(), b"x2");
+        let (x1_id, x2_id) = (x1.id(), x2.id());
+        let custom = unverified_tx_with_ops(vec![Op::ChannelInscribe(x1), Op::ChannelInscribe(x2)]);
+        let custom_hash = custom.hash();
+        let (y_id, y_tx) = ins(ch, MsgId::root(), b"y");
+        let b0 = api_block(1, 0, 1, Vec::new());
+        let b1 = api_block(2, 1, 2, vec![custom.clone()]);
+        let b2 = api_block(3, 1, 3, Vec::new());
+        let b3 = api_block(4, 3, 4, vec![y_tx]);
+
+        let mut tx_state = TxState::new(header_id(0), MsgId::root());
+        tx_state.submit_other(custom, ch).unwrap();
+        let mut state = Some(tx_state);
+        let r = drive(
+            &mut state,
+            ch,
+            &[
+                live_event(&b0),
+                live_event(&b1),
+                live_event(&b2),
+                live_event(&b3),
+            ],
+        )
+        .await;
+
+        assert!(
+            r[1].result
+                .channel_update
+                .as_ref()
+                .is_none_or(|u| u.adopted.is_empty() && u.orphaned.is_empty()),
+            "own pending landing is not a view change"
+        );
+        assert!(
+            r[2].result.channel_update.is_none(),
+            "bare un-mine keeps it"
+        );
+        let u = r[3].result.channel_update.as_ref().expect("y displaced it");
+        let [ChannelUpdateTx::Custom(orphaned_tx)] = &u.orphaned[..] else {
+            panic!("one Custom orphan, got {:?}", u.orphaned);
+        };
+        let orphaned: Vec<MsgId> = channel_inscriptions(orphaned_tx, ch)
+            .iter()
+            .map(|i| i.this_msg)
+            .collect();
+        assert_eq!(orphaned, vec![x1_id, x2_id]);
+        assert_eq!(msg_ids(&u.adopted), vec![y_id]);
+        assert!(r[1].shed_other.is_empty() && r[2].shed_other.is_empty());
+        let shed: Vec<TxHash> = r[3].shed_other.iter().map(SignedOps::hash).collect();
+        assert_eq!(shed, vec![custom_hash]);
+    }
+
+    /// A deposit re-created as `recreated`, our identity pin bundle spending it
+    /// (pending, own), and a node serving the deposit event for block 1.
+    struct PinFixture {
+        dep_tx: SignedOps<Unverified, StandardMode>,
+        pin_tx: SignedOps<Unverified, StandardMode>,
+        pin_id: MsgId,
+        recreated: NoteId,
+        node: MockNode,
+        state: TxState,
+    }
+
+    fn pin_fixture(ch: ChannelId) -> PinFixture {
+        let recreated = NoteId::from(Fr::from(1010u64));
+        let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
+        let dep = deposit_op(ch, 1, Metadata::try_from(b"d".to_vec()).unwrap());
+        let dep_tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(dep.clone())]);
+        let pin_op = inscribe_op(ch, MsgId::root(), b"pin");
+        let pin_id = pin_op.id();
+        let pin_tx = unverified_tx_with_ops(vec![
+            Op::ChannelInscribe(pin_op.clone()),
+            Op::ChannelTransfer(ChannelTransferOp {
+                channel_id: ch,
+                inputs: BoundedInputs::from(recreated).into(),
+                outputs: Outputs::new([Note::new(50, pk)]),
+            }),
+        ]);
+        let note = DepositNote {
+            note_id: recreated,
+            value: 50,
+            pk,
+        };
+        let node = MockNode {
+            events: HashMap::from([(header_id(1), deposit_event(&dep_tx, &dep, 50, vec![note]))]),
+            ..MockNode::default()
+        };
+        let mut state = TxState::new(header_id(0), MsgId::root());
+        state
+            .submit_pin_deposit(
+                pin_tx.clone(),
+                MsgId::root(),
+                pin_id,
+                pin_op.inscription,
+                BoundedInputs::from(recreated).into(),
+            )
+            .unwrap();
+        PinFixture {
+            dep_tx,
+            pin_tx,
+            pin_id,
+            recreated,
+            node,
+            state,
+        }
+    }
+
+    /// A reorg dropping the deposit with the pin leaves the pin unlandable:
+    /// shed it and its pending child, parent first.
+    #[tokio::test]
+    async fn bundle_whose_inputs_left_the_branch_is_shed_with_its_children() {
+        // G <- B1(deposit, pin) canonical; G <- B2 empty sibling: B2 wins.
+        let ch = ChannelId::from([0u8; 32]);
+        let f = pin_fixture(ch);
+        let (x_id, x_tx) = ins(ch, f.pin_id, b"x");
+        let (pin_hash, x_hash) = (f.pin_tx.hash(), x_tx.hash());
+        let b1 = api_block(1, 0, 1, vec![f.dep_tx.clone(), f.pin_tx.clone()]);
+        let b2 = api_block(2, 0, 2, Vec::new());
+
+        let mut state = f.state;
+        state
+            .submit_inscription(
+                x_tx,
+                f.pin_id,
+                x_id,
+                Inscription::new_unchecked(b"x".to_vec()),
+            )
+            .unwrap();
+        let mut state = Some(state);
+        let r = drive_with(&f.node, &mut state, ch, &[live_event(&b1), live_event(&b2)]).await;
+
+        assert!(r[0].shed.is_empty());
+        let shed: Vec<TxHash> = r[1].shed.iter().map(PendingTx::tx_hash).collect();
+        assert_eq!(shed, vec![pin_hash, x_hash], "pin first, then its child");
+        assert!(matches!(r[1].shed[0], PendingTx::PinDeposit(_)));
+        assert!(matches!(r[1].shed[1], PendingTx::Inscription(_)));
+        assert_eq!(state.as_ref().unwrap().pending_publish_count(), 0);
+    }
+
+    /// A custom tx (two chained inscriptions): `(last msg id, tx)`.
+    fn custom(
+        channel_id: ChannelId,
+        parent: MsgId,
+        payload: &[u8],
+    ) -> (MsgId, SignedOps<Unverified, StandardMode>) {
+        let first = inscribe_op(channel_id, parent, payload);
+        let second = inscribe_op(channel_id, first.id(), payload);
+        let id = second.id();
+        let ops = vec![Op::ChannelInscribe(first), Op::ChannelInscribe(second)];
+        (id, unverified_tx_with_ops(ops))
+    }
+
+    /// A custom tx is mirrored like any channel tx: a bare un-mine keeps it
+    /// in the view, silent; a competitor on its parent displaces it and it
+    /// is reported orphaned.
+    #[tokio::test]
+    async fn foreign_custom_tx_is_kept_through_un_mine_and_orphaned_by_a_competitor() {
+        // G <- A(c) tip; G <- X, X <- Y forks; Y <- Z tip: A un-mined bare;
+        // Z <- R(i') tip: i' takes the parent c chained on.
+        let ch = ChannelId::from([0u8; 32]);
+        let (c_id, c_tx) = custom(ch, MsgId::root(), b"c");
+        let (i_id, i_tx) = ins(ch, MsgId::root(), b"i'");
+        let (c_hash, i_hash) = (c_tx.hash(), i_tx.hash());
+        let ba = api_block(1, 0, 1, vec![c_tx]);
+        let bx = api_block(2, 0, 2, Vec::new());
+        let by = api_block(3, 2, 3, Vec::new());
+        let bz = api_block(4, 3, 4, Vec::new());
+        let br = api_block(5, 4, 5, vec![i_tx]);
+
+        let mut state = None;
+        let r = drive(
+            &mut state,
+            ch,
+            &[
+                live_event(&ba),
+                fork_event(&bx, &ba),
+                fork_event(&by, &ba),
+                live_event(&bz),
+                live_event(&br),
+            ],
+        )
+        .await;
+
+        let u = r[0].result.channel_update.as_ref().expect("c is adopted");
+        assert!(
+            matches!(u.adopted.as_slice(), [ChannelUpdateTx::Custom(tx)] if tx.hash() == c_hash)
+        );
+        assert_eq!(u.new_channel_tip, c_id);
+        assert!(
+            r[3].result.channel_update.is_none(),
+            "bare un-mine is silent"
+        );
+        assert_eq!(r[3].shed_other, []);
+        let u = r[4].result.channel_update.as_ref().expect("i' wins");
+        let orphaned: Vec<TxHash> = u.orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
+        let adopted: Vec<TxHash> = u.adopted.iter().map(ChannelUpdateTx::tx_hash).collect();
+        assert_eq!(orphaned, vec![c_hash]);
+        assert_eq!(adopted, vec![i_hash]);
+        assert_eq!(u.new_channel_tip, i_id);
+        let shed: Vec<TxHash> = r[4].shed_other.iter().map(SignedOps::hash).collect();
+        assert_eq!(shed, vec![c_hash]);
+    }
+
+    /// A config is reported like any channel tx: adopted when mined, kept
+    /// silently through a bare un-mine, orphaned when a rival supersedes it.
+    #[tokio::test]
+    async fn foreign_config_is_adopted_kept_through_un_mine_and_orphaned_by_a_rival() {
+        // G <- A(cfg) tip; G <- X, X <- Y forks; Y <- Z tip: A un-mined bare;
+        // Z <- R(cfg') tip: cfg' takes the config slot cfg chained on.
+        let ch = ChannelId::from([0u8; 32]);
+        let cfg =
+            unverified_tx_with_ops(vec![Op::ChannelConfig(channel_config(ch, MsgId::root()))]);
+        let mut rival_op = channel_config(ch, MsgId::root());
+        rival_op.posting_timeframe = SlotTimeframe::from(1u32);
+        let rival = unverified_tx_with_ops(vec![Op::ChannelConfig(rival_op)]);
+        let (cfg_hash, rival_hash) = (cfg.hash(), rival.hash());
+        let ba = api_block(1, 0, 1, vec![cfg]);
+        let bx = api_block(2, 0, 2, Vec::new());
+        let by = api_block(3, 2, 3, Vec::new());
+        let bz = api_block(4, 3, 4, Vec::new());
+        let br = api_block(5, 4, 5, vec![rival]);
+
+        let mut state = None;
+        let r = drive(
+            &mut state,
+            ch,
+            &[
+                live_event(&ba),
+                fork_event(&bx, &ba),
+                fork_event(&by, &ba),
+                live_event(&bz),
+                live_event(&br),
+            ],
+        )
+        .await;
+
+        let u = r[0].result.channel_update.as_ref().expect("cfg is adopted");
+        assert!(u.orphaned.is_empty());
+        assert!(
+            matches!(u.adopted.as_slice(), [ChannelUpdateTx::Config(tx)] if tx.hash() == cfg_hash)
+        );
+        assert_eq!(
+            u.new_channel_tip,
+            MsgId::root(),
+            "configs never move the message tip"
+        );
+        assert!(
+            r[3].result.channel_update.is_none(),
+            "bare un-mine is silent"
+        );
+        let u = r[4]
+            .result
+            .channel_update
+            .as_ref()
+            .expect("cfg' supersedes cfg");
+        let orphaned: Vec<TxHash> = u.orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
+        let adopted: Vec<TxHash> = u.adopted.iter().map(ChannelUpdateTx::tx_hash).collect();
+        assert_eq!(
+            orphaned,
+            vec![cfg_hash],
+            "still in the view until the rival"
+        );
+        assert_eq!(adopted, vec![rival_hash]);
+        // The rival takes the config position: cfg is displaced with it.
+        let shed: Vec<TxHash> = r[4].shed_other.iter().map(SignedOps::hash).collect();
+        assert_eq!(shed, vec![cfg_hash]);
+        assert!(!state.as_ref().unwrap().is_tracked(&cfg_hash));
+    }
+
+    /// After a checkpoint restore the first event's view carries the restored
+    /// pending publish, which `adopted` never echoes.
+    #[tokio::test]
+    async fn first_event_after_restore_keeps_restored_pending_in_the_prefix() {
+        let ch = ChannelId::from([0u8; 32]);
+        let (p_id, p_tx) = ins(ch, MsgId::root(), b"p");
+        let p_hash = p_tx.hash();
+        let mut state = TxState::new(header_id(0), MsgId::root());
+        state
+            .submit_inscription(
+                p_tx,
+                MsgId::root(),
+                p_id,
+                Inscription::new_unchecked(b"p".to_vec()),
+            )
+            .unwrap();
+        let b1 = api_block(1, 0, 1, Vec::new());
+
+        let r = drive(&mut Some(state), ch, &[live_event(&b1)]).await;
+
+        let prefix: Vec<TxHash> = r[0]
+            .result
+            .common_prefix
+            .iter()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect();
+        assert_eq!(prefix, vec![p_hash]);
+        assert!(
+            r[0].result
+                .channel_update
+                .as_ref()
+                .is_none_or(|u| u.adopted.is_empty())
+        );
+    }
+
+    /// `common_prefix ++ adopted` keeps each lineage in order; the message and
+    /// config lineages are not interleaved with each other.
+    #[tokio::test]
+    async fn view_split_keeps_each_lineage_in_order() {
+        // Pending config C in the view; B1 adopts M1 <- M2.
+        let ch = ChannelId::from([0u8; 32]);
+        let cfg =
+            unverified_tx_with_ops(vec![Op::ChannelConfig(channel_config(ch, MsgId::root()))]);
+        let cfg_hash = cfg.hash();
+        let mut state = TxState::new(header_id(0), MsgId::root());
+        state.submit_other(cfg, ch).unwrap();
+        let (m1_id, m1) = ins(ch, MsgId::root(), b"m1");
+        let (m2_id, m2) = ins(ch, m1_id, b"m2");
+        let b1 = api_block(1, 0, 1, vec![m1, m2]);
+
+        let r = drive(&mut Some(state), ch, &[live_event(&b1)]).await;
+
+        let prefix: Vec<TxHash> = r[0]
+            .result
+            .common_prefix
+            .iter()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect();
+        assert_eq!(prefix, vec![cfg_hash]);
+        let u = r[0].result.channel_update.as_ref().expect("M1, M2 adopted");
+        assert_eq!(msg_ids(&u.adopted), vec![m1_id, m2_id]);
+    }
+
+    /// A restored pending P whose message finalized under another hash while
+    /// the sequencer was down — the original of a re-funded publish won — is
+    /// retired by the LIB backfill, not shed as off-branch and orphaned.
+    #[tokio::test]
+    async fn restored_pending_finalized_under_another_hash_is_retired_not_orphaned() {
+        // G(0) <- B1 (original carrying M, finalized, never seen live) <- B2 (live)
+        let ch = ChannelId::from([0u8; 32]);
+        let m = inscribe_op(ch, MsgId::root(), b"m");
+        let m_id = m.id();
+        let original = unverified_tx_with_ops(vec![
+            Op::ChannelInscribe(m.clone()),
+            Op::ChannelConfig(channel_config(ch, MsgId::root())),
+        ]);
+        let rebuilt = unverified_tx_with_ops(vec![Op::ChannelInscribe(m)]);
+        assert_ne!(original.hash(), rebuilt.hash());
+        let mut restored = TxState::new(header_id(0), MsgId::root());
+        restored
+            .submit_inscription(
+                rebuilt,
+                MsgId::root(),
+                m_id,
+                Inscription::new_unchecked(b"m".to_vec()),
+            )
+            .unwrap();
+        let b1 = api_block(1, 0, 1, vec![original]);
+        let b2 = api_block(2, 1, 2, Vec::new());
+        let node = MockNode {
+            immutable: vec![b1],
+            ..MockNode::default()
+        };
+        let event = ProcessedBlockEvent {
+            block: b2,
+            tip: header_id(2),
+            tip_slot: Slot::from(2),
+            lib: header_id(1),
+            lib_slot: Slot::from(1),
+        };
+
+        let r = drive_with(&node, &mut Some(restored), ch, &[event]).await;
+
+        assert!(
+            r[0].shed.is_empty(),
+            "the message landed: nothing to orphan"
+        );
+        assert!(
+            r[0].result
+                .channel_update
+                .as_ref()
+                .is_none_or(|u| u.orphaned.is_empty())
+        );
+        assert!(
+            r[0].result
+                .finalized_items
+                .iter()
+                .flat_map(|tx| tx.ops.iter())
+                .any(|op| matches!(op, FinalizedOp::Inscription(i) if i.this_msg == m_id)),
+            "M is reported finalized"
+        );
+    }
+
+    /// After a restore, the first event may mine the original of a re-funded
+    /// publish: the same message under another hash. It is the restored
+    /// entry landing, not a new entry: nothing adopted, and the message stays
+    /// in the view under the hash that mined it.
+    #[tokio::test]
+    async fn restored_pending_mined_under_another_hash_is_neither_adopted_nor_dropped() {
+        use lb_core::mantle::{
+            ledger::{BoundedInputs, Outputs},
+            ops::transfer::TransferOp,
+        };
+        let ch = ChannelId::from([0u8; 32]);
+        let m = inscribe_op(ch, MsgId::root(), b"m");
+        let m_id = m.id();
+        let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
+        let original = unverified_tx_with_ops(vec![
+            Op::ChannelInscribe(m.clone()),
+            Op::Transfer(TransferOp::new(
+                BoundedInputs::from(NoteId::from(Fr::from(1u64))).into(),
+                Outputs::new([Note::new(50, pk)]),
+            )),
+        ]);
+        let original_hash = original.hash();
+        let rebuilt = unverified_tx_with_ops(vec![Op::ChannelInscribe(m)]);
+        assert_ne!(original_hash, rebuilt.hash());
+        let mut restored = TxState::new(header_id(0), MsgId::root());
+        restored
+            .submit_inscription(
+                rebuilt,
+                MsgId::root(),
+                m_id,
+                Inscription::new_unchecked(b"m".to_vec()),
+            )
+            .unwrap();
+        let b1 = api_block(1, 0, 1, vec![original]);
+
+        let mut state = Some(restored);
+        let r = drive(&mut state, ch, &[live_event(&b1)]).await;
+
+        assert!(r[0].shed.is_empty());
+        assert!(
+            r[0].result.channel_update.is_none(),
+            "our own message landing is not a view change"
+        );
+        let prefix: Vec<TxHash> = r[0]
+            .result
+            .common_prefix
+            .iter()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect();
+        assert_eq!(
+            prefix,
+            vec![original_hash],
+            "M stays in the view, under the mined hash"
+        );
+        let landed = state.as_ref().unwrap().pending_inscription(&original_hash);
+        assert!(landed.is_some_and(|p| p.this_msg == m_id));
+    }
+
+    /// After a restore, a pending P whose unfinalized parent M is rediscovered
+    /// on the first event: P proves M was the view before the restart, so
+    /// nothing is adopted, shed or orphaned; the view is M <- P, and P lands
+    /// next.
+    #[tokio::test]
+    async fn restored_pending_survives_its_parent_being_rediscovered() {
+        let ch = ChannelId::from([0u8; 32]);
+        let (m_id, m_tx) = ins(ch, MsgId::root(), b"m");
+        let (p_id, p_tx) = ins(ch, m_id, b"p");
+        let (m_hash, p_hash) = (m_tx.hash(), p_tx.hash());
+        let mut restored = TxState::new(header_id(0), MsgId::root());
+        restored
+            .submit_inscription(
+                p_tx.clone(),
+                m_id,
+                p_id,
+                Inscription::new_unchecked(b"p".to_vec()),
+            )
+            .unwrap();
+        let b1 = api_block(1, 0, 1, vec![m_tx]);
+        let b2 = api_block(2, 1, 2, vec![p_tx]);
+
+        let r = drive(&mut Some(restored), ch, &[live_event(&b1), live_event(&b2)]).await;
+
+        assert!(r[0].shed.is_empty(), "P chains on M, so it stays pending");
+        assert!(
+            r[0].result.channel_update.is_none(),
+            "M was the view P chained on: nothing changed"
+        );
+        assert_eq!(
+            hashes(&r[0].result.common_prefix),
+            vec![m_hash, p_hash],
+            "the view in lineage order"
+        );
+
+        // P lands on its parent: an own publish is not echoed as adopted, so
+        // no update; the view is now M <- P, both mined.
+        assert!(r[1].shed.is_empty());
+        assert!(
+            r[1].result.channel_update.is_none(),
+            "nothing new to report"
+        );
+        assert_eq!(hashes(&r[1].result.common_prefix), vec![m_hash, p_hash]);
+    }
+
+    /// After a restore, a pending P whose parent M is never mined is shed the
+    /// moment a rival takes M's slot: a conflict, P is orphaned and not in
+    /// the prefix.
+    #[tokio::test]
+    async fn restored_pending_is_orphaned_when_a_rival_takes_its_parents_slot() {
+        let ch = ChannelId::from([0u8; 32]);
+        let (m_id, _m_tx) = ins(ch, MsgId::root(), b"m");
+        let (p_id, p_tx) = ins(ch, m_id, b"p");
+        let (_rival_id, rival_tx) = ins(ch, MsgId::root(), b"rival");
+        let (p_hash, rival_hash) = (p_tx.hash(), rival_tx.hash());
+        let mut restored = TxState::new(header_id(0), MsgId::root());
+        restored
+            .submit_inscription(p_tx, m_id, p_id, Inscription::new_unchecked(b"p".to_vec()))
+            .unwrap();
+        let b1 = api_block(1, 0, 1, vec![rival_tx]);
+
+        let r = drive(&mut Some(restored), ch, &[live_event(&b1)]).await;
+
+        // The actor reports the shed as orphaned (`build_channel_update`).
+        let shed: Vec<ChannelUpdateTx> = r[0]
+            .shed
+            .clone()
+            .into_iter()
+            .map(orphan_from_shed)
+            .collect();
+        assert_eq!(hashes(&shed), vec![p_hash], "P no longer chains on the tip");
+        let u = r[0]
+            .result
+            .channel_update
+            .as_ref()
+            .expect("rival is adopted");
+        assert!(u.orphaned.is_empty(), "nothing mined was dropped");
+        assert_eq!(hashes(&u.adopted), vec![rival_hash]);
+        assert!(r[0].result.common_prefix.is_empty());
+    }
+
+    fn hashes(txs: &[ChannelUpdateTx]) -> Vec<TxHash> {
+        txs.iter().map(ChannelUpdateTx::tx_hash).collect()
+    }
+
+    /// On an extension the new view is the previous view followed by
+    /// `adopted`: across a checkpoint restore with a pending publish P on the
+    /// finalized tip M, an empty block, the block that mines P (which
+    /// `adopted` never echoes), and a block that mines N on top.
+    #[tokio::test]
+    async fn extension_appends_adopted_to_the_previous_view() {
+        let ch = ChannelId::from([0u8; 32]);
+        let (m_id, _) = ins(ch, MsgId::root(), b"m");
+        let (p_id, p_tx) = ins(ch, m_id, b"p");
+        let (_, n_tx) = ins(ch, p_id, b"n");
+        let mut restored = TxState::new(header_id(0), m_id);
+        restored
+            .submit_inscription(
+                p_tx.clone(),
+                m_id,
+                p_id,
+                Inscription::new_unchecked(b"p".to_vec()),
+            )
+            .unwrap();
+        let blocks = [
+            api_block(1, 0, 1, Vec::new()),
+            api_block(2, 1, 2, vec![p_tx]),
+            api_block(3, 2, 3, vec![n_tx]),
+        ];
+
+        let node = MockNode::default();
+        let mut state = Some(restored);
+        let mut current_tip = None;
+        let mut lib_slot = Slot::genesis();
+        let mut view = hashes(
+            &state
+                .as_ref()
+                .unwrap()
+                .channel_view_txs(header_id(0), &HashSet::new()),
+        );
+        for block in &blocks {
+            let result = handle_block_event(
+                &live_event(block),
+                &mut state,
+                &mut current_tip,
+                &mut lib_slot,
+                ch,
+                &node,
+            )
+            .await
+            .unwrap();
+            let adopted = result.channel_update.as_ref().map_or_else(Vec::new, |u| {
+                assert!(u.orphaned.is_empty(), "an extension");
+                hashes(&u.adopted)
+            });
+            let tip = current_tip.expect("processed");
+            let new_view = hashes(
+                &state
+                    .as_ref()
+                    .unwrap()
+                    .channel_view_txs(tip, &HashSet::new()),
+            );
+            assert_eq!(new_view, [view.clone(), adopted].concat());
+            view = new_view;
+        }
+        assert_eq!(view.len(), 2, "P then N");
+    }
+
+    /// A shed bundle the consumer was told to revert can still land: its bytes
+    /// stay in the L1 mempool. When it does, on a pure extension, it must be
+    /// reported adopted — the shed removed it from pending, so the consumer
+    /// no longer holds it. "Ours" is not "already applied".
+    #[tokio::test]
+    async fn shed_bundle_that_lands_anyway_is_reported_adopted() {
+        // G <- B1(deposit, pin) canonical; G <- B2 empty: B2 wins, pin shed;
+        // B2 <- B3(deposit, pin): both re-mined from the mempool.
+        let ch = ChannelId::from([0u8; 32]);
+        let mut f = pin_fixture(ch);
+        let pin_hash = f.pin_tx.hash();
+        let b1 = api_block(1, 0, 1, vec![f.dep_tx.clone(), f.pin_tx.clone()]);
+        let b2 = api_block(2, 0, 2, Vec::new());
+        let b3 = api_block(3, 2, 3, vec![f.dep_tx.clone(), f.pin_tx.clone()]);
+        let dep_event = f.node.events[&header_id(1)].clone();
+        f.node.events.insert(header_id(3), dep_event);
+
+        let mut state = Some(f.state);
+        let r = drive_with(
+            &f.node,
+            &mut state,
+            ch,
+            &[live_event(&b1), live_event(&b2), live_event(&b3)],
+        )
+        .await;
+
+        let shed: Vec<TxHash> = r[1].shed.iter().map(PendingTx::tx_hash).collect();
+        assert_eq!(shed, vec![pin_hash], "sanity: the pin is shed when B2 wins");
+        let u = r[2]
+            .result
+            .channel_update
+            .as_ref()
+            .expect("the pin landing moves the channel tip");
+        assert!(u.orphaned.is_empty());
+        let adopted: Vec<TxHash> = u.adopted.iter().map(ChannelUpdateTx::tx_hash).collect();
+        assert_eq!(
+            adopted,
+            vec![pin_hash],
+            "a shed own bundle that lands anyway must be reported adopted"
+        );
+        assert_eq!(u.new_channel_tip, f.pin_id);
+        assert!(r[2].shed.is_empty(), "it is mined on this branch");
+    }
+
+    /// The pin un-mined alone stays pending and silent; its note is back in
+    /// the wallet view but reserved for it, so selection must not offer it.
+    #[tokio::test]
+    async fn bundle_whose_inputs_stayed_on_the_branch_is_kept_and_its_notes_reserved() {
+        // G <- B1(deposit) <- B2(pin) canonical; B1 <- B3 empty: B3 wins.
+        let ch = ChannelId::from([0u8; 32]);
+        let f = pin_fixture(ch);
+        let b1 = api_block(1, 0, 1, vec![f.dep_tx.clone()]);
+        let b2 = api_block(2, 1, 2, vec![f.pin_tx.clone()]);
+        let b3 = api_block(3, 1, 3, Vec::new());
+
+        let mut state = Some(f.state);
+        let r = drive_with(
+            &f.node,
+            &mut state,
+            ch,
+            &[live_event(&b1), live_event(&b2), live_event(&b3)],
+        )
+        .await;
+
+        assert!(r[2].shed.is_empty());
+        assert!(
+            r[2].result.channel_update.is_none(),
+            "bare un-mine is silent"
+        );
+        let s = state.as_ref().unwrap();
+        assert_eq!(s.pending_publish_count(), 1);
+        let has = |v: &crate::sequencer::ChannelWalletView| {
+            v.finalized
+                .iter()
+                .chain(v.unfinalized.iter())
+                .any(|n| n.note_id == f.recreated)
+        };
+        assert!(has(&s.channel_wallet_view(Some(header_id(3)))));
+        assert!(
+            !has(&s.spendable_wallet_view(Some(header_id(3)), ch)),
+            "reserved"
+        );
+    }
+
+    /// Flip-flop reorg: B wins, loses to B', wins back. Its entry was shed on
+    /// the loss and must be re-mirrored from the store on the win, so a later
+    /// bare un-mine keeps it in the view. Also covers a fork block (B')
+    /// becoming canonical.
+    #[tokio::test]
+    async fn flip_flop_reorg_re_mirrors_the_readopted_block() {
+        // G <- A(i1); A <- B(i2); A <- B'(i2') fork; B' <- C' empty (tip);
+        // B <- C fork; C <- D empty (tip); A <- X, X <- Y forks; Y <- Z empty (tip).
+        let ch = ChannelId::from([0u8; 32]);
+        let (i1_id, i1_tx) = ins(ch, MsgId::root(), b"i1");
+        let (i2_id, i2_tx) = ins(ch, i1_id, b"i2");
+        let (i2a_id, i2a_tx) = ins(ch, i1_id, b"i2'");
+        let (i2_hash, i2a_hash) = (i2_tx.hash(), i2a_tx.hash());
+        let ba = api_block(1, 0, 1, vec![i1_tx]);
+        let bb = api_block(2, 1, 2, vec![i2_tx]);
+        let bba = api_block(3, 1, 3, vec![i2a_tx]);
+        let bca = api_block(4, 3, 4, Vec::new());
+        let bc = api_block(5, 2, 5, Vec::new());
+        let bd = api_block(6, 5, 6, Vec::new());
+        let bx = api_block(7, 1, 7, Vec::new());
+        let by = api_block(8, 7, 8, Vec::new());
+        let bz = api_block(9, 8, 9, Vec::new());
+
+        let mut state = None;
+        let r = drive(
+            &mut state,
+            ch,
+            &[
+                live_event(&ba),
+                live_event(&bb),
+                fork_event(&bba, &bb),
+                live_event(&bca),
+                fork_event(&bc, &bca),
+                live_event(&bd),
+                fork_event(&bx, &bd),
+                fork_event(&by, &bd),
+                live_event(&bz),
+            ],
+        )
+        .await;
+
+        let u = r[3].result.channel_update.as_ref().expect("B' wins");
+        assert_eq!(msg_ids(&u.orphaned), vec![i2_id]);
+        assert_eq!(msg_ids(&u.adopted), vec![i2a_id]);
+        let u = r[5].result.channel_update.as_ref().expect("B wins back");
+        assert_eq!(msg_ids(&u.orphaned), vec![i2a_id]);
+        assert_eq!(msg_ids(&u.adopted), vec![i2_id]);
+        assert!(
+            r[8].result.channel_update.is_none(),
+            "bare un-mine of B: i2 is pending again"
+        );
+        // `common_prefix ++ adopted` is the view above LIB on every event.
+        assert!(r[0].result.common_prefix.is_empty());
+        assert_eq!(msg_ids(&r[1].result.common_prefix), vec![i1_id]);
+        assert_eq!(msg_ids(&r[3].result.common_prefix), vec![i1_id]);
+        assert_eq!(msg_ids(&r[8].result.common_prefix), vec![i1_id, i2_id]);
+        // Each switch sheds only the loser; the winner, re-mirrored from the
+        // store, reads as mined on its branch.
+        let shed: Vec<TxHash> = r[3].shed.iter().map(PendingTx::tx_hash).collect();
+        assert_eq!(shed, vec![i2_hash]);
+        let shed: Vec<TxHash> = r[5].shed.iter().map(PendingTx::tx_hash).collect();
+        assert_eq!(shed, vec![i2a_hash]);
+        assert!(r[8].shed.is_empty());
+        let s = state.as_ref().unwrap();
+        let resubmit: Vec<TxHash> = s
+            .pending_txs(bz.header.id)
+            .iter()
+            .map(|(hash, _)| *hash)
+            .collect();
+        assert_eq!(
+            resubmit,
+            vec![i2_hash],
+            "i2 is unmined at Z and goes back out"
         );
     }
 
@@ -2294,6 +3542,11 @@ mod tests {
             "nothing is orphaned when A's block becomes LIB; got {:?}",
             second.channel_update,
         );
+        assert_eq!(
+            state.as_ref().unwrap().pending_publish_count(),
+            0,
+            "A finalized: it leaves pending and must not be re-mirrored from its (LIB) block"
+        );
 
         // LIB advances to B2 — A's block is now strictly below LIB and its
         // store entry is pruned.
@@ -2322,6 +3575,12 @@ mod tests {
             "a finalized inscription must never be reported orphaned; got {:?}",
             third.channel_update,
         );
+        let s = state.as_mut().unwrap();
+        assert_eq!(s.pending_publish_count(), 0);
+        assert!(
+            s.shed_off_branch_pending(header_id(3)).is_empty(),
+            "nothing pending to shed: a resurrected finalized entry would be reported orphaned here"
+        );
     }
 
     /// End-to-end wallet tracking through the live + finalized paths: a live
@@ -2344,7 +3603,7 @@ mod tests {
 
         let transfer = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([recreated]),
+            inputs: BoundedInputs::from(recreated).into(),
             outputs: Outputs::new([Note::new(50, out_pk)]),
         };
         let out_id = transfer.utxos().next().unwrap().id();
@@ -2383,7 +3642,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .channel_wallet_view(Some(header_id(1)));
-        assert!(view.finalized.is_empty());
+        assert_eq!(view.finalized, []);
         assert_eq!(view.unfinalized.len(), 1);
         assert_eq!(view.unfinalized[0].note_id, recreated);
         assert_eq!(view.unfinalized[0].value, 50);

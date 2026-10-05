@@ -1,4 +1,4 @@
-use lb_codec::BinaryCodec;
+use lb_binary_codec::canonical::BinaryCodec;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use serde::{Deserialize, Serialize};
 
@@ -15,5 +15,12 @@ impl ZkAndEd25519Proof {
             zk_sig,
             ed25519_sig,
         }
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl crate::mantle::ops::op_proof::samples::SampleProof for ZkAndEd25519Proof {
+    fn sample() -> Self {
+        Self::new(ZkSignature::sample(), Ed25519Signature::sample())
     }
 }

@@ -16,6 +16,7 @@ pub struct TimeInfo {
     pub genesis_time_unix_ms: i64,
     pub current_slot: u64,
     pub current_epoch: u32,
+    pub slots_per_epoch: u64,
 }
 
 /// Gets the current time service info.
@@ -47,10 +48,10 @@ pub(crate) fn get_time_info_sync(node: &LogosBlockchainNode) -> StatusResult<Tim
         relay
             .send(TimeServiceMessage::Info { sender })
             .await
-            .map_err(|(e, _)| {
+            .map_err(|error| {
                 OperationStatus::error(
                     OperationStatusCode::ChannelSendError,
-                    format!("Failed to send time info request: {e}"),
+                    format!("Failed to send time info request: {error}"),
                 )
             })?;
 
@@ -74,6 +75,7 @@ pub(crate) fn get_time_info_sync(node: &LogosBlockchainNode) -> StatusResult<Tim
             genesis_time_unix_ms: service_info.genesis_time_unix_ms,
             current_slot: u64::from(service_info.current_slot),
             current_epoch: u32::from(service_info.current_epoch),
+            slots_per_epoch: service_info.slots_per_epoch,
         })
     })
 }

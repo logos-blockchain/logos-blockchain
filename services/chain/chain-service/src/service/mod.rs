@@ -2,33 +2,32 @@
 
 pub mod phases;
 
-use core::fmt::{Debug, Display};
+use core::fmt::Debug;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     pin::Pin,
     time::Duration,
 };
 
-use bytes::Bytes;
 use futures::{Stream, StreamExt as _, future::join_all, stream};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockInfo};
 use lb_core::{
     block::{Block, SignedHeader, UncleHeaders},
-    events::Events,
     header::HeaderId,
     mantle::{
-        OpRef, TxGasCalculator,
+        OpRef, TxHash,
         ledger::verification_mode::StandardMode,
-        traits::{MantleTx, PreverifiedMantleTransaction, SignedMantleTx},
-        transactions::{GasPrices, states::Preverified},
+        traits::{Hashable, MantleTx, PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
+        transactions::states::Preverified,
     },
     sdp::ServiceType,
 };
 use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
-use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse};
+use lb_cryptarchia_sync::{BlocksUnavailableReason, GetTipResponseReason, ProviderResponse};
+use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
-use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
-use lb_utils::bounded::UpperBoundedVec;
+use lb_storage_service::api::StorageApi;
+use lb_utils::bounded::UpperBoundedOrderedSet;
 use overwatch::{
     DynError,
     services::{relay::InboundRelay, state::StateUpdater},
@@ -38,11 +37,11 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    ChainServiceInfo, ConsensusMsg, Cryptarchia, CryptarchiaConsensusState, EpochStateQueryResult,
-    Error, LOG_TARGET, LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, Query, metrics,
+    BlockOrigin, ChainServiceInfo, ConsensusMsg, Cryptarchia, CryptarchiaConsensusState,
+    EpochStateQueryResult, Error, LOG_TARGET, LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo,
+    Query, metrics,
     notifier::ChainOnlineNotifier,
     relays::{BroadcastRelay, CryptarchiaConsensusRelays},
-    storage::{StorageAdapter as _, adapters::StorageAdapter},
     sync::block_provider::BlockProvider,
 };
 
@@ -112,12 +111,10 @@ impl EpochStateQuerySourceTracker {
 }
 
 /// The chain service in the phase `P`.
-pub struct Service<Phase, Tx, Storage, RuntimeServiceId>
+pub struct Service<Phase, Tx>
 where
     Phase: phases::Phase,
     Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
 {
     phase: Phase,
     cryptarchia: Cryptarchia,
@@ -128,20 +125,20 @@ where
     chain_online_notifier: ChainOnlineNotifier,
     current_slot: Slot,
     storage_blocks_to_remove: HashSet<HeaderId>,
-    relays: CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
-    sync_blocks_provider: BlockProvider<Storage, Tx>,
+    relays: CryptarchiaConsensusRelays<Tx>,
+    sync_blocks_provider: BlockProvider<Tx>,
     slot_timer: lb_time_service::EpochSlotTickStream,
     state_recording_timer: tokio::time::Interval,
     prolonged_bootstrap_period: Duration,
     epoch_state_query_sources: EpochStateQuerySourceTracker,
 }
 
-impl<Phase, Tx, Storage, RuntimeServiceId> Service<Phase, Tx, Storage, RuntimeServiceId>
+impl<Phase, Tx> Service<Phase, Tx>
 where
     Phase: phases::Phase,
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -151,17 +148,9 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Display + 'static,
 {
     /// Move to the `NextPhase`, carrying all the shared ingredients over.
-    fn with_phase<NextPhase: phases::Phase>(
-        self,
-        phase: NextPhase,
-    ) -> Service<NextPhase, Tx, Storage, RuntimeServiceId> {
+    fn with_phase<NextPhase: phases::Phase>(self, phase: NextPhase) -> Service<NextPhase, Tx> {
         Service {
             phase,
             cryptarchia: self.cryptarchia,
@@ -216,6 +205,7 @@ where
             &mut self.cryptarchia,
             block,
             self.current_slot,
+            BlockOrigin::Network,
             &self.relays,
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,
@@ -236,7 +226,7 @@ where
         self.storage_blocks_to_remove = delete_stale_blocks_from_storage(
             outcome.pruned_blocks.stale_blocks().copied(),
             &self.storage_blocks_to_remove,
-            self.relays.storage_adapter(),
+            self.relays.storage(),
         )
         .await;
 
@@ -262,9 +252,9 @@ where
             };
 
             for query_source in query_sources {
-                warn!(
+                debug!(
                     target: LOG_TARGET,
-                    diagnostic = "blend_tsi_outage",
+                    diagnostic = BLEND_REACHABILITY,
                     event = "epoch_state_query_source_became_stale",
                     requested_epoch = u32::from(query_source.requested_epoch),
                     requested_slot = u64::from(query_source.requested_slot),
@@ -326,7 +316,7 @@ where
                     &self.cryptarchia,
                     from_descendant,
                     to_ancestor,
-                    self.relays.storage_adapter().clone(),
+                    self.relays.storage().clone(),
                 );
                 reply_channel.send(stream).unwrap_or_else(
                     |_| error!(target: LOG_TARGET, "could not send block stream through channel"),
@@ -414,7 +404,7 @@ where
                     });
             }
             Query::GetBlockEvents { id, reply_channel } => {
-                let events = self.relays.storage_adapter().get_block_events(&id).await;
+                let events = self.relays.storage().get_block_events(&id).await;
                 reply_channel.send(events).unwrap_or_else(|_| {
                     error!(target: LOG_TARGET, "Could not send block events through channel");
                 });
@@ -466,12 +456,7 @@ where
             // Every block accepted into the block tree is persisted, so a
             // candidate must be loadable. Even if not, a proposal is still
             // valid with fewer uncles.
-            let Some(block) = self
-                .relays
-                .storage_adapter()
-                .get_block(&candidate.id())
-                .await
-            else {
+            let Some(block) = self.relays.storage().get_block(&candidate.id()).await else {
                 error!(target: LOG_TARGET, candidate = ?candidate.id(), "uncle candidate not found in storage");
                 continue;
             };
@@ -482,7 +467,8 @@ where
         }
 
         UncleHeaders::new(
-            UpperBoundedVec::try_from(uncles).expect("at most MAX_UNCLES uncles are selected"),
+            UpperBoundedOrderedSet::try_from(uncles)
+                .expect("at most MAX_UNCLES unique uncles are selected"),
         )
     }
 
@@ -497,7 +483,7 @@ where
 }
 
 fn log_epoch_state_query(result: &EpochStateQueryResult) {
-    if !tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG) {
+    if !tracing::enabled!(target: LOG_TARGET, tracing::Level::TRACE) {
         return;
     }
     let returned_active_declaration_count = result
@@ -507,9 +493,9 @@ fn log_epoch_state_query(result: &EpochStateQueryResult) {
         .map(|(_, declarations)| declarations.len())
         .sum::<usize>();
 
-    debug!(
+    trace!(
         target: LOG_TARGET,
-        diagnostic = "blend_tsi_outage",
+        diagnostic = BLEND_REACHABILITY,
         event = "epoch_state_query",
         requested_slot = u64::from(result.requested_slot),
         requested_epoch = u32::from(result.requested_epoch),
@@ -549,7 +535,7 @@ fn log_canonical_tsi_transition<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx>
         .saturating_sub(1);
     info!(
         target: LOG_TARGET,
-        diagnostic = "blend_tsi_outage",
+        diagnostic = BLEND_REACHABILITY,
         event = "tsi_epoch_committed",
         canonical = true,
         from_epoch = u32::from(from_epoch),
@@ -605,13 +591,13 @@ where
 
             info!(
                 target: LOG_TARGET,
-                diagnostic = "blend_tsi_outage",
+                diagnostic = BLEND_REACHABILITY,
                 event = "sdp_activity_committed",
                 canonical = true,
                 provider_id = ?new_declaration.provider_id,
-                declaration_id = ?active.declaration_id,
+                declaration_id = %active.declaration_id,
                 proof_epoch = u32::from(active.metadata.origin_epoch()),
-                tx_id = ?tx.hash(),
+                tx_id = %tx.hash(),
                 block_id = %block.header().id(),
                 block_slot = u64::from(block.header().slot()),
                 epoch = u32::from(committed_state.epoch_state().epoch),
@@ -653,7 +639,7 @@ fn log_blend_snapshot_provider_decisions(
             .unwrap_or_default();
         debug!(
             target: LOG_TARGET,
-            diagnostic = "blend_tsi_outage",
+            diagnostic = BLEND_REACHABILITY,
             event = summary_event,
             canonical = true,
             epoch = u32::from(target_epoch),
@@ -669,15 +655,15 @@ fn log_blend_snapshot_provider_decisions(
             active_blend_declarations.and_then(|active| active.get(declaration_id));
         match snapshot_declaration {
             Some(snapshot_declaration) => {
-                debug!(
+                trace!(
                     target: LOG_TARGET,
-                    diagnostic = "blend_tsi_outage",
+                    diagnostic = BLEND_REACHABILITY,
                     event = provider_event,
                     canonical = true,
                     target_epoch = u32::from(target_epoch),
                     snapshot_slot = u64::from(snapshot_slot),
                     provider_id = ?snapshot_declaration.provider_id,
-                    declaration_id = ?declaration_id,
+                    declaration_id = %declaration_id,
                     snapshot_active_epoch = u32::from(snapshot_declaration.active),
                     snapshot_withdraw_at = ?snapshot_declaration.withdraw_at.map(u32::from),
                     frozen_included = true,
@@ -689,15 +675,15 @@ fn log_blend_snapshot_provider_decisions(
                 // historical active fields for an excluded provider are therefore
                 // unavailable here and must not be reconstructed from the current
                 // ledger declaration.
-                debug!(
+                trace!(
                     target: LOG_TARGET,
-                    diagnostic = "blend_tsi_outage",
+                    diagnostic = BLEND_REACHABILITY,
                     event = provider_event,
                     canonical = true,
                     target_epoch = u32::from(target_epoch),
                     snapshot_slot = u64::from(snapshot_slot),
                     provider_id = ?declaration.provider_id,
-                    declaration_id = ?declaration_id,
+                    declaration_id = %declaration_id,
                     frozen_included = false,
                     "Canonical frozen Blend provider snapshot decision"
                 );
@@ -769,18 +755,19 @@ fn log_canonical_blend_snapshots<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx
     skip(cryptarchia, block, relays, new_block_subscription_sender, lib_broadcaster),
     fields(block_id = %block.header().id(), tx_count = block.transactions_iter().count(), current_slot = ?current_slot)
 )]
-pub async fn process_block<Tx, Storage, RuntimeServiceId>(
+pub async fn process_block<Tx>(
     cryptarchia: &mut Cryptarchia,
     block: Block<Tx>,
     current_slot: Slot,
-    relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
+    origin: BlockOrigin,
+    relays: &CryptarchiaConsensusRelays<Tx>,
     new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
     lib_broadcaster: &broadcast::Sender<LibUpdate>,
 ) -> Result<ProcessBlockOutcome<Tx>, Error>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -790,18 +777,14 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Display + 'static,
 {
     debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
     let header = block.header().clone();
     let prev_lib = cryptarchia.lib();
 
     let mut candidate = cryptarchia.clone();
-    let applied = candidate.try_apply_block_with_state_retention(block.clone(), current_slot)?;
+    let applied =
+        candidate.try_apply_block_with_state_retention(block.clone(), current_slot, origin)?;
     let new_lib = candidate.lib();
 
     let tx_count = block.transactions_iter().count();
@@ -814,7 +797,7 @@ where
     );
 
     relays
-        .storage_adapter()
+        .storage()
         .store_block_data(
             header.id(),
             header.parent(),
@@ -829,7 +812,7 @@ where
         &candidate,
         &block,
         &applied.newly_canonical_blocks,
-        relays.storage_adapter(),
+        relays.storage(),
     )
     .await;
     candidate.prune_ledger_states(applied.pruned_blocks.all());
@@ -893,7 +876,7 @@ where
         applied
             .reorged_blocks
             .iter()
-            .map(|id| relays.storage_adapter().get_block(id)),
+            .map(|id| relays.storage().get_block(id)),
     )
     .await
     .into_iter()
@@ -908,15 +891,15 @@ where
     })
 }
 
-async fn log_newly_canonical_blocks<Tx, Storage, RuntimeServiceId>(
+async fn log_newly_canonical_blocks<Tx>(
     cryptarchia: &Cryptarchia,
     applied_block: &Block<Tx>,
     newly_canonical_blocks: &[HeaderId],
-    storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    storage: &StorageApi<Tx>,
 ) where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -926,11 +909,6 @@ async fn log_newly_canonical_blocks<Tx, Storage, RuntimeServiceId>(
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Display + 'static,
 {
     if !tracing::enabled!(target: LOG_TARGET, tracing::Level::INFO) {
         return;
@@ -945,7 +923,7 @@ async fn log_newly_canonical_blocks<Tx, Storage, RuntimeServiceId>(
         let Some(canonical_block) = canonical_block else {
             warn!(
                 target: LOG_TARGET,
-                diagnostic = "blend_tsi_outage",
+                diagnostic = BLEND_REACHABILITY,
                 event = "canonical_diagnostic_block_unavailable",
                 block_id = %block_id,
                 "Could not load a newly canonical block for diagnostics"
@@ -967,16 +945,16 @@ async fn log_newly_canonical_blocks<Tx, Storage, RuntimeServiceId>(
 ///
 /// First tries to find blocks from memory. If any block is missing from
 /// memory, it falls back to loading all subsequent blocks from storage.
-pub fn get_block_ids<Tx, Storage, RuntimeServiceId>(
+pub fn get_block_ids<Tx>(
     cryptarchia: &Cryptarchia,
     from_descendant: HeaderId,
     to_ancestor: HeaderId,
-    storage_adapter: StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    storage: StorageApi<Tx>,
 ) -> Pin<Box<dyn Stream<Item = Result<HeaderId, Error>> + Send>>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -986,11 +964,6 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Display + 'static,
 {
     let branches = cryptarchia.consensus.branches();
 
@@ -1015,28 +988,26 @@ where
     }
 
     let storage_stream =
-        stream::once(
-            async move { load_block_ids_from_storage(current, to_ancestor, storage_adapter) },
-        )
-        .flatten();
+        stream::once(async move { load_block_ids_from_storage(current, to_ancestor, storage) })
+            .flatten();
     Box::pin(stream::iter(in_memory).chain(storage_stream))
 }
 
 /// Retrieves the block IDs from descendant (inclusive) to ancestor
 /// (inclusive) from the storage, in child-to-parent order.
 ///
-/// This is implemented here, and not as a method of `StorageAdapter`, to
+/// This is implemented here, and not as a method of `StorageApi`, to
 /// simplify the panic and error message handling.
 #[expect(closure_returning_async_block, reason = "required by try_unfold")]
-pub fn load_block_ids_from_storage<Tx, Storage, RuntimeServiceId>(
+pub fn load_block_ids_from_storage<Tx>(
     from_descendant: HeaderId,
     to_ancestor: HeaderId,
-    storage: StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    storage: StorageApi<Tx>,
 ) -> impl Stream<Item = Result<HeaderId, Error>>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -1046,11 +1017,6 @@ where
         + Sync
         + Unpin
         + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Display + 'static,
 {
     // Yield `from_descendant` first since we already know it,
     // and yield subsequent parents by loading them from storage lazily.
@@ -1090,33 +1056,17 @@ where
 ///
 /// This function returns any block that fails to be deleted from the
 /// storage layer.
-pub async fn delete_stale_blocks_from_storage<Tx, Storage, RuntimeServiceId>(
+pub async fn delete_stale_blocks_from_storage<Tx>(
     stale_blocks: impl Iterator<Item = HeaderId> + Send,
     additional_blocks: &HashSet<HeaderId>,
-    storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    storage: &StorageApi<Tx>,
 ) -> HashSet<HeaderId>
 where
-    Tx: PreverifiedMantleTransaction
-        + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
-        + Debug
-        + Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + Unpin
-        + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Display + 'static,
+    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
 {
     match delete_blocks_from_storage(
         stale_blocks.chain(additional_blocks.iter().copied()),
-        storage_adapter,
+        storage,
     )
     .await
     {
@@ -1136,33 +1086,17 @@ where
 /// If any request fails, the header ID and the generated error for each
 /// failing request are collected and returned as part of the `Err`
 /// result.
-async fn delete_blocks_from_storage<Headers, Tx, Storage, RuntimeServiceId>(
+async fn delete_blocks_from_storage<Headers, Tx>(
     block_headers: Headers,
-    storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    storage: &StorageApi<Tx>,
 ) -> Result<(), Vec<(HeaderId, DynError)>>
 where
     Headers: Iterator<Item = HeaderId> + Send,
-    Tx: PreverifiedMantleTransaction
-        + SignedMantleTx<Preverified, StandardMode>
-        + TxGasCalculator<Context = GasPrices>
-        + Debug
-        + Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + Unpin
-        + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Display + 'static,
+    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
 {
     let blocks_to_delete = block_headers.collect::<Vec<_>>();
     let block_deletion_outcomes = blocks_to_delete.iter().copied().zip(
-        storage_adapter
+        storage
             .remove_blocks(blocks_to_delete.iter().copied())
             .await,
     );
@@ -1227,7 +1161,7 @@ async fn broadcast_finalized_block(
     broadcast_relay
         .send(BlockBroadcastMsg::BroadcastFinalizedBlock(block_info))
         .await
-        .map_err(|(error, _)| Box::new(error) as DynError)
+        .map_err(|error| Box::new(error) as DynError)
 }
 
 /// Update and persist `CryptarchiaConsensusState`.
@@ -1255,7 +1189,7 @@ async fn reject_chain_sync_event(event: ChainSyncEvent) {
     match event {
         ChainSyncEvent::ProvideBlocksRequest { reply_sender, .. } => {
             let response = ProviderResponse::Unavailable {
-                reason: BlocksUnavailableReason::Unknown("Node is not in online mode".to_owned()),
+                reason: BlocksUnavailableReason::Unknown,
             };
             if let Err(err) = reply_sender.send(response).await {
                 error!(target: LOG_TARGET, %err, "failed to send chain sync response");
@@ -1268,10 +1202,10 @@ async fn reject_chain_sync_event(event: ChainSyncEvent) {
 }
 
 async fn send_chain_sync_rejection<ResponseType>(
-    sender: mpsc::Sender<ProviderResponse<ResponseType>>,
+    sender: mpsc::Sender<ProviderResponse<ResponseType, GetTipResponseReason>>,
 ) {
     let response = ProviderResponse::Unavailable {
-        reason: "Node is not in online mode".to_owned(),
+        reason: GetTipResponseReason::NodeNotOnline,
     };
     if let Err(err) = sender.send(response).await {
         error!(target: LOG_TARGET, %err, "failed to send chain sync response");

@@ -21,6 +21,7 @@ futures                          = { workspace = true }
 hex                              = { workspace = true }
 http                             = { workspace = true }
 lb-api-service                   = { workspace = true }
+lb-binary-codec                  = { workspace = true }
 lb-blend                         = { workspace = true }
 lb-blend-service                 = { workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
@@ -45,13 +46,15 @@ lb-system-sig-service            = { workspace = true }
 lb-time-service                  = { features = ["ntp"], workspace = true }
 lb-tracing                       = { workspace = true }
 lb-tracing-service               = { workspace = true }
-lb-tx-service                    = { features = ["rocksdb-backend"], workspace = true }
+lb-tx-service                    = { workspace = true }
 lb-utils                         = { features = ["time"], workspace = true }
+lb-version                       = { workspace = true }
 lb-wallet-service                = { workspace = true }
 libp2p                           = { features = ["autonat", "gossipsub", "identify", "kad", "macros"], workspace = true }
 num-bigint                       = { workspace = true }
 nutype                           = { features = ["serde"], workspace = true }
 overwatch                        = { workspace = true }
+percent-encoding                 = { workspace = true }
 rand                             = { workspace = true }
 serde                            = { workspace = true }
 serde_json                       = { workspace = true }
@@ -85,6 +88,7 @@ bytes            = { workspace = true }
 rand             = { workspace = true }
 serde_urlencoded = { workspace = true }
 serial_test      = { workspace = true }
+tempfile         = { workspace = true }
 
 [features]
 dhat-heap = ["dep:dhat"]

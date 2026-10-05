@@ -56,7 +56,7 @@ fn test_membership_new_empty() {
 
     assert_eq!(membership.size(), 0);
     assert!(membership.core_nodes.keys().next().is_none());
-    assert!(membership.node_indices.is_empty());
+    assert_eq!(membership.node_indices, Vec::<u32>::new());
     assert!(membership.local_node_index.is_none());
     assert!(!membership.contains_local());
 }

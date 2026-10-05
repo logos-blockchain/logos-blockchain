@@ -1,26 +1,36 @@
 use core::fmt::{self, Debug, Formatter};
 
 use blake2::Digest as _;
-use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::{
+    bincode::{BoundedSerializeOp, SerializeOp as _},
+    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
+};
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 mod fixtures;
 
 use crate::{
-    codec::SerializeOp as _,
     crypto::Hasher,
     mantle::transactions::GenesisTx,
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
-pub const BEDROCK_VERSION: u8 = 1;
+pub const HEADER_BINCODE_SIZE: usize = <Slot as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + <HeaderId as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + <ContentId as BoundedSerializeOp>::MAX_ENCODED_SIZE
+    + <Groth16LeaderProof as BoundedSerializeOp>::MAX_ENCODED_SIZE;
 
 #[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, BinaryCodec)]
 pub struct HeaderId([u8; 32]);
+
+impl HeaderId {
+    /// The fixed-size canonical representation of a header identifier.
+    pub const CANONICAL_ENCODED_SIZE: usize = 32;
+}
 
 impl Debug for HeaderId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -30,6 +40,11 @@ impl Debug for HeaderId {
 
 #[derive(Clone, Eq, PartialEq, Copy, Hash, BinaryCodec)]
 pub struct ContentId([u8; 32]);
+
+impl ContentId {
+    /// The fixed-size canonical representation of a content identifier.
+    pub const CANONICAL_ENCODED_SIZE: usize = 32;
+}
 
 impl Debug for ContentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -46,112 +61,76 @@ impl Debug for Nonce {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Copy)]
-#[repr(u8)]
-pub enum Version {
-    Bedrock = BEDROCK_VERSION,
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Header {
+    slot: Slot,
+    parent_block: HeaderId,
+    body_root: ContentId,
+    proof_of_leadership: Groth16LeaderProof,
 }
 
-impl Version {
-    #[must_use]
-    pub const fn as_byte(self) -> u8 {
-        self as u8
-    }
-}
-
-impl TryFrom<u8> for Version {
-    type Error = std::io::Error;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            BEDROCK_VERSION => Ok(Self::Bedrock),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Invalid version [{value}]"),
-            )),
-        }
-    }
-}
-
-impl TryFrom<&str> for Version {
-    type Error = std::io::Error;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value.to_lowercase().as_str() {
-            "bedrock" => Ok(Self::Bedrock),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Invalid version [{value}]"),
-            )),
-        }
-    }
-}
-
-impl Serialize for Version {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if serializer.is_human_readable() {
-            serializer.serialize_str(format!("{self:?}").as_str())
-        } else {
-            serializer.serialize_u8(self.as_byte())
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for Version {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        if deserializer.is_human_readable() {
-            let s = String::deserialize(deserializer)?;
-            Self::try_from(s.as_str()).map_err(serde::de::Error::custom)
-        } else {
-            Self::try_from(<u8>::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-        }
-    }
-}
-
-impl BinaryEncode for Version {
+impl BinaryEncode for Header {
     fn encoded_length(&self) -> usize {
-        self.as_byte().encoded_length()
+        let Self {
+            slot,
+            parent_block,
+            body_root,
+            proof_of_leadership,
+        } = self;
+
+        slot.encoded_length()
+            + parent_block.encoded_length()
+            + body_root.encoded_length()
+            + proof_of_leadership.encoded_length()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        out.push(self.as_byte());
+        let Self {
+            slot,
+            parent_block,
+            body_root,
+            proof_of_leadership,
+        } = self;
+
+        // The first field, which must never change across eras. A node reads the slot
+        // to learn which era's rules parse the rest of the header.
+        slot.encode_into(out);
+        parent_block.encode_into(out);
+        body_root.encode_into(out);
+        proof_of_leadership.encode_into(out);
     }
 }
 
-impl BinaryDecode for Version {
+impl BinaryDecode for Header {
     type Context = ();
 
     fn decode<'input>(
         input: &'input [u8],
         context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, version) = u8::decode(input, context)?;
-        let version = Self::try_from(version)
-            .map_err(|_| DecodeError::unknown_discriminant::<Self>(u64::from(version)))?;
-        Ok((input, version))
-    }
-}
+        let (input, slot) = Slot::decode(input, context)?;
+        let (input, parent_block) = HeaderId::decode(input, context)?;
+        let (input, body_root) = ContentId::decode(input, context)?;
+        let (input, proof_of_leadership) = Groth16LeaderProof::decode(input, context)?;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
-pub struct Header {
-    version: Version,
-    parent_block: HeaderId,
-    slot: Slot,
-    body_root: ContentId,
-    proof_of_leadership: Groth16LeaderProof,
+        Ok((
+            input,
+            Self {
+                slot,
+                parent_block,
+                body_root,
+                proof_of_leadership,
+            },
+        ))
+    }
 }
 
 impl Header {
-    #[must_use]
-    pub const fn version(&self) -> &Version {
-        &self.version
-    }
+    /// The fixed-size canonical representation of a header.
+    pub const CANONICAL_ENCODED_SIZE: usize = Slot::CANONICAL_ENCODED_SIZE
+        + HeaderId::CANONICAL_ENCODED_SIZE
+        + ContentId::CANONICAL_ENCODED_SIZE
+        + Groth16LeaderProof::CANONICAL_ENCODED_SIZE;
 
     #[must_use]
     pub const fn parent(&self) -> HeaderId {
@@ -160,7 +139,6 @@ impl Header {
 
     fn update_hasher(&self, h: &mut Hasher) {
         h.update(b"BLOCK_ID_V1");
-        h.update(self.version.as_byte().to_le_bytes());
         h.update(self.parent_block.0);
         h.update(self.slot.to_le_bytes());
         h.update(self.body_root.0);
@@ -210,9 +188,8 @@ impl Header {
         proof_of_leadership: Groth16LeaderProof,
     ) -> Self {
         Self {
-            version: Version::Bedrock,
-            parent_block,
             slot,
+            parent_block,
             body_root,
             proof_of_leadership,
         }
@@ -260,6 +237,18 @@ impl AsRef<[u8]> for HeaderId {
     }
 }
 
+impl AsRef<[u8; 32]> for ContentId {
+    fn as_ref(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8; 32]> for Nonce {
+    fn as_ref(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 impl From<[u8; 32]> for ContentId {
     fn from(id: [u8; 32]) -> Self {
         Self(id)
@@ -280,6 +269,22 @@ serde_bytes_newtype!(HeaderId, 32);
 serde_bytes_newtype!(ContentId, 32);
 serde_bytes_newtype!(Nonce, 32);
 
+impl BoundedSerializeOp for HeaderId {
+    type Bytes = [u8; 32];
+}
+
+impl BoundedSerializeOp for ContentId {
+    type Bytes = [u8; 32];
+}
+
+impl BoundedSerializeOp for Nonce {
+    type Bytes = [u8; 32];
+}
+
+impl BoundedSerializeOp for Header {
+    type Bytes = [u8; HEADER_BINCODE_SIZE];
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Invalid header id size: {0}")]
@@ -288,7 +293,7 @@ pub enum Error {
 
 #[test]
 fn test_serde() {
-    use crate::codec::{DeserializeOp as _, SerializeOp as _};
+    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
     let header = HeaderId([0; 32]);
     assert_eq!(
         HeaderId::from_bytes(
@@ -299,6 +304,50 @@ fn test_serde() {
         .unwrap(),
         HeaderId([0; 32])
     );
+}
+
+#[test]
+fn fixed_size_bincode_serialization_matches_for_header_types() {
+    use lb_binary_codec::canonical::CodecExamples as _;
+
+    let header_id = HeaderId([0x11; 32]);
+    let content_id = ContentId([0x22; 32]);
+    let nonce = Nonce([0x33; 32]);
+
+    for (ordinary, bounded) in [
+        (
+            header_id.to_bytes().unwrap(),
+            header_id.to_bounded_bytes().unwrap().to_vec(),
+        ),
+        (
+            content_id.to_bytes().unwrap(),
+            content_id.to_bounded_bytes().unwrap().to_vec(),
+        ),
+        (
+            nonce.to_bytes().unwrap(),
+            nonce.to_bounded_bytes().unwrap().to_vec(),
+        ),
+    ] {
+        assert_eq!(ordinary.len(), 32);
+        assert_eq!(ordinary.as_ref(), bounded.as_slice());
+    }
+
+    let header = Header::fixtures().into_iter().next().unwrap().value;
+    let ordinary = header.to_bytes().unwrap();
+    let bounded = header.to_bounded_bytes().unwrap();
+    assert_eq!(ordinary.len(), HEADER_BINCODE_SIZE);
+    assert_eq!(bounded.as_ref(), ordinary.as_ref());
+}
+
+#[test]
+fn fixed_header_byte_types_borrow_their_stored_bytes() {
+    let content_id = ContentId([0x22; 32]);
+    let nonce = Nonce([0x33; 32]);
+
+    assert_eq!(content_id.as_ref(), &content_id.0);
+    assert_eq!(nonce.as_ref(), &nonce.0);
+    assert!(std::ptr::eq(content_id.as_ref(), &raw const content_id.0));
+    assert!(std::ptr::eq(nonce.as_ref(), &raw const nonce.0));
 }
 
 #[test]
@@ -343,12 +392,13 @@ fn test_serde_json_rejects_oversized_hex() {
 ///
 /// `body_root = blake2b256( b"BODY_ROOT_V1" || uncle_headers ||
 /// transactions_root )`, where `uncle_headers` is the list encoding: a 1-byte
-/// little-endian element count followed by that many fixed 361-byte entries.
+/// little-endian element count followed by that many fixed 360-byte entries.
 ///
-/// `HeaderId (block_id) = blake2b256( b"BLOCK_ID_V1" || bedrock_version (1B)
-/// ||` `parent_block (32B) || slot_le (8B) || body_root (32B) ||
-/// leader_voucher` `(32B) || entropy_contribution (32B) || proof (128B) ||
-/// leader_key (32B) )`.
+/// `HeaderId (block_id) = blake2b256( b"BLOCK_ID_V1" || parent_block (32B) ||`
+/// `slot_le (8B) || body_root (32B) || leader_voucher (32B) ||`
+/// `entropy_contribution (32B) || proof (128B) || leader_key (32B) )`. The
+/// preimage keeps this field order, which is not the header's wire order
+/// (`slot` leads there).
 ///
 /// The test is `#[ignore]`d so it is skipped by `cargo test --all-features`.
 /// Run it on demand with:
@@ -356,171 +406,15 @@ fn test_serde_json_rejects_oversized_hex() {
 /// --nocapture`
 #[cfg(test)]
 mod body_root_test_vectors {
-    use lb_blend_proofs::{
-        quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
-        selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
-    };
-    use lb_cryptarchia_engine::Epoch;
-    use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_poseidon2::Fr;
+    use lb_utils::bounded::BoundedOrderedSet;
 
     use super::*;
     use crate::{
         block::{SignedHeader, UncleHeaders},
-        mantle::{
-            Note, Op,
-            channel::{SlotTimeframe, SlotTimeout},
-            ledger::{Inputs, NoteId, Outputs},
-            ops::{
-                channel::{
-                    ChannelId, Ed25519PublicKey, MsgId,
-                    channel_transfer::ChannelTransferOp,
-                    config::{ChannelConfigOp, Keys},
-                    deposit::{DepositOp, Metadata},
-                    inscribe::InscriptionOp,
-                    withdraw::ChannelWithdrawOp,
-                },
-                leader_claim::{LeaderClaimOp, VoucherCm},
-                transfer::TransferOp,
-            },
-            traits::Hashable as _,
-            transactions::Ops,
-        },
-        sdp::{
-            ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator,
-            ProviderId, ServiceType, WithdrawMessage, blend::ActivityProof,
-        },
+        mantle::{ops::leader_claim::VoucherCm, traits::Hashable as _, transactions::Ops},
         utils::merkle,
     };
-
-    fn ed25519_pk(seed: u8) -> Ed25519PublicKey {
-        Ed25519Key::from_bytes(&[seed; 32]).public_key()
-    }
-
-    fn zk_pk(seed: u64) -> ZkPublicKey {
-        ZkPublicKey::from(Fr::from(seed))
-    }
-
-    fn tx(op: Op) -> Ops {
-        Ops::new_unchecked(vec![op])
-    }
-
-    /// Builds one transaction per distinct mantle operation kind, each carrying
-    /// a single operation. The instances mirror those used by the `OpId` test
-    /// vectors so the two vector sets stay consistent.
-    fn one_tx_per_op() -> Vec<(&'static str, Ops)> {
-        let activity = ActivityProof {
-            epoch: Epoch::new(10),
-            signing_key: ed25519_pk(1),
-            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([2u8; PROOF_OF_QUOTA_SIZE])
-                .into(),
-            proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked(
-                [3u8; PROOF_OF_SELECTION_SIZE],
-            )
-            .into(),
-        };
-
-        vec![
-            // Transfer (0x00)
-            (
-                "Transfer",
-                tx(Op::Transfer(TransferOp::new(
-                    Inputs::new([NoteId(Fr::from(1u64)), NoteId(Fr::from(2u64))]),
-                    Outputs::new([Note::new(3, zk_pk(4)), Note::new(5, zk_pk(6))]),
-                ))),
-            ),
-            // ChannelConfig (0x10)
-            (
-                "ChannelConfig",
-                tx(Op::ChannelConfig(ChannelConfigOp {
-                    channel: ChannelId::from([7u8; 32]),
-                    parent: MsgId::root(),
-                    keys: Keys::try_from(vec![ed25519_pk(8), ed25519_pk(9)]).unwrap(),
-                    posting_timeframe: SlotTimeframe::from(10u32),
-                    posting_timeout: SlotTimeout::from(11u32),
-                    configuration_threshold: 12,
-                    transfer_threshold: 13,
-                })),
-            ),
-            // ChannelInscribe (0x11)
-            (
-                "ChannelInscribe",
-                tx(Op::ChannelInscribe(InscriptionOp {
-                    channel_id: ChannelId::from([14u8; 32]),
-                    inscription: b"hello logos".into(),
-                    parent: MsgId::root(),
-                    signer: ed25519_pk(15),
-                })),
-            ),
-            // ChannelDeposit (0x12)
-            (
-                "ChannelDeposit",
-                tx(Op::ChannelDeposit(DepositOp {
-                    channel_id: ChannelId::from([16u8; 32]),
-                    inputs: Inputs::new([NoteId(Fr::from(17u64))]),
-                    metadata: Metadata::try_from(b"deposit-metadata".to_vec()).unwrap(),
-                })),
-            ),
-            // ChannelWithdraw (0x13)
-            (
-                "ChannelWithdraw",
-                tx(Op::ChannelWithdraw(ChannelWithdrawOp {
-                    channel_id: ChannelId::from([18u8; 32]),
-                    inputs: Inputs::new([NoteId(Fr::from(19u64))]),
-                })),
-            ),
-            // ChannelTransfer (0x14)
-            (
-                "ChannelTransfer",
-                tx(Op::ChannelTransfer(ChannelTransferOp {
-                    channel_id: ChannelId::from([20u8; 32]),
-                    inputs: Inputs::new([NoteId(Fr::from(21u64))]),
-                    outputs: Outputs::new([Note::new(22, zk_pk(23))]),
-                })),
-            ),
-            // SDPDeclare (0x20)
-            (
-                "SDPDeclare",
-                tx(Op::SDPDeclare(DeclarationMessage {
-                    service_type: ServiceType::BlendNetwork,
-                    locators: "/ip4/127.0.0.1/udp/3000/quic-v1"
-                        .parse::<Locator>()
-                        .unwrap()
-                        .into(),
-                    provider_id: ProviderId(ed25519_pk(24)),
-                    zk_id: zk_pk(25),
-                    service_note_id: NoteId(Fr::from(26u64)),
-                })),
-            ),
-            // SDPWithdraw (0x21)
-            (
-                "SDPWithdraw",
-                tx(Op::SDPWithdraw(WithdrawMessage {
-                    declaration_id: DeclarationId([27u8; 32]),
-                    service_note_id: NoteId(Fr::from(28u64)),
-                    nonce: 29,
-                })),
-            ),
-            // SDPActive (0x22)
-            (
-                "SDPActive",
-                tx(Op::SDPActive(ActiveMessage {
-                    declaration_id: DeclarationId([30u8; 32]),
-                    nonce: 31,
-                    metadata: ActivityMetadata::Blend(Box::new(activity)),
-                })),
-            ),
-            // LeaderClaim (0x30)
-            (
-                "LeaderClaim",
-                tx(Op::LeaderClaim(LeaderClaimOp {
-                    rewards_root: Fr::from(32u64).into(),
-                    voucher_nullifier: Fr::from(33u64).into(),
-                    pk: zk_pk(34),
-                })),
-            ),
-        ]
-    }
 
     fn uncle(byte: u8) -> SignedHeader {
         let signing_key = Ed25519Key::from_bytes(&[byte; 32]);
@@ -555,9 +449,8 @@ mod body_root_test_vectors {
             "body_root  = blake2b256( b\"BODY_ROOT_V1\" || uncle_headers || transactions_root )"
         );
         println!(
-            "block_id   = blake2b256( b\"BLOCK_ID_V1\" || bedrock_version || parent_block || \
-             slot_le || body_root || leader_voucher || entropy_contribution || proof || \
-             leader_key )"
+            "block_id   = blake2b256( b\"BLOCK_ID_V1\" || parent_block || slot_le || body_root \
+             || leader_voucher || entropy_contribution || proof || leader_key )"
         );
 
         // 1. Empty block: no transactions.
@@ -570,8 +463,12 @@ mod body_root_test_vectors {
             hex::encode(merkle::calculate_transactions_root(&empty))
         );
 
-        // 2. One transaction per operation kind (one op each).
-        let txs_with_names = one_tx_per_op();
+        // 2. One transaction per operation kind (one op each), labelled by that
+        //    operation's name.
+        let txs_with_names: Vec<(&'static str, Ops)> = Ops::sample()
+            .into_iter()
+            .map(|op| (op.as_str(), Ops::from([op])))
+            .collect();
         let txs: Vec<Ops> = txs_with_names.iter().map(|(_, tx)| tx.clone()).collect();
         println!("================================================================");
         println!(
@@ -598,7 +495,9 @@ mod body_root_test_vectors {
         // 4. The same transactions with two carried uncles. Nothing downstream consumes
         //    this vector; it is here so that another implementation can check its
         //    `uncle_headers` encoding, signatures included.
-        let uncles = UncleHeaders::new([uncle(0x66), uncle(0x77)]);
+        let uncles = UncleHeaders::new(
+            BoundedOrderedSet::try_from_iter([uncle(0x66), uncle(0x77)]).unwrap(),
+        );
         println!("================================================================");
         println!("vector 4  : body_root with 2 uncles, over vector 2's transactions");
         println!("{:20}: {:02x}", "uncle_count", uncles.len());
@@ -636,7 +535,6 @@ mod body_root_test_vectors {
         let proof = header.leader_proof();
         let mut h = Hasher::new();
         h.update(b"BLOCK_ID_V1");
-        h.update(Version::Bedrock.as_byte().to_le_bytes());
         h.update(parent_block.0);
         h.update(slot.to_le_bytes());
         h.update(body_root.0);
@@ -653,11 +551,6 @@ mod body_root_test_vectors {
         println!("================================================================");
         // Field labels match the names in the `block_id`/`Header` specification.
         println!("vector 5  : HeaderId (block_id) reusing vector 3's body_root");
-        println!(
-            "{:20}: {:02x}",
-            "bedrock_version",
-            Version::Bedrock.as_byte()
-        );
         println!("{:20}: {}", "parent_block", hex::encode(parent_block.0));
         println!("{:20}: {}", "slot", u64::from(slot));
         println!("{:20}: {}", "body_root", hex::encode(body_root.0));

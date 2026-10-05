@@ -49,7 +49,7 @@ where
         + Send
         + Display
         + 'static
-        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter,
@@ -76,7 +76,7 @@ where
             reply_channel: sender,
         })
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|error| DynError::from(error.to_string()))?;
 
     receiver
         .await

@@ -1,11 +1,8 @@
 use std::fmt::{Debug, Display};
 
-use bytes::Bytes;
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService};
-use lb_core::{block::Block, events::Events, mantle::traits::PreverifiedMantleTransaction};
-use lb_storage_service::{
-    StorageMsg, StorageService, api::chain::StorageChainApi, backends::StorageBackend,
-};
+use lb_core::mantle::traits::{PreverifiedMantleTransaction, StorageSize};
+use lb_storage_service::{StorageService, api::StorageApi};
 use lb_time_service::{TimeService, TimeServiceMessage};
 use overwatch::{
     OpaqueServiceResourcesHandle,
@@ -13,67 +10,50 @@ use overwatch::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::{
-    CryptarchiaConsensus,
-    storage::{StorageAdapter as _, adapters::StorageAdapter},
-};
+use crate::CryptarchiaConsensus;
 
 pub type BroadcastRelay = OutboundRelay<BlockBroadcastMsg>;
 
-pub type StorageRelay<Storage> = OutboundRelay<StorageMsg<Storage>>;
-
 pub type TimeRelay = OutboundRelay<TimeServiceMessage>;
 
-pub struct CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>
-where
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-{
+pub struct CryptarchiaConsensusRelays<Tx> {
     broadcast_relay: BroadcastRelay,
-    storage_adapter: StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    storage: StorageApi<Tx>,
     time_relay: TimeRelay,
 }
 
-impl<Tx, Storage, RuntimeServiceId> CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>
-where
-    Tx: PreverifiedMantleTransaction
-        + Debug
-        + Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + Unpin
-        + 'static,
-    Storage: StorageBackend + Send + Sync + 'static,
-    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
-    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: 'static,
-{
-    pub async fn new(
+impl<Tx> CryptarchiaConsensusRelays<Tx> {
+    pub const fn new(
         broadcast_relay: BroadcastRelay,
-        storage_relay: StorageRelay<Storage>,
+        storage: StorageApi<Tx>,
         time_relay: TimeRelay,
     ) -> Self {
-        let storage_adapter =
-            StorageAdapter::<Storage, Tx, RuntimeServiceId>::new(storage_relay).await;
         Self {
             broadcast_relay,
-            storage_adapter,
+            storage,
             time_relay,
         }
     }
 
     #[expect(clippy::allow_attributes_without_reason)]
-    pub async fn from_service_resources_handle<TimeBackend>(
+    pub async fn from_service_resources_handle<TimeBackend, RuntimeServiceId>(
         service_resources_handle: &OpaqueServiceResourcesHandle<
-            CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>,
+            CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>,
             RuntimeServiceId,
         >,
     ) -> Self
     where
+        Tx: PreverifiedMantleTransaction
+            + Debug
+            + Clone
+            + Eq
+            + Serialize
+            + DeserializeOwned
+            + Send
+            + Sync
+            + Unpin
+            + 'static
+            + StorageSize,
         TimeBackend: lb_time_service::backends::TimeBackend,
         TimeBackend::Settings: Clone + Send + Sync + 'static,
         RuntimeServiceId: Debug
@@ -82,7 +62,7 @@ where
             + Display
             + 'static
             + AsServiceId<BlockBroadcastService<RuntimeServiceId>>
-            + AsServiceId<StorageService<Storage, RuntimeServiceId>>
+            + AsServiceId<StorageService<RuntimeServiceId>>
             + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
     {
         let broadcast_relay = service_resources_handle
@@ -94,9 +74,7 @@ where
         succeed",
             );
 
-        let storage_relay = service_resources_handle
-            .overwatch_handle
-            .relay::<StorageService<_, _>>()
+        let storage = StorageApi::from_overwatch_handle(&service_resources_handle.overwatch_handle)
             .await
             .expect("Relay connection with StorageService should succeed");
 
@@ -106,15 +84,15 @@ where
             .await
             .expect("Relay connection with TimeService should succeed");
 
-        Self::new(broadcast_relay, storage_relay, time_relay).await
+        Self::new(broadcast_relay, storage, time_relay)
     }
 
     pub const fn broadcast_relay(&self) -> &BroadcastRelay {
         &self.broadcast_relay
     }
 
-    pub const fn storage_adapter(&self) -> &StorageAdapter<Storage, Tx, RuntimeServiceId> {
-        &self.storage_adapter
+    pub const fn storage(&self) -> &StorageApi<Tx> {
+        &self.storage
     }
 
     pub const fn time_relay(&self) -> &TimeRelay {

@@ -210,8 +210,9 @@ impl TopologyConfig {
     }
 
     pub(crate) const fn apply_deployment_overrides(&self, settings: &mut DeploymentSettings) {
-        settings.cryptarchia.security_param = self.security_param;
-        settings.cryptarchia.slot_activation_coeff = self.active_slot_coeff;
+        let cryptarchia = &mut settings.genesis_era_parameters_mut().cryptarchia;
+        cryptarchia.security_param = self.security_param;
+        cryptarchia.slot_activation_coeff = self.active_slot_coeff;
     }
 }
 

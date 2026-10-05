@@ -1,10 +1,10 @@
-use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::mantle::OpProof;
-#[cfg(feature = "test-utils")]
-use crate::mantle::ops::op_proof::placeholders::placeholder_proof_for;
+#[cfg(any(test, feature = "test-utils"))]
+use crate::mantle::ops::op_proof::samples::sample_proof_for;
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
@@ -177,21 +177,125 @@ impl Op {
         self.by_ref().gas_cost::<Profile>()
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
-    pub fn generate_placeholder_proof(&self) -> OpProof {
+    pub fn sample_proof(&self) -> OpProof {
         match self {
-            Self::ChannelInscribe(op) => placeholder_proof_for(op),
-            Self::ChannelConfig(op) => placeholder_proof_for(op),
-            Self::ChannelDeposit(op) => placeholder_proof_for(op),
-            Self::ChannelWithdraw(op) => placeholder_proof_for(op),
-            Self::ChannelTransfer(op) => placeholder_proof_for(op),
-            Self::SDPDeclare(op) => placeholder_proof_for(op),
-            Self::SDPWithdraw(op) => placeholder_proof_for(op),
-            Self::SDPActive(op) => placeholder_proof_for(op),
-            Self::LeaderClaim(op) => placeholder_proof_for(op),
-            Self::Transfer(op) => placeholder_proof_for(op),
-            Self::ClaimPowReward(op) => placeholder_proof_for(op),
+            Self::ChannelInscribe(op) => sample_proof_for(op),
+            Self::ChannelConfig(op) => sample_proof_for(op),
+            Self::ChannelDeposit(op) => sample_proof_for(op),
+            Self::ChannelWithdraw(op) => sample_proof_for(op),
+            Self::ChannelTransfer(op) => sample_proof_for(op),
+            Self::SDPDeclare(op) => sample_proof_for(op),
+            Self::SDPWithdraw(op) => sample_proof_for(op),
+            Self::SDPActive(op) => sample_proof_for(op),
+            Self::LeaderClaim(op) => sample_proof_for(op),
+            Self::Transfer(op) => sample_proof_for(op),
+            Self::ClaimPowReward(op) => sample_proof_for(op),
+        }
+    }
+}
+
+macro_rules! impl_from_operation {
+    ($($variant:ident => $operation:ident),* $(,)?) => {
+        $(
+            impl From<$operation> for Op {
+                fn from(op: $operation) -> Self {
+                    Self::$variant(op)
+                }
+            }
+        )*
+    };
+}
+
+impl_from_operation! {
+    ChannelInscribe => InscriptionOp,
+    ChannelConfig => ChannelConfigOp,
+    ChannelDeposit => DepositOp,
+    ChannelWithdraw => ChannelWithdrawOp,
+    ChannelTransfer => ChannelTransferOp,
+    SDPDeclare => SDPDeclareOp,
+    SDPWithdraw => SDPWithdrawOp,
+    SDPActive => SDPActiveOp,
+    LeaderClaim => LeaderClaimOp,
+    Transfer => TransferOp,
+    ClaimPowReward => ClaimPowRewardOp,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::mantle::{
+        Op, OpProof, fixtures::ops::op_values::TRANSFER, ledger::ProvableOperation as _,
+        ops::transfer::TransferOp, transactions::Ops,
+    };
+
+    #[test]
+    fn serialize_to_json_tags_the_payload_with_the_opcode() {
+        let op = Op::Transfer(TRANSFER.clone());
+        let encoded_op = serde_json::to_value(&op).expect("the human-readable arm serializes");
+
+        assert_eq!(
+            encoded_op.get("opcode").expect("the json has an opcode"),
+            &serde_json::json!(TransferOp::CODE)
+        );
+    }
+
+    #[test]
+    fn serialize_to_binary_leads_the_payload_with_the_opcode() {
+        let op = Op::Transfer(TRANSFER.clone());
+        let envelope = bincode::serialize(&op).expect("the binary arm serializes");
+        let encoded_op = &envelope[size_of::<u64>()..];
+
+        assert_eq!(encoded_op.first(), Some(&TransferOp::CODE));
+    }
+
+    #[test]
+    fn deserialize_from_json_selects_the_variant_matching_the_opcode() {
+        let op = Op::Transfer(TRANSFER.clone());
+        let encoded_op = serde_json::to_value(&op).expect("the human-readable arm serializes");
+        let decoded_op =
+            serde_json::from_value::<Op>(encoded_op).expect("the human-readable arm deserializes");
+
+        assert!(matches!(decoded_op, Op::Transfer(_)));
+    }
+
+    #[test]
+    fn deserialize_from_binary_reads_the_encoded_operation() {
+        let op = Op::Transfer(TRANSFER.clone());
+        let encoded_op = bincode::serialize(&op).expect("the binary arm serializes");
+        let decoded_op =
+            bincode::deserialize::<Op>(&encoded_op).expect("the binary arm deserializes");
+
+        assert!(matches!(decoded_op, Op::Transfer(_)));
+    }
+
+    #[expect(clippy::match_same_arms, reason = "Clarity")]
+    fn does_proof_match(op: &Op, op_proof: &OpProof) -> bool {
+        match op {
+            Op::ChannelInscribe(_) => matches!(op_proof, OpProof::Ed25519Sig(_)),
+            Op::ChannelConfig(_) => matches!(op_proof, OpProof::ChannelMultiSigProof(_)),
+            Op::ChannelDeposit(_) => matches!(op_proof, OpProof::ZkSig(_)),
+            Op::ChannelWithdraw(_) => matches!(op_proof, OpProof::ChannelMultiSigProof(_)),
+            Op::ChannelTransfer(_) => matches!(op_proof, OpProof::ChannelMultiSigProof(_)),
+            Op::SDPDeclare(_) => matches!(op_proof, OpProof::ZkAndEd25519Sigs(_)),
+            Op::SDPWithdraw(_) => matches!(op_proof, OpProof::ZkSig(_)),
+            Op::SDPActive(_) => matches!(op_proof, OpProof::ZkSig(_)),
+            Op::LeaderClaim(_) => matches!(op_proof, OpProof::PoC(_)),
+            Op::Transfer(_) => matches!(op_proof, OpProof::ZkSig(_)),
+            Op::ClaimPowReward(_) => matches!(op_proof, OpProof::None(_)),
+        }
+    }
+
+    #[test]
+    fn sample_proof_matches_the_kind_each_op_requires() {
+        for op in &Ops::sample() {
+            let proof = op.sample_proof();
+
+            assert!(
+                does_proof_match(op, &proof),
+                "{} got the wrong proof kind: {proof:?}",
+                op.as_str()
+            );
         }
     }
 }

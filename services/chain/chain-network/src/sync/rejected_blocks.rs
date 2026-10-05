@@ -39,6 +39,13 @@ impl RejectedBlocks {
         cache.get(block_id).is_some() || parent_id.is_some_and(|p| cache.get(p).is_some())
     }
 
+    #[cfg(test)]
+    pub fn contains(&self, block_id: &HeaderId) -> bool {
+        self.cache
+            .as_ref()
+            .is_some_and(|cache| cache.contains(block_id))
+    }
+
     /// No-op when the cache is disabled.
     pub fn insert(&mut self, block_id: HeaderId) {
         let Some(cache) = self.cache.as_mut() else {

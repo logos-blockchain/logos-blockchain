@@ -1,10 +1,10 @@
 use bytes::Bytes;
+use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    codec::{DeserializeOp as _, SerializeOp as _},
     crypto::Hash,
     mantle::{
         NoteId, Utxo, Value,
@@ -82,7 +82,7 @@ impl From<HeaderEvent> for Event {
 }
 
 /// An event emitted while processing a transaction
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TxEvent {
     pub tx_hash: TxHash,
     pub op_id: Hash,
@@ -118,7 +118,7 @@ pub struct DepositNote {
 pub type DepositRecreatedNotes = UpperBoundedVec<DepositNote, MAX_TRANSACTION_INPUTS>;
 
 /// Event payloads emitted while processing a transaction
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TxEventPayload {
     Deposit {
         channel_id: ChannelId,
@@ -158,7 +158,7 @@ pub enum HeaderEvent {
 }
 
 impl TryFrom<Bytes> for Events {
-    type Error = crate::codec::Error;
+    type Error = lb_binary_codec::bincode::Error;
 
     fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
         Self::from_bytes(&bytes)
@@ -166,7 +166,7 @@ impl TryFrom<Bytes> for Events {
 }
 
 impl TryFrom<Events> for Bytes {
-    type Error = crate::codec::Error;
+    type Error = lb_binary_codec::bincode::Error;
 
     fn try_from(events: Events) -> Result<Self, Self::Error> {
         events.to_bytes()

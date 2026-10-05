@@ -1,4 +1,8 @@
-use lb_core::mantle::{SignedOps, ledger::verification_mode::StandardMode, transactions::OpProofs};
+use lb_core::mantle::{
+    SignedOps,
+    ledger::{BoundedInputs, verification_mode::StandardMode},
+    transactions::OpProofs,
+};
 
 use super::*;
 
@@ -17,7 +21,7 @@ pub fn build_zone_deposit(
 
     let deposit = DepositOp {
         channel_id,
-        inputs: Inputs::new([note.id()]),
+        inputs: BoundedInputs::from(note.id()).into(),
         metadata,
     };
     let reserved_inputs = vec![note];
@@ -134,7 +138,7 @@ pub async fn submit_zone_channel_split(
         })?;
     let transfer = ChannelTransferOp {
         channel_id,
-        inputs: Inputs::new([input_note.id()]),
+        inputs: BoundedInputs::from(input_note.id()).into(),
         outputs,
     };
 
@@ -163,11 +167,8 @@ pub async fn submit_zone_channel_split(
     // funding appends its own fee transfer proof as the last op.
     let funded_tx = response.funded_tx;
     let tx_hash = funded_tx.hash();
-    let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
-    let proof = ChannelMultiSigProof::try_new([IndexedSignature::new(0, signature)].into())
-        .map_err(|error| ZoneTestError::SplitTransfer {
-            message: format!("multi-sig proof assembly failed: {error:?}"),
-        })?;
+    let signature = signing_key.sign_payload(tx_hash.as_signing_bytes());
+    let proof = ChannelMultiSigProof::new(IndexedSignatures::from((0, signature)));
     let mut op_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(proof)]);
     if let Some(transfer_proof) = response.transfer_proof {
         op_proofs
@@ -256,7 +257,7 @@ pub(super) async fn build_funded_custom_tx(
     payloads: &[Inscription],
     mut parent: MsgId,
 ) -> Result<(SignedOps<Unverified, StandardMode>, MsgId), ZoneTestError> {
-    let signer = signing_key.public_key();
+    let signer = signing_key.public_key().into_unverified();
     let mut tx_builder = MantleTxBuilder::new();
     for payload in payloads {
         let op = InscriptionOp {
@@ -290,7 +291,7 @@ pub(super) async fn build_funded_custom_tx(
     // Funding appends the fee transfer as the last op; every inscription is
     // proven by the sequencer key over the funded tx hash.
     let funded_tx = response.funded_tx;
-    let signature = signing_key.sign_payload(funded_tx.hash().as_signing_bytes().as_ref());
+    let signature = signing_key.sign_payload(funded_tx.hash().as_signing_bytes());
     let mut op_proofs = OpProofs::try_from(vec![OpProof::Ed25519Sig(signature); payloads.len()])
         .map_err(|error| ZoneTestError::BuildCustomTx {
             message: format!("too many operation proofs: {error:?}"),

@@ -223,7 +223,7 @@ mod tests {
         header::{ContentId, HeaderId},
         mantle::{
             Note, SignedOps, Utxo,
-            ledger::{Inputs, Outputs, verification_mode::StandardMode},
+            ledger::{BoundedInputs, Inputs, Outputs, verification_mode::StandardMode},
             ops::{
                 Op,
                 channel::{ChannelId, deposit::DepositOp},
@@ -275,7 +275,7 @@ mod tests {
             Inputs::empty(),
             Outputs::new(outputs),
         ))]);
-        SignedOps::from_ops_with_placeholder_proofs(ops)
+        SignedOps::from_ops_with_sample_proofs(ops)
     }
 
     fn sdp_declaration(service_note_id: lb_core::mantle::NoteId) -> DeclarationMessage {
@@ -345,16 +345,16 @@ mod tests {
         let owned = utxo(10, 0, pk(1));
         let ops = Ops::from([Op::ChannelDeposit(DepositOp {
             channel_id: ChannelId::from([0; 32]),
-            inputs: Inputs::from([owned.id()]),
+            inputs: BoundedInputs::from(owned.id()).into(),
             metadata: b"deposit".into(),
         })]);
-        let spend = SignedOps::from_ops_with_placeholder_proofs(ops);
+        let spend = SignedOps::from_ops_with_sample_proofs(ops);
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[owned])
                 .expect("accounting should build");
         accounting.apply_block(&block(1, vec![spend]));
 
-        assert!(accounting.wallet_utxos()["alice"].is_empty());
+        assert_eq!(accounting.wallet_utxos()["alice"], []);
     }
 
     #[test]
@@ -365,7 +365,7 @@ mod tests {
                 .expect("accounting should build");
         accounting.apply_block(&block(1, vec![tx]));
 
-        assert!(accounting.wallet_utxos()["alice"].is_empty());
+        assert_eq!(accounting.wallet_utxos()["alice"], []);
     }
 
     #[test]
@@ -373,19 +373,19 @@ mod tests {
         let locked = utxo(10, 0, pk(1));
         let declaration = sdp_declaration(locked.id());
         let declare_ops = Ops::from([Op::SDPDeclare(declaration.clone())]);
-        let declare_tx = SignedOps::from_ops_with_placeholder_proofs(declare_ops);
+        let declare_tx = SignedOps::from_ops_with_sample_proofs(declare_ops);
         let withdraw_ops = Ops::from([Op::SDPWithdraw(WithdrawMessage {
             declaration_id: declaration.id(),
             service_note_id: locked.id(),
             nonce: 0,
         })]);
-        let withdraw_tx = SignedOps::from_ops_with_placeholder_proofs(withdraw_ops);
+        let withdraw_tx = SignedOps::from_ops_with_sample_proofs(withdraw_ops);
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[locked])
                 .expect("accounting should build");
 
         accounting.apply_block(&block(1, vec![declare_tx]));
-        assert!(accounting.wallet_utxos()["alice"].is_empty());
+        assert_eq!(accounting.wallet_utxos()["alice"], []);
 
         accounting.apply_block(&block(2, vec![withdraw_tx]));
         assert_eq!(accounting.wallet_utxos()["alice"][0].note.value, 10);

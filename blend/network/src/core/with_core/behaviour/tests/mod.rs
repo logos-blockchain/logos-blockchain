@@ -1,5 +1,8 @@
+mod blacklist;
 mod bootstrapping;
-mod connection_maintenance;
 mod epoch;
+mod handshake;
+mod liveness;
 mod message_handling;
+mod send;
 mod utils;

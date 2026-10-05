@@ -34,7 +34,7 @@ impl Default for Inputs {
         use crate::quota::ED25519_PUBLIC_KEY_SIZE;
 
         Self {
-            signing_key: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+            signing_key: Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
             core: CoreInputs::default(),
             leader: LeaderInputs::default(),
             pow: PowInputs::default(),

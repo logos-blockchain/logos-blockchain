@@ -11,6 +11,7 @@ use super::{
     request_faucet_funds_all_user_wallets, restart_node, sync, utils,
     validate_fee_horizon_after_wallet_batch, verify_no_duplicate_transactions,
     wait_for_all_nodes_to_be_synced_to_chain, wait_for_observed_transaction_hashes,
+    wait_for_observed_transaction_hashes_cancellable,
 };
 
 pub async fn execute_manual_command(
@@ -155,13 +156,23 @@ pub async fn execute_continuous_next_wallet_user_wallet(
     step: &str,
     command: &ManualCommand,
 ) -> Result<(), StepError> {
-    execute_continuous_next_wallet_user_wallet_inner(world, step, command).await
+    execute_continuous_next_wallet_user_wallet_inner(world, step, command, None).await
+}
+
+pub async fn execute_continuous_next_wallet_user_wallet_with_cancellation(
+    world: &mut CucumberWorld,
+    step: &str,
+    command: &ManualCommand,
+    cancellation: &mut tokio::sync::watch::Receiver<bool>,
+) -> Result<(), StepError> {
+    execute_continuous_next_wallet_user_wallet_inner(world, step, command, Some(cancellation)).await
 }
 
 async fn execute_continuous_next_wallet_user_wallet_inner(
     world: &mut CucumberWorld,
     step: &str,
     command: &ManualCommand,
+    mut cancellation: Option<&mut tokio::sync::watch::Receiver<bool>>,
 ) -> Result<(), StepError> {
     let (cycles, transactions_per_wallet, value, epochs_headroom) =
         destructure_next_wallet_command(command)?;
@@ -200,6 +211,7 @@ async fn execute_continuous_next_wallet_user_wallet_inner(
             Some(cycle + 1),
             "CONTINUOUS NEXT WALLET",
             "D",
+            cancellation.as_deref_mut(),
         )
         .await?;
         extend_tx_hash_set(&mut all_next_wallet_tx_hashes, &cycle_tx_hashes);
@@ -227,6 +239,10 @@ async fn execute_continuous_next_wallet_user_wallet_inner(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Transaction verification context and optional task cancellation stay explicit"
+)]
 pub(super) async fn verify_transactions_mined(
     world: &mut CucumberWorld,
     step: &str,
@@ -235,6 +251,7 @@ pub(super) async fn verify_transactions_mined(
     cycle: Option<usize>,
     tag: &str,
     phase: &str,
+    cancellation: Option<&mut tokio::sync::watch::Receiver<bool>>,
 ) -> Result<(), StepError> {
     if tx_hashes.len() != expected_tx_count {
         return Err(StepError::StepFail {
@@ -253,7 +270,18 @@ pub(super) async fn verify_transactions_mined(
         tx_hashes.len(),
     );
 
-    wait_for_observed_transaction_hashes(world, step, tx_hashes, Duration::from_mins(10)).await
+    if let Some(cancellation) = cancellation {
+        wait_for_observed_transaction_hashes_cancellable(
+            world,
+            step,
+            tx_hashes,
+            Duration::from_mins(10),
+            cancellation,
+        )
+        .await
+    } else {
+        wait_for_observed_transaction_hashes(world, step, tx_hashes, Duration::from_mins(10)).await
+    }
 }
 
 pub(super) fn log_phase_counts(

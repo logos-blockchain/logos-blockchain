@@ -49,6 +49,8 @@ pub enum Error {
     LeaderClaim(#[from] LeaderClaimError),
     #[error(transparent)]
     ClaimPow(#[from] ClaimPowRewardError),
+    #[error(transparent)]
+    PowRewardPool(#[from] pow::PowRewardPoolOverflow),
     #[error("Note not found: {0:?}")]
     NoteNotFound(NoteId),
 }
@@ -160,7 +162,7 @@ impl LedgerState {
         self.sdp = new_sdp;
         self.pow = self
             .pow
-            .try_apply_header(last_epoch_state, epoch_state, config);
+            .try_apply_header(last_epoch_state, epoch_state, config)?;
         Ok((self, effect))
     }
 

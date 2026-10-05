@@ -2,7 +2,7 @@ use libp2p::PeerId;
 use thiserror::Error;
 use tokio::time::error::Elapsed;
 
-use crate::{BlocksUnavailableReason, libp2p::packing::PackingError};
+use crate::{BlocksUnavailableReason, GetTipResponseReason, libp2p::packing::PackingError};
 
 #[derive(Debug, Error)]
 pub enum ChainSyncErrorKind {
@@ -10,7 +10,7 @@ pub enum ChainSyncErrorKind {
     RequestBlocksDownloadError(String),
 
     #[error("Failed to request tip: {0}")]
-    RequestTipError(String),
+    RequestTipError(GetTipResponseReason),
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
@@ -113,7 +113,7 @@ impl Clone for ChainSyncErrorKind {
                 }
             },
             Self::RequestBlocksDownloadError(s) => Self::RequestBlocksDownloadError(s.clone()),
-            Self::RequestTipError(s) => Self::RequestTipError(s.clone()),
+            Self::RequestTipError(s) => Self::RequestTipError(*s),
             Self::ChannelReceiveError(s) => Self::ChannelReceiveError(s.clone()),
             Self::ChannelSendError(s) => Self::ChannelSendError(s.clone()),
             Self::ReceivingBlocksError(s) => Self::ReceivingBlocksError(s.clone()),

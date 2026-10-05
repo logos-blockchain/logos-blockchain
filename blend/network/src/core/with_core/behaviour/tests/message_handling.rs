@@ -1,23 +1,27 @@
 use core::time::Duration;
-use std::collections::HashSet;
 
 use futures::StreamExt as _;
 use lb_blend_message::serialize_encapsulated_message_with_verified_public_header;
 use lb_libp2p::SwarmEvent;
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
-use tokio::{select, time::sleep};
+use tokio::{
+    select,
+    time::{sleep, timeout},
+};
 
 use crate::core::{
     tests::utils::{
-        TestEncapsulatedMessage, TestEncapsulatedMessageWithEpoch, TestProofsVerifier, TestSwarm,
+        TestEncapsulatedMessage, TestProofsVerifier, TestSwarm, undecodable_message_bytes,
     },
     with_core::{
         behaviour::{
-            Event, NegotiatedPeerState, SpamReason,
+            Event,
+            blacklist::BlacklistReason,
             message_cache::MessageStatus,
             tests::utils::{
-                BehaviourBuilder, SwarmExt as _, build_memberships, new_nodes_with_empty_address,
+                BehaviourBuilder, PEERING_DEGREE, SwarmExt as _, build_memberships,
+                new_nodes_with_empty_address,
             },
         },
         error::SendError,
@@ -76,15 +80,6 @@ async fn message_sending_and_reception() {
             .unwrap(),
         &MessageStatus::Processed
     );
-    assert_eq!(
-        listening_swarm
-            .behaviour()
-            .message_cache
-            .messages_from_peer(dialing_swarm.local_peer_id())
-            .collect::<HashSet<_>>(),
-        vec![test_message_id].into_iter().collect::<HashSet<_>>()
-    );
-
     // Second copy of the message should not be sent because it was already
     // processed.
     assert_eq!(
@@ -113,20 +108,24 @@ async fn undeserializable_message_received() {
     dialing_swarm
         .behaviour_mut()
         .force_send_serialized_message_to_current_epoch_peer(
-            b"msg".to_vec(),
+            &undecodable_message_bytes(),
             *listening_swarm.local_peer_id(),
         )
         .unwrap();
 
-    let mut events_to_match = 2u8;
+    let mut events_to_match = 3u8;
     loop {
         select! {
             _ = dialing_swarm.select_next_some() => {}
             listening_swarm_event = listening_swarm.select_next_some() => {
                 match listening_swarm_event {
-                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, peer_state)) => {
+                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id)) => {
                         assert_eq!(peer_id, *dialing_swarm.local_peer_id());
-                        assert_eq!(peer_state, NegotiatedPeerState::Spammy(SpamReason::UndeserializableMessage));
+                        events_to_match -= 1;
+                    }
+                    SwarmEvent::Behaviour(Event::PeerBlacklisted { peer, reason }) => {
+                        assert_eq!(peer, *dialing_swarm.local_peer_id());
+                        assert_eq!(reason, BlacklistReason::UndeserializableMessage);
                         events_to_match -= 1;
                     }
                     SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {
@@ -170,21 +169,33 @@ async fn message_with_unexpected_layer_count_disconnects_peer() {
     dialing_swarm
         .behaviour_mut()
         .force_send_serialized_message_to_current_epoch_peer(
-            serialize_encapsulated_message_with_verified_public_header(message.as_ref()),
+            &serialize_encapsulated_message_with_verified_public_header(message.as_ref()),
             *listening_swarm.local_peer_id(),
         )
         .unwrap();
 
-    let mut events_to_match = 2u8;
+    let mut events_to_match = 3u8;
     loop {
         select! {
             _ = dialing_swarm.select_next_some() => {}
             listening_swarm_event = listening_swarm.select_next_some() => {
                 match listening_swarm_event {
-                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, peer_state)) => {
+                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id)) => {
                         assert_eq!(peer_id, *dialing_swarm.local_peer_id());
-                        assert_eq!(peer_state, NegotiatedPeerState::Spammy(SpamReason::UndeserializableMessage));
                         events_to_match -= 1;
+                    }
+                    // The reason is deliberately not pinned. With no length on
+                    // the wire, a node reads the number of bytes its own layer
+                    // count implies, so a message built for a different one is
+                    // read as a truncated prefix and fails whichever check the
+                    // misread bytes reach first. What matters is that it is
+                    // never accepted and the sender is excluded.
+                    SwarmEvent::Behaviour(Event::PeerBlacklisted { peer, .. }) => {
+                        assert_eq!(peer, *dialing_swarm.local_peer_id());
+                        events_to_match -= 1;
+                    }
+                    SwarmEvent::Behaviour(Event::Message { .. }) => {
+                        panic!("A message built for a different layer count must never be accepted.");
                     }
                     SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {
                         assert_eq!(peer_id, *dialing_swarm.local_peer_id());
@@ -202,7 +213,7 @@ async fn message_with_unexpected_layer_count_disconnects_peer() {
 }
 
 #[test(tokio::test)]
-async fn duplicate_message_received_from_same_peer() {
+async fn a_duplicate_from_the_same_peer_carries_no_reaction() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut dialing_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id).with_membership(&nodes).build()
@@ -222,11 +233,9 @@ async fn duplicate_message_received_from_same_peer() {
         .publish_message_with_validated_header_to_current_epoch(test_message.as_ref())
         .unwrap();
 
-    // Poll both swarms until the first message is fully received by the listener.
-    // Without this, the message stays queued in the behaviour and is never sent
-    // over the wire, causing both messages to arrive in the same connection
-    // monitor window and triggering `TooManyMessages` instead of
-    // `DuplicateMessage`.
+    // Poll both swarms until the first copy is fully received by the listener,
+    // so that the second one really is a duplicate rather than the first
+    // message still sitting in a queue.
     loop {
         select! {
             _ = dialing_swarm.select_next_some() => {}
@@ -238,10 +247,9 @@ async fn duplicate_message_received_from_same_peer() {
         }
     }
 
-    // Wait enough time to not considered spammy by the listener.
-    sleep(Duration::from_secs(3)).await;
-
-    // This is a duplicate message, so the listener will mark the dialer as spammy.
+    // The same message again. An honest node relaying along two paths produces
+    // duplicates as a matter of course, so the listener must neither report it
+    // twice nor hold it against the sender.
     dialing_swarm
         .behaviour_mut()
         .force_send_message_to_current_epoch_peer(
@@ -250,29 +258,32 @@ async fn duplicate_message_received_from_same_peer() {
         )
         .unwrap();
 
-    let mut events_to_match = 2u8;
-    loop {
-        select! {
-            _ = dialing_swarm.select_next_some() => {}
-            listening_swarm_event = listening_swarm.select_next_some() => {
-                match listening_swarm_event {
-                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, peer_state)) => {
-                        assert_eq!(peer_id, *dialing_swarm.local_peer_id());
-                        assert_eq!(peer_state, NegotiatedPeerState::Spammy(SpamReason::DuplicateMessage));
-                        events_to_match -= 1;
+    let reaction = timeout(Duration::from_secs(2), async {
+        loop {
+            select! {
+                _ = dialing_swarm.select_next_some() => {}
+                listening_swarm_event = listening_swarm.select_next_some() => {
+                    match listening_swarm_event {
+                        SwarmEvent::Behaviour(Event::Message { .. }) => {
+                            return "the duplicate was reported to the swarm a second time";
+                        }
+                        SwarmEvent::Behaviour(Event::PeerBlacklisted { .. }) => {
+                            return "the sender was blacklisted";
+                        }
+                        SwarmEvent::Behaviour(Event::PeerDisconnected(_))
+                        | SwarmEvent::ConnectionClosed { .. } => {
+                            return "the connection was closed";
+                        }
+                        _ => {}
                     }
-                    SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {
-                        assert_eq!(peer_id, *dialing_swarm.local_peer_id());
-                        assert!(endpoint.is_listener());
-                        events_to_match -= 1;
-                    }
-                    _ => {}
                 }
             }
         }
-        if events_to_match == 0 {
-            break;
-        }
+    })
+    .await;
+
+    if let Ok(reaction) = reaction {
+        panic!("A duplicate must carry no reaction, but {reaction}.");
     }
 }
 
@@ -288,7 +299,7 @@ async fn duplicate_message_received_from_different_peers() {
     let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
-            .with_peering_degree(1..=2)
+            .with_peering_degree(PEERING_DEGREE)
             .build()
     });
 
@@ -374,15 +385,19 @@ async fn invalid_signature_message_received() {
         )
         .unwrap();
 
-    let mut events_to_match = 2u8;
+    let mut events_to_match = 3u8;
     loop {
         select! {
             _ = dialing_swarm.select_next_some() => {}
             listening_swarm_event = listening_swarm.select_next_some() => {
                 match listening_swarm_event {
-                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, peer_state)) => {
+                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id)) => {
                         assert_eq!(peer_id, *dialing_swarm.local_peer_id());
-                        assert_eq!(peer_state, NegotiatedPeerState::Spammy(SpamReason::InvalidHeaderSignature));
+                        events_to_match -= 1;
+                    }
+                    SwarmEvent::Behaviour(Event::PeerBlacklisted { peer, reason }) => {
+                        assert_eq!(peer, *dialing_swarm.local_peer_id());
+                        assert_eq!(reason, BlacklistReason::InvalidHeaderSignature);
                         events_to_match -= 1;
                     }
                     SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {
@@ -402,7 +417,7 @@ async fn invalid_signature_message_received() {
 }
 
 /// A message whose `PoQ` does not verify is never reported to the swarm — so it
-/// can never be relayed — and its sender is marked as spammy and disconnected,
+/// can never be relayed — and its sender is blacklisted and disconnected,
 /// exactly like a peer sending a message with an invalid signature.
 #[test(tokio::test)]
 async fn invalid_proof_of_quota_message_received() {
@@ -430,7 +445,7 @@ async fn invalid_proof_of_quota_message_received() {
         .publish_message_with_validated_header_to_current_epoch(test_message.as_ref())
         .unwrap();
 
-    let mut events_to_match = 2u8;
+    let mut events_to_match = 3u8;
     loop {
         select! {
             _ = dialing_swarm.select_next_some() => {}
@@ -439,9 +454,13 @@ async fn invalid_proof_of_quota_message_received() {
                     SwarmEvent::Behaviour(Event::Message { .. }) => {
                         panic!("A message whose PoQ failed to verify must not be reported to the swarm");
                     }
-                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, peer_state)) => {
+                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id)) => {
                         assert_eq!(peer_id, *dialing_swarm.local_peer_id());
-                        assert_eq!(peer_state, NegotiatedPeerState::Spammy(SpamReason::InvalidProofOfQuota));
+                        events_to_match -= 1;
+                    }
+                    SwarmEvent::Behaviour(Event::PeerBlacklisted { peer, reason }) => {
+                        assert_eq!(peer, *dialing_swarm.local_peer_id());
+                        assert_eq!(reason, BlacklistReason::InvalidProofOfQuota);
                         events_to_match -= 1;
                     }
                     SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {
@@ -495,7 +514,7 @@ async fn message_already_forwarded_silently_ignored_when_received_from_peer() {
     // Node B sends X back to Node A (bypassing Node B's own Forwarded check).
     // From Node A's perspective X is already `Forwarded`, so the
     // `is_message_processed` guard should fire and the message must be
-    // silently dropped - no event, no spam marking.
+    // silently dropped - no event, no blacklisting.
     node_b
         .behaviour_mut()
         .force_send_message_to_current_epoch_peer(
@@ -530,12 +549,12 @@ async fn message_already_forwarded_silently_ignored_when_received_from_peer() {
     );
     assert!(
         !node_a_got_disconnect,
-        "Node A must not mark Node B as spammy for sending an already-forwarded message"
+        "Node A must not mark Node B as malicious for sending an already-forwarded message"
     );
 }
 
 #[test(tokio::test)]
-async fn duplicate_message_in_old_epoch_disconnects_peer_without_swarm_notification() {
+async fn a_duplicate_over_an_old_epoch_connection_carries_no_reaction() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut sender = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id).with_membership(&nodes).build()
@@ -575,14 +594,10 @@ async fn duplicate_message_in_old_epoch_disconnects_peer_without_swarm_notificat
         TestProofsVerifier::accepting(),
     );
 
-    // Wait long enough so that the connection monitor does not fire
-    // `TooManyMessages` instead.
-    sleep(Duration::from_secs(3)).await;
-
     // Sender sends X again, bypassing its own `Forwarded` guard. From
     // receiver's point of view this arrives over the old-epoch connection.
-    // The old-epoch handler detects a duplicate from the same peer,
-    // closes the connection, but must NOT emit a `PeerDisconnected` event.
+    // The old epoch reaches the relay checks by its own path, so it gets its
+    // own guard against the duplicate penalty coming back on one side only.
     sender
         .behaviour_mut()
         .force_send_message_to_current_epoch_peer(
@@ -591,35 +606,34 @@ async fn duplicate_message_in_old_epoch_disconnects_peer_without_swarm_notificat
         )
         .unwrap();
 
-    let mut peer_disconnected_event = false;
-    let mut connection_closed = false;
-    loop {
-        select! {
-            () = sleep(Duration::from_secs(15)) => { break; }
-            _ = sender.select_next_some() => {}
-            event = receiver.select_next_some() => {
-                println!("Received event: {event:?}");
-                match event {
-                    SwarmEvent::Behaviour(Event::PeerDisconnected(..)) => {
-                        peer_disconnected_event = true;
+    let reaction = timeout(Duration::from_secs(3), async {
+        loop {
+            select! {
+                _ = sender.select_next_some() => {}
+                event = receiver.select_next_some() => {
+                    match event {
+                        SwarmEvent::Behaviour(Event::PeerBlacklisted { .. }) => {
+                            return "the sender was blacklisted";
+                        }
+                        SwarmEvent::Behaviour(Event::PeerDisconnected(..)) => {
+                            return "a disconnection was reported to the swarm";
+                        }
+                        SwarmEvent::ConnectionClosed { peer_id, .. }
+                            if peer_id == *sender.local_peer_id() =>
+                        {
+                            return "the old-epoch connection was closed";
+                        }
+                        _ => {}
                     }
-                    SwarmEvent::ConnectionClosed { peer_id, .. } if peer_id == *sender.local_peer_id() => {
-                        connection_closed = true;
-                    }
-                    _ => {}
                 }
             }
         }
-    }
+    })
+    .await;
 
-    assert!(
-        connection_closed,
-        "Connection with spammy old-epoch peer must be closed"
-    );
-    assert!(
-        !peer_disconnected_event,
-        "No PeerDisconnected event must be emitted for a spammy old-epoch peer"
-    );
+    if let Ok(reaction) = reaction {
+        panic!("A duplicate must carry no reaction, but {reaction}.");
+    }
 }
 
 #[test(tokio::test)]
@@ -647,13 +661,14 @@ async fn undeserializable_message_in_old_epoch_closes_connection_without_swarm_n
     sender
         .behaviour_mut()
         .force_send_serialized_message_to_current_epoch_peer(
-            b"garbage".to_vec(),
+            &undecodable_message_bytes(),
             *receiver.local_peer_id(),
         )
         .unwrap();
 
     let mut peer_disconnected_event = false;
     let mut connection_closed = false;
+    let mut blacklisted_for = None;
     loop {
         select! {
             () = sleep(Duration::from_secs(15)) => { break; }
@@ -662,6 +677,10 @@ async fn undeserializable_message_in_old_epoch_closes_connection_without_swarm_n
                 match event {
                     SwarmEvent::Behaviour(Event::PeerDisconnected(..)) => {
                         peer_disconnected_event = true;
+                    }
+                    SwarmEvent::Behaviour(Event::PeerBlacklisted { peer, reason }) => {
+                        assert_eq!(peer, *sender.local_peer_id());
+                        blacklisted_for = Some(reason);
                     }
                     SwarmEvent::ConnectionClosed { .. } => {
                         connection_closed = true;
@@ -674,16 +693,30 @@ async fn undeserializable_message_in_old_epoch_closes_connection_without_swarm_n
 
     assert!(
         connection_closed,
-        "Connection with spammy old-epoch peer must be closed"
+        "Connection with a misbehaving old-epoch peer must be closed"
     );
     assert!(
         !peer_disconnected_event,
-        "No PeerDisconnected event must be emitted for a spammy old-epoch peer"
+        "No PeerDisconnected event must be emitted for a misbehaving old-epoch peer"
+    );
+    // The blacklist belongs to the node, not to an epoch, so an offence over
+    // an old-epoch connection excludes the peer just the same.
+    assert_eq!(
+        blacklisted_for,
+        Some(BlacklistReason::UndeserializableMessage)
+    );
+    assert!(
+        receiver
+            .behaviour()
+            .blacklisted_peers()
+            .any(|peer| peer == sender.local_peer_id())
     );
 }
 
+/// A peer excluded over one connection is excluded as a peer, so it loses the
+/// others too — including the one it holds for the current epoch.
 #[test(tokio::test)]
-async fn spammy_old_epoch_peer_does_not_affect_current_epoch() {
+async fn a_peer_that_offends_on_an_old_epoch_connection_loses_its_current_epoch_one() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut sender = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id).with_membership(&nodes).build()
@@ -709,56 +742,56 @@ async fn spammy_old_epoch_peer_does_not_affect_current_epoch() {
         TestProofsVerifier::accepting(),
     );
     sender.connect_and_wait_for_upgrade(&mut receiver).await;
+    assert!(
+        receiver
+            .behaviour()
+            .negotiated_peers()
+            .contains_key(sender.local_peer_id())
+    );
 
-    // Sender sends garbage over the old-epoch connection. This should
-    // close the old-epoch connection but NOT mark the peer as spammy in
-    // the current epoch.
+    // Sender sends garbage over the old-epoch connection.
     sender
         .behaviour_mut()
         .force_send_serialized_message_to_peer_at_epoch(
-            b"garbage".to_vec(),
+            &undecodable_message_bytes(),
             *receiver.local_peer_id(),
             0.into(),
         )
         .unwrap();
 
-    // Wait for the old-epoch connection to close.
-    loop {
-        select! {
-            () = sleep(Duration::from_secs(15)) => {
-                panic!("Timed out waiting for old-epoch connection to close");
-            }
-            _ = sender.select_next_some() => {}
-            event = receiver.select_next_some() => {
-                if let SwarmEvent::ConnectionClosed { .. } = event {
-                    break;
+    // The current-epoch connection goes with it, and the swarm is told, so
+    // that it can dial a replacement.
+    let disconnected = timeout(Duration::from_secs(15), async {
+        loop {
+            select! {
+                _ = sender.select_next_some() => {}
+                event = receiver.select_next_some() => {
+                    if let SwarmEvent::Behaviour(Event::PeerDisconnected(peer)) = event
+                        && peer == *sender.local_peer_id()
+                    {
+                        return;
+                    }
                 }
             }
         }
-    }
-
-    // Now verify the current epoch connection is healthy by sending a
-    // valid message through it.
-    let test_message = TestEncapsulatedMessageWithEpoch::new(1.into(), b"after-spam");
-    sender
-        .behaviour_mut()
-        .publish_message_with_validated_header(&test_message, 1.into())
-        .unwrap();
-
-    loop {
-        select! {
-            () = sleep(Duration::from_secs(15)) => {
-                panic!("Timed out waiting for message on current epoch - current epoch connection was incorrectly affected by old epoch spam");
-            }
-            _ = sender.select_next_some() => {}
-            event = receiver.select_next_some() => {
-                if let SwarmEvent::Behaviour(Event::Message { message, .. }) = event {
-                    assert_eq!(message.id(), test_message.id());
-                    break;
-                }
-            }
-        }
-    }
+    })
+    .await;
+    assert!(
+        disconnected.is_ok(),
+        "the peer kept its current-epoch connection after being blacklisted"
+    );
+    assert!(
+        !receiver
+            .behaviour()
+            .negotiated_peers()
+            .contains_key(sender.local_peer_id())
+    );
+    assert!(
+        receiver
+            .behaviour()
+            .blacklisted_peers()
+            .any(|peer| peer == sender.local_peer_id())
+    );
 }
 
 #[test(tokio::test)]
@@ -773,7 +806,7 @@ async fn duplicate_message_from_old_epoch_after_epoch_rotation_is_suppressed() {
     let mut receiver = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
-            .with_peering_degree(1..=2)
+            .with_peering_degree(PEERING_DEGREE)
             .build()
     });
 

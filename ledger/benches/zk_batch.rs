@@ -29,7 +29,7 @@ use lb_core::{
         Note, Op, OpProof, SignedOps, Utxo,
         batch::DeferredZkpVerifications,
         gas::MainnetGasProfile,
-        ledger::{Inputs, Outputs, verification_mode::StandardMode},
+        ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
         ops::transfer::TransferOp,
         traits::Hashable as _,
         transactions::{OpProofs, Ops, states::Preverified},
@@ -228,7 +228,7 @@ fn apply(
 ) -> (LedgerState, DeferredZkpVerifications) {
     let (state, _, deferred) = state
         .clone()
-        .try_apply_contents::<_, HeaderId, MainnetGasProfile>(&TX_POOL.config, txs)
+        .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(&TX_POOL.config, txs)
         .expect("block should apply");
     (state, deferred)
 }
@@ -237,7 +237,7 @@ fn apply(
 /// sends the very little amount to `key`.
 fn build_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
     let transfer_op = TransferOp::new(
-        Inputs::new([utxo.id()]),
+        BoundedInputs::from(utxo.id()).into(),
         // Most of the tx's value goes as a tip, to withstand gas cost increases.
         Outputs::new([Note::new(1, key.to_public_key())]),
     );
@@ -305,13 +305,15 @@ fn config() -> Config {
             reward: RewardPoWConfig {
                 reward_pool_genesis: 1_000_000_000,
                 epoch_reward_genesis: 1_000_000,
-                initial_difficulty: ModulusShift::new::<26>(),
+                minimum_difficulty: ModulusShift::new::<26>(),
                 ema_smoothing_factor: 9,
                 ema_smoothing_precision: NonZero::new(10).unwrap(),
                 target_claims_per_block: 100,
                 rate_num: 0,
                 rate_den: NonZero::<u64>::MIN,
                 target_claim_per_block: NonZero::<u64>::MIN,
+                pow_share: 0,
+                share_den: NonZero::<u64>::MIN,
                 slot_window: NonZero::new(100).unwrap(),
             },
         },

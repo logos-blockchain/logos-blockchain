@@ -32,7 +32,7 @@ use lb_core::{
         traits::Hashable as _,
         transactions::{builder::MantleTxBuilder, states::Unverified},
     },
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
@@ -59,7 +59,7 @@ use super::runner::{
     self, ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, FundingConfig,
     InscriptionId, InscriptionInfo, PendingTx, PreparedAtomicBundle, PublishResult,
     SequencerChannelView, SequencerCheckpoint, SequencerClient, SequencerConfig, TurnNotification,
-    TxStatus, TxStatusUpdate, WithdrawArg, WithdrawInputs,
+    WithdrawArg, WithdrawInputs,
 };
 
 /// Inscriptions in the just-finalized txs — the permanent, settled part of the
@@ -77,6 +77,29 @@ fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &In
             | FinalizedOp::Config(_)
             | FinalizedOp::ChannelTransfer(_) => None,
         })
+}
+
+/// The inscriptions carried by channel-update entries, in order — the
+/// non-finalized counterpart of [`finalized_inscriptions`].
+trait Inscriptions<'a> {
+    fn inscriptions(self) -> impl Iterator<Item = &'a InscriptionInfo>;
+}
+
+impl<'a, I: IntoIterator<Item = &'a ChannelUpdateTx>> Inscriptions<'a> for I {
+    fn inscriptions(self) -> impl Iterator<Item = &'a InscriptionInfo> {
+        self.into_iter().filter_map(ChannelUpdateTx::inscription)
+    }
+}
+
+/// The entries an update contributes to a consumer's non-finalized view: a
+/// conflict's whole `canonical_chain()` (the consumer clears first), an
+/// extension's `adopted` (the consumer keeps what it holds).
+fn contributed(update: &ChannelUpdate) -> impl Iterator<Item = &ChannelUpdateTx> {
+    let prefix = match update {
+        ChannelUpdate::Conflict { common_prefix, .. } => common_prefix.as_slice(),
+        ChannelUpdate::Extension { .. } => &[],
+    };
+    prefix.iter().chain(update.adopted())
 }
 use crate::{
     common::{
@@ -221,25 +244,25 @@ impl PublishDeadline {
 /// drive task; the event mpsc is purely for test observation.
 pub struct PolicyRuntime {
     pub task: JoinHandle<()>,
+    pub view_violation: runner::ViewViolation,
     pub client: SequencerClient,
     pub events: tokio::sync::broadcast::Receiver<Event>,
     pub checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
     pub ready_rx: tokio::sync::watch::Receiver<bool>,
     pub channel_view_rx: tokio::sync::watch::Receiver<SequencerChannelView>,
     pub turn_to_write_rx: tokio::sync::watch::Receiver<TurnNotification>,
-    pub tx_status_rx: tokio::sync::broadcast::Receiver<TxStatusUpdate>,
 }
 
 fn to_policy_runtime(rt: runner::Runtime) -> PolicyRuntime {
     PolicyRuntime {
         task: rt.task,
+        view_violation: rt.view_violation,
         client: rt.client,
         events: rt.event_rx,
         checkpoint_rx: rt.checkpoint_rx,
         ready_rx: rt.ready_rx,
         channel_view_rx: rt.channel_view_rx,
         turn_to_write_rx: rt.turn_to_write_rx,
-        tx_status_rx: rt.tx_status_rx,
     }
 }
 
@@ -264,10 +287,9 @@ pub(super) use observation::{
     sequencer_config_with_pending_submit_depth, wait_for_channel_transfer_input_count,
     wait_for_channel_view, wait_for_channel_wallet_counts, wait_for_channel_wallet_note,
     wait_for_deposit, wait_for_exact_indexed_payload_count,
-    wait_for_finalized_deposit_via_sequencer_and_collect_mempool_pending,
-    wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pending, wait_for_lib_advance,
-    wait_for_on_chain_statuses_and_collect_mempool_pending, wait_for_transactions_finalized,
-    wait_for_turn_to_write, wait_for_tx_status_lifecycle, wait_for_withdraw,
+    wait_for_finalized_deposit_via_sequencer, wait_for_finalized_withdraw_via_sequencer,
+    wait_for_lib_advance, wait_for_transactions_finalized, wait_for_turn_to_write,
+    wait_for_withdraw,
 };
 pub(super) use policies::{
     start_balance_aware_policy, start_republish_lineage_policy, start_sequencer_event_loop,

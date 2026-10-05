@@ -3,10 +3,10 @@ use lb_core::{
         SignedOps,
         channel::{SlotTimeframe, SlotTimeout},
         ledger::{NoteId, verification_mode::StandardMode},
-        ops::channel::{MsgId, config::Keys, inscribe::Inscription},
+        ops::channel::{MsgId, VerifiedChannelKeys, inscribe::Inscription},
         transactions::{Ops, states::Unverified},
     },
-    proofs::channel_multi_sig_proof::IndexedSignature,
+    proofs::channel_multi_sig_proof::IndexedSignatures,
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
 
@@ -61,27 +61,24 @@ where
 {
     /// Enqueue an inscription onto the zone's channel.
     ///
-    /// With funding configured ([`SequencerConfig::funding`]), first funds
-    /// the transaction from the node's wallet (one HTTP round-trip) and
-    /// signs the funded hash; a funding failure returns an error without
-    /// mutating state. Then records the inscription as pending and queues a
-    /// `post_transaction` future onto the drive loop's in-flight pool — the
-    /// post itself happens asynchronously the next time the drive loop polls
-    /// `next_event`. The returned [`PublishResult`] reflects this queued
-    /// state, not a network acknowledgement; the tx may not have reached the
-    /// node yet. The accompanying [`SequencerCheckpoint`] captures the new
-    /// pending state so the caller can persist outbox + checkpoint
-    /// atomically.
+    /// First funds the transaction from the node's wallet
+    /// ([`SequencerConfig::funding`](super::SequencerConfig::funding), one
+    /// HTTP round-trip) and signs the funded hash; a funding failure returns
+    /// an error without mutating state. Then records the inscription as
+    /// pending and queues a `post_transaction` future onto the drive loop's
+    /// in-flight pool — the post itself happens asynchronously the next time
+    /// the drive loop polls `next_event`. The returned
+    /// [`PublishResult`](super::PublishResult) reflects this queued state, not
+    /// a network acknowledgement; the tx may not have reached the node yet.
+    /// The accompanying [`SequencerCheckpoint`](super::SequencerCheckpoint)
+    /// captures the new pending state so the caller can persist outbox +
+    /// checkpoint atomically.
     ///
     /// Returns [`Error::Unavailable`] if cold-start backfill is still in
-    /// progress (the sequencer hasn't emitted [`super::Event::Ready`] yet)
-    /// — or, with funding configured, while the node is disconnected
-    /// (funding needs the node; a fresh `Ready` event is emitted when the
-    /// reconnect completes, signalling it is safe to retry). Fee-less
-    /// sequencers keep the old contract: after the first `Ready`, publishes
-    /// are always accepted — during a mid-life reconnect the tx is queued
-    /// locally and posted when the stream resumes (or when our turn comes
-    /// back). To wait for readiness asynchronously, subscribe via
+    /// progress (the sequencer hasn't emitted [`super::Event::Ready`] yet),
+    /// or while the node is disconnected: funding needs the node, and a fresh
+    /// `Ready` event is emitted when the reconnect completes, signalling it is
+    /// safe to retry. To wait for readiness asynchronously, subscribe via
     /// [`ZoneSequencer::subscribe_ready`].
     pub async fn publish(&mut self, data: Inscription) -> Result<PublishReceipt, Error> {
         self.sequencer.do_publish(data).await
@@ -130,8 +127,8 @@ where
     /// channel's current accredited list (at any position) and the channel's
     /// `configuration_threshold` must be 1 — this one-shot helper does not
     /// collect signatures from other key holders. Multi-sig channels are
-    /// reconfigured by collecting the signatures out-of-band and submitting
-    /// the fully-signed transaction via [`Self::submit_signed_tx`]. This
+    /// reconfigured with [`Self::prepare_channel_config`], collecting the
+    /// signatures out-of-band, and [`Self::submit_channel_config`]. This
     /// overwrites the entire key list — include the sequencer's own key if
     /// it should remain authorized.
     ///
@@ -139,16 +136,17 @@ where
     /// sequencer rotation (see Mantle spec). Pass `0` for both to keep a
     /// single fixed sequencer at index 0.
     ///
-    /// With funding configured ([`SequencerConfig::funding`]), first funds
-    /// the transaction from the node's wallet and signs the funded hash.
-    /// Enqueues the config tx onto the drive loop's in-flight pool — the
-    /// post runs the next time the drive loop polls `next_event`. The
-    /// returned [`PublishResult`] reflects the queued state, not a network
-    /// acknowledgement. The signed tx is also returned for callers that want
-    /// to observe finalization via the event stream.
+    /// First funds the transaction from the node's wallet
+    /// ([`SequencerConfig::funding`](super::SequencerConfig::funding)) and
+    /// signs the funded hash. Enqueues the config tx onto the drive loop's
+    /// in-flight pool — the post runs the next time the drive loop polls
+    /// `next_event`. The returned [`PublishResult`](super::PublishResult)
+    /// reflects the queued state, not a network acknowledgement. The signed tx
+    /// is also returned for callers that want to observe finalization via
+    /// the event stream.
     pub async fn channel_config(
         &mut self,
-        keys: Keys,
+        keys: VerifiedChannelKeys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
@@ -182,7 +180,7 @@ where
     /// is empty and the threshold `0` — submit with no signatures.
     pub async fn prepare_channel_config(
         &mut self,
-        keys: Keys,
+        keys: VerifiedChannelKeys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
@@ -203,14 +201,15 @@ where
     /// signatures.
     ///
     /// `signatures` must be indexed against
-    /// [`PreparedChannelConfig::accredited_keys`] and strictly ascending by
-    /// index. Assembles the fully-signed config tx and enqueues it for posting
+    /// [`PreparedChannelConfig::accredited_keys`], with at most one signature
+    /// per index. Assembles the fully-signed config tx and
+    /// enqueues it for posting
     /// on the drive loop's in-flight pool — the returned [`PublishReceipt`]
     /// reflects the queued state, not a network acknowledgement.
     pub fn submit_channel_config(
         &mut self,
         prepared: PreparedChannelConfig,
-        signatures: Vec<IndexedSignature>,
+        signatures: IndexedSignatures,
     ) -> Result<PublishReceipt, Error> {
         self.sequencer
             .do_submit_channel_config(prepared, signatures)
@@ -222,23 +221,23 @@ where
     /// accredited-key index from cached channel state (kept fresh by the
     /// drive loop). Selects the inscription's `parent_msg` from the current
     /// canonical tip, builds the bundled `MantleTx` (funding it from the
-    /// node's wallet when [`SequencerConfig::funding`] is set), signs the
-    /// funded hash locally with the sequencer's key, and submits. Scoped to
+    /// node's wallet, see
+    /// [`SequencerConfig::funding`](super::SequencerConfig::funding)), signs
+    /// the funded hash locally with the sequencer's key, and submits. Scoped to
     /// single-sequencer (centralized) channels — only the sequencer's own
     /// signature is used.
     ///
-    /// Returns [`Error::Unavailable`] only if cold-start backfill is still
-    /// in progress (see [`Self::publish`] for the latched readiness
-    /// contract). After the first `Ready`, builds from cached channel state
-    /// even mid-life reconnect and queues locally; the post fires once the
-    /// stream resumes and our turn is current. Returns [`Error::Network`] if
-    /// the channel's `transfer_threshold > 1` (which would require multi-sig
-    /// orchestration this API doesn't support).
+    /// Returns [`Error::Unavailable`] while cold-start backfill is still in
+    /// progress or the node is disconnected, as [`Self::publish`] does.
+    /// Returns [`Error::Network`] if the channel's `transfer_threshold > 1`
+    /// (which would require multi-sig orchestration this API doesn't
+    /// support).
     ///
     /// `inputs` chooses which tracked channel notes fund the transfer —
-    /// [`WithdrawInputs::Auto`] lets the SDK pick covering notes (largest
-    /// first, own-key notes ahead of the rest), or [`WithdrawInputs::Explicit`]
-    /// pins an exact input set.
+    /// [`WithdrawInputs::Auto`] lets the SDK pick covering notes (newest
+    /// first, own-key notes ahead of the rest, then sweeping dust into the
+    /// spare input slots), or [`WithdrawInputs::Explicit`] pins an exact input
+    /// set.
     pub async fn publish_atomic_withdraw(
         &mut self,
         inscribe: Inscription,
@@ -300,38 +299,15 @@ where
     /// signatures.
     ///
     /// `signatures` must be indexed against
-    /// [`PreparedAtomicBundle::accredited_keys`] and strictly ascending by
-    /// index. Handles both atomic-withdraw and pin-deposit bundles.
+    /// [`PreparedAtomicBundle::accredited_keys`], with at most one signature
+    /// per index, in any order. Handles both atomic-withdraw and pin-deposit
+    /// bundles.
     pub fn submit_atomic_bundle(
         &mut self,
         prepared: PreparedAtomicBundle,
-        signatures: Vec<IndexedSignature>,
+        signatures: IndexedSignatures,
     ) -> Result<PublishReceipt, Error> {
         self.sequencer.do_submit_atomic_bundle(prepared, signatures)
-    }
-
-    /// Sign a prepared config with this sequencer's own key, returning its
-    /// [`IndexedSignature`] — the counterparty half of the multi-sig flow.
-    ///
-    /// Pure local crypto; errors if this sequencer's key is not in the prepared
-    /// accredited set.
-    pub fn sign_prepared_config(
-        &self,
-        prepared: &PreparedChannelConfig,
-    ) -> Result<IndexedSignature, Error> {
-        self.sequencer
-            .do_sign_prepared(&prepared.accredited_keys, &prepared.sign_payload)
-    }
-
-    /// Sign a prepared atomic bundle (withdraw or pin-deposit) with this
-    /// sequencer's own key — the bundle counterpart of
-    /// [`Self::sign_prepared_config`], feeding [`Self::submit_atomic_bundle`].
-    pub fn sign_prepared_bundle(
-        &self,
-        prepared: &PreparedAtomicBundle,
-    ) -> Result<IndexedSignature, Error> {
-        self.sequencer
-            .do_sign_prepared(&prepared.accredited_keys, &prepared.sign_payload)
     }
 
     /// The channel's tracked note set — see [`ZoneSequencer::channel_wallet`].

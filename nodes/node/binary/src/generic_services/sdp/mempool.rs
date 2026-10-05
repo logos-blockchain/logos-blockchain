@@ -60,12 +60,7 @@ where
         + Send
         + Sync
         + 'static
-        + AsServiceId<
-            StorageService<
-                <Mempool::Storage as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
-                RuntimeServiceId,
-            >,
-        >,
+        + AsServiceId<StorageService<RuntimeServiceId>>,
 {
     type MempoolService =
         TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>;
@@ -87,10 +82,10 @@ where
                 reply_channel,
             })
             .await
-            .map_err(|(e, _)| MempoolAdapterError::Other(Box::new(e)))?;
+            .map_err(|error| MempoolAdapterError::Other(Box::new(error)))?;
 
         receiver
             .await?
-            .map_err(|e| MempoolAdapterError::Mempool(Box::new(e)))
+            .map_err(|error| MempoolAdapterError::Mempool(Box::new(error)))
     }
 }

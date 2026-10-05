@@ -1,48 +1,40 @@
 use core::fmt::Debug;
-use std::{collections::HashMap, fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
+use std::{collections::HashMap, fmt::Display, num::NonZeroUsize};
 
-use bytes::Bytes;
-use futures::{Stream, StreamExt as _, future::join_all};
+use futures::{Stream, StreamExt as _};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::{
-    ConsensusMsg, CryptarchiaInfo, ProcessedBlockEvent, Query, Slot,
-    storage::{StorageAdapter as _, adapters::StorageAdapter},
+    CryptarchiaInfo, ProcessedBlockEvent, Slot,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
     block::Block,
-    events::Events,
     header::HeaderId,
     mantle::{
         SignedOps,
         channel::ChannelState,
         ledger::verification_mode::StandardMode,
         ops::channel::ChannelId,
-        traits::Hashable,
+        traits::{Hashable, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
     sdp::{Declaration, DeclarationId},
 };
 use lb_log_targets::api;
-use lb_storage_service::{
-    StorageMsg, StorageService,
-    api::{
-        StorageApiRequest,
-        chain::{StorageChainApi, requests::ChainApiRequest},
-    },
-};
+use lb_storage_service::{StorageService, api::StorageApi};
 use lb_tx_service::{
     MempoolMetrics, MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
     tx::service::openapi::Status,
 };
-use overwatch::services::{AsServiceId, ServiceData};
+use overwatch::services::AsServiceId;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::warn;
 
 use crate::http::{
-    consensus::{Cryptarchia, cryptarchia_ledger_state},
+    consensus::{Cryptarchia, cryptarchia_info, cryptarchia_ledger_state},
     errors::BlockSlotRangeError,
 };
 
@@ -125,7 +117,7 @@ where
         + Send
         + Display
         + 'static
-        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
 {
     let relay = handle
@@ -136,8 +128,7 @@ where
         .send(MempoolMsg::Metrics {
             reply_channel: sender,
         })
-        .await
-        .map_err(|(e, _)| e)?;
+        .await?;
 
     receiver.await.map_err(|e| Box::new(e) as super::DynError)
 }
@@ -160,7 +151,7 @@ where
         + Send
         + Display
         + 'static
-        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
 {
     let relay = handle
@@ -172,8 +163,7 @@ where
             items,
             reply_channel: sender,
         })
-        .await
-        .map_err(|(e, _)| e)?;
+        .await?;
 
     receiver.await.map_err(|e| Box::new(e) as super::DynError)
 }
@@ -193,8 +183,7 @@ where
         .send(BlockBroadcastMsg::SubscribeToFinalizedBlocks {
             result_sender: sender,
         })
-        .await
-        .map_err(|(e, _)| e)?;
+        .await?;
 
     let broadcast_receiver = receiver.await.map_err(|e| Box::new(e) as super::DynError)?;
     let stream = BroadcastStream::new(broadcast_receiver)
@@ -214,20 +203,13 @@ pub async fn get_processed_blocks_event_stream<Transaction, Service, RuntimeServ
 >
 where
     Transaction: Send + 'static,
-    Service: ServiceData<Message = ConsensusMsg<Transaction>>,
+    Service: CryptarchiaServiceData<Tx = Transaction>,
     RuntimeServiceId: Debug + Sync + Display + AsServiceId<Service>,
 {
-    let relay = handle.relay().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(Query::NewBlockSubscribe { sender }.into())
+    let new_blocks_receiver = CryptarchiaServiceApi::<Service>::from_overwatch_handle(handle)
         .await
-        .map_err(|(error, _)| error)?;
-
-    let new_blocks_receiver = receiver
-        .await
-        .map_err(|error| Box::new(error) as super::DynError)?;
+        .subscribe_new_blocks()
+        .await?;
 
     let processed_blocks_stream = BroadcastStream::new(new_blocks_receiver)
         .map(|item| item.map_err(|error| Box::new(error) as crate::http::DynError));
@@ -235,32 +217,29 @@ where
     Ok(processed_blocks_stream)
 }
 
-pub async fn get_new_blocks_stream<
-    Transaction,
-    StorageBackend,
-    ConsensusService,
-    RuntimeServiceId,
->(
+pub async fn get_new_blocks_stream<Transaction, ConsensusService, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
 ) -> Result<
     impl Stream<Item = BlockWithChainState<Transaction>>
     + Send
-    + use<Transaction, StorageBackend, ConsensusService, RuntimeServiceId>,
+    + use<Transaction, ConsensusService, RuntimeServiceId>,
     super::DynError,
 >
 where
-    Transaction:
-        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    <StorageBackend as StorageChainApi>::Block:
-        TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    ConsensusService: ServiceData<Message = ConsensusMsg<Transaction>>,
+    Transaction: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + Send
+        + Sync
+        + 'static
+        + Hashable<Hash = TxHash>
+        + StorageSize,
+    ConsensusService: CryptarchiaServiceData<Tx = Transaction>,
     RuntimeServiceId: Debug
         + Sync
         + Display
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<ConsensusService>
         + 'static,
 {
@@ -270,17 +249,13 @@ where
         )
         .await?;
 
-    let relay = handle
-        .relay::<StorageService<StorageBackend, RuntimeServiceId>>()
-        .await?;
-    let storage_adapter =
-        StorageAdapter::<StorageBackend, Transaction, RuntimeServiceId>::new(relay).await;
+    let storage = StorageApi::<Transaction>::from_overwatch_handle(handle).await?;
 
     let new_blocks_stream = processed_blocks_stream.filter_map(move |event| {
-        let storage_adapter = storage_adapter.clone();
+        let storage = storage.clone();
         async move {
             let event = event.ok()?;
-            let block = storage_adapter.get_block(&event.block_id).await?;
+            let block = storage.get_block(&event.block_id).await?;
             Some(BlockWithChainState {
                 block,
                 tip: event.tip,
@@ -294,7 +269,7 @@ where
     Ok(new_blocks_stream)
 }
 
-async fn get_immutable_block_ids_in_slot_range<Backend, RuntimeServiceId>(
+async fn get_immutable_block_ids_in_slot_range<RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     slot_from: Slot,
     slot_to: Slot,
@@ -302,62 +277,34 @@ async fn get_immutable_block_ids_in_slot_range<Backend, RuntimeServiceId>(
     descending: bool,
 ) -> Result<Vec<HeaderId>, super::DynError>
 where
-    Backend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<Backend, RuntimeServiceId>>,
+    RuntimeServiceId: Debug + Sync + Display + AsServiceId<StorageService<RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
-    let (response_tx, response_rx) = oneshot::channel();
-    let request = if descending {
-        ChainApiRequest::ScanImmutableBlockIdsReverse {
-            slot_range: RangeInclusive::new(slot_from, slot_to),
-            limit,
-            response_tx,
-        }
-    } else {
-        ChainApiRequest::ScanImmutableBlockIds {
-            slot_range: RangeInclusive::new(slot_from, slot_to),
-            limit,
-            response_tx,
-        }
-    };
-
-    relay
-        .send(StorageMsg::Api {
-            request: StorageApiRequest::Chain(request),
-        })
+    StorageApi::<()>::from_overwatch_handle(handle)
+        .await?
+        .scan_immutable_block_ids(slot_from..=slot_to, limit, descending)
         .await
-        .map_err(|(error, _)| error)?;
-
-    response_rx
-        .await
-        .map_err(|error| Box::new(error) as super::DynError)
 }
 
-async fn load_blocks_with_chain_state_by_ids<Transaction, StorageBackend, RuntimeServiceId>(
-    storage_adapter: &StorageAdapter<StorageBackend, Transaction, RuntimeServiceId>,
+async fn load_blocks_with_chain_state_by_ids<Transaction>(
+    storage: &StorageApi<Transaction>,
     header_ids: Vec<HeaderId>,
     chain_info: &CryptarchiaInfo,
     blocks_limit: usize,
 ) -> Result<Vec<BlockWithChainState<Transaction>>, super::DynError>
 where
-    Transaction:
-        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    <StorageBackend as StorageChainApi>::Block:
-        TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Debug
+    Transaction: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
         + Send
         + Sync
-        + Display
         + 'static
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+        + Hashable<Hash = TxHash>
+        + StorageSize,
 {
     let mut blocks = Vec::with_capacity(header_ids.len().min(blocks_limit));
     for header_id in header_ids {
-        let Some(block) = storage_adapter.get_block(&header_id).await else {
+        let Some(block) = storage.get_block(&header_id).await else {
             warn!(
                 target: LOG_TARGET,
                 "missing block body for indexed header {header_id}, skipping"
@@ -405,9 +352,9 @@ fn validate_blocks_slot_range(
     Ok(())
 }
 
-async fn fetch_and_load_mutable_blocks<Transaction, StorageBackend, RuntimeServiceId>(
+async fn fetch_and_load_mutable_blocks<Transaction, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-    storage_adapter: &StorageAdapter<StorageBackend, Transaction, RuntimeServiceId>,
+    storage: &StorageApi<Transaction>,
     chain_info: &CryptarchiaInfo,
     slot_from: Slot,
     slot_to: Slot,
@@ -415,19 +362,21 @@ async fn fetch_and_load_mutable_blocks<Transaction, StorageBackend, RuntimeServi
     descending: bool,
 ) -> Result<Vec<BlockWithChainState<Transaction>>, super::DynError>
 where
-    Transaction:
-        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    <StorageBackend as StorageChainApi>::Block:
-        TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
+    Transaction: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + Send
+        + Sync
+        + 'static
+        + Hashable<Hash = TxHash>
+        + StorageSize,
     RuntimeServiceId: Debug
         + Send
         + Sync
         + Display
         + 'static
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
     let limit = remaining;
@@ -450,7 +399,7 @@ where
             break;
         }
 
-        let Some(block) = storage_adapter.get_block(&current_id).await else {
+        let Some(block) = storage.get_block(&current_id).await else {
             if retried {
                 return Err(format!(
                     "canonical chain inconsistency: missing block {current_id} while traversing \
@@ -462,8 +411,7 @@ where
 
             // Retry once from the latest tip if the original tip is not yet available.
             // The original LIB remains the anchor for this request.
-            let refreshed_info =
-                crate::http::consensus::cryptarchia_info::<RuntimeServiceId>(handle).await?;
+            let refreshed_info = cryptarchia_info::<RuntimeServiceId>(handle).await?;
             current_id = refreshed_info.cryptarchia_info.tip;
             retried = true;
             blocks.clear();
@@ -512,9 +460,9 @@ where
     Ok(blocks)
 }
 
-async fn fetch_and_load_immutable_blocks<Transaction, StorageBackend, RuntimeServiceId>(
+async fn fetch_and_load_immutable_blocks<Transaction, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-    storage_adapter: &StorageAdapter<StorageBackend, Transaction, RuntimeServiceId>,
+    storage: &StorageApi<Transaction>,
     chain_info: &CryptarchiaInfo,
     slot_from: Slot,
     immutable_slot_to: Slot,
@@ -522,23 +470,21 @@ async fn fetch_and_load_immutable_blocks<Transaction, StorageBackend, RuntimeSer
     descending: bool,
 ) -> Result<Vec<BlockWithChainState<Transaction>>, super::DynError>
 where
-    Transaction:
-        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    <StorageBackend as StorageChainApi>::Block:
-        TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Debug
+    Transaction: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
         + Send
         + Sync
-        + Display
         + 'static
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+        + Hashable<Hash = TxHash>
+        + StorageSize,
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<StorageService<RuntimeServiceId>>,
 {
     let limit = NonZeroUsize::new(remaining.saturating_mul(2).max(1))
         .expect("remaining is positive while fetching immutable blocks");
-    let header_ids = get_immutable_block_ids_in_slot_range::<StorageBackend, RuntimeServiceId>(
+    let header_ids = get_immutable_block_ids_in_slot_range::<RuntimeServiceId>(
         handle,
         slot_from,
         immutable_slot_to,
@@ -547,10 +493,10 @@ where
     )
     .await?;
 
-    load_blocks_with_chain_state_by_ids(storage_adapter, header_ids, chain_info, remaining).await
+    load_blocks_with_chain_state_by_ids(storage, header_ids, chain_info, remaining).await
 }
 
-pub async fn get_blocks_in_slot_range_with_snapshot<Transaction, StorageBackend, RuntimeServiceId>(
+pub async fn get_blocks_in_slot_range_with_snapshot<Transaction, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     slot_from: Slot,
     slot_to: Slot,
@@ -560,29 +506,27 @@ pub async fn get_blocks_in_slot_range_with_snapshot<Transaction, StorageBackend,
     chain_info: &CryptarchiaInfo,
 ) -> Result<Vec<BlockWithChainState<Transaction>>, super::DynError>
 where
-    Transaction:
-        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    <StorageBackend as StorageChainApi>::Block:
-        TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
+    Transaction: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + Send
+        + Sync
+        + 'static
+        + Hashable<Hash = TxHash>
+        + StorageSize,
     RuntimeServiceId: Debug
         + Send
         + Sync
         + Display
         + 'static
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
     validate_blocks_slot_range(slot_from, slot_to, immutable_only, chain_info)
         .map_err(|e| Box::new(e) as super::DynError)?;
 
-    let relay = handle
-        .relay::<StorageService<StorageBackend, RuntimeServiceId>>()
-        .await?;
-    let storage_adapter =
-        StorageAdapter::<StorageBackend, Transaction, RuntimeServiceId>::new(relay).await;
+    let storage = StorageApi::<Transaction>::from_overwatch_handle(handle).await?;
 
     let mut blocks = Vec::with_capacity(blocks_limit.get().min(1024));
     let mut remaining = blocks_limit.get();
@@ -595,11 +539,11 @@ where
     let has_mutable_range = !immutable_only && mutable_slot_from <= slot_to;
 
     let fetch_mutable = |remaining: usize, descending: bool| {
-        let storage_adapter = storage_adapter.clone();
+        let storage = storage.clone();
         async move {
-            fetch_and_load_mutable_blocks::<Transaction, StorageBackend, RuntimeServiceId>(
+            fetch_and_load_mutable_blocks::<Transaction, RuntimeServiceId>(
                 handle,
-                &storage_adapter,
+                &storage,
                 chain_info,
                 mutable_slot_from,
                 slot_to,
@@ -611,11 +555,11 @@ where
     };
 
     let fetch_immutable = |remaining: usize, descending: bool| {
-        let storage_adapter = storage_adapter.clone();
+        let storage = storage.clone();
         async move {
-            fetch_and_load_immutable_blocks::<Transaction, StorageBackend, RuntimeServiceId>(
+            fetch_and_load_immutable_blocks::<Transaction, RuntimeServiceId>(
                 handle,
-                &storage_adapter,
+                &storage,
                 chain_info,
                 slot_from,
                 immutable_slot_to,
@@ -653,62 +597,13 @@ where
     Ok(blocks)
 }
 
-/// Fetch immutable block header ids in range.
-///
-/// # Arguments
-///
-/// - `handle`: A reference to the `OverwatchHandle` to interact with the
-///   runtime and storage service.
-/// - `from_slot`: A non-zero starting slot (inclusive) indicating the starting
-///   point of the desired slot range.
-/// - `to_slot`: A non-zero ending slot (inclusive) indicating the endpoint of
-///   the desired slot range. If the range spans across the LIB block, only
-///   header IDs up to LIB will be returned.
-///
-/// # Returns
-///
-/// If successful, returns a `Vec<HeaderId>` containing the block header IDs for
-/// the specified slot range. If any error occurs during processing, returns a
-/// boxed `DynError`.
-pub async fn get_immutable_blocks_header_ids<Backend, RuntimeServiceId>(
-    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-    from_slot: usize,
-    to_slot: usize,
-) -> Result<Vec<HeaderId>, super::DynError>
-where
-    Backend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<Backend, RuntimeServiceId>>,
-{
-    let relay = handle.relay().await?;
-    let (response_tx, response_rx) = oneshot::channel();
-
-    let limit = {
-        // Since this request requires a limit, let's calculate it based on the slot
-        // range. Add 1 to the difference to ensure that limit makes sense.
-        let diff = to_slot - from_slot + 1;
-        NonZeroUsize::new(diff)
-            .ok_or_else(|| String::from("to_slot must be greater or equal to from_slot"))
-    }?;
-
-    let start = Slot::new(from_slot as u64);
-    let end = Slot::new(to_slot as u64);
-    let slot_range = RangeInclusive::new(start, end);
-
-    relay
-        .send(StorageMsg::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::ScanImmutableBlockIds {
-                slot_range,
-                limit,
-                response_tx,
-            }),
-        })
-        .await
-        .map_err(|(error, _)| error)?;
-
-    response_rx
-        .await
-        .map_err(|error| Box::new(error) as super::DynError)
+fn slot_range_limit(slot_from: Slot, slot_to: Slot) -> Option<NonZeroUsize> {
+    slot_to
+        .into_inner()
+        .checked_sub(slot_from.into_inner())
+        .and_then(|diff| diff.checked_add(1))
+        .and_then(|diff| usize::try_from(diff).ok())
+        .and_then(NonZeroUsize::new)
 }
 
 /// Fetch immutable blocks in range
@@ -728,41 +623,56 @@ where
 /// If successful, returns a `Vec` containing the immutable blocks for the
 /// specified slot range. If any error occurs during processing, returns a boxed
 /// `DynError`.
-pub async fn get_immutable_blocks<Transaction, StorageBackend, RuntimeServiceId>(
+pub async fn get_immutable_blocks<Transaction, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     from_slot: usize,
     to_slot: usize,
 ) -> Result<Vec<Block<Transaction>>, super::DynError>
 where
-    Transaction:
-        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    <StorageBackend as StorageChainApi>::Block:
-        TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
+    Transaction: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + Send
+        + Sync
+        + 'static
+        + Hashable<Hash = TxHash>
+        + StorageSize,
     RuntimeServiceId: Debug
+        + Send
         + Sync
         + Display
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + AsServiceId<StorageService<RuntimeServiceId>>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + 'static,
 {
-    let header_ids = get_immutable_blocks_header_ids(handle, from_slot, to_slot).await?;
+    if to_slot < from_slot {
+        return Err("to_slot must be greater or equal to from_slot".into());
+    }
 
-    let relay = handle.relay().await?;
-    let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
+    let chain_info = cryptarchia_info::<RuntimeServiceId>(handle)
+        .await?
+        .cryptarchia_info;
+    let slot_from = Slot::new(from_slot as u64);
+    if slot_from > chain_info.lib_slot {
+        return Ok(Vec::new());
+    }
 
-    let blocks_futures = header_ids
-        .iter()
-        .map(|header_id| storage_adapter.get_block(header_id));
+    let slot_to = Slot::new(to_slot as u64).min(chain_info.lib_slot);
+    let blocks_limit = slot_range_limit(slot_from, slot_to)
+        .ok_or_else(|| "legacy immutable block range is too large".to_owned())?;
+    let blocks = get_blocks_in_slot_range_with_snapshot::<_, RuntimeServiceId>(
+        handle,
+        slot_from,
+        slot_to,
+        false,
+        blocks_limit,
+        true,
+        &chain_info,
+    )
+    .await?;
 
-    let blocks = join_all(blocks_futures)
-        .await
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-
-    Ok(blocks)
+    Ok(blocks.into_iter().map(|block| block.block).collect())
 }
 
 /// Fetch a single block by its header ID.
@@ -778,27 +688,25 @@ where
 /// If successful, returns `Some(Block<Transaction>)` if the block exists, or
 /// `None` if no block with the given header ID was found. Returns a boxed
 /// `DynError` if any error occurs during processing.
-pub async fn get_block<Transaction, StorageBackend, RuntimeServiceId>(
+pub async fn get_block<Transaction, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     header_id: HeaderId,
 ) -> Result<Option<Block<Transaction>>, super::DynError>
 where
-    Transaction:
-        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    <StorageBackend as StorageChainApi>::Block:
-        TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Debug
+    Transaction: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + Send
         + Sync
-        + Display
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
-        + 'static,
+        + 'static
+        + Hashable<Hash = TxHash>
+        + StorageSize,
+    RuntimeServiceId:
+        Debug + Sync + Display + AsServiceId<StorageService<RuntimeServiceId>> + 'static,
 {
-    let relay = handle.relay().await?;
-    let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
-    Ok(storage_adapter.get_block(&header_id).await)
+    let storage = StorageApi::<_>::from_overwatch_handle(handle).await?;
+    Ok(storage.get_block(&header_id).await)
 }
 
 /// Fetch transactions by their hashes.
@@ -813,30 +721,17 @@ where
 ///
 /// If successful, returns a stream of matching [`Transaction`]s.
 /// Returns a boxed `DynError` if any error occurs during processing.
-pub async fn get_transactions<Transaction, StorageBackend, RuntimeServiceId>(
+pub async fn get_transactions<Transaction, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     tx_hashes: Vec<TxHash>,
-) -> Result<
-    impl Stream<Item = Transaction> + use<Transaction, StorageBackend, RuntimeServiceId>,
-    super::DynError,
->
+) -> Result<impl Stream<Item = Transaction> + use<Transaction, RuntimeServiceId>, super::DynError>
 where
-    Transaction:
-        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    <StorageBackend as StorageChainApi>::Block:
-        TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Debug
-        + Sync
-        + Display
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
-        + 'static,
+    Transaction: DeserializeOwned + Hashable<Hash: Into<TxHash>> + Send + 'static,
+    RuntimeServiceId:
+        Debug + Sync + Display + AsServiceId<StorageService<RuntimeServiceId>> + 'static,
 {
-    let relay = handle.relay().await?;
-    let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
-    storage_adapter.get_transactions(tx_hashes).await
+    let storage = StorageApi::<_>::from_overwatch_handle(handle).await?;
+    storage.get_transactions(tx_hashes).await
 }
 
 /// Fetch a single transaction by its hash.
@@ -852,27 +747,17 @@ where
 /// - `Ok(Some(tx))`: Found transaction.
 /// - `Ok(None)`: No transaction with the given hash was found.
 /// - `Err(_)`: An error occurred during processing.
-pub async fn get_transaction<Transaction, StorageBackend, RuntimeServiceId>(
+pub async fn get_transaction<Transaction, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     tx_hash: TxHash,
 ) -> Result<Option<Transaction>, super::DynError>
 where
-    Transaction:
-        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
-    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-    <StorageBackend as StorageChainApi>::Block:
-        TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: Debug
-        + Sync
-        + Display
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
-        + 'static,
+    Transaction: DeserializeOwned + Hashable<Hash: Into<TxHash>> + Send + 'static,
+    RuntimeServiceId:
+        Debug + Sync + Display + AsServiceId<StorageService<RuntimeServiceId>> + 'static,
 {
     let mut stream =
-        get_transactions::<Transaction, StorageBackend, RuntimeServiceId>(handle, vec![tx_hash])
-            .await?;
+        get_transactions::<Transaction, RuntimeServiceId>(handle, vec![tx_hash]).await?;
 
     // Assume only one transaction is returned
     Ok(stream.next().await)
@@ -890,20 +775,9 @@ where
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + 'static,
 {
-    let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(
-            Query::GetSdpDeclarations {
-                reply_channel: sender,
-            }
-            .into(),
-        )
-        .await
-        .map_err(|(e, _)| e)?;
-
-    Ok(receiver.await?)
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    Ok(chain_api.get_sdp_declarations().await?)
 }
 
 pub async fn get_sdp_snapshot<RuntimeServiceId>(
@@ -918,18 +792,7 @@ where
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + 'static,
 {
-    let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(
-            Query::GetSdpSnapshot {
-                reply_channel: sender,
-            }
-            .into(),
-        )
-        .await
-        .map_err(|(e, _)| e)?;
-
-    Ok(receiver.await?)
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    Ok(chain_api.get_sdp_snapshot().await?)
 }

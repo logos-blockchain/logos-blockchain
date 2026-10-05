@@ -20,16 +20,16 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1786522397,
-        "narHash": "sha256-qaQNoq+n60WrpuCZuSNwcNV3ZXm1JXhBh1btehJTlWQ=",
+        "lastModified": 1788878036,
+        "narHash": "sha256-wL5m64kEcQE+CFYXLrUxbcOlqicBfSx+f/3i8fkBy1I=",
         "owner": "logos-blockchain",
         "repo": "logos-blockchain-circuits",
-        "rev": "07c439356435eb6a2f1f4a8daa973bd04bd0b088",
+        "rev": "ebf7ddf5b5b625ef4ea7c803171c670beebd05ef",
         "type": "github"
       },
       "original": {
         "owner": "logos-blockchain",
-        "ref": "v0.5.6",
+        "ref": "v0.5.7",
         "repo": "logos-blockchain-circuits",
         "type": "github"
       }
@@ -98,17 +98,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1787281715,
-        "narHash": "sha256-5yIL5XL31hCZBPWDdUOvUy4cYAl27XZrke7JELhHlnI=",
+        "lastModified": 1788505699,
+        "narHash": "sha256-PSPDCdbEBEbSDCWcqv5GkbyD2ACQ9Diz6vmEbWdy4dM=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "89abdfd661ea493cde2f73d7b1332cb34150aa43",
+        "rev": "9eccf73c5b810052f08aa77ae0548c383259f17f",
         "type": "github"
       },
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "89abdfd661ea493cde2f73d7b1332cb34150aa43",
+        "rev": "9eccf73c5b810052f08aa77ae0548c383259f17f",
         "type": "github"
       }
     },

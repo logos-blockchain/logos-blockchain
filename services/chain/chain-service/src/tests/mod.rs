@@ -7,11 +7,12 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_core::{
-    block::{Block, BlockTransactions, UncleHeaders},
+    block::{Block, BlockTransactions, SignedHeader, UncleHeaders},
     mantle::{
-        Note, Op, OpProof, SignedOps, TxGasCalculator as _, Utxo,
-        gas::MainnetGasProfile,
-        ledger::{Inputs, Outputs, verification_mode::StandardMode},
+        Note, Op, OpProof, SignedOps, Utxo,
+        channel::Channels,
+        gas::{MainnetGasProfile, TxGasCalculator as _},
+        ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
         ops::{
             leader_claim::{VoucherCm, VoucherSecret},
             transfer::TransferOp,
@@ -20,6 +21,7 @@ use lb_core::{
         transactions::{
             GasPrices, OpProofs, Ops,
             states::{Preverified, Unverified},
+            tx_list::ops::OpsGasContext,
         },
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
@@ -36,13 +38,12 @@ use lb_ledger::{
 };
 use lb_storage_service::{
     StorageMsg, StorageService,
-    backends::{
-        StorageBackend as _,
-        rocksdb::{RocksBackend, RocksBackendSettings},
-    },
+    api::StorageApi,
+    backend::StorageBackend as _,
+    rocksdb::{RocksBackend, RocksBackendSettings},
 };
 use lb_time_service::backends::SystemTimeBackend;
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::{bounded::BoundedOrderedSet, math::NonNegativeRatio};
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 use rand::{RngCore as _, thread_rng};
 use tempfile::TempDir;
@@ -52,7 +53,8 @@ use tokio::{
 };
 
 use crate::{
-    Cryptarchia, CryptarchiaConsensus, Error,
+    BlockOrigin, BootstrapConfig, Cryptarchia, CryptarchiaConsensus, CryptarchiaConsensusState,
+    Error, OfflineGracePeriodConfig,
     relays::CryptarchiaConsensusRelays,
     service::{get_block_ids, process_block},
 };
@@ -133,12 +135,11 @@ async fn get_block_ids_from_memory_and_storage() {
     let (storage_tx, storage_rx) = mpsc::channel(10);
     let _storage_svc = spawn_storage_service(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays = CryptarchiaConsensusRelays::<_, RocksBackend, TestRuntimeServiceId>::new(
+    let relays = CryptarchiaConsensusRelays::<_>::new(
         OutboundRelay::new(broadcast_tx),
-        OutboundRelay::new(storage_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
         OutboundRelay::new(time_tx),
-    )
-    .await;
+    );
     let (new_block_tx, _new_block_rx) = broadcast::channel(10);
     let (lib_tx, _lib_rx) = broadcast::channel(10);
 
@@ -175,6 +176,7 @@ async fn get_block_ids_from_memory_and_storage() {
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
+            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -190,7 +192,7 @@ async fn get_block_ids_from_memory_and_storage() {
         &cryptarchia,
         block_ids[2],
         block_ids[0],
-        relays.storage_adapter().clone(),
+        relays.storage().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[2]);
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
@@ -202,7 +204,7 @@ async fn get_block_ids_from_memory_and_storage() {
         &cryptarchia,
         block_ids[2],
         [99; 32].into(), // unknown block ID
-        relays.storage_adapter().clone(),
+        relays.storage().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[2]);
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
@@ -228,6 +230,7 @@ async fn get_block_ids_from_memory_and_storage() {
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
+            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -243,7 +246,7 @@ async fn get_block_ids_from_memory_and_storage() {
         &cryptarchia,
         block_ids[5],
         block_ids[0],
-        relays.storage_adapter().clone(),
+        relays.storage().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[5]);
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[4]);
@@ -258,7 +261,7 @@ async fn get_block_ids_from_memory_and_storage() {
         &cryptarchia,
         block_ids[1],
         [99; 32].into(), // unknown block ID
-        relays.storage_adapter().clone(),
+        relays.storage().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[0]);
@@ -274,32 +277,111 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     let (storage_tx, storage_rx) = mpsc::channel(10);
     let _storage_svc = spawn_storage_service(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays = CryptarchiaConsensusRelays::<
-        SignedOps<Preverified, StandardMode>,
-        RocksBackend,
-        TestRuntimeServiceId,
-    >::new(
+    let relays = CryptarchiaConsensusRelays::<SignedOps<Preverified, StandardMode>>::new(
         OutboundRelay::new(broadcast_tx),
-        OutboundRelay::new(storage_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
         OutboundRelay::new(time_tx),
-    )
-    .await;
+    );
 
     let lib = [0; 32].into();
     let missing_tip = [1; 32].into();
 
-    let recovery_blocks = CryptarchiaConsensus::<
-        _,
-        RocksBackend,
-        SystemTimeBackend,
-        TestRuntimeServiceId,
-    >::load_recovery_blocks_or_fall_back_to_lib(
-        missing_tip, lib, relays.storage_adapter().clone()
+    let recovery_blocks = CryptarchiaConsensus::<_, SystemTimeBackend, TestRuntimeServiceId>::load_recovery_blocks_or_fall_back_to_lib(
+        missing_tip, lib, relays.storage().clone()
     )
     .await;
 
     assert!(recovery_blocks.fell_back_to_lib);
     assert!(recovery_blocks.blocks.is_empty());
+}
+
+/// The chain must be recovered successfully from storage by skipping the uncle
+/// validation.
+///
+/// Build a chain:
+/// G -- B1 -- B2(uncles=[U1])
+///    \
+///      U1
+/// and recover the chain from the state persisted with `LIB = B1` and
+/// `tip = B2`, where `U1`'s parent `G` is older than LIB.
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
+    type Tx = SignedOps<Preverified, StandardMode>;
+
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    let _storage_svc = spawn_storage_service(storage_rx);
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays = CryptarchiaConsensusRelays::<Tx>::new(
+        OutboundRelay::new(broadcast_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
+        OutboundRelay::new(time_tx),
+    );
+    let (new_block_tx, _new_block_rx) = broadcast::channel(10);
+    let (lib_tx, _lib_rx) = broadcast::channel(10);
+
+    let (cryptarchia, b1, u1, _, zk_key, utxo) = chain_with_fork();
+    let (b2, _) = try_build_block(
+        &cryptarchia,
+        cryptarchia.tip(),
+        utxo,
+        &zk_key,
+        u1.header().slot().strict_add(1.into()),
+        UncleHeaders::new(BoundedOrderedSet::from(signed_header(&u1))),
+    )
+    .unwrap();
+    let (b1_id, b2_id, b2_slot) = (b1.header().id(), b2.header().id(), b2.header().slot());
+
+    // Before the restart: `B1` and `B2` are verified and stored.
+    let mut stored = genesis_cryptarchia(utxo);
+    for block in [b1.clone(), b2] {
+        process_block(
+            &mut stored,
+            block,
+            b2_slot,
+            BlockOrigin::Network,
+            &relays,
+            &new_block_tx,
+            &lib_tx,
+        )
+        .await
+        .expect("the block should be valid before the restart");
+    }
+
+    let recovery_state = CryptarchiaConsensusState {
+        tip: b2_id,
+        lib: b1_id,
+        lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
+        lib_block_length: 1,
+        lib_block_slot: b1.header().slot(),
+        lib_block_uncle_slots: UncleSlots::default(),
+        genesis_id: GENESIS_ID.into(),
+        storage_blocks_to_remove: HashSet::new(),
+        last_engine_state: None,
+    };
+    let bootstrap_config = BootstrapConfig {
+        prolonged_bootstrap_period: std::time::Duration::ZERO,
+        force_bootstrap: true,
+        offline_grace_period: OfflineGracePeriodConfig::default(),
+    };
+    let initialized = CryptarchiaConsensus::<
+        Tx,
+        SystemTimeBackend,
+        TestRuntimeServiceId,
+    >::initialize_cryptarchia(
+        &recovery_state,
+        &bootstrap_config,
+        stored.ledger.config().clone(),
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+        b2_slot,
+    )
+    .await;
+    let initialized = initialized.expect("the chain should be recovered");
+    assert!(!initialized.fell_back_to_lib);
+    assert_eq!(initialized.cryptarchia.lib(), b1_id);
+    assert_eq!(initialized.cryptarchia.tip(), b2_id);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -310,16 +392,11 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     // request fails.
     drop(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays = CryptarchiaConsensusRelays::<
-        SignedOps<Preverified, StandardMode>,
-        RocksBackend,
-        TestRuntimeServiceId,
-    >::new(
+    let relays = CryptarchiaConsensusRelays::<SignedOps<Preverified, StandardMode>>::new(
         OutboundRelay::new(broadcast_tx),
-        OutboundRelay::new(storage_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
         OutboundRelay::new(time_tx),
-    )
-    .await;
+    );
     let (new_block_tx, mut new_block_rx) = broadcast::channel(10);
     let (lib_tx, mut lib_rx) = broadcast::channel(10);
 
@@ -331,6 +408,7 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
         &mut cryptarchia,
         block,
         block_slot,
+        BlockOrigin::Network,
         &relays,
         &new_block_tx,
         &lib_tx,
@@ -389,8 +467,10 @@ fn ledger_is_not_commited_if_block_contains_invalid_zkp() {
 /// Creates a transfer tx with a fake sig.
 fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
     let mut output_note = Note::new(1, fake_key.to_public_key());
+    let gas_context = OpsGasContext::from_channels(&Channels::new(), GasPrices::default());
     let fees = transfer_tx(utxo, output_note, fake_key)
-        .total_gas_cost::<MainnetGasProfile>(&GasPrices::default())
+        .op_refs()
+        .total_gas_cost::<MainnetGasProfile>(&gas_context)
         .unwrap();
     output_note.value = utxo.note.value - fees.into_inner();
 
@@ -400,7 +480,10 @@ fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedOps<Preverif
 }
 
 fn transfer_tx(utxo: Utxo, output_note: Note, key: &ZkKey) -> SignedOps<Unverified, StandardMode> {
-    let transfer_op = TransferOp::new(Inputs::new([utxo.id()]), Outputs::new([output_note]));
+    let transfer_op = TransferOp::new(
+        BoundedInputs::from(utxo.id()).into(),
+        Outputs::new([output_note]),
+    );
     let ops = Ops::from([Op::Transfer(transfer_op)]);
     let op_proofs = OpProofs::from([OpProof::ZkSig(
         ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap(),
@@ -442,13 +525,15 @@ fn disabled_reward_config() -> RewardPoWConfig {
     RewardPoWConfig {
         reward_pool_genesis: 1_000_000_000,
         epoch_reward_genesis: 1_000_000,
-        initial_difficulty: ModulusShift::new::<26>(),
+        minimum_difficulty: ModulusShift::new::<26>(),
         ema_smoothing_factor: 9,
         ema_smoothing_precision: core::num::NonZeroU64::new(10).unwrap(),
         target_claims_per_block: 100,
         rate_num: 0,
         rate_den: core::num::NonZeroU64::MIN,
         target_claim_per_block: core::num::NonZeroU64::MIN,
+        pow_share: 0,
+        share_den: core::num::NonZeroU64::MIN,
         slot_window: core::num::NonZeroU64::new(100).unwrap(),
     }
 }
@@ -587,6 +672,70 @@ pub fn try_build_block_with_transactions(
     None
 }
 
+/// A chain `G --- B1` with a fork block `U1` also extending `G`, at the
+/// same slot as `B1`.
+#[expect(clippy::type_complexity, reason = "a test helper")]
+pub fn chain_with_fork() -> (
+    Cryptarchia,
+    Block<SignedOps<Preverified, StandardMode>>,
+    Block<SignedOps<Preverified, StandardMode>>,
+    Ed25519Key,
+    ZkKey,
+    Utxo,
+) {
+    let genesis_id = GENESIS_ID.into();
+    let (zk_key, utxo) = utxo();
+    let mut cryptarchia = genesis_cryptarchia(utxo);
+
+    // Both extend the genesis, and the same key wins the same slot, so the
+    // two blocks differ only in their (randomly generated) block leaders.
+    let (u1, u1_key) = try_build_block(
+        &cryptarchia,
+        genesis_id,
+        utxo,
+        &zk_key,
+        Slot::new(1),
+        UncleHeaders::empty(),
+    )
+    .unwrap();
+    let (b1, _) = try_build_block(
+        &cryptarchia,
+        genesis_id,
+        utxo,
+        &zk_key,
+        Slot::new(1),
+        UncleHeaders::empty(),
+    )
+    .unwrap();
+    let b1_header_slot = b1.header().slot();
+    cryptarchia
+        .try_apply_block(b1.clone(), b1_header_slot)
+        .unwrap();
+
+    (cryptarchia, b1, u1, u1_key, zk_key, utxo)
+}
+
+pub const GENESIS_ID: [u8; 32] = [0; 32];
+
+/// A chain with only the genesis block, holding `utxo`.
+pub fn genesis_cryptarchia(utxo: Utxo) -> Cryptarchia {
+    let config = ledger_config(3.try_into().unwrap());
+    Cryptarchia::from_lib(
+        GENESIS_ID.into(),
+        LedgerState::from_utxos([utxo], &config),
+        GENESIS_ID.into(),
+        config,
+        lb_cryptarchia_engine::State::Bootstrapping,
+        Slot::genesis(),
+        0,
+        UncleSlots::default(),
+    )
+}
+
+pub fn signed_header(block: &Block<SignedOps<Preverified, StandardMode>>) -> SignedHeader {
+    SignedHeader::new(block.header().clone(), *block.signature())
+}
+
 pub fn utxo() -> (ZkKey, Utxo) {
     let mut op_id = [0u8; 32];
     thread_rng().fill_bytes(&mut op_id);
@@ -599,9 +748,7 @@ pub fn utxo() -> (ZkKey, Utxo) {
     (zk_sk, utxo)
 }
 
-pub fn spawn_storage_service(
-    mut rx: mpsc::Receiver<StorageMsg<RocksBackend>>,
-) -> (JoinHandle<()>, TempDir) {
+pub fn spawn_storage_service(mut rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<()>, TempDir) {
     let db_dir = TempDir::new().unwrap();
     let mut backend = RocksBackend::new(RocksBackendSettings {
         db_path: db_dir.path().join("db"),
@@ -612,11 +759,7 @@ pub fn spawn_storage_service(
 
     let handle = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            StorageService::<RocksBackend, TestRuntimeServiceId>::handle_storage_message(
-                msg,
-                &mut backend,
-            )
-            .await;
+            StorageService::<TestRuntimeServiceId>::handle_storage_message(msg, &mut backend).await;
         }
     });
 
@@ -626,14 +769,8 @@ pub fn spawn_storage_service(
 pub struct TestRuntimeServiceId;
 
 impl
-    AsServiceId<
-        CryptarchiaConsensus<
-            SignedOps<Preverified, StandardMode>,
-            RocksBackend,
-            SystemTimeBackend,
-            Self,
-        >,
-    > for TestRuntimeServiceId
+    AsServiceId<CryptarchiaConsensus<SignedOps<Preverified, StandardMode>, SystemTimeBackend, Self>>
+    for TestRuntimeServiceId
 {
     const SERVICE_ID: Self = Self;
 }

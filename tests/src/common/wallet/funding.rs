@@ -436,7 +436,7 @@ mod tests {
                 .expect("zero target should be funded without inputs");
 
         assert_eq!(selected_inputs.total(), 0);
-        assert!(selected_inputs.into_utxos().is_empty());
+        assert_eq!(selected_inputs.into_utxos(), []);
     }
 
     #[test]

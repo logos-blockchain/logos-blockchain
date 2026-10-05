@@ -21,11 +21,6 @@ Feature: Zone SDK
       | MSG_3 | Third message  |
     Then all zone messages are safe in 120 seconds
     And all zone messages are finalized in 180 seconds
-    And sequencer "SEQ_A" emits the full transaction lifecycle for zone messages in 30 seconds:
-      | alias |
-      | MSG_1 |
-      | MSG_2 |
-      | MSG_3 |
     And the zone indexer returns messages in this order:
       | alias |
       | MSG_1 |
@@ -36,6 +31,7 @@ Feature: Zone SDK
       | CHANNEL_CONFIG_1 | 0                 | 0               | SEQ_B                 |
     Then zone transaction "CHANNEL_CONFIG_1" is included in 180 seconds
     And zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -70,6 +66,7 @@ Feature: Zone SDK
       | MSG_2 |
       | MSG_3 |
       | MSG_4 |
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -112,6 +109,7 @@ Feature: Zone SDK
       | MSG_3 |
       | MSG_4 |
       | MSG_5 |
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -148,6 +146,7 @@ Feature: Zone SDK
       | MSG_1 |
       | MSG_2 |
       | MSG_3 |
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -172,11 +171,6 @@ Feature: Zone SDK
       | MSG_1 | a1   |
       | MSG_2 | a2   |
       | MSG_3 | a3   |
-    And sequencer "SEQ_A" emits the full transaction lifecycle for zone messages in 30 seconds:
-      | alias |
-      | MSG_1 |
-      | MSG_2 |
-      | MSG_3 |
     Then the zone indexer returns messages in any order in 360 seconds:
       | alias |
       | MSG_1 |
@@ -215,6 +209,7 @@ Feature: Zone SDK
       | MSG_7 |
       | MSG_8 |
       | MSG_9 |
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -242,6 +237,7 @@ Feature: Zone SDK
       | SEQ_B     | b           |
       | SEQ_C     | c           |
     Then the zone indexer returns all zone messages exactly once in any order in 1200 seconds
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -276,6 +272,7 @@ Feature: Zone SDK
       | SEQ_B     | MSG_9  | hh   |
       | SEQ_B     | MSG_10 | jj   |
     Then the zone indexer preserves per-sequencer order and converges without duplicates in 600 seconds
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -331,6 +328,7 @@ Feature: Zone SDK
     Then the zone indexer returns exactly one finalized pin and withdraw for deposit "DEPOSIT_1" in 300 seconds
     And the channel wallet of "SEQ_A" has exactly 1 finalized and 0 unfinalized notes in 120 seconds
     And the channel wallet of "SEQ_A" contains a finalized note of value 2 in 120 seconds
+    And the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -375,11 +373,7 @@ Feature: Zone SDK
       | own_key_index | turn_to_write | pending_transactions | time_out |
       | 1             | NOT_OUR_TURN  | 3                    | 120      |
     # The first turn submits only the configured active depth, so two txs are posted but remain pending until finalized
-    And sequencer "SEQ_B" emits published events for queued zone messages on its turn in 180 seconds:
-      | alias  |
-      | MSG_B1 |
-      | MSG_B2 |
-    And sequencer "SEQ_B" observed mempool pending events for zone messages:
+    And zone messages queued by sequencer "SEQ_B" are included after its turn in 180 seconds:
       | alias  |
       | MSG_B1 |
       | MSG_B2 |
@@ -389,6 +383,7 @@ Feature: Zone SDK
       | alias  |
       | MSG_B1 |
       | MSG_B2 |
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -430,12 +425,7 @@ Feature: Zone SDK
     Then sequencer "SEQ_B" reaches sequencing state:
       | own_key_index | turn_to_write | pending_transactions | time_out |
       | 1             | NOT_OUR_TURN  | 3                    | 120      |
-    And sequencer "SEQ_B" emits published events for queued zone messages on its turn in 180 seconds:
-      | alias  |
-      | MSG_C1 |
-      | MSG_C2 |
-      | MSG_C3 |
-    And sequencer "SEQ_B" observed mempool pending events for zone messages:
+    And zone messages queued by sequencer "SEQ_B" are included after its turn in 180 seconds:
       | alias  |
       | MSG_C1 |
       | MSG_C2 |
@@ -447,6 +437,7 @@ Feature: Zone SDK
       | MSG_C2 |
       | MSG_C3 |
     Then sequencer "SEQ_B" has 0 pending publish txs in 180 seconds
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -501,6 +492,7 @@ Feature: Zone SDK
       | MSG_B1 |
       | MSG_B2 |
       | MSG_B3 |
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -525,10 +517,11 @@ Feature: Zone SDK
     And sequencer "SEQ_B" is notified it is their turn to write in 120 seconds
     And sequencer "SEQ_A" is notified it is their turn to write in 120 seconds
     When I submit zone message "MSG_A1" to sequencer "SEQ_A" with data "decentralized-immediate-publish" immediately
-    Then sequencer "SEQ_A" publishes "MSG_A1" immediately while in turn in 120 seconds
+    Then zone message "MSG_A1" published by sequencer "SEQ_A" is included while in turn in 120 seconds
     And the zone indexer returns messages in any order in 360 seconds:
       | alias  |
       | MSG_A1 |
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -576,6 +569,7 @@ Feature: Zone SDK
     When I submit zone message "MSG_C_2" to sequencer "SEQ_C" with data "seq_c-msg2" immediately
     # Final check: all messages on chain, exactly once (catches duplicate republishes).
     Then the zone indexer returns all zone messages exactly once in any order in 120 seconds
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -614,6 +608,7 @@ Feature: Zone SDK
       | SEQ_C     | c-bob     | bob     | -7    |
       | SEQ_C     | c-charlie | charlie | -1    |
     Then zone balance updates keep all accounts non-negative after 60 seconds
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -641,6 +636,7 @@ Feature: Zone SDK
       | SEQ_B     |
       | SEQ_C     |
     Then the zone indexer returns 30 copies of zone message "shared-message" in 600 seconds
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -678,6 +674,7 @@ Feature: Zone SDK
     Then the channel wallet of "SEQ_A" has exactly 2 finalized and 0 unfinalized notes in 120 seconds
     When I restart zone sequencer "SEQ_A" fresh
     Then the channel wallet of "SEQ_A" has exactly 2 finalized and 0 unfinalized notes in 120 seconds
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   # [tests/src/tests/zone_sdk/e2e.rs] test_subscribe_to_finalized_deposit
@@ -702,6 +699,7 @@ Feature: Zone SDK
     Then zone transaction "DEPOSIT_1" is included in 120 seconds
     And zone transaction "DEPOSIT_1" is finalized in 120 seconds
     And the zone indexer returns finalized deposit "DEPOSIT_1" in 120 seconds
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -730,6 +728,7 @@ Feature: Zone SDK
       | alias |
       | MSG_1 |
       | MSG_2 |
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -765,6 +764,7 @@ Feature: Zone SDK
       | alias |
       | MSG_1 |
       | MSG_2 |
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -804,6 +804,7 @@ Feature: Zone SDK
       | MSG_INIT |
       | MSG_A1   |
       | MSG_A2   |
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -843,6 +844,7 @@ Feature: Zone SDK
     Then zone transaction "SPLIT_DUST" is finalized in 240 seconds
     When I submit zone deposit transaction "DEPOSIT_BIG" into channel of "SEQ_A" of 10000 with metadata "Big note"
     Then the zone indexer returns a finalized channel transfer consuming 255 inputs in 300 seconds
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -868,6 +870,7 @@ Feature: Zone SDK
       | SEQ_A     | 5            | 5            |
       | SEQ_B     | 5            | 5            |
     Then the zone indexer returns all custom payloads in 600 seconds
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes
 
   @zone_ci
@@ -911,4 +914,56 @@ Feature: Zone SDK
       | MSG_4 | post re-key from A |
     Then zone transaction "CONFIG_BA" is included in 180 seconds
     And the zone indexer returns all zone messages exactly once in any order in 600 seconds
+    Then the channel view contract holds for all zone sequencers
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Zone sequencer re-funds a double-handed inscription after node restart
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 2           | 12500        |
+      | 4             | 4           | 25000        |
+    And I have a cluster with capacity of 2 nodes
+    # NODE_4 is only a fork-provider; SEQ_B is registered but never started, so
+    # the table's "at least one sequencer" rule is satisfied without running one
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers |
+      | NODE_1    | 1             | WALLET_1A   | NODE_4       | SEQ_A      |
+      | NODE_4    | 4             | WALLET_4A   |              | SEQ_B      |
+    When node "NODE_1" is at height 2 in 240 seconds
+    # Starve the funding wallet to two distinct notes so the reused note is
+    # deterministic (largest-first selection picks 9000 for both publishes)
+    And I drain all node "NODE_1" wallets into "WALLET_1A"
+    And wallet "WALLET_1A" has 14000 or more LGO in 240 seconds
+    And wallet "WALLET_1A" sends 1 notes of 9000 LGO to node "NODE_1" funding wallet as "TOPUP_A"
+    And wallet "WALLET_1A" sends 1 notes of 8000 LGO to node "NODE_1" funding wallet as "TOPUP_B"
+    And transaction "TOPUP_A" is included on node "NODE_1" in 240 seconds
+    And transaction "TOPUP_B" is included on node "NODE_1" in 240 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    # Isolate NODE_4 before MSG_1 exists so its branch can never carry it
+    When I stop node "NODE_4"
+    And sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
+      | alias | data      |
+      | MSG_1 | message 1 |
+    And node "NODE_1" alone reaches height 8 in 240 seconds
+    # NODE_1 down wipes its wallet reservations; NODE_4 out-builds it blind
+    When I stop node "NODE_1"
+    And I restart node "NODE_4"
+    And node "NODE_4" alone reaches height 14 in 300 seconds
+    # NODE_1 rejoins, adopts NODE_4's longer branch, orphans MSG_1; SEQ_A
+    # reconnects and republishes MSG_1 byte-identically (its note is free again)
+    When I restart node "NODE_1"
+    And node "NODE_1" is at height 14 in 240 seconds
+    # The next publish double-hands MSG_1's note; the wedged inscription can
+    # only finalize via the sequencer's stale-refund rebuild
+    And sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
+      | alias | data      |
+      | MSG_2 | message 2 |
+    # The rebuild must work from a restored checkpoint too: the funding
+    # record travels with it
+    When I save current checkpoint of sequencer "SEQ_A" as "REFUND_CHECKPOINT"
+    And I restart zone sequencer "SEQ_A" from checkpoint "REFUND_CHECKPOINT"
+    Then the zone indexer returns all zone messages exactly once in any order in 600 seconds
+    And zone message "MSG_2" finalized under a different tx hash than submitted
+    Then the channel view contract holds for all zone sequencers
     And I stop all nodes

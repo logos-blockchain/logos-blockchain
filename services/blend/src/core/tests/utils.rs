@@ -1,4 +1,4 @@
-use core::cell::RefCell;
+use core::{cell::RefCell, num::NonZeroU128};
 use std::{num::NonZeroU64, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
@@ -134,8 +134,10 @@ pub fn seeded_release_delay_rng() -> ChaCha20Rng {
 
 pub fn timing_settings() -> TimingSettings {
     TimingSettings {
+        core_handshake_deadline_in_rounds: NonZeroU128::new(2).unwrap(),
+        network_absorption_in_rounds: NonZeroU64::new(2).unwrap(),
         rounds_per_epoch: 10.try_into().unwrap(),
-        round_duration: Duration::from_secs(1),
+        round_duration_in_seconds: 1.try_into().unwrap(),
         rounds_per_observation_window: 5.try_into().unwrap(),
         epoch_transition_period: Duration::from_secs(1),
     }
@@ -147,7 +149,7 @@ pub fn scheduler_settings(
 ) -> message_scheduler::Settings {
     message_scheduler::Settings {
         maximum_release_delay_in_rounds: NonZeroU64::try_from(1).unwrap(),
-        round_duration: timing_settings.round_duration,
+        round_duration: Duration::from_secs(timing_settings.round_duration_in_seconds.get()),
         rounds_per_epoch: timing_settings.rounds_per_epoch,
         num_blend_layers,
     }

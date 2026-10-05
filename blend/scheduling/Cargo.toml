@@ -17,6 +17,7 @@ fork_stream           = { workspace = true }
 futures               = { workspace = true }
 lb-blend-membership   = { workspace = true }
 lb-blend-message      = { workspace = true }
+lb-blend-primitives   = { workspace = true }
 lb-blend-proofs       = { workspace = true }
 lb-blend-provers      = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }

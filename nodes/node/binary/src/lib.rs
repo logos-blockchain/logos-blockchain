@@ -2,31 +2,36 @@ pub mod api;
 pub mod cli;
 pub mod config;
 pub mod generic_services;
-pub mod panic;
-pub mod version;
-
 pub mod global_allocators;
+pub mod panic;
 
-use std::panic::set_hook;
+mod codec;
+
+use std::{collections::HashMap, panic::set_hook};
 
 use color_eyre::eyre::{Result, eyre};
 pub use lb_blend_service::core::backends::libp2p::Libp2pBlendBackend as BlendBackend;
-use lb_core::mantle::{ledger::verification_mode::StandardMode, transactions::states::Preverified};
+use lb_core::{
+    block::Proposal,
+    mantle::{ledger::verification_mode::StandardMode, transactions::states::Preverified},
+};
 pub use lb_core::{
-    codec,
     header::HeaderId,
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
-pub use lb_storage_service::backends::{
-    SerdeOp, StorageBackend,
+use lb_storage_service::recovery::load_recovery_data;
+pub use lb_storage_service::{
+    backend::{SerdeOp, StorageBackend},
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
-use lb_storage_service::recovery::load_recovery_data;
 pub use lb_system_sig_service::SystemSig;
 use lb_time_service::backends::NtpTimeBackend;
 pub use lb_tracing_service::Tracing;
-use lb_tx_service::storage::adapters::RocksStorageAdapter;
+use lb_tx_service::{
+    network::adapters::libp2p::MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
+    storage::adapters::RocksStorageAdapter,
+};
 pub use lb_tx_service::{
     network::adapters::libp2p::{
         Libp2pAdapter as MempoolNetworkAdapter, Settings as MempoolAdapterSettings,
@@ -43,8 +48,9 @@ use tokio::runtime;
 use crate::{
     api::backend::AxumBackend,
     config::{
-        RunConfig, api::ServiceConfig as ApiConfig, blend::ServiceConfig as BlendConfig,
-        cryptarchia::ServiceConfig as CryptarchiaConfig, kms::ServiceConfig as KmsConfig,
+        DeploymentSettings, RunConfig, api::ServiceConfig as ApiConfig,
+        blend::ServiceConfig as BlendConfig, cryptarchia::ServiceConfig as CryptarchiaConfig,
+        deployment::EraParameters, kms::ServiceConfig as KmsConfig,
         mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
         pow::ServiceConfig as PoWConfig, sdp::ServiceConfig as SdpConfig,
         storage::ServiceConfig as StorageConfig, time::ServiceConfig as TimeConfig,
@@ -53,6 +59,27 @@ use crate::{
     generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
     panic::log_and_exit_hook,
 };
+
+fn max_data_size_by_topic(
+    transaction_topic: &str,
+    proposal_topic: &str,
+) -> HashMap<lb_libp2p::gossipsub::TopicHash, usize> {
+    let mut limits: HashMap<lb_libp2p::gossipsub::TopicHash, usize> = HashMap::new();
+    for (topic, required) in [
+        (
+            transaction_topic,
+            MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
+        ),
+        (proposal_topic, Proposal::MAX_ENCODED_SIZE),
+    ] {
+        let topic = lb_libp2p::gossipsub::IdentTopic::new(topic).hash();
+        limits
+            .entry(topic)
+            .and_modify(|existing| *existing = (*existing).max(required))
+            .or_insert(required);
+    }
+    limits
+}
 pub use crate::{
     cli::Command,
     config::{ApiArgs, LogArgs, NetworkArgs, UserConfig},
@@ -94,13 +121,9 @@ pub type TimeService = generic_services::TimeService<RuntimeServiceId>;
 
 pub type PoWService = generic_services::PoWService<RuntimeServiceId>;
 
-pub type ApiStorageAdapter<RuntimeServiceId> =
-    lb_api_service::http::storage::adapters::rocksdb::RocksAdapter<RuntimeServiceId>;
-
 pub type ApiService = lb_api_service::ApiService<
     AxumBackend<
         NtpTimeBackend,
-        ApiStorageAdapter<RuntimeServiceId>,
         RocksStorageAdapter<SignedOps<Preverified, StandardMode>, TxHash>,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
@@ -110,7 +133,7 @@ pub type ApiService = lb_api_service::ApiService<
     RuntimeServiceId,
 >;
 
-pub type StorageService = lb_storage_service::StorageService<RocksBackend, RuntimeServiceId>;
+pub type StorageService = lb_storage_service::StorageService<RuntimeServiceId>;
 
 pub type SystemSigService = SystemSig<RuntimeServiceId>;
 
@@ -138,6 +161,10 @@ pub struct LogosBlockchain {
     tracing: TracingService,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "TODO: Address this in a later refactor."
+)]
 pub fn run_node_from_config(
     config: RunConfig,
     handle: Option<runtime::Handle>,
@@ -146,13 +173,36 @@ pub fn run_node_from_config(
     // chain ID is fixed by the deployment, so the API backend is handed it up
     // front rather than querying a service for a value that cannot change.
     let chain_id = config.deployment.chain_id();
+    let genesis_time = config.deployment.genesis_time();
 
-    let blend_rewards_params = config.deployment.blend_reward_params();
+    // Derived from the chain and the fork of the era in force, and handed to
+    // every service that speaks a protocol or a topic. Only single-era
+    // schedules are supported for now, so the genesis era is in force.
+    let protocol_names = config.deployment.genesis_protocol_names();
+
+    let blend_rewards_params = config.deployment.genesis_blend_reward_params();
 
     // The PoW mining service must use the same acceptance window as consensus;
-    // read it from the cryptarchia deployment config before that config is
-    // moved into the cryptarchia service settings below.
-    let pow_slot_window = config.deployment.cryptarchia.pow_config.reward.slot_window;
+    // read it from the cryptarchia parameters before they are moved into the
+    // cryptarchia service settings below.
+    let pow_reward_config = &config
+        .deployment
+        .genesis_era_parameters()
+        .cryptarchia
+        .pow_config
+        .reward;
+    let pow_slot_window = pow_reward_config.slot_window;
+    let pow_rewards_enabled = pow_reward_config.rate_num > 0;
+
+    let DeploymentSettings {
+        eras,
+        genesis_block,
+    } = config.deployment;
+    let EraParameters {
+        blend: blend_deployment,
+        cryptarchia: cryptarchia_deployment,
+        time: time_deployment,
+    } = eras.into_genesis_era_parameters();
 
     let storage_config = StorageConfig {
         user: config.user.storage,
@@ -163,36 +213,48 @@ pub fn run_node_from_config(
 
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
         user: config.user.blend,
-        deployment: config.deployment.blend,
+        deployment: blend_deployment,
     }
     .into_blend_services_settings(
         recovery_data.clone(),
-        &config.deployment.time,
-        &config.deployment.cryptarchia,
+        &time_deployment,
+        &cryptarchia_deployment,
+        protocol_names.blend.clone(),
+        protocol_names.cryptarchia_topic.clone(),
     );
 
     let time_service_config = TimeConfig {
         user: config.user.time,
-        deployment: config.deployment.time,
+        deployment: time_deployment,
     }
-    .into_time_service_settings(&config.deployment.cryptarchia);
+    .into_time_service_settings(&cryptarchia_deployment, genesis_time);
 
     let (chain_service_config, chain_network_config, chain_leader_config) = CryptarchiaConfig {
         user: config.user.cryptarchia,
-        deployment: config.deployment.cryptarchia,
+        deployment: cryptarchia_deployment,
     }
-    .into_cryptarchia_services_settings(blend_rewards_params, recovery_data.clone());
+    .into_cryptarchia_services_settings(
+        genesis_block,
+        blend_rewards_params,
+        protocol_names.cryptarchia_topic.clone(),
+        recovery_data.clone(),
+    );
 
     let mempool_service_config = MempoolConfig {
-        deployment: config.deployment.mempool,
+        user: config.user.mempool,
     }
-    .into_mempool_service_settings(recovery_data.clone());
+    .into_mempool_service_settings(protocol_names.mempool_topic.clone(), recovery_data.clone());
 
     let network_service_config = NetworkConfig {
         user: config.user.network,
-        deployment: config.deployment.network,
     }
-    .into();
+    .into_network_config(
+        &protocol_names,
+        max_data_size_by_topic(
+            &protocol_names.mempool_topic,
+            &protocol_names.cryptarchia_topic,
+        ),
+    );
 
     let wallet_config = WalletConfig {
         user: config.user.wallet,
@@ -212,7 +274,7 @@ pub fn run_node_from_config(
     let pow_config = PoWConfig {
         user: config.user.pow,
     }
-    .into_pow_service_settings(recovery_data, pow_slot_window);
+    .into_pow_service_settings(recovery_data, pow_slot_window, pow_rewards_enabled);
 
     let tracing_config = config::tracing::ServiceConfig {
         user: config.user.tracing,
@@ -282,4 +344,21 @@ pub async fn get_services_to_start(
     }
 
     Ok(service_ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_application_topics_use_the_largest_data_limit() {
+        let topic = "/shared/application/topic";
+        let limits = max_data_size_by_topic(topic, topic);
+        let topic_hash = lb_libp2p::gossipsub::IdentTopic::new(topic).hash();
+
+        assert_eq!(
+            limits.get(&topic_hash),
+            Some(&MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE.max(Proposal::MAX_ENCODED_SIZE))
+        );
+    }
 }

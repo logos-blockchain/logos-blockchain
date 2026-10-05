@@ -9,7 +9,9 @@ use lb_tracing::{
     filter::envfilter::{EnvFilterConfig, create_envfilter_layer, default_envfilter_config},
     logging::{
         gelf::{GelfConfig, create_gelf_layer},
-        local::{AppenderType, FileConfig, create_file_layer, create_writer_layer},
+        local::{
+            AppenderType, FileConfig, create_file_layer, create_writer_layer, flush_appenders,
+        },
         loki::{LokiConfig, create_loki_layer},
         otlp::{OtlpLoggingConfig, create_otlp_layer},
     },
@@ -25,7 +27,6 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::Level;
-use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
     EnvFilter, filter::LevelFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
 };
@@ -41,7 +42,6 @@ const LOG_TARGET: &str = log_targets_tracing::SERVICE;
 
 pub struct Tracing<RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    logger_guards: Vec<WorkerGuard>,
     filter_reload_handles: Vec<FilterReloadHandle>,
     _runtime_service_id: PhantomData<RuntimeServiceId>,
 }
@@ -65,7 +65,6 @@ pub enum TracingFilterReloadError {
 
 struct LoggerLayers {
     layers: Vec<Box<dyn tracing_subscriber::Layer<LoggerSubscriber> + Send + Sync>>,
-    guards: Vec<WorkerGuard>,
     reload_handles: Vec<FilterReloadHandle>,
     filter: EnvFilter,
 }
@@ -74,7 +73,6 @@ impl LoggerLayers {
     fn new(filter: EnvFilter) -> Self {
         Self {
             layers: Vec::new(),
-            guards: Vec::new(),
             reload_handles: Vec::new(),
             filter,
         }
@@ -88,14 +86,6 @@ impl LoggerLayers {
 
         self.layers.push(Box::new(layer.with_filter(filter)));
         self.reload_handles.push(reload_handle);
-    }
-
-    fn add_guarded_layer<L>(&mut self, layer: L, guard: WorkerGuard)
-    where
-        L: tracing_subscriber::Layer<LoggerSubscriber> + Send + Sync + 'static,
-    {
-        self.add_layer(layer);
-        self.guards.push(guard);
     }
 }
 
@@ -212,7 +202,6 @@ impl<RuntimeServiceId> ServiceCore<RuntimeServiceId> for Tracing<RuntimeServiceI
 where
     RuntimeServiceId: AsServiceId<Self> + Display + Send,
 {
-    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         _initial_state: Self::State,
@@ -229,18 +218,15 @@ where
         let mut logger_layers = LoggerLayers::new(initial_env_filter(&config)?);
 
         if let Some(file_config) = config.logger.file {
-            let (layer, guard) = create_file_layer(file_config);
-            logger_layers.add_guarded_layer(layer, guard);
+            logger_layers.add_layer(create_file_layer(file_config));
         }
 
         if config.logger.stdout {
-            let (layer, guard) = create_writer_layer(std::io::stdout());
-            logger_layers.add_guarded_layer(layer, guard);
+            logger_layers.add_layer(create_writer_layer(std::io::stdout()));
         }
 
         if config.logger.stderr {
-            let (layer, guard) = create_writer_layer(std::io::stderr());
-            logger_layers.add_guarded_layer(layer, guard);
+            logger_layers.add_layer(create_writer_layer(std::io::stderr()));
         }
 
         if let Some(loki_config) = config.logger.loki {
@@ -280,7 +266,6 @@ where
 
         let LoggerLayers {
             layers: logger_layers,
-            guards: logger_guards,
             reload_handles: filter_reload_handles,
             ..
         } = logger_layers;
@@ -340,7 +325,6 @@ where
 
         Ok(Self {
             service_resources_handle,
-            logger_guards,
             filter_reload_handles,
             _runtime_service_id: PhantomData,
         })
@@ -348,7 +332,6 @@ where
 
     async fn run(self) -> Result<(), overwatch::DynError> {
         let Self {
-            logger_guards: _logger_guard,
             mut service_resources_handle,
             filter_reload_handles,
             ..
@@ -372,6 +355,8 @@ where
                 }
             }
         }
+
+        flush_appenders();
 
         Ok(())
     }

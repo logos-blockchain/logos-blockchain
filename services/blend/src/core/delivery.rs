@@ -2,7 +2,6 @@ use core::{
     num::NonZeroU64,
     pin::Pin,
     task::{Context, Poll},
-    time::Duration,
 };
 use std::collections::HashMap;
 
@@ -28,13 +27,13 @@ impl FailureDetector {
     #[must_use]
     pub fn new(
         maximum_blending_delay: NonZeroU64,
-        round_duration: Duration,
+        round_duration_in_seconds: NonZeroU64,
         payload_broadcasts: BoxStream<'static, DataPayload>,
     ) -> Self {
         Self {
             inner: InnerFailureDetector::new(
                 maximum_blending_delay,
-                round_duration,
+                round_duration_in_seconds,
                 payload_broadcasts,
             ),
             encapsulated: HashMap::new(),
@@ -126,7 +125,7 @@ mod tests {
 
     use crate::{
         core::delivery::FailureDetector,
-        delivery::test_utils::{DEADLINE, ROUND, proposal, transaction, until},
+        delivery::test_utils::{DEADLINE, ROUND_IN_SECONDS, proposal, transaction, until},
         message::DataPayload,
     };
 
@@ -140,7 +139,7 @@ mod tests {
         let (channel, broadcasts) = mpsc::unbounded_channel();
         let detection = FailureDetector::new(
             DEADLINE,
-            ROUND,
+            ROUND_IN_SECONDS,
             UnboundedReceiverStream::new(broadcasts).boxed(),
         );
         (detection, Instant::now(), channel)
@@ -178,7 +177,7 @@ mod tests {
         let (mut detection, start, _channel) = new_failure_monitor();
         // Built now, but held back — waiting on the proofs that will back it.
         detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(0));
-        assert!(until(&mut detection, start, HELD_FOR).await.is_empty());
+        assert_eq!(until(&mut detection, start, HELD_FOR).await, []);
         detection.mark_encapsulated_payload_as_released(id(1));
 
         assert!(
@@ -199,11 +198,7 @@ mod tests {
         detection.mark_encapsulated_payload_as_released(id(9));
 
         assert_eq!(detection.outstanding_payloads_count(), 0);
-        assert!(
-            until(&mut detection, start, DEADLINE.get() + 3)
-                .await
-                .is_empty()
-        );
+        assert_eq!(until(&mut detection, start, DEADLINE.get() + 3).await, []);
     }
 
     /// A message that expires with its epoch never reached a peer, so there is

@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 
+use lb_binary_codec::bincode::{DeserializeOp, SerializeOp};
 use lb_blend_service::message::{DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage};
-use lb_core::codec::{DeserializeOp, SerializeOp};
 use lb_network_service::backends::libp2p::PeerId;
 use overwatch::services::{AsServiceId, ServiceData};
 use tokio::sync::oneshot;
@@ -19,7 +19,7 @@ where
     relay
         .send(ServiceMessage::GetNetworkInfo { reply: sender }.into())
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|error| overwatch::DynError::from(error.to_string()))?;
 
     receiver
         .await
@@ -45,7 +45,7 @@ where
             reply: sender,
         })
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|error| overwatch::DynError::from(error.to_string()))?;
 
     let result = receiver
         .await
@@ -77,7 +77,7 @@ where
     relay
         .send(ServiceMessage::Blend(payload).into())
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|error| overwatch::DynError::from(error.to_string()))?;
 
     Ok(id(&transaction))
 }
@@ -104,7 +104,7 @@ where
     relay
         .send(ServiceMessage::GetPendingTransactions { reply: sender }.into())
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|error| overwatch::DynError::from(error.to_string()))?;
 
     receiver
         .await

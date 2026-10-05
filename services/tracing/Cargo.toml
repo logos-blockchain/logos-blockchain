@@ -29,5 +29,4 @@ thiserror          = { workspace = true }
 time               = { workspace = true }
 tokio              = { features = ["sync"], workspace = true }
 tracing            = { workspace = true }
-tracing-appender   = { workspace = true }
 tracing-subscriber = { workspace = true }
