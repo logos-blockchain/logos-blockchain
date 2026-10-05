@@ -586,7 +586,7 @@ mod tests {
             .expect("configuring a channel never fails");
 
         assert_eq!(context.channels.channel_state(&channel_id), Some(&expected));
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]
@@ -627,7 +627,7 @@ mod tests {
             .expect("configuring a channel never fails");
 
         assert_eq!(context.channels.channel_state(&channel_id), Some(&expected));
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]

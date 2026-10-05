@@ -372,12 +372,12 @@ mod tests {
     #[test]
     fn decode_accepts_keys_in_increasing_order() {
         let (rest, set) = BTreeSet::<u8>::decode(&[2, 0, 0, 0, 1, 2], &()).unwrap();
-        assert!(rest.is_empty());
+        assert_eq!(rest, b"");
         assert_eq!(set, BTreeSet::try_from_iter([1, 2]).unwrap());
 
         let bytes = [2, 0x01, 0x00, 0xAA, 0x00, 0x01, 0xBB];
         let (rest, map) = Map::decode(&bytes, &((), ())).unwrap();
-        assert!(rest.is_empty());
+        assert_eq!(rest, b"");
         assert_eq!(map.encode_to_vec(), bytes);
     }
 

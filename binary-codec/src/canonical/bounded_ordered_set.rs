@@ -151,7 +151,7 @@ mod tests {
 
         let (rest, decoded) = Set::decode(&bytes).unwrap();
 
-        assert!(rest.is_empty());
+        assert_eq!(rest, b"");
         assert_eq!(elements(&decoded), [1, 256]);
         assert_eq!(decoded.encode_to_vec(), bytes);
     }

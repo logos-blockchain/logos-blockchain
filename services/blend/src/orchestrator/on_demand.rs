@@ -129,6 +129,7 @@ mod tests {
         overwatch::OverwatchRunner,
         services::{
             ServiceCore,
+            resources::ServiceResourcesHandle,
             state::{NoOperator, NoState},
         },
     };
@@ -250,7 +251,7 @@ mod tests {
         async fn run(mut self) -> Result<(), DynError> {
             let Self {
                 service_resources_handle:
-                    OpaqueServiceResourcesHandle::<Self, RuntimeServiceId> {
+                    ServiceResourcesHandle {
                         ref mut inbound_relay,
                         ref status_updater,
                         ref settings_handle,

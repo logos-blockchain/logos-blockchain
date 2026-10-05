@@ -436,7 +436,7 @@ mod tests {
         assert_eq!(adds[0].value, 50);
         assert_eq!(adds[0].pk, zk_pk(10));
         assert_eq!(adds[0].slot, Slot::from(9));
-        assert!(removed(&ops).is_empty());
+        assert_eq!(removed(&ops), []);
     }
 
     #[test]
@@ -524,7 +524,7 @@ mod tests {
         );
 
         assert_eq!(removed(&ops), vec![note_id(10)]);
-        assert!(added(&ops).is_empty());
+        assert_eq!(added(&ops), Vec::<&ChannelNote>::new());
     }
 
     fn add(seed: u64, value: Value) -> NoteOp {
@@ -564,8 +564,8 @@ mod tests {
         wallet.store_overlay(header_id(2), vec![NoteOp::Remove(note_id(1))]);
 
         let view = wallet.view([header_id(1), header_id(2)].iter());
-        assert!(view.finalized.is_empty());
-        assert!(view.unfinalized.is_empty());
+        assert_eq!(view.finalized, []);
+        assert_eq!(view.unfinalized, []);
     }
 
     #[test]

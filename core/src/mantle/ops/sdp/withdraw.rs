@@ -454,7 +454,7 @@ mod tests {
                 .service_notes
                 .is_used_for_service(&locked_note_id, &ServiceType::BlendNetwork)
         );
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]

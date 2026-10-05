@@ -149,7 +149,7 @@ mod tests {
     #[test]
     fn decode_reads_a_well_formed_payload() {
         let (rest, bv) = Bounded::decode(&[3, 1, 2, 3]).unwrap();
-        assert!(rest.is_empty());
+        assert_eq!(rest, b"");
         assert_eq!(bv.as_slice(), &[1, 2, 3]);
     }
 
@@ -219,7 +219,7 @@ mod tests {
         let original = bounded(&[10, 20, 30, 40]);
         let bytes = original.encode_to_vec();
         let (rest, decoded) = Bounded::decode(&bytes).unwrap();
-        assert!(rest.is_empty());
+        assert_eq!(rest, b"");
         assert_eq!(decoded, original);
     }
 
@@ -233,7 +233,7 @@ mod tests {
         assert_eq!(bytes, vec![3, 0x02, 0x01, 0x04, 0x03, 0xCD, 0xAB]);
 
         let (rest, decoded) = U16Codec::decode(&bytes).unwrap();
-        assert!(rest.is_empty());
+        assert_eq!(rest, b"");
         assert_eq!(decoded, original);
     }
 
@@ -244,7 +244,7 @@ mod tests {
         let bytes = original.encode_to_vec();
         assert_eq!(bytes, vec![1, 0, 10]); // 2-byte length prefix (1) then a single `u8` (10)
         let (rest, decoded) = TwoByteBounded::decode(&bytes).unwrap();
-        assert!(rest.is_empty());
+        assert_eq!(rest, b"");
         assert_eq!(decoded, original);
     }
 
@@ -255,7 +255,7 @@ mod tests {
         let bytes = original.encode_to_vec();
         assert_eq!(bytes, vec![1, 0, 0, 0, 10]); // 4-byte length prefix (1) then a single `u8` (10)
         let (rest, decoded) = FourByteBounded::decode(&bytes).unwrap();
-        assert!(rest.is_empty());
+        assert_eq!(rest, b"");
         assert_eq!(decoded, original);
     }
 
@@ -288,7 +288,7 @@ mod tests {
 
         let (rest, decoded) = ZeroLength::decode(&bytes).unwrap();
 
-        assert!(rest.is_empty());
+        assert_eq!(rest, b"");
         assert_eq!(decoded, original);
         assert_eq!(decoded.len(), 3);
     }
@@ -319,7 +319,7 @@ mod tests {
 
         let (rest, decoded) = ZeroLength::decode(&[0]).unwrap();
 
-        assert!(rest.is_empty());
+        assert_eq!(rest, b"");
         assert!(decoded.is_empty());
     }
 

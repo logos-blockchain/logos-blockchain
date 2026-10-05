@@ -313,7 +313,6 @@ impl<Tx> Block<Tx> {
         &self.uncle_headers
     }
 
-    #[must_use]
     pub fn transactions_iter(&self) -> impl ExactSizeIterator<Item = &Tx> + '_ {
         self.transactions.as_slice().iter()
     }

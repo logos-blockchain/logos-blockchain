@@ -33,10 +33,10 @@ RUN ./logosctl --appimage-extract && mv squashfs-root ext-logosctl
 
 RUN ./ext-logosctl/AppRun daemon start --detach && \
     ./ext-logosctl/AppRun catalog add \
-        https://raw.githubusercontent.com/logos-blockchain/blockchain-modules-release/refs/heads/main/logos-repo.json && \
+    https://raw.githubusercontent.com/logos-blockchain/blockchain-modules-release/refs/heads/main/logos-repo.json && \
     ./ext-logosctl/AppRun catalog refresh && \
     ./ext-logosctl/AppRun package download blockchain_module \
-        --version "$LB_NODE_VERSION" --catalog logos-modules-internal --output ./ && \
+    --version "$LB_NODE_VERSION" --output ./ && \
     ./ext-logosctl/AppRun install "./blockchain_module-${LB_NODE_VERSION}.lgx" -y && \
     ./ext-logosctl/AppRun daemon stop
 

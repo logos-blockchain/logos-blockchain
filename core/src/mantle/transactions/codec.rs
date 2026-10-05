@@ -183,7 +183,7 @@ mod tests {
         // DECODING
         let test_vector_bytes = hex::decode(test_vector).unwrap();
         let (remaining, decoded_tx) = SignedOps::decode(&test_vector_bytes).unwrap();
-        assert!(remaining.is_empty());
+        assert_eq!(remaining, b"");
         assert_eq!(decoded_tx, signed_tx);
     }
     #[test]
@@ -224,7 +224,7 @@ mod tests {
 
         let encoded = signed_tx.encode();
         let (remaining, decoded_tx) = SignedOps::decode(&encoded).unwrap();
-        assert!(remaining.is_empty());
+        assert_eq!(remaining, b"");
         assert_eq!(decoded_tx, signed_tx);
     }
 
@@ -310,7 +310,7 @@ mod tests {
         let (remaining, decoded_tx) = Ops::decode(&encoded).unwrap();
 
         // Verify
-        assert!(remaining.is_empty());
+        assert_eq!(remaining, b"");
         assert_eq!(original_tx, decoded_tx);
     }
 
@@ -720,7 +720,7 @@ mod tests {
 
         let encoded = op.encode();
         let (remaining, decoded_op) = Op::decode(&encoded).unwrap();
-        assert!(remaining.is_empty());
+        assert_eq!(remaining, b"");
         assert_eq!(decoded_op, op);
     }
 
@@ -747,7 +747,7 @@ mod tests {
         let encoded = signed_tx.encode();
         let (remaining, decoded_tx) = SignedOps::<_, StandardMode>::decode(&encoded).unwrap();
 
-        assert!(remaining.is_empty());
+        assert_eq!(remaining, b"");
         assert_eq!(decoded_tx, signed_tx);
     }
 

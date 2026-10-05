@@ -1829,7 +1829,7 @@ mod tests {
             settings.tick,
             AutoClaimTick::Seconds(NonZeroU64::new(10).unwrap())
         );
-        assert!(settings.targets.is_empty());
+        assert_eq!(settings.targets, []);
     }
 
     #[test]
@@ -1851,7 +1851,7 @@ mod tests {
             slot_paced.tick,
             AutoClaimTick::Slots(NonZeroU64::new(20).unwrap())
         );
-        assert!(slot_paced.targets.is_empty());
+        assert_eq!(slot_paced.targets, []);
     }
 
     #[test]
@@ -2197,7 +2197,7 @@ mod tests {
     fn claimable_rewards_info_is_empty_without_tickets() {
         let info = claimable_rewards_info(&[], Slot::new(100), SLOT_WINDOW);
         assert_eq!(info.claimable_tickets, 0);
-        assert!(info.slots_until_expiry.is_empty());
+        assert_eq!(info.slots_until_expiry, []);
     }
 
     #[test]

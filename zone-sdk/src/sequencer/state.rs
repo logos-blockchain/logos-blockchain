@@ -1803,7 +1803,7 @@ mod tests {
         assert_eq!(state.unfinalized_count(), 1);
 
         // But pending_txs at b1 excludes it (it's in the safe set)
-        assert!(state.pending_txs(b1).is_empty());
+        assert_eq!(state.pending_txs(b1), []);
     }
 
     #[test]
@@ -1875,7 +1875,7 @@ mod tests {
         state.process_block(b1, genesis, genesis, vec![hash], vec![], Vec::new());
 
         // At b1 tip, tx is in safe set (not in pending_txs)
-        assert!(state.pending_txs(b1).is_empty());
+        assert_eq!(state.pending_txs(b1), []);
 
         // b2 forks from genesis, no tx
         state.process_block(b2, genesis, genesis, vec![], vec![], Vec::new());
@@ -2061,7 +2061,7 @@ mod tests {
 
         let view = restored.channel_wallet_view(None);
         assert_eq!(view.finalized.len(), 2);
-        assert!(view.unfinalized.is_empty());
+        assert_eq!(view.unfinalized, []);
     }
 
     #[test]
@@ -2336,7 +2336,7 @@ mod tests {
         // No config has landed yet — the local config tip is root, so ours is
         // still viable.
         state.process_block(b1, genesis, genesis, vec![], vec![], Vec::new());
-        assert!(state.shed_stale_pending_configs(b1).is_empty());
+        assert_eq!(state.shed_stale_pending_configs(b1), []);
         assert!(state.pending_other_contains(&stale_hash));
 
         // A rival config (also chaining on root) lands on-branch and moves the
@@ -2577,7 +2577,7 @@ mod tests {
             Vec::new(),
         );
 
-        assert!(state.shed_stale_pending_configs(tip).is_empty());
+        assert_eq!(state.shed_stale_pending_configs(tip), []);
         assert!(state.pending_other_contains(&config_hash));
     }
 
@@ -2610,7 +2610,7 @@ mod tests {
         state.submit_other(c_config, channel_id).unwrap();
 
         // C extends the local tip B, so it survives.
-        assert!(state.shed_stale_pending_configs(b1).is_empty());
+        assert_eq!(state.shed_stale_pending_configs(b1), []);
         assert!(state.pending_other_contains(&c_hash));
     }
 

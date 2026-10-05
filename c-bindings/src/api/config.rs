@@ -559,7 +559,7 @@ mod test {
             .to_str()
             .expect("Key id should be valid UTF-8")
             .to_owned();
-        assert!(!key_id.is_empty());
+        assert_ne!(key_id, "");
         assert!(unsafe { free_cstring(result.value) }.is_ok());
 
         // add-key
@@ -588,7 +588,7 @@ mod test {
             .to_str()
             .expect("Peer id should be valid UTF-8")
             .to_owned();
-        assert!(!peer_id.is_empty());
+        assert_ne!(peer_id, "");
         assert!(unsafe { free_cstring(result.value) }.is_ok());
 
         // participate

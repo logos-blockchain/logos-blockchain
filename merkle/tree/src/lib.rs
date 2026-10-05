@@ -128,7 +128,6 @@ where
     }
 
     /// Iterates over the stored `(key, item)` pairs, in no particular order
-    #[must_use]
     pub fn iter(&self) -> <&Self as IntoIterator>::IntoIter {
         self.into_iter()
     }

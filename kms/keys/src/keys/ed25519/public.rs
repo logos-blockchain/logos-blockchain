@@ -289,7 +289,7 @@ mod tests {
             );
             let encoded = key.encode();
             let (rest, decoded) = UnverifiedPublicKey::decode(&encoded, &()).unwrap();
-            assert!(rest.is_empty());
+            assert_eq!(rest, b"");
             assert_eq!(decoded, key);
         }
     }

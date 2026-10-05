@@ -831,7 +831,7 @@ mod test {
                 .channels
                 .is_channel_note_of(&output.id(), &CHANNEL_ID)
         );
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]

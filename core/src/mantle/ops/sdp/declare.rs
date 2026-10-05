@@ -764,7 +764,7 @@ mod tests {
                     .service_notes
                     .is_used_for_service(&utxo.id(), &service_type)
             );
-            assert!(events.is_empty());
+            assert_eq!(events, []);
         }
 
         #[test]

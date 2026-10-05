@@ -311,8 +311,6 @@ mod serde {
 
 #[cfg(test)]
 mod tests {
-    use std::f64;
-
     use super::*;
 
     #[test]

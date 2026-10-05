@@ -1777,7 +1777,7 @@ impl WalletInfo {
     #[must_use]
     pub fn public_key_hex(&self) -> String {
         match &self.wallet_type {
-            WalletType::User { wallet_account, .. } => wallet_account.public_key_hex(),
+            WalletType::User { wallet_account } => wallet_account.public_key_hex(),
             WalletType::Funding { key } => key.wallet_pk.clone(),
         }
     }
@@ -1785,7 +1785,7 @@ impl WalletInfo {
     /// Helper to get the wallet's public key as a `ZkPublicKey` type.
     pub fn public_key(&self) -> Result<ZkPublicKey, StepError> {
         match &self.wallet_type {
-            WalletType::User { wallet_account, .. } => Ok(wallet_account.public_key()),
+            WalletType::User { wallet_account } => Ok(wallet_account.public_key()),
             WalletType::Funding { key } => {
                 Ok(ZkPublicKey::from_bytes(&hex::decode(&key.wallet_pk)?)?)
             }

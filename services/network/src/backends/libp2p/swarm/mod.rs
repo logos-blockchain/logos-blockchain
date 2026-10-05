@@ -225,7 +225,6 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 peer_id,
                 connection_id,
                 error,
-                ..
             } => {
                 crate::metrics::network_dial_failures();
 
@@ -861,7 +860,7 @@ mod tests {
             Some(&advertised_protocols(&["/chainsync/test"]))
         );
         assert!(handler.chainsync_eligible_peers().contains(&peer_id));
-        assert!(handler.swarm.kademlia_discovered_peers().is_empty());
+        assert_eq!(handler.swarm.kademlia_discovered_peers(), []);
     }
 
     #[tokio::test]
@@ -900,7 +899,7 @@ mod tests {
 
         handler.remove_kademlia_address_for_dial(Some(peer_id), &address);
 
-        assert!(handler.swarm.kademlia_discovered_peers().is_empty());
+        assert_eq!(handler.swarm.kademlia_discovered_peers(), []);
         assert!(!handler.peer_advertised_protocols.contains_key(&peer_id));
     }
 
@@ -1266,7 +1265,7 @@ mod tests {
         handler.handle_network_command(NetworkCommand::Info { reply });
         let info = info_rx.await.expect("info reply");
 
-        assert!(info.discovered_peers.is_empty());
+        assert_eq!(info.discovered_peers, []);
         assert_eq!(info.n_discovered_peers, 0);
     }
 }

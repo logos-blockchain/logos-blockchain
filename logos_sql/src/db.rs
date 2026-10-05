@@ -1596,7 +1596,7 @@ mod tests {
             db.write_status(tx_id).expect("write status should load"),
             Some(WriteStatus::Live)
         );
-        assert!(db.unhandled_displacements().unwrap().is_empty());
+        assert_eq!(db.unhandled_displacements().unwrap(), []);
         assert!(!db.has_unhandled_displacements().unwrap());
 
         db.apply_history_delta(&[], &[MsgId::from([8; 32])], &[])
@@ -1677,7 +1677,7 @@ mod tests {
             .expect("local write should finalize");
 
         assert!(!db.has_unhandled_displacements().unwrap());
-        assert!(db.unhandled_displacements().unwrap().is_empty());
+        assert_eq!(db.unhandled_displacements().unwrap(), []);
 
         assert_eq!(
             db.write_status(tx_id).expect("write status should load"),
@@ -1688,7 +1688,7 @@ mod tests {
         let db = Databases::open(dir.path()).expect("databases should reopen");
 
         assert!(!db.has_unhandled_displacements().unwrap());
-        assert!(db.unhandled_displacements().unwrap().is_empty());
+        assert_eq!(db.unhandled_displacements().unwrap(), []);
 
         assert_eq!(
             db.write_status(tx_id).expect("write status should reload"),

@@ -481,7 +481,7 @@ mod test {
 
         assert!(!utxos.contains(&input_utxo.id()));
         assert_eq!(utxos.get(&output_utxo.id()), Some(output_utxo));
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]

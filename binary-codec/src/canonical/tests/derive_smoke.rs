@@ -28,7 +28,7 @@ fn derived_named_struct_round_trips() {
     assert_eq!(value.encoded_length(), 3);
 
     let (rest, decoded) = Named::decode(&bytes, &()).unwrap();
-    assert!(rest.is_empty());
+    assert_eq!(rest, b"");
     assert_eq!(decoded, value);
 }
 
@@ -39,7 +39,7 @@ fn derived_tuple_struct_round_trips() {
     assert_eq!(value.encoded_length(), bytes.len());
 
     let (rest, decoded) = Tuple::decode(&bytes, &()).unwrap();
-    assert!(rest.is_empty());
+    assert_eq!(rest, b"");
     assert_eq!(decoded, value);
 }
 

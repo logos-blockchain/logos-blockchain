@@ -2524,7 +2524,7 @@ mod tests {
         assert_eq!(shed, vec![i3_hash, i4_hash]);
         let s = state.as_ref().unwrap();
         assert_eq!(s.pending_publish_count(), 4, "i1, i2, i3', i4' mirrored");
-        assert!(s.pending_txs(b5.header.id).is_empty());
+        assert_eq!(s.pending_txs(b5.header.id), []);
     }
 
     /// Our opaque (custom-shaped) pending tx is part of the view like any
@@ -2727,7 +2727,7 @@ mod tests {
             r[3].result.channel_update.is_none(),
             "bare un-mine is silent"
         );
-        assert!(r[3].shed_other.is_empty());
+        assert_eq!(r[3].shed_other, []);
         let u = r[4].result.channel_update.as_ref().expect("i' wins");
         let orphaned: Vec<TxHash> = u.orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
         let adopted: Vec<TxHash> = u.adopted.iter().map(ChannelUpdateTx::tx_hash).collect();
@@ -3529,7 +3529,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .channel_wallet_view(Some(header_id(1)));
-        assert!(view.finalized.is_empty());
+        assert_eq!(view.finalized, []);
         assert_eq!(view.unfinalized.len(), 1);
         assert_eq!(view.unfinalized[0].note_id, recreated);
         assert_eq!(view.unfinalized[0].value, 50);
