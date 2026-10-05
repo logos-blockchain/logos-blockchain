@@ -21,21 +21,6 @@ use crate::{
     proofs::leader_proof::Groth16LeaderProof,
 };
 
-/// The slot of the block or proposal `bytes` encode, read off the start of
-/// the encoding, before anything else of it is parsed. `None` if `bytes` is
-/// too short to start with a slot.
-///
-/// Both start with their header, and a header with its slot: an unsigned
-/// 64-bit integer in little-endian order, in the canonical layout and in
-/// bincode alike, in every era. The slot names the era of the block, whose
-/// version decodes the rest.
-#[must_use]
-pub fn encoded_slot(bytes: &[u8]) -> Option<Slot> {
-    bytes
-        .first_chunk()
-        .map(|slot| Slot::new(u64::from_le_bytes(*slot)))
-}
-
 /// The maximum number of transactions allowed in a block.
 const MAX_BLOCK_TRANSACTIONS: usize = 1024;
 /// The maximum total size of all transactions in a block, in bytes (2 MiB).

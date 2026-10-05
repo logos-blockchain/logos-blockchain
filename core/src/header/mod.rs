@@ -3,8 +3,9 @@ use core::fmt::{self, Debug, Formatter};
 use lb_binary_codec::{bincode::BoundedSerializeOp, canonical::BinaryCodec};
 use lb_cryptarchia_engine::Slot;
 
-mod fixtures;
 pub mod v1;
+
+mod fixtures;
 
 use crate::{
     proofs::leader_proof::Groth16LeaderProof,
