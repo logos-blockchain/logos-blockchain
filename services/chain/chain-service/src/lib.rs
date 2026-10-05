@@ -36,7 +36,6 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots, era::Eras};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
-use lb_era_parameters::{EraDefinition, EraParameters};
 pub use lb_ledger::EpochState;
 use lb_ledger::{ConfigSchedule as _, LedgerState};
 use lb_log_targets::chain;
@@ -589,21 +588,13 @@ impl Cryptarchia {
 
 #[derive(Debug, Clone)]
 pub struct CryptarchiaSettings {
-    /// The chain's eras: the chain service runs the ledger config of each.
-    pub eras: Arc<Eras<EraDefinition>>,
+    /// The ledger config of every era, the one each block and each epoch is
+    /// run under.
+    pub eras: Arc<Eras<lb_ledger::Config>>,
     pub starting_state: StartingState,
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
     pub recovery_data: RecoveryData,
-}
-
-/// The ledger config of every era of `eras`, the settings the chain runs a
-/// block or an epoch under.
-#[must_use]
-pub fn ledger_eras(eras: &Eras<EraDefinition>) -> Eras<lb_ledger::Config> {
-    eras.map(|era| match &era.entry.parameters.parameters {
-        EraParameters::V1(parameters) => parameters.ledger_config(),
-    })
 }
 
 impl StorageRecoverySettings for CryptarchiaSettings {
@@ -740,7 +731,7 @@ where
         } = Self::initialize_cryptarchia(
             &self.state,
             &bootstrap_config,
-            Arc::new(ledger_eras(&eras)),
+            eras,
             &relays,
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,

@@ -86,11 +86,8 @@ impl ServiceState for CryptarchiaConsensusState {
                 let lib_id = genesis_block.header().id();
                 let genesis_tx = genesis_block.genesis_tx();
                 let epoch_nonce = genesis_tx.cryptarchia_parameter().epoch_nonce;
-                let (ledger, _events) = LedgerState::from_genesis_tx(
-                    genesis_tx.clone(),
-                    &crate::ledger_eras(&settings.eras),
-                    epoch_nonce,
-                )?;
+                let (ledger, _events) =
+                    LedgerState::from_genesis_tx(genesis_tx.clone(), &settings.eras, epoch_nonce)?;
                 (lib_id, lib_id, ledger)
             }
             StartingState::Lib {

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
+use lb_chain_network_service::network::adapters::libp2p::{EraIdentifiers, LibP2pAdapterSettings};
 use lb_core::block::genesis::GenesisBlock;
 use lb_cryptarchia_engine::era::Eras;
-use lb_era_parameters::EraDefinition;
+use lb_era_parameters::{EraDefinition, EraParameters};
 use lb_libp2p::PeerId;
 use lb_services_utils::overwatch::RecoveryData;
 
@@ -19,7 +19,7 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_cryptarchia_services_settings(
         self,
-        eras: &Arc<Eras<EraDefinition>>,
+        eras: &Eras<EraDefinition>,
         genesis_block: GenesisBlock,
         recovery_data: RecoveryData,
     ) -> (
@@ -27,6 +27,11 @@ impl ServiceConfig {
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
         lb_chain_leader_service::LeaderSettings,
     ) {
+        // The ledger config of every era, which the chain service runs and the
+        // leader builds proposals under.
+        let ledger_eras = Arc::new(eras.map(|era| match &era.entry.parameters.parameters {
+            EraParameters::V1(parameters) => parameters.ledger_config(),
+        }));
         let chain_service_settings = lb_chain_service::CryptarchiaSettings {
             bootstrap: lb_chain_service::BootstrapConfig {
                 force_bootstrap: self.user.service.bootstrap.force_bootstrap,
@@ -46,7 +51,7 @@ impl ServiceConfig {
                         .state_recording_interval,
                 },
             },
-            eras: Arc::clone(eras),
+            eras: Arc::clone(&ledger_eras),
             recovery_data,
             starting_state: genesis_block.into(),
             sync: lb_chain_service::SyncConfig {
@@ -71,7 +76,17 @@ impl ServiceConfig {
                 },
             },
             network: LibP2pAdapterSettings {
-                eras: Arc::clone(eras),
+                eras: Arc::new(eras.map(|era| {
+                    EraIdentifiers {
+                        proposal_topic: era
+                            .entry
+                            .parameters
+                            .protocol_names
+                            .cryptarchia_topic
+                            .clone(),
+                        chain_sync_protocol: era.entry.parameters.protocol_names.chain_sync.clone(),
+                    }
+                })),
                 max_connected_peers_to_try_download: self
                     .user
                     .network
@@ -96,7 +111,7 @@ impl ServiceConfig {
             },
         };
         let chain_leader_settings = lb_chain_leader_service::LeaderSettings {
-            eras: Arc::clone(eras),
+            eras: ledger_eras,
             wallet_config: lb_chain_leader_service::LeaderWalletConfig {
                 funding_pk: self.user.leader.wallet.funding_pk,
                 max_tx_fee: self.user.leader.wallet.max_tx_fee,

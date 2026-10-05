@@ -18,14 +18,13 @@ use lb_cryptarchia_engine::{
     era::{Era, EraInForce, EraVersion, Eras},
 };
 use lb_cryptarchia_sync::GetTipResponse;
-use lb_era_parameters::{EraDefinition, ProtocolNames};
 use lb_log_targets::chain;
 use lb_network_service::{
     NetworkService,
     backends::libp2p::{
         ChainSyncCommand, Command, DiscoveryCommand, Libp2p, NetworkCommand, PeerId,
         PubSubCommand::{self, Subscribe, Unsubscribe},
-        TopicHash,
+        StreamProtocol, TopicHash,
     },
     message::{ChainSyncEvent, NetworkMsg},
 };
@@ -65,11 +64,20 @@ where
     _phantom_tx: PhantomData<Tx>,
 }
 
+/// What the adapter follows of an era: the topic its proposals are gossiped
+/// on, and the protocol its blocks are synced over.
+#[derive(Debug, Clone)]
+pub struct EraIdentifiers {
+    pub proposal_topic: String,
+    pub chain_sync_protocol: StreamProtocol,
+}
+
 #[derive(Debug, Clone)]
 pub struct LibP2pAdapterSettings {
-    /// The chain's eras: each era's proposals are gossiped on its topic, and
-    /// its blocks and proposals are decoded by the codec of its version.
-    pub eras: Arc<Eras<EraDefinition>>,
+    /// The identifiers of every era: each era's proposals are gossiped on its
+    /// topic and its blocks synced over its protocol, and both are decoded by
+    /// the codec of its version.
+    pub eras: Arc<Eras<EraIdentifiers>>,
     /// The maximum number of connected peers to attempt downloads from
     /// for each target block.
     pub max_connected_peers_to_try_download: usize,
@@ -149,8 +157,8 @@ where
         }
     }
 
-    /// The protocol and topic names of `era`.
-    fn protocol_names(&self, era: Era) -> &ProtocolNames {
+    /// The identifiers of `era`.
+    fn identifiers(&self, era: Era) -> &EraIdentifiers {
         &self
             .settings
             .eras
@@ -158,7 +166,6 @@ where
             .expect("an era in force is scheduled")
             .entry
             .parameters
-            .protocol_names
     }
 
     async fn get_connected_peers(
@@ -228,7 +235,7 @@ fn is_in_force(topics: &Eras<TopicHash>, in_force: Option<EraInForce>, topic: &T
 
 /// The version of the era of the block or proposal `bytes` encode, read off
 /// its slot: the codec that decodes the rest.
-fn era_version(eras: &Eras<EraDefinition>, bytes: &[u8]) -> Result<EraVersion, DynError> {
+fn era_version<Parameters>(eras: &Eras<Parameters>, bytes: &[u8]) -> Result<EraVersion, DynError> {
     let slot = encoded_slot(bytes).ok_or("too short to start with a slot")?;
     Ok(eras.at_slot(slot).entry.version)
 }
@@ -274,7 +281,7 @@ where
         }
         let previously: Vec<Era> = previous.into_iter().flat_map(EraInForce::eras).collect();
         for era in in_force.eras().filter(|era| !previously.contains(era)) {
-            let topic = &self.protocol_names(era).cryptarchia_topic;
+            let topic = &self.identifiers(era).proposal_topic;
             tracing::debug!(
                 target: LOG_TARGET,
                 era = era.into_inner(),
@@ -286,7 +293,7 @@ where
             .into_iter()
             .filter(|era| !in_force.eras().any(|in_force| in_force == *era))
         {
-            let topic = &self.protocol_names(era).cryptarchia_topic;
+            let topic = &self.identifiers(era).proposal_topic;
             tracing::debug!(
                 target: LOG_TARGET,
                 era = era.into_inner(),
@@ -298,7 +305,7 @@ where
         // to the retiring era's with a peer that has not moved on yet.
         let protocols = in_force
             .eras()
-            .map(|era| self.protocol_names(era).chain_sync.clone())
+            .map(|era| self.identifiers(era).chain_sync_protocol.clone())
             .collect();
         if let Err(error) = self
             .network_relay
@@ -321,15 +328,8 @@ where
             return Err(Box::new(error));
         }
         let eras = Arc::clone(&self.settings.eras);
-        let topics = eras.map(|era| {
-            TopicHash::from_raw(
-                era.entry
-                    .parameters
-                    .protocol_names
-                    .cryptarchia_topic
-                    .clone(),
-            )
-        });
+        let topics =
+            eras.map(|era| TopicHash::from_raw(era.entry.parameters.proposal_topic.clone()));
         let in_force = self.in_force.subscribe();
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
