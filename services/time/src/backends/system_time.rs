@@ -30,8 +30,8 @@ mod test {
 
     use futures::StreamExt as _;
     use lb_cryptarchia_engine::{
-        Epoch, Slot,
-        era::{EraEntry, EraVersion, Eras},
+        Slot,
+        era::{EraEntriesAfterGenesis, EraEntry, EraVersion, Eras},
     };
     use time::OffsetDateTime;
 
@@ -47,14 +47,14 @@ mod test {
         let expected: Vec<_> = (1..=SAMPLE_SIZE).map(Slot::from).collect();
         let eras = Eras::new(
             OffsetDateTime::now_utc(),
-            [EraEntry {
-                first_epoch: Epoch::new(0),
+            EraEntry {
                 version: EraVersion::V1,
                 slot_duration: Duration::from_secs(1),
-                epoch_length: NonZero::new(100).unwrap(),
+                epoch_length_in_slots: NonZero::new(100).unwrap(),
                 transition_slots: 0,
                 parameters: (),
-            }],
+            },
+            EraEntriesAfterGenesis::empty(),
         )
         .unwrap();
         let backend = SystemTimeBackend::init(TimeServiceSettings { eras, backend: () });

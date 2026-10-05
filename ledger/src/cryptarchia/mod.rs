@@ -2240,7 +2240,7 @@ pub mod tests {
             ),
             ..era_0.clone()
         };
-        let eras = schedule([(0.into(), era_0.clone()), (2.into(), era_1.clone())]);
+        let eras = schedule(era_0.clone(), [(2, era_1.clone())]);
         (era_0, era_1, eras)
     }
 

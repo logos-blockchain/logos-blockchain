@@ -240,7 +240,7 @@ mod tests {
         traits::StorageSize as _,
         transactions::{SignedOps, states::Preverified},
     };
-    use lb_cryptarchia_engine::{Epoch, era::EraEntry};
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry};
     use time::OffsetDateTime;
 
     use super::*;
@@ -252,16 +252,17 @@ mod tests {
     #[test]
     fn only_the_topics_of_the_eras_in_force_are_accepted() {
         // Era 1 starts at slot 10, and its first 5 slots still accept era 0.
+        let entry = |era| EraEntry {
+            version: EraVersion::V1,
+            slot_duration: Duration::from_secs(1),
+            epoch_length_in_slots: NonZero::new(10).unwrap(),
+            transition_slots: 5,
+            parameters: topic(era),
+        };
         let topics = Eras::new(
             OffsetDateTime::UNIX_EPOCH,
-            [0, 1].map(|era| EraEntry {
-                first_epoch: Epoch::new(era),
-                version: EraVersion::V1,
-                slot_duration: Duration::from_secs(1),
-                epoch_length: NonZero::new(10).unwrap(),
-                transition_slots: 5,
-                parameters: topic(era),
-            }),
+            entry(0),
+            EraEntriesAfterGenesis::from((NonZero::new(1).unwrap(), entry(1))),
         )
         .unwrap();
         let accepted = |slot: u64| {

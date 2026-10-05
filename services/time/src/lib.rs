@@ -198,7 +198,7 @@ fn handle_service_message<BackendSettings>(
                 genesis_time_unix_ms,
                 current_slot: current_slot_tick.slot,
                 current_epoch: current_slot_tick.epoch,
-                slots_per_epoch: era.epoch_length.get(),
+                slots_per_epoch: era.epoch_length_in_slots.get(),
             })));
         }
         TimeServiceMessage::Subscribe { sender } => {

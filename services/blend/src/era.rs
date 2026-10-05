@@ -34,7 +34,7 @@ pub fn transition_period<Settings>(
 ) -> Duration {
     let scheduled = scheduled(eras, era);
     let epoch_transition = timing(&scheduled.entry.parameters).epoch_transition_period;
-    if era == Era::GENESIS || epoch != scheduled.entry.first_epoch {
+    if era == Era::GENESIS || epoch != scheduled.first_epoch {
         return epoch_transition;
     }
     let era_transition = scheduled
@@ -49,7 +49,7 @@ mod tests {
     use core::{num::NonZero, time::Duration};
 
     use lb_chain_service::Epoch;
-    use lb_cryptarchia_engine::era::{Era, EraEntry, EraVersion, Eras};
+    use lb_cryptarchia_engine::era::{Era, EraEntriesAfterGenesis, EraEntry, EraVersion, Eras};
     use time::OffsetDateTime;
 
     use super::transition_period;
@@ -69,20 +69,20 @@ mod tests {
     /// Era 1 starts at epoch 2: its slots last 2 s and its transition period
     /// 30 slots, 60 s.
     fn two_eras(era_1_epoch_transition: Duration) -> Eras<TimingSettings> {
+        let entry = |slot_duration, epoch_transition| EraEntry {
+            version: EraVersion::V1,
+            slot_duration,
+            epoch_length_in_slots: NonZero::new(10).unwrap(),
+            transition_slots: 30,
+            parameters: timing(epoch_transition),
+        };
         Eras::new(
             OffsetDateTime::UNIX_EPOCH,
-            [
-                (0, Duration::from_secs(1), Duration::from_secs(5)),
-                (2, Duration::from_secs(2), era_1_epoch_transition),
-            ]
-            .map(|(first_epoch, slot_duration, epoch_transition)| EraEntry {
-                first_epoch: Epoch::new(first_epoch),
-                version: EraVersion::V1,
-                slot_duration,
-                epoch_length: NonZero::new(10).unwrap(),
-                transition_slots: 30,
-                parameters: timing(epoch_transition),
-            }),
+            entry(Duration::from_secs(1), Duration::from_secs(5)),
+            EraEntriesAfterGenesis::from((
+                NonZero::new(2).unwrap(),
+                entry(Duration::from_secs(2), era_1_epoch_transition),
+            )),
         )
         .unwrap()
     }

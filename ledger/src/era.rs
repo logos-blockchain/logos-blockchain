@@ -94,14 +94,14 @@ mod tests {
 
     /// Two eras of version 1, the second from epoch 1.
     fn two_eras() -> Eras<Config> {
-        schedule([(Epoch::new(0), config()), (Epoch::new(1), config())])
+        schedule(config(), [(1, config())])
     }
 
     #[test]
     fn a_state_crosses_into_an_era_of_its_version_unchanged() {
         let eras = two_eras();
         let state = LedgerState::from_utxos([utxo()], &eras);
-        let next_era = eras.epoch_start(Epoch::new(1));
+        let next_era = eras.epoch_starting_slot(Epoch::new(1));
 
         assert_eq!(state.clone().into_era_of(next_era, &eras), state);
     }
@@ -110,14 +110,14 @@ mod tests {
     fn a_state_is_borrowed_within_its_own_era() {
         let eras = two_eras();
         let state = LedgerState::from_utxos([utxo()], &eras);
-        let last_slot_of_first_era = Slot::new(eras.epoch_start(Epoch::new(1)).into_inner() - 1);
+        let last_slot_of_first_era = Slot::new(eras.epoch_starting_slot(Epoch::new(1)).into_inner() - 1);
 
         assert!(matches!(
             state.in_era_of(last_slot_of_first_era, &eras),
             Cow::Borrowed(_)
         ));
         assert!(matches!(
-            state.in_era_of(eras.epoch_start(Epoch::new(1)), &eras),
+            state.in_era_of(eras.epoch_starting_slot(Epoch::new(1)), &eras),
             Cow::Owned(_)
         ));
     }

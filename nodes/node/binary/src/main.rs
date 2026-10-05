@@ -126,7 +126,7 @@ fn forks(deployment: &DeploymentSettings) -> Result<String> {
             format!(
                 "era {} from epoch {} on fork {}",
                 era.era.into_inner(),
-                era.entry.first_epoch.into_inner(),
+                era.first_epoch.into_inner(),
                 era.entry.parameters.fork_digest
             )
         })

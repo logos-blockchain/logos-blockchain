@@ -14,7 +14,10 @@ use lb_core::{
         transactions::{codec::DecodeInEra, hash::PrefixedKey},
     },
 };
-use lb_cryptarchia_engine::era::{EraVersion, Eras};
+use lb_cryptarchia_engine::{
+    Slot,
+    era::{EraVersion, Eras},
+};
 use lb_log_targets::blend;
 use lb_network_service::{
     NetworkService,
@@ -71,7 +74,10 @@ impl Libp2pBroadcastSettings {
     /// admits transactions under, and so the one a blended transaction is
     /// decoded under.
     fn version_in_force(&self) -> EraVersion {
-        let slot = self.topics.slot_at(OffsetDateTime::now_utc());
+        let slot = self
+            .topics
+            .slot_at(OffsetDateTime::now_utc())
+            .unwrap_or(Slot::genesis());
         self.topics.at_slot(slot).entry.version
     }
 }
@@ -342,7 +348,7 @@ where
 mod tests {
     use core::{num::NonZero, time::Duration};
 
-    use lb_cryptarchia_engine::{Epoch, era::EraEntry};
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry};
     use tokio::sync::mpsc;
 
     use super::*;
@@ -350,16 +356,17 @@ mod tests {
     #[tokio::test]
     async fn a_proposal_is_broadcast_on_the_topic_of_its_era() {
         // Era 1 starts at slot 10.
+        let entry = |era| EraEntry {
+            version: EraVersion::V1,
+            slot_duration: Duration::from_secs(1),
+            epoch_length_in_slots: NonZero::new(10).unwrap(),
+            transition_slots: 0,
+            parameters: format!("/proposals/{era}"),
+        };
         let topics = Eras::new(
             OffsetDateTime::UNIX_EPOCH,
-            [0, 1].map(|era| EraEntry {
-                first_epoch: Epoch::new(era),
-                version: EraVersion::V1,
-                slot_duration: Duration::from_secs(1),
-                epoch_length: NonZero::new(10).unwrap(),
-                transition_slots: 0,
-                parameters: format!("/proposals/{era}"),
-            }),
+            entry(0),
+            EraEntriesAfterGenesis::from((NonZero::new(1).unwrap(), entry(1))),
         )
         .unwrap();
         let (sender, mut receiver) = mpsc::channel(1);

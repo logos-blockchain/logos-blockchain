@@ -16,7 +16,7 @@ use crate::{EpochSlotTickStream, SlotTick};
 /// ticking at the start of each slot from the next one on, as `eras` lays the
 /// slots out in time.
 pub fn slot_timer(eras: Arc<Eras<()>>, now: OffsetDateTime) -> (SlotTick, EpochSlotTickStream) {
-    let current_slot = eras.slot_at(now);
+    let current_slot = eras.slot_at(now).unwrap_or(Slot::genesis());
     let current_tick = slot_tick(&eras, current_slot);
     (
         current_tick,
@@ -78,7 +78,10 @@ impl Stream for SlotTimer {
         ready!(this.sleep.as_mut().poll(cx));
         // A late wake-up, the task having been held up, ticks for the slot in
         // progress: the slots it missed are skipped.
-        let in_progress = this.eras.slot_at(this.now + this.started.elapsed());
+        let in_progress = this
+            .eras
+            .slot_at(this.now + this.started.elapsed())
+            .unwrap_or(Slot::genesis());
         let slot = in_progress.max(this.last_slot.strict_add(1.into()));
         this.last_slot = slot;
         let next_deadline = this.deadline(slot.strict_add(1.into()));
@@ -94,17 +97,16 @@ mod tests {
     use futures::StreamExt as _;
     use lb_cryptarchia_engine::{
         Epoch,
-        era::{Era, EraEntry, EraVersion},
+        era::{Era, EraEntriesAfterGenesis, EraEntry, EraVersion},
     };
 
     use super::*;
 
-    fn entry(first_epoch: u32, slot_duration: Duration, epoch_length: u64) -> EraEntry<()> {
+    fn entry(slot_duration: Duration, epoch_length: u64) -> EraEntry<()> {
         EraEntry {
-            first_epoch: Epoch::new(first_epoch),
             version: EraVersion::V1,
             slot_duration,
-            epoch_length: NonZero::new(epoch_length).unwrap(),
+            epoch_length_in_slots: NonZero::new(epoch_length).unwrap(),
             transition_slots: 0,
             parameters: (),
         }
@@ -126,10 +128,11 @@ mod tests {
         let eras = Arc::new(
             Eras::new(
                 genesis,
-                [
-                    entry(0, Duration::from_secs(1), 2),
-                    entry(2, Duration::from_secs(3), 2),
-                ],
+                entry(Duration::from_secs(1), 2),
+                EraEntriesAfterGenesis::from((
+                    NonZero::new(2).unwrap(),
+                    entry(Duration::from_secs(3), 2),
+                )),
             )
             .unwrap(),
         );
@@ -154,7 +157,14 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_late_tick_skips_the_slots_it_missed() {
         let genesis = OffsetDateTime::UNIX_EPOCH;
-        let eras = Arc::new(Eras::new(genesis, [entry(0, Duration::from_secs(1), 10)]).unwrap());
+        let eras = Arc::new(
+            Eras::new(
+                genesis,
+                entry(Duration::from_secs(1), 10),
+                EraEntriesAfterGenesis::empty(),
+            )
+            .unwrap(),
+        );
         let (current, mut timer) = slot_timer(eras, genesis);
         assert_eq!(current, tick(0, 0, 0));
 

@@ -3,7 +3,7 @@ use std::{cmp::Ordering, fmt::Display, marker::PhantomData, sync::Arc};
 use bytes::Bytes;
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::era::ForkDigest;
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::{Slot, era::Eras};
 use lb_log_targets::utils;
 pub use lb_services_utils::overwatch::recovery::StorageRecoverySettings;
 use lb_services_utils::overwatch::recovery::{
@@ -161,7 +161,8 @@ impl Stamp {
 
 /// The fork digest of the era in force at `time`.
 fn fork_in_force(forks: &Eras<ForkDigest>, time: OffsetDateTime) -> ForkDigest {
-    forks.at_slot(forks.slot_at(time)).entry.parameters
+    let slot = forks.slot_at(time).unwrap_or(Slot::genesis());
+    forks.at_slot(slot).entry.parameters
 }
 
 pub struct StorageRecoveryBackend<State, Settings, RuntimeServiceId> {
@@ -254,10 +255,7 @@ where
 mod tests {
     use std::{collections::HashMap, num::NonZero, time::Duration};
 
-    use lb_cryptarchia_engine::{
-        Epoch,
-        era::{EraEntry, EraVersion},
-    };
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
     use serde::{Deserialize, Serialize};
 
     use super::*;
@@ -326,18 +324,18 @@ mod tests {
     /// A chain of two eras of 10 one-second slots an epoch, from the Unix
     /// epoch: era 1 starts at slot 10, 10 seconds in.
     fn forks() -> Arc<Eras<ForkDigest>> {
-        let era = |first_epoch, parameters| EraEntry {
-            first_epoch: Epoch::new(first_epoch),
+        let era = |parameters| EraEntry {
             version: EraVersion::V1,
             slot_duration: Duration::from_secs(1),
-            epoch_length: NonZero::new(10).unwrap(),
+            epoch_length_in_slots: NonZero::new(10).unwrap(),
             transition_slots: 0,
             parameters,
         };
         Arc::new(
             Eras::new(
                 OffsetDateTime::UNIX_EPOCH,
-                [era(0, ERA_0.into()), era(1, ERA_1.into())],
+                era(ERA_0.into()),
+                EraEntriesAfterGenesis::from((NonZero::new(1).unwrap(), era(ERA_1.into()))),
             )
             .unwrap(),
         )

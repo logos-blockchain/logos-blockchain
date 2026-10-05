@@ -1,9 +1,15 @@
 //! The era parameters of a deployment file are tagged with their version.
 
-use lb_cryptarchia_engine::era::EraVersion;
+use std::collections::BTreeMap;
+
+use lb_cryptarchia_engine::{
+    Epoch,
+    era::{EraVersion, MAX_ERAS_AFTER_GENESIS},
+};
 use lb_era_parameters::EraParameters;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 
+use super::{EraSchedule, EraScheduleError};
 use crate::config::DeploymentSettings;
 
 fn parameters() -> EraParameters {
@@ -53,5 +59,19 @@ fn unknown_keys_are_reported_through_the_tag() {
     assert!(
         deserialize_value_from_reader::<EraParameters, _>(tagged.as_bytes(), OnUnknownKeys::Fail)
             .is_ok()
+    );
+}
+
+#[test]
+fn a_schedule_of_more_eras_than_a_chain_can_number_is_rejected() {
+    let parameters = parameters();
+    let too_many = MAX_ERAS_AFTER_GENESIS + 1;
+    let eras: BTreeMap<_, _> = (0..=u32::try_from(too_many).unwrap())
+        .map(|first_epoch| (Epoch::new(first_epoch), parameters.clone()))
+        .collect();
+
+    assert_eq!(
+        EraSchedule::try_from(eras).unwrap_err(),
+        EraScheduleError::TooManyEras(too_many)
     );
 }

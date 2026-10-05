@@ -271,7 +271,7 @@ mod tests {
         // A second era from epoch 1: the uncle, at slot 1, is of era 0, and the
         // block, at the first slot of era 1, of era 1.
         let config = ledger_config(3.try_into().unwrap());
-        let eras = schedule([(0.into(), config.clone()), (1.into(), config.clone())]);
+        let eras = schedule(config.clone(), [(1, config.clone())]);
         let era_1_start = Slot::new(config.epoch_length());
         let (mut cryptarchia, _, u1, u1_key, ..) = chain_with_fork_over(eras);
 

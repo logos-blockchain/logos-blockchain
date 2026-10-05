@@ -59,10 +59,7 @@ impl fmt::Debug for RecoveryData {
 mod tests {
     use std::{num::NonZero, time::Duration};
 
-    use lb_cryptarchia_engine::{
-        Epoch,
-        era::{EraEntry, EraVersion},
-    };
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
     use time::OffsetDateTime;
 
     use super::*;
@@ -71,14 +68,14 @@ mod tests {
     fn clones_take_their_entries_from_shared_data() {
         let forks = Eras::new(
             OffsetDateTime::UNIX_EPOCH,
-            [EraEntry {
-                first_epoch: Epoch::new(0),
+            EraEntry {
                 version: EraVersion::V1,
                 slot_duration: Duration::from_secs(1),
-                epoch_length: NonZero::new(10).unwrap(),
+                epoch_length_in_slots: NonZero::new(10).unwrap(),
                 transition_slots: 0,
                 parameters: ForkDigest::from([0; 32]),
-            }],
+            },
+            EraEntriesAfterGenesis::empty(),
         )
         .unwrap();
         let data = RecoveryData::new(

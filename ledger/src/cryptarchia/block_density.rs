@@ -28,7 +28,7 @@ impl BlockDensity {
     /// the block density for epoch 2 will be computed during [200, 259],
     /// which is the Stake Distribution Snapshot + Buffer phases of epoch 2.
     fn compute_period_range(epoch: Epoch, eras: &Eras<Config>) -> RangeInclusive<Slot> {
-        let start = eras.epoch_start(epoch);
+        let start = eras.epoch_starting_slot(epoch);
         let period = eras.config_at_epoch(epoch).total_stake_inference_period();
         start..=Slot::new(start.into_inner().strict_add(period).strict_sub(1))
     }

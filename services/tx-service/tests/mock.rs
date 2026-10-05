@@ -19,10 +19,7 @@ use lb_core::{
         transactions::hash::{PrefixedKey as _, TxHashPrefix},
     },
 };
-use lb_cryptarchia_engine::{
-    Epoch,
-    era::{EraEntry, EraVersion, Eras},
-};
+use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion, Eras};
 use lb_network_service::{
     NetworkService,
     backends::mock::{Mock, MockBackendMessage, MockConfig, MockMessage},
@@ -103,14 +100,14 @@ fn mock_pool_node_settings(
     let db_path = temp_dir.path().join("test_db");
     let eras = Eras::new(
         time::OffsetDateTime::now_utc(),
-        [EraEntry {
-            first_epoch: Epoch::new(0),
+        EraEntry {
             version: EraVersion::V1,
             slot_duration: Duration::from_secs(1),
-            epoch_length: 100.try_into().unwrap(),
+            epoch_length_in_slots: 100.try_into().unwrap(),
             transition_slots: 0,
             parameters: (),
-        }],
+        },
+        EraEntriesAfterGenesis::empty(),
     )
     .unwrap();
     let forks = Arc::new(eras.map(|_| ForkDigest::from([0; 32])));

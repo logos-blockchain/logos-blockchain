@@ -1715,7 +1715,10 @@ fn estimate_reward_claim_fee(
 
 #[cfg(test)]
 pub mod tests {
-    use std::{collections::HashMap, num::NonZeroU64};
+    use std::{
+        collections::HashMap,
+        num::{NonZeroU32, NonZeroU64},
+    };
 
     use lb_binary_codec::bincode::SerializeOp as _;
     use lb_chain_service::Slot;
@@ -1754,17 +1757,17 @@ pub mod tests {
     pub fn eras() -> Eras<EraSettings> {
         Eras::new(
             time::OffsetDateTime::UNIX_EPOCH,
-            [lb_cryptarchia_engine::era::EraEntry {
-                first_epoch: lb_cryptarchia_engine::Epoch::new(0),
+            lb_cryptarchia_engine::era::EraEntry {
                 version: lb_cryptarchia_engine::era::EraVersion::V1,
                 slot_duration: core::time::Duration::from_secs(1),
-                epoch_length: NonZeroU64::new(1_000).unwrap(),
+                epoch_length_in_slots: NonZeroU64::new(1_000).unwrap(),
                 transition_slots: 0,
                 parameters: EraSettings::V1 {
                     slot_window: SLOT_WINDOW,
                     rewards_enabled: true,
                 },
-            }],
+            },
+            lb_cryptarchia_engine::era::EraEntriesAfterGenesis::empty(),
         )
         .unwrap()
     }
@@ -2328,21 +2331,23 @@ pub mod tests {
     /// lands in: era 1, from slot 1000, shortens the window to 10 slots.
     #[test]
     fn prune_expired_tickets_follows_the_window_of_the_era_in_force() {
+        let entry = |slot_window| lb_cryptarchia_engine::era::EraEntry {
+            version: lb_cryptarchia_engine::era::EraVersion::V1,
+            slot_duration: core::time::Duration::from_secs(1),
+            epoch_length_in_slots: NonZeroU64::new(1_000).unwrap(),
+            transition_slots: 0,
+            parameters: EraSettings::V1 {
+                slot_window,
+                rewards_enabled: true,
+            },
+        };
         let eras = Eras::new(
             time::OffsetDateTime::UNIX_EPOCH,
-            [(0, SLOT_WINDOW), (1, NonZeroU64::new(10).unwrap())].map(
-                |(first_epoch, slot_window)| lb_cryptarchia_engine::era::EraEntry {
-                    first_epoch: lb_cryptarchia_engine::Epoch::new(first_epoch),
-                    version: lb_cryptarchia_engine::era::EraVersion::V1,
-                    slot_duration: core::time::Duration::from_secs(1),
-                    epoch_length: NonZeroU64::new(1_000).unwrap(),
-                    transition_slots: 0,
-                    parameters: EraSettings::V1 {
-                        slot_window,
-                        rewards_enabled: true,
-                    },
-                },
-            ),
+            entry(SLOT_WINDOW),
+            lb_cryptarchia_engine::era::EraEntriesAfterGenesis::from((
+                NonZeroU32::new(1).unwrap(),
+                entry(NonZeroU64::new(10).unwrap()),
+            )),
         )
         .unwrap();
         let state = || PoWServiceState {

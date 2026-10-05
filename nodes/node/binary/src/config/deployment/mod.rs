@@ -11,14 +11,16 @@ use lb_core::{
         transactions::genesis_tx::{ChainId, GenesisTime},
     },
 };
-#[cfg(test)]
-use lb_cryptarchia_engine::Epoch;
-use lb_cryptarchia_engine::era::{EraEntry, Eras, ErasError};
+use lb_cryptarchia_engine::{
+    Epoch, Slot,
+    era::{EraEntriesAfterGenesis, EraEntry, Eras, ErasError},
+};
 use lb_era_parameters::{EraDefinition, EraParameters, ProtocolNames, v1};
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
 
 pub mod era;
+use era::GENESIS_EPOCH;
 pub use era::{EraSchedule, EraScheduleError};
 
 pub const SERIALIZED_DEPLOYMENT: &[u8] = include_bytes!("settings.yaml");
@@ -89,7 +91,9 @@ impl DeploymentSettings {
     /// the era in force by the wall clock.
     pub fn protocol_names_in_force(&self) -> Result<ProtocolNames, ErasError> {
         let eras = self.eras()?;
-        let now = eras.slot_at(time::OffsetDateTime::now_utc());
+        let now = eras
+            .slot_at(time::OffsetDateTime::now_utc())
+            .unwrap_or(Slot::genesis());
         Ok(eras.at_slot(now).entry.parameters.protocol_names.clone())
     }
 
@@ -119,18 +123,18 @@ impl DeploymentSettings {
     /// protocol names in force while it is.
     pub fn eras(&self) -> Result<Eras<EraDefinition>, ErasError> {
         let (genesis_id, chain_id) = (self.genesis_id(), self.chain_id());
-        let mut era_digests = Vec::with_capacity(self.eras.iter().len());
-        let mut entries = Vec::with_capacity(self.eras.iter().len());
-        for (first_epoch, parameters) in self.eras.iter() {
+        let mut era_digests = Vec::with_capacity(self.eras.after_genesis().len() + 1);
+        // Called in activation order: the fork digest of an era is over the
+        // digests of the eras up to it.
+        let mut entry = |first_epoch: Epoch, parameters: &EraParameters| {
             let digest = EraDigest::compute(first_epoch, parameters);
             era_digests.push(digest);
             let fork_digest =
                 ForkDigest::compute(genesis_id, &chain_id, era_digests.iter().copied());
-            entries.push(EraEntry {
-                first_epoch,
+            EraEntry {
                 version: parameters.version(),
                 slot_duration: parameters.slot_duration(),
-                epoch_length: parameters.epoch_length(),
+                epoch_length_in_slots: parameters.epoch_length(),
                 transition_slots: parameters.transition_slots(),
                 parameters: EraDefinition {
                     parameters: parameters.clone(),
@@ -138,9 +142,22 @@ impl DeploymentSettings {
                     fork_digest,
                     protocol_names: ProtocolNames::derive(&chain_id, fork_digest),
                 },
+            }
+        };
+        let genesis = entry(GENESIS_EPOCH, self.eras.genesis());
+        let after_genesis = self
+            .eras
+            .after_genesis()
+            .iter()
+            .map(|(&first_epoch, parameters)| {
+                (
+                    first_epoch,
+                    entry(Epoch::new(first_epoch.get()), parameters),
+                )
             });
-        }
-        Eras::new(self.genesis_time().into(), entries)
+        let after_genesis = EraEntriesAfterGenesis::try_from_iter(after_genesis)
+            .expect("a schedule has at most `MAX_ERAS_AFTER_GENESIS` eras after genesis");
+        Eras::new(self.genesis_time().into(), genesis, after_genesis)
     }
 }
 
@@ -299,7 +316,7 @@ mod tests {
         let eras = settings.eras().unwrap();
         let [genesis, second] = [Era::GENESIS, Era::new(1)].map(|era| eras.get(era).unwrap());
 
-        assert_eq!(second.entry.first_epoch, Epoch::new(100));
+        assert_eq!(second.first_epoch, Epoch::new(100));
         assert_ne!(
             genesis.entry.parameters.fork_digest,
             second.entry.parameters.fork_digest

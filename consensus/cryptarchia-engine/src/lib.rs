@@ -742,24 +742,30 @@ where
     pub fn select_uncles(
         &self,
         parent: &Branch<Id>,
-        slot: Slot,
-        era_start: Slot,
+        current_slot: Slot,
+        era_starting_slot: Slot,
     ) -> Vec<&Branch<Id>>
     where
         Id: Ord,
     {
-        let window_start =
-            u64::from(slot).saturating_sub(self.config.uncle_reference_window_in_slot().get());
+        let window_start = u64::from(current_slot)
+            .saturating_sub(self.config.uncle_reference_window_in_slot().get());
 
         let (ancestors, occupied_slots) = self.collect_chain_within_window(parent, window_start);
-        let mut candidates = self.uncle_candidates(slot, window_start, &ancestors, &occupied_slots);
-        candidates.retain(|(_, uncle)| uncle.slot >= era_start);
+        let candidates = {
+            let mut candidates =
+                self.uncle_candidates(current_slot, window_start, &ancestors, &occupied_slots);
+            candidates.retain(|(_, uncle)| uncle.slot >= era_starting_slot);
 
-        // Oldest parent first, because the slot window moves and the oldest candidates
-        // are the closest to expiring.
-        // One uncle per slot, breaking ties by the uncle's slot and ID.
-        candidates
-            .sort_unstable_by_key(|(parent_slot, uncle)| (*parent_slot, uncle.slot, uncle.id));
+            // Oldest parent first, because the slot window moves and the oldest candidates
+            // are the closest to expiring.
+            // One uncle per slot, breaking ties by the uncle's slot and ID.
+            candidates
+                .sort_unstable_by_key(|(parent_slot, uncle)| (*parent_slot, uncle.slot, uncle.id));
+
+            candidates
+        };
+
         let mut selected_slots = HashSet::new();
         candidates
             .into_iter()

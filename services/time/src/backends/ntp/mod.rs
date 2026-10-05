@@ -220,10 +220,7 @@ impl NtpStream {
 mod tests {
     use std::num::NonZero;
 
-    use lb_cryptarchia_engine::{
-        Epoch,
-        era::{Era, EraEntry, EraVersion},
-    };
+    use lb_cryptarchia_engine::era::{Era, EraEntriesAfterGenesis, EraEntry, EraVersion};
 
     use super::*;
 
@@ -231,14 +228,14 @@ mod tests {
     fn test_eras() -> Eras<()> {
         Eras::new(
             OffsetDateTime::UNIX_EPOCH,
-            [EraEntry {
-                first_epoch: Epoch::new(0),
+            EraEntry {
                 version: EraVersion::V1,
                 slot_duration: Duration::from_secs(1),
-                epoch_length: NonZero::new(3).unwrap(),
+                epoch_length_in_slots: NonZero::new(3).unwrap(),
                 transition_slots: 0,
                 parameters: (),
-            }],
+            },
+            EraEntriesAfterGenesis::empty(),
         )
         .unwrap()
     }

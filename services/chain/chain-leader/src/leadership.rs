@@ -484,9 +484,9 @@ fn epoch_winning_slots_stream<RuntimeServiceId>(
     start_slot: Slot,
 ) -> WinningPolSlotStream {
     // The epoch's slots, laid out by its era.
-    let epoch_first_slot = u64::from(ledger_eras.epoch_start(epoch_state.epoch));
+    let epoch_first_slot = u64::from(ledger_eras.epoch_starting_slot(epoch_state.epoch));
     let epoch_last_slot =
-        u64::from(ledger_eras.epoch_start(epoch_state.epoch.strict_add(1.into()))) - 1;
+        u64::from(ledger_eras.epoch_starting_slot(epoch_state.epoch.strict_add(1.into()))) - 1;
     // Skip slots earlier than the start slot: a mid-epoch subscriber does not
     // waste work on slots it has already passed.
     let scan_starting_slot = u64::from(start_slot).max(epoch_first_slot);
@@ -731,7 +731,7 @@ mod pol_tests {
         let (config, kms, eligible, _, epoch_state) = scan_test_fixtures();
 
         let eras = single_era(config.clone());
-        let epoch_starting_slot = u64::from(eras.epoch_start(epoch_state.epoch));
+        let epoch_starting_slot = u64::from(eras.epoch_starting_slot(epoch_state.epoch));
         let epoch_end = epoch_starting_slot + config.epoch_length();
         let start_slot = epoch_starting_slot + config.epoch_length() / 2;
 
@@ -763,7 +763,7 @@ mod pol_tests {
         let (config, kms, eligible, _, epoch_state) = scan_test_fixtures();
 
         let eras = single_era(config.clone());
-        let epoch_starting_slot = u64::from(eras.epoch_start(epoch_state.epoch));
+        let epoch_starting_slot = u64::from(eras.epoch_starting_slot(epoch_state.epoch));
         let epoch_end = epoch_starting_slot + config.epoch_length();
 
         let winners: Vec<_> =

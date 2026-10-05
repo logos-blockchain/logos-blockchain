@@ -64,6 +64,11 @@ impl Epoch {
     pub const fn strict_sub(self, rhs: Self) -> Self {
         Self(self.0.strict_sub(rhs.0))
     }
+
+    #[must_use]
+    pub const fn genesis() -> Self {
+        Self(0)
+    }
 }
 
 impl Display for Epoch {

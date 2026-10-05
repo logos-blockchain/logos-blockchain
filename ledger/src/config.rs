@@ -132,50 +132,63 @@ impl ConfigSchedule for Eras<Config> {
             .config_at_epoch(previous_epoch)
             .nonce_contribution_period();
         Slot::new(
-            self.epoch_start(previous_epoch)
+            self.epoch_starting_slot(previous_epoch)
                 .into_inner()
                 .strict_add(offset),
         )
     }
 
     fn stake_distribution_snapshot(&self, epoch: Epoch) -> Slot {
-        self.epoch_start(epoch.strict_sub(1.into()))
+        self.epoch_starting_slot(epoch.strict_sub(1.into()))
     }
 }
 
-/// A schedule running each config from the epoch it is paired with.
+/// A schedule running `genesis` from genesis, then each config of
+/// `after_genesis` from the epoch it is paired with.
 ///
-/// The first config runs from genesis. The ledger reads neither the slot
-/// durations nor the genesis time, so they are left at 1 s and the Unix epoch.
+/// The ledger reads neither the slot durations nor the genesis time, so they
+/// are left at 1 s and the Unix epoch.
 ///
 /// # Panics
 ///
-/// If the epochs do not start at 0 and strictly increase.
+/// If an era after genesis starts at epoch 0, two start at the same epoch, or
+/// one starts beyond the last slot.
 #[cfg(any(test, feature = "test-utils"))]
 #[must_use]
-pub fn schedule(configs: impl IntoIterator<Item = (Epoch, Config)>) -> Eras<Config> {
-    use lb_cryptarchia_engine::era::{EraEntry, EraVersion};
+pub fn schedule(
+    genesis: Config,
+    after_genesis: impl IntoIterator<Item = (u32, Config)>,
+) -> Eras<Config> {
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
 
+    let entry = |config: Config| EraEntry {
+        version: EraVersion::V1,
+        slot_duration: core::time::Duration::from_secs(1),
+        epoch_length_in_slots: NonZero::new(config.epoch_length())
+            .expect("an epoch has at least one slot"),
+        transition_slots: 0,
+        parameters: config,
+    };
+    let after_genesis = after_genesis.into_iter().map(|(first_epoch, config)| {
+        let first_epoch =
+            NonZero::new(first_epoch).expect("an era after genesis starts after epoch 0");
+        (first_epoch, entry(config))
+    });
+    let after_genesis = EraEntriesAfterGenesis::try_from_iter(after_genesis)
+        .expect("each epoch starts one era at most");
     Eras::new(
         time::OffsetDateTime::UNIX_EPOCH,
-        configs.into_iter().map(|(first_epoch, config)| EraEntry {
-            first_epoch,
-            version: EraVersion::V1,
-            slot_duration: core::time::Duration::from_secs(1),
-            epoch_length: NonZero::new(config.epoch_length())
-                .expect("an epoch has at least one slot"),
-            transition_slots: 0,
-            parameters: config,
-        }),
+        entry(genesis),
+        after_genesis,
     )
-    .expect("the epochs must start at 0 and strictly increase")
+    .expect("eras of version 1 starting within the last slot resolve")
 }
 
 /// A schedule running `config` alone, from genesis.
 #[cfg(any(test, feature = "test-utils"))]
 #[must_use]
 pub fn single_era(config: Config) -> Eras<Config> {
-    schedule([(Epoch::new(0), config)])
+    schedule(config, [])
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -766,7 +779,7 @@ mod tests {
             ),
             ..era_0.clone()
         };
-        let eras = schedule([(0.into(), era_0), (2.into(), era_1)]);
+        let eras = schedule(era_0, [(2, era_1)]);
 
         // The snapshots of epoch 2, the first of era 1, are taken during epoch
         // 1, laid out by era 0.

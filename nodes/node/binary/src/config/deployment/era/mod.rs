@@ -1,8 +1,8 @@
-use core::iter;
+use core::{iter, num::NonZero};
 use std::collections::BTreeMap;
 
 use ::serde::{Deserialize, Deserializer, Serialize};
-use lb_cryptarchia_engine::Epoch;
+use lb_cryptarchia_engine::{Epoch, era::MAX_ERAS_AFTER_GENESIS};
 use lb_era_parameters::EraParameters;
 
 mod serde;
@@ -10,7 +10,7 @@ use serde::EraScheduleVisitor;
 #[cfg(test)]
 mod tests;
 
-const GENESIS_EPOCH: Epoch = Epoch::new(0);
+pub(super) const GENESIS_EPOCH: Epoch = Epoch::new(0);
 
 /// The eras of a chain, each keyed by the epoch it starts at. An era's
 /// parameters are in force from that epoch until the next era starts.
@@ -26,7 +26,7 @@ pub struct EraSchedule {
     /// The era that starts at genesis, which every schedule has.
     genesis: EraParameters,
     /// The eras after it, keyed by the epoch each starts at.
-    after_genesis: BTreeMap<Epoch, EraParameters>,
+    after_genesis: BTreeMap<NonZero<u32>, EraParameters>,
 }
 
 impl EraSchedule {
@@ -54,14 +54,22 @@ impl EraSchedule {
         self.genesis
     }
 
+    /// The parameters of the eras after the genesis era, keyed by the epoch
+    /// each starts at.
+    #[must_use]
+    pub const fn after_genesis(&self) -> &BTreeMap<NonZero<u32>, EraParameters> {
+        &self.after_genesis
+    }
+
     /// Every era of the schedule with the epoch it starts at, in activation
     /// order.
+    #[cfg(test)]
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (Epoch, &EraParameters)> {
         iter::once((GENESIS_EPOCH, &self.genesis))
             .chain(
                 self.after_genesis
                     .iter()
-                    .map(|(first_epoch, parameters)| (*first_epoch, parameters)),
+                    .map(|(first_epoch, parameters)| (Epoch::new(first_epoch.get()), parameters)),
             )
             .collect::<Vec<_>>()
             .into_iter()
@@ -72,11 +80,16 @@ impl From<EraSchedule> for BTreeMap<Epoch, EraParameters> {
     fn from(
         EraSchedule {
             genesis,
-            after_genesis: mut later,
+            after_genesis,
         }: EraSchedule,
     ) -> Self {
-        later.insert(GENESIS_EPOCH, genesis);
-        later
+        iter::once((GENESIS_EPOCH, genesis))
+            .chain(
+                after_genesis
+                    .into_iter()
+                    .map(|(first_epoch, parameters)| (Epoch::new(first_epoch.get()), parameters)),
+            )
+            .collect()
     }
 }
 
@@ -96,14 +109,17 @@ pub enum EraScheduleError {
         .previous.into_inner()
     )]
     OutOfOrder { previous: Epoch, next: Epoch },
+    #[error("a schedule has at most {MAX_ERAS_AFTER_GENESIS} eras after its genesis era, not {0}")]
+    TooManyEras(usize),
 }
 
 impl TryFrom<BTreeMap<Epoch, EraParameters>> for EraSchedule {
     type Error = EraScheduleError;
 
     /// Builds a schedule from eras keyed by their first epoch. The map keeps
-    /// them unique and ordered, so what remains to check is that the first
-    /// one starts at genesis.
+    /// them unique and ordered, so what remains to check is that the first one
+    /// starts at genesis, and that there are no more after it than a chain can
+    /// number.
     fn try_from(mut eras: BTreeMap<Epoch, EraParameters>) -> Result<Self, Self::Error> {
         let Some((first_epoch, genesis)) = eras.pop_first() else {
             return Err(EraScheduleError::Empty);
@@ -111,9 +127,20 @@ impl TryFrom<BTreeMap<Epoch, EraParameters>> for EraSchedule {
         if first_epoch != GENESIS_EPOCH {
             return Err(EraScheduleError::FirstEraAfterGenesis(first_epoch));
         }
+        if eras.len() > MAX_ERAS_AFTER_GENESIS {
+            return Err(EraScheduleError::TooManyEras(eras.len()));
+        }
+        let after_genesis = eras
+            .into_iter()
+            .map(|(first_epoch, parameters)| {
+                let first_epoch = NonZero::new(first_epoch.into_inner())
+                    .expect("the eras after the first, which starts at epoch 0, start later");
+                (first_epoch, parameters)
+            })
+            .collect();
         Ok(Self {
             genesis,
-            after_genesis: eras,
+            after_genesis,
         })
     }
 }
