@@ -492,7 +492,10 @@ def reconcile_candidate_queue_entry(
     as the later trunk-level state. Absence is proven only by a complete
     repository snapshot with no matching PR entry; an unavailable/truncated
     second view leaves a PR-level null unresolved because a stack member may
-    participate in a different trunk queue.
+    participate in a different trunk queue. If the later complete snapshot
+    omits a candidate that had an earlier PR-specific entry, preserve both
+    observations but mark the effective entry unresolved as a stale-observation
+    conflict rather than using the older admission timestamp.
     """
     pr_entry = candidate_queue.get("entry") if isinstance(candidate_queue, dict) else None
     queue_snapshot = repository_queue.get("merge_queue") or {}
@@ -527,7 +530,14 @@ def reconcile_candidate_queue_entry(
             identity_mismatches.append("merge_queue.id")
     ambiguous = len(matches) > 1
     identity_conflict = bool(identity_mismatches) or ambiguous
-    if identity_conflict:
+    repository_complete = bool(queue_snapshot.get("entries_complete"))
+    stale_candidate_entry = (
+        isinstance(pr_entry, dict)
+        and candidate_pr is not None
+        and len(matches) == 0
+        and repository_complete
+    )
+    if identity_conflict or stale_candidate_entry:
         effective = None
         source = "unresolved"
     elif isinstance(pr_entry, dict) and isinstance(repository_entry, dict):
@@ -542,7 +552,6 @@ def reconcile_candidate_queue_entry(
     else:
         effective = None
         source = "unresolved"
-    repository_complete = bool(queue_snapshot.get("entries_complete"))
     candidate_status = (
         candidate_queue.get("queue_entry_status", "unresolved")
         if isinstance(candidate_queue, dict)
@@ -550,7 +559,7 @@ def reconcile_candidate_queue_entry(
     )
     if isinstance(effective, dict):
         entry_status = "present"
-    elif identity_conflict:
+    elif identity_conflict or stale_candidate_entry:
         entry_status = "unresolved"
     elif (
         candidate_pr is not None
@@ -574,6 +583,7 @@ def reconcile_candidate_queue_entry(
         "effective_candidate_queue_entry_source": source,
         "candidate_entry_identity_conflict": identity_conflict,
         "candidate_entry_identity_conflict_fields": identity_mismatches,
+        "candidate_entry_stale_observation_conflict": stale_candidate_entry,
         "candidate_entry_observation_drift_fields": drift_fields,
         "queue_entry_status": entry_status,
         "repository_candidate_entry_resolution": (
@@ -1059,6 +1069,7 @@ class GitHubAPI:
         repo = urllib.parse.quote(self.repo, safe="")
         return self.rest(
             f"repos/{owner}/{repo}/commits/{urllib.parse.quote(sha, safe='')}/pulls",
+            params={"per_page": MAX_QUEUE_ENTRIES},
             warning_label=f"associated pull requests for commit {sha}",
         )
 
@@ -2023,10 +2034,21 @@ def main(argv: list[str] | None = None) -> int:
         result = _snapshot(args.event, args.repo, args.output, summary_path)
     else:
         result = _timing(args.event, args.output, summary_path)
+    if args.mode == "timing":
+        timing = result.get("timing") if isinstance(result, dict) else None
+        status = (
+            timing.get("timing_status")
+            if isinstance(timing, dict)
+            and timing.get("timing_status") in {"complete", "partial"}
+            else "timing status unavailable"
+        )
+    else:
+        status = "snapshot captured"
+    warnings = result.get("warnings") if isinstance(result, dict) else None
+    warning_count = len(warnings) if isinstance(warnings, list) else 0
     print(
         f"Merge queue telemetry {args.mode} completed: "
-        f"{result.get('timing_status', 'snapshot captured')}; "
-        f"{len(result.get('warnings', []))} warning(s)"
+        f"{status}; {warning_count} warning(s)"
     )
     return 0
 

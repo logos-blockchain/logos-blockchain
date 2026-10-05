@@ -7,13 +7,16 @@ regressed independently of any future CI decision. Run from the repository root:
 """
 
 from pathlib import Path
+from contextlib import redirect_stdout
+import io
+import os
 import re
 from unittest.mock import patch
 import tempfile
 import unittest
 
 from scripts.ci.merge_queue_telemetry import (
-    GIT_FETCH_DEPTH, TARGET_WORKFLOWS, ancestry_from_exit_code,
+    GIT_FETCH_DEPTH, MAX_QUEUE_ENTRIES, TARGET_WORKFLOWS, ancestry_from_exit_code,
     bounded_git_fetch_args, classify_stack, classify_runner,
     derive_candidate_identity, derive_queue_timing, derive_timing_metrics,
     duration_seconds, expected_stack_members, normalize_api_error,
@@ -21,8 +24,10 @@ from scripts.ci.merge_queue_telemetry import (
     queue_branch_from_queue_ref, reconcile_candidate_queue_entry,
     resolve_queue_branch, runner_metadata_missing_unexpectedly,
     _collect_identity, _collect_queue_observation, _collect_workflow_attempts,
-    _latest_runs_by_name, _snapshot, _stack_composition, _write_timing_summary, GitHubAPI,
+    _latest_runs_by_name, _snapshot, _stack_composition, _write_timing_summary,
+    GitHubAPI, main,
 )
+import scripts.ci.merge_queue_telemetry as telemetry
 
 
 def graphql_pr(stack=None, entry=None):
@@ -284,6 +289,35 @@ class CandidateIdentityTests(unittest.TestCase):
         self.assertEqual(identity["candidate_pr_candidates"], [101])
         self.assertEqual(identity["candidate_pr_confidence"], "unresolved")
 
+    def test_associated_candidate_beyond_default_page_can_corroborate_ownership(self):
+        associated = [{"number": number} for number in range(1, 31)]
+        associated.append({"number": 101})
+        identity = derive_candidate_identity(
+            ref_signals=[
+                ("merge_group.head_ref", "gh-readonly-queue/master/pr-101-abcde")
+            ],
+            head_associated_pulls=associated,
+            pull_requests={101: {"number": 101}},
+        )
+        self.assertEqual(len(associated), 31)
+        self.assertEqual(identity["candidate_pr"], 101)
+        self.assertEqual(identity["candidate_pr_confidence"], "corroborated")
+
+
+class AssociatedPullRequestRequestTests(unittest.TestCase):
+    def test_associated_pulls_requests_the_existing_bounded_result_limit(self):
+        api = GitHubAPI([])
+        api.owner = "owner"
+        api.repo = "repo"
+        sha = "a" * 40
+        with patch.object(api, "rest", return_value=[]) as rest:
+            api.associated_pulls(sha)
+        rest.assert_called_once_with(
+            f"repos/owner/repo/commits/{sha}/pulls",
+            params={"per_page": MAX_QUEUE_ENTRIES},
+            warning_label=f"associated pull requests for commit {sha}",
+        )
+
 
 class QueueObservationTests(unittest.TestCase):
     def test_normalized_merge_group_base_is_used_for_repository_queue_query(self):
@@ -341,8 +375,6 @@ class QueueObservationTests(unittest.TestCase):
             {"entry": None}, normalize_merge_queue_response(merge_queue_response()), 101
         )
         self.assertEqual(from_repository["effective_candidate_queue_entry_source"], "repository.mergeQueue.entries")
-        missing = reconcile_candidate_queue_entry(candidate, repository, 101)
-        self.assertEqual(missing["effective_candidate_queue_entry_source"], "pull_request.mergeQueueEntry")
         no_match = reconcile_candidate_queue_entry(
             {"entry": None}, repository, 999
         )
@@ -399,6 +431,66 @@ class QueueObservationTests(unittest.TestCase):
             )
             self.assertTrue(conflict["candidate_entry_identity_conflict"])
             self.assertIsNone(conflict["effective_candidate_queue_entry"])
+
+    def test_later_complete_queue_without_candidate_invalidates_earlier_entry(self):
+        candidate = normalize_merge_queue_response(merge_queue_response())
+        repository_response = self.empty_repository_queue()
+        repository = normalize_merge_queue_response(repository_response)
+        result = reconcile_candidate_queue_entry(
+            candidate,
+            repository,
+            101,
+            candidate_observed_at="2026-01-01T00:00:00Z",
+            repository_observed_at="2026-01-01T00:00:01Z",
+        )
+
+        self.assertEqual(result["queue_entry_status"], "unresolved")
+        self.assertIsNone(result["effective_candidate_queue_entry"])
+        self.assertEqual(result["effective_candidate_queue_entry_source"], "unresolved")
+        self.assertTrue(result["candidate_entry_stale_observation_conflict"])
+        self.assertEqual(
+            result["candidate_entry_from_pull_request"]["enqueued_at"],
+            "2026-01-01T00:00:00Z",
+        )
+        self.assertEqual(
+            result["candidate_entry_from_pull_request_observed_at"],
+            "2026-01-01T00:00:00Z",
+        )
+        self.assertEqual(
+            result["candidate_entry_from_repository_queue_observed_at"],
+            "2026-01-01T00:00:01Z",
+        )
+
+        timing = derive_queue_timing(
+            "2026-01-01T00:05:00Z",
+            result["effective_candidate_queue_entry"],
+            [workflow_attempt_record(
+                1, 1, TARGET_WORKFLOWS[0], "success",
+                "2026-01-01T00:02:00Z", "2026-01-01T00:03:00Z",
+                "2026-01-01T00:01:00Z",
+            )],
+            candidate_sha="candidate-sha",
+        )
+        self.assertIsNone(timing["queue_age_at_snapshot_seconds"])
+        self.assertIsNone(timing["queue_to_first_target_workflow_created_seconds"])
+
+    def test_incomplete_repository_snapshot_does_not_override_candidate_entry(self):
+        candidate = normalize_merge_queue_response(merge_queue_response())
+        repository = normalize_merge_queue_response(
+            self.empty_repository_queue(truncated=True)
+        )
+        result = reconcile_candidate_queue_entry(candidate, repository, 101)
+
+        self.assertEqual(result["queue_entry_status"], "present")
+        self.assertEqual(
+            result["effective_candidate_queue_entry_source"],
+            "pull_request.mergeQueueEntry",
+        )
+        self.assertEqual(
+            result["effective_candidate_queue_entry"]["enqueued_at"],
+            candidate["entry"]["enqueued_at"],
+        )
+        self.assertFalse(result["candidate_entry_stale_observation_conflict"])
 
     def test_partial_candidate_entry_is_retained(self):
         response = merge_queue_response()
@@ -1658,6 +1750,39 @@ class ObjectiveIsolationTests(unittest.TestCase):
 
 
 class WorkflowStructureTests(unittest.TestCase):
+    def test_console_status_uses_nested_timing_result(self):
+        for status in ("complete", "partial"):
+            with self.subTest(status=status):
+                output = io.StringIO()
+                with (
+                    patch.object(
+                        telemetry,
+                        "_timing",
+                        return_value={"timing": {"timing_status": status}, "warnings": []},
+                    ),
+                    patch.dict(os.environ, {}, clear=True),
+                    redirect_stdout(output),
+                ):
+                    self.assertEqual(
+                        main(["timing", "--event", "event.json", "--output", "out"]),
+                        0,
+                    )
+                self.assertIn(f"timing completed: {status};", output.getvalue())
+                self.assertNotIn("snapshot captured", output.getvalue())
+
+    def test_console_status_handles_missing_nested_timing_defensively(self):
+        output = io.StringIO()
+        with (
+            patch.object(telemetry, "_timing", return_value={"timing": None}),
+            patch.dict(os.environ, {}, clear=True),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(
+                main(["timing", "--event", "event.json", "--output", "out"]),
+                0,
+            )
+        self.assertIn("timing status unavailable", output.getvalue())
+
     def test_telemetry_workflow_is_read_only_and_hosted_only(self):
         workflow = (
             Path(__file__).parents[3]
