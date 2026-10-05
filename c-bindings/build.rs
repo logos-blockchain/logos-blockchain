@@ -9,9 +9,6 @@ fn main() {
         // Only used through its integer value, so no signature mentions it,
         // but C callers still need the constants.
         .include_item("KeyType")
-        // `sign_message` takes the role as a plain integer, so no signature
-        // reaches the enum.
-        .include_item("SigningKeyRole")
         .generate()
         .expect("Unable to generate bindings")
         .write_to_file("logos_blockchain.h");
