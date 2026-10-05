@@ -4,20 +4,15 @@ use std::{
     time::Duration,
 };
 
-use bytes::Bytes;
 use lb_c_macros::panic_to_error;
-use lb_core::crypto::{Digest as _, Hasher};
-use lb_groth16::{fr_from_mod_bytes, fr_to_bytes};
-use lb_key_management_system_service::{
-    api::KmsServiceApi,
-    keys::{PayloadEncoding, PublicKeyEncoding, SignatureEncoding},
-};
-use lb_node::{
-    RuntimeServiceId, config::blend::serde::Config as BlendConfig,
-    generic_services::KeyManagementService,
-};
+use lb_key_management_system_service::api::KmsServiceApi;
+use lb_node::{RuntimeServiceId, generic_services::KeyManagementService};
 use overwatch::services::status::ServiceStatus;
 
+use super::{
+    SigningKeyRole,
+    encoding::{encode_message, encode_public_key, encode_signature},
+};
 use crate::{
     LogosBlockchainNode, OperationStatus,
     api::{free, free_cstring},
@@ -27,56 +22,6 @@ use crate::{
 };
 
 type NodeKms = KeyManagementService<RuntimeServiceId>;
-
-/// The node key a message is signed with.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub enum SigningKeyRole {
-    /// The Ed25519 key behind the node's Blend `provider_id`.
-    BlendSigning = 0x0,
-    /// The ZK key behind the node's Blend `zk_id`, which receives Blend
-    /// rewards.
-    BlendZk = 0x1,
-}
-
-impl TryFrom<u8> for SigningKeyRole {
-    type Error = OperationStatus;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0x0 => Ok(Self::BlendSigning),
-            0x1 => Ok(Self::BlendZk),
-            _ => Err(OperationStatus::error(
-                OperationStatusCode::ValidationError,
-                format!("Unknown signing key role {value}."),
-            )),
-        }
-    }
-}
-
-/// The KMS key IDs behind each [`SigningKeyRole`].
-pub struct SigningKeyIds {
-    blend_signing: String,
-    blend_zk: String,
-}
-
-impl From<&BlendConfig> for SigningKeyIds {
-    fn from(config: &BlendConfig) -> Self {
-        Self {
-            blend_signing: config.non_ephemeral_signing_key_id.clone(),
-            blend_zk: config.core.zk.secret_key_kms_id.clone(),
-        }
-    }
-}
-
-impl SigningKeyIds {
-    fn get(&self, role: SigningKeyRole) -> &str {
-        match role {
-            SigningKeyRole::BlendSigning => &self.blend_signing,
-            SigningKeyRole::BlendZk => &self.blend_zk,
-        }
-    }
-}
 
 /// A message signature and the public key that verifies it, both hex-encoded.
 ///
@@ -91,27 +36,6 @@ pub struct SignedMessage {
     pub signature: *mut c_char,
 }
 
-fn encode_message(message: &[u8], role: SigningKeyRole) -> PayloadEncoding {
-    match role {
-        SigningKeyRole::BlendSigning => PayloadEncoding::Ed25519(Bytes::copy_from_slice(message)),
-        SigningKeyRole::BlendZk => PayloadEncoding::Zk(fr_from_mod_bytes(&Hasher::digest(message))),
-    }
-}
-
-fn encode_public_key(public_key: &PublicKeyEncoding) -> String {
-    match public_key {
-        PublicKeyEncoding::Ed25519(key) => hex::encode(key.as_bytes()),
-        PublicKeyEncoding::Zk(key) => hex::encode(fr_to_bytes(key.as_fr())),
-    }
-}
-
-fn encode_signature(signature: &SignatureEncoding) -> String {
-    match signature {
-        SignatureEncoding::Ed25519(signature) => hex::encode(signature.to_bytes()),
-        SignatureEncoding::Zk(signature) => hex::encode(signature.as_proof().to_bytes()),
-    }
-}
-
 /// Signs `message` with the node key behind `role`.
 ///
 /// # Arguments
@@ -123,9 +47,8 @@ fn encode_signature(signature: &SignatureEncoding) -> String {
 /// # Returns
 ///
 /// The public key and signature, hex-encoded, on success, or an
-/// [`OperationStatus`] error on failure. Fails right away if the KMS service is
-/// not ready.
-pub(crate) fn sign_message_sync(
+/// [`OperationStatus`] error on failure.
+fn sign_message_sync(
     node: &LogosBlockchainNode,
     role: SigningKeyRole,
     message: &[u8],
@@ -146,6 +69,7 @@ pub(crate) fn sign_message_sync(
                         format!("Failed to request KMS service status watcher: {error}"),
                     )
                 })?;
+
         if let Err(status) = status_watcher
             .wait_for(ServiceStatus::Ready, Some(Duration::from_millis(100)))
             .await
@@ -156,13 +80,16 @@ pub(crate) fn sign_message_sync(
             ));
         }
 
-        let relay = overwatch_handle.relay::<NodeKms>().await.map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RelayError,
-                format!("Failed to get KMS relay: {error}"),
-            )
-        })?;
-        let kms = KmsServiceApi::<NodeKms, RuntimeServiceId>::new(relay);
+        let kms = {
+            let relay = overwatch_handle.relay::<NodeKms>().await.map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::RelayError,
+                    format!("Failed to get KMS relay: {error}"),
+                )
+            })?;
+
+            KmsServiceApi::<NodeKms, RuntimeServiceId>::new(relay)
+        };
 
         let public_key = kms.public_key(key_id.clone()).await.map_err(|error| {
             OperationStatus::error(
@@ -200,13 +127,14 @@ pub type FfiSignedMessageResult = FfiStatusResult<*mut SignedMessage>;
 ///
 /// # Safety
 ///
-/// This function is unsafe because it dereferences raw pointers. The caller
-/// must ensure `message` points to at least `message_len` readable bytes.
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure `message` points to at least `message_len` readable
+/// bytes.
 ///
 /// # Memory Management
 ///
-/// This function allocates the struct and both strings it holds. The caller
-/// must free all of it with [`free_signed_message`].
+/// This function allocates the struct and both strings it holds.
+/// The caller must free all of it with [`free_signed_message`].
 #[must_use]
 #[panic_to_error]
 #[unsafe(no_mangle)]
@@ -221,8 +149,8 @@ pub unsafe extern "C" fn sign_message(
         return_error_if_null_pointer!(message);
     }
 
-    let role = unwrap_or_return_error!(SigningKeyRole::try_from(role));
     let node = unsafe { &*node };
+    let role = unwrap_or_return_error!(SigningKeyRole::try_from(role));
     let message: &[u8] = if message_len == 0 {
         &[]
     } else {
@@ -260,37 +188,4 @@ pub unsafe extern "C" fn free_signed_message(pointer: *mut SignedMessage) -> Ope
     unsafe { free_cstring(signed_message.public_key) };
     unsafe { free_cstring(signed_message.signature) };
     unsafe { free::<SignedMessage>(pointer) }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn role_from_known_values() {
-        assert!(matches!(
-            SigningKeyRole::try_from(0),
-            Ok(SigningKeyRole::BlendSigning)
-        ));
-        assert!(matches!(
-            SigningKeyRole::try_from(1),
-            Ok(SigningKeyRole::BlendZk)
-        ));
-    }
-
-    #[test]
-    fn role_from_unknown_value_is_a_validation_error() {
-        let Err(status) = SigningKeyRole::try_from(2) else {
-            panic!("2 is not a signing key role");
-        };
-        assert_eq!(status.code, OperationStatusCode::ValidationError);
-    }
-
-    #[test]
-    fn ed25519_signs_the_message_as_is() {
-        assert!(matches!(
-            encode_message(b"message", SigningKeyRole::BlendSigning),
-            PayloadEncoding::Ed25519(bytes) if bytes == b"message"[..]
-        ));
-    }
 }

@@ -12,7 +12,7 @@ use tokio::runtime::Runtime;
 
 use crate::{
     LogosBlockchainNode, OperationStatus,
-    api::message::SigningKeyIds,
+    api::kms::SigningKeyIds,
     errors::OperationStatusCode,
     node::ensure_blocking_allowed,
     result::{FfiStatusResult, StatusResult},
