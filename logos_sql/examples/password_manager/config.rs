@@ -6,7 +6,7 @@ use clap::Parser;
 use lb_groth16::fr_from_bytes;
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_zone_sdk::{node_types::ChannelId, sequencer::FundingConfig};
-use logos_sql::LogosSqlConfig;
+use logos_sql::{LogosSqlConfig, WriterConfig};
 use reqwest::Url;
 
 #[derive(Parser)]
@@ -51,14 +51,16 @@ pub fn from_args() -> LogosSqlConfig {
 
     LogosSqlConfig {
         channel_id: options.channel_id,
-        signing_key: options.signing_key,
         node_url: options.node_url,
-        funding: FundingConfig {
-            funding_pk: options.funding_key,
-            change_pk: None,
-            max_tx_fee: options.max_tx_fee.into(),
-            priority_fee_percent: options.priority_fee_percent,
-        },
+        writer: Some(WriterConfig {
+            signing_key: options.signing_key,
+            funding: FundingConfig {
+                funding_pk: options.funding_key,
+                change_pk: None,
+                max_tx_fee: options.max_tx_fee.into(),
+                priority_fee_percent: options.priority_fee_percent,
+            },
+        }),
         state_dir: options.state_dir,
     }
 }

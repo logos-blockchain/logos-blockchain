@@ -2,12 +2,16 @@ use std::{collections::HashMap, hash::BuildHasher, time::Duration};
 
 use lb_libp2p::{Multiaddr, PeerId, Protocol};
 use lb_testing_framework::{
-    DeploymentBuilder, LbcEnv, LbcLocalDeployer, NodeHttpClient, TopologyConfig,
+    DeploymentBuilder, LbcClusterApp, LbcEnv, NodeHttpClient, TopologyConfig,
     configs::{deployment::NodeBinaryProfile, wallet::WalletAccount},
     internal::DeploymentPlan,
     resolve_automatic_genesis_time,
 };
-use testing_framework_core::scenario::{StartNodeOptions, StartedNode};
+use testing_framework_app::AppDeployer;
+use testing_framework_core::{
+    scenario::{StartNodeOptions, StartedNode},
+    topology::FixedDeploymentProvider,
+};
 use tokio::time::{Instant, sleep};
 use tracing::warn;
 
@@ -118,18 +122,18 @@ pub fn build_manual_cluster_deployment(
     Ok(deployment)
 }
 
-pub fn install_local_manual_cluster(
+pub async fn install_local_manual_cluster(
     world: &mut CucumberWorld,
     spec: ManualClusterSpec,
 ) -> Result<(), StepError> {
     let deployment = build_manual_cluster_from_spec(world, spec)?;
-    let deployer = LbcLocalDeployer::new();
-    let cluster = deployer.manual_cluster_from_descriptors(deployment);
-
-    world.cluster.local_cluster = Some(cluster);
+    world.cluster.local_cluster = None;
     world.cluster.k8s_manual_cluster = None;
-    world.cluster.manual_cluster_spec = Some(spec);
 
+    let app = LbcClusterApp::new(Box::new(FixedDeploymentProvider::new(deployment)))
+        .with_on_demand_start();
+    world.cluster.local_cluster = Some(AppDeployer::new().deploy(app).await?);
+    world.cluster.manual_cluster_spec = Some(spec);
     Ok(())
 }
 
@@ -184,10 +188,10 @@ fn build_manual_cluster_from_spec(
     }
 }
 
-pub fn rebuild_pending_local_manual_cluster(world: &mut CucumberWorld) -> StepResult {
+pub async fn rebuild_pending_local_manual_cluster(world: &mut CucumberWorld) -> StepResult {
     if world.nodes_info.is_empty() {
         if let Some(spec) = world.cluster.manual_cluster_spec {
-            return install_local_manual_cluster(world, spec);
+            return install_local_manual_cluster(world, spec).await;
         }
 
         return Ok(());
@@ -198,17 +202,15 @@ pub fn rebuild_pending_local_manual_cluster(world: &mut CucumberWorld) -> StepRe
     })
 }
 
-pub fn stop_active_manual_cluster(world: &CucumberWorld) -> StepResult {
-    if let Some(cluster) = world.cluster.local_cluster.as_ref() {
-        cluster.stop_all();
+pub async fn stop_active_manual_cluster(world: &CucumberWorld) -> StepResult {
+    if let Some(cluster) = world.cluster.local_cluster() {
+        cluster.stop_all().await?;
         return Ok(());
     }
-
     if let Some(cluster) = world.cluster.k8s_manual_cluster.as_ref() {
         cluster.stop_all();
         return Ok(());
     }
-
     Err(StepError::LogicalError {
         message: "No manual cluster available".into(),
     })
@@ -219,7 +221,7 @@ pub async fn start_manual_node(
     node_name: &str,
     options: StartNodeOptions<LbcEnv>,
 ) -> Result<StartedNode<LbcEnv>, StepError> {
-    if let Some(cluster) = world.cluster.local_cluster.as_ref() {
+    if let Some(cluster) = world.cluster.local_cluster() {
         return Box::pin(cluster.start_node_with(node_name, options))
             .await
             .map_err(|e| StepError::LogicalError {
@@ -241,7 +243,7 @@ pub async fn start_manual_node(
 }
 
 pub async fn wait_manual_node_ready(world: &CucumberWorld, node_name: &str) -> StepResult {
-    if let Some(cluster) = world.cluster.local_cluster.as_ref() {
+    if let Some(cluster) = world.cluster.local_cluster() {
         return cluster
             .wait_node_ready(node_name)
             .await
@@ -268,7 +270,7 @@ pub fn manual_node_client(
     world: &CucumberWorld,
     node_name: &str,
 ) -> Result<NodeHttpClient, StepError> {
-    if let Some(cluster) = world.cluster.local_cluster.as_ref() {
+    if let Some(cluster) = world.cluster.local_cluster() {
         return cluster
             .node_client(node_name)
             .ok_or_else(|| StepError::LogicalError {
@@ -439,8 +441,8 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn pending_cucumber_deployment_rebuild_reuses_genesis_time() {
+    #[tokio::test]
+    async fn pending_cucumber_deployment_rebuild_reuses_genesis_time() {
         let mut world = CucumberWorld::default();
         world.set_test_context("pending-genesis-rebuild".to_owned());
         world.set_genesis_time(GenesisTime::new(1_000));
@@ -454,6 +456,7 @@ mod tests {
         let first_genesis_time = first.config().genesis_time();
 
         rebuild_pending_local_manual_cluster(&mut world)
+            .await
             .expect("pending deployment should rebuild");
         let rebuilt = build_manual_cluster_deployment(&mut world, 0)
             .expect("rebuilt pending deployment should build");

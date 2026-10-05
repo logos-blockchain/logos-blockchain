@@ -5,7 +5,6 @@ use core::{
 
 use lb_blend_service::settings::TimingSettings;
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
-use lb_libp2p::protocol_name::StreamProtocol;
 use lb_utils::math::PositiveF64;
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
@@ -164,7 +163,6 @@ pub struct CommonSettings {
     /// message.
     pub num_blend_layers: NonZeroU64,
     pub minimum_network_size: MinimumNetworkSize,
-    pub protocol_name: StreamProtocol,
     /// `η`: the network absorption of one hop, the rounds a message spends
     /// crossing the network between two blend nodes.
     pub network_absorption_in_rounds: NonZeroU64,

@@ -12,15 +12,20 @@ use rusqlite::types::{ToSql, ToSqlOutput, Value};
 use crate::error::Error;
 
 mod codec;
+mod compression;
 mod fixtures;
 
-// Every payload starts with this marker and version before the encoded body.
+// Every payload starts with this marker, version and body encoding.
 pub const PAYLOAD_MARKER: [u8; 9] = *b"LOGOS_SQL";
 const PAYLOAD_VERSION: u16 = 2;
-const PAYLOAD_HEADER_LEN: usize = PAYLOAD_MARKER.len() + size_of::<u16>();
+const PAYLOAD_HEADER_LEN: usize = PAYLOAD_MARKER.len() + size_of::<u16>() + 1;
 
-// A complete λSQL transaction must fit into one channel inscription.
+// Published bytes, including our header, must fit into one chain inscription.
 const MAX_PAYLOAD_BYTES: usize = Inscription::MAX;
+
+// Allow up to 64 MiB before compression. This caps decompression allocations;
+// the compressed payload must still fit the chain's smaller inscription limit.
+const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 /// Stable identity of one application write.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, BinaryCodec)]
@@ -73,7 +78,7 @@ impl SqlText {
             return Err(Error::InvalidTransaction("statement SQL must not be empty"));
         }
 
-        if sql.len() > MAX_PAYLOAD_BYTES {
+        if sql.len() > MAX_BODY_BYTES {
             return Err(Error::InvalidTransaction("statement SQL is too large"));
         }
 
@@ -97,10 +102,10 @@ impl TryFrom<Value> for SqlParameter {
             Value::Real(value) if !value.is_finite() => {
                 return Err(Error::InvalidTransaction("real parameters must be finite"));
             }
-            Value::Text(value) if value.len() > MAX_PAYLOAD_BYTES => {
+            Value::Text(value) if value.len() > MAX_BODY_BYTES => {
                 return Err(Error::InvalidTransaction("text parameter is too large"));
             }
-            Value::Blob(value) if value.len() > MAX_PAYLOAD_BYTES => {
+            Value::Blob(value) if value.len() > MAX_BODY_BYTES => {
                 return Err(Error::InvalidTransaction("blob parameter is too large"));
             }
             _ => {}
@@ -126,13 +131,13 @@ impl SqlParameter {
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 pub struct Statement {
     sql: SqlText,
-    params: UpperBoundedVec<SqlParameter, MAX_PAYLOAD_BYTES>,
+    params: UpperBoundedVec<SqlParameter, MAX_BODY_BYTES>,
 }
 
 impl Statement {
     /// Creates one non-empty statement within the protocol limits.
     pub fn new(sql: String, params: Vec<Value>) -> Result<Self, Error> {
-        if params.len() > MAX_PAYLOAD_BYTES {
+        if params.len() > MAX_BODY_BYTES {
             return Err(Error::InvalidTransaction(
                 "statement has too many parameters",
             ));
@@ -160,7 +165,7 @@ impl Statement {
 /// Statements applied atomically at one channel position.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 pub struct Transaction {
-    statements: NonEmptyBoundedVec<Statement, MAX_PAYLOAD_BYTES>,
+    statements: NonEmptyBoundedVec<Statement, MAX_BODY_BYTES>,
 }
 
 impl Transaction {
@@ -172,7 +177,7 @@ impl Transaction {
             ));
         }
 
-        if statements.len() > MAX_PAYLOAD_BYTES {
+        if statements.len() > MAX_BODY_BYTES {
             return Err(Error::InvalidTransaction(
                 "transaction contains too many statements",
             ));
@@ -224,7 +229,7 @@ impl CapturedFunctionCall {
 /// Function results captured while executing one replicated transaction.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 pub struct CapturedFunctionCalls {
-    calls: UpperBoundedVec<CapturedFunctionCall, MAX_PAYLOAD_BYTES>,
+    calls: UpperBoundedVec<CapturedFunctionCall, MAX_BODY_BYTES>,
 }
 
 impl CapturedFunctionCalls {
@@ -255,12 +260,19 @@ pub struct ChannelInscription {
 
 impl ChannelInscription {
     pub fn encode(&self) -> Result<Vec<u8>, Error> {
-        let payload_len = payload_len(self.encoded_length())?;
-        let mut payload = Vec::with_capacity(payload_len);
+        if self.encoded_length() > MAX_BODY_BYTES {
+            return Err(Error::InvalidTransaction(
+                "transaction exceeds the uncompressed size limit",
+            ));
+        }
+
+        let (encoding, body) = compression::encode(self.encode_to_vec())?;
+        let mut payload = Vec::with_capacity(payload_len(body.len())?);
 
         payload.extend_from_slice(&PAYLOAD_MARKER);
         payload.extend_from_slice(&PAYLOAD_VERSION.to_le_bytes());
-        self.encode_into(&mut payload);
+        payload.push(encoding);
+        payload.extend_from_slice(&body);
 
         Ok(payload)
     }
@@ -285,7 +297,9 @@ impl ChannelInscription {
             return Err(Error::InvalidPayload("protocol version is not supported"));
         }
 
-        <Self as BinaryDecode>::decode_all(body, &())
+        let body = compression::decode(header[PAYLOAD_HEADER_LEN - 1], body)?;
+
+        <Self as BinaryDecode>::decode_all(&body, &())
             .map_err(|_| Error::InvalidPayload("body cannot be decoded"))
     }
 
@@ -344,11 +358,12 @@ pub fn is_logos_sql_payload(payload: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use rand::{RngCore as _, SeedableRng as _, rngs::StdRng};
     use rusqlite::types::Value;
 
     use super::{
-        CapturedFunctionCalls, ChannelInscription, EncodedWrite, MAX_PAYLOAD_BYTES, Statement,
-        Transaction, TxId,
+        CapturedFunctionCalls, ChannelInscription, EncodedWrite, MAX_BODY_BYTES, MAX_PAYLOAD_BYTES,
+        Statement, Transaction, TxId,
     };
 
     #[test]
@@ -380,6 +395,7 @@ mod tests {
 
         assert_eq!(decoded.tx_id, encoded.tx_id);
         assert_eq!(decoded.transaction, transaction);
+        assert_eq!(decoded.content_digest(), encoded.content_digest);
     }
 
     #[test]
@@ -400,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn payload_bytes_are_pinned() {
+    fn plain_and_compressed_payload_fixtures_decode() {
         let transaction = Transaction::new(vec![
             Statement::new("SELECT 1".to_owned(), Vec::new()).expect("statement should be valid"),
         ])
@@ -411,14 +427,32 @@ mod tests {
             captured_function_calls: CapturedFunctionCalls::empty(),
         };
 
-        let expected = hex::decode(concat!(
-            "4c4f474f535f53514c0200",
+        let plain = hex::decode(concat!(
+            "4c4f474f535f53514c020000",
             "0303030303030303030303030303030303030303030303030303030303030303",
             "010000000800000053454c45435420310000000000000000"
         ))
         .expect("fixture should be valid hex");
 
-        assert_eq!(write.encode().expect("payload should encode"), expected);
+        let expected = hex::decode(concat!(
+            "4c4f474f535f53514c02000138000000",
+            "78018586c10d000004c44e7c8c610533889f1ffbcf422ca06993f2030190ad22c35b6df71c2abd027b"
+        ))
+        .expect("fixture should be valid hex");
+
+        assert_eq!(
+            ChannelInscription::decode(&expected).expect("compressed fixture should decode"),
+            write
+        );
+        assert_eq!(
+            ChannelInscription::decode(&plain).expect("plain fixture should decode"),
+            write
+        );
+
+        let mut trailing_plain = plain;
+        trailing_plain.push(0);
+
+        assert!(ChannelInscription::decode(&trailing_plain).is_err());
     }
 
     #[test]
@@ -440,21 +474,69 @@ mod tests {
     }
 
     #[test]
-    fn complete_payload_must_fit_one_inscription() {
+    fn large_transaction_is_accepted_when_its_compressed_payload_fits() {
         let transaction = Transaction::new(vec![
             Statement::new(
                 "SELECT ?1".to_owned(),
-                vec![Value::Blob(vec![0; MAX_PAYLOAD_BYTES])],
+                vec![Value::Blob(vec![0; MAX_PAYLOAD_BYTES + 1])],
             )
             .expect("statement should be valid"),
         ])
         .expect("transaction should be valid");
-        let result = EncodedWrite::new(
+        let encoded = EncodedWrite::new(
             TxId::generate(),
             &transaction,
             CapturedFunctionCalls::empty(),
-        );
+        )
+        .expect("compressed transaction should fit");
 
-        assert!(matches!(result, Err(crate::Error::InscriptionTooLarge)));
+        assert!(encoded.payload.len() <= MAX_PAYLOAD_BYTES);
+        let decoded = ChannelInscription::decode(&encoded.payload).expect("payload should decode");
+
+        assert_eq!(decoded.transaction, transaction);
+    }
+
+    #[test]
+    fn published_payload_must_still_fit_one_inscription() {
+        let mut data = vec![0; MAX_PAYLOAD_BYTES + 1];
+        StdRng::seed_from_u64(7).fill_bytes(&mut data);
+
+        let transaction = Transaction::new(vec![
+            Statement::new("SELECT ?1".to_owned(), vec![Value::Blob(data)])
+                .expect("statement should be valid"),
+        ])
+        .expect("transaction should be valid");
+        let write = ChannelInscription {
+            tx_id: TxId::from([3; 32]),
+            transaction,
+            captured_function_calls: CapturedFunctionCalls::empty(),
+        };
+
+        assert!(matches!(
+            write.encode(),
+            Err(crate::Error::InscriptionTooLarge)
+        ));
+    }
+
+    #[test]
+    fn uncompressed_transaction_size_is_limited_even_if_it_would_compress() {
+        let transaction = Transaction::new(vec![
+            Statement::new(
+                "SELECT ?1".to_owned(),
+                vec![Value::Blob(vec![0; MAX_BODY_BYTES])],
+            )
+            .expect("statement should be valid"),
+        ])
+        .expect("transaction should be valid");
+        let write = ChannelInscription {
+            tx_id: TxId::from([3; 32]),
+            transaction,
+            captured_function_calls: CapturedFunctionCalls::empty(),
+        };
+
+        assert!(matches!(
+            write.encode(),
+            Err(crate::Error::InvalidTransaction(_))
+        ));
     }
 }

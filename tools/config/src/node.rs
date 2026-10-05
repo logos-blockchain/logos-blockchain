@@ -7,8 +7,8 @@ use lb_key_management_system_service::{
 use lb_node::{
     UserConfig,
     config::{
-        ApiConfig, CryptarchiaConfig, PoWConfig, SdpConfig, StorageConfig, WalletConfig,
-        api::serde::AxumBackendSettings,
+        ApiConfig, CryptarchiaConfig, MempoolConfig, PoWConfig, SdpConfig, StorageConfig,
+        WalletConfig, api::serde::AxumBackendSettings,
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
         sdp::serde::RequiredValues as SdpConfigRequiredValues, state::Config as StateConfig,
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
@@ -53,6 +53,7 @@ pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
         // demand, naming the destination key on each claim request.
         pow: PoWConfig::default(),
         kms: config.kms_config,
+        mempool: MempoolConfig::default(),
         state: StateConfig::default(),
     }
 }

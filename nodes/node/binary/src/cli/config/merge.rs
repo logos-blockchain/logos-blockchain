@@ -392,7 +392,7 @@ mod tests {
 
         let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(conflicts.is_empty());
+        assert_eq!(conflicts, []);
         assert_eq!(destination, yaml("a: 3"));
     }
 
@@ -479,7 +479,7 @@ mod tests {
 
         let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(conflicts.is_empty());
+        assert_eq!(conflicts, []);
         assert_eq!(destination, yaml("a: null"));
     }
 
@@ -491,7 +491,7 @@ mod tests {
 
         let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(conflicts.is_empty());
+        assert_eq!(conflicts, []);
         assert_eq!(destination, yaml("a: 30"));
     }
 
@@ -503,7 +503,7 @@ mod tests {
 
         let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(conflicts.is_empty());
+        assert_eq!(conflicts, []);
         assert_eq!(destination, yaml("a: null"));
     }
 
@@ -515,7 +515,7 @@ mod tests {
 
         let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(conflicts.is_empty());
+        assert_eq!(conflicts, []);
         assert_eq!(destination, yaml("a: true"));
     }
 
@@ -527,7 +527,7 @@ mod tests {
 
         let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(conflicts.is_empty());
+        assert_eq!(conflicts, []);
         assert_eq!(destination, yaml("a: 10"));
     }
 
@@ -539,7 +539,7 @@ mod tests {
 
         let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(conflicts.is_empty());
+        assert_eq!(conflicts, []);
         assert_eq!(destination, yaml("a: new"));
     }
 
@@ -551,7 +551,7 @@ mod tests {
 
         let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(conflicts.is_empty());
+        assert_eq!(conflicts, []);
         assert_eq!(destination, yaml("a: [9]"));
     }
 
@@ -563,7 +563,7 @@ mod tests {
 
         let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(conflicts.is_empty());
+        assert_eq!(conflicts, []);
         assert_eq!(destination, yaml("a: { b: { c: 10, d: 2 }, e: 3 }"));
     }
 
@@ -575,7 +575,7 @@ mod tests {
 
         let conflicts = merge(source, &mut destination, extra, &NO_INSERT);
 
-        assert!(conflicts.is_empty());
+        assert_eq!(conflicts, []);
         assert_eq!(destination, yaml("a: !x 1"));
     }
 
@@ -647,7 +647,7 @@ mod tests {
 
         let conflicts = merge(source, &mut destination, extra, &SOURCE_INSERT);
 
-        assert!(conflicts.is_empty());
+        assert_eq!(conflicts, []);
         assert_eq!(destination, yaml("a: { b: { c: 1 } }"));
     }
 

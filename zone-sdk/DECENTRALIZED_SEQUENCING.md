@@ -110,7 +110,7 @@ This means a sequencer can call `publish` from any task at any moment; the SDK w
 
 ```rust
 // From the drive task, once `Event::Ready` has fired.
-let (result, checkpoint) = sequencer.handle().publish(zone_block)?;
+let (result, checkpoint) = sequencer.handle().publish(zone_block).await?;
 // `result.tx` is a `PendingTx::Inscription(...)`.
 // `checkpoint` is up to date with the new pending entry.
 // The post may not have hit the node yet if it is not our turn.
@@ -165,119 +165,126 @@ The view carries `pending_publish_txs` and `queued_messages` so the UI can show 
 
 ## Adding and removing sequencers
 
-The committee is changed by submitting a `ChannelConfig` op — same primitive used during channel creation. Currently only the single signer flow is supported through the SDK, but we outline both flows here.
+The committee is changed by submitting a `ChannelConfig` op — same primitive used during channel creation. The SDK supports both flows below; with more than one signer, collecting the signatures is left to the application.
 
 ### Single-signer: `configuration_threshold == 1`
 
 When `configuration_threshold == 1`, a single valid signature from any one of the channel's accredited keys authorizes a configuration change. Because `ChannelConfigOp` overwrites the entire key list, re-include any keys that should remain accredited after the update.
 
 ```rust
-use lb_core::mantle::channel::{Keys, SlotTimeframe, SlotTimeout};
+use lb_core::mantle::{
+    channel::{SlotTimeframe, SlotTimeout},
+    ops::channel::VerifiedChannelKeys,
+};
 
-let new_keys = Keys::from(vec![
+let new_keys = VerifiedChannelKeys::from([
     admin_pk,
     new_sequencer_b_pk,
     new_sequencer_c_pk,
 ]);
 
-let (result, checkpoint, signed_tx) = sequencer.handle().channel_config(
-    new_keys,
-    SlotTimeframe::from(60),   // ~3 blocks per turn at 20 slots/block
-    SlotTimeout::from(180),    // skip after 3 turn windows of inactivity
-    1,                          // configuration_threshold (still single-admin)
-    1,                          // withdraw_threshold
-)?;
+let ((result, checkpoint), signed_tx) = sequencer
+    .handle()
+    .channel_config(
+        new_keys,
+        SlotTimeframe::from(60), // ~3 blocks per turn at 20 slots/block
+        SlotTimeout::from(180),  // skip after 3 turn windows of inactivity
+        1,                       // configuration_threshold (still single-admin)
+        1,                       // transfer_threshold
+    )
+    .await?;
 ```
 
 `channel_config` builds, signs (with the local key only), and submits the tx atomically. On finalization, the SDK's `refresh_channel_state` picks up the new config and the next `BlocksProcessed` event recomputes `our_turn_to_write` for every running sequencer.
 
-### Multi-admin: `configuration_threshold > 1` (not yet wired)
+### Multi-admin: `configuration_threshold > 1`
 
-When the channel has been moved to a threshold larger than 1, `handle.channel_config` is no longer sufficient — it only signs with the local key. The SDK exposes the lower-level primitives but **does not orchestrate signature collection across sequencers**; the committee transport (how the unsigned tx and the signatures are exchanged) is the application's responsibility.
+When the channel has been moved to a threshold larger than 1, `handle.channel_config` is no longer sufficient — it only signs with the local key. The SDK splits the change into a prepare step and a submit step, but it **does not orchestrate signature collection across sequencers**; the committee transport (how the prepared tx and the signatures are exchanged) is the application's responsibility.
 
-The flow mirrors the multi-sig withdraw flow described in [`BRIDGING.md`](BRIDGING.md#multi-sequencer-zones): one sequencer proposes by calling `prepare_tx` with a `ChannelConfigOp` payload, distributes the unsigned tx to the rest of the committee, each co-signer calls `sign_tx`, the proposer assembles a `ChannelMultiSigProof` from the collected `IndexedSignature`s, and submits via `submit_signed_tx`.
+1. One sequencer proposes the change with `handle.prepare_channel_config(..)`, which builds and funds the config tx and returns a `PreparedChannelConfig`.
+2. Each key holder inspects `prepared.tx()` and signs it with `prepared.sign_with(&key)`, which returns an `IndexedSignature` indexed against the channel's current accredited keys. A key holder without a running sequencer can call `sign_prepared(&key, &prepared.accredited_keys, &prepared.sign_payload)` instead.
+3. The proposer gathers `prepared.signing_threshold` signatures — the channel's current `configuration_threshold` — into `IndexedSignatures` and submits them with `handle.submit_channel_config(prepared, signatures)`.
 
 ```rust
 use lb_core::mantle::{
-    Op, SignedOps,
-    ops::{OpProof, channel::config::ChannelConfigOp},
+    channel::{SlotTimeframe, SlotTimeout},
+    ops::channel::VerifiedChannelKeys,
 };
-use lb_core::proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature};
+use lb_zone_sdk::sequencer::{IndexedSignature, IndexedSignatures};
 
-// 1. Read this sequencer's index from the channel view.
-let view = sequencer.subscribe_channel_view().borrow().clone();
-let own_key_index = view.own_key_index.ok_or("not an accredited key")?;
+// 1. Propose the new configuration. The SDK builds and funds the tx.
+let prepared = sequencer
+    .handle()
+    .prepare_channel_config(
+        VerifiedChannelKeys::from([admin_pk, sequencer_b_pk, sequencer_c_pk]),
+        SlotTimeframe::from(60),
+        SlotTimeout::from(180),
+        2, // configuration_threshold
+        1, // transfer_threshold
+    )
+    .await?;
 
-// 2. Build the unsigned config tx and get this sequencer's own signature.
-let config = ChannelConfigOp {
-    channel,
-    keys: new_keys,
-    posting_timeframe,
-    posting_timeout,
-    configuration_threshold,
-    withdraw_threshold,
-};
-let (tx, msg_id, own_sig) = sequencer.handle().prepare_tx(
-    [Op::ChannelConfig(config)].into(),
-    inscription_payload,
-)?;
+// 2. Distribute `prepared` to the rest of the committee; each key holder
+//    signs with `prepared.sign_with(&key)`. Transport is application-defined.
+let collected: Vec<IndexedSignature> = collect_signatures_from_committee(&prepared).await?;
 
-// 3. Distribute `tx` to the rest of the committee, collect their
-//    `IndexedSignature`s. Transport is application-defined.
-let signatures: Vec<IndexedSignature> = collect_signatures_from_committee(
-    &tx,
-    IndexedSignature::new(own_key_index, own_sig.clone()),
-).await?;
-
-// 4. Assemble the threshold proof and submit.
-let config_proof = ChannelMultiSigProof::new(signatures)?;
-let signed_tx = SignedOps::new(
-    tx,
-    vec![
-        OpProof::ChannelMultiSigProof(config_proof),
-        OpProof::Ed25519Sig(own_sig),
-    ],
-)?;
+// 3. Gather the signatures, ordered by key index with at most one per key,
+//    and submit.
+let signatures = IndexedSignatures::try_from_iter(collected.into_iter().map(Into::into))?;
 let (result, checkpoint) = sequencer
     .handle()
-    .submit_signed_tx(signed_tx, msg_id)?;
+    .submit_channel_config(prepared, signatures)?;
 ```
 
-The multi-admin flow is not currently exercised by integration tests (see `tests/cucumber_tests/features/zone.feature` in the repo); treat it as the reference path until SDK support lands.
+The `Multi-sig channel config escalates across independent signers` scenario in `tests/cucumber_tests/features/zone.feature` runs this flow with distinct signers.
 
 
 ## Competing writes and republish
 
 In a decentralized channel, two sequencers can race on the same parent slot — for instance, when rotation is mid-transition or when sequencers are temporarily disconnected and resync at different rates. The on-chain rule is *first valid inscription wins*; the loser's tx becomes invalid because its parent slot is now claimed.
 
-The SDK detects this via the `channel_update` field of `Event::BlocksProcessed`: the losing tx surfaces in `channel_update.orphaned` as a `ChannelUpdateTx::Inscription(InscriptionInfo)`. The consumer decides whether to republish — re-call `publish` with the same payload and the SDK fills in the new (current) parent.
+The SDK detects this via the `channel_update` field of `Event::BlocksProcessed`: the update is a `ChannelUpdate::Conflict` and the losing tx surfaces in its `orphaned` list, reachable through `channel_update.orphaned()`, as a `ChannelUpdateTx::Inscription(InscriptionInfo)`. An update with nothing orphaned is a `ChannelUpdate::Extension`, and `orphaned()` is empty. The consumer decides whether to republish — re-call `publish` with the same payload and the SDK fills in the new (current) parent.
 
 ```rust
 use lb_zone_sdk::sequencer::{ChannelUpdateTx, Event};
 
 if let Event::BlocksProcessed { channel_update, .. } = event {
-    for entry in channel_update.orphaned {
+    for entry in channel_update.orphaned() {
         if let ChannelUpdateTx::Inscription(info) = entry {
-            let (result, checkpoint) = sequencer.handle().publish(info.payload)?;
+            let (result, checkpoint) = sequencer.handle().publish(info.payload.clone()).await?;
             // Persist `result` + `checkpoint` exactly as on the original publish.
         }
     }
 }
 ```
 
-The integration tests provide reference policies that run this re-publish loop automatically, in `tests/src/cucumber/steps/manual_zone/support.rs`: `OrphanRepublishPolicy` (simple republish), `RepublishLineagePolicy` (for repeating payloads, tracks msg-id lineage so each intent lands once), `SortedConflictPolicy` (republish only when it preserves the channel's sorted order, otherwise discard), and `BalanceAwarePolicy` (republish only when the account balance still allows it). Wiring one into the drive loop is the recommended pattern for any sequencer running in a competing-write environment.
+### Keeping state from channel updates
+
+`ChannelUpdate` has two variants, cut along the channel view rather than the L1 branch:
+
+- `Extension { adopted }` — nothing you hold became invalid. Append `adopted` to your non-finalized state. A block that changes the L1 branch without touching the channel view is still an extension.
+- `Conflict { common_prefix, adopted, orphaned }` — entries left the view: a competing entry took their parent, a competing spend took a bundle's inputs, or a config change invalidated the pending tail. `orphaned` is never empty. `common_prefix` is what the previous and the new view share above the finalized boundary, so `common_prefix ++ adopted`, available as `channel_update.canonical_chain()`, is the whole non-finalized view at the new tip. It includes your own unmined publishes, which chain on the mined tip.
+
+Two ways to consume a conflict, depending on whether your state can undo an entry's effects:
+
+- **Diff**: revert every `orphaned` entry, apply every `adopted` entry.
+- **Rebuild from LIB**: reset to finalized state and replay `canonical_chain()`; use `orphaned` only to decide what to republish and to clean derived indexes.
+
+Either way, your own publishes are applied at publish time from the returned receipt and never echo back in `adopted`; they appear in `adopted` only after they were reported orphaned first.
+
+The integration tests provide reference policies that run this re-publish loop automatically, in `tests/src/cucumber/steps/zone/operations/policies.rs`: `OrphanRepublishPolicy` (simple republish), `RepublishLineagePolicy` (for repeating payloads, tracks msg-id lineage so each intent lands once), `SortedConflictPolicy` (republish only when it preserves the channel's sorted order, otherwise discard), and `BalanceAwarePolicy` (republish only when the account balance still allows it). Wiring one into the drive loop is the recommended pattern for any sequencer running in a competing-write environment.
 
 If the orphan policy is too aggressive — e.g., the orphan was caused by genuine application-level conflict, not a race — the consumer can choose to drop the payload, deduplicate against a higher-level transaction stream, or apply any other custom rule. The SDK only surfaces the event; the resolution policy is yours.
 
-Channel txs built outside the publish API are classified by shape, not by how they were submitted: a tx that looks like publish output (a single inscription, optionally with withdraws and one funding transfer) surfaces as `ChannelUpdateTx::Inscription` / `ChannelUpdateTx::AtomicWithdraw`; anything else surfaces as `ChannelUpdateTx::Custom(SignedOps)` — the SDK hands back the whole transaction and it is up to the consumer to parse it (the `channel_inscriptions` helper extracts its inscriptions) and decide how to recover it. The main API is `publish` and `publish_atomic_withdraw`.
+Channel txs built outside the publish API are classified by shape, not by how they were submitted. A tx that looks like publish output — one inscription plus at most one funding transfer — surfaces as `ChannelUpdateTx::Inscription`; with withdraws (and at most one channel transfer) added, as `ChannelUpdateTx::AtomicWithdraw`; with one channel transfer and no withdraws, as `ChannelUpdateTx::PinDeposit`. A lone config, plus at most one funding transfer, surfaces as `ChannelUpdateTx::Config`. Anything else surfaces as `ChannelUpdateTx::Custom(SignedOps)` — the SDK hands back the whole transaction and it is up to the consumer to parse it (the `channel_inscriptions` helper extracts its inscriptions) and decide how to recover it. The main API is `publish`, `publish_atomic_withdraw` and `publish_pin_deposit`.
 
 
 ## Current limitations
 
-- **`channel_config` is single-sig only.** `SequencerHandle::channel_config` signs with the local sequencer's key only, so it works for `configuration_threshold == 1` channels. For threshold > 1, use the `prepare_tx` + `submit_signed_tx` flow above. An SDK helper to drive the multi-admin flow end-to-end is not yet provided.
+- **`channel_config` is single-sig only.** `SequencerHandle::channel_config` signs with the local sequencer's key only, so it works for `configuration_threshold == 1` channels. For threshold > 1, use the `prepare_channel_config` → `sign_with` → `submit_channel_config` flow above; collecting the signatures is up to the application.
 
-- **`publish_atomic_withdraw` requires `withdraw_threshold == 1`.** Multi-sig withdraws follow the same pattern as multi-sig config: `prepare_tx` → distribute → collect signatures → `submit_signed_tx`. See [`BRIDGING.md`](BRIDGING.md#multi-sequencer-zones) for the worked example.
+- **`publish_atomic_withdraw` requires `transfer_threshold == 1`.** Multi-sig withdraws use the lower-level flow: `prepare_tx` → distribute → collect signatures → `submit_signed_tx`. See [`BRIDGING.md`](BRIDGING.md#multi-sequencer-zones) for the worked example.
 
 - **No SDK-level coordination layer.** Off-chain coordination (who proposes config changes, how unsigned txs and signatures are transported between sequencers, how orphan-republish is gated across competing writers) is the application's responsibility. The SDK surfaces per-sequencer state and accepts independent calls; coordination is built on top.
 
-- **Reorg-aware recovery for multi-sig.** An orphaned bundle surfaces as `ChannelUpdateTx::AtomicWithdraw` with its withdraws regardless of how it was signed and of whether it was ever mined, but the SDK cannot re-sign a multi-sig tx: the consumer must re-run the `prepare_tx` → collect-signatures → `submit_signed_tx` flow. This is documented in [`BRIDGING.md`](BRIDGING.md#reorgs-and-republish) and applies equally to multi-sig config changes.
+- **Reorg-aware recovery for multi-sig.** An orphaned bundle surfaces as `ChannelUpdateTx::AtomicWithdraw` with its withdraws regardless of how it was signed and of whether it was ever mined, but the SDK cannot re-sign a multi-sig tx: the consumer must re-run the `prepare_tx` → collect-signatures → `submit_signed_tx` flow. This is documented in [`BRIDGING.md`](BRIDGING.md#reorgs-and-republish). An orphaned multi-sig config change surfaces as `ChannelUpdateTx::Config` and is recovered the same way, by re-running `prepare_channel_config` → collect signatures → `submit_channel_config`.

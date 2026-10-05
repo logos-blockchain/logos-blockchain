@@ -548,6 +548,7 @@ where
                 genesis_time_unix_ms: service_info.genesis_time_unix_ms,
                 current_slot: u64::from(service_info.current_slot),
                 current_epoch: u32::from(service_info.current_epoch),
+                slots_per_epoch: service_info.slots_per_epoch,
             };
             (StatusCode::OK, Json(api_info)).into_response()
         }
@@ -2272,9 +2273,10 @@ mod tests {
         mantle::{
             channel::{ChannelState, SlotTimeframe, SlotTimeout},
             gas::GasCost,
-            ops::channel::{Ed25519PublicKey, MsgId, config::Keys},
+            ops::channel::{MsgId, UnverifiedChannelKeys},
         },
     };
+    use lb_key_management_system_service::keys::UnverifiedEd25519PublicKey;
 
     use super::{channel_response, validate_max_tx_fee};
     use crate::api::{
@@ -2311,9 +2313,10 @@ mod tests {
     }
 
     fn channel_state() -> ChannelState {
-        let accredited_keys: Keys =
-            [Ed25519PublicKey::from_bytes(&[0; 32]).expect("test public key should be valid")]
-                .into();
+        let accredited_keys: UnverifiedChannelKeys =
+            [UnverifiedEd25519PublicKey::from_bytes(&[0; 32])
+                .expect("test public key should be valid")]
+            .into();
 
         ChannelState {
             accredited_keys: Arc::new(accredited_keys),

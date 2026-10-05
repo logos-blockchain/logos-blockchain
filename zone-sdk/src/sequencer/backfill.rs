@@ -139,13 +139,12 @@ where
 
         self.buffered_events.push_back(Event::BlocksProcessed {
             checkpoint,
-            channel_update: ChannelUpdate {
-                orphaned: Vec::new(),
+            // Backfill is finalized history: nothing sits above LIB, and
+            // deposits surface via `finalized`.
+            channel_update: ChannelUpdate::Extension {
                 adopted: Vec::new(),
-                // Backfill is finalized history; deposits there surface via
-                // `finalized`, not as non-finalized `adopted_deposits`.
-                adopted_deposits: Vec::new(),
             },
+            deposits: Vec::new(),
             finalized: batch.items,
         });
         Some(self.buffered_events.pop_front())
@@ -268,6 +267,10 @@ where
             Ok(stream) => {
                 debug!(target: TARGET, "ensure_connected: blocks stream connected");
                 self.blocks_stream = Some(stream);
+                // A back-off that was cancelled before it elapsed must not
+                // carry over to the next disconnect as an already-past
+                // deadline.
+                self.reconnect_until = None;
                 true
             }
             Err(e) => {
@@ -309,12 +312,11 @@ where
                     self.backfill_to = Some(network_lib_slot);
                     return false;
                 }
-                true
             }
             Err(e) => {
                 warn!(target: TARGET, "Failed to fetch consensus info for backfill check: {e}");
-                true
             }
         }
+        true
     }
 }

@@ -442,7 +442,7 @@ mod tests {
                 channel_id: ChannelId::from([0xAA; 32]),
                 inscription: Inscription::new_unchecked(vec![0xab; 1024]),
                 parent: MsgId::root(),
-                signer: signing_key.public_key(),
+                signer: signing_key.public_key().into_unverified(),
             }))
             .expect("inscription test builder should fit op bounds");
         assert_eq!(

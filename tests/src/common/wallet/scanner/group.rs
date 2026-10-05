@@ -143,7 +143,7 @@ pub fn build_fork_group_scanner_configs(
          node_clients,
          wallet_to_node,
          group_id,
-         mut last_msg| {
+         last_msg| {
             Box::pin(async move {
                 let node_to_group = node_clients
                     .keys()
@@ -155,7 +155,7 @@ pub fn build_fork_group_scanner_configs(
                     &node_to_group,
                     &group_nodes,
                     &node_clients,
-                    Some(&mut last_msg),
+                    Some(last_msg),
                 )
                 .await
             })

@@ -6,18 +6,20 @@ use lb_core::{
         ops::{
             Op, OpProof, OpRef,
             channel::{
-                ChannelId, ChannelKeyIndex, MsgId,
-                config::{ChannelConfigOp, Keys},
+                ChannelId, ChannelKeyIndex, MsgId, VerifiedChannelKeys,
+                config::ChannelConfigOp,
                 inscribe::{Inscription, InscriptionOp},
             },
         },
         traits::{Hashable as _, MantleTx},
         transactions::{MantleTxBuilder, OpProofs, Ops, states::Unverified},
     },
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature, IndexedSignatures},
 };
 use lb_http_api_common::bodies::wallet::fund::WalletFundRequestBody;
-use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
+use lb_key_management_system_service::keys::{
+    Ed25519Key, Ed25519Signature, UnverifiedEd25519PublicKey,
+};
 
 use super::types::{Error, FundingConfig};
 use crate::adapter;
@@ -102,8 +104,7 @@ pub(super) fn build_atomic_bundle_ops_proofs(
     transfer_proof: Option<&OpProof>,
 ) -> Result<OpProofs, Error> {
     let channel_proof =
-        ChannelMultiSigProof::try_new([IndexedSignature::new(own_key_index, own_sig)].into())
-            .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
+        ChannelMultiSigProof::new(IndexedSignatures::from((own_key_index, own_sig)));
     let mut ops_proofs = OpProofs::empty();
     for op in tx.op_refs() {
         match op {
@@ -145,7 +146,7 @@ pub(super) fn find_own_key_index(
     channel_state: &ChannelState,
     signing_key: &Ed25519Key,
 ) -> Result<ChannelKeyIndex, Error> {
-    let own_pk = signing_key.public_key();
+    let own_pk = signing_key.public_key().into_unverified();
     channel_state
         .accredited_keys
         .iter()
@@ -165,7 +166,7 @@ pub(super) async fn create_inscribe_tx<Node>(
 where
     Node: adapter::Node + Sync,
 {
-    let signer = signing_key.public_key();
+    let signer = signing_key.public_key().into_unverified();
 
     let inscribe_op = InscriptionOp {
         channel_id,
@@ -209,7 +210,7 @@ pub(super) async fn build_and_fund_config<Node>(
     funding: &FundingConfig,
     channel_id: ChannelId,
     parent: MsgId,
-    keys: Keys,
+    keys: VerifiedChannelKeys,
     posting_timeframe: SlotTimeframe,
     posting_timeout: SlotTimeout,
     configuration_threshold: u16,
@@ -235,19 +236,16 @@ where
 /// fee-transfer proof, and the collected accredited-key signatures.
 ///
 /// `signatures` must be indexed against the channel's *current* (pre-update)
-/// `accredited_keys` — the list the ledger verifies against — and strictly
-/// ascending by index. Pass an empty vec to configure an unclaimed channel,
-/// whose configuration requires no signatures (the empty multi-sig proof).
+/// `accredited_keys` — the list the ledger verifies against — with at most one
+/// signature per index, in any order. Pass an empty vec to configure an
+/// unclaimed channel, whose configuration requires no signatures (the empty
+/// multi-sig proof).
 pub(super) fn assemble_channel_config_tx(
     config_tx: Ops,
     transfer_proof: Option<OpProof>,
-    signatures: Vec<IndexedSignature>,
+    signatures: IndexedSignatures,
 ) -> Result<SignedOps<Unverified, StandardMode>, Error> {
-    let signatures = signatures
-        .try_into()
-        .map_err(|e| Error::Network(format!("too many channel-config signatures: {e:?}")))?;
-    let proof = ChannelMultiSigProof::try_new(signatures)
-        .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
+    let proof = ChannelMultiSigProof::new(signatures);
     let ops_proofs = attach_transfer_proof(
         &config_tx,
         [OpProof::ChannelMultiSigProof(proof)].into(),
@@ -278,7 +276,7 @@ pub(super) async fn create_channel_config_tx<Node>(
     channel_id: ChannelId,
     parent: MsgId,
     signer: Option<(ChannelKeyIndex, &Ed25519Key)>,
-    keys: Keys,
+    keys: VerifiedChannelKeys,
     posting_timeframe: SlotTimeframe,
     posting_timeout: SlotTimeout,
     configuration_threshold: u16,
@@ -300,10 +298,9 @@ where
     )
     .await?;
 
-    let signatures = signer
-        .map(|(index, key)| IndexedSignature::new(index, sign_tx(config_tx.hash(), key)))
-        .into_iter()
-        .collect::<Vec<_>>();
+    let signatures = signer.map_or(IndexedSignatures::empty(), |(index, key)| {
+        (index, sign_tx(config_tx.hash(), key)).into()
+    });
 
     assemble_channel_config_tx(config_tx, transfer_proof, signatures)
 }
@@ -319,7 +316,7 @@ pub(super) fn prepare_tx(
         channel_id,
         inscription,
         parent,
-        signer: signing_key.public_key(),
+        signer: signing_key.public_key().into_unverified(),
     };
     let msg_id = inscription_op.id();
     // TODO: Return `Error` in case there's too many ops already.
@@ -347,10 +344,10 @@ pub(super) fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signa
 /// Returns [`Error`] if `signing_key` is not among `accredited_keys`.
 pub fn sign_prepared(
     signing_key: &Ed25519Key,
-    accredited_keys: &[Ed25519PublicKey],
+    accredited_keys: &[UnverifiedEd25519PublicKey],
     sign_payload: &[u8],
 ) -> Result<IndexedSignature, Error> {
-    let own_pk = signing_key.public_key();
+    let own_pk = signing_key.public_key().into_unverified();
     let index = accredited_keys
         .iter()
         .position(|k| *k == own_pk)
@@ -388,7 +385,10 @@ mod tests {
         let keys: Vec<Ed25519Key> = (1u8..=3)
             .map(|b| Ed25519Key::from_bytes(&[b; 32]))
             .collect();
-        let accredited: Vec<Ed25519PublicKey> = keys.iter().map(Ed25519Key::public_key).collect();
+        let accredited: Vec<UnverifiedEd25519PublicKey> = keys
+            .iter()
+            .map(|k| k.public_key().into_unverified())
+            .collect();
         let payload = b"channel config sign payload";
 
         // Signing with the middle key indexes at its position, and the
@@ -403,8 +403,12 @@ mod tests {
     #[test]
     fn sign_prepared_rejects_unaccredited_key() {
         let accredited = vec![
-            Ed25519Key::from_bytes(&[1; 32]).public_key(),
-            Ed25519Key::from_bytes(&[2; 32]).public_key(),
+            Ed25519Key::from_bytes(&[1; 32])
+                .public_key()
+                .into_unverified(),
+            Ed25519Key::from_bytes(&[2; 32])
+                .public_key()
+                .into_unverified(),
         ];
         let outsider = Ed25519Key::from_bytes(&[9; 32]);
         assert!(sign_prepared(&outsider, &accredited, b"payload").is_err());

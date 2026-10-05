@@ -62,6 +62,7 @@ pub fn spawn(
     db: Databases,
     channel_id: ChannelId,
     restored_checkpoint: Option<SequencerCheckpoint>,
+    read_only: bool,
 ) -> RuntimeHandle {
     let (command_tx, command_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
     let (ready_tx, ready_rx) = oneshot::channel();
@@ -70,6 +71,7 @@ pub fn spawn(
         sequencer,
         db,
         channel_id,
+        read_only,
         command_rx,
         sequencer_ready: false,
         ready_checkpoint_pending: false,
@@ -200,6 +202,7 @@ struct Runtime {
     sequencer: ZoneSequencer<NodeHttpClient>,
     db: Databases,
     channel_id: ChannelId,
+    read_only: bool,
     command_rx: mpsc::Receiver<Command>,
     sequencer_ready: bool,
     ready_checkpoint_pending: bool,
@@ -346,6 +349,10 @@ impl Runtime {
     }
 
     const fn ensure_ready_to_write(&self) -> Result<(), Error> {
+        if self.read_only {
+            return Err(Error::ReadOnly);
+        }
+
         if self.event_pending_retry.is_some() {
             return Err(Error::RuntimeHalted);
         }
@@ -466,7 +473,7 @@ impl Runtime {
     }
 
     const fn can_publish(&self) -> bool {
-        self.sequencer_ready && !self.ready_checkpoint_pending
+        !self.read_only && self.sequencer_ready && !self.ready_checkpoint_pending
     }
 
     async fn advance_publish(&mut self) -> Result<(), Error> {
@@ -555,10 +562,15 @@ impl Runtime {
         Ok(())
     }
 
+    /// Whether the retry tick has anything to do. An applier retry and a
+    /// pending checkpoint are local work. A pending publish needs the node, so
+    /// it only counts while the sequencer is connected: ticking for it while
+    /// disconnected would fail fast and, worse, cancel the reconnect that
+    /// `next_event` has in progress.
     fn has_pending_work(&self) -> Result<bool, Error> {
         Ok(self.event_pending_retry.is_some()
             || matches!(self.publish_state, PublishState::CheckpointPending { .. })
-            || self.db.pending_publish()?.is_some())
+            || (self.sequencer.is_connected() && self.db.pending_publish()?.is_some()))
     }
 
     fn shutdown_result(&mut self) -> Result<(), Error> {
@@ -591,6 +603,49 @@ mod tests {
 
     use super::{COMMAND_CHANNEL_CAPACITY, Command, PendingEvent, PublishState, Runtime};
     use crate::{db::Databases, error::Error, sql::TransactionBuilder, status::WriteStatus};
+
+    #[tokio::test]
+    async fn read_only_accepts_channel_writes_only() {
+        let (_writer_dir, mut writer, _) = runtime();
+        let inscription = published_local_write(&mut writer, 2);
+        let (_reader_dir, mut reader, _) = runtime();
+        reader.read_only = true;
+        reader.sequencer_ready = true;
+
+        reader.handle_event(adopt_event(inscription.clone())).await;
+
+        let connection = Databases::open_reader(reader.db.live_path()).unwrap();
+        let count: i64 = connection
+            .query_row("SELECT count(*) FROM local_2", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+        assert!(reader.event_pending_retry.is_none());
+        assert!(!reader.can_publish());
+
+        let (tx_id, transaction) = prepare_transaction("CREATE TABLE forbidden(value INTEGER)")
+            .finish()
+            .unwrap();
+
+        assert!(matches!(
+            reader.execute(tx_id, transaction).await,
+            Err(Error::ReadOnly)
+        ));
+        assert!(
+            connection
+                .query_row("SELECT count(*) FROM forbidden", [], |row| row
+                    .get::<_, i64>(0))
+                .is_err()
+        );
+
+        writer.handle_event(orphan_event(inscription)).await;
+        let displacement = writer.db.unhandled_displacements().unwrap().remove(0);
+
+        assert!(matches!(
+            reader.retry_displacement(&displacement).await,
+            Err(Error::ReadOnly)
+        ));
+        assert!(reader.db.pending_publish().unwrap().is_none());
+    }
 
     #[tokio::test]
     async fn retry_handles_only_the_selected_displacement() {
@@ -686,14 +741,7 @@ mod tests {
             let displacement = runtime.db.unhandled_displacements().unwrap().remove(0);
 
             if restored {
-                let mut event = blocks_processed();
-                let Event::BlocksProcessed { channel_update, .. } = &mut event else {
-                    unreachable!()
-                };
-                channel_update
-                    .adopted
-                    .push(ChannelUpdateTx::Inscription(original));
-                runtime.handle_event(event).await;
+                runtime.handle_event(adopt_event(original)).await;
             } else {
                 runtime.db.mark_displacement_handled(&displacement).unwrap();
             }
@@ -715,14 +763,7 @@ mod tests {
         runtime.handle_event(orphan_event(original.clone())).await;
         let old = runtime.db.unhandled_displacements().unwrap().remove(0);
 
-        let mut event = blocks_processed();
-        let Event::BlocksProcessed { channel_update, .. } = &mut event else {
-            unreachable!()
-        };
-        channel_update
-            .adopted
-            .push(ChannelUpdateTx::Inscription(original.clone()));
-        runtime.handle_event(event).await;
+        runtime.handle_event(adopt_event(original.clone())).await;
         runtime.handle_event(orphan_event(original)).await;
         let current = runtime.db.unhandled_displacements().unwrap();
         runtime.sequencer_ready = true;
@@ -817,16 +858,17 @@ mod tests {
     }
 
     fn orphan_event(inscription: InscriptionInfo) -> Event {
-        let mut event = blocks_processed();
-        let Event::BlocksProcessed { channel_update, .. } = &mut event else {
-            unreachable!()
-        };
+        update_event(ChannelUpdate::Conflict {
+            common_prefix: Vec::new(),
+            adopted: Vec::new(),
+            orphaned: vec![ChannelUpdateTx::Inscription(inscription)],
+        })
+    }
 
-        channel_update
-            .orphaned
-            .push(ChannelUpdateTx::Inscription(inscription));
-
-        event
+    fn adopt_event(inscription: InscriptionInfo) -> Event {
+        update_event(ChannelUpdate::Extension {
+            adopted: vec![ChannelUpdateTx::Inscription(inscription)],
+        })
     }
 
     #[tokio::test]
@@ -855,22 +897,14 @@ mod tests {
                 .expect("payload should fit"),
             signer: None,
         };
-        let mut event = blocks_processed();
-        let Event::BlocksProcessed {
-            checkpoint,
-            channel_update,
-            ..
-        } = &mut event
-        else {
+        let event = orphan_event(inscription.clone());
+        let Event::BlocksProcessed { checkpoint, .. } = &event else {
             unreachable!()
         };
         runtime
             .db
             .complete_publish(checkpoint, inscription.this_msg, &pending)
             .expect("publication should be recorded");
-        channel_update
-            .orphaned
-            .push(ChannelUpdateTx::Inscription(inscription));
 
         let control =
             Connection::open(dir.path().join("control.db")).expect("control database should open");
@@ -969,6 +1003,7 @@ mod tests {
             sequencer,
             db,
             channel_id,
+            read_only: false,
             command_rx,
             sequencer_ready: false,
             ready_checkpoint_pending: false,
@@ -981,6 +1016,12 @@ mod tests {
     }
 
     fn blocks_processed() -> Event {
+        update_event(ChannelUpdate::Extension {
+            adopted: Vec::new(),
+        })
+    }
+
+    fn update_event(channel_update: ChannelUpdate) -> Event {
         Event::BlocksProcessed {
             checkpoint: SequencerCheckpoint {
                 last_msg_id: MsgId::root(),
@@ -990,11 +1031,8 @@ mod tests {
                 channel_notes: Vec::new(),
                 finalized_config: MsgId::root(),
             },
-            channel_update: ChannelUpdate {
-                adopted: Vec::new(),
-                orphaned: Vec::new(),
-                adopted_deposits: Vec::new(),
-            },
+            channel_update,
+            deposits: Vec::new(),
             finalized: Vec::new(),
         }
     }

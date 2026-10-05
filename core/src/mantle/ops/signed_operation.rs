@@ -193,7 +193,7 @@ mod tests {
             channel::{Channels, Error},
             channel_notes,
             gas::MainnetGasProfile,
-            ledger::{Inputs, Outputs, Utxos, verification_mode::StandardMode},
+            ledger::{BoundedInputs, Outputs, Utxos, verification_mode::StandardMode},
             ops::{
                 channel::{
                     ChannelId, MsgId,
@@ -237,7 +237,7 @@ mod tests {
         SignedOperation::<_, Unverified, StandardMode>::new(
             ChannelWithdrawOp {
                 channel_id: channel_id(),
-                inputs: Inputs::new([note_id]),
+                inputs: BoundedInputs::from(note_id).into(),
             },
             ChannelMultiSigProof::sample_with_signatures(1),
         )
@@ -357,7 +357,10 @@ mod tests {
         };
         let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
         let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
-            TransferOp::new(Inputs::new([input_utxo.id()]), Outputs::empty()),
+            TransferOp::new(
+                BoundedInputs::from(input_utxo.id()).into(),
+                Outputs::empty(),
+            ),
             ZkSignature::sample(),
         )
         .into_state_trusted::<Preverified>();

@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    marker::PhantomData,
     num::NonZeroUsize,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -22,9 +21,8 @@ use lb_core::mantle::{
 };
 use lb_key_management_system_service::keys::Ed25519Key;
 use rand::{seq::SliceRandom as _, thread_rng};
-use testing_framework_core::scenario::{
-    DynError, RunContext, RunMetrics, Workload as ScenarioWorkload,
-};
+use testing_framework_app::AppHostEnv;
+use testing_framework_core::scenario::{DynError, RunContext, Workload as ScenarioWorkload};
 use thiserror::Error;
 use tokio::{
     sync::broadcast::error::RecvError,
@@ -33,9 +31,9 @@ use tokio::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    framework::{BlockRecord, LbcEnv},
-    node::{DeploymentPlan, NodeHttpClient},
-    workloads::{BlockFeedSubscription, LbcBlockFeedEnv, LbcScenarioEnv},
+    framework::BlockRecord,
+    node::NodeHttpClient,
+    workloads::{BlockFeedSubscription, LbcRunContextExt as _},
 };
 
 const BLOCK_POLL_TIMEOUT: Duration = Duration::from_secs(1);
@@ -59,34 +57,21 @@ enum InscriptionWorkloadError {
 }
 
 #[derive(Clone)]
-pub struct WorkloadImpl<E = LbcEnv> {
+pub struct WorkloadImpl {
     channel_count: NonZeroUsize,
     payload_bytes: NonZeroUsize,
     min_confirmed: u64,
-    _env: PhantomData<fn() -> E>,
 }
 
-pub type Workload<E = LbcEnv> = WorkloadImpl<E>;
+pub type Workload = WorkloadImpl;
 
 #[async_trait]
-impl<E> ScenarioWorkload<E> for WorkloadImpl<E>
-where
-    E: LbcScenarioEnv + LbcBlockFeedEnv,
-{
+impl ScenarioWorkload<AppHostEnv> for WorkloadImpl {
     fn name(&self) -> &'static str {
         "inscription_workload"
     }
 
-    fn init(
-        &mut self,
-        descriptors: &DeploymentPlan,
-        _run_metrics: &RunMetrics,
-    ) -> Result<(), DynError> {
-        let _ = descriptors;
-        Ok(())
-    }
-
-    async fn start(&self, ctx: &RunContext<E>) -> Result<(), DynError> {
+    async fn start(&self, ctx: &RunContext<AppHostEnv>) -> Result<(), DynError> {
         if self.channel_count.get() == 0 {
             return Err(InscriptionWorkloadError::MissingChannels.into());
         }
@@ -96,14 +81,13 @@ where
     }
 }
 
-impl<E> WorkloadImpl<E> {
+impl WorkloadImpl {
     #[must_use]
-    pub fn new(channel_count: NonZeroUsize) -> Self {
+    pub const fn new(channel_count: NonZeroUsize) -> Self {
         Self {
             channel_count,
             payload_bytes: NonZeroUsize::new(DEFAULT_PAYLOAD_BYTES).expect("constant is non-zero"),
             min_confirmed: 0,
-            _env: PhantomData,
         }
     }
 
@@ -120,17 +104,17 @@ impl<E> WorkloadImpl<E> {
     }
 }
 
-impl<E> Default for WorkloadImpl<E> {
+impl Default for WorkloadImpl {
     fn default() -> Self {
         Self::new(NonZeroUsize::MIN)
     }
 }
 
-struct InscriptionRunner<'a, E: LbcScenarioEnv> {
+struct InscriptionRunner<'a> {
     channels: Vec<ChannelState>,
     pending_by_hash: HashMap<TxHash, usize>,
     feed: BlockFeedSubscription,
-    ctx: &'a RunContext<E>,
+    ctx: &'a RunContext<AppHostEnv>,
     payload_bytes: usize,
     min_confirmed: u64,
     deadline: TokioInstant,
@@ -152,8 +136,8 @@ struct PendingSubmission {
     submitted_at: Instant,
 }
 
-impl<'a, E: LbcScenarioEnv + LbcBlockFeedEnv> InscriptionRunner<'a, E> {
-    fn new(workload: &WorkloadImpl<E>, ctx: &'a RunContext<E>) -> Result<Self, DynError> {
+impl<'a> InscriptionRunner<'a> {
+    fn new(workload: &WorkloadImpl, ctx: &'a RunContext<AppHostEnv>) -> Result<Self, DynError> {
         let channels = build_channel_states(workload.channel_count.get(), &resolve_run_salt());
         if channels.is_empty() {
             return Err(InscriptionWorkloadError::MissingChannels.into());
@@ -162,7 +146,7 @@ impl<'a, E: LbcScenarioEnv + LbcBlockFeedEnv> InscriptionRunner<'a, E> {
         Ok(Self {
             channels,
             pending_by_hash: HashMap::new(),
-            feed: E::block_feed_subscription(ctx)?,
+            feed: ctx.block_feed_subscription()?,
             ctx,
             payload_bytes: workload.payload_bytes.get(),
             min_confirmed: workload.min_confirmed,
@@ -383,7 +367,7 @@ fn build_inscription_transaction(
         channel_id: channel.channel_id,
         inscription: build_payload(channel, payload_bytes),
         parent: channel.parent,
-        signer: channel.signing_key.public_key(),
+        signer: channel.signing_key.public_key().into_unverified(),
     };
     let msg_id = op.id();
 
@@ -420,10 +404,10 @@ fn build_payload(channel: &ChannelState, payload_bytes: usize) -> Inscription {
 }
 
 async fn submit_transaction_via_cluster(
-    ctx: &RunContext<impl LbcScenarioEnv>,
+    ctx: &RunContext<AppHostEnv>,
     tx: Arc<SignedOps<Preverified, StandardMode>>,
 ) -> Result<(), DynError> {
-    let mut clients = ctx.node_clients().snapshot();
+    let mut clients = ctx.lbc_clients()?;
     if clients.is_empty() {
         return Err(cluster_client_exhausted_error());
     }

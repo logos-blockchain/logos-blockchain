@@ -79,23 +79,17 @@ async fn test_load_prefix() {
     let prefix = b"foo/";
 
     // No data yet in the backend
-    assert!(
-        backend
-            .load_prefix(prefix, None, None, None)
-            .await
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        backend.load_prefix(prefix, None, None, None).await.unwrap(),
+        Vec::<Bytes>::new()
     );
 
     // No data with the prefix
     backend.store("boo/0".into(), "boo0".into()).await.unwrap();
     backend.store("zoo/0".into(), "zoo0".into()).await.unwrap();
-    assert!(
-        backend
-            .load_prefix(prefix, None, None, None)
-            .await
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        backend.load_prefix(prefix, None, None, None).await.unwrap(),
+        Vec::<Bytes>::new()
     );
 
     // Two data with the prefix
@@ -467,5 +461,5 @@ async fn test_transaction_basic_flow() {
 
     let empty_stream = backend.get_transactions(iter::once(tx_hash).collect());
     let empty: Vec<_> = empty_stream.collect().await;
-    assert!(empty.is_empty());
+    assert_eq!(empty, Vec::<Bytes>::new());
 }

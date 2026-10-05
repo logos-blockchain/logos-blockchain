@@ -272,7 +272,6 @@ impl RocksBackend {
         self.bulk_store(batch_items).await.map_err(Into::into)
     }
 
-    #[must_use]
     pub fn get_transactions(
         &self,
         tx_hashes: Vec<TxHash>,

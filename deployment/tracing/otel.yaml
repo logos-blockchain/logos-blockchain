@@ -7,6 +7,10 @@ receivers:
         endpoint: "0.0.0.0:4318"
 
 exporters:
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      insecure: true
   otlp_http/loki:
     endpoint: "http://loki:3100/otlp"
     tls:
@@ -18,6 +22,9 @@ exporters:
 
 service:
   pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp/tempo]
     logs:
       receivers: [otlp]
       exporters: [otlp_http/loki]

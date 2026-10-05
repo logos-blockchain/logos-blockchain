@@ -7,6 +7,7 @@ use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{
         AsServiceId, ServiceCore, ServiceData,
+        resources::ServiceResourcesHandle,
         state::{NoOperator, NoState},
     },
 };
@@ -65,7 +66,7 @@ where
     async fn run(mut self) -> Result<(), overwatch::DynError> {
         let Self {
             service_resources_handle:
-                OpaqueServiceResourcesHandle::<Self, RuntimeServiceId> {
+                ServiceResourcesHandle {
                     mut inbound_relay, ..
                 },
             mut backend,

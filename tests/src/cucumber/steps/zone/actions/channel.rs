@@ -1,7 +1,7 @@
 use super::{
-    AtomicZoneDepositRequest, CucumberWorld, Duration, Ed25519Key, Inscription, Keys, Metadata,
+    AtomicZoneDepositRequest, CucumberWorld, Duration, Ed25519Key, Inscription, Metadata,
     PublishDeadline, PublishResult, SequencerCheckpoint, Step, StepError, StepResult, TxHash, Utxo,
-    WalletInfo, WalletReservedInputs, ZONE_CHANNEL_DEPOSIT_THRESHOLD,
+    VerifiedChannelKeys, WalletInfo, WalletReservedInputs, ZONE_CHANNEL_DEPOSIT_THRESHOLD,
     ZONE_CHANNEL_WITHDRAW_THRESHOLD, ZoneDeposit, ZoneTestError, build_zone_deposit,
     build_zone_deposit_from_values, current_available_utxos_for_wallet, log_step_error,
     make_inscription, publish_atomic_zone_withdraw, submit_atomic_zone_deposit,
@@ -48,7 +48,7 @@ pub(in super::super) async fn submit_zone_channel_config(
 
     let ((result, post_call_checkpoint), _signed_tx) = handle
         .channel_config(
-            Keys::new_unchecked(authorized_keys),
+            VerifiedChannelKeys::new_unchecked(authorized_keys),
             posting_timeframe.into(),
             posting_timeout.into(),
             ZONE_CHANNEL_WITHDRAW_THRESHOLD,
@@ -89,7 +89,7 @@ pub(in super::super) async fn prepare_zone_channel_config(
 
     let prepared = client
         .prepare_channel_config(
-            Keys::new_unchecked(authorized_keys.clone()),
+            VerifiedChannelKeys::new_unchecked(authorized_keys.clone()),
             0.into(),
             0.into(),
             threshold,
@@ -161,10 +161,9 @@ pub(in super::super) async fn submit_prepared_zone_channel_config(
 ) -> StepResult {
     let client = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
     let prepared = log_step_error(step, world.zone.prepared_config(&transaction_alias))?.clone();
-    // Collected in arbitrary signer order; the proof requires strictly
-    // ascending index order, so canonicalize before submitting.
-    let mut signatures = world.zone.prepared_config_signatures(&transaction_alias);
-    signatures.sort_unstable();
+    // Collected in arbitrary signer order, which the proof's binary tree-based map
+    // puts in index order.
+    let signatures = world.zone.prepared_config_signatures(&transaction_alias);
 
     let mut checkpoint_rx = world
         .zone

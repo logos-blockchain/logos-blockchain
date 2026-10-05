@@ -344,7 +344,7 @@ mod tests {
         events::DepositNote,
         mantle::{
             Note, Op,
-            ledger::{Inputs, Outputs},
+            ledger::{BoundedInputs, Outputs},
             ops::channel::{
                 channel_transfer::ChannelTransferOp,
                 deposit::{DepositOp, Metadata},
@@ -367,7 +367,7 @@ mod tests {
     fn deposit_op(channel_id: ChannelId, input_seed: u64) -> DepositOp {
         DepositOp {
             channel_id,
-            inputs: Inputs::new([note_id(input_seed)]),
+            inputs: BoundedInputs::from(note_id(input_seed)).into(),
             metadata: Metadata::try_from(b"m".to_vec()).unwrap(),
         }
     }
@@ -436,7 +436,7 @@ mod tests {
         assert_eq!(adds[0].value, 50);
         assert_eq!(adds[0].pk, zk_pk(10));
         assert_eq!(adds[0].slot, Slot::from(9));
-        assert!(removed(&ops).is_empty());
+        assert_eq!(removed(&ops), []);
     }
 
     #[test]
@@ -444,7 +444,9 @@ mod tests {
         let channel_id = ChannelId::from([1u8; 32]);
         let op = DepositOp {
             channel_id,
-            inputs: Inputs::new([note_id(1), note_id(2)]),
+            inputs: BoundedInputs::try_from_iter([note_id(1), note_id(2)])
+                .unwrap()
+                .into(),
             metadata: Metadata::try_from(b"m".to_vec()).unwrap(),
         };
         let tx = crate::test_support::unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
@@ -474,7 +476,7 @@ mod tests {
         let channel_id = ChannelId::from([1u8; 32]);
         let op = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([note_id(10)]),
+            inputs: BoundedInputs::from(note_id(10)).into(),
             outputs: Outputs::new([Note::new(30, zk_pk(7)), Note::new(20, zk_pk(8))]),
         };
         let expected_ids: Vec<NoteId> = op.utxos().map(|u| u.id()).collect();
@@ -503,11 +505,11 @@ mod tests {
         let other = ChannelId::from([2u8; 32]);
         let withdraw = lb_core::mantle::ops::channel::withdraw::ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([note_id(10)]),
+            inputs: BoundedInputs::from(note_id(10)).into(),
         };
         let foreign = lb_core::mantle::ops::channel::withdraw::ChannelWithdrawOp {
             channel_id: other,
-            inputs: Inputs::new([note_id(11)]),
+            inputs: BoundedInputs::from(note_id(11)).into(),
         };
         let tx = crate::test_support::unverified_tx_with_ops(vec![
             Op::ChannelWithdraw(withdraw),
@@ -522,7 +524,7 @@ mod tests {
         );
 
         assert_eq!(removed(&ops), vec![note_id(10)]);
-        assert!(added(&ops).is_empty());
+        assert_eq!(added(&ops), Vec::<&ChannelNote>::new());
     }
 
     fn add(seed: u64, value: Value) -> NoteOp {
@@ -562,8 +564,8 @@ mod tests {
         wallet.store_overlay(header_id(2), vec![NoteOp::Remove(note_id(1))]);
 
         let view = wallet.view([header_id(1), header_id(2)].iter());
-        assert!(view.finalized.is_empty());
-        assert!(view.unfinalized.is_empty());
+        assert_eq!(view.finalized, []);
+        assert_eq!(view.unfinalized, []);
     }
 
     #[test]

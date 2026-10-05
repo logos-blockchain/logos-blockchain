@@ -6,7 +6,7 @@ use lb_binary_codec::canonical::BinaryCodec;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
-use lb_utils::bounded::{BoundedError, UpperBoundedVec};
+use lb_utils::bounded::{BoundedError, UpperBoundedOrderedSet, UpperBoundedVec};
 use lb_utxotree::UtxoTree;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -36,7 +36,7 @@ use crate::{
 pub const MAX_TRANSACTION_INPUTS: usize = u8::MAX as usize;
 const MAX_TRANSACTION_OUTPUTS: usize = u8::MAX as usize;
 pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
-pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
+pub type BoundedInputs = UpperBoundedOrderedSet<NoteId, MAX_TRANSACTION_INPUTS>;
 pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
 
 pub mod verification_mode {
@@ -271,12 +271,12 @@ impl Inputs {
     }
 
     #[must_use]
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.0.len()
     }
 
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
@@ -288,7 +288,7 @@ impl Inputs {
         <&Self as IntoIterator>::into_iter(self)
     }
 
-    pub const fn preverify(&self) -> Result<(), InputsError> {
+    pub fn preverify(&self) -> Result<(), InputsError> {
         if self.is_empty() {
             return Err(InputsError::EmptyInputs);
         }
@@ -401,12 +401,6 @@ impl Inputs {
 
 impl AsRef<BoundedInputs> for Inputs {
     fn as_ref(&self) -> &BoundedInputs {
-        &self.0
-    }
-}
-
-impl AsRef<[NoteId]> for Inputs {
-    fn as_ref(&self) -> &[NoteId] {
         &self.0
     }
 }

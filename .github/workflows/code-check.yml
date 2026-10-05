@@ -14,6 +14,7 @@ concurrency:
 jobs:
   formatting:
     name: Check formatting
+    if: ${{ github.event_name != 'merge_group' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -22,7 +23,7 @@ jobs:
         uses: actions-rs/toolchain@88dc2356392166efad76775c878094f4e83ff746  # Version 1.0.6
         with:
           # The same version must be used in the `.pre-commit-config.yaml` file
-          toolchain: nightly-2026-07-05
+          toolchain: nightly-2026-08-15
           profile: minimal
           components: rustfmt
           override: true
@@ -40,6 +41,7 @@ jobs:
 
   cargo-deny:
     name: Check cargo-deny rules
+    if: ${{ github.event_name != 'merge_group' }}
     # `cargo-deny` action is only supported on Linux
     runs-on: ubuntu-latest
 
@@ -61,6 +63,7 @@ jobs:
 
   workspace-deps:
     name: Check for correctly declared dependencies in the workspace
+    if: ${{ github.event_name != 'merge_group' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -70,6 +73,7 @@ jobs:
 
   unused-deps:
     name: Check for unused dependencies
+    if: ${{ github.event_name != 'merge_group' }}
     strategy:
       fail-fast: false
       matrix:
@@ -80,8 +84,8 @@ jobs:
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
       - name: Install cargo-machete
         uses: bnjbvr/cargo-machete@9f0895d780783da0089162cae9668f6ec6e896c4  # Version 0.8.0
-        # This step also runs `cargo-machete` without the `--with-metadata` flag, which can trigger more false positives.
-        # We ignore errors and run `cargo-machete` with the `--with-metadata` flag for the actual result.
+        # The action's default run omits `--with-metadata`, which can produce false positives.
+        # Treat its result as advisory; the metadata-aware run below is authoritative.
         continue-on-error: true
       - name: Run cargo-machete
         run: cargo machete --with-metadata
@@ -164,8 +168,8 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: nextest
-          # - We don't test benches as they take 6h+, leading to a timeout
-          # - We also do not test end-to-end integration tests here as those are run in a dedicated step below
+          # - Benchmarks take more than six hours and would exceed the job timeout.
+          # - End-to-end integration tests run separately in their dedicated workflow.
           args: >-
             run --workspace --locked --lib --bins --examples --tests --retries 2
             --all-features --no-fail-fast --exclude logos-blockchain-tests
@@ -186,8 +190,8 @@ jobs:
 
   # Stable required check for nextest unit tests.
   #
-  # On pull requests and pushes to master, this job succeeds only when both
-  # self-hosted nextest unit tests matrix jobs succeeded.
+  # On pull requests, this job succeeds only when both self-hosted nextest unit
+  # test matrix jobs succeeded.
   #
   # On merge_group, the real nextest unit tests matrix is skipped and this lightweight
   # check succeeds because nextest unit tests was already required before queue admission.

@@ -5,7 +5,6 @@ pub mod deployment;
 pub mod kms;
 pub mod network;
 pub mod node;
-pub mod release;
 pub mod sdp;
 pub mod time;
 pub mod tracing;

@@ -1,12 +1,8 @@
 use core::num::{NonZero, NonZeroU32, NonZeroU64};
-use std::collections::HashMap;
 
+use lb_binary_codec::canonical::BTreeMap;
 use lb_chain_service::Epoch;
-use lb_core::{
-    block::genesis::GenesisBlock,
-    mantle::{traits::GenesisTx as _, transactions::genesis_tx::ChainId},
-    sdp::{InactivityPeriod, MinStake, ServiceType},
-};
+use lb_core::sdp::{InactivityPeriod, MinStake, ServiceType};
 use lb_cryptarchia_engine::{
     Config as ConsensusConfig, average_slots_for_blocks, base_period_length,
     expected_blocks_per_epoch, time::epoch_length,
@@ -25,23 +21,12 @@ pub struct Settings {
     /// `W`, the uncle reference window in expected block-intervals.
     pub uncle_reference_window_in_block: NonZeroU32,
     pub sdp_config: SdpConfig,
-    pub gossipsub_protocol: String,
-    pub genesis_block: GenesisBlock,
     #[serde(default)]
     pub faucet_pk: Option<ZkPublicKey>,
     pub pow_config: PoWConfig,
 }
 
 impl Settings {
-    /// The chain this deployment targets, read off the genesis inscription.
-    #[must_use]
-    pub fn chain_id(&self) -> ChainId {
-        self.genesis_block
-            .genesis_tx()
-            .cryptarchia_parameter()
-            .chain_id
-    }
-
     #[must_use]
     pub const fn slots_per_epoch(&self) -> u64 {
         epoch_length(
@@ -99,7 +84,9 @@ pub struct EpochConfig {
 // config instead.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SdpConfig {
-    pub service_params: HashMap<ServiceType, ServiceParameters>,
+    /// Ordered by service type, which is the order the canonical encoding lists
+    /// them in.
+    pub service_params: BTreeMap<ServiceType, ServiceParameters>,
     pub min_stake: MinStake,
 }
 

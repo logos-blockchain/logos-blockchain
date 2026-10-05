@@ -38,8 +38,8 @@ use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::{KMSBackend, preload::PreloadKMSBackend},
     keys::{
-        Ed25519Key, KeyOperators, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkPublicKeys,
-        ZkSignature, secured_key::SecuredKey,
+        ED25519_PUBLIC_KEY_SIZE, Ed25519Key, Ed25519PublicKey, KeyOperators, PayloadEncoding,
+        SignatureEncoding, ZkPublicKey, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
     },
     operators::zk::voucher::UnsafeVoucherOperator,
 };
@@ -62,6 +62,7 @@ use tokio::{
     sync::{oneshot, oneshot::Sender},
     task::JoinError,
 };
+use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::states::{RecoveryState, ServiceState, Wallet};
@@ -141,6 +142,8 @@ pub enum WalletServiceError {
 
     #[error(transparent)]
     VerificationError(#[from] VerificationError),
+    #[error("Failed to generated signature for weak public key {}", hex::encode(.0))]
+    InvalidSigner([u8; ED25519_PUBLIC_KEY_SIZE]),
 }
 
 #[derive(Debug)]
@@ -489,11 +492,13 @@ where
             "Wallet connecting to chain"
         );
 
-        // Subscribe to block updates using the API
-        let mut new_block_receiver = cryptarchia_api.subscribe_new_blocks().await?;
+        // Subscribe to block updates using the API. Wrapped so that lag on the
+        // broadcast channel surfaces as an item rather than being dropped by a
+        // `select!` pattern.
+        let mut new_blocks = BroadcastStream::new(cryptarchia_api.subscribe_new_blocks().await?);
 
         // Subscribe to LIB updates for wallet state pruning
-        let mut lib_receiver = cryptarchia_api.subscribe_lib_updates().await?;
+        let mut lib_updates = BroadcastStream::new(cryptarchia_api.subscribe_lib_updates().await?);
 
         let (epoch_config, consensus_config) = cryptarchia_api.get_epoch_config().await?;
         let security_param = NonZeroU64::from(consensus_config.security_param()).get();
@@ -538,15 +543,27 @@ where
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
                     Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &kms, &epoch_config)).await;
                 }
-                Ok(event) = new_block_receiver.recv() => {
-                    Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &epoch_config).await;
-                }
-                Ok(lib_update) = lib_receiver.recv() => {
-                    Self::handle_lib_update(&lib_update, &storage, &mut state, &cryptarchia_api,  &epoch_config).await;
-                }
+                // A skipped block shows up as an unknown parent on the next
+                // one and is backfilled from there; the log line is what tells
+                // an operator why the wallet fell behind.
+                Some(event) = new_blocks.next() => match event {
+                    Ok(event) => Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &epoch_config).await,
+                    Err(BroadcastStreamRecvError::Lagged(skipped)) => warn_lagged("new-block", skipped),
+                },
+                Some(lib_update) = lib_updates.next() => match lib_update {
+                    Ok(lib_update) => Self::handle_lib_update(&lib_update, &storage, &mut state, &cryptarchia_api, &epoch_config).await,
+                    Err(BroadcastStreamRecvError::Lagged(skipped)) => warn_lagged("LIB", skipped),
+                },
             }
         }
     }
+}
+
+/// The wallet fell `skipped` items behind one of its chain subscriptions. Only
+/// the latest LIB matters, and a skipped block is backfilled from the next one,
+/// so this is a diagnostic rather than an error.
+fn warn_lagged(stream: &str, skipped: u64) {
+    warn!(target: LOG_TARGET, stream, skipped, "Wallet fell behind a chain subscription");
 }
 
 impl<Kms, Cryptarchia, Tx, RuntimeServiceId> WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId>
@@ -861,7 +878,12 @@ where
         inscribe_op: &InscriptionOp,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<OpProof, WalletServiceError> {
-        let ed25519_sig = Self::sign_ed25519(tx_hash, inscribe_op.signer, kms).await?;
+        let Ok(validated_public_key) = Ed25519PublicKey::try_from(inscribe_op.signer) else {
+            return Err(WalletServiceError::InvalidSigner(
+                inscribe_op.signer.to_bytes(),
+            ));
+        };
+        let ed25519_sig = Self::sign_ed25519(tx_hash, validated_public_key, kms).await?;
         Ok(OpProof::Ed25519Sig(ed25519_sig))
     }
 
@@ -890,7 +912,10 @@ where
             .ok_or(WalletServiceError::MissingChannelState(set_keys_op.channel))?;
 
         let authorized_key = channel.accredited_keys[0]; // First key is authorized key (guaranteed non-empty)
-        let ed25519_sig = Self::sign_ed25519(tx_hash, authorized_key, kms).await?;
+        let Ok(validated_public_key) = Ed25519PublicKey::try_from(authorized_key) else {
+            return Err(WalletServiceError::InvalidSigner(authorized_key.to_bytes()));
+        };
+        let ed25519_sig = Self::sign_ed25519(tx_hash, validated_public_key, kms).await?;
 
         Ok(OpProof::Ed25519Sig(ed25519_sig))
     }

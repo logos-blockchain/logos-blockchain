@@ -7,12 +7,14 @@ use async_trait::async_trait;
 use futures::future::join_all;
 use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
 use lb_tx_service::MempoolMetrics;
+use testing_framework_app::{AppHostEnv, AppHostTopology, AppRunContextExt as _};
 use testing_framework_core::scenario::{
-    DynError, Expectation, RunContext, RunHandle, RunMetrics, Runner, Scenario, ScenarioError,
+    ClusterHandle, DynError, Expectation, RunContext, RunHandle, RunMetrics, Runner, Scenario,
+    ScenarioError,
 };
 use thiserror::Error;
 
-use crate::{BlockFeed, LbcEnv, NodeHttpClient, node::DeploymentPlan};
+use crate::{BlockFeed, LbcEnv, NodeHttpClient};
 
 #[doc(hidden)]
 pub fn register_system_monitor_output_file(path: &std::path::Path) {
@@ -59,13 +61,10 @@ impl ScenarioRunDiagnosticsError {
     }
 }
 
-pub async fn run_with_failure_diagnostics<Caps>(
-    runner: Runner<LbcEnv>,
-    scenario: &mut Scenario<LbcEnv, Caps>,
-) -> Result<RunHandle<LbcEnv>, ScenarioRunDiagnosticsError>
-where
-    Caps: Send + Sync,
-{
+pub async fn run_with_failure_diagnostics(
+    runner: Runner<AppHostEnv>,
+    scenario: &mut Scenario<AppHostEnv>,
+) -> Result<RunHandle<AppHostEnv>, ScenarioRunDiagnosticsError> {
     let sources = DiagnosticSources::capture(runner.context());
 
     match runner.run(scenario).await {
@@ -96,9 +95,9 @@ impl<X> FailureDiagnosticsExpectation<X> {
 }
 
 #[async_trait]
-impl<X> Expectation<LbcEnv> for FailureDiagnosticsExpectation<X>
+impl<X> Expectation<AppHostEnv> for FailureDiagnosticsExpectation<X>
 where
-    X: Expectation<LbcEnv>,
+    X: Expectation<AppHostEnv>,
 {
     fn name(&self) -> &str {
         self.inner.name()
@@ -106,27 +105,27 @@ where
 
     fn init(
         &mut self,
-        descriptors: &DeploymentPlan,
+        descriptors: &AppHostTopology,
         run_metrics: &RunMetrics,
     ) -> Result<(), DynError> {
         self.inner.init(descriptors, run_metrics)
     }
 
-    async fn start_capture(&mut self, ctx: &RunContext<LbcEnv>) -> Result<(), DynError> {
+    async fn start_capture(&mut self, ctx: &RunContext<AppHostEnv>) -> Result<(), DynError> {
         match self.inner.start_capture(ctx).await {
             Ok(()) => Ok(()),
             Err(source) => Err(add_failure_diagnostics(ctx, source).await),
         }
     }
 
-    async fn check_during_capture(&mut self, ctx: &RunContext<LbcEnv>) -> Result<(), DynError> {
+    async fn check_during_capture(&mut self, ctx: &RunContext<AppHostEnv>) -> Result<(), DynError> {
         match self.inner.check_during_capture(ctx).await {
             Ok(()) => Ok(()),
             Err(source) => Err(add_failure_diagnostics(ctx, source).await),
         }
     }
 
-    async fn evaluate(&mut self, ctx: &RunContext<LbcEnv>) -> Result<(), DynError> {
+    async fn evaluate(&mut self, ctx: &RunContext<AppHostEnv>) -> Result<(), DynError> {
         match self.inner.evaluate(ctx).await {
             Ok(()) => Ok(()),
             Err(source) => Err(add_failure_diagnostics(ctx, source).await),
@@ -142,7 +141,7 @@ struct FailureDiagnosticsError {
     report: String,
 }
 
-async fn add_failure_diagnostics(ctx: &RunContext<LbcEnv>, source: DynError) -> DynError {
+async fn add_failure_diagnostics(ctx: &RunContext<AppHostEnv>, source: DynError) -> DynError {
     if dyn_error_has_diagnostics(&source) {
         return source;
     }
@@ -155,7 +154,7 @@ async fn add_failure_diagnostics(ctx: &RunContext<LbcEnv>, source: DynError) -> 
     })
 }
 
-pub async fn collect_failure_report(context: &RunContext<LbcEnv>) -> String {
+pub async fn collect_failure_report(context: &RunContext<AppHostEnv>) -> String {
     DiagnosticSources::capture(context).render().await
 }
 
@@ -166,11 +165,14 @@ struct DiagnosticSources {
 }
 
 impl DiagnosticSources {
-    fn capture(context: &RunContext<LbcEnv>) -> Self {
+    fn capture(context: &RunContext<AppHostEnv>) -> Self {
+        let cluster = context.app::<ClusterHandle<LbcEnv>>();
         Self {
-            cluster_control_profile: context.cluster_control_profile().as_str(),
-            node_clients: context.node_clients().snapshot(),
-            block_feed: context.extension::<BlockFeed>(),
+            cluster_control_profile: cluster
+                .as_ref()
+                .map_or("unavailable", |cluster| cluster.control_profile().as_str()),
+            node_clients: cluster.map_or_else(Vec::new, |cluster| cluster.clients()),
+            block_feed: context.app::<BlockFeed>(),
         }
     }
 

@@ -7,13 +7,20 @@ use serde_with::serde_as;
 
 #[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Settings {
-    pub pubsub_topic: String,
+pub struct Config {
     /// How long a pending transaction may stay in the mempool before it is
     /// evicted. `None` disables expiry-based eviction.
     #[serde_as(as = "Option<MinimalBoundedDuration<1, SECOND>>")]
     #[serde(default = "default_tx_ttl")]
     pub tx_ttl: Option<Duration>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            tx_ttl: default_tx_ttl(),
+        }
+    }
 }
 
 #[must_use]

@@ -9,7 +9,7 @@ use lb_core::mantle::Utxo;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
-    DeploymentBuilder, LbcEnv, LbcLocalDeployer, LbcManualCluster, NodeHttpClient, TopologyConfig,
+    DeploymentBuilder, LbcEnv, LbcManualCluster, NodeHttpClient, TopologyConfig,
     configs::wallet::WalletConfig, internal::DeploymentPlan, is_truthy_env,
     record_system_monitor_event, register_system_monitor_output_file,
     unregister_system_monitor_output_file,
@@ -115,7 +115,7 @@ pub fn build_local_manual_cluster(
         .build()
         .expect("manual-cluster deployment should build");
 
-    let cluster = LbcLocalDeployer::new().manual_cluster_from_descriptors(deployment.clone());
+    let cluster = LbcManualCluster::from_topology(deployment.clone());
     let system_monitor_output_path = scenario_base_dir.join("system_stats.ndjson");
 
     LocalManualClusterHarnessBase {
@@ -187,10 +187,21 @@ pub async fn start_fast_cluster_with_wallet(
 }
 
 fn fast_chain_config(mut config: RunConfig) -> RunConfig {
-    config.deployment.time.slot_duration = Duration::from_secs(2);
-    config.deployment.cryptarchia.security_param = NonZero::new(3).expect("nonzero");
-    config.deployment.cryptarchia.slot_activation_coeff =
-        NonNegativeRatio::new(1, 2.try_into().expect("nonzero"));
+    config
+        .deployment
+        .genesis_era_parameters_mut()
+        .time
+        .slot_duration = Duration::from_secs(2);
+    config
+        .deployment
+        .genesis_era_parameters_mut()
+        .cryptarchia
+        .security_param = NonZero::new(3).expect("nonzero");
+    config
+        .deployment
+        .genesis_era_parameters_mut()
+        .cryptarchia
+        .slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().expect("nonzero"));
     config
 }
 
@@ -213,7 +224,7 @@ where
         nodes.push(
             Box::pin(
                 cluster.start_node_with(
-                    &node_index.to_string(),
+                    &format!("node-{node_index}"),
                     StartNodeOptions::default()
                         .with_peers(peers)
                         .with_persist_dir(scenario_base_dir.join(format!("node-{node_index}")))

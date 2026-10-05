@@ -3,7 +3,9 @@ use std::borrow::Cow;
 use ark_ff::AdditiveGroup as _;
 use lb_binary_codec::canonical::{CodecFixtures, decode_fixture_hex};
 use lb_groth16::{CompressedGroth16Proof, Fr};
-use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, ZkSignature};
+use lb_key_management_system_keys::keys::{
+    Ed25519Signature, UnverifiedEd25519PublicKey, ZkSignature,
+};
 
 use crate::mantle::{
     NoteId,
@@ -18,7 +20,7 @@ use crate::mantle::{
             ZK_AND_ED25519_SIGS, ZK_AND_ED25519_SIGS_HEX, ZK_SIG, ZK_SIG_HEX,
         },
     },
-    ledger::{Outputs, verification_mode::VerificationMode},
+    ledger::{BoundedInputs, Outputs, verification_mode::VerificationMode},
     ops::{
         NoOpProof, SignedOp, SignedOperation,
         channel::{
@@ -65,7 +67,7 @@ const TWO_OPS_HEX: &str = concat!(
 fn two_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<State, Mode> {
     let transfer = SignedOperation::<TransferOp, Unverified, Mode>::new(
         TransferOp {
-            inputs: [NoteId(Fr::ZERO)].into(),
+            inputs: BoundedInputs::from(NoteId(Fr::ZERO)).into(),
             outputs: Outputs::empty(),
         },
         ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0xAAu8; 128])),
@@ -75,7 +77,7 @@ fn two_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
             channel_id: ChannelId::from([0u8; 32]),
             inscription: Inscription::default(),
             parent: MsgId::root(),
-            signer: Ed25519PublicKey::from_bytes(&[1u8; 32]).unwrap(),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[1u8; 32]).unwrap(),
         },
         Ed25519Signature::from_bytes(&[0xBBu8; 64]),
     );

@@ -10,13 +10,11 @@ use crate::{
         NoteId,
         channel_notes::{self, ChannelNotes},
         gas::ThresholdSource,
-        ledger,
-        ledger::verification_mode::GenesisMode,
+        ledger::{self, verification_mode::GenesisMode},
         ops::{
             SignedOperation,
             channel::{
-                ChannelId, ChannelKeyIndex, MsgId,
-                config::Keys,
+                ChannelId, ChannelKeyIndex, MsgId, UnverifiedChannelKeys,
                 inscribe::{InscriptionExecutionContext, InscriptionOp},
             },
         },
@@ -67,6 +65,8 @@ pub enum Error {
         channel_id: ChannelId,
         signer: String,
     },
+    #[error("Invalid signer")]
+    InvalidSigner,
     #[error("Invalid signature")]
     InvalidSignature,
     #[error(
@@ -107,11 +107,14 @@ pub struct Channels {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelState {
+    // We cannot use verified Ed25519 public keys here because genesis creates a channel with a key
+    // of all `0`s, which would otherwise fail to deserialize here.
     // Channel Configuration
-    pub accredited_keys: Arc<Keys>, // keys.len() <= ChannelKeyIndex::MAX
-    pub configuration_threshold: u16, /* indicating how many keys are required to update
-                                     * the
-                                     * configuration */
+    pub accredited_keys: Arc<UnverifiedChannelKeys>, // keys.len() <= ChannelKeyIndex::MAX
+    pub configuration_threshold: u16,                /* indicating how many keys are required to
+                                                      * update
+                                                      * the
+                                                      * configuration */
 
     // Message Ordering
     pub tip_message: MsgId,     // last message of the channel
@@ -289,16 +292,15 @@ impl ChannelState {
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_key_management_system_keys::keys::{Ed25519Key, UnverifiedEd25519PublicKey};
 
     use super::*;
-    use crate::mantle::{
-        ops::channel::Ed25519PublicKey as PublicKey,
-        transactions::{GasPrices, tx_list::ops::OpsGasContext},
-    };
+    use crate::mantle::transactions::{GasPrices, tx_list::ops::OpsGasContext};
 
-    fn test_public_key(seed: u8) -> PublicKey {
-        Ed25519Key::from_bytes(&[seed; 32]).public_key()
+    fn test_public_key(seed: u8) -> UnverifiedEd25519PublicKey {
+        Ed25519Key::from_bytes(&[seed; 32])
+            .public_key()
+            .into_unverified()
     }
 
     fn make_channel(
@@ -315,9 +317,11 @@ mod tests {
             tip_sequencer_starting_slot: Slot::new(tip_sequencer_starting_slot),
             posting_timeframe: SlotTimeframe(posting_timeframe),
             posting_timeout: SlotTimeout(posting_timeout),
-            accredited_keys: Keys::try_from((0..num_keys).map(test_public_key).collect::<Vec<_>>())
-                .unwrap()
-                .into(),
+            accredited_keys: UnverifiedChannelKeys::try_from(
+                (0..num_keys).map(test_public_key).collect::<Vec<_>>(),
+            )
+            .unwrap()
+            .into(),
             configuration_threshold: 0,
             tip_message: MsgId::root(),
             config_tip_hash: MsgId::root(),
@@ -336,7 +340,7 @@ mod tests {
                 .insert(
                     first_id,
                     ChannelState {
-                        accredited_keys: Keys::from(test_public_key(11)).into(),
+                        accredited_keys: UnverifiedChannelKeys::from(test_public_key(11)).into(),
                         configuration_threshold: 1,
                         tip_message: MsgId::root(),
                         config_tip_hash: MsgId::root(),
@@ -351,8 +355,11 @@ mod tests {
                 .insert(
                     second_id,
                     ChannelState {
-                        accredited_keys: Keys::from([test_public_key(22), test_public_key(23)])
-                            .into(),
+                        accredited_keys: UnverifiedChannelKeys::from([
+                            test_public_key(22),
+                            test_public_key(23),
+                        ])
+                        .into(),
                         configuration_threshold: 1,
                         tip_message: MsgId::root(),
                         config_tip_hash: MsgId::root(),

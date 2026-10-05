@@ -859,7 +859,7 @@ pub mod tests {
             OpProof::ZkSig,
             SignedOps,
             gas::MainnetGasProfile,
-            ledger::{Inputs, Outputs},
+            ledger::{Inputs, InputsError, Outputs},
             ops::{ZkAndEd25519Proof, leader_claim::VoucherCm, sdp::SDPDeclareOp},
             traits::Hashable as _,
             transactions::{
@@ -872,9 +872,12 @@ pub mod tests {
     use lb_cryptarchia_engine::EpochConfig;
     use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, ModulusShift};
     use lb_key_management_system_keys::keys::{
-        Ed25519Key, Ed25519PublicKey, Ed25519Signature, ZkKey, ZkSignature,
+        Ed25519Key, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey, ZkSignature,
     };
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
+    use lb_utils::{
+        bounded::BoundedError,
+        math::{NonNegativeRatio, PositiveF64},
+    };
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
 
@@ -914,7 +917,7 @@ pub mod tests {
 
     pub struct DummyProof {
         pub public: LeaderPublic,
-        pub leader_key: Ed25519PublicKey,
+        pub leader_key: UnverifiedEd25519PublicKey,
         pub voucher_cm: VoucherCm,
     }
 
@@ -932,7 +935,7 @@ pub mod tests {
             Fr::from(0u8)
         }
 
-        fn leader_key(&self) -> &Ed25519PublicKey {
+        fn leader_key(&self) -> &UnverifiedEd25519PublicKey {
             &self.leader_key
         }
 
@@ -1053,7 +1056,7 @@ pub mod tests {
                 ledger_state.epoch_state.lottery_0,
                 ledger_state.epoch_state.lottery_1,
             ),
-            leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            leader_key: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
         }
     }
@@ -1125,7 +1128,7 @@ pub mod tests {
         crate::config::RewardPoWConfig {
             reward_pool_genesis: 1_000_000_000,
             epoch_reward_genesis: 1_000_000,
-            initial_difficulty: ModulusShift::new::<26>(),
+            minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
             target_claims_per_block: 100,
@@ -1938,7 +1941,7 @@ pub mod tests {
                 lottery_0: ledger_state.epoch_state.lottery_0,
                 lottery_1: ledger_state.epoch_state.lottery_1,
             },
-            leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            leader_key: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
         };
         let update_err = ledger_state
@@ -1963,7 +1966,7 @@ pub mod tests {
                 lottery_0: ledger_state.epoch_state.lottery_0,
                 lottery_1: ledger_state.epoch_state.lottery_1,
             },
-            leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            leader_key: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
         };
         let update_err = ledger_state
@@ -1996,7 +1999,6 @@ pub mod tests {
     #[test]
     fn test_invalid_double_spend_transfer() {
         let note_sk = ZkKey::from(BigUint::from(1u8));
-        let output_note_sk = ZkKey::from(BigUint::from(2u8));
         let input_note = Note::new(100, note_sk.to_public_key());
         let input_utxo = Utxo {
             op_id: [1u8; 32],
@@ -2004,19 +2006,16 @@ pub mod tests {
             note: input_note,
         };
 
-        let output_note = Note::new(200, output_note_sk.to_public_key());
+        // A transfer's inputs are a set, so spending the same note twice is
+        // refused before the transfer can even be built.
+        let result = Inputs::try_new(vec![input_utxo.id(), input_utxo.id()]);
 
-        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (_tx, transfer_op, transfer_proof) = create_tx_with_transfer(
-            &[(&note_sk, &input_utxo), (&note_sk, &input_utxo)],
-            vec![output_note],
+        assert_eq!(
+            result.err(),
+            Some(InputsError::BoundedError(BoundedError::DuplicateItem {
+                index: 1
+            }))
         );
-        let signed_operation =
-            SignedOperation::new(transfer_op, transfer_proof).into_state_trusted();
-
-        let result = ledger_state.try_apply_transfer::<(), MainnetGasProfile>(signed_operation);
-
-        assert!(result.is_err());
     }
 
     #[test]
@@ -2048,7 +2047,7 @@ pub mod tests {
             balance,
             i128::from(input_note.value - output_note1.value - output_note2.value)
         );
-        assert!(events.is_empty());
+        assert_eq!(events, []);
 
         // Verify input was consumed
         assert!(!new_state.utxos.contains(&input_utxo.id()));
@@ -2083,7 +2082,7 @@ pub mod tests {
         );
         assert!(!final_state.utxos.contains(&output_utxo1.id()));
         assert!(!final_state.utxos.contains(&output_utxo2.id()));
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]
@@ -2158,7 +2157,7 @@ pub mod tests {
             .try_apply_transfer::<(), MainnetGasProfile>(signed_operation)
             .unwrap();
         assert_eq!(balance, -1);
-        assert!(events.is_empty());
+        assert_eq!(events, []);
 
         let (_tx, transfer_op, transfer_proof) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![output_note]);
@@ -2194,7 +2193,7 @@ pub mod tests {
 
         let (new_state, balance, events) = result.unwrap();
         assert_eq!(balance, 10000);
-        assert!(events.is_empty());
+        assert_eq!(events, []);
 
         // Verify input was consumed
         assert!(!new_state.utxos.contains(&input_utxo.id()));

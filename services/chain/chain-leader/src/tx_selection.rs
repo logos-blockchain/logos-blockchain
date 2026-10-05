@@ -272,7 +272,7 @@ mod tests {
 
         let selection = select_transactions(ledger_state.clone(), candidates, &config);
         assert_eq!(selection.selected_txs.len(), CANDIDATE_COUNT - 1);
-        assert!(selection.invalid_tx_hashes.is_empty());
+        assert_eq!(selection.invalid_tx_hashes, []);
 
         let block_txs = txs_for_block(stream::iter(selection.selected_txs)).await;
         assert_eq!(block_txs.len(), CANDIDATE_COUNT - 1);

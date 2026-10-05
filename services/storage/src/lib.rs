@@ -16,6 +16,7 @@ use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
         AsServiceId, ServiceCore, ServiceData,
+        resources::ServiceResourcesHandle,
         state::{NoOperator, NoState},
     },
 };
@@ -79,7 +80,7 @@ where
         let Self {
             mut backend,
             service_resources_handle:
-                OpaqueServiceResourcesHandle::<Self, RuntimeServiceId> {
+                ServiceResourcesHandle {
                     mut inbound_relay,
                     status_updater,
                     ..

@@ -2,6 +2,7 @@ pub mod blend;
 pub mod service_notes;
 
 use core::{
+    cmp::Ordering,
     fmt::{self, Display, Formatter},
     str::FromStr,
 };
@@ -24,26 +25,22 @@ use lb_groth16::Fr;
 use lb_groth16::fr_to_bytes;
 #[cfg(any(test, feature = "test-utils"))]
 use lb_key_management_system_keys::keys::Ed25519Key;
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
-use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec};
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, ZkPublicKey};
+use lb_utils::bounded::{BoundedVec, NonEmptyBoundedOrderedSet};
 use multiaddr::{Multiaddr, Protocol};
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
 use crate::{
     block::BlockNumber,
-    mantle::{
-        NoteId,
-        ops::{channel::Ed25519PublicKey, sdp::SdpError},
-        transactions::hash::TxHashView,
-    },
+    mantle::{NoteId, ops::sdp::SdpError, transactions::hash::TxHashView},
     sdp::blend::ActivityProof,
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
 pub type StakeThreshold = u64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct MinStake {
     pub threshold: StakeThreshold,
     pub timestamp: BlockNumber,
@@ -82,6 +79,17 @@ impl InactivityPeriod {
     #[must_use]
     pub const fn into_inner(self) -> NumberOfEpochs {
         self.0
+    }
+}
+
+// An inactivity period: the number of epochs it wraps.
+impl BinaryEncode for InactivityPeriod {
+    fn encoded_length(&self) -> usize {
+        self.0.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
     }
 }
 
@@ -307,6 +315,20 @@ impl AsRef<u8> for ServiceType {
     }
 }
 
+impl PartialOrd for ServiceType {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Service types are ordered by the byte each is encoded as, so a map keyed by
+/// service type iterates in the order of their encodings.
+impl Ord for ServiceType {
+    fn cmp(&self, other: &Self) -> Ordering {
+        <Self as AsRef<u8>>::as_ref(self).cmp(<Self as AsRef<u8>>::as_ref(other))
+    }
+}
+
 impl BinaryEncode for ServiceType {
     fn encoded_length(&self) -> usize {
         <Self as AsRef<u8>>::as_ref(self).encoded_length()
@@ -379,13 +401,13 @@ impl TryFrom<[u8; 32]> for ProviderId {
 }
 
 impl PartialOrd for ProviderId {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for ProviderId {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.as_ref().cmp(other.as_ref())
     }
 }
@@ -502,7 +524,7 @@ impl TryFrom<Declarations> for Bytes {
 }
 
 pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
-pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
+pub type Locators = NonEmptyBoundedOrderedSet<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct DeclarationMessage {

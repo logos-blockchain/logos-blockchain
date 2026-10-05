@@ -11,10 +11,18 @@
 
 mod array;
 mod boolean;
+mod bounded_ordered_map;
+mod bounded_ordered_set;
 mod bounded_vec;
+mod btree;
+pub use btree::{BTreeMap, BTreeSet};
+mod duration;
 mod error;
 mod fixtures;
+mod length_prefix;
+mod math;
 mod numbers;
+mod option;
 
 #[cfg(test)]
 mod tests;

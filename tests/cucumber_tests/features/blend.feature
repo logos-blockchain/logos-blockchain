@@ -59,7 +59,7 @@ Feature: Blend
       | 1             | 2           | 1000         |
       | 2             | 2           | 1000         |
       | 3             | 0           | 0            |
-    And I have deployment config override "cryptarchia.pow_config.blend.base_difficulty" as "1"
+    And I have deployment config override "eras.0.cryptarchia.pow_config.blend.base_difficulty" as "1"
     And I have a cluster with capacity of 4 nodes
     And the first 2 nodes are declared as blend providers
     And I start nodes with wallet resources:

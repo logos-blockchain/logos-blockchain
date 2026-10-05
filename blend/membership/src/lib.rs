@@ -70,7 +70,7 @@ where
 
         Self::new(
             nodes,
-            &Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+            &Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
         )
     }
 }

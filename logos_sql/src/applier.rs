@@ -88,6 +88,7 @@ pub fn on_event(db: &mut Databases, event: &Event, channel_id: ChannelId) -> Res
             checkpoint,
             channel_update,
             finalized,
+            ..
         } => process_blocks(db, checkpoint, channel_update, finalized, channel_id),
         Event::Ready => {
             tracing::info!(target: TARGET, "sequencer ready");
@@ -149,8 +150,8 @@ impl SqlChanges {
             .collect();
 
         Self {
-            adopted: Self::collect_channel_inscriptions(&channel_update.adopted, channel_id),
-            orphaned: Self::collect_channel_inscriptions(&channel_update.orphaned, channel_id),
+            adopted: Self::collect_channel_inscriptions(channel_update.adopted(), channel_id),
+            orphaned: Self::collect_channel_inscriptions(channel_update.orphaned(), channel_id),
             finalized,
         }
     }
@@ -429,7 +430,7 @@ fn is_logos_sql_inscription(inscription: &InscriptionInfo) -> bool {
 #[cfg(test)]
 mod tests {
     use lb_zone_sdk::{
-        Ed25519PublicKey,
+        UnverifiedEd25519PublicKey,
         node_types::{ChannelId, HeaderId, MsgId, Slot, TxHash},
         sequencer::{
             ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, InscriptionInfo,
@@ -471,7 +472,7 @@ mod tests {
                 .to_vec()
                 .try_into()
                 .expect("test payload should fit an inscription"),
-            signer: Some(Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()),
+            signer: Some(UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap()),
         }
     }
 
@@ -481,13 +482,19 @@ mod tests {
         orphaned: Vec<ChannelUpdateTx>,
         finalized: Vec<FinalizedTx>,
     ) -> Event {
+        let channel_update = if orphaned.is_empty() {
+            ChannelUpdate::Extension { adopted }
+        } else {
+            ChannelUpdate::Conflict {
+                common_prefix: Vec::new(),
+                adopted,
+                orphaned,
+            }
+        };
         Event::BlocksProcessed {
             checkpoint,
-            channel_update: ChannelUpdate {
-                orphaned,
-                adopted,
-                adopted_deposits: Vec::new(),
-            },
+            channel_update,
+            deposits: Vec::new(),
             finalized,
         }
     }

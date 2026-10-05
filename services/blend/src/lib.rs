@@ -27,6 +27,7 @@ use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
         AsServiceId, ServiceCore, ServiceData,
+        resources::ServiceResourcesHandle,
         state::{NoOperator, NoState},
     },
 };
@@ -170,7 +171,7 @@ where
     async fn run(mut self) -> Result<(), DynError> {
         let Self {
             service_resources_handle:
-                OpaqueServiceResourcesHandle::<Self, RuntimeServiceId> {
+                ServiceResourcesHandle {
                     ref mut inbound_relay,
                     ref overwatch_handle,
                     ref settings_handle,
@@ -332,7 +333,7 @@ where
         "Submitting Blend service declaration to SDP with locator {locator:?} and service note id {service_note_id:?}",
     );
     let sdp_declaration = DeclarationMessage {
-        locators: [locator].into(),
+        locators: locator.into(),
         service_note_id,
         provider_id: ProviderId(non_ephemeral_signing_key_public),
         service_type: ServiceType::BlendNetwork,

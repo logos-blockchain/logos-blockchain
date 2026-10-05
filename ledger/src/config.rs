@@ -1,6 +1,7 @@
 use core::num::NonZeroU32;
 use std::num::{NonZero, NonZeroU64, NonZeroU128};
 
+use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 use lb_core::mantle::{Value, ops::pow::PowReward};
 use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_groth16::ModulusShift;
@@ -147,15 +148,17 @@ pub struct RewardPoWConfig {
     pub reward_pool_genesis: PowReward,
     /// `sigma_e` genesis: initial per-claim reward.
     pub epoch_reward_genesis: PowReward,
-    /// `d_reward` at genesis, as the exponent `n` in `p / 2^n` — the same way
-    /// [`BlendPoWConfig::base_difficulty`] states the Blend threshold.
+    /// `d_reward` floor, as the exponent `n` in `p / 2^n` — the same way
+    /// [`BlendPoWConfig::base_difficulty`] states the Blend threshold. It is
+    /// both the genesis difficulty and the minimum: the retarget controller
+    /// never eases the target past it.
     ///
     /// Stated directly rather than derived: a difficulty is a fraction of the
     /// scalar field, and the retarget controller can only ever scale a target
     /// it is already given. Seeding it from a token amount cannot express a
     /// field-scale value, so the chain would start ~60 orders of magnitude
-    /// too hard. Spec: 26.
-    pub initial_difficulty: ModulusShift,
+    /// too hard. Spec: 19.
+    pub minimum_difficulty: ModulusShift,
     /// EMA smoothing factor `F` (weight of the prior estimate). Must be below
     /// [`Self::ema_smoothing_precision`]: `P - F` is a divisor in
     /// [`Self::reward_target_floor`].
@@ -193,7 +196,7 @@ pub struct RewardPoWConfig {
 struct RewardPoWConfigFields {
     reward_pool_genesis: PowReward,
     epoch_reward_genesis: PowReward,
-    initial_difficulty: ModulusShift,
+    minimum_difficulty: ModulusShift,
     ema_smoothing_factor: u64,
     ema_smoothing_precision: NonZeroU64,
     target_claims_per_block: u64,
@@ -212,7 +215,7 @@ impl TryFrom<RewardPoWConfigFields> for RewardPoWConfig {
         let config = Self {
             reward_pool_genesis: fields.reward_pool_genesis,
             epoch_reward_genesis: fields.epoch_reward_genesis,
-            initial_difficulty: fields.initial_difficulty,
+            minimum_difficulty: fields.minimum_difficulty,
             ema_smoothing_factor: fields.ema_smoothing_factor,
             ema_smoothing_precision: fields.ema_smoothing_precision,
             target_claims_per_block: fields.target_claims_per_block,
@@ -366,6 +369,92 @@ impl RewardPoWConfig {
     }
 }
 
+// The reward parameters: every field in declaration order. A node's era digest
+// commits to them through this encoding.
+impl BinaryEncode for RewardPoWConfig {
+    fn encoded_length(&self) -> usize {
+        // We destructure (in declaration order) so we know we are not forgetting to
+        // encode new fields.
+        let Self {
+            reward_pool_genesis,
+            epoch_reward_genesis,
+            minimum_difficulty,
+            ema_smoothing_factor,
+            ema_smoothing_precision,
+            target_claims_per_block,
+            rate_num,
+            rate_den,
+            target_claim_per_block,
+            pow_share,
+            share_den,
+            slot_window,
+        } = self;
+        reward_pool_genesis.encoded_length()
+            + epoch_reward_genesis.encoded_length()
+            + minimum_difficulty.encoded_length()
+            + ema_smoothing_factor.encoded_length()
+            + ema_smoothing_precision.encoded_length()
+            + target_claims_per_block.encoded_length()
+            + rate_num.encoded_length()
+            + rate_den.encoded_length()
+            + target_claim_per_block.encoded_length()
+            + pow_share.encoded_length()
+            + share_den.encoded_length()
+            + slot_window.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let Self {
+            reward_pool_genesis,
+            epoch_reward_genesis,
+            minimum_difficulty,
+            ema_smoothing_factor,
+            ema_smoothing_precision,
+            target_claims_per_block,
+            rate_num,
+            rate_den,
+            target_claim_per_block,
+            pow_share,
+            share_den,
+            slot_window,
+        } = self;
+        reward_pool_genesis.encode_into(out);
+        epoch_reward_genesis.encode_into(out);
+        minimum_difficulty.encode_into(out);
+        ema_smoothing_factor.encode_into(out);
+        ema_smoothing_precision.encode_into(out);
+        target_claims_per_block.encode_into(out);
+        rate_num.encode_into(out);
+        rate_den.encode_into(out);
+        target_claim_per_block.encode_into(out);
+        pow_share.encode_into(out);
+        share_den.encode_into(out);
+        slot_window.encode_into(out);
+    }
+}
+
+/// The encoding of the fixture below, one field per group.
+const REWARD_POW_CONFIG_HEX: &str = "1e00000000000000 1f00000000000000 20000000 2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000 2600000000000000 2700000000000000 2800000000000000 2900000000000000";
+
+codec_fixtures!(
+    RewardPoWConfig,
+    encode_only,
+    RewardPoWConfig {
+        reward_pool_genesis: 30,
+        epoch_reward_genesis: 31,
+        minimum_difficulty: ModulusShift::new::<32>(),
+        ema_smoothing_factor: 33,
+        ema_smoothing_precision: NonZeroU64::new(34).unwrap(),
+        target_claims_per_block: 35,
+        rate_num: 36,
+        rate_den: NonZeroU64::new(37).unwrap(),
+        target_claim_per_block: NonZeroU64::new(38).unwrap(),
+        pow_share: 39,
+        share_den: NonZeroU64::new(40).unwrap(),
+        slot_window: NonZeroU64::new(41).unwrap(),
+    } => REWARD_POW_CONFIG_HEX
+);
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct BlendPoWConfig {
     /// `BLEND_DIFFICULTY_BASE`: the threshold in effect at exactly the
@@ -419,7 +508,7 @@ mod tests {
         RewardPoWConfig {
             reward_pool_genesis: 1_000_000_000,
             epoch_reward_genesis: 1_000_000,
-            initial_difficulty: ModulusShift::new::<26>(),
+            minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
             target_claims_per_block: 100,

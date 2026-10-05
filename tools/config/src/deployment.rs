@@ -9,7 +9,6 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
-use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::{
     blend::deployment::{
         CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
@@ -19,17 +18,12 @@ use lb_node::config::{
     cryptarchia::deployment::{
         EpochConfig, ServiceParameters, Settings as CryptarchiaDeploymentSettings,
     },
-    deployment::DeploymentSettings,
-    mempool::deployment::{Settings as MempoolDeploymentSettings, default_tx_ttl},
-    network::deployment::Settings as NetworkDeploymentSettings,
+    deployment::{DeploymentSettings, EraParameters, EraSchedule},
     time::deployment::Settings as TimeDeploymentSettings,
 };
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
-use crate::{
-    release::ProtocolIdentity,
-    time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS},
-};
+use crate::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
 /// `T_E`: the rounds an edge node is given to send its message.
 const BLEND_EDGE_NODE_SEND_DEADLINE_IN_ROUNDS: u64 = 1;
@@ -42,17 +36,11 @@ const BLEND_NETWORK_ABSORPTION_IN_ROUNDS: u64 = 2;
 const BLEND_PEERING_DEGREE: NonZeroU32 = NonZeroU32::new(4).unwrap();
 const MINIMUM_BLEND_NETWORK_SIZE: u64 = 2;
 const NUM_BLEND_LAYERS: u64 = 3;
-const BLEND_PROTOCOL_NAME: &str = "/blend/integration-tests";
 const DATA_REPLICATION_FACTOR: u64 = 0;
 
 const COVER_MESSAGE_FREQUENCY_PER_ROUND: f64 = 1.0;
 const MAXIMUM_RELEASE_DELAY_IN_ROUNDS: u64 = 3;
 const ACTIVITY_THRESHOLD_SENSITIVITY: u64 = 1;
-
-const IDENTIFY_PROTOCOL_SUFFIX: &str = "identify/1.0.0";
-const KADEMLIA_PROTOCOL_SUFFIX: &str = "kad/1.0.0";
-const CHAIN_SYNC_PROTOCOL_SUFFIX: &str = "chainsync/1.0.0";
-const GOSSIPSUB_PROTOCOL_SUFFIX: &str = "cryptarchia/proto/1.0.0";
 
 const SECURITY_PARAM: u32 = 20;
 const UNCLE_REFERENCE_WINDOW_IN_BLOCK: u32 = 12;
@@ -76,7 +64,7 @@ const BLEND_POW_DAMPING_DEN_OFFSET: u32 = 1;
 // Token-reward PoW parameters. Payout is disabled (`rate_num = 0`).
 const REWARD_POW_POOL_GENESIS: u64 = 1_000_000_000;
 const REWARD_POW_EPOCH_REWARD_GENESIS: u64 = 1_000_000;
-const REWARD_POW_INITIAL_DIFFICULTY_EXPONENT: u32 = 26;
+const REWARD_POW_MINIMUM_DIFFICULTY_EXPONENT: u32 = 19;
 const REWARD_POW_EMA_SMOOTHING_FACTOR: u64 = 9;
 const REWARD_POW_EMA_SMOOTHING_PRECISION: u64 = 10;
 const REWARD_POW_TARGET_CLAIMS_PER_BLOCK: u64 = 100;
@@ -86,9 +74,6 @@ const REWARD_POW_TARGET_CLAIM_PER_BLOCK: u64 = 1;
 const REWARD_POW_SHARE: u64 = 10;
 const REWARD_POW_SHARE_DEN: u64 = 100;
 const REWARD_POW_SLOT_WINDOW: u64 = 100;
-
-const MEMPOOL_TOPIC: &str = "mantle_e2e_tests";
-const DEFAULT_PROTOCOL_NAMESPACE: &str = "integration/logos-blockchain";
 
 #[must_use]
 #[expect(
@@ -102,126 +87,119 @@ pub fn e2e_deployment_settings_with_genesis_block(
     let slot_duration_in_secs = std::env::var(CONSENSUS_SLOT_TIME_VAR)
         .map_or(DEFAULT_SLOT_TIME_IN_SECS, |s| s.parse::<u64>().unwrap());
 
-    let protocol_identity = ProtocolIdentity::from_env(DEFAULT_PROTOCOL_NAMESPACE);
-
     DeploymentSettings {
-        blend: BlendDeploymentSettings {
-            common: BlendCommonSettings {
-                minimum_network_size: MinimumNetworkSize::try_new(MINIMUM_BLEND_NETWORK_SIZE)
-                    .expect("Minimum network size cannot be less than 2."),
-                num_blend_layers: NonZeroU64::try_from(NUM_BLEND_LAYERS)
-                    .expect("Number of blend layers cannot be zero."),
-                network_absorption_in_rounds: NonZeroU64::try_from(
-                    BLEND_NETWORK_ABSORPTION_IN_ROUNDS,
-                )
-                .expect("Network absorption cannot be zero."),
-                protocol_name: StreamProtocol::new(BLEND_PROTOCOL_NAME),
-                data_replication_factor: DATA_REPLICATION_FACTOR,
-            },
-            core: BlendCoreSettings {
-                target_peering_degree: BLEND_PEERING_DEGREE,
-                verification_rate_per_second: NonZeroU32::try_from(
-                    BLEND_VERIFICATION_RATE_PER_SECOND,
-                )
-                .expect("Verification rate cannot be zero."),
-                edge_node_send_deadline_in_rounds: NonZeroU64::try_from(
-                    BLEND_EDGE_NODE_SEND_DEADLINE_IN_ROUNDS,
-                )
-                .expect("`T_E` cannot be zero."),
-                core_handshake_deadline_in_rounds: NonZeroU128::try_from(
-                    BLEND_CORE_HANDSHAKE_DEADLINE_IN_ROUNDS,
-                )
-                .expect("`T_H` cannot be zero."),
-                scheduler: SchedulerSettings {
-                    cover: CoverTrafficSettings {
-                        message_frequency_per_round: PositiveF64::try_from(
-                            COVER_MESSAGE_FREQUENCY_PER_ROUND,
-                        )
-                        .expect("Message frequency per round must be positive."),
-                    },
-                    delayer: MessageDelayerSettings {
-                        maximum_release_delay_in_rounds: NonZeroU64::try_from(
-                            MAXIMUM_RELEASE_DELAY_IN_ROUNDS,
-                        )
-                        .expect("Maximum release delay between rounds cannot be zero."),
-                    },
+        eras: EraSchedule::new_genesis(EraParameters {
+            blend: BlendDeploymentSettings {
+                common: BlendCommonSettings {
+                    minimum_network_size: MinimumNetworkSize::try_new(MINIMUM_BLEND_NETWORK_SIZE)
+                        .expect("Minimum network size cannot be less than 2."),
+                    num_blend_layers: NonZeroU64::try_from(NUM_BLEND_LAYERS)
+                        .expect("Number of blend layers cannot be zero."),
+                    network_absorption_in_rounds: NonZeroU64::try_from(
+                        BLEND_NETWORK_ABSORPTION_IN_ROUNDS,
+                    )
+                    .expect("Network absorption cannot be zero."),
+                    data_replication_factor: DATA_REPLICATION_FACTOR,
                 },
-                activity_threshold_sensitivity: ACTIVITY_THRESHOLD_SENSITIVITY,
+                core: BlendCoreSettings {
+                    target_peering_degree: BLEND_PEERING_DEGREE,
+                    verification_rate_per_second: NonZeroU32::try_from(
+                        BLEND_VERIFICATION_RATE_PER_SECOND,
+                    )
+                    .expect("Verification rate cannot be zero."),
+                    edge_node_send_deadline_in_rounds: NonZeroU64::try_from(
+                        BLEND_EDGE_NODE_SEND_DEADLINE_IN_ROUNDS,
+                    )
+                    .expect("`T_E` cannot be zero."),
+                    core_handshake_deadline_in_rounds: NonZeroU128::try_from(
+                        BLEND_CORE_HANDSHAKE_DEADLINE_IN_ROUNDS,
+                    )
+                    .expect("`T_H` cannot be zero."),
+                    scheduler: SchedulerSettings {
+                        cover: CoverTrafficSettings {
+                            message_frequency_per_round: PositiveF64::try_from(
+                                COVER_MESSAGE_FREQUENCY_PER_ROUND,
+                            )
+                            .expect("Message frequency per round must be positive."),
+                        },
+                        delayer: MessageDelayerSettings {
+                            maximum_release_delay_in_rounds: NonZeroU64::try_from(
+                                MAXIMUM_RELEASE_DELAY_IN_ROUNDS,
+                            )
+                            .expect("Maximum release delay between rounds cannot be zero."),
+                        },
+                    },
+                    activity_threshold_sensitivity: ACTIVITY_THRESHOLD_SENSITIVITY,
+                },
             },
-        },
-        network: NetworkDeploymentSettings {
-            identify_protocol_name: protocol_identity.stream_protocol(IDENTIFY_PROTOCOL_SUFFIX),
-            kademlia_protocol_name: protocol_identity.stream_protocol(KADEMLIA_PROTOCOL_SUFFIX),
-            chain_sync_protocol_name: protocol_identity.stream_protocol(CHAIN_SYNC_PROTOCOL_SUFFIX),
-        },
-        cryptarchia: CryptarchiaDeploymentSettings {
-            gossipsub_protocol: protocol_identity.protocol_name(GOSSIPSUB_PROTOCOL_SUFFIX),
-            security_param: NonZero::new(SECURITY_PARAM).unwrap(),
-            uncle_reference_window_in_block: NonZero::new(UNCLE_REFERENCE_WINDOW_IN_BLOCK).unwrap(),
-            slot_activation_coeff: NonNegativeRatio::new(
-                SLOT_ACTIVATION_COEFF_NUMERATOR,
-                NonZero::new(SLOT_ACTIVATION_COEFF_DENOMINATOR).unwrap(),
-            ),
-            epoch_config: EpochConfig {
-                epoch_stake_distribution_stabilization: NonZero::new(
-                    EPOCH_STAKE_DISTRIBUTION_STABILIZATION,
-                )
-                .unwrap(),
-                epoch_period_nonce_buffer: NonZero::new(EPOCH_PERIOD_NONCE_BUFFER).unwrap(),
-                epoch_period_nonce_stabilization: NonZero::new(EPOCH_PERIOD_NONCE_STABILIZATION)
+            cryptarchia: CryptarchiaDeploymentSettings {
+                security_param: NonZero::new(SECURITY_PARAM).unwrap(),
+                uncle_reference_window_in_block: NonZero::new(UNCLE_REFERENCE_WINDOW_IN_BLOCK)
                     .unwrap(),
-            },
-            sdp_config: lb_node::config::cryptarchia::deployment::SdpConfig {
-                service_params: [(
-                    ServiceType::BlendNetwork,
-                    ServiceParameters {
-                        inactivity_period: SDP_INACTIVITY_PERIOD.try_into().unwrap(),
-                        epoch: SDP_EPOCH,
+                slot_activation_coeff: NonNegativeRatio::new(
+                    SLOT_ACTIVATION_COEFF_NUMERATOR,
+                    NonZero::new(SLOT_ACTIVATION_COEFF_DENOMINATOR).unwrap(),
+                ),
+                epoch_config: EpochConfig {
+                    epoch_stake_distribution_stabilization: NonZero::new(
+                        EPOCH_STAKE_DISTRIBUTION_STABILIZATION,
+                    )
+                    .unwrap(),
+                    epoch_period_nonce_buffer: NonZero::new(EPOCH_PERIOD_NONCE_BUFFER).unwrap(),
+                    epoch_period_nonce_stabilization: NonZero::new(
+                        EPOCH_PERIOD_NONCE_STABILIZATION,
+                    )
+                    .unwrap(),
+                },
+                sdp_config: lb_node::config::cryptarchia::deployment::SdpConfig {
+                    service_params: (
+                        ServiceType::BlendNetwork,
+                        ServiceParameters {
+                            inactivity_period: SDP_INACTIVITY_PERIOD.try_into().unwrap(),
+                            epoch: SDP_EPOCH,
+                        },
+                    )
+                        .into(),
+                    min_stake: lb_core::sdp::MinStake {
+                        threshold: MIN_STAKE_THRESHOLD,
+                        timestamp: MIN_STAKE_TIMESTAMP,
                     },
-                )]
-                .into(),
-                min_stake: lb_core::sdp::MinStake {
-                    threshold: MIN_STAKE_THRESHOLD,
-                    timestamp: MIN_STAKE_TIMESTAMP,
+                },
+                learning_rate: LEARNING_RATE.try_into().expect("1 > 0"),
+                faucet_pk: None,
+                pow_config: lb_node::config::cryptarchia::deployment::PoWConfig {
+                    blend: lb_node::config::cryptarchia::deployment::BlendPoWConfig {
+                        base_difficulty: ModulusShift::new::<BLEND_POW_BASE_DIFFICULTY_EXPONENT>(),
+                        target_transactions_per_block: NonZero::new(BLEND_POW_TARGET_TXS_PER_BLOCK)
+                            .unwrap(),
+                        max_step: NonZero::new(BLEND_POW_MAX_STEP).unwrap(),
+                        damping_num: NonZero::new(BLEND_POW_DAMPING_NUM).unwrap(),
+                        damping_den_offset: BLEND_POW_DAMPING_DEN_OFFSET,
+                    },
+                    reward: lb_node::config::cryptarchia::deployment::RewardPoWConfig {
+                        reward_pool_genesis: REWARD_POW_POOL_GENESIS,
+                        epoch_reward_genesis: REWARD_POW_EPOCH_REWARD_GENESIS,
+                        minimum_difficulty: ModulusShift::new::<
+                            REWARD_POW_MINIMUM_DIFFICULTY_EXPONENT,
+                        >(),
+                        ema_smoothing_factor: REWARD_POW_EMA_SMOOTHING_FACTOR,
+                        ema_smoothing_precision: NonZero::new(REWARD_POW_EMA_SMOOTHING_PRECISION)
+                            .unwrap(),
+                        target_claims_per_block: REWARD_POW_TARGET_CLAIMS_PER_BLOCK,
+                        rate_num: REWARD_POW_RATE_NUM,
+                        rate_den: NonZero::new(REWARD_POW_RATE_DEN).unwrap(),
+                        target_claim_per_block: NonZero::new(REWARD_POW_TARGET_CLAIM_PER_BLOCK)
+                            .unwrap(),
+                        pow_share: REWARD_POW_SHARE,
+                        share_den: NonZero::new(REWARD_POW_SHARE_DEN).unwrap(),
+                        slot_window: NonZero::new(REWARD_POW_SLOT_WINDOW).unwrap(),
+                    },
                 },
             },
-            genesis_block: GenesisBlock::genesis(genesis_tx.clone()),
-            learning_rate: LEARNING_RATE.try_into().expect("1 > 0"),
-            faucet_pk: None,
-            pow_config: lb_node::config::cryptarchia::deployment::PoWConfig {
-                blend: lb_node::config::cryptarchia::deployment::BlendPoWConfig {
-                    base_difficulty: ModulusShift::new::<BLEND_POW_BASE_DIFFICULTY_EXPONENT>(),
-                    target_transactions_per_block: NonZero::new(BLEND_POW_TARGET_TXS_PER_BLOCK)
-                        .unwrap(),
-                    max_step: NonZero::new(BLEND_POW_MAX_STEP).unwrap(),
-                    damping_num: NonZero::new(BLEND_POW_DAMPING_NUM).unwrap(),
-                    damping_den_offset: BLEND_POW_DAMPING_DEN_OFFSET,
-                },
-                reward: lb_node::config::cryptarchia::deployment::RewardPoWConfig {
-                    reward_pool_genesis: REWARD_POW_POOL_GENESIS,
-                    epoch_reward_genesis: REWARD_POW_EPOCH_REWARD_GENESIS,
-                    initial_difficulty: ModulusShift::new::<REWARD_POW_INITIAL_DIFFICULTY_EXPONENT>(
-                    ),
-                    ema_smoothing_factor: REWARD_POW_EMA_SMOOTHING_FACTOR,
-                    ema_smoothing_precision: NonZero::new(REWARD_POW_EMA_SMOOTHING_PRECISION)
-                        .unwrap(),
-                    target_claims_per_block: REWARD_POW_TARGET_CLAIMS_PER_BLOCK,
-                    rate_num: REWARD_POW_RATE_NUM,
-                    rate_den: NonZero::new(REWARD_POW_RATE_DEN).unwrap(),
-                    target_claim_per_block: NonZero::new(REWARD_POW_TARGET_CLAIM_PER_BLOCK)
-                        .unwrap(),
-                    pow_share: REWARD_POW_SHARE,
-                    share_den: NonZero::new(REWARD_POW_SHARE_DEN).unwrap(),
-                    slot_window: NonZero::new(REWARD_POW_SLOT_WINDOW).unwrap(),
-                },
+            time: TimeDeploymentSettings {
+                slot_duration: Duration::from_secs(slot_duration_in_secs),
             },
-        },
-        time: TimeDeploymentSettings {
-            slot_duration: Duration::from_secs(slot_duration_in_secs),
-        },
-        mempool: MempoolDeploymentSettings {
-            pubsub_topic: MEMPOOL_TOPIC.to_owned(),
-            tx_ttl: default_tx_ttl(),
-        },
+        }),
+        genesis_block: GenesisBlock::genesis(genesis_tx.clone()),
     }
 }

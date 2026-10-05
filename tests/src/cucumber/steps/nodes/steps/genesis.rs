@@ -69,7 +69,7 @@ async fn step_chain_starts_from_now(
 
     world.set_genesis_time(genesis_time);
     if world.nodes_info.is_empty() && world.cluster.manual_cluster_spec.is_some() {
-        rebuild_pending_local_manual_cluster(world)?;
+        rebuild_pending_local_manual_cluster(world).await?;
     }
 
     Ok(())

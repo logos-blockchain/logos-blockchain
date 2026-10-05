@@ -5,7 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     rust-overlay = {
-      url = "github:oxalica/rust-overlay/9eccf73c5b810052f08aa77ae0548c383259f17f";
+      url = "github:oxalica/rust-overlay/dcee1adabb61484343af863501d2e3d91ef51f72";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -49,7 +49,7 @@
           overlays = [ rust-overlay.overlays.default ];
         };
 
-      rustVersion = "1.98.1";
+      rustVersion = "1.99.0";
     in
     {
       packages = forAll (

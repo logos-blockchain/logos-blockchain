@@ -67,7 +67,7 @@ impl StaticNodeConfigProvider for LbcEnv {
         let mut config = Self::build_node_config(deployment, node_index)?;
         apply_launch_ready_bind_addresses(&mut config);
 
-        match &options.peers {
+        match &options.common.peers {
             None | Some(PeerSelection::DefaultLayout) => {
                 if options.config_override.is_none() && options.config_patch.is_none() {
                     return Ok(None);
@@ -81,7 +81,7 @@ impl StaticNodeConfigProvider for LbcEnv {
                     deployment,
                     node_index,
                     hostnames,
-                    options.peers.as_ref(),
+                    options.common.peers.as_ref(),
                 )
                 .map_err(NodeCfgsyncError::from)?;
                 apply_runtime_networking(&mut config, &hostnames[node_index], peers);

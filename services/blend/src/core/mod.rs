@@ -376,8 +376,8 @@ where
             panic!("Key with specified ID is not a ZK key.");
         };
 
-        // TODO: This will go once we do not need to pass the secret key anymore, i.e.,
-        // when we have libp2p integration with KMS.
+        // TODO: This will go once we do not need to pass the secret key
+        // anymore, i.e., when we have libp2p integration with KMS.
         let non_ephemeral_signing_key = {
             let (sender, receiver) = oneshot::channel();
             kms_api
@@ -496,10 +496,10 @@ where
         )
         .await;
 
-        // The main event loop has ended because the node is no longer a core node
-        // in the new epoch.
-        // Before terminating the service, complete the old epoch during a single
-        // epoch transition period.
+        // The main event loop has ended because the node is no longer a core
+        // node in the new epoch.
+        // Before terminating the service, complete the old epoch during a
+        // single epoch transition period.
         retire(
             // We don't need epoch numbers anymore since we know we are dealing with a single,
             // past epoch.
@@ -703,25 +703,26 @@ where
             );
 
             let current_epoch_reward_info = reward::EpochInfo::new(
-                    current_epoch_public_info.epoch,
-                    &current_epoch_public_info.poq_leadership_public_inputs.pol_epoch_nonce,
-                    current_epoch_public_info.membership.size() as u64,
-                    current_epoch_public_info.poq_core_public_inputs.quota,
-                    blend_config.activity_threshold_sensitivity,
-                ).expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch");
+                current_epoch_public_info.epoch,
+                &current_epoch_public_info.poq_leadership_public_inputs.pol_epoch_nonce,
+                current_epoch_public_info.membership.size() as u64,
+                current_epoch_public_info.poq_core_public_inputs.quota,
+                blend_config.activity_threshold_sensitivity,
+            ).expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch");
 
             // Everything else in a stale state belongs to the epoch it was
             // saved under, but a transaction still waiting for a `PoW` solution
             // has not been encapsulated and so belongs to none: it outlives the
-            // state that carried it, the same way it outlives an epoch rotation.
+            // state that carried it, the same way it outlives an epoch
+            // rotation.
             //
             // The tokens that state collected are the exception. A state saved
             // under the immediately preceding epoch holds a full epoch's worth
-            // of them, and they are still worth an activity proof: rotating that
-            // collector here is the same move the running service makes at an
-            // epoch boundary, and it hands the proof to the submission below.
-            // A gap of two or more epochs is past submitting for, so it is
-            // dropped.
+            // of them, and they are still worth an activity proof: rotating
+            // that collector here is the same move the running
+            // service makes at an epoch boundary, and it hands the
+            // proof to the submission below. A gap of two or more
+            // epochs is past submitting for, so it is dropped.
             let (pending_transactions, recovered_old_epoch_token_collector) = maybe_stale_state
                 .map_or_else(
                     || (VecDeque::new(), None),
@@ -750,8 +751,8 @@ where
     };
 
     // If there is the old epoch token collector loaded from `last_saved_state`,
-    // compute/submit its activity proof because we won't collect more tokens for
-    // the old epoch after this initialization step because we are not
+    // compute/submit its activity proof because we won't collect more tokens
+    // for the old epoch after this initialization step because we are not
     // establishing connections for the old epoch.
     let mut state_updater = current_recovery_checkpoint.start_updating();
     if let Some(old_epoch_token_collector) = state_updater.clear_old_epoch_token_collector() {
@@ -844,8 +845,8 @@ async fn post_initialize<PolInfoProvider, RuntimeServiceId>(
 where
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
 {
-    // There might be services that depend on Blend to be ready before starting, so
-    // we cannot wait for the stream to be sent before we signal we are
+    // There might be services that depend on Blend to be ready before starting,
+    // so we cannot wait for the stream to be sent before we signal we are
     // ready, hence this should always be called after `notify_ready();`.
     // Also, Blend services start even if such a stream is not immediately
     // available, since they will simply keep blending cover messages.
@@ -1646,8 +1647,8 @@ async fn retire<
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
+    let epoch = retiring_epoch.epoch();
     loop {
-        let epoch = retiring_epoch.epoch();
         tokio::select! {
             Some(incoming_message) = blend_messages.next() => {
                 let (crypto_processor, message_scheduler, blending_token_collector) = retiring_epoch.split_mut();
@@ -1659,26 +1660,38 @@ async fn retire<
             Some(undelivered) = next_undelivered_messages(failure_detector.as_mut()) => {
                 broadcast_undelivered_messages(undelivered.into_iter(), &payload_dispatcher).await;
             }
-            Some(EpochEvent::TransitionPeriodExpired) = remaining_epoch_stream.next() => {
-                // Its scheduler is about to go, so whatever that epoch
-                // encapsulated and never released can no longer be sent
-                // and is nothing left to wait on.
-                if let Some(failure_detector) = failure_detector.as_mut() {
-                    failure_detector.drop_unreleased_payloads_for_epoch(epoch);
+            // Matched in full on purpose: a `select!` pattern that only named
+            // the expiry would consume and drop anything else the stream
+            // yields without a trace. Only the expiry ends the window; the
+            // other cases are logged and the wait goes on.
+            epoch_event = remaining_epoch_stream.next() => {
+                match epoch_event {
+                    Some(EpochEvent::TransitionPeriodExpired) | None => break,
+                    Some(EpochEvent::NewEpoch(epoch_info)) => {
+                        error!(target: LOG_TARGET, "New epoch ({:?}) started before the retiring epoch's transition period expired", epoch_info.epoch());
+                        panic!("New epoch started before the retiring epoch's transition period expired");
+                    }
                 }
-                handle_epoch_transition_expired(&mut backend, retiring_epoch.into_tokens(), &sdp_relay).await;
-                // Now the core service is no longer needed for the current (new) epoch,
-                // and the remaining epoch transition has been completed,
-                // so finishing the retirement process — bar the deadlines this
-                // epoch's own releases are still owed.
-                if let Some(failure_detector) = failure_detector {
-                    failure_detector
-                        .drain_pending_message_queue(&payload_dispatcher)
-                        .await;
-                }
-                return;
             }
         }
+    }
+
+    // Its scheduler is about to go, so whatever that epoch encapsulated and
+    // never released can no longer be sent and is nothing left to wait on.
+    if let Some(failure_detector) = failure_detector.as_mut() {
+        failure_detector.drop_unreleased_payloads_for_epoch(epoch);
+    }
+
+    handle_epoch_transition_expired(&mut backend, retiring_epoch.into_tokens(), &sdp_relay).await;
+
+    // Now the core service is no longer needed for the current (new) epoch,
+    // and the remaining epoch transition has been completed, so finishing the
+    // retirement process — bar the deadlines this epoch's own releases are
+    // still owed.
+    if let Some(failure_detector) = failure_detector {
+        failure_detector
+            .drain_pending_message_queue(&payload_dispatcher)
+            .await;
     }
 }
 
@@ -1739,13 +1752,15 @@ where
                 core_poq_generator,
                 public: new_epoch_info,
             } = *core_epoch_info;
-            // Once a new epoch starts, the old epoch's proving is useless: retiring
-            // its processor into a receive-only one for the transition period drops
-            // the generators, and with them the `PoW` mining they have in flight.
+            // Once a new epoch starts, the old epoch's proving is useless:
+            // retiring its processor into a receive-only one for
+            // the transition period drops the generators, and with
+            // them the `PoW` mining they have in flight.
             let old_cryptographic_processor = current_cryptographic_processor.rotate_epoch();
-            // Queued proposals go with it, and for the same reason: the rotation
-            // is what makes them unsendable. Anything not yet encapsulated would
-            // now draw on the new epoch's leadership quota — one message's worth
+            // Queued proposals go with it, and for the same reason: the
+            // rotation is what makes them unsendable. Anything not
+            // yet encapsulated would now draw on the new epoch's
+            // leadership quota — one message's worth
             let (
                 _,
                 _,
@@ -1764,7 +1779,7 @@ where
                 new_epoch_info.poq_core_public_inputs.quota,
                 settings.activity_threshold_sensitivity,
             )
-            .expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch");
+                .expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch");
             let (new_epoch_blending_token_collector, old_epoch_blending_token_collector) =
                 current_epoch_blending_token_collector.rotate_epoch(&new_reward_epoch_info);
 
@@ -1805,7 +1820,8 @@ where
                 .as_ref()
                 .is_some_and(|secret| secret.epoch == new_epoch_info.epoch)
             {
-                // We consume the stream by `take()`ing only if the epochs match.
+                // We consume the stream by `take()`ing only if the epochs
+                // match.
                 let current_secret_info = current_secret_info
                     .take()
                     .expect("Secret PoL info presence checked above.");
@@ -1855,7 +1871,7 @@ where
                 Quota::ZERO,
                 settings.activity_threshold_sensitivity,
             )
-            .expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch");
+                .expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch");
             let (_, old_epoch_blending_token_collector) =
                 current_epoch_blending_token_collector.rotate_epoch(&new_reward_epoch_info);
             HandleEpochEventOutput::Retiring {
@@ -1990,13 +2006,13 @@ where
     ProofsVerifier: ProofsVerifierTrait,
 {
     let mut state_updater = current_recovery_checkpoint.start_updating();
-    // The epoch this message is built under, and the one whose end takes it with
-    // it if it is never released.
+    // The epoch this message is built under, and the one whose end takes it
+    // with it if it is never released.
     let epoch = cryptographic_processor.epoch();
 
-    // Before blending the data message, we try to peel off any outer layers that
-    // are addressed to us. In this case, we collect the blending tokens and we
-    // blend only the remaining layers.
+    // Before blending the data message, we try to peel off any outer layers
+    // that are addressed to us. In this case, we collect the blending
+    // tokens and we blend only the remaining layers.
     let self_decapsulation_output = cryptographic_processor
         .receiver()
         .decapsulate_message_recursive(wrapped_message.clone());
@@ -2004,8 +2020,9 @@ where
     let payload_type = payload.payload_type();
 
     let Ok(multi_layer_decapsulation_output) = self_decapsulation_output else {
-        // The outermost layer of the data message is not for us, hence we treat this as
-        // a regular data message that should be released at the next round.
+        // The outermost layer of the data message is not for us, hence we treat
+        // this as a regular data message that should be released at the
+        // next round.
         tracing::debug!(target: LOG_TARGET, "Locally generated data message does not have its outermost layer addressed to us. Sending it out as a data message...");
         if let Some(failure_detector) = failure_detector {
             failure_detector.mark_payload_as_encapsulated(wrapped_message.id(), payload, epoch);
@@ -2027,9 +2044,9 @@ where
         return state_updater.commit_changes();
     };
 
-    // It happened that the outermost `N` layers were addressed to this very same
-    // node, so we collect blending tokens for those layers and propagate only the
-    // remaining part.
+    // It happened that the outermost `N` layers were addressed to this very
+    // same node, so we collect blending tokens for those layers and
+    // propagate only the remaining part.
     let (blending_tokens, remaining_message_type) =
         multi_layer_decapsulation_output.into_components();
     let processed_message = match remaining_message_type {
@@ -2068,17 +2085,17 @@ where
     state_updater.collect_current_epoch_tokens(blending_tokens.into_iter());
 
     scheduler.schedule_processed_message(processed_message.clone());
-    // We treat a partially or fully decapsulated message as a processed message,
-    // and we schedule for its release at the next release round.
+    // We treat a partially or fully decapsulated message as a processed
+    // message, and we schedule for its release at the next release round.
     if state_updater
         .add_unsent_processed_message(processed_message.clone())
         .is_err()
     {
-        // With a data replication factor greater than `0`, it's expected to have
-        // multiple identical copies of the same data message, so in that case it's not
-        // a warning and should not be logged.
-        // Hence, we only log a warning in the unexpected case of an encapsulated
-        // message seen twice, which should never happen.
+        // With a data replication factor greater than `0`, it's expected to
+        // have multiple identical copies of the same data message, so
+        // in that case it's not a warning and should not be logged.
+        // Hence, we only log a warning in the unexpected case of an
+        // encapsulated message seen twice, which should never happen.
         if matches!(processed_message, ProcessedMessage::Encapsulated(_)) {
             tracing::warn!(
                 target: LOG_TARGET,
@@ -2418,10 +2435,10 @@ where
                 failure_detector.mark_encapsulated_payload_as_released(data_message_to_blend.id());
             }
         }).map(
-            |data_message_to_blend| -> BoxFuture<'_, ()> {
-                backend.publish(data_message_to_blend, current_epoch).boxed()
-            },
-        ).collect::<Vec<_>>();
+        |data_message_to_blend| -> BoxFuture<'_, ()> {
+            backend.publish(data_message_to_blend, current_epoch).boxed()
+        },
+    ).collect::<Vec<_>>();
 
     let processed_messages_relay_futures = build_futures_to_release_processed_messages(
         processed_messages,
@@ -2440,9 +2457,9 @@ where
     if should_generate_cover_message
         // TODO: Remove this logic once we don't have tests that deploy less than 3 Blend nodes, or when we start using a minimum network size of 3.
         && let Some(encapsulated_cover_message) = generate_and_try_to_decapsulate_cover_message(
-            cryptographic_processor,
-            &mut state_updater,
-        )
+        cryptographic_processor,
+        &mut state_updater,
+    )
         .await
     {
         message_futures.push(
@@ -2496,12 +2513,13 @@ async fn handle_release_round_for_old_epoch<
         release_type.map_or_else(|| (vec![], false), RoundReleaseType::into_components);
     let (data_count, processed_count) = (data_messages.len(), processed_messages.len());
 
-    // Data messages the epoch left unreleased carry its `PoQ`, which only verifies
-    // against that epoch's public inputs, so they are published under the old
-    // epoch's number and therefore to the peers still negotiated for it. They are
-    // not tracked in the new epoch's recovery state, which was reset on rotation,
-    // and they do not consume the new epoch's core quota, since they neither spend
-    // it nor reach current-epoch peers.
+    // Data messages the epoch left unreleased carry its `PoQ`, which only
+    // verifies against that epoch's public inputs, so they are published
+    // under the old epoch's number and therefore to the peers still
+    // negotiated for it. They are not tracked in the new epoch's recovery
+    // state, which was reset on rotation, and they do not consume the new
+    // epoch's core quota, since they neither spend it nor reach
+    // current-epoch peers.
     let data_messages_relay_futures = data_messages
         .into_iter()
         .inspect(|data_message_to_blend| {
@@ -2586,12 +2604,12 @@ where
         .inspect(|processed_message_to_release| {
             if let Some(state_updater) = state_updater.as_mut()
                 && state_updater.remove_sent_processed_message(processed_message_to_release).is_err() && matches!(processed_message_to_release, ProcessedMessage::Encapsulated(_)) {
-                    // With a data replication factor greater than `0`, it's expected to have
-                    // multiple identical copies of the same data message, so in that case it's not
-                    // a warning and should not be logged.
-                    // Hence, we only log a warning in the unexpected case of an encapsulated
-                    // message seen twice, which should never happen.
-                    tracing::warn!(
+                // With a data replication factor greater than `0`, it's expected to have
+                // multiple identical copies of the same data message, so in that case it's not
+                // a warning and should not be logged.
+                // Hence, we only log a warning in the unexpected case of an encapsulated
+                // message seen twice, which should never happen.
+                tracing::warn!(
                             target: LOG_TARGET,
                             "Previously processed message should be present in the recovery state but was not found."
                         );
@@ -2656,8 +2674,8 @@ where
         .receiver()
         .decapsulate_message_recursive(encapsulated_cover_message.clone());
     let Ok(multi_layer_decapsulation_output) = self_decapsulation_output else {
-        // First layer not addressed to ourselves, so it goes out fully encapsulated.
-        // The quota it spent was already recorded above.
+        // First layer not addressed to ourselves, so it goes out fully
+        // encapsulated. The quota it spent was already recorded above.
         tracing::trace!(target: LOG_TARGET, "Locally generated cover message does not have its outermost layer addressed to us. Sending it out fully encapsulated...");
         return Some(encapsulated_cover_message.into());
     };

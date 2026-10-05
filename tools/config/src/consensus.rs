@@ -8,7 +8,7 @@ use lb_core::{
         ops::{
             Op, OpId as _, ZkAndEd25519Proof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId,
+                ChannelId, MsgId,
                 inscribe::{Inscription, InscriptionOp},
             },
             transfer::TransferOp,
@@ -19,7 +19,7 @@ use lb_core::{
 };
 use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
 use lb_key_management_system_service::keys::{
-    Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
+    Ed25519Key, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey, ZkSignature,
 };
 use lb_node::{Hashable as _, SignedOps};
 use num_bigint::BigUint;
@@ -204,7 +204,7 @@ fn inscription_for_current_test(
             .encode_to_vec(),
         ),
         parent: MsgId::root(),
-        signer: Ed25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),
+        signer: UnverifiedEd25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),
     }
 }
 

@@ -177,7 +177,7 @@ mod tests {
         let (mut detection, start, _channel) = new_failure_monitor();
         // Built now, but held back — waiting on the proofs that will back it.
         detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(0));
-        assert!(until(&mut detection, start, HELD_FOR).await.is_empty());
+        assert_eq!(until(&mut detection, start, HELD_FOR).await, []);
         detection.mark_encapsulated_payload_as_released(id(1));
 
         assert!(
@@ -198,11 +198,7 @@ mod tests {
         detection.mark_encapsulated_payload_as_released(id(9));
 
         assert_eq!(detection.outstanding_payloads_count(), 0);
-        assert!(
-            until(&mut detection, start, DEADLINE.get() + 3)
-                .await
-                .is_empty()
-        );
+        assert_eq!(until(&mut detection, start, DEADLINE.get() + 3).await, []);
     }
 
     /// A message that expires with its epoch never reached a peer, so there is

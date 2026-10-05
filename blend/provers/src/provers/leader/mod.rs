@@ -16,7 +16,7 @@ use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_log_targets::{blend, diagnostic::BLEND_REACHABILITY};
-use lb_utils::tokio::{stream::Buffered, task::spawn_blocking};
+use lb_utils::tokio::{stream::BufferedOrdered, task::spawn_blocking};
 use tokio::time::Instant;
 
 use crate::{
@@ -104,7 +104,7 @@ fn create_proof_stream(
     // of one slot get distinct nullifiers, and consecutive messages use
     // distinct slots and therefore distinct nullifiers. The mapping of indices
     // to each message + encapsulation layer is up to the scheduler.
-    Buffered::new(
+    BufferedOrdered::new(
         winning_pol_info_stream.flat_map(move |slot_inputs| {
             stream::iter(message_quota.values_range()).map(move |message_release_index| {
                 let slot_inputs = slot_inputs.clone();

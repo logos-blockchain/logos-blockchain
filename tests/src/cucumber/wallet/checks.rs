@@ -2,7 +2,10 @@ use std::{collections::HashSet, fmt::Display, hash::BuildHasher, time::Duration}
 
 use lb_core::mantle::transactions::hash::TxHash;
 use thiserror::Error;
-use tokio::time::{Instant, sleep};
+use tokio::{
+    sync::watch,
+    time::{Instant, sleep},
+};
 use tracing::{info, warn};
 
 use crate::{
@@ -202,6 +205,35 @@ pub async fn wait_for_observed_transaction_hashes<S: BuildHasher + Sync>(
     expected_hashes: &HashSet<TxHash, S>,
     timeout: Duration,
 ) -> Result<(), StepError> {
+    wait_for_observed_transaction_hashes_inner(world, step, expected_hashes, timeout, None).await
+}
+
+/// Wait for transaction inclusion while also stopping when the owning
+/// background task is cancelled.
+pub async fn wait_for_observed_transaction_hashes_cancellable<S: BuildHasher + Sync>(
+    world: &mut CucumberWorld,
+    step: &str,
+    expected_hashes: &HashSet<TxHash, S>,
+    timeout: Duration,
+    cancellation: &mut watch::Receiver<bool>,
+) -> Result<(), StepError> {
+    wait_for_observed_transaction_hashes_inner(
+        world,
+        step,
+        expected_hashes,
+        timeout,
+        Some(cancellation),
+    )
+    .await
+}
+
+async fn wait_for_observed_transaction_hashes_inner<S: BuildHasher + Sync>(
+    world: &CucumberWorld,
+    step: &str,
+    expected_hashes: &HashSet<TxHash, S>,
+    timeout: Duration,
+    mut cancellation: Option<&mut watch::Receiver<bool>>,
+) -> Result<(), StepError> {
     let start = Instant::now();
 
     loop {
@@ -218,6 +250,13 @@ pub async fn wait_for_observed_transaction_hashes<S: BuildHasher + Sync>(
             );
 
             return Ok(());
+        }
+
+        if cancellation
+            .as_ref()
+            .is_some_and(|receiver| *receiver.borrow())
+        {
+            return Err(StepError::BackgroundTaskCancelled);
         }
 
         if start.elapsed() >= timeout {
@@ -254,7 +293,18 @@ pub async fn wait_for_observed_transaction_hashes<S: BuildHasher + Sync>(
             return Err(StepError::Timeout { message: msg });
         }
 
-        sleep(Duration::from_millis(250)).await;
+        if let Some(receiver) = cancellation.as_deref_mut() {
+            tokio::select! {
+                changed = receiver.changed() => {
+                    if changed.is_err() || *receiver.borrow() {
+                        return Err(StepError::BackgroundTaskCancelled);
+                    }
+                }
+                () = sleep(Duration::from_millis(250)) => {}
+            }
+        } else {
+            sleep(Duration::from_millis(250)).await;
+        }
     }
 }
 
@@ -516,5 +566,72 @@ fn log_ranged_condition_match(
             {value_message}",
         ),
         (None, None) => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod observed_transaction_hash_tests {
+    use std::{collections::HashSet, time::Duration};
+
+    use lb_core::mantle::transactions::hash::TxHash;
+    use tokio::{sync::watch, task::yield_now, time::timeout};
+
+    use super::{
+        wait_for_observed_transaction_hashes, wait_for_observed_transaction_hashes_cancellable,
+    };
+    use crate::cucumber::{error::StepError, world::CucumberWorld};
+
+    #[tokio::test]
+    async fn cancellable_transaction_inclusion_wait_stops_promptly() {
+        let mut world = CucumberWorld::default();
+        let expected_hashes = HashSet::from([TxHash::default()]);
+        let (cancellation_sender, mut cancellation_receiver) = watch::channel(false);
+
+        let result = timeout(Duration::from_secs(1), async {
+            let wait = wait_for_observed_transaction_hashes_cancellable(
+                &mut world,
+                "cancellation regression",
+                &expected_hashes,
+                Duration::from_secs(600),
+                &mut cancellation_receiver,
+            );
+            tokio::pin!(wait);
+
+            tokio::select! {
+                biased;
+                result = &mut wait => panic!("inclusion wait returned before cancellation: {result:?}"),
+                () = yield_now() => {}
+            }
+
+            cancellation_sender
+                .send(true)
+                .expect("the inclusion wait should still hold the receiver");
+            wait.await
+        })
+        .await
+        .expect("cancelled inclusion wait should return promptly");
+
+        assert!(matches!(result, Err(StepError::BackgroundTaskCancelled)));
+    }
+
+    #[tokio::test]
+    async fn ordinary_transaction_inclusion_wait_keeps_timeout_diagnostics() {
+        let mut world = CucumberWorld::default();
+        let expected_hashes = HashSet::from([TxHash::default()]);
+
+        let error = wait_for_observed_transaction_hashes(
+            &mut world,
+            "foreground timeout regression",
+            &expected_hashes,
+            Duration::ZERO,
+        )
+        .await
+        .expect_err("unobserved transaction should time out");
+
+        assert!(matches!(
+            error,
+            StepError::Timeout { message }
+                if message.contains("transaction inclusion timeout: submitted=1 chain_observed=0 missing=1")
+        ));
     }
 }

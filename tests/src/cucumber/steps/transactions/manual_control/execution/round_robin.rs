@@ -174,6 +174,7 @@ async fn manage_round_robin_coin_splits_with_utxo_cache(
         Some(cycle + 1),
         "CONTINUOUS ROUND ROBIN",
         "B",
+        None,
     )
     .await?;
 
@@ -339,6 +340,7 @@ pub(super) async fn execute_continuous_round_robin(
             Some(cycle + 1),
             "CONTINUOUS ROUND ROBIN",
             "E",
+            None,
         )
         .await?;
 

@@ -15,16 +15,15 @@ use lb_core::{
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ledger::{Inputs, NoteId, Outputs, verification_mode::StandardMode},
         ops::channel::{
-            ChannelId, MsgId,
+            ChannelId, MsgId, VerifiedChannelKeys,
             channel_transfer::ChannelTransferOp,
-            config::Keys,
             inscribe::{Inscription, InscriptionOp},
             withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
         transactions::{Ops, hash::TxHash, states::Unverified},
     },
-    proofs::channel_multi_sig_proof::IndexedSignature,
+    proofs::channel_multi_sig_proof::IndexedSignatures,
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -96,6 +95,12 @@ pub struct ZoneSequencer<Node> {
     // the node); a fresh `Event::Ready` is emitted when the reconnect
     // completes.
     pub(super) connected: bool,
+
+    // Absolute end of the reconnect back-off currently running, if any. A
+    // field rather than a local in `wait_reconnect_delay` so a caller that
+    // drops `next_event()` mid-wait (its own `select!` losing the race)
+    // resumes the same deadline instead of restarting it.
+    pub(super) reconnect_until: Option<tokio::time::Instant>,
 
     // Resubmission
     pub(super) resubmit_interval: tokio::time::Interval,
@@ -180,7 +185,7 @@ pub(super) enum ActorRequest {
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
     ChannelConfig {
-        keys: Keys,
+        keys: VerifiedChannelKeys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
@@ -188,7 +193,7 @@ pub(super) enum ActorRequest {
         response_tx: oneshot::Sender<Result<PublishResponse, Error>>,
     },
     PrepareChannelConfig {
-        keys: Keys,
+        keys: VerifiedChannelKeys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
@@ -199,7 +204,7 @@ pub(super) enum ActorRequest {
         // Boxed: `PreparedChannelConfig` is much larger than the other
         // variants' payloads, so keep it off the enum's inline footprint.
         prepared: Box<PreparedChannelConfig>,
-        signatures: Vec<IndexedSignature>,
+        signatures: IndexedSignatures,
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
     SubmitSignedTx {
@@ -320,6 +325,7 @@ where
             blocks_stream: None,
             pending_block_event: None,
             connected: false,
+            reconnect_until: None,
             resubmit_interval,
             in_flight: FuturesUnordered::new(),
             resubmit_active: Arc::new(AtomicBool::new(false)),
@@ -385,6 +391,15 @@ where
     #[must_use]
     pub fn is_ready(&self) -> bool {
         *self.ready_tx.borrow()
+    }
+
+    /// Whether the live block stream is open and the cached channel state
+    /// reflects the latest observed block. `false` while (re)connecting, when
+    /// every publish-type operation fails fast with [`Error::Unavailable`].
+    /// Sync snapshot read.
+    #[must_use]
+    pub const fn is_connected(&self) -> bool {
+        self.connected
     }
 
     /// Current persistence checkpoint, if one has been produced.
@@ -493,11 +508,22 @@ where
     /// completions, reconnect retries), so the caller's loop body always
     /// receives a real [`Event`] — no `Option` unwrapping required.
     ///
-    /// # Block-event cancellation safety
+    /// # Cancellation safety
     ///
-    /// Cancelling this future does not lose or partially apply a block event.
-    /// A pulled block is retained until its event is returned, and all fallible
-    /// node reads complete before the corresponding state mutation.
+    /// Safe to drop at any point, which the documented drive pattern (this
+    /// future as one arm of the caller's `select!`) relies on:
+    ///
+    /// - A block event is never lost or partially applied. A pulled block is
+    ///   retained until its event is returned, and all fallible node reads
+    ///   complete before the corresponding state mutation.
+    /// - A reconnect resumes rather than restarts. Every connect step stores
+    ///   its result on `self` before the next await, and the reconnect back-off
+    ///   keeps its absolute deadline across cancellations.
+    /// - A backfill batch that is dropped mid-fetch is fetched again from the
+    ///   same range.
+    ///
+    /// The cost of a cancellation is therefore at most one in-flight node
+    /// request, which is reissued on the next call.
     ///
     /// A [`SequencerClient`](super::SequencerClient) command selected from the
     /// request queue may instead fail with [`Error::Unavailable`] if this
@@ -694,15 +720,23 @@ where
     /// [`Self::ensure_connected`] succeeds, since `request_rx` is otherwise
     /// only drained from `step`'s `select!` after connection.
     ///
-    /// The sleep is pinned so the backoff keeps elapsing across iterations: any
-    /// number of requests can be serviced during the wait without resetting or
-    /// short-circuiting the delay.
+    /// The deadline is absolute and stored on `self`, so the backoff keeps
+    /// elapsing across iterations and across cancellations: any number of
+    /// requests can be serviced during the wait, and a caller that drops
+    /// [`Self::next_event`] while this is sleeping resumes the same deadline
+    /// on its next call instead of starting a fresh delay.
     pub(super) async fn wait_reconnect_delay(&mut self) {
-        let sleep = tokio::time::sleep(self.config.reconnect_delay);
+        let until = *self
+            .reconnect_until
+            .get_or_insert_with(|| tokio::time::Instant::now() + self.config.reconnect_delay);
+        let sleep = tokio::time::sleep_until(until);
         tokio::pin!(sleep);
         loop {
             tokio::select! {
-                () = &mut sleep => break,
+                () = &mut sleep => {
+                    self.reconnect_until = None;
+                    return;
+                }
                 Some(request) = self.request_rx.recv() => self.handle_request(request).await,
             }
         }
@@ -768,7 +802,7 @@ where
             parent_msg: parent,
             this_msg: new_msg_id,
             payload: data.clone(),
-            signer: Some(self.signing_key.public_key()),
+            signer: Some(self.signing_key.public_key().into_unverified()),
         };
 
         // Safe to unwrap — `ensure_ready` checks state.
@@ -860,7 +894,7 @@ where
             channel_id: self.channel_id,
             inscription: inscribe.clone(),
             parent,
-            signer: self.signing_key.public_key(),
+            signer: self.signing_key.public_key().into_unverified(),
         };
         let msg_id = inscription_op.id();
 
@@ -931,7 +965,7 @@ where
                         parent_msg: parent,
                         this_msg: msg_id,
                         payload: inscribe,
-                        signer: Some(self.signing_key.public_key()),
+                        signer: Some(self.signing_key.public_key().into_unverified()),
                     },
                     withdraws: withdraw_infos,
                     outputs,
@@ -1046,7 +1080,7 @@ where
             channel_id: self.channel_id,
             inscription: inscribe.clone(),
             parent,
-            signer: self.signing_key.public_key(),
+            signer: self.signing_key.public_key().into_unverified(),
         };
         let msg_id = inscription_op.id();
 
@@ -1105,7 +1139,7 @@ where
                         parent_msg: parent,
                         this_msg: msg_id,
                         payload: inscribe,
-                        signer: Some(self.signing_key.public_key()),
+                        signer: Some(self.signing_key.public_key().into_unverified()),
                     },
                     consumed_notes: consumed_inputs,
                 }),
@@ -1150,7 +1184,7 @@ where
 
     pub(super) async fn do_channel_config(
         &mut self,
-        keys: Keys,
+        keys: VerifiedChannelKeys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
@@ -1276,7 +1310,7 @@ where
     )]
     pub(super) async fn do_prepare_channel_config(
         &mut self,
-        keys: Keys,
+        keys: VerifiedChannelKeys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
@@ -1333,8 +1367,9 @@ where
     /// and submit it.
     ///
     /// `signatures` must be indexed against
-    /// [`PreparedChannelConfig::accredited_keys`] and strictly ascending by
-    /// index. Once assembled, the fully-signed config tx is a plain
+    /// [`PreparedChannelConfig::accredited_keys`], with at most one signature
+    /// per index, in any order. Once assembled, the fully-signed config tx is
+    /// a plain
     /// `[CHANNEL_CONFIG, TRANSFER(fee)]` — identical in shape to a single-sig
     /// config — so it flows through the same submit path as
     /// [`Self::do_submit_signed_tx`] (track → `submit_other`, queue post,
@@ -1342,7 +1377,7 @@ where
     pub(super) fn do_submit_channel_config(
         &mut self,
         prepared: PreparedChannelConfig,
-        signatures: Vec<IndexedSignature>,
+        signatures: IndexedSignatures,
     ) -> Result<PublishReceipt, Error> {
         let signed_tx =
             assemble_channel_config_tx(prepared.tx, prepared.transfer_proof, signatures)?;

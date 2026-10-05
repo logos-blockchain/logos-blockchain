@@ -31,12 +31,12 @@ pub use diagnostics::{
     unregister_system_monitor_output_file,
 };
 pub use framework::{
-    BlockFeed, BlockFeedCollector, BlockFeedCollectorRuntime, BlockFeedExtensionFactory,
-    BlockFeedObservation, BlockFeedObserver, BlockFeedSnapshot, BlockFeedWaitError, BlockRecord,
-    BoxedBlockFeedCollector, CoreBuilderExt, LbcComposeDeployer, LbcEnv, LbcK8sDeployer,
-    LbcK8sManualCluster, LbcLocalDeployer, LbcManualCluster, NodeHeadSnapshot,
-    NodeStateSnapshotStore, ObservedBlock, ScenarioBuilder, ScenarioBuilderExt,
-    block_feed_source_provider, block_feed_sources, named_block_feed_sources,
+    AppHost, AppHostDeployError, AppHostDeployer, AppHostEnv, AppRunContextExt, BlockFeed,
+    BlockFeedCollector, BlockFeedCollectorRuntime, BlockFeedObservation, BlockFeedObserver,
+    BlockFeedSnapshot, BlockFeedWaitError, BlockRecord, BoxedBlockFeedCollector, LbcClusterApp,
+    LbcClusterBackend, LbcEnv, LbcK8sManualCluster, LbcManualCluster, LbcScenario,
+    NodeHeadSnapshot, NodeStateSnapshotStore, ObservedBlock, ScenarioBuilder, ScenarioBuilderExt,
+    block_feed_sources, named_block_feed_sources,
 };
 // Required by reused node-test config modules importing from crate root.
 pub use node::configs::deployment::{
@@ -44,9 +44,7 @@ pub use node::configs::deployment::{
 };
 pub use node::{NodeHttpClient, configs};
 pub use testing_framework_runner_compose::ComposeRunnerError;
-pub use testing_framework_runner_k8s::{
-    K8sRunnerError, ManualClusterError as K8sManualClusterError,
-};
+pub use testing_framework_runner_k8s::ManualClusterError as K8sManualClusterError;
 pub use workloads::{ClusterForkMonitor, ConsensusLiveness, inscription, transaction};
 
 /// Internal helpers for sibling workspace crates.
@@ -59,10 +57,7 @@ pub mod internal {
 }
 
 pub mod prelude {
-    pub use crate::{
-        CoreBuilderExt as _, LbcLocalDeployer, LbcManualCluster, ScenarioBuilder,
-        ScenarioBuilderExt as _,
-    };
+    pub use crate::{AppHostDeployer, LbcManualCluster, ScenarioBuilder, ScenarioBuilderExt as _};
 }
 
 #[must_use]

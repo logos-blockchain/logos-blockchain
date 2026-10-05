@@ -374,7 +374,7 @@ dependencies = [
  "nom 7.1.3",
  "num-traits",
  "rusticata-macros",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "time",
 ]
 
@@ -514,13 +514,13 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.89"
+version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.118",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -750,6 +750,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "bip39"
+version = "2.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90dbd31c98227229239363921e60fcf5e558e43ec69094d46fc4996f08d1d5bc"
+dependencies = [
+ "bitcoin_hashes",
+ "rand 0.8.6",
+ "rand_core 0.6.4",
+ "serde",
+ "unicode-normalization",
+ "zeroize",
+]
+
+[[package]]
+name = "bitcoin_hashes"
+version = "0.14.101"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bca4c7abb40c8817d77403c880988cfd484f23ab2365726afb2f798363e2c4a2"
+dependencies = [
+ "hex-conservative",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -936,7 +959,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 [[package]]
 name = "cfgsync-adapter"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=db880d61155db3a4f32177ef16b0f1e4bf22b1f6#db880d61155db3a4f32177ef16b0f1e4bf22b1f6"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=8d87f69108685c6685857a8206d9bb9532b24f47#8d87f69108685c6685857a8206d9bb9532b24f47"
 dependencies = [
  "cfgsync-artifacts",
  "cfgsync-core",
@@ -947,16 +970,16 @@ dependencies = [
 [[package]]
 name = "cfgsync-artifacts"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=db880d61155db3a4f32177ef16b0f1e4bf22b1f6#db880d61155db3a4f32177ef16b0f1e4bf22b1f6"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=8d87f69108685c6685857a8206d9bb9532b24f47#8d87f69108685c6685857a8206d9bb9532b24f47"
 dependencies = [
  "serde",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "cfgsync-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=db880d61155db3a4f32177ef16b0f1e4bf22b1f6#db880d61155db3a4f32177ef16b0f1e4bf22b1f6"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=8d87f69108685c6685857a8206d9bb9532b24f47#8d87f69108685c6685857a8206d9bb9532b24f47"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -965,7 +988,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
 ]
 
@@ -1591,7 +1614,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
 dependencies = [
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2358,7 +2381,7 @@ dependencies = [
  "serde_json",
  "syn 2.0.118",
  "textwrap",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "typed-builder",
 ]
 
@@ -2543,6 +2566,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
+name = "hex-conservative"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db3fef046dca3ca91ee1408a8c1b80ab777e80a4d308d1bf4e7adb3fcb047e08"
+dependencies = [
+ "arrayvec",
+]
+
+[[package]]
 name = "hex_fmt"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2567,7 +2599,7 @@ dependencies = [
  "rand 0.9.4",
  "ring",
  "socket2 0.5.10",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tinyvec",
  "tokio",
  "tracing",
@@ -2590,7 +2622,7 @@ dependencies = [
  "rand 0.9.4",
  "resolv-conf",
  "smallvec",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -2790,7 +2822,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -3199,7 +3231,7 @@ dependencies = [
  "jsonptr",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3212,7 +3244,7 @@ dependencies = [
  "pest_derive",
  "regex",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3331,7 +3363,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "tower 0.5.3",
@@ -3354,7 +3386,7 @@ dependencies = [
  "serde",
  "serde-value",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3378,7 +3410,7 @@ dependencies = [
  "pin-project",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3443,7 +3475,7 @@ dependencies = [
  "multiaddr",
  "pin-project",
  "rw-stream-sink",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3477,7 +3509,7 @@ dependencies = [
  "quick-protobuf-codec",
  "rand 0.8.6",
  "rand_core 0.6.4",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tracing",
  "web-time",
 ]
@@ -3512,7 +3544,7 @@ dependencies = [
  "quick-protobuf",
  "rand 0.8.6",
  "rw-stream-sink",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tracing",
  "unsigned-varint 0.8.0",
  "web-time",
@@ -3582,7 +3614,7 @@ dependencies = [
  "quick-protobuf",
  "quick-protobuf-codec",
  "smallvec",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -3602,7 +3634,7 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "sha2",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tracing",
  "zeroize",
 ]
@@ -3629,7 +3661,7 @@ dependencies = [
  "serde",
  "sha2",
  "smallvec",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tracing",
  "uint",
  "web-time",
@@ -3706,7 +3738,7 @@ dependencies = [
  "ring",
  "rustls",
  "socket2 0.5.10",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -3823,7 +3855,7 @@ dependencies = [
  "ring",
  "rustls",
  "rustls-webpki",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "x509-parser",
  "yasna",
 ]
@@ -3852,7 +3884,7 @@ dependencies = [
  "either",
  "futures",
  "libp2p-core",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tracing",
  "yamux 0.12.1",
  "yamux 0.13.10",
@@ -3977,7 +4009,7 @@ dependencies = [
  "logos-blockchain-tx-service",
  "overwatch",
  "serde",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -3991,11 +4023,12 @@ dependencies = [
  "bincode",
  "bytes",
  "hex",
+ "indexmap",
  "logos-blockchain-binary-codec-macros",
  "logos-blockchain-groth16",
  "logos-blockchain-utils",
  "serde",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4048,7 +4081,7 @@ dependencies = [
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "rs-merkle-tree",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4085,7 +4118,7 @@ dependencies = [
  "serde",
  "serde_with",
  "test-log",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tracing",
  "zeroize",
 ]
@@ -4145,7 +4178,7 @@ dependencies = [
  "num-bigint",
  "rand 0.8.6",
  "serde",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "zeroize",
 ]
 
@@ -4190,7 +4223,7 @@ dependencies = [
  "logos-blockchain-log-targets",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -4234,7 +4267,7 @@ dependencies = [
  "serde",
  "serde_with",
  "test-log",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -4311,7 +4344,7 @@ dependencies = [
  "overwatch",
  "rand 0.8.6",
  "serde",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -4345,7 +4378,7 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "serde_with",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -4381,7 +4414,7 @@ dependencies = [
  "serde",
  "serde_with",
  "tempfile",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "tracing",
@@ -4490,7 +4523,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio-util",
  "url",
 ]
@@ -4546,7 +4579,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strum",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "tracing",
@@ -4564,7 +4597,7 @@ dependencies = [
  "rpds",
  "serde",
  "serde_with",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "tracing",
@@ -4589,7 +4622,7 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "serde_with",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -4642,7 +4675,7 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4673,8 +4706,10 @@ version = "0.0.0"
 dependencies = [
  "arbitrary-int",
  "async-trait",
+ "bip39",
  "blake2",
  "bytes",
+ "curve25519-dalek",
  "ed25519-dalek",
  "generic-array 1.4.3",
  "hex",
@@ -4692,7 +4727,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "subtle",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "utoipa",
@@ -4741,7 +4776,7 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "serde_yaml",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -4772,7 +4807,7 @@ dependencies = [
  "serde",
  "serde_arrays",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -4800,7 +4835,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4830,7 +4865,7 @@ dependencies = [
  "logos-blockchain-dynamic-merkle",
  "rpds",
  "serde",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4847,7 +4882,7 @@ dependencies = [
  "rpds",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4890,6 +4925,7 @@ dependencies = [
  "http",
  "libp2p",
  "logos-blockchain-api-service",
+ "logos-blockchain-binary-codec",
  "logos-blockchain-blend",
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-broadcast-service",
@@ -4921,6 +4957,7 @@ dependencies = [
  "num-bigint",
  "nutype",
  "overwatch",
+ "percent-encoding",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -4929,7 +4966,7 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "tempfile",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tikv-jemallocator",
  "time",
  "tokio",
@@ -5034,7 +5071,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -5047,7 +5084,7 @@ dependencies = [
  "logos-blockchain-circuits-types",
  "logos-blockchain-groth16",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5067,9 +5104,10 @@ dependencies = [
  "logos-blockchain-utils",
  "overwatch",
  "serde",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "time",
  "tokio",
+ "tokio-stream",
  "tracing",
 ]
 
@@ -5085,7 +5123,7 @@ dependencies = [
  "overwatch",
  "overwatch-derive",
  "serde",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -5108,7 +5146,7 @@ dependencies = [
  "rocksdb",
  "serde",
  "tempfile",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -5174,9 +5212,10 @@ dependencies = [
  "strum_macros",
  "tempfile",
  "testing-framework",
+ "testing-framework-app",
  "testing-framework-core",
  "testing-framework-runner-local",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "tracing",
@@ -5198,7 +5237,7 @@ dependencies = [
  "serde",
  "serde_with",
  "sntpc",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "tokio-stream",
@@ -5224,7 +5263,7 @@ dependencies = [
  "serde",
  "serde_with",
  "serde_yaml",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "url",
@@ -5242,7 +5281,6 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
- "rand 0.8.6",
  "serde",
  "tempfile",
  "tokio",
@@ -5266,7 +5304,7 @@ dependencies = [
  "logos-blockchain-tracing",
  "overwatch",
  "serde",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "tracing",
@@ -5294,7 +5332,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -5310,6 +5348,7 @@ dependencies = [
  "const-hex",
  "futures",
  "humantime",
+ "indexmap",
  "logos-blockchain-log-targets",
  "multiaddr",
  "overwatch",
@@ -5319,7 +5358,7 @@ dependencies = [
  "serde_with",
  "serde_yaml",
  "tempfile",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "tracing",
@@ -5368,7 +5407,7 @@ dependencies = [
  "num-bigint",
  "rpds",
  "serde",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -5407,8 +5446,9 @@ dependencies = [
  "logos-blockchain-wallet",
  "overwatch",
  "serde",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
+ "tokio-stream",
  "tracing",
 ]
 
@@ -5429,7 +5469,7 @@ dependencies = [
  "serde",
  "serde-big-array",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -5452,7 +5492,7 @@ dependencies = [
  "rpds",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -5464,6 +5504,7 @@ dependencies = [
  "bincode",
  "blake2",
  "clap",
+ "flate2",
  "hex",
  "logos-blockchain-binary-codec",
  "logos-blockchain-groth16",
@@ -5475,7 +5516,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rusqlite",
  "tempfile",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -5826,7 +5867,7 @@ dependencies = [
  "log",
  "netlink-packet-core 0.8.1",
  "netlink-sys",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6147,7 +6188,7 @@ dependencies = [
  "futures-sink",
  "js-sys",
  "pin-project-lite",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6188,7 +6229,7 @@ dependencies = [
  "opentelemetry_sdk",
  "prost 0.14.4",
  "reqwest 0.13.4",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tonic",
  "tonic-types",
@@ -6226,7 +6267,7 @@ dependencies = [
  "percent-encoding",
  "portable-atomic",
  "rand 0.9.4",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
 ]
@@ -6254,7 +6295,7 @@ dependencies = [
  "async-trait",
  "futures",
  "overwatch-derive",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -6583,7 +6624,7 @@ dependencies = [
  "spin",
  "symbolic-demangle",
  "tempfile",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6912,8 +6953,8 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.6.4",
- "thiserror 2.0.18",
+ "socket2 0.5.10",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "web-time",
@@ -6935,7 +6976,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tinyvec",
  "tracing",
  "web-time",
@@ -6950,7 +6991,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.59.0",
 ]
@@ -7111,7 +7152,7 @@ checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
 dependencies = [
  "getrandom 0.2.17",
  "libredox",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -7319,7 +7360,7 @@ dependencies = [
  "quote",
  "rand 0.9.4",
  "syn 1.0.109",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tiny-keccak",
  "tokio",
 ]
@@ -7979,7 +8020,7 @@ dependencies = [
  "keccak",
  "rand 0.8.6",
  "sha3",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "zerocopy",
  "zeroize",
 ]
@@ -8301,22 +8342,15 @@ dependencies = [
  "hex",
  "logos-blockchain-binary-codec",
  "logos-blockchain-blend-service",
- "logos-blockchain-chain-leader-service",
- "logos-blockchain-chain-network-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-common-http-client",
  "logos-blockchain-config",
  "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-cryptarchia-sync",
- "logos-blockchain-groth16",
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
- "logos-blockchain-ledger",
  "logos-blockchain-libp2p",
  "logos-blockchain-network-service",
  "logos-blockchain-node",
- "logos-blockchain-time-service",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "num-bigint",
@@ -8328,11 +8362,12 @@ dependencies = [
  "sysinfo",
  "tar",
  "tempfile",
+ "testing-framework-app",
  "testing-framework-core",
  "testing-framework-runner-compose",
  "testing-framework-runner-k8s",
  "testing-framework-runner-local",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "tracing",
@@ -8340,9 +8375,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "testing-framework-app"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=8d87f69108685c6685857a8206d9bb9532b24f47#8d87f69108685c6685857a8206d9bb9532b24f47"
+dependencies = [
+ "async-trait",
+ "rand 0.8.6",
+ "testing-framework-container",
+ "testing-framework-core",
+ "testing-framework-runner-local",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "testing-framework-container"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=8d87f69108685c6685857a8206d9bb9532b24f47#8d87f69108685c6685857a8206d9bb9532b24f47"
+dependencies = [
+ "async-trait",
+ "testing-framework-core",
+]
+
+[[package]]
 name = "testing-framework-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=db880d61155db3a4f32177ef16b0f1e4bf22b1f6#db880d61155db3a4f32177ef16b0f1e4bf22b1f6"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=8d87f69108685c6685857a8206d9bb9532b24f47#8d87f69108685c6685857a8206d9bb9532b24f47"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8357,7 +8415,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -8365,17 +8423,20 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-compose"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=db880d61155db3a4f32177ef16b0f1e4bf22b1f6#db880d61155db3a4f32177ef16b0f1e4bf22b1f6"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=8d87f69108685c6685857a8206d9bb9532b24f47#8d87f69108685c6685857a8206d9bb9532b24f47"
 dependencies = [
  "anyhow",
  "async-trait",
+ "futures",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",
  "tera",
+ "testing-framework-container",
  "testing-framework-core",
- "thiserror 2.0.18",
+ "testing-framework-tools",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-retry",
  "tracing",
@@ -8386,7 +8447,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-k8s"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=db880d61155db3a4f32177ef16b0f1e4bf22b1f6#db880d61155db3a4f32177ef16b0f1e4bf22b1f6"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=8d87f69108685c6685857a8206d9bb9532b24f47#8d87f69108685c6685857a8206d9bb9532b24f47"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8401,7 +8462,7 @@ dependencies = [
  "serde_yaml",
  "tempfile",
  "testing-framework-core",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-retry",
  "tracing",
@@ -8411,7 +8472,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-local"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=db880d61155db3a4f32177ef16b0f1e4bf22b1f6#db880d61155db3a4f32177ef16b0f1e4bf22b1f6"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=8d87f69108685c6685857a8206d9bb9532b24f47#8d87f69108685c6685857a8206d9bb9532b24f47"
 dependencies = [
  "async-trait",
  "fs_extra",
@@ -8421,11 +8482,16 @@ dependencies = [
  "sha2",
  "tempfile",
  "testing-framework-core",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-retry",
  "tracing",
 ]
+
+[[package]]
+name = "testing-framework-tools"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=8d87f69108685c6685857a8206d9bb9532b24f47#8d87f69108685c6685857a8206d9bb9532b24f47"
 
 [[package]]
 name = "textwrap"
@@ -8449,11 +8515,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.18"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl 2.0.18",
+ "thiserror-impl 2.0.21",
 ]
 
 [[package]]
@@ -8469,13 +8535,13 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.18"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.118",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -8852,7 +8918,7 @@ checksum = "050686193eb999b4bb3bc2acfa891a13da00f79734704c4b8b4ef1a10b368a3c"
 dependencies = [
  "crossbeam-channel",
  "symlink",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "time",
  "tracing-subscriber",
 ]
@@ -9060,6 +9126,15 @@ name = "unicode-linebreak"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"
@@ -9803,7 +9878,7 @@ dependencies = [
  "nom 7.1.3",
  "oid-registry",
  "rusticata-macros",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "time",
 ]
 
@@ -10002,7 +10077,7 @@ dependencies = [
  "flate2",
  "indexmap",
  "memchr",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
  "zopfli",
 ]
 

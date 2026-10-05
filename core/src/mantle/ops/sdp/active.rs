@@ -423,7 +423,7 @@ mod tests {
             .expect("the declaration stays registered");
         assert_eq!(updated.active, epoch);
         assert_eq!(updated.nonce, nonce);
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     /// Verifies an active message at `epoch` against a declaration whose

@@ -1,10 +1,9 @@
 use std::{error::Error, thread, time::Duration};
 
 use lb_testing_framework::{
-    CoreBuilderExt as _, K8sRunnerError, LbcK8sDeployer, ScenarioBuilder, ScenarioBuilderExt as _,
-    run_with_failure_diagnostics,
+    AppHostDeployError, AppHostDeployer, K8sManualClusterError, LbcClusterBackend, ScenarioBuilder,
+    ScenarioBuilderExt as _, run_with_failure_diagnostics,
 };
-use testing_framework_core::scenario::Deployer as _;
 
 type TestResult = Result<(), Box<dyn Error + Send + Sync>>;
 
@@ -35,20 +34,22 @@ fn run_k8s_smoke() -> TestResult {
         let mut scenario = ScenarioBuilder::deployment_with(|topology| {
             topology.nodes(1).scenario_base_dir(std::env::temp_dir())
         })
+        .with_backend(LbcClusterBackend::K8s)
         .with_run_duration(Duration::from_mins(3))
         .expect_consensus_liveness()
         .build()
         .map_err(|err| -> Box<dyn Error + Send + Sync> { err.into() })?;
 
-        let deployer = LbcK8sDeployer::default();
-        let runner = match deployer.deploy(&scenario).await {
+        let runner = match AppHostDeployer.deploy(&scenario).await {
             Ok(runner) => runner,
-            Err(K8sRunnerError::ClientInit { source }) => {
-                tracing::warn!("Kubernetes cluster unavailable ({source}); skipping");
+            Err(err) => {
+                if let Some(source) = k8s_client_init_failure(&err) {
+                    tracing::warn!("Kubernetes cluster unavailable ({source}); skipping");
 
-                return Ok(None);
+                    return Ok(None);
+                }
+                return Err(Box::<dyn Error + Send + Sync>::from(err));
             }
-            Err(err) => return Err(Box::<dyn Error + Send + Sync>::from(err)),
         };
 
         let handle = run_with_failure_diagnostics(runner, &mut scenario)
@@ -63,6 +64,16 @@ fn run_k8s_smoke() -> TestResult {
     }
 
     Ok(())
+}
+
+fn k8s_client_init_failure(error: &AppHostDeployError) -> Option<String> {
+    let AppHostDeployError::RuntimeExtensions { source } = error else {
+        return None;
+    };
+    match source.downcast_ref::<K8sManualClusterError>() {
+        Some(K8sManualClusterError::ClientInit { source }) => Some(source.to_string()),
+        _ => None,
+    }
 }
 
 fn format_panic(panic: &Box<dyn std::any::Any + Send>) -> String {

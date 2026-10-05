@@ -995,7 +995,7 @@ mod tests {
             Note, Op, OpProof, SignedOps,
             channel::Channels,
             gas::{MainnetGasProfile, TxGasCalculator as _},
-            ledger::{Inputs, Outputs, Utxos, VerifiableOperation as _},
+            ledger::{BoundedInputs, Inputs, Outputs, Utxos, VerifiableOperation as _},
             ops::{
                 OpId as _, OpRef, SignedOperation,
                 channel::{
@@ -1017,7 +1017,7 @@ mod tests {
             },
         },
         proofs::{
-            channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+            channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
             leader_claim_proof::Groth16LeaderClaimProof,
         },
         sdp::{ActivityMetadata, DeclarationId, Nonce},
@@ -1025,7 +1025,7 @@ mod tests {
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{CompressedGroth16Proof, Field as _};
     use lb_key_management_system_keys::keys::{
-        Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey, ZkSignature,
+        Ed25519Key, Ed25519PublicKey, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey, ZkSignature,
     };
     use num_bigint::BigUint;
 
@@ -1157,7 +1157,7 @@ mod tests {
         config: &Config,
         id: ChannelId,
         signing_key: &Ed25519Key,
-        verifying_key: Ed25519PublicKey,
+        verifying_key: UnverifiedEd25519PublicKey,
     ) -> LedgerState {
         let tx = create_signed_tx(
             Op::ChannelInscribe(InscriptionOp {
@@ -1181,7 +1181,7 @@ mod tests {
     ) -> SignedOps<Preverified, StandardMode> {
         create_signed_tx(
             Op::ChannelConfig(config_op),
-            &Key::MultiSequencer(ChannelMultiSigProof::try_new([].into()).unwrap()),
+            &Key::MultiSequencer(ChannelMultiSigProof::empty()),
         )
     }
 
@@ -1191,14 +1191,10 @@ mod tests {
     ) -> SignedOps<Preverified, StandardMode> {
         let ops = Ops::from([Op::ChannelConfig(config_op.clone())]);
         let config_tx_hash = ops.hash();
-        let config_proof = ChannelMultiSigProof::try_new(
-            [IndexedSignature::new(
-                0,
-                signing_key.sign_payload(config_tx_hash.as_signing_bytes()),
-            )]
-            .into(),
-        )
-        .unwrap();
+        let config_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
+            0,
+            signing_key.sign_payload(config_tx_hash.as_signing_bytes()),
+        )));
 
         create_signed_tx(
             Op::ChannelConfig(config_op),
@@ -1333,7 +1329,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3, 4].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let tx = create_signed_tx(Op::ChannelInscribe(inscribe_op), &Key::Ed25519(signing_key));
@@ -1351,7 +1347,7 @@ mod tests {
                 .channels
                 .contains_key(&channel_id)
         );
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]
@@ -1394,9 +1390,9 @@ mod tests {
                 .get(&channel_id)
                 .unwrap()
                 .accredited_keys,
-            verifying_key.into()
+            verifying_key.into_unverified().into()
         );
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]
@@ -1461,7 +1457,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let mut tip = first_inscribe.id();
         let first_tx = create_signed_tx(
@@ -1491,7 +1487,7 @@ mod tests {
                 channel_id,
                 inscription: [byte].into(),
                 parent: tip,
-                signer: verifying_key,
+                signer: verifying_key.into_unverified(),
             };
             tip = inscribe.id();
             let tx = create_signed_tx(
@@ -1599,7 +1595,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let first_tx = create_signed_tx(
             Op::ChannelInscribe(first_inscribe.clone()),
@@ -1631,7 +1627,7 @@ mod tests {
             channel_id,
             inscription: [4, 5, 6].into(),
             parent: first_inscribe.id(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let second_tx = create_signed_tx(
             Op::ChannelInscribe(second_inscribe.clone()),
@@ -1665,7 +1661,7 @@ mod tests {
             &test_config,
             channel_id,
             &signing_key,
-            verifying_key,
+            verifying_key.into_unverified(),
         );
         assert!(
             ledger_state
@@ -1678,7 +1674,7 @@ mod tests {
         // Submit a deposit operation
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let ops = vec![Op::ChannelDeposit(deposit.clone())];
@@ -1759,13 +1755,13 @@ mod tests {
             &test_config,
             channel_id,
             &signing_key,
-            verifying_key,
+            verifying_key.into_unverified(),
         );
 
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
@@ -1787,18 +1783,14 @@ mod tests {
         // keeps the NoteId the deposit gave it.
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         };
         let withdraw_tx = Ops::from([Op::ChannelWithdraw(withdraw)]);
         let withdraw_tx_hash = withdraw_tx.hash();
-        let withdraw_proof = ChannelMultiSigProof::try_new(
-            [IndexedSignature::new(
-                0,
-                signing_key.sign_payload(withdraw_tx_hash.as_signing_bytes()),
-            )]
-            .into(),
-        )
-        .unwrap();
+        let withdraw_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
+            0,
+            signing_key.sign_payload(withdraw_tx_hash.as_signing_bytes()),
+        )));
 
         let signed_tx = create_multi_signed_tx(
             withdraw_tx.to_vec(),
@@ -1821,7 +1813,7 @@ mod tests {
                 .is_channel_note(&deposited)
         );
         assert!(new_state.latest_utxos().contains(&deposited));
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     // A transaction can create a channel, fund it and spend from it, so the fee
@@ -1848,13 +1840,13 @@ mod tests {
         };
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         };
         let ops = vec![
             Op::ChannelConfig(config_op),
@@ -1863,18 +1855,11 @@ mod tests {
         ];
 
         let tx_hash = Ops::new_unchecked(ops.clone()).hash();
-        let genesis_key = Key::MultiSequencer(ChannelMultiSigProof::try_new([].into()).unwrap());
+        let genesis_key = Key::MultiSequencer(ChannelMultiSigProof::empty());
         let deposit_key = Key::Zk(sk);
-        let withdraw_key = Key::MultiSequencer(
-            ChannelMultiSigProof::try_new(
-                [IndexedSignature::new(
-                    0,
-                    signing_key.sign_payload(tx_hash.as_signing_bytes()),
-                )]
-                .into(),
-            )
-            .unwrap(),
-        );
+        let withdraw_key = Key::MultiSequencer(ChannelMultiSigProof::new(IndexedSignatures::from(
+            (0, signing_key.sign_payload(tx_hash.as_signing_bytes())),
+        )));
         let tx = create_multi_signed_tx(ops, vec![&genesis_key, &deposit_key, &withdraw_key]);
 
         // The estimator only sees the state before the transaction, where the
@@ -1916,7 +1901,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let config_op = ChannelConfigOp {
             channel: channel_id,
@@ -1934,16 +1919,10 @@ mod tests {
 
         let tx_hash = Ops::new_unchecked(ops.clone()).hash();
         let inscribe_key = Key::Ed25519(signing_key.clone());
-        let config_key = Key::MultiSequencer(
-            ChannelMultiSigProof::try_new(
-                [IndexedSignature::new(
-                    0,
-                    signing_key.sign_payload(tx_hash.as_signing_bytes()),
-                )]
-                .into(),
-            )
-            .unwrap(),
-        );
+        let config_key = Key::MultiSequencer(ChannelMultiSigProof::new(IndexedSignatures::from((
+            0,
+            signing_key.sign_payload(tx_hash.as_signing_bytes()),
+        ))));
         let tx = create_multi_signed_tx(ops, vec![&inscribe_key, &config_key]);
 
         let prices = GasPrices::default();
@@ -1985,17 +1964,17 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         };
         let ops = vec![
             Op::ChannelInscribe(inscribe_op),
@@ -2006,16 +1985,9 @@ mod tests {
         let tx_hash = Ops::new_unchecked(ops.clone()).hash();
         let inscribe_key = Key::Ed25519(signing_key.clone());
         let deposit_key = Key::Zk(sk);
-        let withdraw_key = Key::MultiSequencer(
-            ChannelMultiSigProof::try_new(
-                [IndexedSignature::new(
-                    0,
-                    signing_key.sign_payload(tx_hash.as_signing_bytes()),
-                )]
-                .into(),
-            )
-            .unwrap(),
-        );
+        let withdraw_key = Key::MultiSequencer(ChannelMultiSigProof::new(IndexedSignatures::from(
+            (0, signing_key.sign_payload(tx_hash.as_signing_bytes())),
+        )));
         let tx = create_multi_signed_tx(ops, vec![&inscribe_key, &deposit_key, &withdraw_key]);
 
         let prices = GasPrices::default();
@@ -2054,17 +2026,17 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let transfer = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
             outputs: Outputs::try_new(vec![utxo.note]).unwrap(),
         };
         let ops = vec![
@@ -2076,16 +2048,9 @@ mod tests {
         let tx_hash = Ops::new_unchecked(ops.clone()).hash();
         let inscribe_key = Key::Ed25519(signing_key.clone());
         let deposit_key = Key::Zk(sk);
-        let transfer_key = Key::MultiSequencer(
-            ChannelMultiSigProof::try_new(
-                [IndexedSignature::new(
-                    0,
-                    signing_key.sign_payload(tx_hash.as_signing_bytes()),
-                )]
-                .into(),
-            )
-            .unwrap(),
-        );
+        let transfer_key = Key::MultiSequencer(ChannelMultiSigProof::new(IndexedSignatures::from(
+            (0, signing_key.sign_payload(tx_hash.as_signing_bytes())),
+        )));
         let tx = create_multi_signed_tx(ops, vec![&inscribe_key, &deposit_key, &transfer_key]);
 
         let prices = GasPrices::default();
@@ -2124,12 +2089,12 @@ mod tests {
             &test_config,
             channel_id,
             &signing_key,
-            verifying_key,
+            verifying_key.into_unverified(),
         );
 
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
@@ -2147,16 +2112,12 @@ mod tests {
         // it, so the original input never comes back to the ledger.
         let withdraw_tx = Ops::from([Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         })]);
-        let withdraw_proof = ChannelMultiSigProof::try_new(
-            [IndexedSignature::new(
-                0,
-                signing_key.sign_payload(withdraw_tx.hash().as_signing_bytes()),
-            )]
-            .into(),
-        )
-        .unwrap();
+        let withdraw_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
+            0,
+            signing_key.sign_payload(withdraw_tx.hash().as_signing_bytes()),
+        )));
         let signed_withdraw = create_multi_signed_tx(
             withdraw_tx.to_vec(),
             vec![&Key::MultiSequencer(withdraw_proof)],
@@ -2190,13 +2151,13 @@ mod tests {
             &test_config,
             channel_id,
             &signing_key,
-            verifying_key,
+            verifying_key.into_unverified(),
         );
 
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: BoundedInputs::from(utxo.id()).into(),
             metadata: Metadata::empty(),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
@@ -2217,19 +2178,15 @@ mod tests {
         // Try to withdraw the channel note, but with an invalid proof
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposited]),
+            inputs: BoundedInputs::from(deposited).into(),
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
         let withdraw_tx = Ops::from([Op::ChannelWithdraw(withdraw)]);
         let withdraw_tx_hash = withdraw_tx.hash();
-        let invalid_proof = ChannelMultiSigProof::try_new(
-            [IndexedSignature::new(
-                0,
-                wrong_key.sign_payload(withdraw_tx_hash.as_signing_bytes()),
-            )]
-            .into(),
-        )
-        .unwrap();
+        let invalid_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
+            0,
+            wrong_key.sign_payload(withdraw_tx_hash.as_signing_bytes()),
+        )));
 
         let signed_tx = create_multi_signed_tx(
             withdraw_tx.to_vec(),
@@ -2269,7 +2226,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let first_tx = create_signed_tx(
@@ -2287,7 +2244,7 @@ mod tests {
             channel_id,
             inscription: [4, 5, 6].into(),
             parent: wrong_parent,
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let second_tx = create_signed_tx(
@@ -2312,7 +2269,7 @@ mod tests {
             channel_id: empty_channel_id,
             inscription: [7, 8, 9].into(),
             parent: MsgId::from([1; 32]), // non-root parent
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let empty_tx = create_signed_tx(
@@ -2344,7 +2301,7 @@ mod tests {
             channel_id,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: verifying_key,
+            signer: verifying_key.into_unverified(),
         };
 
         let correct_parent = first_inscribe.id();
@@ -2362,7 +2319,7 @@ mod tests {
             channel_id,
             inscription: [4, 5, 6].into(),
             parent: correct_parent,
-            signer: unauthorized_verifying_key,
+            signer: unauthorized_verifying_key.into_unverified(),
         };
 
         let second_tx = create_signed_tx(
@@ -2401,14 +2358,14 @@ mod tests {
             channel_id: channel1,
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
-            signer: vk1,
+            signer: vk1.into_unverified(),
         };
 
         let inscribe_op2 = InscriptionOp {
             channel_id: channel2,
             inscription: [4, 5, 6].into(),
             parent: MsgId::root(),
-            signer: vk2,
+            signer: vk2.into_unverified(),
         };
 
         let config_op = ChannelConfigOp {
@@ -2425,7 +2382,7 @@ mod tests {
             channel_id: channel1,
             inscription: [7, 8, 9].into(),
             parent: inscribe_op1.id(),
-            signer: vk3,
+            signer: vk3.into_unverified(),
         };
 
         let ops = vec![
@@ -2436,14 +2393,10 @@ mod tests {
         ];
         let config_tx = Ops::new_unchecked(ops.clone());
         let config_tx_hash = config_tx.hash();
-        let config_proof = ChannelMultiSigProof::try_new(
-            [IndexedSignature::new(
-                0,
-                sk1.sign_payload(config_tx_hash.as_signing_bytes()),
-            )]
-            .into(),
-        )
-        .unwrap();
+        let config_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
+            0,
+            sk1.sign_payload(config_tx_hash.as_signing_bytes()),
+        )));
 
         let tx = create_multi_signed_tx(
             ops,
@@ -2680,7 +2633,7 @@ mod tests {
         // The `unwrap` should succeed because the user pays at least the base fee of
         // 794
         let (no_priority_fee_ledger, events, _) = result.unwrap();
-        assert!(events.is_empty());
+        assert_eq!(events, []);
 
         // The tx ays 1794 fees = 590 execution base fee + 1000 execution tip + 204
         // storage
@@ -2712,7 +2665,7 @@ mod tests {
                 .leaders
                 .get_pending_rewards()
         );
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 
     #[test]
@@ -2871,7 +2824,7 @@ mod tests {
             RewardPoWConfig {
                 reward_pool_genesis: 1_000_000_000,
                 epoch_reward_genesis: 1_000_000,
-                initial_difficulty: ModulusShift::new::<26>(),
+                minimum_difficulty: ModulusShift::new::<26>(),
                 ema_smoothing_factor: 9,
                 ema_smoothing_precision: NonZeroU64::new(10).expect("10 is non-zero"),
                 target_claims_per_block: 100,
@@ -2993,16 +2946,29 @@ mod tests {
         fn difficulty_is_seeded_at_genesis_and_the_controller_can_move_it() {
             // Genesis seeds a nonzero initial difficulty (zero would be an
             // absorbing state for the controller, with no ticket ever able
-            // to satisfy it), and the per-block retarget moves it: an empty
-            // block (no claims) eases the target upward.
+            // to satisfy it). It is also the minimum difficulty: an empty
+            // block (no claims) cannot ease the target past it. The per-block
+            // retarget still moves it the other way: excess claims harden it.
             let test_utxo = utxo();
-            let (mut test_ledger, genesis) = ledger(&[test_utxo], config());
+            let config = config();
+            let (mut test_ledger, genesis) = ledger(&[test_utxo], config.clone());
             let genesis_difficulty = difficulty_at(&test_ledger, genesis);
             assert_ne!(genesis_difficulty, Fr::ZERO);
 
             let block_1 = update_ledger(&mut test_ledger, genesis, 1, test_utxo)
                 .expect("empty block should apply");
-            assert!(difficulty_at(&test_ledger, block_1) > genesis_difficulty);
+            assert_eq!(difficulty_at(&test_ledger, block_1), genesis_difficulty);
+
+            let mut state = test_ledger
+                .state(&block_1)
+                .expect("block state should exist")
+                .clone();
+            state.update_pow_reward_difficulty(u64::MAX, &config);
+            let hardened = state.mantle_ledger.pow.reward_difficulty();
+            assert!(
+                BigUint::from_bytes_le(&lb_groth16::fr_to_bytes(&hardened))
+                    < BigUint::from_bytes_le(&lb_groth16::fr_to_bytes(&genesis_difficulty))
+            );
         }
 
         fn claim_tx() -> SignedOps<Preverified, StandardMode> {

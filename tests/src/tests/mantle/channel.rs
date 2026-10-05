@@ -8,7 +8,7 @@ use lb_core::{
     mantle::{
         NoteId,
         gas::GasCost,
-        ledger::Inputs,
+        ledger::BoundedInputs,
         ops::channel::{ChannelId, deposit::DepositOp},
         traits::Hashable as _,
         transactions::hash::TxHash,
@@ -118,7 +118,7 @@ async fn channel_deposit() {
     assert_eq!(selected_deposit_amount, deposit_amount);
     let deposit_op = DepositOp {
         channel_id,
-        inputs: Inputs::new([note_id]),
+        inputs: BoundedInputs::from(note_id).into(),
         metadata: format!("Mint {deposit_amount} to Alice in Zone")
             .into_bytes()
             .try_into()
@@ -345,16 +345,10 @@ async fn channel_withdraw_updates_wallet_balance() {
         HashMap::from([(channel_id, 1)]),
         Op::ChannelWithdraw(withdraw.clone()),
         |tx_hash| {
-            OpProof::ChannelMultiSigProof(
-                ChannelMultiSigProof::try_new(
-                    [IndexedSignature::new(
-                        0,
-                        channel_signing_key.sign_payload(tx_hash.as_signing_bytes()),
-                    )]
-                    .into(),
-                )
-                .expect("withdraw proof should be valid"),
-            )
+            OpProof::ChannelMultiSigProof(ChannelMultiSigProof::new(IndexedSignatures::from((
+                0,
+                channel_signing_key.sign_payload(tx_hash.as_signing_bytes()),
+            ))))
         },
     )
     .await;
@@ -416,10 +410,21 @@ fn channel_deposit_wallet_config(
 }
 
 fn channel_test_config(mut config: RunConfig) -> RunConfig {
-    config.deployment.time.slot_duration = Duration::from_secs(1);
-    config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
-    config.deployment.cryptarchia.slot_activation_coeff =
-        NonNegativeRatio::new(1, 2.try_into().unwrap());
+    config
+        .deployment
+        .genesis_era_parameters_mut()
+        .time
+        .slot_duration = Duration::from_secs(1);
+    config
+        .deployment
+        .genesis_era_parameters_mut()
+        .cryptarchia
+        .security_param = NonZero::new(3).unwrap();
+    config
+        .deployment
+        .genesis_era_parameters_mut()
+        .cryptarchia
+        .slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().unwrap());
     config
 }
 
@@ -438,7 +443,7 @@ async fn submit_channel_deposit(
     assert_eq!(selected_deposit_amount, deposit_amount);
     let deposit_op = DepositOp {
         channel_id,
-        inputs: Inputs::new([note_id]),
+        inputs: BoundedInputs::from(note_id).into(),
         metadata: format!("Mint {deposit_amount} to Alice in Zone")
             .into_bytes()
             .try_into()

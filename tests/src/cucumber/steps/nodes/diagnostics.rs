@@ -4,6 +4,8 @@ use std::{
     io::Write as _,
     net::SocketAddr,
     num::{NonZero, NonZeroU64},
+    path::PathBuf,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -31,54 +33,112 @@ use crate::cucumber::{
 const TIMELINE_FILE: &str = "blend_diagnostic_timeline.ndjson";
 const DIAGNOSTIC_QUERY_TIMEOUT: Duration = Duration::from_millis(1_500);
 
-fn append_timeline_record(world: &CucumberWorld, record: &serde_json::Value) {
-    let path = world.lifecycle.scenario_base_dir.join(TIMELINE_FILE);
-    let result = (|| -> std::io::Result<()> {
-        let mut header_written = world
-            .blend_diagnostics
-            .timeline_header_written
-            .lock()
-            .map_err(|_| std::io::Error::other("timeline header lock poisoned"))?;
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
-        if !*header_written {
-            if file.metadata()?.len() != 0 {
-                file.write_all(b"\n")?;
-            }
-            let timestamp = OffsetDateTime::now_utc();
-            let header = serde_json::json!({
-                "event": "blend_diagnostic_timeline_header",
-                "date": timestamp.date().to_string(),
-                "time": timestamp.time().to_string(),
-                "scenario": world
-                    .lifecycle
-                    .scenario_name
-                    .as_deref()
-                    .unwrap_or("<unknown>"),
-            });
-            serde_json::to_writer(&mut file, &header).map_err(std::io::Error::other)?;
-            file.write_all(b"\n\n")?;
-            *header_written = true;
-        }
-        serde_json::to_writer(&mut file, record).map_err(std::io::Error::other)?;
-        file.write_all(b"\n")?;
-        file.flush()?;
-        drop(header_written);
-        Ok(())
-    })();
+#[derive(Clone)]
+pub struct BlendDiagnosticEventLogger {
+    scenario_base_dir: PathBuf,
+    scenario_name: Option<String>,
+    timeline_header_written: Arc<Mutex<bool>>,
+}
 
-    if let Err(error) = result {
-        warn!(
+impl BlendDiagnosticEventLogger {
+    #[must_use]
+    pub fn from_world(world: &CucumberWorld) -> Self {
+        Self {
+            scenario_base_dir: world.lifecycle.scenario_base_dir.clone(),
+            scenario_name: world.lifecycle.scenario_name.clone(),
+            timeline_header_written: Arc::clone(&world.blend_diagnostics.timeline_header_written),
+        }
+    }
+
+    pub fn append_timeline_record(&self, record: &serde_json::Value) {
+        let path = self.scenario_base_dir.join(TIMELINE_FILE);
+        let result = (|| -> std::io::Result<()> {
+            let mut header_written = self
+                .timeline_header_written
+                .lock()
+                .map_err(|_| std::io::Error::other("timeline header lock poisoned"))?;
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)?;
+            if !*header_written {
+                if file.metadata()?.len() != 0 {
+                    file.write_all(b"\n")?;
+                }
+                let timestamp = OffsetDateTime::now_utc();
+                let header = serde_json::json!({
+                    "event": "blend_diagnostic_timeline_header",
+                    "date": timestamp.date().to_string(),
+                    "time": timestamp.time().to_string(),
+                    "scenario": self
+                        .scenario_name
+                        .as_deref()
+                        .unwrap_or("<unknown>"),
+                });
+                serde_json::to_writer(&mut file, &header).map_err(std::io::Error::other)?;
+                file.write_all(b"\n\n")?;
+                *header_written = true;
+            }
+            serde_json::to_writer(&mut file, record).map_err(std::io::Error::other)?;
+            file.write_all(b"\n")?;
+            file.flush()?;
+            drop(header_written);
+            Ok(())
+        })();
+
+        if let Err(error) = result {
+            warn!(
+                target: TARGET,
+                diagnostic = BLEND_REACHABILITY,
+                event = "timeline_write_failure",
+                path = %path.display(),
+                error = %error,
+                "Could not persist Blend diagnostic timeline record"
+            );
+        }
+    }
+
+    pub fn append_named_timeline_record(&self, event: &str, fields: &serde_json::Value) {
+        let mut record = fields.as_object().cloned().unwrap_or_default();
+        record.insert("event".to_owned(), event.into());
+        record.insert(
+            "timestamp".to_owned(),
+            OffsetDateTime::now_utc().to_string().into(),
+        );
+        self.append_timeline_record(&serde_json::Value::Object(record));
+    }
+
+    pub fn log_blend_relay_event(
+        &self,
+        event: &str,
+        node_name: &str,
+        declared_addr: SocketAddr,
+        backend_addr: SocketAddr,
+        phase: &str,
+    ) {
+        info!(
             target: TARGET,
             diagnostic = BLEND_REACHABILITY,
-            event = "timeline_write_failure",
-            path = %path.display(),
-            error = %error,
-            "Could not persist Blend diagnostic timeline record"
+            event,
+            node = node_name,
+            declared_addr = %declared_addr,
+            backend_addr = %backend_addr,
+            phase,
+            "Blend provider relay event"
         );
+        self.append_timeline_record(&serde_json::json!({
+            "event": event,
+            "timestamp": OffsetDateTime::now_utc().to_string(),
+            "node": node_name,
+            "declared_addr": declared_addr.to_string(),
+            "backend_addr": backend_addr.to_string(),
+            "phase": phase,
+        }));
     }
+}
+
+fn append_timeline_record(world: &CucumberWorld, record: &serde_json::Value) {
+    BlendDiagnosticEventLogger::from_world(world).append_timeline_record(record);
 }
 
 pub fn log_blend_relay_event(
@@ -89,26 +149,12 @@ pub fn log_blend_relay_event(
     backend_addr: SocketAddr,
     phase: &str,
 ) {
-    info!(
-        target: TARGET,
-        diagnostic = BLEND_REACHABILITY,
+    BlendDiagnosticEventLogger::from_world(world).log_blend_relay_event(
         event,
-        node = node_name,
-        declared_addr = %declared_addr,
-        backend_addr = %backend_addr,
+        node_name,
+        declared_addr,
+        backend_addr,
         phase,
-        "Blend provider relay event"
-    );
-    append_timeline_record(
-        world,
-        &serde_json::json!({
-            "event": event,
-            "timestamp": OffsetDateTime::now_utc().to_string(),
-            "node": node_name,
-            "declared_addr": declared_addr.to_string(),
-            "backend_addr": backend_addr.to_string(),
-            "phase": phase,
-        }),
     );
 }
 
@@ -167,19 +213,28 @@ impl BlendDiagnosticParameterSet {
     }
 
     const fn apply_to(&self, settings: &mut DeploymentSettings) {
-        settings.cryptarchia.security_param = NonZero::new(self.security_parameter)
-            .expect("named Blend diagnostic security parameter must be non-zero");
-        settings.time.slot_duration = Duration::from_secs(self.slot_duration_secs);
         settings
+            .genesis_era_parameters_mut()
+            .cryptarchia
+            .security_param = NonZero::new(self.security_parameter)
+            .expect("named Blend diagnostic security parameter must be non-zero");
+        settings.genesis_era_parameters_mut().time.slot_duration =
+            Duration::from_secs(self.slot_duration_secs);
+        settings
+            .genesis_era_parameters_mut()
             .cryptarchia
             .epoch_config
             .epoch_stake_distribution_stabilization =
             NonZero::new(self.epoch_stake_distribution_stabilization)
                 .expect("named Blend diagnostic phase must be non-zero");
-        settings.cryptarchia.epoch_config.epoch_period_nonce_buffer =
-            NonZero::new(self.epoch_period_nonce_buffer)
-                .expect("named Blend diagnostic phase must be non-zero");
         settings
+            .genesis_era_parameters_mut()
+            .cryptarchia
+            .epoch_config
+            .epoch_period_nonce_buffer = NonZero::new(self.epoch_period_nonce_buffer)
+            .expect("named Blend diagnostic phase must be non-zero");
+        settings
+            .genesis_era_parameters_mut()
             .cryptarchia
             .epoch_config
             .epoch_period_nonce_stabilization = NonZero::new(self.epoch_period_nonce_stabilization)
@@ -188,7 +243,10 @@ impl BlendDiagnosticParameterSet {
 
     fn effective_deployment_settings(self) -> DeploymentSettings {
         let mut settings = DeploymentSettings::default();
-        settings.cryptarchia.slot_activation_coeff = TopologyConfig::default().active_slot_coeff;
+        settings
+            .genesis_era_parameters_mut()
+            .cryptarchia
+            .slot_activation_coeff = TopologyConfig::default().active_slot_coeff;
         self.apply_to(&mut settings);
         settings
     }
@@ -206,8 +264,9 @@ struct DiagnosticGeometry {
 
 impl DiagnosticGeometry {
     fn from_settings(settings: &DeploymentSettings) -> Self {
-        let epoch_config = settings.cryptarchia.epoch_config;
+        let epoch_config = settings.genesis_era_parameters().cryptarchia.epoch_config;
         let base_period_length = settings
+            .genesis_era_parameters()
             .cryptarchia
             .consensus_config()
             .base_period_length()
@@ -219,7 +278,10 @@ impl DiagnosticGeometry {
         );
         let finalization_length = base_period_length
             .saturating_mul(NonZeroU64::from(epoch_config.epoch_period_nonce_stabilization).get());
-        let slots_per_epoch = settings.cryptarchia.slots_per_epoch();
+        let slots_per_epoch = settings
+            .genesis_era_parameters()
+            .cryptarchia
+            .slots_per_epoch();
 
         Self {
             base_period_length,
@@ -309,13 +371,13 @@ pub fn set_blend_diagnostic_parameter_set(
     set_deployment_config_override(
         world,
         step,
-        "time.slot_duration",
+        "eras.0.time.slot_duration",
         &format!("seconds({})", parameter_set.slot_duration_secs),
     )?;
     set_deployment_config_override(
         world,
         step,
-        "cryptarchia.epoch_config.epoch_stake_distribution_stabilization",
+        "eras.0.cryptarchia.epoch_config.epoch_stake_distribution_stabilization",
         &parameter_set
             .epoch_stake_distribution_stabilization
             .to_string(),
@@ -323,13 +385,13 @@ pub fn set_blend_diagnostic_parameter_set(
     set_deployment_config_override(
         world,
         step,
-        "cryptarchia.epoch_config.epoch_period_nonce_buffer",
+        "eras.0.cryptarchia.epoch_config.epoch_period_nonce_buffer",
         &parameter_set.epoch_period_nonce_buffer.to_string(),
     )?;
     set_deployment_config_override(
         world,
         step,
-        "cryptarchia.epoch_config.epoch_period_nonce_stabilization",
+        "eras.0.cryptarchia.epoch_config.epoch_period_nonce_stabilization",
         &parameter_set.epoch_period_nonce_stabilization.to_string(),
     )?;
 
@@ -341,20 +403,20 @@ pub fn set_blend_diagnostic_parameter_set(
         diagnostic = BLEND_REACHABILITY,
         event = "blend_diagnostic_parameter_set",
         parameter_set = parameter_set.name,
-        security_parameter = settings.cryptarchia.security_param.get(),
-        slot_duration_secs = settings.time.slot_duration.as_secs(),
+        security_parameter = settings.genesis_era_parameters().cryptarchia.security_param.get(),
+        slot_duration_secs = settings.genesis_era_parameters().time.slot_duration.as_secs(),
         epoch_stake_distribution_stabilization = settings
-            .cryptarchia
+            .genesis_era_parameters().cryptarchia
             .epoch_config
             .epoch_stake_distribution_stabilization
             .get(),
         epoch_period_nonce_buffer = settings
-            .cryptarchia
+            .genesis_era_parameters().cryptarchia
             .epoch_config
             .epoch_period_nonce_buffer
             .get(),
         epoch_period_nonce_stabilization = settings
-            .cryptarchia
+            .genesis_era_parameters().cryptarchia
             .epoch_config
             .epoch_period_nonce_stabilization
             .get(),
@@ -364,27 +426,27 @@ pub fn set_blend_diagnostic_parameter_set(
         finalization_length = geometry.finalization_length,
         finalization_midpoint_offset = geometry.finalization_midpoint_offset,
         pre_boundary_offset = geometry.pre_boundary_offset,
-        slot_activation_coeff_numerator = settings.cryptarchia.slot_activation_coeff.numerator,
+        slot_activation_coeff_numerator = settings.genesis_era_parameters().cryptarchia.slot_activation_coeff.numerator,
         slot_activation_coeff_denominator = settings
-            .cryptarchia
+            .genesis_era_parameters().cryptarchia
             .slot_activation_coeff
             .denominator
             .get(),
         "Blend diagnostic parameters: {}: k={}, phases={}/{}/{}, slots_per_epoch={}",
         parameter_set.name,
-        settings.cryptarchia.security_param.get(),
+        settings.genesis_era_parameters().cryptarchia.security_param.get(),
         settings
-            .cryptarchia
+            .genesis_era_parameters().cryptarchia
             .epoch_config
             .epoch_stake_distribution_stabilization
             .get(),
         settings
-            .cryptarchia
+            .genesis_era_parameters().cryptarchia
             .epoch_config
             .epoch_period_nonce_buffer
             .get(),
         settings
-            .cryptarchia
+            .genesis_era_parameters().cryptarchia
             .epoch_config
             .epoch_period_nonce_stabilization
             .get(),
@@ -397,30 +459,30 @@ pub fn set_blend_diagnostic_parameter_set(
             "event": "blend_diagnostic_parameter_set",
             "timestamp": OffsetDateTime::now_utc().to_string(),
             "parameter_set": parameter_set.name,
-            "security_parameter": settings.cryptarchia.security_param.get(),
-            "slot_duration_secs": settings.time.slot_duration.as_secs(),
-            "slot_duration_ms": settings.time.slot_duration.as_millis(),
+            "security_parameter": settings.genesis_era_parameters().cryptarchia.security_param.get(),
+            "slot_duration_secs": settings.genesis_era_parameters().time.slot_duration.as_secs(),
+            "slot_duration_ms": settings.genesis_era_parameters().time.slot_duration.as_millis(),
             "epoch_stake_distribution_stabilization": settings
-                .cryptarchia
+                .genesis_era_parameters().cryptarchia
                 .epoch_config
                 .epoch_stake_distribution_stabilization
                 .get(),
             "epoch_period_nonce_buffer": settings
-                .cryptarchia
+                .genesis_era_parameters().cryptarchia
                 .epoch_config
                 .epoch_period_nonce_buffer
                 .get(),
             "epoch_period_nonce_stabilization": settings
-                .cryptarchia
+                .genesis_era_parameters().cryptarchia
                 .epoch_config
                 .epoch_period_nonce_stabilization
                 .get(),
             "slot_activation_coeff_numerator": settings
-                .cryptarchia
+                .genesis_era_parameters().cryptarchia
                 .slot_activation_coeff
                 .numerator,
             "slot_activation_coeff_denominator": settings
-                .cryptarchia
+                .genesis_era_parameters().cryptarchia
                 .slot_activation_coeff
                 .denominator
                 .get(),
@@ -467,9 +529,13 @@ fn deployment_settings(
 
 #[must_use]
 fn epoch_for_slot(settings: &DeploymentSettings, slot: u64) -> u32 {
-    (slot / settings.cryptarchia.slots_per_epoch())
-        .try_into()
-        .unwrap_or(u32::MAX)
+    (slot
+        / settings
+            .genesis_era_parameters()
+            .cryptarchia
+            .slots_per_epoch())
+    .try_into()
+    .unwrap_or(u32::MAX)
 }
 
 struct EpochObservationConfig<'a> {
@@ -527,23 +593,31 @@ pub async fn observe_epoch_transitions(
         )));
     }
 
-    if world.blend_diagnostics.phase.is_none() {
-        world.blend_diagnostics.phase = Some(BlendDiagnosticPhase::Baseline);
+    if world.blend_diagnostics.reachability.phase().is_none() {
+        world
+            .blend_diagnostics
+            .reachability
+            .set_phase(Some(BlendDiagnosticPhase::Baseline));
     }
     let phase = world
         .blend_diagnostics
-        .phase
+        .reachability
+        .phase()
         .expect("diagnostic phase was initialized above");
     world.blend_diagnostics.reference_node = Some(node_name.to_owned());
     let settings = deployment_settings(world, node_name)?;
     let client = world.resolve_node_http_client(node_name)?;
-    let epoch_length = settings.cryptarchia.slots_per_epoch();
+    let epoch_length = settings
+        .genesis_era_parameters()
+        .cryptarchia
+        .slots_per_epoch();
     let geometry = DiagnosticGeometry::from_settings(&settings);
     let timeout_secs = observation_timeout_secs(&settings, transition_count);
     let poll_interval = observation_poll_interval(&settings);
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     let initial_observation = loop {
+        world.ensure_background_tasks_healthy()?;
         if Instant::now() >= deadline {
             return Err(StepError::Timeout {
                 message: format!(
@@ -630,10 +704,16 @@ pub async fn observe_epoch_transitions(
 
 fn observation_timeout_secs(settings: &DeploymentSettings, transition_count: usize) -> u64 {
     settings
+        .genesis_era_parameters()
         .time
         .slot_duration
         .as_secs()
-        .saturating_mul(settings.cryptarchia.slots_per_epoch())
+        .saturating_mul(
+            settings
+                .genesis_era_parameters()
+                .cryptarchia
+                .slots_per_epoch(),
+        )
         .max(1)
         .saturating_mul(
             u64::try_from(transition_count)
@@ -644,8 +724,16 @@ fn observation_timeout_secs(settings: &DeploymentSettings, transition_count: usi
 
 fn observation_poll_interval(settings: &DeploymentSettings) -> Duration {
     Duration::from_millis(
-        u64::try_from((settings.time.slot_duration.as_millis() / 4).clamp(100, 1_000))
-            .unwrap_or(1_000),
+        u64::try_from(
+            (settings
+                .genesis_era_parameters()
+                .time
+                .slot_duration
+                .as_millis()
+                / 4)
+            .clamp(100, 1_000),
+        )
+        .unwrap_or(1_000),
     )
 }
 
@@ -666,6 +754,7 @@ async fn wait_for_epoch_transitions(
     let geometry = DiagnosticGeometry::from_settings(settings);
     let mut completed_checkpoints = BTreeSet::new();
     loop {
+        world.ensure_background_tasks_healthy()?;
         if Instant::now() >= observation.deadline {
             return Err(StepError::Timeout {
                 message: format!(
@@ -1114,7 +1203,6 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
         .ok_or_else(|| diagnostic_error("No running nodes are available for identity mapping"))?;
     let deployment = deployment_settings(world, reference_node)?;
     let declared_provider_ids = deployment
-        .cryptarchia
         .genesis_block
         .genesis_tx()
         .sdp_declarations()
@@ -1209,7 +1297,7 @@ pub async fn log_node_lifecycle_marker(
     node_name: &str,
     stage: &str,
 ) {
-    let Some(phase) = world.blend_diagnostics.phase else {
+    let Some(phase) = world.blend_diagnostics.reachability.phase() else {
         return;
     };
     let time_info = lifecycle_reference_time(world, event, node_name)
@@ -1329,7 +1417,7 @@ fn log_reference_query_failure(
 }
 
 pub async fn log_majority_outage_summary(world: &CucumberWorld) {
-    let Some(BlendDiagnosticPhase::Outage) = world.blend_diagnostics.phase else {
+    let Some(BlendDiagnosticPhase::Outage) = world.blend_diagnostics.reachability.phase() else {
         return;
     };
     let mut stopped_nodes: Vec<_> = world
@@ -1345,9 +1433,9 @@ pub async fn log_majority_outage_summary(world: &CucumberWorld) {
     });
     let mut blend_unreachable_nodes: Vec<_> = world
         .blend_diagnostics
-        .blend_unreachable_nodes
-        .iter()
-        .cloned()
+        .reachability
+        .unreachable_nodes()
+        .into_iter()
         .collect();
     blend_unreachable_nodes.sort_by(|left, right| {
         diagnostic_node_sort_number(left)
@@ -1397,6 +1485,7 @@ pub async fn log_majority_outage_summary(world: &CucumberWorld) {
 mod tests {
     use super::*;
 
+    #[expect(clippy::too_many_lines, reason = "Test function.")]
     #[test]
     fn named_parameter_sets_apply_expected_values_and_derive_epoch_length() {
         for (name, security_parameter, phases, expected_geometry) in [
@@ -1419,23 +1508,33 @@ mod tests {
             let settings = parameter_set.effective_deployment_settings();
 
             assert_eq!(
-                settings.cryptarchia.security_param.get(),
+                settings
+                    .genesis_era_parameters()
+                    .cryptarchia
+                    .security_param
+                    .get(),
                 security_parameter
             );
-            assert_eq!(settings.time.slot_duration, Duration::from_secs(1));
+            assert_eq!(
+                settings.genesis_era_parameters().time.slot_duration,
+                Duration::from_secs(1)
+            );
             assert_eq!(
                 (
                     settings
+                        .genesis_era_parameters()
                         .cryptarchia
                         .epoch_config
                         .epoch_stake_distribution_stabilization
                         .get(),
                     settings
+                        .genesis_era_parameters()
                         .cryptarchia
                         .epoch_config
                         .epoch_period_nonce_buffer
                         .get(),
                     settings
+                        .genesis_era_parameters()
                         .cryptarchia
                         .epoch_config
                         .epoch_period_nonce_stabilization
@@ -1476,12 +1575,20 @@ mod tests {
                 3 * expected_geometry.1 + expected_geometry.2
             );
             let mut deployment_settings = DeploymentSettings::default();
-            deployment_settings.cryptarchia.slot_activation_coeff =
-                TopologyConfig::default().active_slot_coeff;
+            deployment_settings
+                .genesis_era_parameters_mut()
+                .cryptarchia
+                .slot_activation_coeff = TopologyConfig::default().active_slot_coeff;
             parameter_set.apply_to(&mut deployment_settings);
             assert_eq!(
-                settings.cryptarchia.slots_per_epoch(),
-                deployment_settings.cryptarchia.slots_per_epoch()
+                settings
+                    .genesis_era_parameters()
+                    .cryptarchia
+                    .slots_per_epoch(),
+                deployment_settings
+                    .genesis_era_parameters()
+                    .cryptarchia
+                    .slots_per_epoch()
             );
         }
     }
@@ -1537,5 +1644,43 @@ mod tests {
                 .expect("third record should be valid JSON")["event"],
             "third"
         );
+    }
+
+    #[test]
+    fn cloned_event_logger_persists_background_relay_events() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let mut world = CucumberWorld::default();
+        world.lifecycle.scenario_base_dir = temp_dir.path().to_owned();
+        world.set_scenario_name("background relay events");
+
+        let event_logger = BlendDiagnosticEventLogger::from_world(&world);
+        let background_logger = event_logger.clone();
+        event_logger.log_blend_relay_event(
+            "blend_relay_disabled",
+            "NODE_1",
+            "127.0.0.1:12001"
+                .parse()
+                .expect("declared address is valid"),
+            "127.0.0.1:12002".parse().expect("backend address is valid"),
+            "outage",
+        );
+        background_logger.append_timeline_record(&serde_json::json!({
+            "event": "blend_churn_transition",
+            "epoch": 3,
+        }));
+
+        let timeline = fs::read_to_string(temp_dir.path().join(TIMELINE_FILE))
+            .expect("timeline should be readable");
+        let records = timeline
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("timeline records should be valid JSON");
+        assert_eq!(records[0]["scenario"], "background relay events");
+        assert_eq!(records[1]["event"], "blend_relay_disabled");
+        assert_eq!(records[1]["node"], "NODE_1");
+        assert_eq!(records[2]["event"], "blend_churn_transition");
+        assert_eq!(records[2]["epoch"], 3);
     }
 }

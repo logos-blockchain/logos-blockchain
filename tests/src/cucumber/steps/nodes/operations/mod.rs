@@ -21,11 +21,13 @@ use lb_node::config::{
     tracing::serde::console::{Layer as ConsoleLayer, TokioConfig},
 };
 use lb_testing_framework::{
-    LbcEnv, LbcManualCluster, NodeHttpClient, USER_CONFIG_FILE, configs::wallet::WalletAccount,
+    LbcEnv, NodeHttpClient, USER_CONFIG_FILE, configs::wallet::WalletAccount,
 };
 use libp2p::Multiaddr;
 use reqwest::{Client, Url};
-use testing_framework_core::scenario::{PeerSelection, StartNodeOptions, StartedNode};
+use testing_framework_core::scenario::{
+    ClusterHandle, PeerSelection, StartNodeOptions, StartedNode,
+};
 use tokio::time::{Instant as TokioInstant, sleep, timeout};
 use tracing::{info, warn};
 
@@ -103,7 +105,10 @@ mod resources;
 mod snapshots;
 mod synchronization;
 
-pub use blend_relay::{BlendRelayRegistry, set_blend_reachability};
+pub use blend_relay::{
+    BlendReachabilityTransition, BlendRelayRegistry, apply_blend_reachability_set,
+    restore_all_blend_reachability, set_blend_reachability,
+};
 pub use consensus::{
     ensure_all_nodes_agree_on_lib, nodes_converged, poll_all_nodes_and_update_consensus_cache,
 };

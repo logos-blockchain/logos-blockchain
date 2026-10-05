@@ -223,7 +223,7 @@ mod tests {
         header::{ContentId, HeaderId},
         mantle::{
             Note, SignedOps, Utxo,
-            ledger::{Inputs, Outputs, verification_mode::StandardMode},
+            ledger::{BoundedInputs, Inputs, Outputs, verification_mode::StandardMode},
             ops::{
                 Op,
                 channel::{ChannelId, deposit::DepositOp},
@@ -345,7 +345,7 @@ mod tests {
         let owned = utxo(10, 0, pk(1));
         let ops = Ops::from([Op::ChannelDeposit(DepositOp {
             channel_id: ChannelId::from([0; 32]),
-            inputs: Inputs::from([owned.id()]),
+            inputs: BoundedInputs::from(owned.id()).into(),
             metadata: b"deposit".into(),
         })]);
         let spend = SignedOps::from_ops_with_sample_proofs(ops);
@@ -354,7 +354,7 @@ mod tests {
                 .expect("accounting should build");
         accounting.apply_block(&block(1, vec![spend]));
 
-        assert!(accounting.wallet_utxos()["alice"].is_empty());
+        assert_eq!(accounting.wallet_utxos()["alice"], []);
     }
 
     #[test]
@@ -365,7 +365,7 @@ mod tests {
                 .expect("accounting should build");
         accounting.apply_block(&block(1, vec![tx]));
 
-        assert!(accounting.wallet_utxos()["alice"].is_empty());
+        assert_eq!(accounting.wallet_utxos()["alice"], []);
     }
 
     #[test]
@@ -385,7 +385,7 @@ mod tests {
                 .expect("accounting should build");
 
         accounting.apply_block(&block(1, vec![declare_tx]));
-        assert!(accounting.wallet_utxos()["alice"].is_empty());
+        assert_eq!(accounting.wallet_utxos()["alice"], []);
 
         accounting.apply_block(&block(2, vec![withdraw_tx]));
         assert_eq!(accounting.wallet_utxos()["alice"][0].note.value, 10);

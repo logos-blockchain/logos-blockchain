@@ -8,10 +8,17 @@ pub mod withdraw;
 use std::fmt::{Display, Formatter};
 
 use lb_binary_codec::{bincode::BoundedSerializeOp, canonical::BinaryCodec};
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnverifiedEd25519PublicKey};
+use lb_utils::bounded::NonEmptyBoundedVec;
 
 use crate::utils::serde_bytes_newtype;
 
 pub type ChannelKeyIndex = u16;
+
+pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
+type ChannelKeys<Key> = NonEmptyBoundedVec<Key, CHANNEL_MAX_KEYS>;
+pub type VerifiedChannelKeys = ChannelKeys<Ed25519PublicKey>;
+pub type UnverifiedChannelKeys = ChannelKeys<UnverifiedEd25519PublicKey>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryCodec)]
 pub struct ChannelId([u8; 32]);
@@ -43,8 +50,6 @@ impl Display for MsgId {
         write!(f, "{hex_string}")
     }
 }
-
-pub type Ed25519PublicKey = lb_key_management_system_keys::keys::Ed25519PublicKey;
 
 impl MsgId {
     #[must_use]

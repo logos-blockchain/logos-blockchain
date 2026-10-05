@@ -3,10 +3,10 @@ use lb_core::{
         SignedOps,
         channel::{SlotTimeframe, SlotTimeout},
         ledger::{NoteId, verification_mode::StandardMode},
-        ops::channel::{MsgId, config::Keys, inscribe::Inscription},
+        ops::channel::{MsgId, VerifiedChannelKeys, inscribe::Inscription},
         transactions::{Ops, states::Unverified},
     },
-    proofs::channel_multi_sig_proof::IndexedSignature,
+    proofs::channel_multi_sig_proof::IndexedSignatures,
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -119,7 +119,7 @@ impl SequencerClient {
     /// Async counterpart of [`super::SequencerHandle::channel_config`].
     pub async fn channel_config(
         &self,
-        keys: Keys,
+        keys: VerifiedChannelKeys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
@@ -143,7 +143,7 @@ impl SequencerClient {
     /// [`super::SequencerHandle::prepare_channel_config`].
     pub async fn prepare_channel_config(
         &self,
-        keys: Keys,
+        keys: VerifiedChannelKeys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
@@ -169,7 +169,7 @@ impl SequencerClient {
     pub async fn submit_channel_config(
         &self,
         prepared: PreparedChannelConfig,
-        signatures: Vec<IndexedSignature>,
+        signatures: IndexedSignatures,
     ) -> Result<PublishReceipt, Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(ActorRequest::SubmitChannelConfig {
