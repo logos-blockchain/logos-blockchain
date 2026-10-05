@@ -63,7 +63,7 @@ use crate::{
         defaults::{
             CUCUMBER_NODE_CONFIG_OVERRIDE, LOGOS_BLOCKCHAIN_NODE_BIN, init_node_log_dir_defaults,
         },
-        deployment::{LocalDeployment, LocalImplementation, runtime_info::NodeRuntimeInfo},
+        deployment::{LocalDeployment, LocalImplementation, runtime_info::NodeRuntimeInfoSource},
         error::{StepError, StepResult},
         fee_reserve::{SCENARIO_FEE_ACCOUNT_NAME, ScenarioFeeState},
         logos_sql::LogosSqlState,
@@ -1036,7 +1036,7 @@ pub struct ClusterState {
 
     /// Owns the selected local app, including its cleanup guards.
     pub local_app: Option<LocalDeployment>,
-    pub node_runtime_info: Vec<NodeRuntimeInfo>,
+    pub node_runtime_info: Option<Arc<dyn NodeRuntimeInfoSource>>,
 
     /// Manual: Optional k8s manual cluster instance for scenarios that use the
     /// k8s deployer.
@@ -1095,12 +1095,13 @@ impl NodeHeightSnapshots {
 
 impl ClusterState {
     pub(crate) fn install_local(&mut self, app: LocalDeployment) -> StepResult {
-        self.node_runtime_info =
+        self.node_runtime_info = Some(
             app.runtime()
-                .get::<Vec<NodeRuntimeInfo>>()
+                .get::<Arc<dyn NodeRuntimeInfoSource>>()
                 .ok_or_else(|| StepError::LogicalError {
                     message: "Local app does not provide node runtime information".into(),
-                })?;
+                })?,
+        );
         self.logos_cluster = app.runtime().get::<ClusterHandle<LbcEnv>>();
         self.local_app = Some(app);
         self.k8s_manual_cluster = None;
