@@ -5,7 +5,6 @@ pub(crate) mod swarm;
 pub use lb_libp2p::{
     PeerId,
     libp2p::gossipsub::{Message, TopicHash},
-    protocol_name::StreamProtocol,
 };
 use lb_log_targets::network_service;
 use lb_utils::tokio::task::spawn_on;

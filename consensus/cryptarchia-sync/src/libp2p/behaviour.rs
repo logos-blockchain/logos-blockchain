@@ -120,9 +120,8 @@ pub struct Behaviour {
     stream_behaviour: StreamBehaviour,
     /// Control to open streams to peers.
     control: Control,
-    /// A handle per protocol spoken, to listen to its incoming stream
-    /// requests.
-    incoming_streams: Vec<(StreamProtocol, IncomingStreams)>,
+    /// A handle to listen to incoming stream requests.
+    incoming_streams: IncomingStreams,
     /// Futures for reading incoming requests. This is common to both tip and
     /// block because initially we don't know which request we receive over
     /// stream. After reading the request, we use dedicated `FuturesUnordered`,
@@ -152,10 +151,8 @@ pub struct Behaviour {
     waker: Option<std::task::Waker>,
     /// Configuration for the behaviour.
     config: Config,
-    /// The protocols spoken, the preferred first: the behaviour accepts the
-    /// streams of each, and dials a peer with the first of them it speaks.
-    /// Never empty.
-    protocols: Vec<StreamProtocol>,
+    /// Protocol name.
+    protocol_name: StreamProtocol,
 }
 
 impl Behaviour {
@@ -169,7 +166,7 @@ impl Behaviour {
         Self {
             stream_behaviour,
             control,
-            incoming_streams: vec![(protocol_name.clone(), incoming_streams)],
+            incoming_streams,
             receiving_block_responses: FuturesUnordered::new(),
             sending_block_responses: FuturesUnordered::new(),
             receiving_requests: FuturesUnordered::new(),
@@ -180,43 +177,8 @@ impl Behaviour {
             sending_tip_responses: FuturesUnordered::new(),
             waker: None,
             config,
-            protocols: vec![protocol_name],
+            protocol_name,
         }
-    }
-
-    /// Speaks `protocols` from now on, the preferred first: accepts the
-    /// streams of each of them, and of no other, and dials a peer with the
-    /// first of them it speaks. Ignored if `protocols` is empty.
-    pub fn set_protocols(&mut self, protocols: Vec<StreamProtocol>) {
-        if protocols.is_empty() {
-            error!(target: LOG_TARGET, "Ignoring an empty list of chain sync protocols");
-            return;
-        }
-        // Dropping a protocol's handle stops accepting its streams.
-        self.incoming_streams
-            .retain(|(protocol, _)| protocols.contains(protocol));
-        for protocol in &protocols {
-            if self
-                .incoming_streams
-                .iter()
-                .any(|(accepted, _)| accepted == protocol)
-            {
-                continue;
-            }
-            match self.control.accept(protocol.clone()) {
-                Ok(incoming_streams) => {
-                    self.incoming_streams
-                        .push((protocol.clone(), incoming_streams));
-                }
-                Err(error) => {
-                    error!(
-                        target: LOG_TARGET,
-                        "Failed to accept incoming streams for sync protocol {protocol}: {error}"
-                    );
-                }
-            }
-        }
-        self.protocols = protocols;
     }
 
     pub fn request_tip(
@@ -225,11 +187,12 @@ impl Behaviour {
         reply_sender: oneshot::Sender<Result<GetTipResponse, ChainSyncError>>,
     ) -> Result<(), ChainSyncError> {
         let mut control = self.control.clone();
-        let protocols = self.protocols.clone();
+        let protocol_name = self.protocol_name.clone();
 
         self.sending_tip_requests.push(
             async move {
-                Downloader::send_tip_request(peer_id, &mut control, protocols, reply_sender).await
+                Downloader::send_tip_request(peer_id, &mut control, protocol_name, reply_sender)
+                    .await
             }
             .boxed(),
         );
@@ -255,11 +218,17 @@ impl Behaviour {
             latest_immutable_block,
             additional_blocks,
         );
-        let protocols = self.protocols.clone();
+        let protocol_name = self.protocol_name.clone();
 
         self.sending_block_requests.push(
-            Downloader::send_download_request(peer_id, control, request, protocols, reply_sender)
-                .boxed(),
+            Downloader::send_download_request(
+                peer_id,
+                control,
+                request,
+                protocol_name,
+                reply_sender,
+            )
+            .boxed(),
         );
 
         self.try_notify_waker();
@@ -546,14 +515,7 @@ impl NetworkBehaviour for Behaviour {
             }
         }
 
-        // Polls every protocol's handle until one has a stream, so that every
-        // pending one is woken up.
-        if let Some((peer_id, stream)) = self.incoming_streams.iter_mut().find_map(
-            |(_, incoming_streams)| match incoming_streams.poll_next_unpin(cx) {
-                Poll::Ready(Some(stream)) => Some(stream),
-                Poll::Ready(None) | Poll::Pending => None,
-            },
-        ) {
+        if let Poll::Ready(Some((peer_id, stream))) = self.incoming_streams.poll_next_unpin(cx) {
             self.handle_incoming_stream(peer_id, stream);
 
             return Poll::Pending;
@@ -695,59 +657,6 @@ mod tests {
         assert_eq!(tip, HeaderId::from([0; 32]));
         assert_eq!(slot, Slot::from(0));
         assert_eq!(height, 0);
-    }
-
-    /// A requester that prefers a protocol its peer does not speak yet
-    /// falls back to the next one it lists, which the peer speaks.
-    #[tokio::test]
-    async fn requests_fall_back_to_a_protocol_the_peer_speaks() {
-        let config = Config {
-            peer_response_timeout: Duration::from_secs(1),
-            max_inbound_requests: 4.try_into().unwrap(),
-        };
-        let (mut downloader_swarm, provider_peer_id) =
-            start_provider_and_downloader(0, config).await;
-        downloader_swarm
-            .behaviour_mut()
-            .set_protocols(vec![next_protocol(), current_protocol()]);
-
-        let receiver = request_tip(&mut downloader_swarm, provider_peer_id);
-        tokio::spawn(async move { downloader_swarm.loop_on_next().await });
-
-        assert!(matches!(receiver.await.unwrap(), Ok(Tip { .. })));
-    }
-
-    /// A peer that stopped speaking every protocol the requester lists
-    /// refuses its requests, and answers once the requester speaks its
-    /// protocol.
-    #[tokio::test]
-    async fn requests_fail_once_the_peer_stops_speaking_their_protocols() {
-        let config = Config {
-            peer_response_timeout: Duration::from_secs(1),
-            max_inbound_requests: 4.try_into().unwrap(),
-        };
-        let (mut provider_swarm, provider_peer_id, provider_addr) =
-            setup_provider_swarm(config.clone());
-        provider_swarm
-            .behaviour_mut()
-            .set_protocols(vec![next_protocol()]);
-        tokio::spawn(run_provider(
-            provider_swarm,
-            StandardProvider { blocks_count: 0 },
-        ));
-        let mut downloader_swarm = setup_downloader_and_connect(provider_addr, config).await;
-
-        // A request takes the protocols spoken when it is made.
-        let refused = request_tip(&mut downloader_swarm, provider_peer_id);
-        downloader_swarm
-            .behaviour_mut()
-            .set_protocols(vec![next_protocol(), current_protocol()]);
-        let answered = request_tip(&mut downloader_swarm, provider_peer_id);
-        tokio::spawn(async move { downloader_swarm.loop_on_next().await });
-
-        // The stream cannot be opened, so the request is dropped.
-        assert!(refused.await.is_err());
-        assert!(matches!(answered.await.unwrap(), Ok(Tip { .. })));
     }
 
     /// Concurrent requests to a peer are all answered, not only the first
@@ -1120,14 +1029,6 @@ mod tests {
         (blocks, errors)
     }
 
-    const fn current_protocol() -> StreamProtocol {
-        StreamProtocol::new("/tests/chain-sync")
-    }
-
-    const fn next_protocol() -> StreamProtocol {
-        StreamProtocol::new("/tests/chain-sync/next")
-    }
-
     fn new_swarm_with_quic(config: Config) -> Swarm<Behaviour> {
         let keypair = libp2p::identity::Keypair::generate_ed25519();
         libp2p::SwarmBuilder::with_existing_identity(keypair)
@@ -1135,7 +1036,7 @@ mod tests {
             .with_quic()
             .with_dns()
             .unwrap()
-            .with_behaviour(|_| Behaviour::new(current_protocol(), config))
+            .with_behaviour(|_| Behaviour::new(StreamProtocol::new("/tests/chain-sync"), config))
             .unwrap()
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(10)))
             .build()

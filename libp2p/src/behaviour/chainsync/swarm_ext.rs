@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use lb_cryptarchia_sync::{BoxedStream, ChainSyncError, GetTipResponse, HeaderId, SerialisedBlock};
-use libp2p::{PeerId, StreamProtocol};
+use libp2p::PeerId;
 use rand::RngCore;
 use tokio::sync::oneshot;
 
@@ -10,14 +10,6 @@ use crate::{Swarm, behaviour::BehaviourError};
 type SerialisedBlockStream = BoxedStream<Result<SerialisedBlock, ChainSyncError>>;
 
 impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
-    /// Speaks `protocols` for chain sync from now on, the preferred first.
-    pub fn set_chain_sync_protocols(&mut self, protocols: Vec<StreamProtocol>) {
-        self.swarm
-            .behaviour_mut()
-            .chain_sync
-            .set_protocols(protocols);
-    }
-
     pub fn request_tip(
         &self,
         peer_id: PeerId,

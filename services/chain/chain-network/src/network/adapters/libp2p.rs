@@ -25,7 +25,7 @@ use lb_network_service::{
     backends::libp2p::{
         ChainSyncCommand, Command, DiscoveryCommand, Libp2p, NetworkCommand, PeerId,
         PubSubCommand::{self, Subscribe, Unsubscribe},
-        StreamProtocol, TopicHash,
+        TopicHash,
     },
     message::{ChainSyncEvent, NetworkMsg},
 };
@@ -65,20 +65,12 @@ where
     _phantom_tx: PhantomData<Tx>,
 }
 
-/// What the adapter follows of an era: the topic its proposals are gossiped
-/// on, and the protocol its blocks are synced over.
-#[derive(Debug, Clone)]
-pub struct EraIdentifiers {
-    pub proposal_topic: String,
-    pub chain_sync_protocol: StreamProtocol,
-}
-
 #[derive(Debug, Clone)]
 pub struct LibP2pAdapterSettings {
-    /// The identifiers of every era: each era's proposals are gossiped on its
-    /// topic and its blocks synced over its protocol, and both are decoded by
-    /// the codec of its version.
-    pub eras: Arc<Eras<EraIdentifiers>>,
+    /// The proposal topic of every era: each era's proposals are gossiped on
+    /// its topic, and decoded, as its synced blocks are, by the codec of its
+    /// version.
+    pub topics: Arc<Eras<String>>,
     /// The maximum number of connected peers to attempt downloads from
     /// for each target block.
     pub max_connected_peers_to_try_download: usize,
@@ -159,11 +151,11 @@ where
         }
     }
 
-    /// The identifiers of `era`.
-    fn identifiers(&self, era: Era) -> &EraIdentifiers {
+    /// The topic the proposals of `era` are gossiped on.
+    fn proposal_topic(&self, era: Era) -> &str {
         &self
             .settings
-            .eras
+            .topics
             .get(era)
             .expect("an era in force is scheduled")
             .entry
@@ -270,14 +262,14 @@ where
     }
 
     async fn follow_eras_at(&self, slot: Slot) {
-        let in_force = self.settings.eras.in_force(slot);
+        let in_force = self.settings.topics.in_force(slot);
         let previous = self.in_force.send_replace(Some(in_force));
         if previous == Some(in_force) {
             return;
         }
         let previously: Vec<Era> = previous.into_iter().flat_map(EraInForce::eras).collect();
         for era in in_force.eras().filter(|era| !previously.contains(era)) {
-            let topic = &self.identifiers(era).proposal_topic;
+            let topic = self.proposal_topic(era);
             tracing::debug!(
                 target: LOG_TARGET,
                 era = era.into_inner(),
@@ -289,28 +281,13 @@ where
             .into_iter()
             .filter(|era| !in_force.eras().any(|in_force| in_force == *era))
         {
-            let topic = &self.identifiers(era).proposal_topic;
+            let topic = self.proposal_topic(era);
             tracing::debug!(
                 target: LOG_TARGET,
                 era = era.into_inner(),
                 "Unsubscribing chain-network adapter from pubsub topic {topic}"
             );
             Self::send_pubsub_command(&self.network_relay, Unsubscribe(topic.into())).await;
-        }
-        // Blocks are synced over the protocol of the era in force, falling back
-        // to the retiring era's with a peer that has not moved on yet.
-        let protocols = in_force
-            .eras()
-            .map(|era| self.identifiers(era).chain_sync_protocol.clone())
-            .collect();
-        if let Err(error) = self
-            .network_relay
-            .send(NetworkMsg::Process(Command::ChainSync(
-                ChainSyncCommand::SetProtocols { protocols },
-            )))
-            .await
-        {
-            tracing::error!(target: LOG_TARGET, "error setting the chain sync protocols: {error}");
         }
     }
 
@@ -325,10 +302,10 @@ where
         }
         let topics = self
             .settings
-            .eras
-            .map(|era| TopicHash::from_raw(era.entry.parameters.proposal_topic.clone()));
+            .topics
+            .map(|era| TopicHash::from_raw(era.entry.parameters.clone()));
         // A proposal decodes under the version of the era of its slot.
-        let eras = self.settings.eras.map(|_| ());
+        let eras = self.settings.topics.map(|_| ());
         let in_force = self.in_force.subscribe();
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
@@ -486,7 +463,7 @@ where
 
         let stream = receiver.await?;
         // A block decodes under the version of the era of its slot.
-        let eras = self.settings.eras.map(|_| ());
+        let eras = self.settings.topics.map(|_| ());
         let stream = stream
             .map_err(|e| Box::new(e) as DynError)
             .map(move |result| {

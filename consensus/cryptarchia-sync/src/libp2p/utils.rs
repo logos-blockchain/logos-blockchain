@@ -1,7 +1,7 @@
 use futures::AsyncWriteExt as _;
 use lb_binary_codec::bincode::BoundedSerializeOp;
 use libp2p::{PeerId, Stream, StreamProtocol};
-use libp2p_stream::{Control, OpenStreamError};
+use libp2p_stream::Control;
 use serde::de::DeserializeOwned;
 
 use crate::libp2p::{errors::ChainSyncError, packing::pack_to_writer};
@@ -23,30 +23,16 @@ pub async fn send_message<M: BoundedSerializeOp + DeserializeOwned + Sync>(
     Ok(())
 }
 
-/// Opens a stream to `peer_id` with the first of `protocols` it speaks, the
-/// preferred first.
-///
-/// # Panics
-///
-/// If `protocols` is empty.
 pub async fn open_stream(
     peer_id: PeerId,
     control: &mut Control,
-    protocols: &[StreamProtocol],
+    protocol_name: StreamProtocol,
 ) -> Result<Stream, ChainSyncError> {
-    let (last, preferred) = protocols
-        .split_last()
-        .expect("chain sync speaks at least one protocol");
-    for protocol in preferred {
-        match control.open_stream(peer_id, protocol.clone()).await {
-            Err(OpenStreamError::UnsupportedProtocol(_)) => {}
-            result => return result.map_err(|e| ChainSyncError::from((peer_id, e))),
-        }
-    }
-    control
-        .open_stream(peer_id, last.clone())
+    let stream = control
+        .open_stream(peer_id, protocol_name)
         .await
-        .map_err(|e| ChainSyncError::from((peer_id, e)))
+        .map_err(|e| ChainSyncError::from((peer_id, e)))?;
+    Ok(stream)
 }
 
 pub async fn close_stream(peer_id: PeerId, mut stream: Stream) -> Result<(), ChainSyncError> {

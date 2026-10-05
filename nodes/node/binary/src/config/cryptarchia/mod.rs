@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use lb_chain_network_service::network::adapters::libp2p::{EraIdentifiers, LibP2pAdapterSettings};
+use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
 use lb_core::block::genesis::GenesisBlock;
 use lb_cryptarchia_engine::era::Eras;
 use lb_era_parameters::{EraDefinition, EraParameters};
@@ -76,16 +76,12 @@ impl ServiceConfig {
                 },
             },
             network: LibP2pAdapterSettings {
-                eras: Arc::new(eras.map(|era| {
-                    EraIdentifiers {
-                        proposal_topic: era
-                            .entry
-                            .parameters
-                            .protocol_names
-                            .cryptarchia_topic
-                            .clone(),
-                        chain_sync_protocol: era.entry.parameters.protocol_names.chain_sync.clone(),
-                    }
+                topics: Arc::new(eras.map(|era| {
+                    era.entry
+                        .parameters
+                        .protocol_names
+                        .cryptarchia_topic
+                        .clone()
                 })),
                 max_connected_peers_to_try_download: self
                     .user
