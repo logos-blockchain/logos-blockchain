@@ -52,16 +52,6 @@ impl SharedDeployment {
         })
     }
 
-    /// Combines deployment YAML with network identities without interpreting
-    /// the node configuration schema. Each adapter validates compatibility.
-    #[must_use]
-    pub const fn from_yaml(deployment_yaml: String, network_keys: Vec<Keypair>) -> Self {
-        Self {
-            deployment_yaml: Some(deployment_yaml),
-            network_keys,
-        }
-    }
-
     #[must_use]
     pub const fn node_count(&self) -> usize {
         self.network_keys.len()
