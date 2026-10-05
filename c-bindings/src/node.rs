@@ -6,7 +6,7 @@ use overwatch::overwatch::{Overwatch, OverwatchHandle, ServicePanic};
 use tokio::runtime::{Handle, Runtime};
 
 use crate::{
-    api::message::SigningKeyIds,
+    api::kms::SigningKeyIds,
     errors::{OperationStatus, OperationStatusCode},
     logging,
     result::StatusResult,
