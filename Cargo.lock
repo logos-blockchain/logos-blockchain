@@ -812,6 +812,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "blockchain-test-interop"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "libp2p",
+ "logos-blockchain-tests",
+ "multiaddr",
+ "serde",
+ "serde_yaml",
+ "tempfile",
+ "testing-framework",
+ "testing-framework-app",
+ "testing-framework-core",
+ "testing-framework-runner-local",
+ "tokio",
+ "toml",
+ "url",
+]
+
+[[package]]
 name = "boon"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

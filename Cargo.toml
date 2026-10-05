@@ -78,6 +78,7 @@ members = [
   "services/utils",
   "services/wallet",
   "tests",
+  "tests/interop",
   "tests/testing_framework",
   "tools/blockchain-tools",
   "tools/config",
