@@ -37,7 +37,7 @@ impl<NodeId, CorePoQGenerator> CoreEpochStateInfo<NodeId, CorePoQGenerator> {
 pub struct MismatchedZkId;
 
 impl<NodeId, CorePoQGenerator> From<(Epoch, ZkHash)>
-for CoreEpochStateInfo<NodeId, CorePoQGenerator>
+    for CoreEpochStateInfo<NodeId, CorePoQGenerator>
 {
     fn from((epoch, epoch_nonce): (Epoch, ZkHash)) -> Self {
         Self::NotCore { epoch, epoch_nonce }
@@ -45,7 +45,7 @@ for CoreEpochStateInfo<NodeId, CorePoQGenerator>
 }
 
 impl<NodeId, CorePoQGenerator> From<CoreEpochInfo<NodeId, CorePoQGenerator>>
-for CoreEpochStateInfo<NodeId, CorePoQGenerator>
+    for CoreEpochStateInfo<NodeId, CorePoQGenerator>
 {
     fn from(core_epoch_info: CoreEpochInfo<NodeId, CorePoQGenerator>) -> Self {
         Self::Core(Box::new(core_epoch_info))

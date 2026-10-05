@@ -138,7 +138,7 @@ pub use state::RecoveryServiceState as CoreServiceState;
 const LOG_TARGET: &str = blend::service::CORE;
 
 type OldEpochCryptographicProcessor<ProofsVerifier> =
-ReceiverCryptographicProcessor<ProofsVerifier>;
+    ReceiverCryptographicProcessor<ProofsVerifier>;
 
 /// A blend service that sends messages to the blend network
 /// and broadcasts fully unwrapped messages through the [`NetworkService`].
@@ -159,15 +159,14 @@ pub struct BlendService<
     PolInfoProvider,
     StateStorage,
     RuntimeServiceId,
->
-where
+> where
     Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
     StateStorage: RecoveryBackendTrait<
-        RuntimeServiceId,
-        State=RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
-    > + Send
-    + Sync,
+            RuntimeServiceId,
+            State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
+        > + Send
+        + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     last_saved_state: Option<ServiceState<Backend::Settings, Dispatcher::Settings>>,
@@ -195,27 +194,27 @@ impl<
     StateStorage,
     RuntimeServiceId,
 > ServiceData
-for BlendService<
-    Backend,
-    NodeId,
-    Dispatcher,
-    SdpService,
-    ProofsGenerator,
-    ProofsVerifier,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
-    StateStorage,
-    RuntimeServiceId,
->
+    for BlendService<
+        Backend,
+        NodeId,
+        Dispatcher,
+        SdpService,
+        ProofsGenerator,
+        ProofsVerifier,
+        TimeBackend,
+        ChainService,
+        PolInfoProvider,
+        StateStorage,
+        RuntimeServiceId,
+    >
 where
     Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
     StateStorage: RecoveryBackendTrait<
-        RuntimeServiceId,
-        State=RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
-    > + Send
-    + Sync,
+            RuntimeServiceId,
+            State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
+        > + Send
+        + Sync,
 {
     type Settings = StartingBlendConfig<Backend::Settings, Dispatcher::Settings>;
     type State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>;
@@ -237,50 +236,50 @@ impl<
     StateStorage,
     RuntimeServiceId,
 > ServiceCore<RuntimeServiceId>
-for BlendService<
-    Backend,
-    NodeId,
-    Dispatcher,
-    SdpService,
-    ProofsGenerator,
-    ProofsVerifier,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
-    StateStorage,
-    RuntimeServiceId,
->
+    for BlendService<
+        Backend,
+        NodeId,
+        Dispatcher,
+        SdpService,
+        ProofsGenerator,
+        ProofsVerifier,
+        TimeBackend,
+        ChainService,
+        PolInfoProvider,
+        StateStorage,
+        RuntimeServiceId,
+    >
 where
     Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
     NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
     ProofsGenerator:
-    CoreLeaderAndPowProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
-    SdpService: ServiceData<Message=SdpMessage> + Send,
+        CoreLeaderAndPowProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
+    SdpService: ServiceData<Message = SdpMessage> + Send,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
     StateStorage: RecoveryBackendTrait<
-        RuntimeServiceId,
-        State=RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
-    > + Send
-    + Sync,
+            RuntimeServiceId,
+            State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
+        > + Send
+        + Sync,
     RuntimeServiceId: AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
-    + AsServiceId<Dispatcher::MempoolService>
-    + AsServiceId<Dispatcher::ChainNetworkService>
-    + AsServiceId<SdpService>
-    + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
-    + AsServiceId<ChainService>
-    + AsServiceId<PreloadKmsService<RuntimeServiceId>>
-    + AsServiceId<Self>
-    + Clone
-    + Debug
-    + Display
-    + Sync
-    + Send
-    + Unpin
-    + 'static,
+        + AsServiceId<Dispatcher::MempoolService>
+        + AsServiceId<Dispatcher::ChainNetworkService>
+        + AsServiceId<SdpService>
+        + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
+        + AsServiceId<ChainService>
+        + AsServiceId<PreloadKmsService<RuntimeServiceId>>
+        + AsServiceId<Self>
+        + Clone
+        + Debug
+        + Display
+        + Sync
+        + Send
+        + Unpin
+        + 'static,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -314,13 +313,13 @@ where
     async fn run(mut self) -> Result<(), overwatch::DynError> {
         let Self {
             service_resources_handle:
-            OpaqueServiceResourcesHandle::<Self, RuntimeServiceId> {
-                ref mut inbound_relay,
-                ref overwatch_handle,
-                ref settings_handle,
-                ref status_updater,
-                state_updater,
-            },
+                OpaqueServiceResourcesHandle::<Self, RuntimeServiceId> {
+                    ref mut inbound_relay,
+                    ref overwatch_handle,
+                    ref settings_handle,
+                    ref status_updater,
+                    state_updater,
+                },
             last_saved_state,
             ..
         } = self;
@@ -335,7 +334,7 @@ where
             SdpService,
             PreloadKmsService<_>
         )
-            .await?;
+        .await?;
 
         let payload_dispatcher = async {
             let network_relay = overwatch_handle
@@ -357,7 +356,7 @@ where
                 blend_config.network.clone(),
             )
         }
-            .await;
+        .await;
 
         let kms_api = async {
             let kms_outbound_relay = overwatch_handle
@@ -367,7 +366,7 @@ where
 
             KmsServiceApi::new(kms_outbound_relay)
         }
-            .await;
+        .await;
 
         let PublicKeyEncoding::Zk(zk_public_key) = kms_api
             .public_key(blend_config.zk.secret_key_kms_id.clone())
@@ -400,7 +399,7 @@ where
                 Some(zk_public_key),
                 "blend_core_service",
             )
-                .await;
+            .await;
 
         let sdp_relay = overwatch_handle
             .relay::<SdpService>()
@@ -448,7 +447,7 @@ where
             state_updater,
             ChaCha20Rng::from_entropy(),
         )
-            .await;
+        .await;
 
         status_updater.notify_ready();
         tracing::info!(
@@ -495,7 +494,7 @@ where
             failure_detector.as_mut(),
             current_recovery_checkpoint,
         )
-            .await;
+        .await;
 
         // The main event loop has ended because the node is no longer a core
         // node in the new epoch.
@@ -513,7 +512,7 @@ where
             retiring_epoch,
             failure_detector.take(),
         )
-            .await;
+        .await;
 
         Ok(())
     }
@@ -536,7 +535,7 @@ async fn initialize<
     RuntimeServiceId,
 >(
     blend_config: RunningBlendConfig<Backend::Settings>,
-    public_epoch_stream: impl Stream<Item=BlendEpoch<NodeId>> + Send + Unpin + 'static,
+    public_epoch_stream: impl Stream<Item = BlendEpoch<NodeId>> + Send + Unpin + 'static,
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     kms_adapter: KmsAdapter,
     sdp_relay: &OutboundRelay<SdpMessage>,
@@ -546,7 +545,7 @@ async fn initialize<
     >,
     release_delay_rng: ChaCha20Rng,
 ) -> (
-    impl Stream<Item=EpochEvent<CoreEpochStateInfo<NodeId, KmsAdapter::CorePoQGenerator>>>
+    impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, KmsAdapter::CorePoQGenerator>>>
     + Unpin
     + Send
     + 'static,
@@ -569,11 +568,11 @@ where
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<KmsAdapter::CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
-// To avoid bubbling up generics everywhere in the configs (current Overwatch limitation), we
-// know the final key ID type is a `String`, so we constraint the trait impl here instead.
-    KmsAdapter: KmsPoQAdapter<RuntimeServiceId, KeyId=String, CorePoQGenerator: Clone + Send + Sync>
-    + Send
-    + 'static,
+    // To avoid bubbling up generics everywhere in the configs (current Overwatch limitation), we
+    // know the final key ID type is a `String`, so we constraint the trait impl here instead.
+    KmsAdapter: KmsPoQAdapter<RuntimeServiceId, KeyId = String, CorePoQGenerator: Clone + Send + Sync>
+        + Send
+        + 'static,
     RuntimeServiceId: Clone + Send + Sync + 'static,
 {
     // Initialize epoch stream for all public PoQ inputs.
@@ -582,16 +581,16 @@ where
         let zk_sk_id = config.zk.secret_key_kms_id.clone();
         public_epoch_stream.map(
             move |(
-                      BlendEpochState {
-                          aged,
-                          epoch,
-                          lottery_0,
-                          lottery_1,
-                          nonce,
-                          pow_difficulty,
-                      },
-                      membership_info,
-                  )| {
+                BlendEpochState {
+                    aged,
+                    epoch,
+                    lottery_0,
+                    lottery_1,
+                    nonce,
+                    pow_difficulty,
+                },
+                membership_info,
+            )| {
                 let membership_size = membership_info.membership.size();
                 let zk_path = membership_info
                     .zk
@@ -599,9 +598,9 @@ where
                     .and_then(|zk| zk.core_and_path_selectors);
 
                 let ModeMembership::Core(CoreMembership {
-                                             membership,
-                                             zk_root,
-                                         }) = ModeMembership::resolve(membership_info, config.minimum_network_size)
+                    membership,
+                    zk_root,
+                }) = ModeMembership::resolve(membership_info, config.minimum_network_size)
                 else {
                     return Ok(CoreEpochStateInfo::NotCore {
                         epoch,
@@ -635,38 +634,38 @@ where
                     },
                     core_poq_generator,
                 }
-                    .into())
+                .into())
             },
         )
     }
-        .await;
+    .await;
     let (current_epoch_info, remaining_epoch_stream) = Box::pin(
         UninitializedEpochEventStream::new(epoch_stream, blend_config.time.epoch_transition_period)
             .await_first_ready(),
     )
-        .await
-        .map(|(epoch_info, remaining_epoch_stream)| {
-            let CoreEpochStateInfo::Core(core_epoch_info) =
-                epoch_info.unwrap_or_else(|error| panic!("{error}"))
-            else {
-                panic!("First retrieved epoch for Blend core startup must be available.");
-            };
-            (
-                core_epoch_info,
-                // Refused out here, not in the stream's own `map`: that runs
-                // while `fork_stream` holds its lock, so a panic under it
-                // poisons the lock and the unwind panics again in
-                // `Forked::drop`, aborting instead of unwinding. `Forked`
-                // has released the lock by the time this runs.
-                remaining_epoch_stream.fork().map(|event| match event {
-                    EpochEvent::NewEpoch(epoch) => {
-                        EpochEvent::NewEpoch(epoch.unwrap_or_else(|error| panic!("{error}")))
-                    }
-                    EpochEvent::TransitionPeriodExpired => EpochEvent::TransitionPeriodExpired,
-                }),
-            )
-        })
-        .expect("The current epoch info must be available.");
+    .await
+    .map(|(epoch_info, remaining_epoch_stream)| {
+        let CoreEpochStateInfo::Core(core_epoch_info) =
+            epoch_info.unwrap_or_else(|error| panic!("{error}"))
+        else {
+            panic!("First retrieved epoch for Blend core startup must be available.");
+        };
+        (
+            core_epoch_info,
+            // Refused out here, not in the stream's own `map`: that runs
+            // while `fork_stream` holds its lock, so a panic under it
+            // poisons the lock and the unwind panics again in
+            // `Forked::drop`, aborting instead of unwinding. `Forked`
+            // has released the lock by the time this runs.
+            remaining_epoch_stream.fork().map(|event| match event {
+                EpochEvent::NewEpoch(epoch) => {
+                    EpochEvent::NewEpoch(epoch.unwrap_or_else(|error| panic!("{error}")))
+                }
+                EpochEvent::TransitionPeriodExpired => EpochEvent::TransitionPeriodExpired,
+            }),
+        )
+    })
+    .expect("The current epoch info must be available.");
 
     let CoreEpochInfo {
         public: current_epoch_public_info,
@@ -747,7 +746,7 @@ where
                 recovered_old_epoch_token_collector,
                 state_updater,
             )
-                .expect("service state should be created successfully")
+            .expect("service state should be created successfully")
         }
     };
 
@@ -842,7 +841,7 @@ where
 /// readiness to Overwatch.
 async fn post_initialize<PolInfoProvider, RuntimeServiceId>(
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-) -> impl Stream<Item=PolEpochInfo>
+) -> impl Stream<Item = PolEpochInfo>
 where
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
 {
@@ -876,17 +875,17 @@ async fn run_event_loop<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    mut inbound_relay: impl Stream<Item=ServiceMessage<NodeId>> + Send + Unpin,
+    mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
     blend_messages: &mut (
-    impl Stream<Item=(EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>
-    + Send
-    + Unpin
-    + 'static
-    ),
-    mut secret_pol_info_stream: impl Stream<Item=PolEpochInfo> + Send + Unpin,
+             impl Stream<Item = (EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>
+             + Send
+             + Unpin
+             + 'static
+         ),
+    mut secret_pol_info_stream: impl Stream<Item = PolEpochInfo> + Send + Unpin,
     remaining_epoch_stream: &mut (
-    impl Stream<Item=EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
-    ),
+             impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
+         ),
     blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &mut Backend,
     payload_dispatcher: &Dispatcher,
@@ -928,7 +927,7 @@ where
                     failure_detector.as_deref_mut(),
                     recovery_checkpoint,
                 )
-                    .await
+                .await
             }
             Stage::DuringTransition(during_transition) => {
                 run_during_transition(
@@ -947,7 +946,7 @@ where
                     failure_detector.as_deref_mut(),
                     recovery_checkpoint,
                 )
-                    .await
+                .await
             }
         };
         match epoch_outcome {
@@ -983,8 +982,8 @@ enum Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng> {
 }
 
 impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
-From<CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>>
-for Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
+    From<CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>>
+    for Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
 {
     fn from(
         value: CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
@@ -994,15 +993,15 @@ for Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
 }
 
 impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
-From<
-    CurrentEpochDuringTransition<
-        NodeId,
-        CorePoQGenerator,
-        ProofsGenerator,
-        ProofsVerifier,
-        Rng,
-    >,
-> for Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
+    From<
+        CurrentEpochDuringTransition<
+            NodeId,
+            CorePoQGenerator,
+            ProofsGenerator,
+            ProofsVerifier,
+            Rng,
+        >,
+    > for Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
 {
     fn from(
         value: CurrentEpochDuringTransition<
@@ -1048,17 +1047,17 @@ async fn run_current_epoch<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    inbound_relay: &mut (impl Stream<Item=ServiceMessage<NodeId>> + Send + Unpin),
+    inbound_relay: &mut (impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin),
     blend_messages: &mut (
-    impl Stream<Item=(EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>
-    + Send
-    + Unpin
-    + 'static
-    ),
-    secret_pol_info_stream: &mut (impl Stream<Item=PolEpochInfo> + Send + Unpin),
+             impl Stream<Item = (EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>
+             + Send
+             + Unpin
+             + 'static
+         ),
+    secret_pol_info_stream: &mut (impl Stream<Item = PolEpochInfo> + Send + Unpin),
     remaining_epoch_stream: &mut (
-    impl Stream<Item=EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
-    ),
+             impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
+         ),
     blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &mut Backend,
     payload_dispatcher: &Dispatcher,
@@ -1136,17 +1135,17 @@ async fn run_during_transition<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    inbound_relay: &mut (impl Stream<Item=ServiceMessage<NodeId>> + Send + Unpin),
+    inbound_relay: &mut (impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin),
     blend_messages: &mut (
-    impl Stream<Item=(EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>
-    + Send
-    + Unpin
-    + 'static
-    ),
-    secret_pol_info_stream: &mut (impl Stream<Item=PolEpochInfo> + Send + Unpin),
+             impl Stream<Item = (EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>
+             + Send
+             + Unpin
+             + 'static
+         ),
+    secret_pol_info_stream: &mut (impl Stream<Item = PolEpochInfo> + Send + Unpin),
     remaining_epoch_stream: &mut (
-    impl Stream<Item=EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
-    ),
+             impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
+         ),
     blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &mut Backend,
     payload_dispatcher: &Dispatcher,
@@ -1371,7 +1370,7 @@ where
                 failure_detector,
                 recovery_checkpoint,
             )
-                .await
+            .await
         }
     }
 }
@@ -1457,7 +1456,7 @@ where
         backend,
         latest_secret_pol_info,
     )
-        .await
+    .await
     {
         HandleEpochEventOutput::Transitioning {
             current_epoch,
@@ -1625,12 +1624,12 @@ async fn retire<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    mut blend_messages: impl Stream<Item=EncapsulatedMessageWithVerifiedPublicHeader>
+    mut blend_messages: impl Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader>
     + Unpin
     + Send
     + 'static,
     mut remaining_epoch_stream: impl Stream<
-        Item=EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>,
+        Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>,
     > + Send
     + Unpin,
     mut backend: Backend,
@@ -1846,7 +1845,7 @@ where
                 Some(old_epoch_blending_token_collector),
                 state_updater,
             )
-                .expect("service state should be created successfully");
+            .expect("service state should be created successfully");
             HandleEpochEventOutput::Transitioning {
                 current_epoch: Box::new(CurrentEpoch::new(
                     new_processor,
@@ -2251,8 +2250,8 @@ where
 
     if let Some(processed_message) = maybe_processed_message
         && state_updater
-        .add_unsent_processed_message(processed_message)
-        .is_err()
+            .add_unsent_processed_message(processed_message)
+            .is_err()
     {
         tracing::trace!(
             target: LOG_TARGET,
@@ -2314,7 +2313,7 @@ fn schedule_decapsulated_incoming_message<ProofsVerifier>(
     cryptographic_processor: &ReceiverCryptographicProcessor<ProofsVerifier>,
 ) -> (
     Option<ProcessedMessage>,
-    impl Iterator<Item=BlendingToken>,
+    impl Iterator<Item = BlendingToken>,
 )
 where
     ProofsVerifier: ProofsVerifierTrait,
