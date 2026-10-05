@@ -1,0 +1,298 @@
+use std::{
+    collections::HashMap,
+    fs::OpenOptions,
+    io,
+    path::{Path, PathBuf},
+    process::ExitCode,
+    sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use cucumber::{
+    StatsWriter as _, World as _, WriterExt as _, event::ScenarioFinished, writer,
+    writer::Verbosity,
+};
+use lb_testing_framework::{
+    hash_str, is_truthy_env, record_system_monitor_event, register_system_monitor_output_file,
+    release_reserved_port_block, resolve_automatic_genesis_time,
+    unregister_system_monitor_output_file,
+};
+
+use crate::cucumber::{
+    defaults::{
+        ARTEFACTS, CUCUMBER_DEPLOYER_COMPOSE, CUCUMBER_DEPLOYER_K8S,
+        CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL, MAX_CUCUMBER_CONCURRENT_SCENARIOS,
+        create_scenario_output_dir, get_feature_path, get_retries, init_logging_defaults,
+        init_tracing,
+    },
+    deployment::LocalImplementation,
+    world::{CucumberWorld, DeployerKind},
+};
+
+type ScenarioAttempts = Arc<Mutex<HashMap<String, u8>>>;
+
+// Get the maximum number of concurrent scenarios from env var, defaults to 1
+fn get_max_concurrent_scenarios() -> usize {
+    std::env::var(MAX_CUCUMBER_CONCURRENT_SCENARIOS)
+        .ok()
+        .and_then(|val| val.parse().ok())
+        .unwrap_or(1)
+}
+
+// Increment and return the attempt count for the given scenario. Counts
+// are tracked per-scenario, and keyed by a combination of feature and
+// scenario name.
+#[expect(clippy::significant_drop_tightening, reason = "Compiler weirdness")]
+fn increment_attempts(
+    scenario_attempts: &ScenarioAttempts,
+    feature: &str,
+    scenario: &str,
+) -> String {
+    let mut guard = scenario_attempts
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let key = format!("{feature}::{scenario}");
+    let entry = guard.entry(key).or_insert(0);
+    *entry = entry.wrapping_add(1);
+    format!("attempt_{}", *entry)
+}
+
+/// Run the existing feature suite with the supplied local implementation.
+#[expect(
+    clippy::future_not_send,
+    reason = "Cucumber uses non-Send futures; entry points await the runner directly"
+)]
+pub async fn run(implementation: LocalImplementation) -> ExitCode {
+    println!("args: {:?}", std::env::args());
+
+    let deployer = selected_deployer();
+    if deployer != DeployerKind::Local {
+        implementation
+            .require_logos("non-local deployment")
+            .expect("supported implementation");
+    }
+    println!(
+        "Running with '{deployer:?}' and '{}'",
+        implementation.name()
+    );
+
+    init_logging_defaults();
+    init_tracing();
+
+    let scenario_attempts: ScenarioAttempts = Arc::new(Mutex::new(HashMap::new()));
+
+    let output_dir = create_scenario_output_dir();
+    let junit_xml_file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(output_dir.join("cucumber-output-junit.xml"))
+        .inspect_err(|err| println!("Failed to open output file: {err}"))
+        .expect("should create or open output file");
+    let mut world = CucumberWorld::cucumber()
+        // Re-outputs Failed steps for easier navigation.
+        .repeat_failed()
+        // .fail_fast() // Remove comment to enable fail-fast behavior for development
+        .max_concurrent_scenarios(get_max_concurrent_scenarios())
+        // Replaces Writer.
+        .with_writer(
+            writer::Summarize::new(writer::Basic::new(
+                io::stdout(),
+                // With `writer::Coloring::Auto`, cucumber treats the output as a TTY and using the
+                // underlying termcolor/console behaviour that can rewrite/clear lines when
+                // printing step statuses (✔ ...). That can visually clobber the
+                // immediately adjacent tracing line, especially the one emitted
+                // right as the step transitions from “running” to “passed”.
+                writer::Coloring::Never,
+                Verbosity::ShowWorldAndDocString,
+            ))
+            .tee::<CucumberWorld, _>(writer::JUnit::for_tee(junit_xml_file, 0))
+            .normalized(),
+        )
+        // Ensure that all the steps were covered. Keep this after `with_writer`, which replaces
+        // the runner's writer and would otherwise discard the skipped-step failure wrapper.
+        .fail_on_skipped()
+        // Sets a hook, executed on each Scenario before running all its Steps, including Background
+        // ones.
+        .before(move |feature, _rule, scenario, world| {
+            Box::pin({
+                let output_dir_clone = output_dir.clone();
+                let scenario_attempts_clone = ScenarioAttempts::clone(&scenario_attempts);
+                async move {
+                    println!(
+                        "\nStarting - {}: {} ({}: {})\n",
+                        scenario.keyword, scenario.name, feature.keyword, feature.name,
+                    );
+                    world.cluster.implementation = implementation;
+                    prepare_world_for_scenario(
+                        world,
+                        deployer,
+                        &output_dir_clone,
+                        &scenario_attempts_clone,
+                        &feature.name,
+                        &scenario.name,
+                    );
+                }
+            })
+        });
+
+    if let Some(retries) = get_retries()
+        .inspect_err(|e| println!("{e}"))
+        .expect("should parse retries")
+    {
+        // Makes failed Scenarios being retried the specified number of times.
+        world = world.retries(retries);
+    }
+
+    let failed = world
+        .after(|feature, _rule, scenario, scenario_finished, world| {
+            Box::pin(async move {
+                // Runs after the scenario has completed; useful for capturing final state/logs.
+                println!(
+                    "\nFinished - {}: {} ({}: {})\n",
+                    scenario.keyword, scenario.name, feature.keyword, feature.name,
+                );
+
+                if let Some(world) = world {
+                    finish_scenario(
+                        world,
+                        matches!(scenario_finished, ScenarioFinished::StepPassed),
+                    )
+                    .await;
+                }
+            })
+        })
+        // Runs Cucumber. Features sourced from a Parser are fed to a Runner, which
+        // produces events handled by a Writer.
+        .run(get_feature_path_for_deployer(deployer))
+        .await;
+
+    // Release this process's reserved port block before exiting.
+    release_reserved_port_block();
+
+    if failed.execution_has_failed() {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn selected_deployer() -> DeployerKind {
+    // The k8s deployer uses the active Kubernetes client configuration on the
+    // machine running the test, so it targets the currently configured cluster
+    // and context rather than provisioning one itself. To use custom images,
+    // set `LOGOS_BLOCKCHAIN_K8S_NODE_IMAGE` for node pods and optionally
+    // `LOGOS_BLOCKCHAIN_K8S_BOOTSTRAP_IMAGE` for the cfgsync/bootstrap pod.
+    // If those are unset, the runner falls back to `LOGOS_BLOCKCHAIN_TESTNET_IMAGE`
+    // or the default local node and cfgsync images built by the runtime
+    // docker scripts under `tests/testing_framework/assets/runtime/scripts/docker`.
+    if is_truthy_env(CUCUMBER_DEPLOYER_K8S) {
+        return DeployerKind::K8s;
+    }
+
+    if is_truthy_env(CUCUMBER_DEPLOYER_COMPOSE) {
+        return DeployerKind::Compose;
+    }
+
+    DeployerKind::Local
+}
+
+fn get_feature_path_for_deployer(deployer: DeployerKind) -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let feature_path = match deployer {
+        DeployerKind::K8s => manifest_dir.join("cucumber_tests/features_k8s"),
+        DeployerKind::Local | DeployerKind::Compose => get_feature_path(),
+    };
+    println!("Feature path:      {}", feature_path.display());
+    feature_path
+}
+
+fn prepare_world_for_scenario(
+    world: &mut CucumberWorld,
+    deployer: DeployerKind,
+    output_dir: &Path,
+    scenario_attempts: &ScenarioAttempts,
+    feature_name: &str,
+    scenario_name: &str,
+) {
+    world.set_deployer(deployer);
+    world.set_genesis_time(resolve_automatic_genesis_time());
+
+    if let Err(err) = world.preflight(deployer) {
+        println!("Preflight failed for scenario '{scenario_name}': {err}");
+    }
+
+    let scenario_dir =
+        scenario_output_dir(output_dir, scenario_attempts, feature_name, scenario_name);
+
+    if let Err(err) = std::fs::create_dir_all(&scenario_dir) {
+        println!(
+            "Failed to create scenario artifact directory '{}': {err}",
+            scenario_dir.display()
+        );
+    }
+
+    register_system_monitor_output_file(&scenario_dir.join("system_stats.ndjson"));
+    record_system_monitor_event(
+        "cucumber_scenario_prepared",
+        scenario_dir.display().to_string(),
+    );
+
+    world.set_scenario_base_dir(&scenario_dir, &deployer);
+    world.set_scenario_name(scenario_name);
+    world.apply_deployment_config_override_path();
+
+    let started_at_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    let raw_context = format!("{}::{started_at_ns}", scenario_dir.display());
+    world.set_test_context(hash_str(&raw_context));
+}
+
+fn scenario_output_dir(
+    output_dir: &Path,
+    scenario_attempts: &ScenarioAttempts,
+    feature_name: &str,
+    scenario_name: &str,
+) -> PathBuf {
+    let run_attempt = increment_attempts(scenario_attempts, feature_name, scenario_name);
+
+    output_dir
+        .join(ARTEFACTS)
+        .join(feature_name)
+        .join(scenario_name.trim().replace(' ', "_"))
+        .join(run_attempt)
+}
+
+async fn finish_scenario(world: &mut CucumberWorld, successful: bool) {
+    if let Err(error) = world.stop_background_activity().await {
+        println!("Scenario background cleanup failed: {error}");
+    }
+
+    let path = world
+        .lifecycle
+        .scenario_base_dir
+        .join("debug_dump_file.log");
+    if let Some(parent) = path.parent() {
+        let _unused = std::fs::create_dir_all(parent);
+    }
+    let _unused = std::fs::write(&path, world.full_debug_info_string());
+
+    if successful && is_truthy_env(CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL) {
+        println!(
+            "Env var '{CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL}' set, removing all \
+            artefacts\n"
+        );
+        if let Err(e) = world.clear_scenario_artifacts() {
+            println!("{e}");
+        }
+    }
+
+    unregister_system_monitor_output_file(
+        &world
+            .lifecycle
+            .scenario_base_dir
+            .join("system_stats.ndjson"),
+    );
+}

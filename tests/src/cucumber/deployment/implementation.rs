@@ -1,26 +1,36 @@
-use std::env;
+use std::pin::Pin;
 
 use lb_testing_framework::{LbcClusterApp, SharedDeployment, internal::DeploymentPlan};
 use testing_framework_app::AppDeployer;
-use testing_framework_core::topology::FixedDeploymentProvider;
+use testing_framework_core::{scenario::DynError, topology::FixedDeploymentProvider};
 
 use super::{CucumberClusterApp, LocalDeployment, runtime_info::NodeRuntimeInfo};
 use crate::cucumber::error::StepError;
 
-/// Selects an adapter at the runner boundary; shared steps use TF control.
+pub type DeploymentFuture = Pin<Box<dyn Future<Output = Result<LocalDeployment, DynError>> + Send>>;
+
+/// Receives prepared network inputs and returns a TF-owned local deployment.
+/// External runners provide this function; the suite does not select adapters.
+pub type DeploymentFactory = fn(SharedDeployment, Vec<NodeRuntimeInfo>) -> DeploymentFuture;
+
+/// The default Logos deployment or a factory supplied by an integration runner.
+/// Shared steps use TF control in either case.
 #[derive(Clone, Copy, Debug, Default)]
 pub enum LocalImplementation {
     #[default]
     Logos,
+    External {
+        name: &'static str,
+        deploy: DeploymentFactory,
+    },
 }
 
 impl LocalImplementation {
-    pub fn from_env() -> Result<Self, StepError> {
-        match env::var("CUCUMBER_IMPLEMENTATION").as_deref() {
-            Err(env::VarError::NotPresent) | Ok("logos") => Ok(Self::Logos),
-            value => Err(StepError::InvalidArgument {
-                message: format!("invalid CUCUMBER_IMPLEMENTATION: {value:?}"),
-            }),
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Logos => "logos",
+            Self::External { name, .. } => name,
         }
     }
 
@@ -55,6 +65,7 @@ impl LocalImplementation {
                     })
                     .await?)
             }
+            Self::External { deploy, .. } => Ok(deploy(inputs, node_runtime_info).await?),
         }
     }
 }
