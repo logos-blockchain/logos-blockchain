@@ -700,6 +700,29 @@ def runner_metadata_missing_unexpectedly(job: dict[str, Any]) -> bool:
     )
 
 
+def _job_runner_cost_issue(job: dict[str, Any]) -> str | None:
+    """Return why a job makes runner-cost coverage partial, if it does.
+
+    Skips cannot have runner work to account for. A job known not to have run
+    is exempt only when timestamps provide no evidence of measurable work.
+    Other jobs must be terminal with valid non-negative runtime timestamps,
+    including cancelled jobs.
+    """
+    conclusion = job.get("conclusion")
+    started_at = job.get("started_at")
+    if conclusion == "skipped":
+        return None
+    if conclusion in {"startup_failure", "action_required"} and not started_at:
+        return None
+    if conclusion == "cancelled" and not started_at:
+        return None
+    if job.get("status") != "completed":
+        return "job_incomplete"
+    if duration_seconds(started_at, job.get("completed_at")) is None:
+        return "job_runtime_unavailable"
+    return None
+
+
 def derive_timing_metrics(
     latest_runs: dict[str, dict[str, Any] | None],
     jobs_by_run: dict[tuple[int, int], list[dict[str, Any]]],
@@ -710,9 +733,10 @@ def derive_timing_metrics(
     Each workflow attempt has its own (run ID, attempt) key. Runner seconds sum
     observed completed work from every attempt, including cancelled attempts
     that ran jobs. ``timing_status`` describes latest workflow completion;
-    ``runner_time_status`` separately reports whether every observed attempt's
-    job listing was complete. Partial runner accounting keeps observed seconds
-    as a lower bound and identifies attempts with unavailable job evidence.
+    ``runner_time_status`` separately reports whether every attempt's job
+    listing and runner-work timestamps are complete. Running jobs and jobs
+    with unmeasurable runtimes make accounting partial; skipped or never-started
+    jobs do not. Observed seconds remain available as a lower bound.
     Candidate wall time uses earliest creation to latest completion and does
     not sum retry durations.
     """
@@ -768,6 +792,39 @@ def derive_timing_metrics(
         if (run.get("name") or run.get("workflow_name")) in TARGET_WORKFLOWS
     ]
     runner_time_missing_attempts = []
+    for run in observed_target_runs:
+        if (
+            run.get("status") != "completed"
+            and run.get("attempt_metadata_available") is not False
+        ):
+            runner_time_missing_attempts.append({
+                "run_id": run.get("id"),
+                "run_attempt": int(run.get("run_attempt") or 1),
+                "workflow_name": run.get("name") or run.get("workflow_name"),
+                "reason": "workflow_incomplete",
+                "status": run.get("status"),
+            })
+    for (run_id, attempt), jobs in jobs_by_run.items():
+        run = next(
+            (item for item in observed_target_runs
+             if item.get("id") == run_id
+             and int(item.get("run_attempt") or 1) == attempt),
+            {},
+        )
+        for job in jobs:
+            reason = _job_runner_cost_issue(job)
+            if reason is not None:
+                runner_time_missing_attempts.append({
+                    "run_id": run_id,
+                    "run_attempt": attempt,
+                    "workflow_name": (
+                        job.get("workflow_name") or run.get("name")
+                        or run.get("workflow_name")
+                    ),
+                    "reason": reason,
+                    "job_id": job.get("id"),
+                    "job_name": job.get("name"),
+                })
     for run in observed_target_runs:
         run_id = run.get("id")
         attempt = int(run.get("run_attempt") or 1)

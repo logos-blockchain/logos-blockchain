@@ -837,6 +837,137 @@ class TimingTests(unittest.TestCase):
             "updated_at": updated,
         }
 
+    def cost_fixture(self):
+        runs = {
+            name: self.run_row(
+                name, index, "2026-01-01T00:00:00Z",
+                "2026-01-01T00:01:00Z", "2026-01-01T00:03:00Z",
+            )
+            for index, name in enumerate(self.names, start=1)
+        }
+        jobs = {(index, 1): [] for index in range(1, 4)}
+        return runs, jobs
+
+    def test_queued_or_in_progress_job_makes_runner_cost_partial(self):
+        for status in ("queued", "in_progress"):
+            with self.subTest(status=status):
+                runs, jobs = self.cost_fixture()
+                jobs[(1, 1)] = [
+                    attempt_job(
+                        "finished", "success", "2026-01-01T00:01:00Z",
+                        "2026-01-01T00:02:00Z", self.names[0],
+                    ),
+                    {
+                        "id": f"pending-{status}", "name": "pending",
+                        "status": status, "conclusion": None,
+                        "started_at": None, "completed_at": None,
+                    },
+                ]
+                result = derive_timing_metrics(runs, jobs)
+                self.assertEqual(result["timing_status"], "complete")
+                self.assertEqual(result["runner_time_status"], "partial")
+                self.assertEqual(result["runner_time_seconds"]["self-hosted"], 60.0)
+                self.assertEqual(
+                    {item["reason"] for item in result["runner_time_missing_attempts"]},
+                    {"job_incomplete"},
+                )
+
+    def test_ran_job_with_missing_or_invalid_timestamps_makes_cost_partial(self):
+        for started, completed in (
+            ("2026-01-01T00:01:00Z", None),
+            (None, "2026-01-01T00:02:00Z"),
+            ("invalid", "2026-01-01T00:02:00Z"),
+            ("2026-01-01T00:02:00Z", "2026-01-01T00:01:00Z"),
+        ):
+            with self.subTest(started=started, completed=completed):
+                runs, jobs = self.cost_fixture()
+                jobs[(1, 1)] = [{
+                    "id": "unmeasurable", "name": "unmeasurable",
+                    "status": "completed", "conclusion": "failure",
+                    "started_at": started, "completed_at": completed,
+                    "labels": ["self-hosted"],
+                }]
+                result = derive_timing_metrics(runs, jobs)
+                self.assertEqual(result["runner_time_status"], "partial")
+                self.assertEqual(result["runner_time_seconds"]["self-hosted"], 0.0)
+                self.assertEqual(
+                    result["runner_time_missing_attempts"][0]["reason"],
+                    "job_runtime_unavailable",
+                )
+
+    def test_skipped_job_does_not_make_cost_partial_or_add_runtime(self):
+        runs, jobs = self.cost_fixture()
+        jobs[(1, 1)] = [{
+            "id": "skip", "name": "skipped", "status": "completed",
+            "conclusion": "skipped", "started_at": None, "completed_at": None,
+        }]
+        result = derive_timing_metrics(runs, jobs)
+        self.assertEqual(result["runner_time_status"], "complete")
+        self.assertEqual(result["runner_time_seconds"]["self-hosted"], 0.0)
+        self.assertEqual(result["runner_time_missing_attempts"], [])
+
+    def test_cancelled_before_start_and_startup_failure_have_no_runner_cost(self):
+        runs, jobs = self.cost_fixture()
+        jobs[(1, 1)] = [
+            {"id": "cancelled", "status": "completed", "conclusion": "cancelled"},
+            {"id": "startup", "status": "completed", "conclusion": "startup_failure"},
+            {"id": "action-required", "status": "completed", "conclusion": "action_required"},
+        ]
+        result = derive_timing_metrics(runs, jobs)
+        self.assertEqual(result["runner_time_status"], "complete")
+        self.assertEqual(result["runner_time_seconds"]["self-hosted"], 0.0)
+        self.assertEqual(result["runner_time_missing_attempts"], [])
+
+    def test_startup_failure_or_action_required_with_measurable_runtime_counts(self):
+        for conclusion in ("startup_failure", "action_required"):
+            with self.subTest(conclusion=conclusion):
+                runs, jobs = self.cost_fixture()
+                jobs[(1, 1)] = [attempt_job(
+                    "measurable", conclusion, "2026-01-01T00:01:00Z",
+                    "2026-01-01T00:01:30Z", self.names[0],
+                )]
+                result = derive_timing_metrics(runs, jobs)
+                self.assertEqual(result["runner_time_status"], "complete")
+                self.assertEqual(result["runner_time_seconds"]["self-hosted"], 30.0)
+                self.assertEqual(result["runner_time_missing_attempts"], [])
+
+    def test_cancelled_after_start_with_valid_timestamps_counts_work(self):
+        runs, jobs = self.cost_fixture()
+        jobs[(1, 1)] = [attempt_job(
+            "cancelled", "cancelled", "2026-01-01T00:01:00Z",
+            "2026-01-01T00:02:30Z", self.names[0],
+        )]
+        result = derive_timing_metrics(runs, jobs)
+        self.assertEqual(result["runner_time_status"], "complete")
+        self.assertEqual(result["runner_time_seconds"]["self-hosted"], 90.0)
+        self.assertEqual(result["runner_time_missing_attempts"], [])
+
+    def test_mixed_attempt_counts_measurable_work_and_reports_unmeasurable_work(self):
+        runs, jobs = self.cost_fixture()
+        jobs[(1, 1)] = [
+            attempt_job(
+                "finished", "success", "2026-01-01T00:01:00Z",
+                "2026-01-01T00:03:00Z", self.names[0],
+            ),
+            {
+                "id": "still-running", "name": "still running",
+                "status": "in_progress", "conclusion": None,
+                "started_at": "2026-01-01T00:02:00Z", "completed_at": None,
+            },
+            {
+                "id": "missing-runtime", "name": "missing runtime",
+                "status": "completed", "conclusion": "failure",
+                "started_at": "2026-01-01T00:00:00Z", "completed_at": "bad-time",
+            },
+        ]
+        result = derive_timing_metrics(runs, jobs)
+        self.assertEqual(result["runner_time_status"], "partial")
+        self.assertEqual(result["runner_time_seconds"]["self-hosted"], 120.0)
+        self.assertEqual(
+            {item["reason"] for item in result["runner_time_missing_attempts"]},
+            {"job_incomplete", "job_runtime_unavailable"},
+        )
+
     def test_pending_sibling_is_partial(self):
         runs = {
             self.names[0]: self.run_row(
@@ -850,8 +981,21 @@ class TimingTests(unittest.TestCase):
             ),
             self.names[2]: None,
         }
-        result = derive_timing_metrics(runs, {})
+        jobs = {(1, 1): [], (2, 1): []}
+        result = derive_timing_metrics(runs, jobs)
         self.assertEqual(result["timing_status"], "partial")
+        self.assertEqual(result["runner_time_status"], "partial")
+        self.assertEqual(result["job_rows"], [])
+        self.assertEqual(
+            result["runner_time_missing_attempts"],
+            [{
+                "run_id": 2,
+                "run_attempt": 1,
+                "workflow_name": self.names[1],
+                "reason": "workflow_incomplete",
+                "status": "in_progress",
+            }],
+        )
         self.assertIsNone(result["candidate_wall_time_seconds"])
 
     def test_all_siblings_complete_has_workflow_and_candidate_timings(self):
@@ -1186,6 +1330,7 @@ class TimingTests(unittest.TestCase):
         self.assertEqual(timing["workflow_rows"][0]["conclusion"], "cancelled")
         self.assertEqual(timing["runner_time_seconds"]["self-hosted"], 120.0)
         self.assertEqual(timing["runner_time_status"], "complete")
+        self.assertEqual(timing["runner_time_missing_attempts"], [])
 
     def test_skipped_jobs_do_not_make_complete_job_listings_partial(self):
         runs = {
