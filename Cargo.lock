@@ -5282,6 +5282,7 @@ dependencies = [
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "serde",
+ "tempfile",
  "tokio",
  "tonic",
  "tracing",

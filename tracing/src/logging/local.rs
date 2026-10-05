@@ -2,7 +2,8 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::{Mutex, PoisonError, TryLockError},
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -19,17 +20,34 @@ pub type FmtLayer<S> = Layer<S, DefaultFields, Format, tracing_appender::non_blo
 /// Worker guards of every non-blocking appender created by this module.
 static APPENDER_GUARDS: Mutex<Vec<WorkerGuard>> = Mutex::new(Vec::new());
 
+const FLUSH_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
+const FLUSH_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(10);
+
 /// Flushes and shuts down every appender created so far.
 ///
-/// The registry lock is only tried, never waited on, so the function is safe
-/// to call from a panic hook even if the panicking thread holds the lock.
+/// The registry lock is only tried, never waited on, so the function is safe to
+/// call from a panic hook: a lock held by another thread is retried until
+/// [`FLUSH_LOCK_TIMEOUT`], while a lock held by the panicking thread itself can
+/// never be acquired and the function gives up instead of deadlocking.
 pub fn flush_appenders() {
-    let guards = match APPENDER_GUARDS.try_lock() {
-        Ok(mut guards) => std::mem::take(&mut *guards),
-        Err(TryLockError::Poisoned(poisoned)) => std::mem::take(&mut *poisoned.into_inner()),
-        Err(TryLockError::WouldBlock) => return,
-    };
-    drop(guards);
+    let deadline = Instant::now() + FLUSH_LOCK_TIMEOUT;
+
+    loop {
+        match APPENDER_GUARDS.try_lock() {
+            Ok(mut guards) => {
+                drop(std::mem::take(&mut *guards));
+                return;
+            }
+            Err(TryLockError::Poisoned(poisoned)) => {
+                drop(std::mem::take(&mut *poisoned.into_inner()));
+                return;
+            }
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                thread::sleep(FLUSH_LOCK_RETRY_INTERVAL);
+            }
+            Err(TryLockError::WouldBlock) => return,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
@@ -145,13 +163,57 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{io, sync::Arc};
+    use std::{
+        env, fs, io,
+        panic::set_hook,
+        process::{self, Command, ExitStatus, Stdio},
+        sync::{Arc, mpsc},
+    };
 
-    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
     use super::*;
 
     const CHILD_TARGET: &str = "lb_tracing::local::tests";
+    const LOG_DIR_ENV: &str = "LB_TRACING_PANIC_TEST_LOG_DIR";
+    const LOG_PREFIX: &str = "tracing-panic-test.log";
+    const PANIC_MESSAGE: &str = "This is fine.";
+    const EXIT_CODE: i32 = 1;
+    const FILLER_LINES: usize = 100;
+    const LOCK_HOLD: Duration = Duration::from_millis(200);
+
+    fn child_log_dir() -> Option<PathBuf> {
+        env::var_os(LOG_DIR_ENV).map(PathBuf::from)
+    }
+
+    fn init_child_file_layer(directory: PathBuf) {
+        let layer = create_file_layer(FileConfig {
+            directory,
+            prefix: Some(LOG_PREFIX.into()),
+            appender_type: AppenderType::Simple,
+        });
+        tracing_subscriber::registry().with(layer).init();
+    }
+
+    fn run_child(test_name: &str) -> (ExitStatus, tempfile::TempDir) {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should exist");
+        let current_exe = env::current_exe().expect("test executable should exist");
+
+        let status = Command::new(current_exe)
+            .args(["--exact", test_name])
+            .env(LOG_DIR_ENV, temp_dir.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("test process should run");
+
+        (status, temp_dir)
+    }
+
+    fn child_log(temp_dir: &tempfile::TempDir) -> String {
+        fs::read_to_string(temp_dir.path().join(LOG_PREFIX))
+            .expect("should have written the log file")
+    }
 
     #[derive(Clone, Default)]
     struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
@@ -191,5 +253,99 @@ mod tests {
             "should have reached the writer: {contents:?}"
         );
         assert_eq!(contents.matches("This is fine").count(), 1);
+    }
+
+    #[test]
+    fn panic_hook_flushes_log_file_before_exit() {
+        if let Some(log_dir) = child_log_dir() {
+            init_child_file_layer(log_dir);
+
+            set_hook(Box::new(|panic_info| {
+                tracing::error!(target: CHILD_TARGET, panic_payload = %panic_info, "A panic occurred");
+                flush_appenders();
+                process::exit(EXIT_CODE);
+            }));
+
+            for i in 0..FILLER_LINES {
+                tracing::info!(target: CHILD_TARGET, "Fire {i}");
+            }
+
+            panic!("{PANIC_MESSAGE}");
+        }
+
+        let (status, temp_dir) =
+            run_child("logging::local::tests::panic_hook_flushes_log_file_before_exit");
+
+        assert_eq!(status.code(), Some(EXIT_CODE));
+
+        let log = child_log(&temp_dir);
+        assert!(
+            log.contains("panic occurred") && log.contains(PANIC_MESSAGE),
+            "panic line should have been flushed to the log file: {log}"
+        );
+        assert_eq!(log.matches("Fire").count(), FILLER_LINES);
+    }
+
+    #[test]
+    fn flush_appenders_retries_while_another_thread_holds_the_lock() {
+        if let Some(log_dir) = child_log_dir() {
+            init_child_file_layer(log_dir);
+
+            let (lock_taken_tx, lock_taken_rx) = mpsc::channel();
+            thread::spawn(move || {
+                let guards = APPENDER_GUARDS
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                lock_taken_tx.send(()).expect("receiver should be alive");
+                thread::sleep(LOCK_HOLD);
+                drop(guards);
+            });
+            lock_taken_rx.recv().expect("lock should have been taken");
+
+            for i in 0..FILLER_LINES {
+                tracing::info!(target: CHILD_TARGET, "Fire {i}");
+            }
+
+            flush_appenders();
+            process::exit(EXIT_CODE);
+        }
+
+        let (status, temp_dir) = run_child(
+            "logging::local::tests::flush_appenders_retries_while_another_thread_holds_the_lock",
+        );
+
+        assert_eq!(status.code(), Some(EXIT_CODE));
+
+        let log = child_log(&temp_dir);
+        assert_eq!(log.matches("Fire").count(), FILLER_LINES);
+    }
+
+    #[test]
+    fn panic_hook_exits_when_the_panicking_thread_holds_the_lock() {
+        if let Some(log_dir) = child_log_dir() {
+            init_child_file_layer(log_dir);
+
+            set_hook(Box::new(|_| {
+                flush_appenders();
+                process::exit(EXIT_CODE);
+            }));
+
+            let _guards = APPENDER_GUARDS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            panic!("{PANIC_MESSAGE}");
+        }
+
+        let started = Instant::now();
+        let (status, _temp_dir) = run_child(
+            "logging::local::tests::panic_hook_exits_when_the_panicking_thread_holds_the_lock",
+        );
+        let elapsed = started.elapsed();
+
+        assert_eq!(status.code(), Some(EXIT_CODE));
+        assert!(
+            elapsed >= FLUSH_LOCK_TIMEOUT,
+            "the hook should have retried up to the timeout, gave up after {elapsed:?}"
+        );
     }
 }
