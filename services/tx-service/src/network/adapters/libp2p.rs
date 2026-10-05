@@ -2,11 +2,11 @@ use core::marker::PhantomData;
 use std::sync::Arc;
 
 use futures::Stream;
-use lb_binary_codec::bincode::{self, SerializeOp as _};
-use lb_core::{block::MAX_BLOCK_TRANSACTIONS_SIZE, mantle::transactions::codec::DecodeInEra};
+use lb_binary_codec::bincode::{self, DeserializeOp as _, SerializeOp as _};
+use lb_core::block::MAX_BLOCK_TRANSACTIONS_SIZE;
 use lb_cryptarchia_engine::{
     Slot,
-    era::{Era, EraInForce, EraVersion, Eras},
+    era::{Era, EraInForce, Eras},
 };
 use lb_log_targets::mempool;
 use lb_network_service::{
@@ -88,7 +88,7 @@ impl<Item, Key, Clock, RuntimeServiceId> Libp2pAdapter<Item, Key, Clock, Runtime
 impl<Item, Key, Clock, RuntimeServiceId> NetworkAdapter<RuntimeServiceId>
     for Libp2pAdapter<Item, Key, Clock, RuntimeServiceId>
 where
-    Item: DecodeInEra + DeserializeOwned + Serialize + Send + Sync + 'static + Clone,
+    Item: DeserializeOwned + Serialize + Send + Sync + 'static + Clone,
     Key: Clone + Send + Sync + 'static,
     Clock: TimeBackend + 'static,
 {
@@ -160,17 +160,17 @@ where
             .expect("Network backend should be ready");
 
         let stream = receiver.await.unwrap();
-        Box::new(Box::pin(stream.filter_map(move |message| {
-            let Message { data, topic, .. } = message.ok()?;
-            // A transaction is decoded under the era of the topic it came on.
-            let version = version_in_force(&topics, *in_force.borrow(), &topic)?;
-            match Item::decode_in(version, &data) {
-                Ok(item) => Some((id(&item), item)),
-                Err(e) => {
-                    tracing::debug!(target: LOG_TARGET, "Unrecognized message: {e}");
-                    None
+        Box::new(Box::pin(stream.filter_map(move |message| match message {
+            Ok(Message { data, topic, .. }) if is_in_force(&topics, *in_force.borrow(), &topic) => {
+                match Item::from_bytes(&data) {
+                    Ok(item) => Some((id(&item), item)),
+                    Err(e) => {
+                        tracing::debug!(target: LOG_TARGET, "Unrecognized message: {e}");
+                        None
+                    }
                 }
             }
+            _ => None,
         })))
     }
 
@@ -200,18 +200,13 @@ where
     }
 }
 
-/// The version of the era in force whose topic `topic` is, if any is.
-fn version_in_force(
-    topics: &Eras<TopicHash>,
-    in_force: Option<EraInForce>,
-    topic: &TopicHash,
-) -> Option<EraVersion> {
+/// Whether `topic` is the topic of an era in force.
+fn is_in_force(topics: &Eras<TopicHash>, in_force: Option<EraInForce>, topic: &TopicHash) -> bool {
     in_force
         .into_iter()
         .flat_map(EraInForce::eras)
         .filter_map(|era| topics.get(era))
-        .find(|era| era.entry.parameters == *topic)
-        .map(|era| era.entry.version)
+        .any(|era| era.entry.parameters == *topic)
 }
 
 #[derive(Debug)]
@@ -240,7 +235,7 @@ mod tests {
         traits::StorageSize as _,
         transactions::{SignedOps, states::Preverified},
     };
-    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry};
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
     use time::OffsetDateTime;
 
     use super::*;
@@ -267,13 +262,13 @@ mod tests {
         .unwrap();
         let accepted = |slot: u64| {
             let in_force = Some(topics.in_force(Slot::new(slot)));
-            [0, 1].map(|era| version_in_force(&topics, in_force, &topic(era)).is_some())
+            [0, 1].map(|era| is_in_force(&topics, in_force, &topic(era)))
         };
 
         assert_eq!(accepted(9), [true, false]);
         assert_eq!(accepted(10), [true, true]);
         assert_eq!(accepted(15), [false, true]);
-        assert_eq!(version_in_force(&topics, None, &topic(0)), None);
+        assert!(!is_in_force(&topics, None, &topic(0)));
     }
 
     #[test]

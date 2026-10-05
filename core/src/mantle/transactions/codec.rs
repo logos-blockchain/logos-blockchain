@@ -1,7 +1,4 @@
-use core::fmt::Display;
-
-use lb_binary_codec::{bincode::DeserializeOp as _, canonical::BinaryEncode as _};
-use lb_cryptarchia_engine::era::EraVersion;
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_key_management_system_keys::keys::ED25519_SIGNATURE_SIZE;
 
@@ -9,41 +6,13 @@ use crate::{
     mantle::{
         OpRef,
         gas::ThresholdSource as _,
-        ledger::verification_mode::StandardMode,
         transactions::{
-            SignedOps,
-            states::Preverified,
             thresholds::RunningThresholds,
             tx_list::{OpRefs, ops::OpsGasContext},
         },
     },
     proofs::channel_multi_sig_proof::codec::calculate_channel_multi_sig_proof_byte_size,
 };
-
-/// A transaction as the network carries it, decoded under the version of the
-/// era it arrives in: the era of the topic it was gossiped on, or the era in
-/// force when it comes out of Blend.
-pub trait DecodeInEra: Sized {
-    type Error: Display;
-
-    /// Decodes a transaction of an era of `version`, from the bytes it
-    /// travels as.
-    ///
-    /// # Errors
-    ///
-    /// If `bytes` are not a transaction of that version.
-    fn decode_in(version: EraVersion, bytes: &[u8]) -> Result<Self, Self::Error>;
-}
-
-impl DecodeInEra for SignedOps<Preverified, StandardMode> {
-    type Error = lb_binary_codec::bincode::Error;
-
-    fn decode_in(version: EraVersion, bytes: &[u8]) -> Result<Self, Self::Error> {
-        match version {
-            EraVersion::V1 => Self::from_bytes(bytes),
-        }
-    }
-}
 
 /// Predicts the minimum encoded size of the transaction once signed.
 ///
@@ -119,7 +88,9 @@ mod tests {
     use crate::{
         mantle::{
             Note, NoteId, Op, OpProof, Utxo,
-            ledger::{BoundedInputs, BoundedOutputs, Inputs, Outputs},
+            ledger::{
+                BoundedInputs, BoundedOutputs, Inputs, Outputs, verification_mode::StandardMode,
+            },
             ops::{
                 ZkAndEd25519Proof,
                 channel::{
@@ -133,7 +104,7 @@ mod tests {
                 transfer::TransferOp,
             },
             traits::{Hashable as _, MantleTx as _},
-            transactions::{GasPrices, OpProofs, tx_list::Ops},
+            transactions::{GasPrices, OpProofs, SignedOps, tx_list::Ops},
         },
         proofs::{
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
