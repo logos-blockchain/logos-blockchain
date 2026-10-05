@@ -18,6 +18,16 @@ pub enum CoreEpochStateInfo<NodeId, CorePoQGenerator> {
     NotCore { epoch: Epoch, epoch_nonce: ZkHash },
 }
 
+impl<NodeId, CorePoQGenerator> CoreEpochStateInfo<NodeId, CorePoQGenerator> {
+    #[must_use]
+    pub fn epoch(&self) -> Epoch {
+        match self {
+            Self::Core(info) => info.epoch(),
+            Self::NotCore { epoch, .. } => *epoch,
+        }
+    }
+}
+
 /// The node is in the membership, but the core Merkle tree has no path for the
 /// zk ID it is configured with.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -27,7 +37,7 @@ pub enum CoreEpochStateInfo<NodeId, CorePoQGenerator> {
 pub struct MismatchedZkId;
 
 impl<NodeId, CorePoQGenerator> From<(Epoch, ZkHash)>
-    for CoreEpochStateInfo<NodeId, CorePoQGenerator>
+for CoreEpochStateInfo<NodeId, CorePoQGenerator>
 {
     fn from((epoch, epoch_nonce): (Epoch, ZkHash)) -> Self {
         Self::NotCore { epoch, epoch_nonce }
@@ -35,7 +45,7 @@ impl<NodeId, CorePoQGenerator> From<(Epoch, ZkHash)>
 }
 
 impl<NodeId, CorePoQGenerator> From<CoreEpochInfo<NodeId, CorePoQGenerator>>
-    for CoreEpochStateInfo<NodeId, CorePoQGenerator>
+for CoreEpochStateInfo<NodeId, CorePoQGenerator>
 {
     fn from(core_epoch_info: CoreEpochInfo<NodeId, CorePoQGenerator>) -> Self {
         Self::Core(Box::new(core_epoch_info))
@@ -49,6 +59,12 @@ pub struct CoreEpochInfo<NodeId, CorePoQGenerator> {
     pub public: CoreEpochPublicInfo<NodeId>,
     /// The core `PoQ` generator component.
     pub core_poq_generator: CorePoQGenerator,
+}
+
+impl<NodeId, CorePoQGenerator> CoreEpochInfo<NodeId, CorePoQGenerator> {
+    pub const fn epoch(&self) -> Epoch {
+        self.public.epoch
+    }
 }
 
 #[derive(Clone, Debug)]
