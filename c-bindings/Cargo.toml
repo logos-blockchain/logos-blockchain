@@ -10,7 +10,9 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
+bytes                            = { workspace = true }
 futures                       = { workspace = true }
+hex                              = { features = ["alloc"], workspace = true }
 lb-api-service                = { workspace = true }
 lb-blend-service              = { workspace = true }
 lb-c-macros                   = { workspace = true }
@@ -20,6 +22,7 @@ lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-key-management-system-service = { workspace = true }
 lb-network-service            = { workspace = true }
 lb-node                       = { workspace = true }
 lb-pow-service                = { workspace = true }
