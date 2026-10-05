@@ -5,7 +5,7 @@ use lb_libp2p::{
     identity::{Keypair, ed25519},
 };
 use lb_node::config::RunConfig;
-use lb_testing_framework::{configs::build_node_run_config, internal::DeploymentPlan};
+use testing_framework_core::scenario::{Application, ClusterHandle, DynError};
 
 use crate::cucumber::{
     error::StepError, utils::node_wallet_keys_from_config, world::NodeWalletKey,
@@ -20,8 +20,8 @@ use crate::cucumber::{
 /// problem. Supplying these values separately lets steps use them without
 /// parsing the node's native configuration.
 ///
-/// Adapters supply these values from their prepared inputs. Logos config
-/// overrides refresh them after the patch is applied.
+/// Each implementation supplies these values for the node that was prepared.
+/// They must reflect any start-time overrides.
 #[derive(Clone)]
 pub struct NodeRuntimeInfo {
     pub peer_id: PeerId,
@@ -29,29 +29,22 @@ pub struct NodeRuntimeInfo {
     pub wallets: Vec<NodeWalletKey>,
 }
 
-impl NodeRuntimeInfo {
-    pub fn from_deployment(deployment: &DeploymentPlan) -> Result<Vec<Self>, StepError> {
-        deployment
-            .nodes()
-            .iter()
-            .map(|node| {
-                let config = build_node_run_config(
-                    deployment,
-                    node,
-                    deployment.config().node_config_override(node.index()),
-                )?;
+/// Provides shared information from a node's prepared settings.
+///
+/// Implementations can reuse retained inputs or read their final native config;
+/// the information must describe the settings actually used to launch the node.
+pub trait NodeRuntimeInfoProvider {
+    fn runtime_info(&self) -> Result<NodeRuntimeInfo, DynError>;
+}
 
-                Self::from_config(&config)
-            })
-            .collect()
-    }
-
-    pub fn from_config(config: &RunConfig) -> Result<Self, StepError> {
+impl NodeRuntimeInfoProvider for RunConfig {
+    fn runtime_info(&self) -> Result<NodeRuntimeInfo, DynError> {
+        let config = self;
         let key = Keypair::from(ed25519::Keypair::from(
             config.user.network.backend.swarm.node_key.clone(),
         ));
 
-        Ok(Self {
+        Ok(NodeRuntimeInfo {
             peer_id: key.public().to_peer_id(),
             slots_per_epoch: NonZero::new(
                 config
@@ -65,5 +58,19 @@ impl NodeRuntimeInfo {
             })?,
             wallets: node_wallet_keys_from_config(&config.user)?,
         })
+    }
+}
+
+/// Implementation-independent access to a managed node's effective settings.
+pub trait NodeRuntimeInfoSource: Send + Sync {
+    fn read(&self, name: &str) -> Result<NodeRuntimeInfo, DynError>;
+}
+
+impl<E: Application> NodeRuntimeInfoSource for ClusterHandle<E>
+where
+    E::NodeConfig: NodeRuntimeInfoProvider,
+{
+    fn read(&self, name: &str) -> Result<NodeRuntimeInfo, DynError> {
+        self.node_config(name)?.runtime_info()
     }
 }

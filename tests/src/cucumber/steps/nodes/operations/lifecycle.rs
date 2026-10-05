@@ -1,4 +1,4 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use super::*;
 use crate::cucumber::{
@@ -146,25 +146,17 @@ pub async fn start_node(
         .with_peers(startup_settings.peer_selection.clone())
         .with_persist_dir(persist_dir);
 
-    let effective_runtime_info = Arc::new(OnceLock::new());
     let logos_start_options = startup_settings.logos_start_options(
         scenario_wallet_key_ids,
         blend_relays,
         relay_node_name,
-        Arc::clone(&effective_runtime_info),
     )?;
 
-    let start_result = launch_local_node(
-        world,
-        node_name,
-        common_options,
-        logos_start_options,
-        &effective_runtime_info,
-    )
-    .await
-    .inspect_err(|e| {
-        warn!(target: TARGET, "Step `{step}` error: {e}");
-    });
+    let start_result = launch_local_node(world, node_name, common_options, logos_start_options)
+        .await
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{step}` error: {e}");
+        });
 
     let (started_node_name, client, runtime_info) = match start_result {
         Ok(started) => started,
@@ -362,20 +354,24 @@ pub async fn start_node(
     Ok(())
 }
 
-/// Starts a local node and returns its TF name, API client and runtime
-/// information.
-///
-/// Ordinary starts use the common app control and prepared runtime information.
-/// Starts with Logos configuration patches require the typed Logos handle and
-/// use runtime information captured after those patches are applied.
+/// Starts a local node, then reads shared runtime information from the actual
+/// configuration retained by TF. Typed Logos overrides use the same reader.
 async fn launch_local_node(
     world: &CucumberWorld,
     node_name: &str,
     common_options: NodeLaunchOptions,
     logos_start_options: Option<StartNodeOptions<LbcEnv>>,
-    effective_runtime_info: &OnceLock<NodeRuntimeInfo>,
 ) -> Result<(String, NodeHttpClient, NodeRuntimeInfo), StepError> {
-    if let Some(mut options) = logos_start_options {
+    let runtime_info =
+        world
+            .cluster
+            .node_runtime_info
+            .as_ref()
+            .ok_or_else(|| StepError::LogicalError {
+                message: "Local app does not provide node runtime information".into(),
+            })?;
+
+    let (name, client) = if let Some(mut options) = logos_start_options {
         let cluster = world
             .cluster
             .logos_cluster()
@@ -385,35 +381,16 @@ async fn launch_local_node(
 
         options.common = common_options;
         let started = Box::pin(cluster.start_node_with(node_name, options)).await?;
-
-        let runtime_info =
-            effective_runtime_info
-                .get()
-                .cloned()
-                .ok_or_else(|| StepError::LogicalError {
-                    message: "Logos startup did not capture the effective configuration".into(),
-                })?;
-
-        Ok((started.name, started.client, runtime_info))
+        (started.name, started.client)
     } else {
         let control = world.cluster.local_control()?;
-        let index = control.node_names().len();
-        let runtime_info = world
-            .cluster
-            .node_runtime_info
-            .get(index)
-            .cloned()
-            .ok_or_else(|| StepError::LogicalError {
-                message: format!(
-                    "no prepared runtime information for node index {index}; increase the cluster capacity"
-                ),
-            })?;
-
         let started = control.start_node_with(node_name, common_options).await?;
         let client = NodeHttpClient::from_url(started.access.api_base_url()?);
+        (started.name, client)
+    };
 
-        Ok((started.name, client, runtime_info))
-    }
+    let info = runtime_info.read(&name)?;
+    Ok((name, client, info))
 }
 
 fn check_tokio_console_port(node_name: &str, port: u16) {
@@ -591,7 +568,6 @@ impl StartupSettings {
         scenario_wallet_key_ids: HashSet<KeyId>,
         blend_relays: BlendRelayRegistry,
         node_name: String,
-        effective_runtime_info: Arc<OnceLock<NodeRuntimeInfo>>,
     ) -> Result<Option<StartNodeOptions<LbcEnv>>, StepError> {
         if !self.join_external_network
             && self.deployment_settings_override.is_none()
@@ -635,10 +611,6 @@ impl StartupSettings {
                     &mut config,
                     &declared_blend_address,
                 )?;
-
-                effective_runtime_info
-                    .set(NodeRuntimeInfo::from_config(&config)?)
-                    .map_err(|_| "Logos configuration was prepared more than once")?;
 
                 Ok(config)
             },

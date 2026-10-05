@@ -1,17 +1,20 @@
-use std::pin::Pin;
+use std::fmt::Debug;
 
+use async_trait::async_trait;
 use lb_testing_framework::{LbcClusterApp, SharedDeployment, internal::DeploymentPlan};
 use testing_framework_app::AppDeployer;
 use testing_framework_core::{scenario::DynError, topology::FixedDeploymentProvider};
 
-use super::{CucumberClusterApp, LocalDeployment, runtime_info::NodeRuntimeInfo};
+use super::{CucumberClusterApp, LocalDeployment};
 use crate::cucumber::error::StepError;
 
-pub type DeploymentFuture = Pin<Box<dyn Future<Output = Result<LocalDeployment, DynError>> + Send>>;
+/// Prepares an external implementation from the suite's shared network inputs.
+#[async_trait]
+pub trait ExternalDeploymentFactory: Debug + Send + Sync {
+    fn name(&self) -> &'static str;
 
-/// Receives prepared network inputs and returns a TF-owned local deployment.
-/// External runners provide this function; the suite does not select adapters.
-pub type DeploymentFactory = fn(SharedDeployment, Vec<NodeRuntimeInfo>) -> DeploymentFuture;
+    async fn deploy(&self, inputs: SharedDeployment) -> Result<LocalDeployment, DynError>;
+}
 
 /// The default Logos deployment or a factory supplied by an integration runner.
 /// Shared steps use TF control in either case.
@@ -19,18 +22,15 @@ pub type DeploymentFactory = fn(SharedDeployment, Vec<NodeRuntimeInfo>) -> Deplo
 pub enum LocalImplementation {
     #[default]
     Logos,
-    External {
-        name: &'static str,
-        deploy: DeploymentFactory,
-    },
+    External(&'static dyn ExternalDeploymentFactory),
 }
 
 impl LocalImplementation {
     #[must_use]
-    pub const fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::Logos => "logos",
-            Self::External { name, .. } => name,
+            Self::External(factory) => factory.name(),
         }
     }
 
@@ -50,7 +50,6 @@ impl LocalImplementation {
 
     pub async fn deploy(self, deployment: DeploymentPlan) -> Result<LocalDeployment, StepError> {
         let inputs = SharedDeployment::from_plan(&deployment)?;
-        let node_runtime_info = NodeRuntimeInfo::from_deployment(&deployment)?;
 
         match self {
             Self::Logos => {
@@ -58,87 +57,157 @@ impl LocalImplementation {
                     .with_on_demand_start();
 
                 Ok(AppDeployer::new()
-                    .deploy(CucumberClusterApp {
-                        app,
-                        inputs,
-                        node_runtime_info,
-                    })
+                    .deploy(CucumberClusterApp { app, inputs })
                     .await?)
             }
-            Self::External { deploy, .. } => Ok(deploy(inputs, node_runtime_info).await?),
+            Self::External(factory) => Ok(factory.deploy(inputs).await?),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+    use std::{
+        collections::HashMap,
+        num::NonZero,
+        sync::{Arc, Mutex},
     };
 
     use async_trait::async_trait;
+    use lb_libp2p::identity::Keypair;
     use lb_testing_framework::{DeploymentBuilder, TopologyConfig};
     use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
-    use testing_framework_core::scenario::NodeControl;
+    use testing_framework_core::{
+        scenario::{
+            Application, ClusterControlProfile, ClusterHandle, ClusterUnit, NodeAccess,
+            NodeClients, NodeControl, NodeControlHandle, NodeLaunchOptions, StartedNodeAccess,
+        },
+        topology::ClusterTopology,
+    };
 
     use super::*;
-    use crate::cucumber::world::ClusterState;
+    use crate::cucumber::{
+        deployment::runtime_info::{NodeRuntimeInfo, NodeRuntimeInfoProvider},
+        world::ClusterState,
+    };
 
-    struct TestApp {
-        inputs: SharedDeployment,
-        nodes: Vec<NodeRuntimeInfo>,
+    struct TestEnv;
+
+    impl Application for TestEnv {
+        type Deployment = ClusterTopology;
+        type NodeConfig = NodeRuntimeInfo;
+        type NodeClient = ();
+
+        fn build_node_client(_access: &NodeAccess) -> Result<(), DynError> {
+            Ok(())
+        }
     }
 
     #[derive(Default)]
     struct TestControl {
-        stopped: AtomicBool,
+        configs: Mutex<HashMap<String, NodeRuntimeInfo>>,
     }
 
     #[async_trait]
     impl NodeControl for TestControl {
-        fn node_names(&self) -> Vec<String> {
-            vec!["external-node".to_owned()]
+        async fn start_node_with(
+            &self,
+            name: &str,
+            _options: NodeLaunchOptions,
+        ) -> Result<StartedNodeAccess, DynError> {
+            let mut configs = self.configs.lock().unwrap();
+            let index = u64::try_from(configs.len())?;
+            configs.insert(
+                name.to_owned(),
+                NodeRuntimeInfo {
+                    peer_id: Keypair::generate_ed25519().public().to_peer_id(),
+                    slots_per_epoch: NonZero::new(index + 1).unwrap(),
+                    wallets: Vec::new(),
+                },
+            );
+            drop(configs);
+
+            Ok(StartedNodeAccess {
+                name: name.to_owned(),
+                access: NodeAccess::new("127.0.0.1", 8080),
+            })
         }
 
         async fn stop_node(&self, name: &str) -> Result<(), DynError> {
-            assert_eq!(name, "external-node");
-            self.stopped.store(true, Ordering::SeqCst);
+            self.configs
+                .lock()
+                .unwrap()
+                .remove(name)
+                .ok_or("missing test node")?;
             Ok(())
         }
     }
 
     #[async_trait]
+    impl NodeControlHandle<TestEnv> for TestControl {
+        fn node_config(&self, name: &str) -> Result<NodeRuntimeInfo, DynError> {
+            self.configs
+                .lock()
+                .unwrap()
+                .get(name)
+                .cloned()
+                .ok_or_else(|| "missing test node".into())
+        }
+    }
+
+    struct TestApp;
+
+    #[async_trait]
     impl AppDeployment<AppHostEnv> for TestApp {
-        type Handle = Arc<dyn NodeControl>;
+        type Handle = ClusterHandle<TestEnv>;
 
         async fn deploy(
             self,
-            ctx: &mut DeployContext<AppHostEnv>,
+            _ctx: &mut DeployContext<AppHostEnv>,
         ) -> Result<Self::Handle, DynError> {
-            ctx.expose(self.inputs)?;
-            ctx.expose(self.nodes)?;
+            Ok(ClusterUnit::new(
+                Some(ClusterTopology::new(1)),
+                NodeClients::default(),
+                ClusterControlProfile::ManualControlled,
+            )
+            .with_node_control(Arc::new(TestControl::default()))
+            .handle())
+        }
+    }
 
-            let control = Arc::new(TestControl::default());
-            ctx.expose(Arc::clone(&control))?;
-            Ok(control)
+    impl NodeRuntimeInfoProvider for NodeRuntimeInfo {
+        fn runtime_info(&self) -> Result<NodeRuntimeInfo, DynError> {
+            Ok(self.clone())
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestFactory;
+
+    #[async_trait]
+    impl ExternalDeploymentFactory for TestFactory {
+        fn name(&self) -> &'static str {
+            "test"
+        }
+
+        async fn deploy(&self, inputs: SharedDeployment) -> Result<LocalDeployment, DynError> {
+            AppDeployer::new()
+                .deploy(CucumberClusterApp {
+                    app: TestApp,
+                    inputs,
+                })
+                .await
         }
     }
 
     #[tokio::test]
-    async fn external_factory_installs_shared_inputs_and_common_control() {
+    async fn external_factory_reads_runtime_info_for_nodes_beyond_initial_capacity() {
         let plan =
             DeploymentBuilder::new(TopologyConfig::with_node_numbers(1).with_blend_core_nodes(0))
                 .build()
                 .unwrap();
         let expected = SharedDeployment::from_plan(&plan).unwrap();
-        let expected_node = NodeRuntimeInfo::from_deployment(&plan).unwrap().remove(0);
-        let implementation = LocalImplementation::External {
-            name: "test",
-            deploy: |inputs, nodes| {
-                Box::pin(async move { AppDeployer::new().deploy(TestApp { inputs, nodes }).await })
-            },
-        };
+        let implementation = LocalImplementation::External(&TestFactory);
 
         let app = implementation.deploy(plan).await.unwrap();
         let inputs = app.runtime().get::<SharedDeployment>().unwrap();
@@ -151,21 +220,23 @@ mod tests {
             inputs.network_key(0).unwrap().public(),
             expected.network_key(0).unwrap().public()
         );
-        let control = app.runtime().get::<Arc<TestControl>>().unwrap();
 
         let mut cluster = ClusterState::default();
         cluster.install_local(app).unwrap();
         assert!(cluster.logos_cluster().is_none());
-        assert_eq!(cluster.node_runtime_info.len(), 1);
-        assert_eq!(cluster.node_runtime_info[0].peer_id, expected_node.peer_id);
-        assert_eq!(
-            cluster.node_runtime_info[0].slots_per_epoch,
-            expected_node.slots_per_epoch
-        );
+        let reader = cluster.node_runtime_info.as_ref().unwrap();
+        assert!(reader.read("second").is_err());
 
-        let common_control = cluster.local_control().unwrap();
-        assert_eq!(common_control.node_names(), ["external-node"]);
-        common_control.stop_node("external-node").await.unwrap();
-        assert!(control.stopped.load(Ordering::SeqCst));
+        let control = cluster.local_control().unwrap();
+        control.start_node("first").await.unwrap();
+        control.start_node("second").await.unwrap();
+        let first = reader.read("first").unwrap();
+        let second = reader.read("second").unwrap();
+        assert_ne!(first.peer_id, second.peer_id);
+        assert_eq!(first.slots_per_epoch.get(), 1);
+        assert_eq!(second.slots_per_epoch.get(), 2);
+
+        control.stop_node("second").await.unwrap();
+        assert!(reader.read("second").is_err());
     }
 }
