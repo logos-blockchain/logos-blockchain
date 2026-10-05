@@ -2,6 +2,7 @@ use core::fmt::{self, Debug};
 use std::collections::HashSet;
 
 use futures::StreamExt as _;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_core::mantle::{
     ledger::verification_mode::StandardMode,
     traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
@@ -38,6 +39,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin

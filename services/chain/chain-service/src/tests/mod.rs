@@ -7,7 +7,7 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_core::{
-    block::{Block, BlockTransactions, SignedHeader, UncleHeaders},
+    block::{Block, BlockTransactions, UncleHeaders},
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
@@ -27,7 +27,10 @@ use lb_core::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
     sdp::ServiceParameters,
 };
-use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots, era::Eras};
+use lb_cryptarchia_engine::{
+    EpochConfig, Slot, UncleSlots,
+    era::{EraVersion, Eras},
+};
 use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
@@ -43,7 +46,7 @@ use lb_storage_service::{
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
 use lb_time_service::backends::SystemTimeBackend;
-use lb_utils::{bounded::BoundedOrderedSet, math::NonNegativeRatio};
+use lb_utils::math::NonNegativeRatio;
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 use rand::{RngCore as _, thread_rng};
 use tempfile::TempDir;
@@ -89,7 +92,7 @@ fn cryptarchia_switch_to_online() {
             utxo,
             &zk_key,
             slot,
-            UncleHeaders::empty(),
+            UncleHeaders::empty(EraVersion::V1),
         )
         .expect("should find a winning slot");
 
@@ -177,7 +180,7 @@ async fn get_block_ids_from_memory_and_storage() {
             utxo,
             &zk_key,
             slot,
-            UncleHeaders::empty(),
+            UncleHeaders::empty(EraVersion::V1),
         )
         .unwrap();
         process_block(
@@ -231,7 +234,7 @@ async fn get_block_ids_from_memory_and_storage() {
             utxo,
             &zk_key,
             slot,
-            UncleHeaders::empty(),
+            UncleHeaders::empty(EraVersion::V1),
         )
         .unwrap();
         process_block(
@@ -300,7 +303,7 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     .await;
 
     assert!(recovery_blocks.fell_back_to_lib);
-    assert!(recovery_blocks.blocks.is_empty());
+    assert_eq!(recovery_blocks.blocks, []);
 }
 
 /// The chain must be recovered successfully from storage by skipping the uncle
@@ -335,7 +338,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
         utxo,
         &zk_key,
         u1.header().slot().strict_add(1.into()),
-        UncleHeaders::new(BoundedOrderedSet::from(signed_header(&u1))),
+        uncle(&u1),
     )
     .unwrap();
     let (b1_id, b2_id, b2_slot) = (b1.header().id(), b2.header().id(), b2.header().slot());
@@ -457,16 +460,16 @@ fn ledger_is_not_commited_if_block_contains_invalid_zkp() {
         utxo,
         &zk_key,
         Slot::new(1),
-        UncleHeaders::empty(),
+        UncleHeaders::empty(EraVersion::V1),
         BlockTransactions::from([transfer_tx_with_fake_sig(utxo, &fake_key)]),
     )
     .expect("should find a winning slot");
 
-    let block_header = block.header().clone();
-    let result = cryptarchia.try_apply_block(block, block_header.slot());
+    let (block_id, block_slot) = (block.header().id(), block.header().slot());
+    let result = cryptarchia.try_apply_block(block, block_slot);
     assert!(matches!(result, Err(Error::BatchZkpVerification(_))));
     assert!(
-        cryptarchia.ledger.state(&block_header.id()).is_none(),
+        cryptarchia.ledger.state(&block_id).is_none(),
         "ledger state should not be committed"
     );
     assert_eq!(cryptarchia.tip(), genesis_id, "tip should not advance");
@@ -520,7 +523,7 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, St
         utxo,
         &zk_key,
         Slot::new(1),
-        UncleHeaders::empty(),
+        UncleHeaders::empty(EraVersion::V1),
     )
     .unwrap();
 
@@ -718,7 +721,7 @@ pub fn chain_with_fork_over(
         utxo,
         &zk_key,
         Slot::new(1),
-        UncleHeaders::empty(),
+        UncleHeaders::empty(EraVersion::V1),
     )
     .unwrap();
     let (b1, _) = try_build_block(
@@ -727,7 +730,7 @@ pub fn chain_with_fork_over(
         utxo,
         &zk_key,
         Slot::new(1),
-        UncleHeaders::empty(),
+        UncleHeaders::empty(EraVersion::V1),
     )
     .unwrap();
     let b1_header_slot = b1.header().slot();
@@ -760,8 +763,9 @@ pub fn genesis_cryptarchia_over(ledger_eras: Eras<lb_ledger::Config>, utxo: Utxo
     )
 }
 
-pub fn signed_header(block: &Block<SignedOps<Preverified, StandardMode>>) -> SignedHeader {
-    SignedHeader::new(block.header().clone(), *block.signature())
+/// `block`, as the only uncle of another block of its era.
+pub fn uncle(block: &Block<SignedOps<Preverified, StandardMode>>) -> UncleHeaders {
+    UncleHeaders::of_blocks(EraVersion::V1, [block]).expect("one uncle is within the bound")
 }
 
 pub fn utxo() -> (ZkKey, Utxo) {

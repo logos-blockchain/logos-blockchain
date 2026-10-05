@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     block::Error,
-    header::{Header, HeaderId},
+    header::{HeaderId, v1::Header},
 };
 
 /// Signed headers of the uncles referenced by a block.
@@ -88,7 +88,7 @@ impl SignedHeader {
     }
 
     pub fn verify(&self) -> Result<(), Error> {
-        crate::block::verify_header_alone(&self.header)?;
-        crate::block::verify_header_signature(&self.header, &self.signature)
+        super::verify_header_alone(&self.header)?;
+        super::verify_header_signature(&self.header, &self.signature)
     }
 }

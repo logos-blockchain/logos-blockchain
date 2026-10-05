@@ -21,6 +21,7 @@ use std::{
 
 use educe::Educe;
 use futures::{Stream, TryStreamExt as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
     block::{Block, UncleHeaders, genesis::GenesisBlock},
@@ -662,6 +663,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -836,6 +839,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin

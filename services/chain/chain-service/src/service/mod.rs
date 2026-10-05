@@ -11,9 +11,10 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _, future::join_all, stream};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockInfo};
 use lb_core::{
-    block::{Block, SignedHeader, UncleHeaders},
+    block::{Block, UncleHeaders},
     header::HeaderId,
     mantle::{
         OpRef, TxHash,
@@ -30,7 +31,6 @@ use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::api::StorageApi;
 use lb_time_service::SlotTick;
-use lb_utils::bounded::UpperBoundedOrderedSet;
 use overwatch::{
     DynError,
     services::{relay::InboundRelay, state::StateUpdater},
@@ -149,6 +149,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -512,12 +514,13 @@ where
 
     /// Selects uncles for a new block extending `parent` at `slot`.
     async fn select_uncles(&self, parent: HeaderId, slot: Slot) -> UncleHeaders {
+        // An uncle must be of the era of the new block.
+        let era = self.cryptarchia.ledger.eras().at_slot(slot);
+        let (era_start, version) = (era.first_slot, era.entry.version);
         let Some(parent_branch) = self.cryptarchia.consensus.branches().get(&parent) else {
-            return UncleHeaders::empty();
+            return UncleHeaders::empty(version);
         };
 
-        // An uncle must be of the era of the new block.
-        let era_start = self.cryptarchia.ledger.eras().at_slot(slot).first_slot;
         let mut uncles = Vec::new();
         for candidate in self
             .cryptarchia
@@ -531,16 +534,11 @@ where
                 error!(target: LOG_TARGET, candidate = ?candidate.id(), "uncle candidate not found in storage");
                 continue;
             };
-            uncles.push(SignedHeader::new(
-                block.header().clone(),
-                *block.signature(),
-            ));
+            uncles.push(block);
         }
 
-        UncleHeaders::new(
-            UpperBoundedOrderedSet::try_from(uncles)
-                .expect("at most MAX_UNCLES unique uncles are selected"),
-        )
+        UncleHeaders::of_blocks(version, &uncles)
+            .expect("at most MAX_UNCLES unique uncles are selected")
     }
 
     /// Record the current service state.
@@ -845,13 +843,20 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
         + 'static,
 {
     debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
-    let header = block.header().clone();
+    let (id, parent, slot) = (
+        block.header().id(),
+        block.header().parent(),
+        block.header().slot(),
+    );
+    let version = cryptarchia.ledger.eras().at_slot(slot).entry.version;
     let prev_lib = cryptarchia.lib();
 
     let mut candidate = cryptarchia.clone();
@@ -871,9 +876,10 @@ where
     relays
         .storage()
         .store_block_data(
-            header.id(),
-            header.parent(),
+            id,
+            parent,
             block.clone(),
+            version,
             applied.events,
             immutable_blocks,
         )
@@ -895,8 +901,8 @@ where
         let tip = cryptarchia.tip_branch();
         let lib = cryptarchia.lib_branch();
         ProcessedBlockEvent {
-            block_id: header.id(),
-            block_slot: header.slot(),
+            block_id: id,
+            block_slot: slot,
             tip: tip.id(),
             tip_slot: tip.slot(),
             lib: lib.id(),
@@ -952,6 +958,8 @@ async fn log_newly_canonical_blocks<Tx>(
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -1007,6 +1015,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -1060,6 +1070,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -1109,7 +1121,14 @@ pub async fn delete_stale_blocks_from_storage<Tx>(
     storage: &StorageApi<Tx>,
 ) -> HashSet<HeaderId>
 where
-    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
+    Tx: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
 {
     match delete_blocks_from_storage(
         stale_blocks.chain(additional_blocks.iter().copied()),
@@ -1139,7 +1158,14 @@ async fn delete_blocks_from_storage<Headers, Tx>(
 ) -> Result<(), Vec<(HeaderId, DynError)>>
 where
     Headers: Iterator<Item = HeaderId> + Send,
-    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
+    Tx: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
 {
     let blocks_to_delete = block_headers.collect::<Vec<_>>();
     let block_deletion_outcomes = blocks_to_delete.iter().copied().zip(

@@ -2,6 +2,7 @@ use core::fmt::Debug;
 use std::{collections::HashMap, fmt::Display, num::NonZeroUsize};
 
 use futures::{Stream, StreamExt as _};
+use lb_binary_codec::canonical::BinaryDecode;
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::{
     CryptarchiaInfo, ProcessedBlockEvent, Slot,
@@ -231,6 +232,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -297,6 +299,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -367,6 +370,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -421,7 +425,7 @@ where
 
         let header = block.header();
         let slot = header.slot();
-        let parent_id = header.parent_block();
+        let parent_id = header.parent();
 
         if slot < gated_slot_from {
             break;
@@ -475,6 +479,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -511,6 +516,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -634,6 +640,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -698,6 +705,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static

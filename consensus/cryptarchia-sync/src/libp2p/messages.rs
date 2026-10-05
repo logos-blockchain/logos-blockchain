@@ -1,12 +1,7 @@
 use std::collections::HashSet;
 
 use lb_binary_codec::bincode::{self, BoundedSerializeOp, UpperBoundedVec};
-use lb_core::{
-    block::{BlockTransactions, MAX_BLOCK_TRANSACTIONS_SIZE},
-    header::HeaderId,
-};
-use lb_cryptarchia_engine::MAX_UNCLES;
-use lb_key_management_system_keys::keys::Ed25519Signature;
+use lb_core::{block::Block, header::HeaderId};
 use serde::{Deserialize, Deserializer, Serialize, de::Visitor};
 
 use crate::{
@@ -21,25 +16,14 @@ pub const MAX_REQUEST_MESSAGE_BINCODE_SIZE: usize = bincode::BINCODE_ENUM_DISCRI
     + bincode::BINCODE_LENGTH_PREFIX_SIZE
     + MAX_ADDITIONAL_BLOCKS * <HeaderId as BoundedSerializeOp>::MAX_ENCODED_SIZE;
 
-/// Maximum configured-bincode size of one stored block. The block stores each
-/// transaction as its canonical bytes inside a bincode byte envelope, so the
-/// existing total transaction-content and transaction-count limits account for
-/// all variable-sized block data.
-pub const MAX_SERIALISED_BLOCK_BINCODE_SIZE: usize =
-    <lb_core::header::Header as BoundedSerializeOp>::MAX_ENCODED_SIZE
-        + <Ed25519Signature as BoundedSerializeOp>::MAX_ENCODED_SIZE
-        + bincode::BINCODE_LENGTH_PREFIX_SIZE
-        + MAX_UNCLES
-            * (<lb_core::header::Header as BoundedSerializeOp>::MAX_ENCODED_SIZE
-                + <Ed25519Signature as BoundedSerializeOp>::MAX_ENCODED_SIZE)
-        + bincode::BINCODE_LENGTH_PREFIX_SIZE
-        + MAX_BLOCK_TRANSACTIONS_SIZE
-        + BlockTransactions::<()>::MAX * bincode::BINCODE_LENGTH_PREFIX_SIZE;
+/// Maximum size of one block as it is synced: its canonical encoding, of the
+/// version of the era of its slot.
+pub const MAX_SERIALISED_BLOCK_SIZE: usize = Block::<()>::MAX_ENCODED_SIZE;
 
 /// Maximum configured-bincode size of a `DownloadBlocksResponse` frame.
 pub const MAX_DOWNLOAD_BLOCKS_RESPONSE_BINCODE_SIZE: usize = bincode::BINCODE_ENUM_DISCRIMINANT_SIZE
     + bincode::BINCODE_LENGTH_PREFIX_SIZE
-    + MAX_SERIALISED_BLOCK_BINCODE_SIZE;
+    + MAX_SERIALISED_BLOCK_SIZE;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum RequestMessage {
@@ -201,7 +185,7 @@ mod tests {
     use super::{
         DownloadBlocksRequest, DownloadBlocksResponse, KnownBlocks,
         MAX_DOWNLOAD_BLOCKS_RESPONSE_BINCODE_SIZE, MAX_REQUEST_MESSAGE_BINCODE_SIZE,
-        MAX_SERIALISED_BLOCK_BINCODE_SIZE, RequestMessage,
+        MAX_SERIALISED_BLOCK_SIZE, RequestMessage,
     };
     use crate::BlocksUnavailableReason;
 
@@ -282,10 +266,8 @@ mod tests {
 
     #[test]
     fn response_bound_includes_the_block_bincode_envelope() {
-        let response = DownloadBlocksResponse::Block(bytes::Bytes::from(vec![
-            0;
-            MAX_SERIALISED_BLOCK_BINCODE_SIZE
-        ]));
+        let response =
+            DownloadBlocksResponse::Block(bytes::Bytes::from(vec![0; MAX_SERIALISED_BLOCK_SIZE]));
         let ordinary = response.to_bytes().unwrap();
         let ordinary: &[u8] = ordinary.as_ref();
 

@@ -7,6 +7,7 @@ use std::{
 
 use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _, future, stream, stream::BoxStream};
+use lb_binary_codec::canonical::BinaryDecode;
 use lb_core::{
     block::Block,
     header::HeaderId,
@@ -70,7 +71,7 @@ impl<Tx> BlockProvider<Tx> {
 
 impl<Tx> BlockProvider<Tx>
 where
-    Tx: DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
+    Tx: DeserializeOwned + BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
     Tx: Serialize + Clone + Eq + Send + Sync + 'static,
 {
     /// Creates a block stream that leads from one of the [`known_blocks`]
@@ -556,7 +557,6 @@ where
 mod tests {
     use std::{collections::BTreeMap, num::NonZero};
 
-    use lb_binary_codec::bincode::DeserializeOp as _;
     use lb_core::{
         block::{BlockTransactions, UncleHeaders},
         crypto::ZkHasher,
@@ -569,7 +569,7 @@ mod tests {
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
-    use lb_cryptarchia_engine::{Config, UncleSlots};
+    use lb_cryptarchia_engine::{Config, UncleSlots, era::EraVersion};
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
     use lb_storage_service::{StorageMsg, StorageService, rocksdb::RocksBackendSettings};
@@ -882,7 +882,7 @@ mod tests {
             Block::create(
                 prev_header,
                 slot,
-                UncleHeaders::empty(),
+                UncleHeaders::empty(EraVersion::V1),
                 self.proof.clone(),
                 BlockTransactions::empty(),
                 &dummy_signing_key,
@@ -909,25 +909,16 @@ mod tests {
             block: &Block<SignedOps<Unverified, StandardMode>>,
             header_id: HeaderId,
         ) {
-            let parent_id = block.header().parent();
-            let store_result: Result<_, _> = block.clone().try_into();
-            let (sender, receiver) = oneshot::channel();
-
-            self.storage_relay
-                .send(StorageMsg::StoreBlockData {
+            StorageApi::new(self.storage_relay.clone())
+                .store_block_data(
                     header_id,
-                    parent_id,
-                    block: store_result.unwrap(),
-                    events: Events::new().try_into().unwrap(),
-                    immutable_ids: BTreeMap::new(),
-                    response_tx: sender,
-                })
+                    block.header().parent(),
+                    block.clone(),
+                    EraVersion::V1,
+                    Events::new(),
+                    BTreeMap::new(),
+                )
                 .await
-                .expect("Failed to store block");
-
-            receiver
-                .await
-                .expect("Failed to receive store block response")
                 .expect("Failed to store block");
         }
 
@@ -972,7 +963,7 @@ mod tests {
                 while let Some(res) = &stream.next().await {
                     if let Ok(bytes) = &res {
                         let block: Block<SignedOps<Unverified, StandardMode>> =
-                            Block::from_bytes(bytes).unwrap();
+                            Block::decode_in(EraVersion::V1, bytes).unwrap();
                         blocks.push(block.header().id());
                     } else {
                         break;
@@ -1016,7 +1007,8 @@ mod tests {
                     }
                     ProviderResponse::Available(mut stream) => match stream.next().await {
                         Some(Ok(bytes)) => {
-                            let block: Block<Ops> = Block::try_from(bytes).unwrap();
+                            let block: Block<Ops> =
+                                Block::decode_in(EraVersion::V1, &bytes).unwrap();
                             (
                                 false,
                                 format!("Available(first_block={:?})", block.header().id()),

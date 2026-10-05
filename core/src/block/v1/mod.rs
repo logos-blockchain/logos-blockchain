@@ -1,0 +1,973 @@
+//! The blocks and block proposals of version 1.
+
+pub(in crate::block) mod fixtures;
+mod uncle;
+
+use lb_binary_codec::{
+    bincode::SerializeOp as _,
+    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
+};
+use lb_cryptarchia_engine::Slot;
+use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
+use serde::{Deserialize, Serialize};
+pub use uncle::{SignedHeader, UncleHeaders};
+
+use crate::{
+    block::{BlockTransactions, Error, HeaderError, MAX_BLOCK_TRANSACTIONS_SIZE, References},
+    crypto::{Digest as _, Hasher},
+    header::{ContentId, HeaderId, v1::Header},
+    mantle::{
+        traits::{Hashable, StorageSize},
+        transactions::hash::{TxHash, TxHashPrefix},
+    },
+    proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
+    utils::merkle,
+};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
+pub struct Proposal {
+    pub header: Header,
+    pub uncle_headers: UncleHeaders,
+    pub references: References,
+    pub signature: Ed25519Signature,
+}
+
+impl Proposal {
+    /// Maximum canonical encoded size of a block proposal.
+    ///
+    /// The bound is composed from the maxima owned by each component rather
+    /// than being an unexplained total. It describes the canonical encoding,
+    /// not the configured-bincode representation.
+    pub const MAX_ENCODED_SIZE: usize = Header::CANONICAL_ENCODED_SIZE
+        + UncleHeaders::MAX_CANONICAL_ENCODED_SIZE
+        + References::MAX_CANONICAL_ENCODED_SIZE
+        + Ed25519Signature::CANONICAL_ENCODED_SIZE;
+
+    #[must_use]
+    pub const fn header(&self) -> &Header {
+        &self.header
+    }
+
+    #[must_use]
+    pub const fn uncle_headers(&self) -> &UncleHeaders {
+        &self.uncle_headers
+    }
+
+    #[must_use]
+    pub const fn references(&self) -> &References {
+        &self.references
+    }
+
+    /// The reference prefixes carried by this proposal, in block order.
+    #[must_use]
+    pub fn mempool_transactions(&self) -> &[TxHashPrefix] {
+        &self.references.mempool_transactions
+    }
+
+    #[must_use]
+    pub const fn signature(&self) -> &Ed25519Signature {
+        &self.signature
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(bound(serialize = "Tx: Clone + Serialize"))]
+pub struct Block<Tx> {
+    pub(super) header: Header,
+    pub(super) signature: Ed25519Signature,
+    pub(super) uncle_headers: UncleHeaders,
+    pub(super) transactions: BlockTransactions<Tx>,
+}
+
+impl<'de, Tx> Deserialize<'de> for Block<Tx>
+where
+    Tx: Clone + Eq + Deserialize<'de> + Hashable<Hash = TxHash> + StorageSize,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawBlock<Tx> {
+            header: Header,
+            signature: Ed25519Signature,
+            uncle_headers: UncleHeaders,
+            transactions: BlockTransactions<Tx>,
+        }
+
+        let raw = RawBlock::<Tx>::deserialize(deserializer)?;
+
+        Self::reconstruct(
+            raw.header,
+            raw.uncle_headers,
+            raw.transactions,
+            raw.signature,
+        )
+        .map_err(serde::de::Error::custom)
+    }
+}
+
+impl<Tx> Block<Tx> {
+    /// The largest canonical encoding of a block whose transactions take as
+    /// many bytes to encode as their storage size counts.
+    ///
+    /// The transactions are a list capped at 1024 entries, so they carry a
+    /// 2-byte little-endian length prefix.
+    pub const MAX_ENCODED_SIZE: usize = Header::CANONICAL_ENCODED_SIZE
+        + UncleHeaders::MAX_CANONICAL_ENCODED_SIZE
+        + 2
+        + MAX_BLOCK_TRANSACTIONS_SIZE
+        + Ed25519Signature::CANONICAL_ENCODED_SIZE;
+
+    pub fn create(
+        parent_block: HeaderId,
+        slot: Slot,
+        uncle_headers: UncleHeaders,
+        proof_of_leadership: Groth16LeaderProof,
+        transactions: BlockTransactions<Tx>,
+        signing_key: &Ed25519Key,
+    ) -> Result<Self, Error>
+    where
+        Tx: Hashable<Hash = TxHash> + StorageSize,
+    {
+        // 1. Non-genesis blocks only
+        if slot == Slot::genesis() {
+            return Err(HeaderError::GenesisSlot.into());
+        }
+
+        // 2. Expected leader public key
+        let expected_leader_public_key = proof_of_leadership.leader_key();
+        if expected_leader_public_key != signing_key.public_key().as_unverified() {
+            return Err(Error::KeyMismatch);
+        }
+
+        // 3. Body root & header
+        let header = Header::new(
+            parent_block,
+            body_root(&uncle_headers, transactions.as_slice()),
+            slot,
+            proof_of_leadership,
+        );
+
+        // 4. Signature over the header
+        let signature = header.sign(signing_key)?;
+
+        // 5. New block
+        let block = Self {
+            header,
+            signature,
+            uncle_headers,
+            transactions,
+        };
+
+        // 6. Size is ok
+        block.validate_total_transactions_size()?;
+
+        Ok(block)
+    }
+
+    pub fn reconstruct(
+        header: Header,
+        uncle_headers: UncleHeaders,
+        transactions: BlockTransactions<Tx>,
+        signature: Ed25519Signature,
+    ) -> Result<Self, Error>
+    where
+        Tx: Hashable<Hash = TxHash> + StorageSize,
+    {
+        let block = Self {
+            header,
+            signature,
+            uncle_headers,
+            transactions,
+        };
+        let block = block.into_verified()?;
+
+        Ok(block)
+    }
+
+    fn into_verified(self) -> Result<Self, Error>
+    where
+        Tx: Hashable<Hash = TxHash> + StorageSize,
+    {
+        // 1. Checks that need the header alone
+        verify_header_alone(&self.header)?;
+
+        // 2. Size is ok
+        self.validate_total_transactions_size()?;
+
+        // 3. Body root matches the carried uncle headers and transactions
+        self.validate_body_root()?;
+
+        // 4. Signature is valid over the header bytes
+        verify_header_signature(&self.header, &self.signature)?;
+
+        Ok(self)
+    }
+
+    fn validate_total_transactions_size(&self) -> Result<usize, Error>
+    where
+        Tx: Hashable<Hash = TxHash> + StorageSize,
+    {
+        let mut total = 0usize;
+
+        for item in &self.transactions {
+            total = total
+                .checked_add(item.storage_size())
+                .ok_or(Error::ContentTooBig {
+                    size: usize::MAX,
+                    max: MAX_BLOCK_TRANSACTIONS_SIZE,
+                })?;
+
+            if total > MAX_BLOCK_TRANSACTIONS_SIZE {
+                return Err(Error::ContentTooBig {
+                    size: total,
+                    max: MAX_BLOCK_TRANSACTIONS_SIZE,
+                });
+            }
+        }
+
+        Ok(total)
+    }
+
+    pub(super) fn validate_body_root(&self) -> Result<(), Error>
+    where
+        Tx: Hashable<Hash = TxHash>,
+    {
+        if self.header.body_root() != &body_root(&self.uncle_headers, &self.transactions) {
+            return Err(Error::BodyRootMismatch);
+        }
+
+        Ok(())
+    }
+
+    #[must_use]
+    pub const fn header(&self) -> &Header {
+        &self.header
+    }
+
+    #[must_use]
+    pub const fn uncle_headers(&self) -> &UncleHeaders {
+        &self.uncle_headers
+    }
+
+    pub fn transactions_iter(&self) -> impl ExactSizeIterator<Item = &Tx> + '_ {
+        self.transactions.as_slice().iter()
+    }
+
+    #[must_use]
+    pub const fn transactions(&self) -> &BlockTransactions<Tx> {
+        &self.transactions
+    }
+
+    #[must_use]
+    pub fn into_transactions(self) -> Vec<Tx> {
+        self.transactions.into_inner()
+    }
+
+    #[must_use]
+    pub const fn signature(&self) -> &Ed25519Signature {
+        &self.signature
+    }
+
+    /// The block's header and the signature of its leader, as another block
+    /// carries it as an uncle.
+    #[must_use]
+    pub fn signed_header(&self) -> SignedHeader {
+        SignedHeader::new(self.header.clone(), self.signature)
+    }
+
+    #[must_use]
+    pub fn to_proposal(self) -> Proposal
+    where
+        Tx: Hashable<Hash = TxHash>,
+    {
+        Proposal {
+            header: self.header,
+            uncle_headers: self.uncle_headers,
+            references: References::from_block_transactions(&self.transactions),
+            signature: self.signature,
+        }
+    }
+}
+
+/// Validates the header using only the content within the header.
+///
+/// This does not check `body_root` because it commits to a body this function
+/// does not have. It should be checked separately by the caller.
+///
+/// This does not check `proof_of_leadership` and the parent header
+/// since they require a ledger state.
+pub fn verify_header_alone(header: &Header) -> Result<(), HeaderError> {
+    if header.slot() == Slot::genesis() {
+        return Err(HeaderError::GenesisSlot);
+    }
+    Ok(())
+}
+
+/// Verifies the signature of block header.
+pub fn verify_header_signature(header: &Header, signature: &Ed25519Signature) -> Result<(), Error> {
+    let header_bytes = header.to_bytes()?;
+    header
+        .leader_proof()
+        .leader_key()
+        .verify(&header_bytes, signature)
+        .map_err(|_| Error::Signature)
+}
+
+/// The commitment to a block body: its uncle headers and its txs
+#[must_use]
+pub fn body_root<Tx: Hashable<Hash = TxHash>>(
+    uncle_headers: &UncleHeaders,
+    transactions: &[Tx],
+) -> ContentId {
+    let mut h = Hasher::new();
+    h.update(b"BODY_ROOT_V1");
+    h.update(uncle_headers.encode_to_vec());
+    h.update(merkle::calculate_transactions_root(transactions));
+    ContentId::from(<[u8; 32]>::from(h.finalize()))
+}
+
+/// Encodes as `header || uncle_headers || transactions || signature`: the
+/// header first, so that the encoding starts with the slot, and the rest in
+/// the order of a proposal, the transactions in place of their references.
+impl<Tx> BinaryEncode for Block<Tx>
+where
+    Tx: BinaryEncode + Hashable<Hash = TxHash> + StorageSize,
+{
+    fn encoded_length(&self) -> usize {
+        let Self {
+            header,
+            signature,
+            uncle_headers,
+            transactions,
+        } = self;
+
+        header.encoded_length()
+            + uncle_headers.encoded_length()
+            + transactions.encoded_length()
+            + signature.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let Self {
+            header,
+            signature,
+            uncle_headers,
+            transactions,
+        } = self;
+
+        header.encode_into(out);
+        uncle_headers.encode_into(out);
+        transactions.encode_into(out);
+        signature.encode_into(out);
+    }
+}
+
+/// Decodes a block and checks it as [`Block::reconstruct`] does, so that no
+/// block comes out of bytes unchecked.
+impl<Tx> BinaryDecode for Block<Tx>
+where
+    Tx: BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
+{
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        context: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, header) = Header::decode(input, context)?;
+        let (input, uncle_headers) = UncleHeaders::decode(input, context)?;
+        let (input, transactions) = BlockTransactions::<Tx>::decode(input, context)?;
+        let (input, signature) = Ed25519Signature::decode(input, context)?;
+        let block = Self::reconstruct(header, uncle_headers, transactions, signature)
+            .map_err(|error| DecodeError::invalid_value::<Self>(error.to_string()))?;
+        Ok((input, block))
+    }
+}
+
+#[cfg(test)]
+pub(super) mod tests {
+    use std::iter;
+
+    use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::UnsecuredZkKey;
+    use lb_pol::LotteryConstants;
+    use lb_utils::{
+        bounded::{BoundedError, BoundedOrderedSet},
+        math::NonNegativeRatio,
+    };
+    use lb_utxotree::UtxoTree;
+
+    use super::*;
+    use crate::{
+        block::MAX_BLOCK_TRANSACTIONS,
+        crypto::ZkHasher,
+        mantle::{
+            ledger::{Note, Utxo},
+            ops::leader_claim::VoucherCm,
+            traits::hashable,
+            transactions::Ops,
+        },
+        proofs::leader_proof::{LeaderPrivate, LeaderPublic},
+    };
+
+    pub fn create_proof() -> Groth16LeaderProof {
+        let leader_sk = UnsecuredZkKey::zero();
+        let utxo = Utxo {
+            op_id: [0u8; 32],
+            output_index: 0,
+            note: Note::new(1000, leader_sk.to_public_key()),
+        };
+        let utxo_tree = UtxoTree::<_, _, ZkHasher>::new().insert(utxo.id(), utxo).0;
+        let utxo_tree_root = utxo_tree.root();
+        let utxo_merkle_path = utxo_tree.path(&utxo.id()).expect("note must exist in tree");
+
+        let (lottery_0, lottery_1) =
+            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+                .compute_lottery_values(1000);
+
+        // We grind the nonce here to find a winning PoL
+        let public_inputs = {
+            let mut nonce = 0;
+            while nonce < 1000 {
+                let inputs = LeaderPublic::new(
+                    utxo_tree_root,
+                    utxo_tree_root,
+                    Fr::from(nonce),
+                    0,
+                    lottery_0,
+                    lottery_1,
+                );
+
+                if inputs.check_winning(utxo.note.value, *utxo.id().as_fr(), *leader_sk.as_fr()) {
+                    break;
+                }
+
+                nonce += 1;
+            }
+            LeaderPublic::new(
+                utxo_tree_root,
+                utxo_tree_root,
+                Fr::from(nonce),
+                0,
+                lottery_0,
+                lottery_1,
+            )
+        };
+
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let verifying_key = signing_key.public_key();
+
+        let private_inputs = LeaderPrivate::new(
+            public_inputs,
+            utxo,
+            &utxo_merkle_path, // aged path
+            &utxo_merkle_path, // latest path
+            *leader_sk.as_fr(),
+            &verifying_key,
+        );
+        Groth16LeaderProof::prove(private_inputs, VoucherCm::default())
+            .expect("Proof generation should succeed")
+    }
+
+    fn create_tx(count: usize) -> Vec<Ops> {
+        iter::repeat_with(|| Ops::new_unchecked(vec![]))
+            .take(count)
+            .collect()
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct IndexedTestMantleTx {
+        index: u8,
+    }
+
+    impl Hashable for IndexedTestMantleTx {
+        const HASHER: hashable::Hasher<Self> = |transaction| TxHash::from([transaction.index; 32]);
+        type Hash = TxHash;
+
+        fn as_signing(&self) -> Vec<u8> {
+            vec![self.index]
+        }
+    }
+
+    impl StorageSize for IndexedTestMantleTx {
+        fn storage_size(&self) -> usize {
+            1
+        }
+    }
+
+    #[test]
+    fn test_block_signature_validation() {
+        let parent_block = [0u8; 32].into();
+        let slot = Slot::from(42u64);
+        let proof_of_leadership = create_proof();
+        let transactions = BlockTransactions::<Ops>::empty();
+
+        let valid_signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let valid_block = Block::create(
+            parent_block,
+            slot,
+            UncleHeaders::empty(),
+            proof_of_leadership,
+            transactions.clone(),
+            &valid_signing_key,
+        )
+        .expect("Valid block should be created");
+
+        let header = valid_block.header().clone();
+        let valid_signature = *valid_block.signature();
+
+        let _reconstructed_block = Block::reconstruct(
+            header.clone(),
+            UncleHeaders::empty(),
+            transactions.clone(),
+            valid_signature,
+        )
+        .expect("Should reconstruct block with valid signature");
+
+        let wrong_signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
+        let invalid_signature = header
+            .sign(&wrong_signing_key)
+            .expect("Signing should work");
+
+        let invalid_block_result = Block::reconstruct(
+            header,
+            UncleHeaders::empty(),
+            transactions,
+            invalid_signature,
+        );
+
+        assert!(
+            invalid_block_result.is_err(),
+            "Should not reconstruct block with invalid signature"
+        );
+    }
+
+    #[test]
+    fn test_block_transaction_count_validation() {
+        let parent_block = [0u8; 32].into();
+        let slot = Slot::from(42u64);
+        let proof_of_leadership = create_proof();
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+
+        let transactions = BlockTransactions::empty();
+        let _valid_block: Block<Ops> = Block::create(
+            parent_block,
+            slot,
+            UncleHeaders::empty(),
+            proof_of_leadership.clone(),
+            transactions,
+            &signing_key,
+        )
+        .expect("Valid block should be created");
+
+        let transactions = BlockTransactions::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap();
+        let _valid_block: Block<Ops> = Block::create(
+            parent_block,
+            slot,
+            UncleHeaders::empty(),
+            proof_of_leadership,
+            transactions,
+            &signing_key,
+        )
+        .expect("Valid block should be created");
+
+        let invalid_transaction_inputs_result =
+            BlockTransactions::<Ops>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS + 1));
+
+        assert!(invalid_transaction_inputs_result.is_err());
+        let error = invalid_transaction_inputs_result.unwrap_err();
+
+        match error {
+            BoundedError::TooManyItems { count, max } => {
+                assert_eq!(count, MAX_BLOCK_TRANSACTIONS + 1);
+                assert_eq!(max, MAX_BLOCK_TRANSACTIONS);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn proposal_references_preserve_transaction_hash_prefixes_and_order() {
+        let parent_block = [0u8; 32].into();
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let transactions = BlockTransactions::<IndexedTestMantleTx>::try_from(vec![
+            IndexedTestMantleTx { index: 1 },
+            IndexedTestMantleTx { index: 2 },
+            IndexedTestMantleTx { index: 3 },
+        ])
+        .unwrap();
+        let expected_prefixes: Vec<_> = transactions
+            .iter()
+            .map(|transaction| IndexedTestMantleTx::hash(transaction).prefix())
+            .collect();
+
+        let proposal = Block::create(
+            parent_block,
+            Slot::from(42u64),
+            UncleHeaders::empty(),
+            create_proof(),
+            transactions,
+            &signing_key,
+        )
+        .unwrap()
+        .to_proposal();
+
+        assert_eq!(
+            proposal.mempool_transactions(),
+            expected_prefixes.as_slice()
+        );
+    }
+
+    #[test]
+    fn proposal_accepts_maximum_transaction_references() {
+        let parent_block = [0u8; 32].into();
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let block = Block::create(
+            parent_block,
+            Slot::from(42u64),
+            UncleHeaders::empty(),
+            create_proof(),
+            BlockTransactions::<Ops>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
+            &signing_key,
+        )
+        .unwrap();
+
+        let proposal = block.to_proposal();
+
+        assert_eq!(
+            proposal.mempool_transactions().len(),
+            MAX_BLOCK_TRANSACTIONS
+        );
+    }
+
+    #[test]
+    fn proposal_deserialization_rejects_excess_transaction_references() {
+        #[derive(Serialize)]
+        struct LegacyReferences {
+            mempool_transactions: Vec<TxHashPrefix>,
+        }
+
+        #[derive(Serialize)]
+        struct LegacyProposal {
+            header: Header,
+            uncle_headers: UncleHeaders,
+            references: LegacyReferences,
+            signature: Ed25519Signature,
+        }
+
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let proposal = Block::create(
+            [0u8; 32].into(),
+            Slot::from(42u64),
+            UncleHeaders::empty(),
+            create_proof(),
+            BlockTransactions::<Ops>::empty(),
+            &signing_key,
+        )
+        .unwrap()
+        .to_proposal();
+        let legacy = LegacyProposal {
+            header: proposal.header.clone(),
+            uncle_headers: proposal.uncle_headers.clone(),
+            references: LegacyReferences {
+                mempool_transactions: vec![TxHashPrefix::default(); MAX_BLOCK_TRANSACTIONS + 1],
+            },
+            signature: *proposal.signature(),
+        };
+        let bytes = bincode::serialize(&legacy).unwrap();
+
+        let error = <Proposal as lb_binary_codec::bincode::DeserializeOp>::from_bytes(&bytes)
+            .expect_err("proposal with too many transaction references must be rejected");
+
+        assert!(
+            error.to_string().contains("exceeds static maximum"),
+            "unexpected deserialization error: {error}"
+        );
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct TestMantleTx<const SIZE: usize>;
+
+    impl<const SIZE: usize> Hashable for TestMantleTx<SIZE> {
+        //noinspection RsTypeCheck: The type is correct, but the linter is confused by
+        // the closure.
+        const HASHER: hashable::Hasher<Self> = |_tx| TxHash::from([0u8; 32]);
+        type Hash = TxHash;
+
+        fn as_signing(&self) -> Vec<u8> {
+            vec![0u8]
+        }
+    }
+
+    impl<const SIZE: usize> StorageSize for TestMantleTx<SIZE> {
+        fn storage_size(&self) -> usize {
+            SIZE
+        }
+    }
+
+    #[test]
+    fn test_block_transaction_size_validation() {
+        let parent_block = [0u8; 32].into();
+        let slot = Slot::from(42u64);
+        let proof_of_leadership = create_proof();
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+
+        let transactions = BlockTransactions::empty();
+        let _valid_block: Block<Ops> = Block::create(
+            parent_block,
+            slot,
+            UncleHeaders::empty(),
+            proof_of_leadership.clone(),
+            transactions,
+            &signing_key,
+        )
+        .expect("Valid block should be created");
+
+        let transactions: BlockTransactions<TestMantleTx<MAX_BLOCK_TRANSACTIONS_SIZE>> =
+            BlockTransactions::try_from(vec![TestMantleTx::<MAX_BLOCK_TRANSACTIONS_SIZE>]).unwrap();
+        let _valid_block = Block::create(
+            parent_block,
+            slot,
+            UncleHeaders::empty(),
+            proof_of_leadership.clone(),
+            transactions,
+            &signing_key,
+        )
+        .expect("Valid block should be created");
+
+        let oversized: BlockTransactions<TestMantleTx<{ MAX_BLOCK_TRANSACTIONS_SIZE + 1 }>> =
+            BlockTransactions::try_from(vec![TestMantleTx::<{ MAX_BLOCK_TRANSACTIONS_SIZE + 1 }>])
+                .unwrap();
+        let invalid_transaction_inputs_result = Block::create(
+            parent_block,
+            slot,
+            UncleHeaders::empty(),
+            proof_of_leadership,
+            oversized,
+            &signing_key,
+        );
+
+        assert!(invalid_transaction_inputs_result.is_err());
+        let error = invalid_transaction_inputs_result.unwrap_err();
+
+        match error {
+            Error::ContentTooBig { size, max } => {
+                assert_eq!(size, MAX_BLOCK_TRANSACTIONS_SIZE + 1);
+                assert_eq!(max, MAX_BLOCK_TRANSACTIONS_SIZE);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn global_block_limits_are_reflective_in_block_transaction_bounds() {
+        assert_eq!(BlockTransactions::<Ops>::MIN, 0);
+        assert_eq!(BlockTransactions::<Ops>::MAX, MAX_BLOCK_TRANSACTIONS);
+    }
+
+    #[test]
+    fn test_create_rejects_genesis_slot() {
+        let parent_block = [0u8; 32].into();
+        let proof = create_proof();
+
+        // Build a syntactically valid non-genesis block first.
+        let txs = BlockTransactions::<Ops>::empty();
+        let key = Ed25519Key::from_bytes(&[0; 32]);
+        let block_result = Block::create(
+            parent_block,
+            Slot::from(0u64),
+            UncleHeaders::empty(),
+            proof,
+            txs,
+            &key,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            block_result,
+            Error::Header(HeaderError::GenesisSlot)
+        ));
+    }
+
+    #[test]
+    fn test_reconstruct_rejects_genesis_slot() {
+        let parent_block = [0u8; 32].into();
+        let proof = create_proof();
+        let key = Ed25519Key::from_bytes(&[0; 32]);
+
+        // Create a valid NON-genesis block first so we can reuse a valid signature
+        // shape.
+        let valid = Block::create(
+            parent_block,
+            Slot::from(1u64),
+            UncleHeaders::empty(),
+            proof.clone(),
+            BlockTransactions::<Ops>::empty(),
+            &key,
+        )
+        .expect("valid non-genesis block");
+
+        // Rebuild header at genesis slot and sign it so signature itself is still
+        // consistent.
+        let genesis_header = Header::new(
+            parent_block,
+            *valid.header().body_root(),
+            Slot::genesis(),
+            proof,
+        );
+        let genesis_signature = genesis_header
+            .sign(&key)
+            .expect("header signing should succeed");
+
+        let err = Block::reconstruct(
+            genesis_header,
+            UncleHeaders::empty(),
+            BlockTransactions::<Ops>::empty(),
+            genesis_signature,
+        )
+        .expect_err("genesis slot must be rejected by reconstruct path");
+
+        assert!(matches!(err, Error::Header(HeaderError::GenesisSlot)));
+    }
+
+    /// The maximum-size proposal continues to match its canonical size bound.
+    #[test]
+    fn maximum_proposal_matches_the_specified_size() {
+        use lb_binary_codec::canonical::BinaryEncode as _;
+        use lb_cryptarchia_engine::MAX_UNCLES;
+
+        let proof = create_proof();
+        let proposal = Block::create(
+            [0u8; 32].into(),
+            Slot::from(42u64),
+            UncleHeaders::new(
+                BoundedOrderedSet::try_from_iter(std::array::from_fn::<_, MAX_UNCLES, _>(|slot| {
+                    signed_uncle(slot as u64, &proof)
+                }))
+                .unwrap(),
+            ),
+            proof,
+            BlockTransactions::<Ops>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
+            &Ed25519Key::from_bytes(&[0; 32]),
+        )
+        .expect("valid block")
+        .to_proposal();
+
+        assert_eq!(proposal.encoded_length(), Proposal::MAX_ENCODED_SIZE);
+        assert_eq!(proposal.encode().len(), Proposal::MAX_ENCODED_SIZE);
+    }
+
+    #[test]
+    fn body_root_accepts_carried_uncle_headers() {
+        let proof = create_proof();
+        let uncles = UncleHeaders::new(
+            BoundedOrderedSet::try_from_iter([signed_uncle(1, &proof), signed_uncle(2, &proof)])
+                .unwrap(),
+        );
+
+        block_with_uncles(uncles, proof)
+            .into_verified()
+            .expect("the carried headers are the ones the body root commits to");
+    }
+
+    #[test]
+    fn body_root_rejects_dropped_uncle_header() {
+        let proof = create_proof();
+        let uncles = UncleHeaders::new(BoundedOrderedSet::from(signed_uncle(1, &proof)));
+        let mut block = block_with_uncles(uncles, proof);
+
+        block.uncle_headers = UncleHeaders::empty();
+
+        assert!(matches!(
+            block.into_verified(),
+            Err(Error::BodyRootMismatch)
+        ));
+    }
+
+    #[test]
+    fn body_root_rejects_substituted_uncle_header() {
+        let proof = create_proof();
+        let uncles = UncleHeaders::new(BoundedOrderedSet::from(signed_uncle(1, &proof)));
+        let mut block = block_with_uncles(uncles, proof.clone());
+
+        // Same count, but a different header than the one committed to.
+        block.uncle_headers = UncleHeaders::new(BoundedOrderedSet::from(signed_uncle(2, &proof)));
+
+        assert!(matches!(
+            block.into_verified(),
+            Err(Error::BodyRootMismatch)
+        ));
+    }
+
+    #[test]
+    fn body_root_rejects_reordered_uncle_headers() {
+        let proof = create_proof();
+        let (first, second) = (signed_uncle(1, &proof), signed_uncle(2, &proof));
+        let mut block = block_with_uncles(
+            UncleHeaders::new(
+                BoundedOrderedSet::try_from_iter([first.clone(), second.clone()]).unwrap(),
+            ),
+            proof,
+        );
+
+        block.uncle_headers =
+            UncleHeaders::new(BoundedOrderedSet::try_from_iter([second, first]).unwrap());
+
+        assert!(matches!(
+            block.into_verified(),
+            Err(Error::BodyRootMismatch)
+        ));
+    }
+
+    #[test]
+    fn body_root_rejects_tampered_uncle_signature() {
+        let proof = create_proof();
+        let uncle = signed_uncle(1, &proof);
+        let mut block = block_with_uncles(
+            UncleHeaders::new(BoundedOrderedSet::from(uncle.clone())),
+            proof,
+        );
+
+        // Replace only the signature, leaving the header it signs untouched.
+        let other_signature = uncle
+            .header()
+            .sign(&Ed25519Key::from_bytes(&[1; 32]))
+            .expect("header signing should succeed");
+        block.uncle_headers = UncleHeaders::new(BoundedOrderedSet::from(SignedHeader::new(
+            uncle.header().clone(),
+            other_signature,
+        )));
+
+        assert!(matches!(
+            block.into_verified(),
+            Err(Error::BodyRootMismatch)
+        ));
+    }
+
+    fn signed_uncle(slot: u64, proof: &Groth16LeaderProof) -> SignedHeader {
+        let header = Header::new(
+            HeaderId::from([9u8; 32]),
+            ContentId::from([9u8; 32]),
+            Slot::from(slot),
+            proof.clone(),
+        );
+        let signature = header
+            .sign(&Ed25519Key::from_bytes(&[0; 32]))
+            .expect("header signing should succeed");
+        SignedHeader::new(header, signature)
+    }
+
+    fn block_with_uncles(uncle_headers: UncleHeaders, proof: Groth16LeaderProof) -> Block<Ops> {
+        Block::create(
+            [0u8; 32].into(),
+            Slot::from(42u64),
+            uncle_headers,
+            proof,
+            BlockTransactions::empty(),
+            &Ed25519Key::from_bytes(&[0; 32]),
+        )
+        .expect("block creation should succeed")
+    }
+}

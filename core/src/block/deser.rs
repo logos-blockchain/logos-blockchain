@@ -4,7 +4,10 @@ mod tests {
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use crate::{
-        block::{Block, BlockTransactions, UncleHeaders, tests::create_proof},
+        block::{
+            BlockTransactions,
+            v1::{Block, UncleHeaders, tests::create_proof},
+        },
         mantle::transactions::Ops,
     };
 

@@ -90,12 +90,10 @@ pub fn subscribe_to_new_blocks_sync(
                                     tx: tx.clone(),
                                 })
                                 .collect();
-                            let block: CoreBlock<TxWithId> = CoreBlock::reconstruct(
-                                block.header().clone(),
-                                block.uncle_headers().clone(),
+                            let block: CoreBlock<TxWithId> = CoreBlock::from_proposal(
+                                block.to_proposal(),
                                 BlockTransactions::try_from(txs_with_id)
                                     .expect("Block should always build from valid block"),
-                                *block.signature(),
                             )
                             .expect("Block should always build from valid block");
                             callback_per_block(Block::from(block).as_ptr());

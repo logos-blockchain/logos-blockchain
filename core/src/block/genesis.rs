@@ -7,8 +7,8 @@ use lb_utils::bounded::{BoundedError, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    block::{Block, BlockTransactions, UncleHeaders},
-    header::Header,
+    block::{Block, BlockTransactions, v1},
+    header::v1::Header,
     mantle::{
         Note, Op, OpProof,
         ledger::{BoundedOutputs, Inputs, Outputs},
@@ -112,7 +112,8 @@ where
 /// The block carries a sentinel
 /// [`Groth16LeaderProof`](crate::proofs::leader_proof::Groth16LeaderProof)
 /// and an all-zero signature; it is not produced by a normal slot leader
-/// election.
+/// election. It is (de)serialized tagged with its version: the genesis block
+/// of a chain whose genesis era runs version 1 is a `!V1` in YAML.
 #[derive(Clone, Debug, Serialize)]
 pub struct GenesisBlock(Block<GenesisTx>);
 
@@ -122,14 +123,19 @@ impl<'de> Deserialize<'de> for GenesisBlock {
         D: serde::Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        struct RawGenesisBlock {
+        enum RawGenesisBlock {
+            V1(RawV1GenesisBlock),
+        }
+
+        #[derive(Deserialize)]
+        struct RawV1GenesisBlock {
             header: Header,
             signature: Ed25519Signature,
-            uncle_headers: UncleHeaders,
+            uncle_headers: v1::UncleHeaders,
             transactions: BlockTransactions<GenesisTx>,
         }
 
-        let raw = RawGenesisBlock::deserialize(deserializer)?;
+        let RawGenesisBlock::V1(raw) = RawGenesisBlock::deserialize(deserializer)?;
 
         if raw.header.slot() != Slot::genesis() {
             return Err(serde::de::Error::custom("expected genesis slot"));
@@ -147,7 +153,7 @@ impl<'de> Deserialize<'de> for GenesisBlock {
             ));
         }
 
-        let block = Block {
+        let block = v1::Block {
             header: raw.header,
             signature: raw.signature,
             uncle_headers: raw.uncle_headers,
@@ -157,7 +163,7 @@ impl<'de> Deserialize<'de> for GenesisBlock {
             .validate_body_root()
             .map_err(serde::de::Error::custom)?;
 
-        Ok(Self(block))
+        Ok(Self(Block::V1(block)))
     }
 }
 
@@ -172,12 +178,12 @@ impl GenesisBlock {
         let header = Header::genesis(&genesis_tx);
         let signature = Ed25519Signature::from_bytes(&[0; 64]);
         let transactions = BlockTransactions::from([genesis_tx]);
-        Self(Block {
+        Self(Block::V1(v1::Block {
             header,
             signature,
-            uncle_headers: UncleHeaders::empty(),
+            uncle_headers: v1::UncleHeaders::empty(),
             transactions,
-        })
+        }))
     }
 
     #[must_use]
@@ -1298,7 +1304,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        block::SignedHeader,
+        block::v1::SignedHeader,
         header::HeaderId,
         mantle::{
             CryptarchiaParameter, GenesisTime, NoteId,
@@ -1821,7 +1827,7 @@ mod tests {
 
         // Mutate only slot in JSON to a non-genesis value.
         let mut value = serde_json::to_value(&block).expect("to_value should work");
-        value["header"]["slot"] = serde_json::json!(1);
+        value["V1"]["header"]["slot"] = serde_json::json!(1);
 
         let err = serde_json::from_value::<GenesisBlock>(value).unwrap_err();
         assert!(
@@ -1839,12 +1845,13 @@ mod tests {
 
         // Reference an uncle, which is not allowed in a genesis block.
         let mut value = serde_json::to_value(&block).expect("to_value should work");
+        let Block::V1(inner) = &*block;
         let uncle = serde_json::to_value(SignedHeader::new(
-            block.header().clone(),
-            *block.signature(),
+            inner.header().clone(),
+            *inner.signature(),
         ))
         .expect("to_value should work");
-        value["uncle_headers"] = serde_json::Value::Array(vec![uncle]);
+        value["V1"]["uncle_headers"] = serde_json::Value::Array(vec![uncle]);
 
         let err = serde_json::from_value::<GenesisBlock>(value).unwrap_err();
         assert!(
@@ -1864,8 +1871,8 @@ mod tests {
         let mut value = serde_json::to_value(&block).expect("to_value should work");
 
         // Duplicate the tx so count becomes 2.
-        let tx0 = value["transactions"][0].clone();
-        value["transactions"] = serde_json::Value::Array(vec![tx0.clone(), tx0]);
+        let tx0 = value["V1"]["transactions"][0].clone();
+        value["V1"]["transactions"] = serde_json::Value::Array(vec![tx0.clone(), tx0]);
 
         let err = serde_json::from_value::<GenesisBlock>(value).unwrap_err();
         assert!(
@@ -1935,7 +1942,7 @@ mod tests {
             .build();
 
         let mut value = serde_json::to_value(&block).expect("to_value should work");
-        value["header"]["body_root"] = serde_json::json!("00".repeat(32));
+        value["V1"]["header"]["body_root"] = serde_json::json!("00".repeat(32));
 
         let err = serde_json::from_value::<GenesisBlock>(value).unwrap_err();
         assert!(

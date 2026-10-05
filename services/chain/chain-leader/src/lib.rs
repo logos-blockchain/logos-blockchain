@@ -653,7 +653,7 @@ where
             .unwrap_or_else(|err| {
                 error!(target: LOG_TARGET, ?slot, %err, "failed to select uncles");
                 // A proposal without uncles is still valid
-                UncleHeaders::empty()
+                UncleHeaders::empty(ledger_eras.at_slot(slot).entry.version)
             });
 
         (ledger_state, _) = ledger_state

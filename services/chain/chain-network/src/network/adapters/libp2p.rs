@@ -4,8 +4,9 @@ use std::{
 };
 
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
+use lb_binary_codec::canonical::BinaryDecode;
 use lb_core::{
-    block::{Block, Proposal, encoded_slot},
+    block::{Block, Proposal},
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
@@ -15,7 +16,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{
     Slot,
-    era::{Era, EraInForce, EraVersion, Eras},
+    era::{Era, EraInForce, Eras},
 };
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_log_targets::chain;
@@ -123,6 +124,7 @@ where
             + StorageSize
             + Serialize
             + DeserializeOwned
+            + BinaryDecode<Context = ()>
             + Clone
             + Eq
             + Send
@@ -233,13 +235,6 @@ fn is_in_force(topics: &Eras<TopicHash>, in_force: Option<EraInForce>, topic: &T
         .any(|era| era.entry.parameters == *topic)
 }
 
-/// The version of the era of the block or proposal `bytes` encode, read off
-/// its slot: the codec that decodes the rest.
-fn era_version<Parameters>(eras: &Eras<Parameters>, bytes: &[u8]) -> Result<EraVersion, DynError> {
-    let slot = encoded_slot(bytes).ok_or("too short to start with a slot")?;
-    Ok(eras.at_slot(slot).entry.version)
-}
-
 #[async_trait::async_trait]
 impl<Tx, RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for LibP2pAdapter<Tx, RuntimeServiceId>
 where
@@ -247,6 +242,7 @@ where
         + StorageSize
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Clone
         + Eq
         + Send
@@ -327,16 +323,17 @@ where
         {
             return Err(Box::new(error));
         }
-        let eras = Arc::clone(&self.settings.eras);
-        let topics =
-            eras.map(|era| TopicHash::from_raw(era.entry.parameters.proposal_topic.clone()));
+        let topics = self
+            .settings
+            .eras
+            .map(|era| TopicHash::from_raw(era.entry.parameters.proposal_topic.clone()));
+        // A proposal decodes under the version of the era of its slot.
+        let eras = self.settings.eras.map(|_| ());
         let in_force = self.in_force.subscribe();
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
             Ok(message) if is_in_force(&topics, *in_force.borrow(), &message.topic) => {
-                match era_version(&eras, &message.data)
-                    .and_then(|version| Ok(Proposal::decode_in(version, &message.data)?))
-                {
+                match Proposal::decode_all(&message.data, &eras) {
                     Ok(proposal) => Some(proposal),
                     Err(e) => {
                         tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
@@ -488,12 +485,12 @@ where
         }
 
         let stream = receiver.await?;
-        let eras = Arc::clone(&self.settings.eras);
+        // A block decodes under the version of the era of its slot.
+        let eras = self.settings.eras.map(|_| ());
         let stream = stream
             .map_err(|e| Box::new(e) as DynError)
             .map(move |result| {
-                let block = result?;
-                let block: Self::Block = Block::decode_in(era_version(&eras, &block)?, block)?;
+                let block: Self::Block = Block::decode_all(&result?, &eras)?;
                 Ok((block.header().id(), block))
             });
 
@@ -642,7 +639,7 @@ where
 mod tests {
     use core::{num::NonZero, time::Duration};
 
-    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry};
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
     use lb_cryptarchia_sync::{BlocksUnavailableReason, ChainSyncError, ChainSyncErrorKind};
     use time::OffsetDateTime;
 

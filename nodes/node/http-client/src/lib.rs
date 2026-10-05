@@ -57,7 +57,7 @@ use tokio_util::{
 const LOG_TARGET: &str = http_client::ROOT;
 
 /// Client-side header representation matching the server's
-/// `ApiHeaderSerializer`.
+/// `ApiHeader`.
 #[derive(Clone, Debug, Deserialize)]
 pub struct ApiHeader {
     pub id: HeaderId,

@@ -1,8 +1,8 @@
 use lb_api_service::http::mantle::BlockWithChainState;
 use lb_chain_service::Slot;
 use lb_core::{
-    block::{Block, SignedHeader},
-    header::{ContentId, Header, HeaderId},
+    block::{Block, SignedHeaderRef},
+    header::{ContentId, HeaderId, HeaderRef},
     mantle::{
         SignedOps, ledger::verification_mode::VerificationMode,
         transactions::states::VerificationState,
@@ -16,8 +16,7 @@ use crate::api::serializers::transactions::ApiSignedTransaction;
 
 #[derive(Serialize)]
 pub struct ApiBlock<'block> {
-    #[serde(with = "ApiHeaderSerializer")]
-    header: &'block Header,
+    header: ApiHeader<'block>,
     uncle_headers: Vec<ApiSignedHeader<'block>>,
     transactions: Vec<ApiSignedTransaction<'block>>,
 }
@@ -44,7 +43,7 @@ impl<'block, State: VerificationState, Mode: VerificationMode>
             .map(ApiSignedTransaction::from)
             .collect();
         Self {
-            header: value.header(),
+            header: value.header().into(),
             uncle_headers: value.uncle_headers().iter().map(Into::into).collect(),
             transactions,
         }
@@ -54,15 +53,14 @@ impl<'block, State: VerificationState, Mode: VerificationMode>
 /// The signed header of an uncle a block references.
 #[derive(Serialize)]
 pub struct ApiSignedHeader<'block> {
-    #[serde(with = "ApiHeaderSerializer")]
-    header: &'block Header,
+    header: ApiHeader<'block>,
     signature: &'block Ed25519Signature,
 }
 
-impl<'block> From<&'block SignedHeader> for ApiSignedHeader<'block> {
-    fn from(value: &'block SignedHeader) -> Self {
+impl<'block> From<SignedHeaderRef<'block>> for ApiSignedHeader<'block> {
+    fn from(value: SignedHeaderRef<'block>) -> Self {
         Self {
-            header: value.header(),
+            header: value.header().into(),
             signature: value.signature(),
         }
     }
@@ -83,19 +81,26 @@ impl<State: VerificationState, Mode: VerificationMode> From<Block<SignedOps<Stat
     }
 }
 
+/// A header of any version, as the API shows it.
 #[derive(Serialize)]
-#[serde(remote = "Header")]
-pub struct ApiHeaderSerializer {
-    #[serde(getter = "Header::id")]
+pub struct ApiHeader<'block> {
     id: HeaderId,
-    #[serde(getter = "Header::parent_block")]
     parent_block: HeaderId,
-    #[serde(getter = "Header::slot")]
     slot: Slot,
-    #[serde(getter = "Header::body_root")]
-    body_root: ContentId,
-    #[serde(getter = "Header::leader_proof")]
-    proof_of_leadership: Groth16LeaderProof,
+    body_root: &'block ContentId,
+    proof_of_leadership: &'block Groth16LeaderProof,
+}
+
+impl<'block> From<HeaderRef<'block>> for ApiHeader<'block> {
+    fn from(header: HeaderRef<'block>) -> Self {
+        Self {
+            id: header.id(),
+            parent_block: header.parent(),
+            slot: header.slot(),
+            body_root: header.body_root(),
+            proof_of_leadership: header.leader_proof(),
+        }
+    }
 }
 
 /// API response type for processed block events.

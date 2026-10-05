@@ -1180,13 +1180,8 @@ where
         transactions.push(resolve_reference(index, prefix, mempool).await?);
     }
 
-    Block::reconstruct(
-        proposal.header().clone(),
-        proposal.uncle_headers().clone(),
-        BlockTransactions::try_from(transactions)?,
-        *proposal.signature(),
-    )
-    .map_err(|_| Error::NoMatchingReconstruction)
+    Block::from_proposal(proposal, BlockTransactions::try_from(transactions)?)
+        .map_err(|_| Error::NoMatchingReconstruction)
 }
 
 /// The single local transaction a reference means.
@@ -1238,13 +1233,14 @@ mod tests {
     use futures::stream;
     use lb_binary_codec::canonical::BinaryDecodeExt as _;
     use lb_core::{
-        block::UncleHeaders,
+        block::{UncleHeaders, v1},
         mantle::{
             traits::Hasher,
             transactions::{Ops, hash::REFERENCE_PREFIX_BYTES},
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
+    use lb_cryptarchia_engine::era::EraVersion;
     use lb_cryptarchia_sync::GetTipResponse;
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
     use lb_network_service::{backends::mock::Mock, message::ChainSyncEvent};
@@ -1440,7 +1436,7 @@ mod tests {
         let genuine = Block::create(
             HeaderId::from([0; 32]),
             Slot::new(1),
-            UncleHeaders::empty(),
+            UncleHeaders::empty(EraVersion::V1),
             leader_proof(&leader_key.public_key()),
             BlockTransactions::<Ops>::empty(),
             &leader_key,
@@ -1450,10 +1446,11 @@ mod tests {
 
         let mut signature = genuine.signature().to_bytes();
         signature[0] ^= 1;
-        let tampered = Proposal {
+        let Proposal::V1(genuine_v1) = genuine.clone();
+        let tampered = Proposal::V1(v1::Proposal {
             signature: Ed25519Signature::from_bytes(&signature),
-            ..genuine.clone()
-        };
+            ..genuine_v1
+        });
         let block_id = genuine.header().id();
         // The tampered proposal has the same block ID as the genuine one,
         // because the block ID doesn't commit to the signature.

@@ -110,7 +110,8 @@ mod tests {
     fn a_state_is_borrowed_within_its_own_era() {
         let eras = two_eras();
         let state = LedgerState::from_utxos([utxo()], &eras);
-        let last_slot_of_first_era = Slot::new(eras.epoch_starting_slot(Epoch::new(1)).into_inner() - 1);
+        let last_slot_of_first_era =
+            Slot::new(eras.epoch_starting_slot(Epoch::new(1)).into_inner() - 1);
 
         assert!(matches!(
             state.in_era_of(last_slot_of_first_era, &eras),

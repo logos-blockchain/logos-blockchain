@@ -89,7 +89,7 @@ eras:
       faucet_pk: d2a1977db29daf6691f7ce897fe7b666ec964b1bf027814cacd1a2c141b12f10
     time:
       slot_duration: '1.000000000'
-genesis_block:
+genesis_block: !V1
   header:
     slot: 0
     parent_block: '0000000000000000000000000000000000000000000000000000000000000000'

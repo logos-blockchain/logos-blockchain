@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use lb_core::{
-    block::{Block, HeaderError, SignedHeader, UncleHeaders},
+    block::{Block, HeaderError, SignedHeaderRef, UncleHeadersRef},
     header::HeaderId,
 };
 use lb_cryptarchia_engine::Branch;
@@ -97,7 +97,7 @@ impl Cryptarchia {
     ///   uncle reference window.
     fn verify_uncles_ancestry(
         &self,
-        uncle_headers: &UncleHeaders,
+        uncle_headers: UncleHeadersRef<'_>,
         parent: &Branch<HeaderId>,
         window_start: u64,
     ) -> Result<(), Error> {
@@ -140,7 +140,7 @@ impl Cryptarchia {
     }
 
     /// Verifies the leadership proof carried by an uncle.
-    fn verify_uncle_pol(&self, uncle: &SignedHeader) -> Result<(), UncleError> {
+    fn verify_uncle_pol(&self, uncle: SignedHeaderRef<'_>) -> Result<(), UncleError> {
         // The proof of leadership must verify against the ledger state of the
         // uncle's parent, which must exist since the parent is on the chain.
         let parent_state = self
@@ -192,22 +192,22 @@ impl From<lb_core::block::Error> for UncleError {
 #[cfg(test)]
 mod tests {
     use lb_core::{
-        block::BlockTransactions,
-        header::{ContentId, Header},
+        block::{BlockTransactions, UncleHeaders, v1},
+        header::{ContentId, v1::Header},
         mantle::{
             SignedOps, ledger::verification_mode::StandardMode, transactions::states::Preverified,
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
     use lb_cryptarchia_engine::Slot;
-    use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
     use lb_ledger::config::schedule;
     use lb_utils::bounded::BoundedOrderedSet;
     use rand::thread_rng;
 
     use super::*;
     use crate::tests::{
-        chain_with_fork, chain_with_fork_over, ledger_config, signed_header, try_build_block,
+        chain_with_fork, chain_with_fork_over, ledger_config, try_build_block, uncle,
     };
 
     #[test]
@@ -220,7 +220,7 @@ mod tests {
             utxo,
             &zk_key,
             u1.header().slot().strict_add(1.into()),
-            UncleHeaders::new(BoundedOrderedSet::from(signed_header(&u1))),
+            uncle(&u1),
         )
         .unwrap();
 
@@ -248,7 +248,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             u1.header().slot(),
-            UncleHeaders::new(BoundedOrderedSet::from(signed_header(&u1))),
+            uncle(&u1),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -278,7 +278,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             era_1_start,
-            UncleHeaders::new(BoundedOrderedSet::from(signed_header(&u1))),
+            uncle(&u1),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -316,7 +316,7 @@ mod tests {
             u1.header()
                 .slot()
                 .strict_add((uncle_reference_window + 1).into()),
-            UncleHeaders::new(BoundedOrderedSet::from(signed_header(&u1))),
+            uncle(&u1),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -342,7 +342,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             b1.header().slot().strict_add(1.into()),
-            UncleHeaders::new(BoundedOrderedSet::from(signed_header(&b1))),
+            uncle(&b1),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -375,9 +375,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             u1.header().slot().strict_add(1.into()),
-            UncleHeaders::new(BoundedOrderedSet::from(SignedHeader::new(
-                header, signature,
-            ))),
+            v1_uncle(header, signature),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -401,17 +399,15 @@ mod tests {
 
         // The uncle's header is intact, but signed by a key that is not its
         // leader.
-        let signature = u1
+        let Block::V1(u1_block) = &u1;
+        let signature = u1_block
             .header()
             .sign(&Ed25519Key::generate(&mut thread_rng()))
             .unwrap();
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             u1.header().slot().strict_add(1.into()),
-            UncleHeaders::new(BoundedOrderedSet::from(SignedHeader::new(
-                u1.header().clone(),
-                signature,
-            ))),
+            v1_uncle(u1_block.header().clone(), signature),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -446,9 +442,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             u1.header().slot().strict_add(2.into()),
-            UncleHeaders::new(BoundedOrderedSet::from(SignedHeader::new(
-                header, signature,
-            ))),
+            v1_uncle(header, signature),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -464,6 +458,13 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// `header`, signed with `signature`, as the only uncle of a block.
+    fn v1_uncle(header: Header, signature: Ed25519Signature) -> UncleHeaders {
+        UncleHeaders::V1(v1::UncleHeaders::new(BoundedOrderedSet::from(
+            v1::SignedHeader::new(header, signature),
+        )))
     }
 
     /// Crafts a block carrying the uncles, without a winning `PoL` for `slot`,
