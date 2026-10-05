@@ -207,6 +207,10 @@ pub enum ErasError {
     Overflow(Era),
 }
 
+/// A utility type for consumers that are only interested in eras schedule
+/// without any era-specific parameters.
+pub type EraSchedules = Eras<()>;
+
 /// A chain's eras, each resolved against the ones before it.
 ///
 /// Never empty, and the first era starts at genesis: at epoch 0, slot 0 and

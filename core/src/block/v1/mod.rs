@@ -368,18 +368,18 @@ where
 /// block comes out of bytes unchecked.
 impl<Tx> BinaryDecode for Block<Tx>
 where
-    Tx: BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
+    Tx: BinaryDecode + Hashable<Hash = TxHash> + StorageSize,
 {
-    type Context = ();
+    type Context = Tx::Context;
 
     fn decode<'input>(
         input: &'input [u8],
         context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, header) = Header::decode(input, context)?;
-        let (input, uncle_headers) = UncleHeaders::decode(input, context)?;
+        let (input, header) = Header::decode(input, &())?;
+        let (input, uncle_headers) = UncleHeaders::decode(input, &())?;
         let (input, transactions) = BlockTransactions::<Tx>::decode(input, context)?;
-        let (input, signature) = Ed25519Signature::decode(input, context)?;
+        let (input, signature) = Ed25519Signature::decode(input, &())?;
         let block = Self::reconstruct(header, uncle_headers, transactions, signature)
             .map_err(|error| DecodeError::invalid_value::<Self>(error.to_string()))?;
         Ok((input, block))

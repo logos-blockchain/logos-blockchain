@@ -1,12 +1,13 @@
 mod deser;
 mod fixtures;
 pub mod genesis;
+
 pub mod v1;
 
 use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::{
     Slot, UncleSlots,
-    era::{EraVersion, Eras},
+    era::{EraSchedules, EraVersion, Eras},
 };
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use lb_utils::bounded::{BoundedError, BoundedVec, UpperBoundedOrderedSet, UpperBoundedVec};
@@ -155,15 +156,18 @@ impl BinaryEncode for Proposal {
 /// Decodes a proposal with the codec of the version of the era of its slot,
 /// read off the start of its encoding.
 impl BinaryDecode for Proposal {
-    type Context = Eras<()>;
+    type Context = EraSchedules;
 
     fn decode<'input>(
         input: &'input [u8],
         eras: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        match era_version::<Self>(input, eras)? {
-            EraVersion::V1 => <v1::Proposal as BinaryDecode>::decode(input, &())
-                .map(|(rest, proposal)| (rest, Self::V1(proposal))),
+        let (input, slot) = Slot::decode(input, &())?;
+        let era_for_slot = eras.at_slot(slot).entry.version;
+        match era_for_slot {
+            EraVersion::V1 => {
+                v1::Proposal::decode(input, &()).map(|(rest, proposal)| (rest, Self::V1(proposal)))
+            }
         }
     }
 }
@@ -279,28 +283,6 @@ impl<Tx> Block<Tx> {
     }
 }
 
-impl<Tx> Block<Tx>
-where
-    Tx: BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
-{
-    /// Decodes a block of an era of `version`, with nothing left over: one a
-    /// node stored, and the version it stored next to it.
-    pub fn decode_in(version: EraVersion, bytes: &[u8]) -> Result<Self, DecodeError> {
-        let (rest, block) = Self::decode_with(version, bytes)?;
-        if !rest.is_empty() {
-            return Err(DecodeError::input_remaining::<Self>(rest.len()));
-        }
-        Ok(block)
-    }
-
-    fn decode_with(version: EraVersion, input: &[u8]) -> Result<(&[u8], Self), DecodeError> {
-        match version {
-            EraVersion::V1 => <v1::Block<Tx> as BinaryDecode>::decode(input, &())
-                .map(|(rest, block)| (rest, Self::V1(block))),
-        }
-    }
-}
-
 impl<Tx> BinaryEncode for Block<Tx>
 where
     Tx: BinaryEncode + Hashable<Hash = TxHash> + StorageSize,
@@ -322,25 +304,21 @@ where
 /// read off the start of its encoding, and checks it.
 impl<Tx> BinaryDecode for Block<Tx>
 where
-    Tx: BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
+    Tx: BinaryDecode + Hashable<Hash = TxHash> + StorageSize,
 {
-    type Context = Eras<()>;
+    type Context = (Eras<()>, Tx::Context);
 
     fn decode<'input>(
         input: &'input [u8],
-        eras: &Self::Context,
+        (eras, tx_decode_context): &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        Self::decode_with(era_version::<Self>(input, eras)?, input)
+        let (input, slot) = Slot::decode(input, &())?;
+        let era_for_slot = eras.at_slot(slot).entry.version;
+        match era_for_slot {
+            EraVersion::V1 => <v1::Block<Tx>>::decode(input, tx_decode_context)
+                .map(|(rest, block)| (rest, Self::V1(block))),
+        }
     }
-}
-
-/// The version of the era of the block or proposal `input` encodes, read off
-/// its slot.
-fn era_version<Item>(input: &[u8], eras: &Eras<()>) -> Result<EraVersion, DecodeError> {
-    let slot = encoded_slot(input).ok_or_else(|| {
-        DecodeError::end_of_input::<Item>(Slot::CANONICAL_ENCODED_SIZE - input.len())
-    })?;
-    Ok(eras.at_slot(slot).entry.version)
 }
 
 /// The uncle headers a leader gathers for a new block, of the version of the
@@ -502,47 +480,5 @@ mod tests {
             &Ed25519Key::from_bytes(&[0; 32]),
         )
         .expect("valid block")
-    }
-
-    /// A block's and a proposal's encodings start with their slot, which a
-    /// node reads to learn the era that decodes the rest.
-    #[test]
-    fn encodings_start_with_the_slot() {
-        let block = block();
-        let slot = block.header().slot();
-
-        let block_bytes = block.encode();
-        assert_eq!(encoded_slot(&block_bytes), Some(slot));
-        assert_eq!(
-            Block::decode_all(&block_bytes, &single_era()).unwrap(),
-            block
-        );
-
-        let proposal = block.to_proposal();
-        let proposal_bytes = proposal.encode();
-        assert_eq!(encoded_slot(&proposal_bytes), Some(slot));
-        assert_eq!(
-            Proposal::decode_all(&proposal_bytes, &single_era()).unwrap(),
-            proposal
-        );
-
-        assert_eq!(encoded_slot(&proposal_bytes[..7]), None);
-        assert!(Proposal::decode_all(&proposal_bytes[..7], &single_era()).is_err());
-    }
-
-    /// A node decodes the blocks it stored with the version it stored next
-    /// to them, without the era schedule.
-    #[test]
-    fn a_stored_block_decodes_under_the_version_stored_with_it() {
-        let block = block();
-        let block_bytes = block.encode();
-
-        assert_eq!(
-            Block::decode_in(EraVersion::V1, &block_bytes).unwrap(),
-            block
-        );
-        let mut trailing = block_bytes.to_vec();
-        trailing.push(0);
-        assert!(Block::<Ops>::decode_in(EraVersion::V1, &trailing).is_err());
     }
 }
