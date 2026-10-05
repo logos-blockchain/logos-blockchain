@@ -1788,6 +1788,135 @@ def _stack_composition(
     return evidence
 
 
+def _bind_timing_stack_observation(
+    repo: Path,
+    candidate_sha: str,
+    candidate_pr: int | None,
+    current_pr: dict[str, Any] | None,
+    identity: dict[str, Any],
+    output_dir: Path,
+    warnings: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Bind the current stack observation's commit context to a candidate SHA.
+
+    The workflow_run event identifies an older synthesized merge-group commit,
+    while the stack GraphQL lookup reflects current PR state. This result only
+    states whether the observed member commits can be tied to that candidate;
+    it does not claim the later stack metadata was historically true when the
+    candidate was created. The time-scoped ``identity.stack`` observation is
+    never changed by ancestry results.
+    """
+    stack = identity.get("stack")
+    observed_status = (
+        stack.get("stack_status") if isinstance(stack, dict) else "unresolved"
+    )
+    common = {
+        "candidate_sha": candidate_sha,
+        "observed_stack_status": observed_status,
+        "meaning": (
+            "Binds the current observation's commit context to this candidate; "
+            "does not establish historical stack metadata"
+        ),
+    }
+    if observed_status == "stack_member":
+        members = expected_stack_members(stack, candidate_pr)
+        if members is None:
+            return {
+                **common,
+                "status": "unresolved",
+                "basis": "own_stack_prefix_ancestry",
+                "member_ancestry": [],
+                "reason": "Current stack prefix is incomplete or inconsistent",
+            }
+        proof = _stack_composition(
+            repo, candidate_sha, candidate_pr, stack, output_dir, warnings
+        )
+        proof_by_position = {
+            member.get("stack_position"): member
+            for member in proof.get("members", [])
+        }
+        member_ancestry = []
+        for member in members:
+            observed = proof_by_position.get(member["stack_position"], {})
+            member_ancestry.append({
+                "stack_position": member["stack_position"],
+                "pr_number": member["pr_number"],
+                "head_sha": member["head_sha"],
+                "is_ancestor": observed.get("head_is_ancestor"),
+            })
+        values = [member["is_ancestor"] for member in member_ancestry]
+        status = (
+            "disproven" if any(value is False for value in values)
+            else "proven" if values and all(value is True for value in values)
+            else "unresolved"
+        )
+        return {
+            **common,
+            "status": status,
+            "basis": "own_stack_prefix_ancestry",
+            "candidate_member_head_sha": members[-1]["head_sha"],
+            "member_ancestry": member_ancestry,
+            "history_shallow": proof.get("history_shallow"),
+            "fetch_succeeded": proof.get("fetch_succeeded"),
+            **({"reason": "At least one expected stack member head is not an ancestor of the candidate"}
+               if status == "disproven" else {}),
+        }
+
+    if observed_status == "not_a_stack":
+        head = current_pr.get("head") if isinstance(current_pr, dict) else None
+        head_sha = head.get("sha") if isinstance(head, dict) else None
+        if (
+            not isinstance(candidate_sha, str)
+            or not re.fullmatch(r"[0-9a-fA-F]{40,64}", candidate_sha)
+            or not isinstance(head_sha, str)
+            or not re.fullmatch(r"[0-9a-fA-F]{40,64}", head_sha)
+        ):
+            return {
+                **common,
+                "status": "unresolved",
+                "basis": "current_pr_head_ancestry",
+                "candidate_pr_head_sha": head_sha,
+                "reason": "Candidate SHA or current REST PR head SHA is unavailable",
+            }
+        fetched = _git(
+            repo,
+            bounded_git_fetch_args(candidate_sha) + [head_sha],
+            warnings,
+            label="bounded candidate PR head binding fetch",
+        )
+        shallow = _git(
+            repo,
+            ["rev-parse", "--is-shallow-repository"],
+            warnings,
+            label="candidate PR head binding history completeness",
+        )
+        history_shallow = shallow.strip() == "true" if shallow is not None else None
+        is_ancestor = _git_is_ancestor(
+            repo, head_sha, candidate_sha, warnings,
+            history_shallow=history_shallow,
+        )
+        return {
+            **common,
+            "status": (
+                "proven" if is_ancestor is True
+                else "disproven" if is_ancestor is False
+                else "unresolved"
+            ),
+            "basis": "current_pr_head_ancestry",
+            "candidate_pr_head_sha": head_sha,
+            "head_is_ancestor": is_ancestor,
+            "history_shallow": history_shallow,
+            "fetch_succeeded": fetched is not None,
+        }
+
+    return {
+        **common,
+        "status": "unresolved",
+        "basis": "unavailable_stack_observation",
+        "reason": "Stack lookup is unresolved; no Git ancestry check was attempted",
+    }
+
+
 def _collect_identity(
     api: GitHubAPI, head_sha: str, ref_signals: list[tuple[str, Any]],
     output_dir: Path, warnings: list[dict[str, str]],
@@ -1810,8 +1939,10 @@ def _collect_identity(
     )
     number = identity["candidate_pr"]
     candidate = metadata.get(number)
+    stack_observed_at = None
     if number is not None:
         response = api.stack_graphql(number)
+        stack_observed_at = utc_now()
         _write_raw_api(output_dir / "api" / "prs" / f"{number}-stack.json", response)
         _graphql_response_warning(response, warnings, label="candidate stack lookup")
         stack = classify_stack(response)
@@ -1821,6 +1952,7 @@ def _collect_identity(
     else:
         stack = _unresolved_stack("Candidate PR ownership is unresolved")
     identity["stack"] = stack
+    identity["stack_observed_at"] = stack_observed_at
     return identity, candidate
 
 
@@ -1900,6 +2032,15 @@ def _timing(event_path: Path, output_dir: Path, step_summary: Path | None) -> di
         api, sha, [("workflow_run.head_branch", source.get("head_branch"))],
         output_dir, warnings,
     )
+    identity["stack_candidate_binding"] = _bind_timing_stack_observation(
+        Path(__file__).resolve().parents[2],
+        sha,
+        identity.get("candidate_pr"),
+        candidate,
+        identity,
+        output_dir,
+        warnings,
+    )
     queue_branch = queue_branch_from_queue_ref(source.get("head_branch"))
     branch = ({"queue_branch": queue_branch, "queue_branch_source": "workflow_run.head_branch"}
               if queue_branch else resolve_queue_branch(stack=identity["stack"], pull_request=candidate))
@@ -1925,24 +2066,32 @@ def _timing(event_path: Path, output_dir: Path, step_summary: Path | None) -> di
 
 
 def _identity_summary_lines(summary: dict[str, Any]) -> list[str]:
-    """Render candidate-scoped identity and current entry provenance concisely."""
+    """Render candidate ownership and the time-scoped stack observation."""
     identity = summary.get("identity") or {}
     stack = identity.get("stack") or {}
+    binding = identity.get("stack_candidate_binding")
     queue = summary.get("queue") or {}
     entry = queue.get("entry") or {}
-    return [
+    lines = [
         f"**Candidate PR:** {_safe_markdown(identity.get('candidate_pr', 'unresolved'))}",
         f"**Ownership:** {_safe_markdown(identity.get('candidate_pr_resolution'))}",
-        f"**Own stack:** {_safe_markdown(stack.get('stack_status'))}; "
+        f"**Stack observation:** {_safe_markdown(stack.get('stack_status'))}; "
         f"ID {_safe_markdown(stack.get('stack_id'))}; "
         f"position {_safe_markdown(stack.get('stack_position'))} / "
-        f"{_safe_markdown(stack.get('stack_size'))}",
+        f"{_safe_markdown(stack.get('stack_size'))}; observed at "
+        f"{_safe_markdown(identity.get('stack_observed_at'))}",
         f"**Trunk queue:** {_safe_markdown(queue.get('queue_branch'))}; "
         f"entry {_safe_markdown(queue.get('queue_entry_status'))} "
         f"({_safe_markdown(queue.get('effective_candidate_queue_entry_source'))}); "
         f"queue position {_safe_markdown(entry.get('queue_entry_position'))}",
         f"**Enqueued at:** {_safe_markdown(entry.get('enqueued_at'))}",
     ]
+    if isinstance(binding, dict):
+        lines.append(
+            f"**Observation commit binding:** {_safe_markdown(binding.get('status'))}; "
+            f"{_safe_markdown(binding.get('basis'))}"
+        )
+    return lines
 
 
 def _write_snapshot_summary(summary: dict[str, Any], destination: Path | None) -> None:

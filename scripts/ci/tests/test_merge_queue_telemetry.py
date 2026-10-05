@@ -24,7 +24,8 @@ from scripts.ci.merge_queue_telemetry import (
     queue_branch_from_queue_ref, reconcile_candidate_queue_entry,
     resolve_queue_branch, runner_metadata_missing_unexpectedly,
     _collect_identity, _collect_queue_observation, _collect_workflow_attempts,
-    _latest_runs_by_name, _snapshot, _stack_composition, _write_timing_summary,
+    _latest_runs_by_name, _snapshot, _stack_composition,
+    _bind_timing_stack_observation, _write_timing_summary, _timing,
     GitHubAPI, main,
 )
 import scripts.ci.merge_queue_telemetry as telemetry
@@ -1633,6 +1634,7 @@ class ObjectiveIsolationTests(unittest.TestCase):
                 number, "master", "merge_group.base_ref", Path(temporary), [],
             )
         self.assertEqual(api.stack_calls, [number])
+        self.assertIsNotNone(identity["stack_observed_at"])
         self.assertEqual(len(queue["merge_queue"]["entries"]), len(queue_nodes))
         return identity
 
@@ -1700,6 +1702,216 @@ class ObjectiveIsolationTests(unittest.TestCase):
             with patch("scripts.ci.merge_queue_telemetry._git") as git:
                 _stack_composition(Path("."), "a" * 40, 101, classification, Path("."), [])
                 git.assert_not_called()
+
+    def test_historical_candidate_binding_proves_current_stack_prefix(self):
+        identity = {
+            "candidate_pr": 3715,
+            "stack": classify_stack(own_stack_response(3715, 2)),
+            "stack_observed_at": "2026-10-05T00:00:00Z",
+        }
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "scripts.ci.merge_queue_telemetry._git", return_value="false\n"
+        ), patch(
+            "scripts.ci.merge_queue_telemetry._git_is_ancestor", return_value=True
+        ):
+            binding = _bind_timing_stack_observation(
+                Path(temporary), "a" * 40, 3715, None, identity,
+                Path(temporary), [],
+            )
+
+        self.assertEqual(binding["status"], "proven")
+        self.assertEqual(binding["candidate_member_head_sha"], "2" * 40)
+        self.assertEqual(
+            [member["is_ancestor"] for member in binding["member_ancestry"]],
+            [True, True],
+        )
+        self.assertEqual(identity["stack"]["stack_status"], "stack_member")
+        self.assertEqual(
+            (identity["stack"]["stack_id"], identity["stack"]["stack_position"],
+             identity["stack"]["stack_size"]),
+            ("S", 2, 3),
+        )
+
+    def test_historical_binding_disproves_changed_current_stack_without_mutating_it(self):
+        response = own_stack_response(3715, 2)
+        current_pr = response["data"]["repository"]["pullRequest"]
+        current_pr["stack"]["id"] = "S-new"
+        current_pr["stackEntry"]["stack"]["id"] = "S-new"
+        current_pr["stack"]["entries"]["nodes"][1]["pullRequest"]["headRefOid"] = "c" * 40
+        identity = {"candidate_pr": 3715, "stack": classify_stack(response)}
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "scripts.ci.merge_queue_telemetry._git", return_value="false\n"
+        ), patch(
+            "scripts.ci.merge_queue_telemetry._git_is_ancestor", return_value=False
+        ):
+            binding = _bind_timing_stack_observation(
+                Path(temporary), "a" * 40, 3715, None, identity,
+                Path(temporary), [],
+            )
+
+        self.assertEqual(identity["candidate_pr"], 3715)
+        self.assertEqual(binding["status"], "disproven")
+        self.assertEqual(binding["candidate_member_head_sha"], "c" * 40)
+        self.assertEqual(identity["stack"]["stack_status"], "stack_member")
+        self.assertEqual(
+            (identity["stack"]["stack_id"], identity["stack"]["stack_position"],
+             identity["stack"]["stack_size"]),
+            ("S-new", 2, 3),
+        )
+
+    def test_historical_binding_is_unresolved_when_ancestry_is_unavailable(self):
+        identity = {
+            "candidate_pr": 3715,
+            "stack": classify_stack(own_stack_response(3715, 2)),
+        }
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "scripts.ci.merge_queue_telemetry._git", return_value=None
+        ), patch(
+            "scripts.ci.merge_queue_telemetry._git_is_ancestor", return_value=None
+        ):
+            binding = _bind_timing_stack_observation(
+                Path(temporary), "a" * 40, 3715, None, identity,
+                Path(temporary), [],
+            )
+
+        self.assertEqual(binding["status"], "unresolved")
+        self.assertEqual(binding["member_ancestry"][0]["is_ancestor"], None)
+        self.assertEqual(identity["stack"]["stack_status"], "stack_member")
+        self.assertEqual(identity["stack"]["stack_position"], 2)
+
+    def test_ordinary_observation_binds_rest_head_without_claiming_historical_status(self):
+        identity = {"candidate_pr": 101, "stack": classify_stack(graphql_pr())}
+        current_pr = {"head": {"sha": "b" * 40}}
+        with patch(
+            "scripts.ci.merge_queue_telemetry._git", return_value="false\n"
+        ), patch(
+            "scripts.ci.merge_queue_telemetry._git_is_ancestor", return_value=True
+        ):
+            binding = _bind_timing_stack_observation(
+                Path("."), "a" * 40, 101, current_pr, identity, Path("."), []
+            )
+        self.assertEqual(binding["status"], "proven")
+        self.assertEqual(binding["basis"], "current_pr_head_ancestry")
+        self.assertEqual(binding["candidate_pr_head_sha"], "b" * 40)
+        self.assertIn("does not establish historical stack metadata", binding["meaning"])
+        self.assertEqual(identity["stack"]["stack_status"], "not_a_stack")
+
+        identity_without_head = {
+            "candidate_pr": 101,
+            "stack": classify_stack(graphql_pr()),
+        }
+        with patch("scripts.ci.merge_queue_telemetry._git") as git:
+            missing_binding = _bind_timing_stack_observation(
+                Path("."), "a" * 40, 101, {}, identity_without_head,
+                Path("."), [],
+            )
+        self.assertEqual(missing_binding["status"], "unresolved")
+        self.assertEqual(identity_without_head["stack"]["stack_status"], "not_a_stack")
+        git.assert_not_called()
+
+    def test_unresolved_stack_lookup_has_unresolved_binding_without_git_work(self):
+        identity = {"candidate_pr": 3715, "stack": classify_stack(None)}
+        with patch("scripts.ci.merge_queue_telemetry._git") as git:
+            binding = _bind_timing_stack_observation(
+                Path("."), "a" * 40, 3715, None, identity, Path("."), []
+            )
+        self.assertEqual(binding["status"], "unresolved")
+        self.assertEqual(binding["basis"], "unavailable_stack_observation")
+        self.assertEqual(identity["stack"]["stack_status"], "unresolved")
+        git.assert_not_called()
+
+    def test_distinct_stack_positions_and_not_a_stack_bind_to_same_candidate_sha(self):
+        candidate_pr = 3716
+        candidate_sha = "a" * 40
+        observations = []
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "scripts.ci.merge_queue_telemetry._git", return_value="false\n"
+        ), patch(
+            "scripts.ci.merge_queue_telemetry._git_is_ancestor", return_value=True
+        ):
+            for observed_at, position, size in (
+                ("t0", 3, 3), ("t1", 2, 2), ("t2", 1, 1),
+            ):
+                response = own_stack_response(candidate_pr, position, size=size)
+                nodes = response["data"]["repository"]["pullRequest"]["stack"]["entries"]["nodes"]
+                for index, node in enumerate(nodes, start=1):
+                    node["pullRequest"]["number"] = candidate_pr - position + index
+                identity = {
+                    "candidate_pr": candidate_pr,
+                    "stack": classify_stack(response),
+                    "stack_observed_at": observed_at,
+                }
+                identity["stack_candidate_binding"] = _bind_timing_stack_observation(
+                    Path(temporary), candidate_sha, candidate_pr, None,
+                    identity, Path(temporary), [],
+                )
+                observations.append(identity)
+
+            ordinary = {
+                "candidate_pr": candidate_pr,
+                "stack": classify_stack(graphql_pr()),
+                "stack_observed_at": "t3",
+            }
+            ordinary_binding = _bind_timing_stack_observation(
+                Path(temporary), candidate_sha, candidate_pr,
+                {"head": {"sha": "3" * 40}}, ordinary, Path(temporary), [],
+            )
+
+        self.assertEqual(
+            [(identity["stack"]["stack_position"], identity["stack"]["stack_size"])
+             for identity in observations],
+            [(3, 3), (2, 2), (1, 1)],
+        )
+        self.assertEqual(
+            [identity["stack_observed_at"] for identity in observations],
+            ["t0", "t1", "t2"],
+        )
+        self.assertTrue(all(
+            identity["stack"]["stack_status"] == "stack_member"
+            for identity in observations
+        ))
+        self.assertTrue(all(
+            identity["stack_candidate_binding"]["status"] == "proven"
+            for identity in observations
+        ))
+        self.assertEqual(ordinary["stack"]["stack_status"], "not_a_stack")
+        self.assertEqual(ordinary_binding["status"], "proven")
+
+    def test_timing_collector_records_time_scoped_stack_binding(self):
+        import json
+
+        identity = {
+            "candidate_pr": 3715,
+            "stack": classify_stack(own_stack_response(3715, 2)),
+            "stack_observed_at": "2026-10-05T00:00:00Z",
+        }
+        api = type("API", (), {"api_errors": []})()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            event = root / "event.json"
+            event.write_text(json.dumps({"workflow_run": {
+                "event": "merge_group", "id": 55, "run_attempt": 1,
+                "head_sha": "a" * 40,
+                "head_branch": "gh-readonly-queue/master/pr-3715-abcdef",
+            }}), encoding="utf-8")
+            with (
+                patch("scripts.ci.merge_queue_telemetry.GitHubAPI", return_value=api),
+                patch("scripts.ci.merge_queue_telemetry._target_runs", return_value=[]),
+                patch("scripts.ci.merge_queue_telemetry._collect_workflow_attempts", return_value=([], {})),
+                patch("scripts.ci.merge_queue_telemetry._collect_identity", return_value=(identity, None)),
+                patch("scripts.ci.merge_queue_telemetry._collect_queue_observation", return_value={"entry": None}),
+                patch("scripts.ci.merge_queue_telemetry._git", return_value="false\n"),
+                patch("scripts.ci.merge_queue_telemetry._git_is_ancestor", return_value=True),
+                patch("scripts.ci.merge_queue_telemetry._write_api_errors"),
+                patch("scripts.ci.merge_queue_telemetry._write_timing_summary"),
+                patch("scripts.ci.merge_queue_telemetry.safe_environment", return_value={}),
+            ):
+                result = _timing(event, root / "telemetry", None)
+
+        self.assertEqual(result["identity"]["candidate_pr"], 3715)
+        self.assertEqual(result["identity"]["stack"]["stack_status"], "stack_member")
+        self.assertEqual(result["identity"]["stack_observed_at"], "2026-10-05T00:00:00Z")
+        self.assertEqual(result["identity"]["stack_candidate_binding"]["status"], "proven")
 
     def test_snapshot_preserves_raw_base_ref_and_normalizes_only_queue_branch(self):
         class SnapshotAPI(FakeIdentityAPI, FakeQueueAPI):
