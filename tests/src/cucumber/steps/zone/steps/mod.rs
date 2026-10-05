@@ -28,8 +28,7 @@ use super::{
     balance_update_payload, collect_indexed_messages, collect_indexed_messages_exactly_once,
     ensure_zone_transactions_included,
     errors::{log_step_error, zone_step_error},
-    parse_balance_payload, publish_message_with_retry,
-    runner::{TxSource, TxStatus},
+    parse_balance_payload, publish_message_with_retry, replay_finalized_history,
     tables::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
         custom_tx_rows, generated_zone_message_batches, generated_zone_message_sequencers,
@@ -39,10 +38,9 @@ use super::{
     },
     wait_for_channel_transfer_input_count, wait_for_channel_view, wait_for_channel_wallet_counts,
     wait_for_channel_wallet_note, wait_for_deposit, wait_for_exact_indexed_payload_count,
-    wait_for_finalized_deposit_via_sequencer_and_collect_mempool_pending,
-    wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pending, wait_for_lib_advance,
-    wait_for_on_chain_statuses_and_collect_mempool_pending, wait_for_transactions_finalized,
-    wait_for_turn_to_write, wait_for_tx_status_lifecycle, wait_for_withdraw,
+    wait_for_finalized_deposit_via_sequencer, wait_for_finalized_withdraw_via_sequencer,
+    wait_for_lib_advance, wait_for_transactions_finalized, wait_for_turn_to_write,
+    wait_for_withdraw,
 };
 use crate::{
     common::mantle_inscription::make_inscription,

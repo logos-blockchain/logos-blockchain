@@ -26,6 +26,7 @@ serde                         = { features = ["derive"], workspace = true }
 thiserror                     = { workspace = true }
 time                          = { workspace = true }
 tokio                         = { workspace = true }
+tokio-stream                  = { features = ["sync"], workspace = true }
 tracing                       = { workspace = true }
 
 [dev-dependencies]

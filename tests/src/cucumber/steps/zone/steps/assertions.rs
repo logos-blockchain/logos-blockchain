@@ -1,15 +1,14 @@
 use super::{
     CONCURRENT_DUPLICATE_SETTLE_SECS, CucumberWorld, DEFAULT_ZONE_SEQUENCER, Duration, HashMap,
-    HashSet, Inscription, Step, StepError, StepResult, TxSource, TxStatus, assert_sorted_outcome,
+    HashSet, Inscription, Step, StepError, StepResult, assert_sorted_outcome,
     collect_indexed_messages, collect_indexed_messages_exactly_once,
     ensure_zone_transactions_included, log_step_error, make_inscription, parse_balance_payload,
-    scan_indexer_for_payloads, single_column_table, wait_for_channel_transfer_input_count,
-    wait_for_channel_wallet_counts, wait_for_channel_wallet_note, wait_for_deposit,
-    wait_for_exact_indexed_payload_count,
-    wait_for_finalized_deposit_via_sequencer_and_collect_mempool_pending,
-    wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pending,
-    wait_for_indexer_unordered, wait_for_transactions_finalized, wait_for_tx_status_lifecycle,
-    wait_for_withdraw, wait_until_sorted_conflict_settles, zone_step_error,
+    replay_finalized_history, scan_indexer_for_payloads, single_column_table,
+    wait_for_channel_transfer_input_count, wait_for_channel_wallet_counts,
+    wait_for_channel_wallet_note, wait_for_deposit, wait_for_exact_indexed_payload_count,
+    wait_for_finalized_deposit_via_sequencer, wait_for_finalized_withdraw_via_sequencer,
+    wait_for_indexer_unordered, wait_for_transactions_finalized, wait_for_withdraw,
+    wait_until_sorted_conflict_settles, zone_step_error,
 };
 
 #[cucumber::then("the channel view contract holds for all zone sequencers")]
@@ -83,40 +82,6 @@ async fn step_all_zone_messages_are_finalized(
     wait_for_transactions_finalized(
         node_url,
         &inscription_ids,
-        Duration::from_secs(timeout_seconds),
-    )
-    .await
-    .map_err(|error| zone_step_error(step, &error))
-}
-
-#[cucumber::then(
-    expr = "sequencer {string} emits the full transaction lifecycle for zone messages in {int} seconds:"
-)]
-#[cucumber::when(
-    expr = "sequencer {string} emits the full transaction lifecycle for zone messages in {int} seconds:"
-)]
-async fn step_sequencer_emits_full_transaction_lifecycle(
-    world: &mut CucumberWorld,
-    step: &Step,
-    sequencer_alias: String,
-    timeout_seconds: u64,
-) -> StepResult {
-    let aliases = single_column_table(step, "alias", "zone message aliases")?;
-    let tx_hashes = log_step_error(step, world.zone.message_tx_hashes_for_aliases(&aliases))?;
-    let mut tx_status_rx = log_step_error(
-        step,
-        world.zone.take_sequencer_tx_status_rx(&sequencer_alias),
-    )?;
-
-    wait_for_tx_status_lifecycle(
-        &mut tx_status_rx,
-        &tx_hashes,
-        &[
-            TxStatus::AcceptedLocally,
-            TxStatus::PendingMempool,
-            TxStatus::OnChain(TxSource::Local),
-            TxStatus::Finalized(TxSource::Local),
-        ],
         Duration::from_secs(timeout_seconds),
     )
     .await
@@ -399,7 +364,7 @@ async fn step_zone_sequencer_finalizes_deposit(
         .clone();
     let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
 
-    let mempool_pending = wait_for_finalized_deposit_via_sequencer_and_collect_mempool_pending(
+    wait_for_finalized_deposit_via_sequencer(
         events,
         &deposit,
         amount,
@@ -407,9 +372,6 @@ async fn step_zone_sequencer_finalizes_deposit(
     )
     .await
     .map_err(|error| zone_step_error(step, &error))?;
-    world
-        .zone
-        .record_mempool_pending(sequencer_alias.clone(), mempool_pending);
     Ok(())
 }
 
@@ -427,16 +389,13 @@ async fn step_zone_sequencer_finalizes_withdraw(
         .clone();
     let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
 
-    let mempool_pending = wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pending(
+    wait_for_finalized_withdraw_via_sequencer(
         events,
         &withdraw,
         Duration::from_secs(timeout_seconds),
     )
     .await
     .map_err(|error| zone_step_error(step, &error))?;
-    world
-        .zone
-        .record_mempool_pending(sequencer_alias.clone(), mempool_pending);
     Ok(())
 }
 
@@ -467,6 +426,54 @@ async fn step_zone_indexer_returns_all_messages_exactly_once_any_order(
         .map_err(|error| zone_step_error(step, &error))?;
 
     ensure_indexed_payloads_match_once(&expected_set, &seen, &all_payloads)
+}
+
+/// The message finalized, but not as the tx the publish returned: the SDK
+/// re-funded it under a new hash after the original was stuck.
+#[cucumber::then(expr = "zone message {string} finalized under a different tx hash than submitted")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_zone_message_finalized_under_a_rebuilt_tx(
+    world: &mut CucumberWorld,
+    step: &Step,
+    message_alias: String,
+) -> StepResult {
+    let message = log_step_error(step, world.zone.published_message(&message_alias))?;
+    let submitted = message
+        .inscription_id
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Zone message '{message_alias}' has no submitted tx hash"),
+        })?;
+    let payload = message.payload.clone();
+    let reader = log_step_error(step, world.zone.indexer())?;
+    let history = replay_finalized_history(reader)
+        .await
+        .map_err(|error| zone_step_error(step, &error))?;
+
+    let finalized_as: Vec<_> = history
+        .iter()
+        .filter(|tx| {
+            tx.ops.iter().any(|op| {
+                matches!(op, lb_zone_sdk::sequencer::FinalizedOp::Inscription(info) if info.payload == payload)
+            })
+        })
+        .map(|tx| tx.tx_hash)
+        .collect();
+    if finalized_as.is_empty() {
+        return Err(StepError::LogicalError {
+            message: format!("Zone message '{message_alias}' is not finalized"),
+        });
+    }
+    if finalized_as.contains(&submitted) {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "Zone message '{message_alias}' finalized as the tx it was submitted with; nothing was re-funded"
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn published_payload_set(

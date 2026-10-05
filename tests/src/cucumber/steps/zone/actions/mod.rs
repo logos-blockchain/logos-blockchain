@@ -126,7 +126,6 @@ struct StartedSequencerRuntime {
     ready_rx: tokio::sync::watch::Receiver<bool>,
     channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
     turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
-    tx_status_rx: broadcast::Receiver<lb_zone_sdk::sequencer::TxStatusUpdate>,
     discarded_payloads: Option<DiscardedPayloads>,
 }
 

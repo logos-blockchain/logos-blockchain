@@ -28,18 +28,34 @@ use crate::adapter;
 ///
 /// The node appends a fee transfer (paid from `funding.funding_pk`, change
 /// back to it) and returns the proof for that transfer; all other ops must
-/// be proven by the caller over the funded transaction hash.
+/// be proven by the caller over the funded transaction hash. Also returns
+/// the pre-funding builder, the channel ops alone, so the caller can
+/// re-fund the same ops later with fresh fee inputs.
 pub(super) async fn fund_ops<Node>(
     node: &Node,
     funding: &FundingConfig,
     ops: Vec<Op>,
-) -> Result<(Ops, Option<OpProof>), Error>
+) -> Result<(Ops, Option<OpProof>, MantleTxBuilder), Error>
 where
     Node: adapter::Node + Sync,
 {
     let tx_builder = MantleTxBuilder::new()
         .extend_ops(ops)
         .map_err(|e| Error::Network(format!("too many ops in transaction: {e:?}")))?;
+    let (funded_tx, transfer_proof) = fund_builder(node, funding, tx_builder.clone()).await?;
+    Ok((funded_tx, transfer_proof, tx_builder))
+}
+
+/// Fund the channel ops in `tx_builder` from the node's wallet. Funding the
+/// same builder again draws fresh fee inputs: the same ops under a new hash.
+pub(super) async fn fund_builder<Node>(
+    node: &Node,
+    funding: &FundingConfig,
+    tx_builder: MantleTxBuilder,
+) -> Result<(Ops, Option<OpProof>), Error>
+where
+    Node: adapter::Node + Sync,
+{
     let response = node
         .fund_tx(WalletFundRequestBody {
             // Fund against the node's latest tip.
@@ -162,7 +178,7 @@ pub(super) async fn create_inscribe_tx<Node>(
     signing_key: &Ed25519Key,
     inscription: Inscription,
     parent: MsgId,
-) -> Result<(SignedOps<Unverified, StandardMode>, MsgId), Error>
+) -> Result<(SignedOps<Unverified, StandardMode>, MsgId, MantleTxBuilder), Error>
 where
     Node: adapter::Node + Sync,
 {
@@ -176,7 +192,7 @@ where
     };
     let msg_id = inscribe_op.id();
 
-    let (inscribe_tx, transfer_proof) =
+    let (inscribe_tx, transfer_proof, pre_fund) =
         fund_ops(node, funding, vec![Op::ChannelInscribe(inscribe_op)]).await?;
 
     let tx_hash = inscribe_tx.hash();
@@ -190,7 +206,27 @@ where
     let signed_tx = SignedOps::from_parts(inscribe_tx, ops_proofs)
         .unwrap_or_else(|error| panic!("Node returned an unprovable transaction: {error}"));
 
-    Ok((signed_tx, msg_id))
+    Ok((signed_tx, msg_id, pre_fund))
+}
+
+/// Sign a funded tx this sequencer built itself. A plain inscription carries
+/// the sequencer's `Ed25519Sig`; with `own_key_index` set, a bundle's
+/// transfer and withdraw ops carry its single-signer multi-sig proof too.
+pub(super) fn sign_own_tx(
+    tx: Ops,
+    transfer_proof: Option<OpProof>,
+    signing_key: &Ed25519Key,
+    own_key_index: Option<ChannelKeyIndex>,
+) -> Result<SignedOps<Unverified, StandardMode>, Error> {
+    let own_sig = sign_tx(tx.hash(), signing_key);
+    let ops_proofs = match own_key_index {
+        Some(index) => {
+            build_atomic_bundle_ops_proofs(&tx, index, own_sig, transfer_proof.as_ref())?
+        }
+        None => attach_transfer_proof(&tx, [OpProof::Ed25519Sig(own_sig)].into(), transfer_proof)?,
+    };
+    SignedOps::from_parts(tx, ops_proofs)
+        .map_err(|error| Error::Network(format!("failed to assemble signed tx: {error:?}")))
 }
 
 /// Build and fund a `ChannelConfig` transaction, returning the funded raw
@@ -229,7 +265,9 @@ where
         transfer_threshold,
     };
 
-    fund_ops(node, funding, vec![Op::ChannelConfig(config_op)]).await
+    let (config_tx, transfer_proof, _) =
+        fund_ops(node, funding, vec![Op::ChannelConfig(config_op)]).await?;
+    Ok((config_tx, transfer_proof))
 }
 
 /// Assemble a fully-signed channel-config tx from a funded config tx, the
