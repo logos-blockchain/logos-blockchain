@@ -529,7 +529,7 @@ mod no_node {
             info_ref.protocol_names.chain_sync,
             info_ref.protocol_names.mempool,
         ] {
-            assert!(!unsafe { CStr::from_ptr(pointer) }.to_bytes().is_empty());
+            assert_ne!((unsafe { CStr::from_ptr(pointer) }).to_bytes().len(), 0);
         }
         assert!(unsafe { free_deployment_info(info) }.is_ok());
     }
