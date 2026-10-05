@@ -5,12 +5,13 @@ mod deployment;
 
 use std::{
     fs,
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use async_trait::async_trait;
+use lb_testing_framework::SharedDeployment;
 use libp2p::{PeerId, identity::Keypair};
 use multiaddr::{Multiaddr, Protocol};
 use serde::Serialize;
@@ -37,6 +38,8 @@ pub struct NimbosDeployment {
     binary: PathBuf,
     circuits_dir: PathBuf,
     deployment_yaml: Arc<str>,
+    // Retained during preparation for shared test assertions.
+    slots_per_epoch: NonZeroU64,
     bootstrap_peers: Vec<Multiaddr>,
 }
 
@@ -44,24 +47,33 @@ impl NimbosDeployment {
     /// Read native Nimbos deployment YAML using caller-supplied binary paths.
     ///
     /// The file is preserved verbatim; loading it does not validate protocol
-    /// or genesis compatibility with the binary.
+    /// or genesis compatibility with the binary. The supplied epoch length
+    /// must match these deployment settings.
     pub fn new(
         binary: &Path,
         circuits_dir: &Path,
         deployment_file: &Path,
+        slots_per_epoch: NonZeroU64,
     ) -> Result<Self, DynError> {
-        Self::from_deployment_yaml(binary, circuits_dir, fs::read_to_string(deployment_file)?)
+        Self::from_deployment_yaml(
+            binary,
+            circuits_dir,
+            fs::read_to_string(deployment_file)?,
+            slots_per_epoch,
+        )
     }
 
     pub fn from_deployment_yaml(
         binary: &Path,
         circuits_dir: &Path,
         deployment_yaml: String,
+        slots_per_epoch: NonZeroU64,
     ) -> Result<Self, DynError> {
         Ok(Self {
             keys: vec![Keypair::generate_ed25519()],
             binary: binary.canonicalize()?,
             circuits_dir: circuits_dir.canonicalize()?,
+            slots_per_epoch,
             deployment_yaml: deployment_yaml.into(),
             bootstrap_peers: Vec::new(),
         })
@@ -130,7 +142,7 @@ pub struct NimbosConfig {
     #[serde(skip)]
     deployment: NimbosDeployment,
     #[serde(skip)]
-    network_key: Vec<u8>,
+    network_key: Keypair,
     netkey_file: &'static str,
     log_file: PathBuf,
     rest_port: u16,
@@ -156,22 +168,24 @@ impl NimbosEnv {
     /// YAML.
     ///
     /// This is called by the application, before TF's per-node configuration
-    /// hooks. It accepts deployment YAML as data, without depending on the
+    /// hooks. It accepts shared deployment data, without depending on the
     /// Logos configuration generator. The cluster uses the supplied node count
     /// and its own network keys.
     pub fn prepare_deployment(
-        deployment_yaml: &str,
-        node_count: usize,
+        inputs: &SharedDeployment,
         binary: &Path,
         circuits_dir: &Path,
     ) -> Result<NimbosDeployment, DynError> {
-        let count =
-            NonZeroUsize::new(node_count).ok_or("Nimbos deployment requires at least one node")?;
-        let yaml = deployment::from_logos_yaml(deployment_yaml)?;
-        Ok(
-            NimbosDeployment::from_deployment_yaml(binary, circuits_dir, yaml)?
-                .with_node_count(count),
-        )
+        let count = NonZeroUsize::new(inputs.node_count())
+            .ok_or("Nimbos deployment requires at least one node")?;
+        let yaml = deployment::from_logos_yaml(inputs.deployment_yaml()?)?;
+        Ok(NimbosDeployment::from_deployment_yaml(
+            binary,
+            circuits_dir,
+            yaml,
+            inputs.slots_per_epoch()?,
+        )?
+        .with_node_count(count))
     }
 }
 
@@ -252,7 +266,7 @@ impl LocalDeployerEnv for NimbosEnv {
 
         let mut config = template.cloned().unwrap_or_else(|| NimbosConfig {
             deployment: deployment.clone(),
-            network_key: Vec::new(),
+            network_key: key.clone(),
             netkey_file: NETWORK_KEY_FILE,
             log_file: PathBuf::from("nimbos.log"),
             rest_port: 0,
@@ -265,7 +279,7 @@ impl LocalDeployerEnv for NimbosEnv {
             num_threads: 2,
             data_dir: PathBuf::from("data"),
         });
-        config.network_key = key.to_protobuf_encoding()?;
+        config.network_key = key.clone();
         config.bootstrap_node = bootstrap;
         config.rest_port = ports.allocate("http")?;
         config.quic_port = ports.network_port();
@@ -303,7 +317,7 @@ impl LocalDeployerEnv for NimbosEnv {
                 },
                 LaunchFile {
                     relative_path: NETWORK_KEY_FILE.into(),
-                    contents: config.network_key.clone(),
+                    contents: config.network_key.to_protobuf_encoding()?,
                 },
             ],
             args: vec![format!("--config-file={CONFIG_FILE}")],

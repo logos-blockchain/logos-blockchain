@@ -140,8 +140,7 @@ where
     /// bootstrap from its live addresses and peer IDs.
     async fn deploy(self, ctx: &mut DeployContext<AppHostEnv>) -> Result<Self::Handle, DynError> {
         let nimbos_deployment = NimbosEnv::prepare_deployment(
-            self.shared_deployment.deployment_yaml()?,
-            self.shared_deployment.node_count(),
+            &self.shared_deployment,
             &self.nimbos_binary,
             &self.circuits_dir,
         )?;
