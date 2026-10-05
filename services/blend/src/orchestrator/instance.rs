@@ -503,7 +503,7 @@ mod tests {
 
     type TestInstance = Instance<CoreService, EdgeService, BroadcastService, RuntimeServiceId>;
 
-    #[overwatch::derive_services]
+    #[overwatch::derive_services(panic_policy = overwatch::overwatch::ShutdownOverwatch)]
     struct Services {
         core: CoreService,
         edge: EdgeService,

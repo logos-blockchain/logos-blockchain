@@ -281,7 +281,7 @@ mod tests {
         }
     }
 
-    #[derive_services]
+    #[derive_services(panic_policy = overwatch::overwatch::ShutdownOverwatch)]
     struct App {
         light_service: LightService,
         heavy_service: HeavyService,
@@ -381,6 +381,8 @@ mod tests {
                 .runtime()
                 .block_on(overwatch_handle.shutdown()),
         );
-        overwatch.blocking_wait_finished();
+        overwatch
+            .blocking_wait_finished()
+            .expect("No service should panic");
     }
 }

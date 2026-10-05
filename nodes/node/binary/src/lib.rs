@@ -136,7 +136,7 @@ pub type StorageService = lb_storage_service::StorageService<RuntimeServiceId>;
 
 pub type SystemSigService = SystemSig<RuntimeServiceId>;
 
-#[derive_services]
+#[derive_services(panic_policy = overwatch::overwatch::ShutdownOverwatch)]
 pub struct LogosBlockchain {
     network: NetworkService,
     blend: BlendService,

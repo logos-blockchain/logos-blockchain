@@ -2,7 +2,7 @@ use std::ffi::{CStr, CString};
 
 use lb_core::mantle::transactions::genesis_tx::ChainId;
 use lb_node::RuntimeServiceId;
-use overwatch::overwatch::{Overwatch, OverwatchExit, OverwatchHandle};
+use overwatch::overwatch::{Overwatch, OverwatchHandle, ServicePanic};
 use tokio::runtime::{Handle, Runtime};
 
 use crate::{
@@ -152,10 +152,10 @@ impl LogosBlockchainNode {
 /// A node that stopped because a service panicked is released like any other,
 /// but the caller is told: until this point all it could see was that the
 /// node had stopped.
-pub fn exit_status(exit: &OverwatchExit<RuntimeServiceId>) -> OperationStatus {
+pub fn exit_status(exit: &Result<(), ServicePanic<RuntimeServiceId>>) -> OperationStatus {
     match exit {
-        OverwatchExit::Shutdown => OperationStatus::OK,
-        OverwatchExit::ServicePanicked(panic) => OperationStatus::error(
+        Ok(()) => OperationStatus::OK,
+        Err(panic) => OperationStatus::error(
             OperationStatusCode::NodeStopped,
             format!("The node had already stopped: {panic}."),
         ),

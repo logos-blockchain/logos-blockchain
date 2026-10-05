@@ -726,7 +726,7 @@ mod tests {
     const TEST_BATCH_SIZE: NonZeroUsize =
         NonZeroUsize::new(1000).expect("TEST_BATCH_SIZE must be non-zero");
 
-    #[derive_services]
+    #[derive_services(panic_policy = overwatch::overwatch::ShutdownOverwatch)]
     pub struct TestServices {
         pub storage: StorageService<RuntimeServiceId>,
     }

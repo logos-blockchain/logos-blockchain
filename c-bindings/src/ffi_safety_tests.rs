@@ -38,7 +38,7 @@ use std::{
 use lb_c_macros::panic_to_error;
 use lb_node::{RuntimeServiceId, UserConfig};
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
-use overwatch::overwatch::{OverwatchExit, ServicePanic};
+use overwatch::overwatch::ServicePanic;
 use serial_test::serial;
 use tempfile::TempDir;
 
@@ -410,9 +410,9 @@ mod no_node {
     #[test]
     #[ignore = "Runs under valgrind only: see the module docs."]
     fn shutdown_reports_a_service_panic() {
-        assert!(exit_status(&OverwatchExit::Shutdown).is_ok());
+        assert!(exit_status(&Ok(())).is_ok());
 
-        let exit = OverwatchExit::ServicePanicked(ServicePanic {
+        let exit = Err(ServicePanic {
             service_id: RuntimeServiceId::BlendCore,
             message: "index out of bounds".to_owned(),
         });
