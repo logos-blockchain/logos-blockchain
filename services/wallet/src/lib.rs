@@ -508,7 +508,7 @@ where
         let security_param = ledger_eras
             .iter()
             .map(|era| {
-                NonZeroU64::from(era.entry.parameters.consensus_config.security_param()).get()
+                NonZeroU64::from(era.entry.parameters.consensus_config().security_param()).get()
             })
             .max()
             .expect("a schedule has at least one era");

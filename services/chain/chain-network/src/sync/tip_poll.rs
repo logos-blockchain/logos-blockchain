@@ -163,7 +163,7 @@ impl TipPollParams {
             .map_err(|e| DynError::from(format!("failed to fetch the ledger eras: {e}")))?;
         if ledger_eras
             .iter()
-            .any(|era| cadence_slots(&era.entry.parameters.consensus_config).is_none())
+            .any(|era| cadence_slots(&era.entry.parameters.consensus_config()).is_none())
         {
             return Err(DynError::from(
                 "active slot coefficient f must be > 0 in every era for tip polling",
@@ -172,7 +172,7 @@ impl TipPollParams {
 
         Ok(Self {
             cadence_slots: Arc::new(ledger_eras.map(|era| {
-                cadence_slots(&era.entry.parameters.consensus_config)
+                cadence_slots(&era.entry.parameters.consensus_config())
                     .expect("every era was checked to have a cadence")
             })),
             lag_threshold_blocks: config.lag_threshold_blocks.get(),

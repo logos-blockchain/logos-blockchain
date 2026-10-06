@@ -30,7 +30,7 @@ impl ServiceConfig {
         // The ledger config of every era, which the chain service runs and the
         // leader builds proposals under.
         let ledger_eras = Arc::new(eras.map(|era| match &era.entry.parameters.parameters {
-            EraParameters::V1(parameters) => parameters.ledger_config(),
+            EraParameters::V1(parameters) => lb_ledger::Config::V1(parameters.ledger_config()),
         }));
         let chain_service_settings = lb_chain_service::CryptarchiaSettings {
             bootstrap: lb_chain_service::BootstrapConfig {

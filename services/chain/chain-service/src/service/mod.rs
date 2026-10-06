@@ -191,7 +191,7 @@ where
     /// selection follow its consensus config from now on.
     async fn enter_era(&mut self, tick: SlotTick) {
         let config = config_at_slot(self.cryptarchia.ledger.era_schedule(), tick.slot)
-            .consensus_config
+            .consensus_config()
             .clone();
         let previous_lib = self.cryptarchia.lib();
         let pruned_blocks = self.cryptarchia.enter_era(config);
@@ -646,7 +646,7 @@ where
             };
             let inactivity_period =
                 config_at_slot(cryptarchia.ledger.era_schedule(), block.header().slot())
-                    .sdp_config
+                    .sdp_config()
                     .service_params
                     .get(&new_declaration.service_type)
                     .map_or(0, |params| {

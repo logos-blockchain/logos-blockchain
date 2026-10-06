@@ -441,7 +441,7 @@ where
         .get_leader_aged_notes(Some(wallet_tip))
         .await
         .ok()?;
-    let eligible = match &config_at_slot(ledger_eras, slot).faucet_pk {
+    let eligible = match &config_at_slot(ledger_eras, slot).faucet_pk() {
         Some(faucet_pk) => eligible_utxos
             .response
             .into_iter()
@@ -798,7 +798,7 @@ mod pol_tests {
     }
 
     pub fn test_config() -> lb_ledger::Config {
-        lb_ledger::Config {
+        lb_ledger::Config::V1(lb_ledger::config::v1::Config {
             epoch_config: EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(3u8).unwrap(),
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
@@ -847,7 +847,7 @@ mod pol_tests {
                 },
                 reward: disabled_reward_config(),
             },
-        }
+        })
     }
 
     struct DummyKms;

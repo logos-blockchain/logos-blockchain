@@ -2,28 +2,9 @@
 
 use std::borrow::Cow;
 
-use lb_cryptarchia_engine::{
-    Slot,
-    era::{EraSchedule, EraVersion, ScheduledEra},
-};
+use lb_cryptarchia_engine::{Slot, era::ScheduledEra};
 
 use crate::{Config, LedgerState, config::EraScheduledConfig};
-
-/// The ledger's own versions, which the global era versions map to: a global
-/// version that changes nothing in the ledger maps to the ledger version that
-/// came before it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LedgerVersion {
-    V1,
-}
-
-impl From<EraVersion> for LedgerVersion {
-    fn from(version: EraVersion) -> Self {
-        match version {
-            EraVersion::V1 => Self::V1,
-        }
-    }
-}
 
 #[expect(
     clippy::multiple_inherent_impl,
@@ -55,16 +36,14 @@ impl LedgerState {
     /// The state at the end of era `previous`, brought into era `next`, the
     /// one after it.
     fn into_next_era(self, previous: &ScheduledEra<Config>, next: &ScheduledEra<Config>) -> Self {
-        match (
-            LedgerVersion::from(previous.entry.version),
-            LedgerVersion::from(next.entry.version),
-        ) {
+        // The ledger's version in an era is its config's.
+        match (&previous.entry.parameters, &next.entry.parameters) {
             // Within a version, an era changes only the values of the
             // parameters, which the ledger reads from the config of the era
             // whenever it uses them: every component carries over unchanged.
             // A new component must be named here, so that the version that
             // adds it says what it becomes at an era boundary.
-            (LedgerVersion::V1, LedgerVersion::V1) => {
+            (Config::V1(_), Config::V1(_)) => {
                 let Self {
                     block_number,
                     cryptarchia_ledger,
@@ -87,7 +66,7 @@ mod tests {
     use lb_cryptarchia_engine::{Epoch, Slot};
 
     use crate::{
-        Config, LedgerState,
+        LedgerState,
         config::{EraScheduledConfig, schedule},
         cryptarchia::tests::{config, utxo},
     };

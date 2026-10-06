@@ -48,7 +48,7 @@ use lb_core::{
     },
     proofs::leader_proof,
 };
-use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots, era::EraSchedule};
+use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 use mantle::LedgerState as MantleLedger;
@@ -561,7 +561,7 @@ impl LedgerState {
         self = self.compute_block_rewards(
             gas_and_fees.fee_burned,
             gas_and_fees.fee_tip,
-            &config.pow_config.reward,
+            &config.pow_config().reward,
         )?;
         // Update Execution market state
         self = self.update_execution_market(gas_and_fees.execution_gas);
@@ -730,7 +730,7 @@ impl LedgerState {
             return;
         };
         let inactivity_period = config
-            .sdp_config
+            .sdp_config()
             .service_params
             .get(&declaration.service_type)
             .map_or(0, |parameters| {
@@ -769,7 +769,7 @@ impl LedgerState {
         let slot = self.cryptarchia_ledger.slot();
         let epoch = self.cryptarchia_ledger.epoch_state().epoch;
         let inactivity_period = config
-            .sdp_config
+            .sdp_config()
             .service_params
             .get(&new_declaration.service_type)
             .map_or(0, |parameters| {
@@ -1034,7 +1034,7 @@ impl LedgerState {
     fn update_pow_reward_difficulty(&mut self, claims_in_block: u64, config: &Config) {
         self.mantle_ledger
             .pow
-            .update_difficulty(claims_in_block, &config.pow_config.reward);
+            .update_difficulty(claims_in_block, &config.pow_config().reward);
     }
 }
 
@@ -1131,11 +1131,11 @@ mod tests {
         let expected_for_epoch_0 = ledger
             .mantle_ledger
             .sdp
-            .active_declarations(0.into(), &config.sdp_config.service_params);
+            .active_declarations(0.into(), &config.sdp_config().service_params);
         let expected_for_epoch_1 = ledger
             .mantle_ledger
             .sdp
-            .active_declarations(1.into(), &config.sdp_config.service_params);
+            .active_declarations(1.into(), &config.sdp_config().service_params);
 
         assert_eq!(
             *ledger.epoch_state().active_declarations,
@@ -1282,7 +1282,7 @@ mod tests {
                 zk_key,
                 target_epoch_state,
                 &current_epoch_state,
-                &config.sdp_config.service_rewards_params.blend,
+                &config.sdp_config().service_rewards_params.blend,
             ))),
         };
         let signed_operation = SignedOperation::new(
@@ -2946,7 +2946,8 @@ mod tests {
         /// schedule)`.
         fn test_pool_config() -> Config {
             let mut config = config();
-            config.pow_config.reward = RewardPoWConfig {
+            let Config::V1(v1_config) = &mut config;
+            v1_config.pow_config.reward = RewardPoWConfig {
                 rate_num: 1,
                 rate_den: NonZeroU64::MIN,
                 target_claim_per_block: NonZeroU64::new(10).expect("10 is non-zero"),
@@ -3337,8 +3338,9 @@ mod tests {
             // A tenth of the collected fees is diverted to the PoW refill and
             // the rest is pooled for block rewards.
             let mut config = config();
-            config.pow_config.reward.pow_share = 10;
-            config.pow_config.reward.share_den = NonZeroU64::new(100).unwrap();
+            let Config::V1(v1_config) = &mut config;
+            v1_config.pow_config.reward.pow_share = 10;
+            v1_config.pow_config.reward.share_den = NonZeroU64::new(100).unwrap();
             let mut state = LedgerState::from_utxos([utxo()], &single_era(config.clone()));
             let pool_before = state.mantle_ledger.pow.reward_pool();
 
@@ -3346,7 +3348,7 @@ mod tests {
                 .compute_block_rewards::<HeaderId>(
                     1_000.into(),
                     0.into(),
-                    &config.pow_config.reward,
+                    &config.pow_config().reward,
                 )
                 .expect("reward computation should succeed");
 
@@ -3375,7 +3377,7 @@ mod tests {
                 .compute_block_rewards::<HeaderId>(
                     1_000.into(),
                     0.into(),
-                    &config.pow_config.reward,
+                    &config.pow_config().reward,
                 )
                 .expect("reward computation should succeed");
 

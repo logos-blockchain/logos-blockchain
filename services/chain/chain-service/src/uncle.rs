@@ -67,7 +67,7 @@ impl Cryptarchia {
         // Each uncle's parent must be on the chain the block extends, within the
         // uncle reference window.
         let uncle_reference_window = config_at_slot(self.ledger.era_schedule(), slot)
-            .consensus_config
+            .consensus_config()
             .uncle_reference_window_in_slot()
             .get();
         let window_start = slot.into_inner().saturating_sub(uncle_reference_window);
@@ -305,7 +305,7 @@ mod tests {
             .genesis()
             .entry
             .parameters
-            .consensus_config
+            .consensus_config()
             .uncle_reference_window_in_slot()
             .get();
         let block = craft_block_with_uncles(

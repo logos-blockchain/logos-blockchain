@@ -987,7 +987,7 @@ mod tests {
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
-        lb_ledger::Config {
+        lb_ledger::Config::V1(lb_ledger::config::v1::Config {
             epoch_config,
             consensus_config,
             sdp_config: lb_ledger::mantle::sdp::Config {
@@ -1027,6 +1027,6 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
-        }
+        })
     }
 }

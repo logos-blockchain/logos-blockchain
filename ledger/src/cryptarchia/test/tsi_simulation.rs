@@ -144,7 +144,7 @@ fn simulate(scenario: Scenario) -> Outcome {
     let mut ledger = genesis_ledger(&config, utxo);
     let mut engine = Cryptarchia::from_lib(
         GENESIS,
-        config.consensus_config.clone(),
+        config.consensus_config().clone(),
         State::Online,
         0.into(),
         0,
@@ -182,7 +182,8 @@ fn simulate(scenario: Scenario) -> Outcome {
 
 fn simulation_config() -> Config {
     let mut config = config();
-    config.consensus_config = lb_cryptarchia_engine::Config::new(
+    let Config::V1(v1_config) = &mut config;
+    v1_config.consensus_config = lb_cryptarchia_engine::Config::new(
         NonZero::new(SECURITY_PARAM).unwrap(),
         NonNegativeRatio::new(
             SLOT_ACTIVATION_COEFF.0,
@@ -278,7 +279,7 @@ fn current_estimated_total_stake(
 /// - v: the stake of a leader
 /// - S: the estimated total stake
 fn slot_won(config: &Config, total_stake_estimate: Value, rng: &mut StdRng) -> bool {
-    let slot_activation_coeff = config.consensus_config.slot_activation_coeff().as_f64();
+    let slot_activation_coeff = config.consensus_config().slot_activation_coeff().as_f64();
     let winning_prob =
         1.0 - (1.0 - slot_activation_coeff).powf(TOTAL_STAKE as f64 / total_stake_estimate as f64);
     rng.gen_bool(winning_prob)

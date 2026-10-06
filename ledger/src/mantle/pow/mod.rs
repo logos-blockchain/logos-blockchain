@@ -253,7 +253,7 @@ impl PowState {
 /// saturates.
 #[must_use]
 pub fn compute_epoch_pow_reward(pow_reward_pool: PowReward, config: &Config) -> PowReward {
-    let reward = u128::from(pow_reward_pool) * u128::from(config.pow_config.reward.rate_num)
+    let reward = u128::from(pow_reward_pool) * u128::from(config.pow_config().reward.rate_num)
         / config.claim_rate_denominator().get();
     PowReward::try_from(reward).unwrap_or(PowReward::MAX)
 }
@@ -325,7 +325,8 @@ mod tests {
     /// derived factor of the payout denominator.
     fn ledger_config() -> Config {
         let mut config = crate::cryptarchia::tests::config();
-        config.pow_config.reward = reward_config();
+        let Config::V1(v1_config) = &mut config;
+        v1_config.pow_config.reward = reward_config();
         config
     }
 
@@ -333,7 +334,8 @@ mod tests {
     /// `1 * 10 * 10`, the last factor derived from the consensus schedule).
     fn test_pool_config() -> Config {
         let mut config = ledger_config();
-        config.pow_config.reward = RewardPoWConfig {
+        let Config::V1(v1_config) = &mut config;
+        v1_config.pow_config.reward = RewardPoWConfig {
             rate_num: 1,
             rate_den: NonZeroU64::MIN,
             target_claim_per_block: NonZeroU64::new(10).expect("10 is non-zero"),
@@ -400,7 +402,8 @@ mod tests {
         // A rate with rate_num > 1: `sigma_e = pool * 2 / 10`, the denominator
         // being the ten expected blocks per epoch.
         let mut high_rate = ledger_config();
-        high_rate.pow_config.reward.rate_num = 2;
+        let Config::V1(v1_config) = &mut high_rate;
+        v1_config.pow_config.reward.rate_num = 2;
 
         // The pool can reach u64::MAX, so `pool * rate_num` must be widened
         // past u64 or it overflows for any rate_num > 1.

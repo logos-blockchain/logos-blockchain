@@ -1,3 +1,5 @@
+pub mod v1;
+
 use core::num::NonZeroU32;
 use std::num::{NonZero, NonZeroU64, NonZeroU128};
 
@@ -10,78 +12,77 @@ use lb_pol::LotteryConstants;
 
 pub type EraScheduledConfig = EraSchedule<Config>;
 
+/// The ledger's config in an era, in the version of the ledger that runs the
+/// era: an era of an older version keeps its config, in that version's shape,
+/// for as long as the ledger applies its blocks.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Config {
-    pub epoch_config: lb_cryptarchia_engine::EpochConfig,
-    pub consensus_config: lb_cryptarchia_engine::Config,
-    pub sdp_config: crate::mantle::sdp::Config,
-    #[serde(default)]
-    pub faucet_pk: Option<ZkPublicKey>,
-    pub pow_config: PoWConfig,
+pub enum Config {
+    V1(v1::Config),
 }
 
+/// What every version of the config has.
 impl Config {
     #[must_use]
-    pub const fn lottery_constants(&self) -> &LotteryConstants {
-        self.consensus_config.lottery_constants()
+    pub const fn consensus_config(&self) -> &lb_cryptarchia_engine::Config {
+        match self {
+            Self::V1(config) => &config.consensus_config,
+        }
     }
 
     #[must_use]
-    pub const fn base_period_length(&self) -> NonZero<u64> {
-        self.consensus_config.base_period_length()
+    pub const fn sdp_config(&self) -> &crate::mantle::sdp::Config {
+        match self {
+            Self::V1(config) => &config.sdp_config,
+        }
+    }
+
+    #[must_use]
+    pub const fn faucet_pk(&self) -> Option<ZkPublicKey> {
+        match self {
+            Self::V1(config) => config.faucet_pk,
+        }
+    }
+
+    #[must_use]
+    pub const fn pow_config(&self) -> &PoWConfig {
+        match self {
+            Self::V1(config) => &config.pow_config,
+        }
+    }
+
+    #[must_use]
+    pub const fn lottery_constants(&self) -> &LotteryConstants {
+        match self {
+            Self::V1(config) => config.lottery_constants(),
+        }
     }
 
     #[must_use]
     pub const fn epoch_length(&self) -> u64 {
-        self.epoch_config
-            .epoch_length(self.consensus_config.base_period_length())
+        match self {
+            Self::V1(config) => config.epoch_length(),
+        }
     }
 
-    /// `N_b`: the number of blocks a full epoch is expected to produce.
-    ///
-    /// Deliberately derived rather than configured. It is fixed by the epoch
-    /// schedule and the slot activation coefficient — it works out to `10k`
-    /// for the standard 3/3/4 phase split — so a hand-set value that disagreed
-    /// with them would silently mis-scale the per-claim `PoW` reward.
-    #[must_use]
-    pub const fn expected_blocks_per_epoch(&self) -> NonZeroU64 {
-        lb_cryptarchia_engine::expected_blocks_per_epoch(
-            self.epoch_length(),
-            self.consensus_config.slot_activation_coeff(),
-        )
-    }
-
-    /// Full denominator of the per-epoch payout rate:
-    /// `rate_den * target_claim_per_block * expected_blocks_per_epoch`.
-    ///
-    /// Widened to `u128`: the first two factors are bounded to `u64` by
-    /// [`RewardPoWConfig::validate`] at config-load time, and the third is a
-    /// `u64`, so the product fits but need not fit in a `u64`.
     #[must_use]
     pub fn claim_rate_denominator(&self) -> NonZeroU128 {
-        let configured = self.pow_config.reward.claim_rate_scale();
-        let denominator =
-            u128::from(configured.get()) * u128::from(self.expected_blocks_per_epoch().get());
-        NonZeroU128::new(denominator).expect("product of non-zero values is non-zero")
+        match self {
+            Self::V1(config) => config.claim_rate_denominator(),
+        }
     }
 
-    /// The number of slots in Stake Distribution Snapshot + Buffer phases
     #[must_use]
     pub fn nonce_contribution_period(&self) -> u64 {
-        self.base_period_length().get().strict_mul(
-            u64::from(NonZeroU64::from(
-                self.epoch_config.epoch_period_nonce_buffer,
-            ))
-            .strict_add(u64::from(NonZeroU64::from(
-                self.epoch_config.epoch_stake_distribution_stabilization,
-            ))),
-        )
+        match self {
+            Self::V1(config) => config.nonce_contribution_period(),
+        }
     }
 
-    /// The number of slots in Stake Distribution Snapshot + Buffer phases
     #[must_use]
     pub fn total_stake_inference_period(&self) -> u64 {
-        self.nonce_contribution_period()
+        match self {
+            Self::V1(config) => config.total_stake_inference_period(),
+        }
     }
 }
 
@@ -701,7 +702,7 @@ mod tests {
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
-        let config = super::Config {
+        let config = super::Config::V1(super::v1::Config {
             epoch_config,
             consensus_config,
             sdp_config: crate::mantle::sdp::Config {
@@ -741,7 +742,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
-        };
+        });
         assert_eq!(config.epoch_length(), 100);
         let eras = single_era(config);
         assert_eq!(nonce_snapshot(&eras, 1.into()), 60.into());
@@ -756,15 +757,16 @@ mod tests {
         // starts 60 slots in. Era 1 from epoch 2: k = 10, so epochs of 200
         // slots whose nonce phase starts 120 slots in.
         let era_0 = epoch_zero_test_config();
-        let era_1 = super::Config {
+        let super::Config::V1(era_0_v1) = era_0.clone();
+        let era_1 = super::Config::V1(super::v1::Config {
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(10).unwrap(),
                 NonNegativeRatio::new(1, 2.try_into().unwrap()),
                 1f64.try_into().expect("1 > 0"),
                 NonZero::new(12).unwrap(),
             ),
-            ..era_0.clone()
-        };
+            ..era_0_v1
+        });
         let eras = schedule(era_0, [(2, era_1)]);
 
         // The snapshots of epoch 2, the first of era 1, are taken during epoch
@@ -790,7 +792,7 @@ mod tests {
             NonZero::new(12).unwrap(),
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
-        super::Config {
+        super::Config::V1(super::v1::Config {
             epoch_config,
             consensus_config,
             sdp_config: crate::mantle::sdp::Config {
@@ -830,7 +832,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
-        }
+        })
     }
 
     #[test]
@@ -851,7 +853,7 @@ mod tests {
     fn expected_blocks_per_epoch_is_ten_k() {
         // k = 5 and f = 1/2, so the epoch spans 100 slots and half of them are
         // expected to carry a block — the `10k` the payout rate assumes.
-        let config = epoch_zero_test_config();
+        let super::Config::V1(config) = epoch_zero_test_config();
         assert_eq!(config.epoch_length(), 100);
         assert_eq!(
             config.expected_blocks_per_epoch(),
@@ -866,8 +868,9 @@ mod tests {
     #[test]
     fn claim_rate_denominator_folds_in_the_derived_block_count() {
         let mut config = epoch_zero_test_config();
-        config.pow_config.reward.rate_den = NonZeroU64::new(10).unwrap();
-        config.pow_config.reward.target_claim_per_block = NonZeroU64::new(3).unwrap();
+        let super::Config::V1(v1_config) = &mut config;
+        v1_config.pow_config.reward.rate_den = NonZeroU64::new(10).unwrap();
+        v1_config.pow_config.reward.target_claim_per_block = NonZeroU64::new(3).unwrap();
         // rate_den * target_claim_per_block * expected_blocks_per_epoch.
         assert_eq!(
             config.claim_rate_denominator(),
@@ -890,7 +893,7 @@ mod tests {
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
-        let config = super::Config {
+        let config = super::Config::V1(super::v1::Config {
             epoch_config,
             consensus_config,
             sdp_config: crate::mantle::sdp::Config {
@@ -930,7 +933,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
-        };
+        });
         let eras = single_era(config);
         assert_eq!(eras.epoch_of(1.into()), 0);
         assert_eq!(eras.epoch_of(100.into()), 1);

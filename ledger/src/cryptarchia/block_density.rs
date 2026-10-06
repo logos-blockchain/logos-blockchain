@@ -3,10 +3,7 @@ use std::ops::RangeInclusive;
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use rpds::HashTrieSetSync;
 
-use crate::{
-    Config,
-    config::{EraScheduledConfig, config_at_epoch},
-};
+use crate::config::{EraScheduledConfig, config_at_epoch};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockDensity {
@@ -75,6 +72,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        Config,
         config::single_era,
         mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
     };
@@ -129,7 +127,7 @@ mod tests {
     }
 
     fn config() -> Config {
-        Config {
+        Config::V1(crate::config::v1::Config {
             epoch_config: lb_cryptarchia_engine::EpochConfig {
                 epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
                 epoch_period_nonce_buffer: 3.try_into().unwrap(),
@@ -170,6 +168,6 @@ mod tests {
                 },
                 reward: crate::cryptarchia::tests::disabled_reward_config(),
             },
-        }
+        })
     }
 }

@@ -184,7 +184,7 @@ mod tests {
         let epoch_length =
             epoch_config.epoch_length(cryptarchia_engine_config.base_period_length());
 
-        let ledger_config = lb_ledger::Config {
+        let ledger_config = lb_ledger::Config::V1(lb_ledger::config::v1::Config {
             epoch_config,
             consensus_config: cryptarchia_engine_config.clone(),
             sdp_config: lb_ledger::mantle::sdp::Config {
@@ -224,7 +224,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
-        };
+        });
 
         let (cryptarchia_engine, pruned_blocks) = {
             // Boostrapping mode since we are pursposefully adding old forks to test the
@@ -368,7 +368,7 @@ mod tests {
         let epoch_length =
             epoch_config.epoch_length(cryptarchia_engine_config.base_period_length());
 
-        let ledger_config = lb_ledger::Config {
+        let ledger_config = lb_ledger::Config::V1(lb_ledger::config::v1::Config {
             epoch_config,
             consensus_config: cryptarchia_engine_config.clone(),
             sdp_config: lb_ledger::mantle::sdp::Config {
@@ -408,7 +408,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
-        };
+        });
 
         // Build a chain: b0 (genesis) - b1 - b2 - b3 - b4 - b5
         // With security_param=2, going online will advance LIB.

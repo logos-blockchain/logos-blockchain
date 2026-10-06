@@ -128,8 +128,11 @@ fn cryptarchia_switch_to_online() {
 
     // An era with a larger k anchors the LIB where it is: nothing is pruned,
     // and the LIB keeps its ledger state.
-    let pruned_blocks =
-        cryptarchia.enter_era(ledger_config(3.try_into().unwrap()).consensus_config);
+    let pruned_blocks = cryptarchia.enter_era(
+        ledger_config(3.try_into().unwrap())
+            .consensus_config()
+            .clone(),
+    );
     assert!(pruned_blocks.is_empty());
     assert_eq!(cryptarchia.lib(), block_ids[2]);
     assert!(cryptarchia.ledger.state(&block_ids[2]).is_some());
@@ -572,7 +575,7 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
     );
     let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
-    lb_ledger::Config {
+    lb_ledger::Config::V1(lb_ledger::config::v1::Config {
         epoch_config,
         consensus_config,
         sdp_config: lb_ledger::mantle::sdp::Config {
@@ -603,7 +606,7 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
             },
             reward: disabled_reward_config(),
         },
-    }
+    })
 }
 
 /// Builds a block with no trasaction by grinding through slots

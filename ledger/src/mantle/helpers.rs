@@ -80,7 +80,7 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
     }
 
     fn get_min_stake(&self) -> &MinStake {
-        &self.config.sdp_config.min_stake
+        &self.config.sdp_config().min_stake
     }
 
     fn get_epoch(&self) -> Epoch {
@@ -161,6 +161,6 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
     }
 
     fn get_pow_slot_window(&self) -> NonZeroU64 {
-        self.config.pow_config.reward.slot_window
+        self.config.pow_config().reward.slot_window
     }
 }

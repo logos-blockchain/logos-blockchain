@@ -520,7 +520,7 @@ mod tests {
 
         LedgerState::from_utxos(
             utxos,
-            &lb_ledger::config::single_era(lb_ledger::Config {
+            &lb_ledger::config::single_era(lb_ledger::Config::V1(lb_ledger::config::v1::Config {
                 epoch_config,
                 consensus_config,
                 sdp_config: lb_ledger::mantle::sdp::Config {
@@ -560,7 +560,7 @@ mod tests {
                         target_transactions_per_block: 1.try_into().unwrap(),
                     },
                 },
-            }),
+            })),
         )
     }
 }

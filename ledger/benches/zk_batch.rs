@@ -39,7 +39,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{
     EpochConfig,
-    era::{EraEntriesAfterGenesis, EraEntry, EraVersion, EraSchedule},
+    era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion},
 };
 use lb_key_management_system_keys::keys::ZkKey;
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
@@ -284,7 +284,7 @@ fn config() -> Config {
     );
     let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
-    Config {
+    Config::V1(logos_blockchain_ledger::config::v1::Config {
         epoch_config,
         consensus_config,
         sdp_config: logos_blockchain_ledger::mantle::sdp::Config {
@@ -336,5 +336,5 @@ fn config() -> Config {
                 slot_window: NonZero::new(100).unwrap(),
             },
         },
-    }
+    })
 }

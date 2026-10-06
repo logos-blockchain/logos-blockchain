@@ -46,14 +46,14 @@ impl Parameters {
         self.blend.rewards_params(&self.cryptarchia, &self.time)
     }
 
-    /// The ledger's configuration: the consensus, epoch, SDP and `PoW`
-    /// parameters, with the Blend rewards they imply.
+    /// The ledger's configuration in its version 1: the consensus, epoch, SDP
+    /// and `PoW` parameters, with the Blend rewards they imply.
     #[must_use]
-    pub fn ledger_config(&self) -> lb_ledger::Config {
+    pub fn ledger_config(&self) -> lb_ledger::config::v1::Config {
         let cryptarchia = &self.cryptarchia;
         let epoch_config = &cryptarchia.epoch_config;
         let blend_pow_config = &cryptarchia.pow_config.blend;
-        lb_ledger::Config {
+        lb_ledger::config::v1::Config {
             consensus_config: cryptarchia.consensus_config(),
             epoch_config: EpochConfig {
                 epoch_period_nonce_buffer: epoch_config.epoch_period_nonce_buffer,

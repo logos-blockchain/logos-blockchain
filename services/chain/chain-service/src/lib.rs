@@ -352,7 +352,7 @@ impl Cryptarchia {
             consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib_id,
                 config_at_slot(&ledger_eras, lib_slot)
-                    .consensus_config
+                    .consensus_config()
                     .clone(),
                 state,
                 lib_slot,
@@ -993,7 +993,7 @@ where
             recovery_state.last_engine_state.as_ref(),
         );
         let in_force = config_at_slot(&ledger_eras, current_slot)
-            .consensus_config
+            .consensus_config()
             .clone();
         let mut cryptarchia = Cryptarchia::from_lib(
             lib_id,

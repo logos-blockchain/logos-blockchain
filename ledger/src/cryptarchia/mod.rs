@@ -59,7 +59,7 @@ const STORAGE_MARKET_CLAMP_DOWN_NUMERATOR: u128 = 7;
 const STORAGE_MARKET_CLAMP_UP_NUMERATOR: u128 = 9;
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
-use super::{Balance, Config, LedgerError, mantle};
+use super::{Balance, LedgerError, mantle};
 use crate::WINDOW_SIZE;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -135,7 +135,7 @@ impl EpochState {
                     compute_epoch_blend_difficulty(
                         load,
                         ledger.epoch_state.blend_pow_difficulty,
-                        &config.pow_config.blend,
+                        &config.pow_config().blend,
                     )
                 },
             );
@@ -153,7 +153,7 @@ impl EpochState {
                 ledger.utxos.clone(),
                 // Filter declarations active at the `self.epoch` from `SdpLedger`
                 // regardless of when it was built.
-                Arc::new(sdp.active_declarations(self.epoch, &config.sdp_config.service_params)),
+                Arc::new(sdp.active_declarations(self.epoch, &config.sdp_config().service_params)),
             )
         } else {
             (self.utxos, self.active_declarations)
@@ -355,7 +355,7 @@ impl LedgerState {
                     sdp.active_declarations(
                         next_epoch_state_epoch,
                         &config_at_epoch(eras, next_epoch_state_epoch)
-                            .sdp_config
+                            .sdp_config()
                             .service_params,
                     ),
                 ),
@@ -436,7 +436,7 @@ impl LedgerState {
                 // Filter declarations active at the `new_epoch`
                 // from `SdpLedger` regardless of when it was built.
                 active_declarations: Arc::new(
-                    sdp.active_declarations(new_epoch, &new_config.sdp_config.service_params),
+                    sdp.active_declarations(new_epoch, &new_config.sdp_config().service_params),
                 ),
             };
             let next_epoch_state_epoch = new_epoch.strict_add(1.into());
@@ -454,7 +454,7 @@ impl LedgerState {
                     sdp.active_declarations(
                         next_epoch_state_epoch,
                         &config_at_epoch(eras, next_epoch_state_epoch)
-                            .sdp_config
+                            .sdp_config()
                             .service_params,
                     ),
                 ),
@@ -676,7 +676,7 @@ impl LedgerState {
     pub fn with_genesis_sdp(mut self, sdp: &SdpLedger, eras: &EraScheduledConfig) -> Self {
         for epoch_state in [&mut self.epoch_state, &mut self.next_epoch_state] {
             let service_params = &config_at_epoch(eras, epoch_state.epoch)
-                .sdp_config
+                .sdp_config()
                 .service_params;
             epoch_state.active_declarations =
                 Arc::new(sdp.active_declarations(epoch_state.epoch, service_params));
@@ -772,7 +772,7 @@ impl LedgerState {
         let total_stake = utxos
             .utxos()
             .iter()
-            .filter(|(_, (utxo, _))| config.faucet_pk.is_none_or(|fpk| utxo.note.pk != fpk))
+            .filter(|(_, (utxo, _))| config.faucet_pk().is_none_or(|fpk| utxo.note.pk != fpk))
             .map(|(_, (utxo, _))| utxo.note.value)
             .sum::<Value>()
             .max(1); // TODO: Change total_stake to NonZeroU64: https://github.com/logos-blockchain/logos-blockchain/issues/2166
@@ -791,7 +791,7 @@ impl LedgerState {
             next_epoch_state: EpochState {
                 epoch: 1.into(),
                 nonce,
-                blend_pow_difficulty: config.pow_config.blend.base_difficulty.into(),
+                blend_pow_difficulty: config.pow_config().blend.base_difficulty.into(),
                 utxos: utxos.clone(),
                 total_stake,
                 lottery_0,
@@ -801,7 +801,7 @@ impl LedgerState {
             epoch_state: EpochState {
                 epoch: 0.into(),
                 nonce,
-                blend_pow_difficulty: config.pow_config.blend.base_difficulty.into(),
+                blend_pow_difficulty: config.pow_config().blend.base_difficulty.into(),
                 utxos,
                 total_stake,
                 lottery_0,
@@ -906,8 +906,8 @@ pub mod tests {
 
     use super::*;
     use crate::{
-        Ledger,
-        config::{EraScheduledConfig, schedule, single_era},
+        Config, Ledger,
+        config::{schedule, single_era},
         leader_proof::LeaderProof,
         mantle::{
             pow::tx_density::ClosedEpochLoad,
@@ -1113,7 +1113,7 @@ pub mod tests {
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
-        Config {
+        Config::V1(crate::config::v1::Config {
             epoch_config,
             consensus_config,
             sdp_config: mantle::sdp::Config {
@@ -1146,7 +1146,7 @@ pub mod tests {
                 },
                 reward: disabled_reward_config(),
             },
-        }
+        })
     }
 
     /// A reward config with claiming disabled, standing in for a real
@@ -1193,7 +1193,7 @@ pub mod tests {
         let epoch_state = EpochState {
             epoch: 0.into(),
             nonce: Fr::ZERO,
-            blend_pow_difficulty: config.pow_config.blend.base_difficulty.into(),
+            blend_pow_difficulty: config.pow_config().blend.base_difficulty.into(),
             utxos: utxos.clone(),
             total_stake,
             lottery_0,
@@ -1203,7 +1203,7 @@ pub mod tests {
         let next_epoch_state = EpochState {
             epoch: 1.into(),
             nonce: Fr::ZERO,
-            blend_pow_difficulty: config.pow_config.blend.base_difficulty.into(),
+            blend_pow_difficulty: config.pow_config().blend.base_difficulty.into(),
             utxos: utxos.clone(),
             total_stake,
             lottery_0,
@@ -1331,7 +1331,7 @@ pub mod tests {
         let expected = ledger.states[snapshot_header_id]
             .mantle_ledger
             .sdp
-            .active_declarations(epoch, &config().sdp_config.service_params);
+            .active_declarations(epoch, &config().sdp_config().service_params);
         assert_eq!(
             *ledger.states[header_id]
                 .cryptarchia_ledger
@@ -1553,7 +1553,7 @@ pub mod tests {
         let sdp = SdpLedger::new(0.into());
         let mut state = genesis_state(&[utxo()]);
         let mut pow = pow_state();
-        let blend_config = &config.pow_config.blend;
+        let blend_config = &config.pow_config().blend;
         let genesis_difficulty = state.epoch_state.blend_pow_difficulty;
         assert_eq!(
             genesis_difficulty,
@@ -1636,7 +1636,7 @@ pub mod tests {
         // different tip.
         let config = config();
         let eras = single_era(config.clone());
-        let blend_config = &config.pow_config.blend;
+        let blend_config = &config.pow_config().blend;
         let sdp = SdpLedger::new(0.into());
 
         // A branch is both halves of the state together, since a block clones
@@ -1700,7 +1700,7 @@ pub mod tests {
     fn blend_difficulty_reads_a_skipped_epoch_as_no_load() {
         let config = config();
         let eras = single_era(config.clone());
-        let blend_config = &config.pow_config.blend;
+        let blend_config = &config.pow_config().blend;
         let sdp = SdpLedger::new(0.into());
         let mut state = genesis_state(&[utxo()]);
         let mut pow = pow_state();
@@ -2227,15 +2227,16 @@ pub mod tests {
     /// 120.
     fn two_eras() -> (Config, Config, EraScheduledConfig) {
         let era_0 = config();
-        let era_1 = Config {
+        let Config::V1(era_0_v1) = era_0.clone();
+        let era_1 = Config::V1(crate::config::v1::Config {
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(4).unwrap(),
                 NonNegativeRatio::new(1, 5.try_into().unwrap()),
                 0.5f64.try_into().expect("1/2 > 0"),
                 NonZero::new(12).unwrap(),
             ),
-            ..era_0.clone()
-        };
+            ..era_0_v1
+        });
         let eras = schedule(era_0.clone(), [(2, era_1.clone())]);
         (era_0, era_1, eras)
     }

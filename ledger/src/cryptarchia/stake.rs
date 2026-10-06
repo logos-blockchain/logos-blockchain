@@ -19,8 +19,8 @@ impl StakeInference {
     /// measures the block density over.
     pub fn from_config(config: &Config) -> Self {
         Self {
-            learning_rate: config.consensus_config.stake_inference_learning_rate(),
-            slot_activation_coefficient: config.consensus_config.slot_activation_coeff().as_f64(),
+            learning_rate: config.consensus_config().stake_inference_learning_rate(),
+            slot_activation_coefficient: config.consensus_config().slot_activation_coeff().as_f64(),
             period: config.total_stake_inference_period(),
         }
     }
@@ -171,7 +171,7 @@ mod tests {
     }
 
     fn config(slot_activation_coeff: NonNegativeRatio) -> Config {
-        Config {
+        Config::V1(crate::config::v1::Config {
             epoch_config: lb_cryptarchia_engine::EpochConfig {
                 epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
                 epoch_period_nonce_buffer: 3.try_into().unwrap(),
@@ -212,7 +212,7 @@ mod tests {
                 },
                 reward: crate::cryptarchia::tests::disabled_reward_config(),
             },
-        }
+        })
     }
 
     fn expected_density(inference: &StakeInference) -> u64 {
