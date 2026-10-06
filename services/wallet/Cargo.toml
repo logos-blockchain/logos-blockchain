@@ -46,7 +46,7 @@ ignored = [
 ]
 
 [dev-dependencies]
-lb-ledger = { features = ["test-utils"], workspace = true }
+time = { workspace = true }
 
 [features]
 tokio-task-names = ["lb-utils/tokio-task-names"]

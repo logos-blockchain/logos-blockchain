@@ -33,6 +33,5 @@ tracing                       = { workspace = true }
 [dev-dependencies]
 lb-blend-proofs       = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
-lb-ledger             = { features = ["test-utils"], workspace = true }
 lb-utils              = { workspace = true }
 tokio                 = { features = ["macros", "rt"], workspace = true }

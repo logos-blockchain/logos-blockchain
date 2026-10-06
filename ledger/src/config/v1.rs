@@ -83,3 +83,38 @@ impl Config {
         self.nonce_contribution_period()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::num::{NonZeroU64, NonZeroU128};
+
+    use crate::config::tests::epoch_zero_test_config;
+
+    #[test]
+    fn expected_blocks_per_epoch_is_ten_k() {
+        // k = 5 and f = 1/2, so the epoch spans 100 slots and half of them are
+        // expected to carry a block — the `10k` the payout rate assumes.
+        let config = epoch_zero_test_config();
+        assert_eq!(config.epoch_length(), 100);
+        assert_eq!(
+            config.expected_blocks_per_epoch(),
+            NonZeroU64::new(50).unwrap()
+        );
+        assert_eq!(
+            u64::from(config.expected_blocks_per_epoch()),
+            10 * u64::from(config.consensus_config.security_param().get())
+        );
+    }
+
+    #[test]
+    fn claim_rate_denominator_folds_in_the_derived_block_count() {
+        let mut config = epoch_zero_test_config();
+        config.pow_config.reward.rate_den = NonZeroU64::new(10).unwrap();
+        config.pow_config.reward.target_claim_per_block = NonZeroU64::new(3).unwrap();
+        // rate_den * target_claim_per_block * expected_blocks_per_epoch.
+        assert_eq!(
+            config.claim_rate_denominator(),
+            NonZeroU128::new(10 * 3 * 50).unwrap()
+        );
+    }
+}

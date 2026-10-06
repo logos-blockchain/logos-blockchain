@@ -138,9 +138,10 @@ mod tests {
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
     use lb_ledger::{
-        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig, single_era},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
+    use crate::tests::single_era;
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
     use super::*;

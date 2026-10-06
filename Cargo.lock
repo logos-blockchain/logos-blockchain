@@ -4346,6 +4346,7 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -5441,6 +5442,7 @@ dependencies = [
  "rpds",
  "serde",
  "thiserror 2.0.21",
+ "time",
  "tracing",
 ]
 
@@ -5481,6 +5483,7 @@ dependencies = [
  "overwatch",
  "serde",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tokio-stream",
  "tracing",

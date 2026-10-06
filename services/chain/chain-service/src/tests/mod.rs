@@ -36,7 +36,7 @@ use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 use lb_ledger::{
     LedgerState,
-    config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig, single_era},
+    config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use lb_storage_service::{
@@ -553,6 +553,43 @@ fn disabled_reward_config() -> RewardPoWConfig {
 }
 
 #[must_use]
+/// A schedule running `genesis` from genesis, then each config of
+/// `after_genesis` from the epoch it is paired with, every era of version 1.
+pub fn schedule(
+    genesis: lb_ledger::Config,
+    after_genesis: impl IntoIterator<Item = (u32, lb_ledger::Config)>,
+) -> EraSchedule<lb_ledger::Config> {
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry};
+
+    let entry = |config: lb_ledger::Config| EraEntry {
+        version: EraVersion::V1,
+        slot_duration: core::time::Duration::from_secs(1),
+        epoch_length_in_slots: NonZero::new(config.epoch_length())
+            .expect("an epoch has at least one slot"),
+        transition_slots: 0,
+        parameters: config,
+    };
+    let after_genesis = after_genesis.into_iter().map(|(first_epoch, config)| {
+        let first_epoch =
+            NonZero::new(first_epoch).expect("an era after genesis starts after epoch 0");
+        (first_epoch, entry(config))
+    });
+    EraSchedule::new(
+        time::OffsetDateTime::UNIX_EPOCH,
+        entry(genesis),
+        EraEntriesAfterGenesis::try_from_iter(after_genesis)
+            .expect("each epoch starts one era at most"),
+    )
+    .expect("eras of version 1 starting within the last slot resolve")
+}
+
+/// A schedule of a single era, of version 1, running `config` from genesis.
+pub fn single_era(
+    config: lb_ledger::Config,
+) -> EraSchedule<lb_ledger::Config> {
+    schedule(config, [])
+}
+
 pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
     let mut service_params = HashMap::new();
     service_params.insert(

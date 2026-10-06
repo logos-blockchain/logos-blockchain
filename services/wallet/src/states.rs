@@ -605,7 +605,7 @@ mod tests {
         use lb_core::era::ForkDigest;
         use lb_services_utils::overwatch::RecoveryData;
 
-        let eras = lb_ledger::config::single_era(ledger_config());
+        let eras = single_era(ledger_config());
         let settings = WalletServiceSettings {
             known_keys: HashMap::new(),
             voucher_master_key_id: "voucher-master".into(),
@@ -644,5 +644,27 @@ mod tests {
         // No panic: the advance is skipped and the LIB stays at a block whose
         // WalletState exists.
         assert_eq!(state.lib(), genesis);
+    }
+
+    /// A schedule of a single era, of version 1, running `config` from genesis.
+    fn single_era(
+        config: lb_ledger::Config,
+    ) -> lb_cryptarchia_engine::era::EraSchedule<lb_ledger::Config> {
+        use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion};
+
+        let entry = EraEntry {
+            version: EraVersion::V1,
+            slot_duration: core::time::Duration::from_secs(1),
+            epoch_length_in_slots: core::num::NonZero::new(config.epoch_length())
+                .expect("an epoch has at least one slot"),
+            transition_slots: 0,
+            parameters: config,
+        };
+        EraSchedule::new(
+            time::OffsetDateTime::UNIX_EPOCH,
+            entry,
+            EraEntriesAfterGenesis::empty(),
+        )
+        .expect("a single era of version 1 resolves")
     }
 }

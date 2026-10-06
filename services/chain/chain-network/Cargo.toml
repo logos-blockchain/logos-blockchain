@@ -44,7 +44,6 @@ tracing-futures       = { workspace = true }
 [dev-dependencies]
 lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-lb-ledger                     = { features = ["test-utils"], workspace = true }
 lb-network-service            = { workspace = true }
 lb-utils                      = { workspace = true }
 time                          = { workspace = true }

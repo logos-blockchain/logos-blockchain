@@ -32,7 +32,7 @@ use lb_wallet_service::{
 };
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 #[cfg(test)]
-pub use pol_tests::test_config;
+pub use pol_tests::{single_era, test_config};
 use rand::rngs::OsRng;
 use tokio::{
     sync::{mpsc, oneshot},
@@ -571,7 +571,7 @@ mod pol_tests {
     use lb_groth16::{Fr, fr_from_bytes_unchecked};
     use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkKey};
     use lb_ledger::{
-        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig, single_era},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{
             Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
         },
@@ -795,6 +795,28 @@ mod pol_tests {
             share_den: core::num::NonZeroU64::MIN,
             slot_window: core::num::NonZeroU64::new(100).unwrap(),
         }
+    }
+
+    /// A schedule of a single era, of version 1, running `config` from genesis.
+    pub fn single_era(
+        config: lb_ledger::Config,
+    ) -> EraSchedule<lb_ledger::Config> {
+        use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
+
+        let entry = EraEntry {
+            version: EraVersion::V1,
+            slot_duration: core::time::Duration::from_secs(1),
+            epoch_length_in_slots: NonZero::new(config.epoch_length())
+                .expect("an epoch has at least one slot"),
+            transition_slots: 0,
+            parameters: config,
+        };
+        EraSchedule::new(
+            time::OffsetDateTime::UNIX_EPOCH,
+            entry,
+            EraEntriesAfterGenesis::empty(),
+        )
+        .expect("a single era of version 1 resolves")
     }
 
     pub fn test_config() -> lb_ledger::Config {

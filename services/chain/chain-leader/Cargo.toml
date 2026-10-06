@@ -41,7 +41,7 @@ tracing                          = { workspace = true }
 tracing-futures                  = { workspace = true }
 
 [dev-dependencies]
-lb-ledger = { features = ["test-utils"], workspace = true }
+time = { workspace = true }
 
 [features]
 default = []

@@ -1,7 +1,5 @@
-pub mod v1;
-
 use core::num::NonZeroU32;
-use std::num::{NonZero, NonZeroU64, NonZeroU128};
+use std::num::{NonZeroU64, NonZeroU128};
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 use lb_core::mantle::{Value, ops::pow::PowReward};
@@ -9,13 +7,13 @@ use lb_cryptarchia_engine::{Epoch, Slot, era::EraSchedule};
 pub use lb_groth16::ModulusShift;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_pol::LotteryConstants;
+use serde::{Deserialize, Serialize};
+
+pub mod v1;
 
 pub type EraScheduledConfig = EraSchedule<Config>;
 
-/// The ledger's config in an era, in the version of the ledger that runs the
-/// era: an era of an older version keeps its config, in that version's shape,
-/// for as long as the ledger applies its blocks.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Config {
     V1(v1::Config),
 }
@@ -98,12 +96,11 @@ pub fn config_at_epoch(eras: &EraScheduledConfig, epoch: Epoch) -> &Config {
     &eras.at_epoch(epoch).entry.parameters
 }
 
-/// The slot at which the nonce of `epoch` is snapshotted: the first slot of
-/// the last phase of the previous epoch, under the layout of that epoch's era.
+/// The slot at which the nonce for a given epoch is snapshotted
 ///
-/// If epoch length is 100 slots, and epoch phases are 3/3/4 slots, the nonce
-/// for epoch 1 will be snapshotted at slot 60, which is the 1st slot of the
-/// last phase of epoch 0.
+/// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
+/// the nonce for epoch 1 will be snapshotted at slot 60, which is the 1st
+/// slot of the last phase of epoch 0.
 ///
 /// # Panics
 ///
@@ -140,12 +137,14 @@ pub fn stake_distribution_snapshot(eras: &EraScheduledConfig, epoch: Epoch) -> S
 ///
 /// If an era after genesis starts at epoch 0, two start at the same epoch, or
 /// one starts beyond the last slot.
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(test)]
 #[must_use]
-pub fn schedule(
+pub(crate) fn schedule(
     genesis: Config,
     after_genesis: impl IntoIterator<Item = (u32, Config)>,
 ) -> EraScheduledConfig {
+    use core::num::NonZero;
+
     use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
 
     let entry = |config: Config| EraEntry {
@@ -172,9 +171,9 @@ pub fn schedule(
 }
 
 /// A schedule running `config` alone, from genesis.
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(test)]
 #[must_use]
-pub fn single_era(config: Config) -> EraScheduledConfig {
+pub(crate) fn single_era(config: Config) -> EraScheduledConfig {
     schedule(config, [])
 }
 
@@ -541,7 +540,7 @@ impl BlendPoWConfig {
 #[cfg(test)]
 mod tests {
     use std::{
-        num::{NonZero, NonZeroU64, NonZeroU128},
+        num::{NonZero, NonZeroU64},
         sync::Arc,
     };
 
@@ -757,7 +756,6 @@ mod tests {
         // starts 60 slots in. Era 1 from epoch 2: k = 10, so epochs of 200
         // slots whose nonce phase starts 120 slots in.
         let era_0 = epoch_zero_test_config();
-        let super::Config::V1(era_0_v1) = era_0.clone();
         let era_1 = super::Config::V1(super::v1::Config {
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(10).unwrap(),
@@ -765,9 +763,9 @@ mod tests {
                 1f64.try_into().expect("1 > 0"),
                 NonZero::new(12).unwrap(),
             ),
-            ..era_0_v1
+            ..era_0.clone()
         });
-        let eras = schedule(era_0, [(2, era_1)]);
+        let eras = schedule(super::Config::V1(era_0), [(2, era_1)]);
 
         // The snapshots of epoch 2, the first of era 1, are taken during epoch
         // 1, laid out by era 0.
@@ -779,7 +777,7 @@ mod tests {
         assert_eq!(stake_distribution_snapshot(&eras, 4.into()), 400.into());
     }
 
-    fn epoch_zero_test_config() -> super::Config {
+    pub(super) fn epoch_zero_test_config() -> super::v1::Config {
         let epoch_config = EpochConfig {
             epoch_stake_distribution_stabilization: NonZero::new(3u8).unwrap(),
             epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
@@ -792,7 +790,7 @@ mod tests {
             NonZero::new(12).unwrap(),
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
-        super::Config::V1(super::v1::Config {
+        super::v1::Config {
             epoch_config,
             consensus_config,
             sdp_config: crate::mantle::sdp::Config {
@@ -832,50 +830,21 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
-        })
+        }
     }
 
     #[test]
     #[should_panic(expected = "attempt to subtract with overflow")]
     fn stake_distribution_snapshot_panics_at_epoch_zero() {
-        let eras = single_era(epoch_zero_test_config());
+        let eras = single_era(super::Config::V1(epoch_zero_test_config()));
         let _ = stake_distribution_snapshot(&eras, 0.into());
     }
 
     #[test]
     #[should_panic(expected = "attempt to subtract with overflow")]
     fn nonce_snapshot_panics_at_epoch_zero() {
-        let eras = single_era(epoch_zero_test_config());
+        let eras = single_era(super::Config::V1(epoch_zero_test_config()));
         let _ = nonce_snapshot(&eras, 0.into());
-    }
-
-    #[test]
-    fn expected_blocks_per_epoch_is_ten_k() {
-        // k = 5 and f = 1/2, so the epoch spans 100 slots and half of them are
-        // expected to carry a block — the `10k` the payout rate assumes.
-        let super::Config::V1(config) = epoch_zero_test_config();
-        assert_eq!(config.epoch_length(), 100);
-        assert_eq!(
-            config.expected_blocks_per_epoch(),
-            NonZeroU64::new(50).unwrap()
-        );
-        assert_eq!(
-            u64::from(config.expected_blocks_per_epoch()),
-            10 * u64::from(config.consensus_config.security_param().get())
-        );
-    }
-
-    #[test]
-    fn claim_rate_denominator_folds_in_the_derived_block_count() {
-        let mut config = epoch_zero_test_config();
-        let super::Config::V1(v1_config) = &mut config;
-        v1_config.pow_config.reward.rate_den = NonZeroU64::new(10).unwrap();
-        v1_config.pow_config.reward.target_claim_per_block = NonZeroU64::new(3).unwrap();
-        // rate_den * target_claim_per_block * expected_blocks_per_epoch.
-        assert_eq!(
-            config.claim_rate_denominator(),
-            NonZeroU128::new(10 * 3 * 50).unwrap()
-        );
     }
 
     #[test]

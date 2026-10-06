@@ -198,13 +198,12 @@ mod tests {
     };
     use lb_cryptarchia_engine::Slot;
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
-    use lb_ledger::config::schedule;
     use lb_utils::bounded::BoundedOrderedSet;
     use rand::thread_rng;
 
     use super::*;
     use crate::tests::{
-        chain_with_fork, chain_with_fork_over, ledger_config, try_build_block, uncle,
+        chain_with_fork, chain_with_fork_over, ledger_config, schedule, try_build_block, uncle,
     };
 
     #[test]
