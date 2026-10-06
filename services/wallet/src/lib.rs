@@ -64,6 +64,7 @@ use tokio::{
     sync::{oneshot, oneshot::Sender},
     task::JoinError,
 };
+use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::states::{RecoveryState, ServiceState, Wallet};
@@ -492,11 +493,13 @@ where
             "Wallet connecting to chain"
         );
 
-        // Subscribe to block updates using the API
-        let mut new_block_receiver = cryptarchia_api.subscribe_new_blocks().await?;
+        // Subscribe to block updates using the API. Wrapped so that lag on the
+        // broadcast channel surfaces as an item rather than being dropped by a
+        // `select!` pattern.
+        let mut new_blocks = BroadcastStream::new(cryptarchia_api.subscribe_new_blocks().await?);
 
         // Subscribe to LIB updates for wallet state pruning
-        let mut lib_receiver = cryptarchia_api.subscribe_lib_updates().await?;
+        let mut lib_updates = BroadcastStream::new(cryptarchia_api.subscribe_lib_updates().await?);
 
         let ledger_eras = cryptarchia_api.get_ledger_eras().await?;
         // A pending claim is held until `k` blocks became immutable after its
@@ -546,15 +549,27 @@ where
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
                     Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &kms, &ledger_eras)).await;
                 }
-                Ok(event) = new_block_receiver.recv() => {
-                    Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &ledger_eras).await;
-                }
-                Ok(lib_update) = lib_receiver.recv() => {
-                    Self::handle_lib_update(&lib_update, &storage, &mut state, &cryptarchia_api,  &ledger_eras).await;
-                }
+                // A skipped block shows up as an unknown parent on the next
+                // one and is backfilled from there; the log line is what tells
+                // an operator why the wallet fell behind.
+                Some(event) = new_blocks.next() => match event {
+                    Ok(event) => Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &ledger_eras).await,
+                    Err(BroadcastStreamRecvError::Lagged(skipped)) => warn_lagged("new-block", skipped),
+                },
+                Some(lib_update) = lib_updates.next() => match lib_update {
+                    Ok(lib_update) => Self::handle_lib_update(&lib_update, &storage, &mut state, &cryptarchia_api, &ledger_eras).await,
+                    Err(BroadcastStreamRecvError::Lagged(skipped)) => warn_lagged("LIB", skipped),
+                },
             }
         }
     }
+}
+
+/// The wallet fell `skipped` items behind one of its chain subscriptions. Only
+/// the latest LIB matters, and a skipped block is backfilled from the next one,
+/// so this is a diagnostic rather than an error.
+fn warn_lagged(stream: &str, skipped: u64) {
+    warn!(target: LOG_TARGET, stream, skipped, "Wallet fell behind a chain subscription");
 }
 
 impl<Kms, Cryptarchia, Tx, RuntimeServiceId> WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId>

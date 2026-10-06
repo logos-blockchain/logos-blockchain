@@ -36,6 +36,10 @@ use overwatch::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::oneshot;
+use tokio_stream::{
+    StreamExt as _,
+    wrappers::{BroadcastStream, errors::BroadcastStreamRecvError},
+};
 use tracing::{debug, error, trace, warn};
 
 pub use crate::{api::SdpServiceApi, intent::Config as ActiveMessageTrackerConfig};
@@ -212,7 +216,9 @@ where
         self.validate_initial_declaration_status(&chain_api).await?;
         self.restore_active_message_tracker(&chain_api).await;
 
-        let mut new_blocks = chain_api.subscribe_new_blocks().await?;
+        // Wrapped so that lag on the broadcast channel surfaces as an item
+        // rather than being dropped by a `select!` pattern.
+        let mut new_blocks = BroadcastStream::new(chain_api.subscribe_new_blocks().await?);
 
         self.service_resources_handle.status_updater.notify_ready();
         tracing::info!(
@@ -226,9 +232,16 @@ where
                 Some(msg) = self.service_resources_handle.inbound_relay.recv() => {
                     self.handle_message(msg, &wallet_adapter, &mempool_adapter, &chain_api).await;
                 }
-                Ok(event) = new_blocks.recv() => {
-                    self.handle_new_block(event, &wallet_adapter, &mempool_adapter, &chain_api).await;
-                }
+                Some(event) = new_blocks.next() => match event {
+                    Ok(event) => {
+                        self.handle_new_block(event, &wallet_adapter, &mempool_adapter, &chain_api).await;
+                    }
+                    // The tracker only needs the latest tip, so a skipped
+                    // event costs nothing but is worth knowing about.
+                    Err(BroadcastStreamRecvError::Lagged(skipped)) => {
+                        warn!(target: LOG_TARGET, skipped, "SDP service fell behind the new-block stream");
+                    }
+                },
             }
         }
     }

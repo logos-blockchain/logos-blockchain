@@ -1,7 +1,7 @@
 use super::{
-    CucumberWorld, Duration, Step, StepError, StepResult, log_step_error, single_column_table,
-    wait_for_channel_view, wait_for_on_chain_statuses_and_collect_mempool_pending,
-    wait_for_turn_to_write, zone_sequencing_state_row, zone_step_error,
+    CucumberWorld, Duration, Step, StepResult, ensure_zone_transactions_included, log_step_error,
+    single_column_table, wait_for_channel_view, wait_for_turn_to_write, zone_sequencing_state_row,
+    zone_step_error,
 };
 
 #[cucumber::then(
@@ -137,9 +137,13 @@ async fn step_sequencer_notified_turn_to_write(
 }
 
 #[cucumber::then(
-    expr = "sequencer {string} emits published events for queued zone messages on its turn in {int} seconds:"
+    expr = "zone messages queued by sequencer {string} are included after its turn in {int} seconds:"
 )]
-async fn step_sequencer_emits_published_events_for_queued_zone_messages_on_turn(
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_queued_zone_messages_are_included_after_turn(
     world: &mut CucumberWorld,
     step: &Step,
     sequencer_alias: String,
@@ -154,58 +158,19 @@ async fn step_sequencer_emits_published_events_for_queued_zone_messages_on_turn(
     .await
     .map_err(|error| zone_step_error(step, &error))?;
 
-    // The messages were remembered when queued; wait until they're mined
-    // (`OnChain`, not yet finalized) via the per-tx status stream.
-    let mut statuses = log_step_error(
+    // The messages were remembered when queued; the turn posts them, so wait
+    // until the node has them on chain (mined, not yet finalized).
+    let node_client = log_step_error(
         step,
-        world.zone.take_sequencer_tx_status_rx(&sequencer_alias),
+        world.zone_node_http_client_for_sequencer(&sequencer_alias),
     )?;
-    let mempool_pending = wait_for_on_chain_statuses_and_collect_mempool_pending(
-        &mut statuses,
+    ensure_zone_transactions_included(
+        &node_client,
         &tx_hashes,
         Duration::from_secs(timeout_seconds),
     )
     .await
-    .map_err(|error| zone_step_error(step, &error))?;
-
-    world
-        .zone
-        .record_mempool_pending(sequencer_alias.clone(), mempool_pending);
-
-    Ok(())
-}
-
-#[cucumber::then(expr = "sequencer {string} observed mempool pending events for zone messages:")]
-#[expect(
-    clippy::unused_async,
-    reason = "Cucumber step functions are async even when assertion is synchronous"
-)]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
-async fn step_sequencer_emitted_mempool_pending_events_for_zone_messages(
-    world: &mut CucumberWorld,
-    step: &Step,
-    sequencer_alias: String,
-) -> StepResult {
-    let aliases = single_column_table(step, "alias", "zone message aliases")?;
-    let tx_hashes = log_step_error(step, world.zone.message_tx_hashes_for_aliases(&aliases))?;
-
-    for (alias, tx_hash) in aliases.iter().zip(tx_hashes.iter()) {
-        if !world
-            .zone
-            .has_observed_mempool_pending(&sequencer_alias, tx_hash)
-        {
-            return Err(StepError::LogicalError {
-                message: format!(
-                    "Sequencer '{sequencer_alias}' did not emit mempool pending event for zone message '{alias}'"
-                ),
-            });
-        }
-    }
-
-    Ok(())
+    .map_err(|error| zone_step_error(step, &error))
 }
 
 #[expect(
@@ -234,38 +199,36 @@ async fn step_sequencer_has_pending_publish_txs(
 }
 
 #[cucumber::then(
-    expr = "sequencer {string} publishes {string} immediately while in turn in {int} seconds"
+    expr = "zone message {string} published by sequencer {string} is included while in turn in {int} seconds"
 )]
-async fn step_sequencer_publishes_immediately_while_in_turn(
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_published_zone_message_is_included_while_in_turn(
     world: &mut CucumberWorld,
     step: &Step,
-    sequencer_alias: String,
     message_alias: String,
+    sequencer_alias: String,
     timeout_seconds: u64,
 ) -> StepResult {
-    // The message was remembered when submitted; wait until it's mined
-    // (`OnChain`, not yet finalized) via the per-tx status stream.
+    // The message was remembered when submitted; wait until the node has it
+    // on chain (mined, not yet finalized).
     let tx_hashes = log_step_error(
         step,
         world
             .zone
             .message_tx_hashes_for_aliases(std::slice::from_ref(&message_alias)),
     )?;
-    let mut statuses = log_step_error(
+    let node_client = log_step_error(
         step,
-        world.zone.take_sequencer_tx_status_rx(&sequencer_alias),
+        world.zone_node_http_client_for_sequencer(&sequencer_alias),
     )?;
-    let mempool_pending = wait_for_on_chain_statuses_and_collect_mempool_pending(
-        &mut statuses,
+    ensure_zone_transactions_included(
+        &node_client,
         &tx_hashes,
         Duration::from_secs(timeout_seconds),
     )
     .await
-    .map_err(|error| zone_step_error(step, &error))?;
-
-    world
-        .zone
-        .record_mempool_pending(sequencer_alias.clone(), mempool_pending);
-
-    Ok(())
+    .map_err(|error| zone_step_error(step, &error))
 }

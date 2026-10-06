@@ -43,6 +43,16 @@ impl<NodeId, CorePoQGenerator> CoreEpochStateInfo<NodeId, CorePoQGenerator> {
     }
 }
 
+impl<NodeId, CorePoQGenerator> CoreEpochStateInfo<NodeId, CorePoQGenerator> {
+    #[must_use]
+    pub fn epoch(&self) -> Epoch {
+        match self {
+            Self::Core(info) => info.epoch(),
+            Self::NotCore { epoch, .. } => *epoch,
+        }
+    }
+}
+
 /// The node is in the membership, but the core Merkle tree has no path for the
 /// zk ID it is configured with.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -66,6 +76,12 @@ pub struct CoreEpochInfo<NodeId, CorePoQGenerator> {
     pub public: CoreEpochPublicInfo<NodeId>,
     /// The core `PoQ` generator component.
     pub core_poq_generator: CorePoQGenerator,
+}
+
+impl<NodeId, CorePoQGenerator> CoreEpochInfo<NodeId, CorePoQGenerator> {
+    pub const fn epoch(&self) -> Epoch {
+        self.public.epoch
+    }
 }
 
 #[derive(Clone, Debug)]
