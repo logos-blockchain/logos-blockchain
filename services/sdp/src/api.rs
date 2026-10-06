@@ -11,7 +11,7 @@ use overwatch::{
 };
 use tokio::sync::{oneshot, oneshot::error::RecvError};
 
-use crate::{Participation, SdpMessage, SdpSubmission};
+use crate::{SdpMessage, SdpStatus, SdpSubmission};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -70,11 +70,10 @@ where
         receiver.await?.map_err(Error::Other)
     }
 
-    /// This node's participation in the SDP, or `None` if it has never
-    /// declared.
-    pub async fn get_participation(&self) -> Result<Option<Participation>, Error> {
+    /// This node's SDP status.
+    pub async fn get_status(&self) -> Result<SdpStatus, Error> {
         let (reply_channel, receiver) = oneshot::channel();
-        self.publish(SdpMessage::GetParticipation { reply_channel })
+        self.publish(SdpMessage::GetStatus { reply_channel })
             .await?;
         Ok(receiver.await?)
     }
