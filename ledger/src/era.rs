@@ -4,10 +4,10 @@ use std::borrow::Cow;
 
 use lb_cryptarchia_engine::{
     Slot,
-    era::{EraVersion, EraSchedule, ScheduledEra},
+    era::{EraSchedule, EraVersion, ScheduledEra},
 };
 
-use crate::{Config, LedgerState};
+use crate::{Config, LedgerState, config::EraScheduledConfig};
 
 /// The ledger's own versions, which the global era versions map to: a global
 /// version that changes nothing in the ledger maps to the ledger version that
@@ -32,7 +32,7 @@ impl From<EraVersion> for LedgerVersion {
 impl LedgerState {
     /// The state brought from the era of its own slot into the era of `slot`,
     /// across every era boundary in between.
-    pub(crate) fn into_era_of(self, slot: Slot, eras: &EraSchedule<Config>) -> Self {
+    pub(crate) fn into_era_of(self, slot: Slot, eras: &EraScheduledConfig) -> Self {
         let (from, into) = (eras.at_slot(self.slot()).era, eras.at_slot(slot).era);
         eras.iter()
             .zip(eras.iter().skip(1))
@@ -44,7 +44,7 @@ impl LedgerState {
 
     /// The state as the era of `slot` holds it, borrowed when that is the era
     /// of its own slot.
-    pub(crate) fn in_era_of(&self, slot: Slot, eras: &EraSchedule<Config>) -> Cow<'_, Self> {
+    pub(crate) fn in_era_of(&self, slot: Slot, eras: &EraScheduledConfig) -> Cow<'_, Self> {
         if eras.at_slot(self.slot()).era == eras.at_slot(slot).era {
             Cow::Borrowed(self)
         } else {
@@ -84,16 +84,16 @@ impl LedgerState {
 mod tests {
     use std::borrow::Cow;
 
-    use lb_cryptarchia_engine::{Epoch, Slot, era::EraSchedule};
+    use lb_cryptarchia_engine::{Epoch, Slot};
 
     use crate::{
         Config, LedgerState,
-        config::schedule,
+        config::{EraScheduledConfig, schedule},
         cryptarchia::tests::{config, utxo},
     };
 
     /// Two eras of version 1, the second from epoch 1.
-    fn two_eras() -> EraSchedule<Config> {
+    fn two_eras() -> EraScheduledConfig {
         schedule(config(), [(1, config())])
     }
 

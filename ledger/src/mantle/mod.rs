@@ -25,13 +25,17 @@ use lb_core::{
     },
     sdp::service_notes::ServiceNotes,
 };
-use lb_cryptarchia_engine::{Slot, era::EraSchedule};
+use lb_cryptarchia_engine::Slot;
 use lb_log_targets::ledger;
 use lb_mmr::MerkleMountainRange;
 use sdp::Error as SdpLedgerError;
 use tracing::error;
 
-use crate::{Config, EpochState, UtxoTree, config::ConfigSchedule as _, mantle::sdp::HeaderEffect};
+use crate::{
+    Config, EpochState, UtxoTree,
+    config::{EraScheduledConfig, config_at_epoch},
+    mantle::sdp::HeaderEffect,
+};
 
 const LOG_TARGET: &str = ledger::mantle::ROOT;
 
@@ -157,10 +161,10 @@ impl LedgerState {
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
         voucher: VoucherCm,
-        eras: &EraSchedule<Config>,
+        eras: &EraScheduledConfig,
     ) -> Result<(Self, HeaderEffect), Error> {
-        let last_config = eras.config_at_epoch(last_epoch_state.epoch);
-        let config = eras.config_at_epoch(epoch_state.epoch);
+        let last_config = config_at_epoch(eras, last_epoch_state.epoch);
+        let config = config_at_epoch(eras, epoch_state.epoch);
         self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
         let (new_sdp, effect) = self.sdp.try_apply_header(
             &last_config.sdp_config,

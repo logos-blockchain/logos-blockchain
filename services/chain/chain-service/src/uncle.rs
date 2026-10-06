@@ -7,7 +7,7 @@ use lb_core::{
     header::HeaderId,
 };
 use lb_cryptarchia_engine::Branch;
-use lb_ledger::ConfigSchedule as _;
+use lb_ledger::config::config_at_slot;
 
 use crate::{Cryptarchia, Error};
 
@@ -66,10 +66,7 @@ impl Cryptarchia {
 
         // Each uncle's parent must be on the chain the block extends, within the
         // uncle reference window.
-        let uncle_reference_window = self
-            .ledger
-            .era_schedule()
-            .config_at_slot(slot)
+        let uncle_reference_window = config_at_slot(self.ledger.era_schedule(), slot)
             .consensus_config
             .uncle_reference_window_in_slot()
             .get();

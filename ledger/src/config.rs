@@ -8,6 +8,8 @@ pub use lb_groth16::ModulusShift;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_pol::LotteryConstants;
 
+pub type EraScheduledConfig = EraSchedule<Config>;
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Config {
     pub epoch_config: lb_cryptarchia_engine::EpochConfig,
@@ -83,64 +85,48 @@ impl Config {
     }
 }
 
-/// The ledger's view of the era schedule.
-///
-/// It gives the config of the era a slot or an epoch belongs to, and where
-/// the snapshots of each epoch are taken. The snapshots of an epoch are taken
-/// during the epoch before it, at the phase boundaries of that epoch, so they
-/// follow the layout of the previous epoch's era.
-pub trait ConfigSchedule {
-    /// The config of the era `slot` belongs to.
-    fn config_at_slot(&self, slot: Slot) -> &Config;
-
-    /// The config of the era `epoch` belongs to.
-    fn config_at_epoch(&self, epoch: Epoch) -> &Config;
-
-    /// The slot at which the nonce of `epoch` is snapshotted: the first slot
-    /// of the last phase of the previous epoch.
-    ///
-    /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
-    /// the nonce for epoch 1 will be snapshotted at slot 60, which is the 1st
-    /// slot of the last phase of epoch 0.
-    ///
-    /// # Panics
-    ///
-    /// For epoch 0, which no epoch precedes.
-    fn nonce_snapshot(&self, epoch: Epoch) -> Slot;
-
-    /// The slot at which the stake distribution of `epoch` is snapshotted:
-    /// the first slot of the previous epoch.
-    ///
-    /// # Panics
-    ///
-    /// For epoch 0, which no epoch precedes.
-    fn stake_distribution_snapshot(&self, epoch: Epoch) -> Slot;
+/// The config of the era `slot` belongs to.
+#[must_use]
+pub fn config_at_slot(eras: &EraScheduledConfig, slot: Slot) -> &Config {
+    &eras.at_slot(slot).entry.parameters
 }
 
-impl ConfigSchedule for EraSchedule<Config> {
-    fn config_at_slot(&self, slot: Slot) -> &Config {
-        &self.at_slot(slot).entry.parameters
-    }
+/// The config of the era `epoch` belongs to.
+#[must_use]
+pub fn config_at_epoch(eras: &EraScheduledConfig, epoch: Epoch) -> &Config {
+    &eras.at_epoch(epoch).entry.parameters
+}
 
-    fn config_at_epoch(&self, epoch: Epoch) -> &Config {
-        &self.at_epoch(epoch).entry.parameters
-    }
+/// The slot at which the nonce of `epoch` is snapshotted: the first slot of
+/// the last phase of the previous epoch, under the layout of that epoch's era.
+///
+/// If epoch length is 100 slots, and epoch phases are 3/3/4 slots, the nonce
+/// for epoch 1 will be snapshotted at slot 60, which is the 1st slot of the
+/// last phase of epoch 0.
+///
+/// # Panics
+///
+/// For epoch 0, which no epoch precedes.
+#[must_use]
+pub fn nonce_snapshot(eras: &EraScheduledConfig, epoch: Epoch) -> Slot {
+    let previous_epoch = epoch.strict_sub(1.into());
+    let offset = config_at_epoch(eras, previous_epoch).nonce_contribution_period();
+    Slot::new(
+        eras.epoch_starting_slot(previous_epoch)
+            .into_inner()
+            .strict_add(offset),
+    )
+}
 
-    fn nonce_snapshot(&self, epoch: Epoch) -> Slot {
-        let previous_epoch = epoch.strict_sub(1.into());
-        let offset = self
-            .config_at_epoch(previous_epoch)
-            .nonce_contribution_period();
-        Slot::new(
-            self.epoch_starting_slot(previous_epoch)
-                .into_inner()
-                .strict_add(offset),
-        )
-    }
-
-    fn stake_distribution_snapshot(&self, epoch: Epoch) -> Slot {
-        self.epoch_starting_slot(epoch.strict_sub(1.into()))
-    }
+/// The slot at which the stake distribution of `epoch` is snapshotted: the
+/// first slot of the previous epoch.
+///
+/// # Panics
+///
+/// For epoch 0, which no epoch precedes.
+#[must_use]
+pub fn stake_distribution_snapshot(eras: &EraScheduledConfig, epoch: Epoch) -> Slot {
+    eras.epoch_starting_slot(epoch.strict_sub(1.into()))
 }
 
 /// A schedule running `genesis` from genesis, then each config of
@@ -158,7 +144,7 @@ impl ConfigSchedule for EraSchedule<Config> {
 pub fn schedule(
     genesis: Config,
     after_genesis: impl IntoIterator<Item = (u32, Config)>,
-) -> EraSchedule<Config> {
+) -> EraScheduledConfig {
     use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
 
     let entry = |config: Config| EraEntry {
@@ -187,7 +173,7 @@ pub fn schedule(
 /// A schedule running `config` alone, from genesis.
 #[cfg(any(test, feature = "test-utils"))]
 #[must_use]
-pub fn single_era(config: Config) -> EraSchedule<Config> {
+pub fn single_era(config: Config) -> EraScheduledConfig {
     schedule(config, [])
 }
 
@@ -565,8 +551,8 @@ mod tests {
 
     use crate::{
         config::{
-            BlendPoWConfig, ConfigSchedule as _, PoWConfig, RewardPoWConfig, RewardPoWConfigError,
-            schedule, single_era,
+            BlendPoWConfig, PoWConfig, RewardPoWConfig, RewardPoWConfigError, nonce_snapshot,
+            schedule, single_era, stake_distribution_snapshot,
         },
         mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
     };
@@ -758,10 +744,10 @@ mod tests {
         };
         assert_eq!(config.epoch_length(), 100);
         let eras = single_era(config);
-        assert_eq!(eras.nonce_snapshot(1.into()), 60.into());
-        assert_eq!(eras.nonce_snapshot(2.into()), 160.into());
-        assert_eq!(eras.stake_distribution_snapshot(1.into()), 0.into());
-        assert_eq!(eras.stake_distribution_snapshot(2.into()), 100.into());
+        assert_eq!(nonce_snapshot(&eras, 1.into()), 60.into());
+        assert_eq!(nonce_snapshot(&eras, 2.into()), 160.into());
+        assert_eq!(stake_distribution_snapshot(&eras, 1.into()), 0.into());
+        assert_eq!(stake_distribution_snapshot(&eras, 2.into()), 100.into());
     }
 
     #[test]
@@ -783,12 +769,12 @@ mod tests {
 
         // The snapshots of epoch 2, the first of era 1, are taken during epoch
         // 1, laid out by era 0.
-        assert_eq!(eras.stake_distribution_snapshot(2.into()), 100.into());
-        assert_eq!(eras.nonce_snapshot(2.into()), 160.into());
+        assert_eq!(stake_distribution_snapshot(&eras, 2.into()), 100.into());
+        assert_eq!(nonce_snapshot(&eras, 2.into()), 160.into());
         // The snapshots of epoch 3 are taken during epoch 2, laid out by era 1.
-        assert_eq!(eras.stake_distribution_snapshot(3.into()), 200.into());
-        assert_eq!(eras.nonce_snapshot(3.into()), 320.into());
-        assert_eq!(eras.stake_distribution_snapshot(4.into()), 400.into());
+        assert_eq!(stake_distribution_snapshot(&eras, 3.into()), 200.into());
+        assert_eq!(nonce_snapshot(&eras, 3.into()), 320.into());
+        assert_eq!(stake_distribution_snapshot(&eras, 4.into()), 400.into());
     }
 
     fn epoch_zero_test_config() -> super::Config {
@@ -851,14 +837,14 @@ mod tests {
     #[should_panic(expected = "attempt to subtract with overflow")]
     fn stake_distribution_snapshot_panics_at_epoch_zero() {
         let eras = single_era(epoch_zero_test_config());
-        let _ = eras.stake_distribution_snapshot(0.into());
+        let _ = stake_distribution_snapshot(&eras, 0.into());
     }
 
     #[test]
     #[should_panic(expected = "attempt to subtract with overflow")]
     fn nonce_snapshot_panics_at_epoch_zero() {
         let eras = single_era(epoch_zero_test_config());
-        let _ = eras.nonce_snapshot(0.into());
+        let _ = nonce_snapshot(&eras, 0.into());
     }
 
     #[test]

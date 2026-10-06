@@ -38,7 +38,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots, era::EraSchedule};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 pub use lb_ledger::EpochState;
-use lb_ledger::{ConfigSchedule as _, LedgerState};
+use lb_ledger::{LedgerState, config::config_at_slot};
 use lb_log_targets::chain;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
@@ -351,8 +351,7 @@ impl Cryptarchia {
         Self {
             consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib_id,
-                ledger_eras
-                    .config_at_slot(lib_slot)
+                config_at_slot(&ledger_eras, lib_slot)
                     .consensus_config
                     .clone(),
                 state,
@@ -993,8 +992,7 @@ where
             bootstrap_config,
             recovery_state.last_engine_state.as_ref(),
         );
-        let in_force = ledger_eras
-            .config_at_slot(current_slot)
+        let in_force = config_at_slot(&ledger_eras, current_slot)
             .consensus_config
             .clone();
         let mut cryptarchia = Cryptarchia::from_lib(

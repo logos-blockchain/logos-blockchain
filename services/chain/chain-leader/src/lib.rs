@@ -33,7 +33,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Slot, era::EraSchedule};
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
-use lb_ledger::{ConfigSchedule as _, LedgerState};
+use lb_ledger::{LedgerState, config::config_at_slot};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
@@ -673,7 +673,7 @@ where
         } = select_transactions(
             ledger_state,
             tx_stream.collect().await,
-            ledger_eras.config_at_slot(slot),
+            config_at_slot(ledger_eras, slot),
         );
 
         if !invalid_tx_hashes.is_empty()

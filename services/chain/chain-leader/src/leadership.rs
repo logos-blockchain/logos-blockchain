@@ -22,7 +22,7 @@ use lb_key_management_system_service::{
     api::KmsServiceApi, backend::preload::KeyId, keys::Ed25519Key,
     operators::zk::leader::BuildPrivateInputsWithLeaderKey,
 };
-use lb_ledger::{ConfigSchedule as _, EpochState, UtxoTree};
+use lb_ledger::{EpochState, UtxoTree, config::config_at_slot};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_time_service::{EpochSlotTickStream, SlotTick, TimeServiceMessage};
 use lb_utils::tokio::task::spawn_blocking;
@@ -441,7 +441,7 @@ where
         .get_leader_aged_notes(Some(wallet_tip))
         .await
         .ok()?;
-    let eligible = match &ledger_eras.config_at_slot(slot).faucet_pk {
+    let eligible = match &config_at_slot(ledger_eras, slot).faucet_pk {
         Some(faucet_pk) => eligible_utxos
             .response
             .into_iter()

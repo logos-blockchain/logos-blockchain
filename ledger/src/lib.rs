@@ -12,7 +12,7 @@ mod update;
 
 use std::{hash::Hash, sync::Arc};
 
-pub use config::{Config, ConfigSchedule};
+pub use config::Config;
 use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
 #[cfg(test)]
@@ -56,7 +56,7 @@ use rpds::HashTrieMapSync;
 use thiserror::Error;
 
 use crate::{
-    config::RewardPoWConfig,
+    config::{EraScheduledConfig, RewardPoWConfig, config_at_epoch, config_at_slot},
     mantle::helpers::MantleOperationVerificationHelper,
     update::{BatchVerifiedUpdate, PreparedUpdate},
 };
@@ -155,14 +155,14 @@ pub struct Ledger<Id: Eq + Hash> {
     states: HashTrieMapSync<Id, LedgerState>,
     /// The config of every era: each block is applied under the config of the
     /// era of its slot, and each epoch is settled under the config of its era.
-    eras: Arc<EraSchedule<Config>>,
+    eras: Arc<EraScheduledConfig>,
 }
 
 impl<Id> Ledger<Id>
 where
     Id: Eq + Hash + Copy,
 {
-    pub fn new(id: Id, mut state: LedgerState, eras: Arc<EraSchedule<Config>>) -> Self
+    pub fn new(id: Id, mut state: LedgerState, eras: Arc<EraScheduledConfig>) -> Self
     where
         Id: Into<BlockHash>,
     {
@@ -172,7 +172,7 @@ where
         let slot = state.slot();
         state
             .mantle_ledger
-            .add_seen_block(id.into(), slot, eras.config_at_slot(slot));
+            .add_seen_block(id.into(), slot, config_at_slot(&eras, slot));
         Self {
             states: HashTrieMapSync::new_sync().insert(id, state),
             eras,
@@ -223,7 +223,7 @@ where
 
     /// The config of every era.
     #[must_use]
-    pub const fn era_schedule(&self) -> &Arc<EraSchedule<Config>> {
+    pub const fn era_schedule(&self) -> &Arc<EraScheduledConfig> {
         &self.eras
     }
 
@@ -263,7 +263,7 @@ impl LedgerState {
         proof: &LeaderProof,
         uncle_slots: &UncleSlots,
         txs: impl Iterator<Item = Tx>,
-        eras: &EraSchedule<Config>,
+        eras: &EraScheduledConfig,
     ) -> Result<(Self, Events, DeferredZkpVerifications), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
@@ -273,7 +273,7 @@ impl LedgerState {
     {
         let (mut state, header_events) = self.try_apply_header(slot, proof, uncle_slots, eras)?;
         // The block's contents follow the config of the era of its slot.
-        let config = eras.config_at_slot(slot);
+        let config = config_at_slot(eras, slot);
         // Record the applied block among the recently seen blocks `PoW`
         // claims may anchor to. This is the canonical apply path, where the
         // block's id is known — unlike a proposer's direct
@@ -319,7 +319,7 @@ impl LedgerState {
         slot: Slot,
         proof: &LeaderProof,
         uncle_slots: &UncleSlots,
-        eras: &EraSchedule<Config>,
+        eras: &EraScheduledConfig,
     ) -> Result<(Self, Vec<HeaderEvent>), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -373,7 +373,7 @@ impl LedgerState {
         &self,
         slot: Slot,
         proof: &LeaderProof,
-        eras: &EraSchedule<Config>,
+        eras: &EraScheduledConfig,
     ) -> Result<(), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -578,13 +578,13 @@ impl LedgerState {
     pub fn inapplicable_transactions<'tx, Tx, Profile: GasProfile>(
         &self,
         slot: Slot,
-        eras: &EraSchedule<Config>,
+        eras: &EraScheduledConfig,
         txs: &'tx [Tx],
     ) -> Vec<&'tx Tx>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
-        let config = eras.config_at_slot(slot);
+        let config = config_at_slot(eras, slot);
         let mut state = self.in_era_of(slot, eras).into_owned();
         let mut pending = txs.iter().collect::<Vec<_>>();
         loop {
@@ -607,10 +607,10 @@ impl LedgerState {
         }
     }
 
-    pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, eras: &EraSchedule<Config>) -> Self {
+    pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, eras: &EraScheduledConfig) -> Self {
         let cryptarchia_ledger = CryptarchiaLedger::from_utxos(utxos, eras, Fr::ZERO);
         let mantle_ledger = MantleLedger::new(
-            eras.config_at_epoch(Epoch::new(0)),
+            config_at_epoch(eras, Epoch::new(0)),
             cryptarchia_ledger.epoch_state(),
         );
         // Seed the genesis epoch-state membership snapshots from the genesis SDP
@@ -625,7 +625,7 @@ impl LedgerState {
 
     pub fn from_genesis_tx<Id>(
         tx: impl GenesisTx,
-        eras: &EraSchedule<Config>,
+        eras: &EraScheduledConfig,
         epoch_nonce: Fr,
     ) -> Result<(Self, Vec<TxEvent>), LedgerError<Id>> {
         let GenesisOps {
@@ -637,7 +637,7 @@ impl LedgerState {
         let (mantle_ledger, events) = MantleLedger::from_genesis_tx(
             inscription,
             declarations,
-            eras.config_at_epoch(Epoch::new(0)),
+            config_at_epoch(eras, Epoch::new(0)),
             cryptarchia_ledger.latest_utxos(),
             cryptarchia_ledger.epoch_state(),
         )?;
@@ -680,7 +680,7 @@ impl LedgerState {
     pub fn epoch_state_for_slot<Id>(
         &self,
         slot: Slot,
-        eras: &EraSchedule<Config>,
+        eras: &EraScheduledConfig,
     ) -> Result<EpochState, LedgerError<Id>> {
         let state = self.in_era_of(slot, eras);
         state.cryptarchia_ledger.epoch_state_for_slot(
