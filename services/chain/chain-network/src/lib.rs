@@ -64,10 +64,7 @@ pub use crate::{
 };
 use crate::{
     bootstrap::ibd::InitialBlockDownload,
-    mempool::{
-        MempoolAdapter as MempoolAdapterTrait, adapter::MempoolAdapter,
-        remove_inapplicable_transactions,
-    },
+    mempool::{MempoolAdapter as MempoolAdapterTrait, adapter::MempoolAdapter},
     relays::ChainNetworkRelays,
     sync::{
         orphan_handler::OrphanBlocksDownloader,
@@ -349,9 +346,6 @@ where
 
         let network_adapter = NetAdapter::new(network_config, relays.network_relay().clone()).await;
         network_adapter.follow_eras_at(current_tick.slot).await;
-        // The era of the last tick seen: when one starts, the mempool is
-        // checked against its rules.
-        let mut era = current_tick.era;
 
         let initial_block_download = InitialBlockDownload::new(
             ChainNetworkIbdBlockProcessor::<_, Mempool> {
@@ -518,25 +512,6 @@ where
 
                     Some(tick) = slot_ticks.next() => {
                         adapter.follow_eras_at(tick.slot).await;
-
-                        if tick.era != era {
-                            era = tick.era;
-                            // Off the event loop, which the chain service's
-                            // answers do not depend on.
-                            let cryptarchia = relays.cryptarchia().clone();
-                            let mempool = relays.mempool_adapter().clone();
-                            drop(spawn("logos/chain/mempool-revalidation", async move {
-                                match remove_inapplicable_transactions(&cryptarchia, &mempool, tick.slot).await {
-                                    Ok(removed) => info!(
-                                        target: LOG_TARGET,
-                                        era = tick.era.into_inner(),
-                                        removed,
-                                        "Removed the mempool transactions the new era rejects"
-                                    ),
-                                    Err(e) => error!(target: LOG_TARGET, %e, "Failed to check the mempool against the new era"),
-                                }
-                            }));
-                        }
 
                         let Some(params) = tip_poll_params.clone() else {
                             continue;
@@ -1276,10 +1251,6 @@ mod tests {
 
         async fn remove_transactions(&self, _ids: &[TxHash]) -> Result<(), DynError> {
             unimplemented!("resolution never removes")
-        }
-
-        async fn pending_transactions(&self) -> Result<Vec<HashOnlyTx>, DynError> {
-            unimplemented!("resolution never reads the whole mempool")
         }
 
         async fn get_transactions_by_prefix(

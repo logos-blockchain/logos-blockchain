@@ -2,6 +2,7 @@ use std::{collections::HashSet, time::SystemTime};
 
 use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_core::{header::HeaderId, mantle::traits::GenesisTx as _};
+use lb_cryptarchia_engine::{Epoch, era::Era};
 use lb_ledger::LedgerState;
 use lb_services_utils::overwatch::{StateVersion, VersionedState};
 use overwatch::{DynError, services::state::ServiceState};
@@ -81,13 +82,25 @@ impl ServiceState for CryptarchiaConsensusState {
     fn from_settings(
         settings: &<Self as ServiceState>::Settings,
     ) -> Result<Self, <Self as ServiceState>::Error> {
+        // The genesis state sets up epochs 0 and 1 under the genesis config, so
+        // both must be of the genesis era.
+        if settings
+            .eras
+            .get(Era::new(1))
+            .is_some_and(|era| era.first_epoch == Epoch::new(1))
+        {
+            return Err(Error::EraAtEpochOne);
+        }
         let (lib_id, genesis_id, lib_ledger_state) = match &settings.starting_state {
             StartingState::Genesis { genesis_block } => {
                 let lib_id = genesis_block.header().id();
                 let genesis_tx = genesis_block.genesis_tx();
                 let epoch_nonce = genesis_tx.cryptarchia_parameter().epoch_nonce;
-                let (ledger, _events) =
-                    LedgerState::from_genesis_tx(genesis_tx.clone(), &settings.eras, epoch_nonce)?;
+                let (ledger, _events) = LedgerState::from_genesis_tx(
+                    genesis_tx.clone(),
+                    &settings.eras.genesis().entry.parameters,
+                    epoch_nonce,
+                )?;
                 (lib_id, lib_id, ledger)
             }
             StartingState::Lib {
@@ -141,10 +154,10 @@ mod tests {
         config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
-    use crate::tests::single_era;
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
     use super::*;
+    use crate::tests::single_era;
 
     /// A reward config with claiming disabled, standing in for a real
     /// deployment config in tests.
@@ -322,7 +335,7 @@ mod tests {
         // Empty ledger state.
         let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
-            LedgerState::from_utxos([], &single_era(ledger_config.clone())),
+            LedgerState::from_utxos([], &ledger_config),
             Arc::new(single_era(ledger_config)),
         );
 
@@ -446,7 +459,7 @@ mod tests {
             consensus: engine.clone(),
             ledger: lb_ledger::Ledger::new(
                 lib_id,
-                LedgerState::from_utxos([], &single_era(ledger_config.clone())),
+                LedgerState::from_utxos([], &ledger_config),
                 Arc::new(single_era(ledger_config.clone())),
             ),
             genesis_id: genesis_header_id,

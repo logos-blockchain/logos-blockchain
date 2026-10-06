@@ -3,7 +3,10 @@ use std::ops::RangeInclusive;
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use rpds::HashTrieSetSync;
 
-use crate::config::{EraScheduledConfig, config_for_epoch, total_stake_snapshot};
+use crate::{
+    Config,
+    config::{EraScheduledConfig, config_for_epoch, total_stake_snapshot},
+};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockDensity {
@@ -17,6 +20,16 @@ impl BlockDensity {
     pub fn new(epoch: Epoch, eras: &EraScheduledConfig) -> Self {
         Self {
             period_range: Self::compute_period_range(epoch, eras),
+            occupied_slots: HashTrieSetSync::new_sync(),
+        }
+    }
+
+    /// The block density of the genesis epoch, laid out by the genesis config:
+    /// the genesis state sets up epochs 0 and 1, both of the genesis era.
+    pub fn from_genesis_config(config: &Config) -> Self {
+        let end = config.total_stake_inference_period().strict_sub(1);
+        Self {
+            period_range: Slot::genesis()..=Slot::new(end),
             occupied_slots: HashTrieSetSync::new_sync(),
         }
     }
@@ -76,7 +89,6 @@ mod tests {
 
     use super::*;
     use crate::{
-        Config,
         config::single_era,
         mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
     };

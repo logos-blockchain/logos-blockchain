@@ -56,7 +56,7 @@ use rpds::HashTrieMapSync;
 use thiserror::Error;
 
 use crate::{
-    config::{EraScheduledConfig, RewardPoWConfig, config_for_epoch, config_for_slot},
+    config::{EraScheduledConfig, RewardPoWConfig, config_for_slot},
     mantle::helpers::MantleOperationVerificationHelper,
     update::{BatchVerifiedUpdate, PreparedUpdate},
 };
@@ -326,7 +326,13 @@ impl LedgerState {
     {
         // A block is applied under the era of its slot, which the state
         // crosses into first.
-        let state = self.migrate_to_future_slot(slot, eras);
+        let parent = self.slot();
+        let state = self
+            .migrate_to_future_slot(slot, eras)
+            .ok_or(LedgerError::InvalidSlot {
+                parent,
+                block: slot,
+            })?;
         let last_epoch_state = state.cryptarchia_ledger.epoch_state().clone();
         let mut cryptarchia_ledger = state
             .cryptarchia_ledger
@@ -378,7 +384,12 @@ impl LedgerState {
     where
         LeaderProof: leader_proof::LeaderProof,
     {
-        let state = self.as_in_era_of_slot(slot, eras);
+        let state = self
+            .as_in_era_of_slot(slot, eras)
+            .ok_or(LedgerError::InvalidSlot {
+                parent: self.slot(),
+                block: slot,
+            })?;
         state.cryptarchia_ledger.verify_proof_of_leadership(
             slot,
             proof,
@@ -571,51 +582,12 @@ impl LedgerState {
         Ok((self, tx_events, deferred_zkps))
     }
 
-    /// The transactions of `txs` that no block at `slot` on top of this state
-    /// could include: those that still fail once every other one that applies
-    /// has been applied, to the state brought into the era of `slot`, as a
-    /// leader assembles a block. Their proofs are not verified.
-    pub fn inapplicable_transactions<'tx, Tx, Profile: GasProfile>(
-        &self,
-        slot: Slot,
-        eras: &EraScheduledConfig,
-        txs: &'tx [Tx],
-    ) -> Vec<&'tx Tx>
-    where
-        Tx: PreverifiedMantleTransaction + StorageSize + Clone,
-    {
-        let config = config_for_slot(eras, slot);
-        let mut state = self.as_in_era_of_slot(slot, eras).into_owned();
-        let mut pending = txs.iter().collect::<Vec<_>>();
-        loop {
-            let still_pending = pending.len();
-            pending.retain(|tx| {
-                match state
-                    .clone()
-                    .try_apply_transaction::<_, BlockHash, Profile>(config, *tx)
-                {
-                    Ok((next_state, ..)) => {
-                        state = next_state;
-                        false
-                    }
-                    Err(_) => true,
-                }
-            });
-            if pending.len() == still_pending {
-                return pending;
-            }
-        }
-    }
-
-    pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, eras: &EraScheduledConfig) -> Self {
-        let cryptarchia_ledger = CryptarchiaLedger::from_utxos(utxos, eras, Fr::ZERO);
-        let mantle_ledger = MantleLedger::new(
-            config_for_epoch(eras, Epoch::new(0)),
-            cryptarchia_ledger.epoch_state(),
-        );
+    pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config) -> Self {
+        let cryptarchia_ledger = CryptarchiaLedger::from_utxos(utxos, config, Fr::ZERO);
+        let mantle_ledger = MantleLedger::new(config, cryptarchia_ledger.epoch_state());
         // Seed the genesis epoch-state membership snapshots from the genesis SDP
         // ledger, which only exists after the mantle ledger is built.
-        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(&mantle_ledger.sdp, eras);
+        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(&mantle_ledger.sdp, config);
         Self {
             block_number: 0,
             cryptarchia_ledger,
@@ -625,7 +597,7 @@ impl LedgerState {
 
     pub fn from_genesis_tx<Id>(
         tx: impl GenesisTx,
-        eras: &EraScheduledConfig,
+        config: &Config,
         epoch_nonce: Fr,
     ) -> Result<(Self, Vec<TxEvent>), LedgerError<Id>> {
         let GenesisOps {
@@ -633,17 +605,18 @@ impl LedgerState {
             inscription,
             declarations,
         } = tx.into_genesis_ops();
-        let cryptarchia_ledger = CryptarchiaLedger::from_genesis_tx(&transfer, eras, epoch_nonce)?;
+        let cryptarchia_ledger =
+            CryptarchiaLedger::from_genesis_tx(&transfer, config, epoch_nonce)?;
         let (mantle_ledger, events) = MantleLedger::from_genesis_tx(
             inscription,
             declarations,
-            config_for_epoch(eras, Epoch::new(0)),
+            config,
             cryptarchia_ledger.latest_utxos(),
             cryptarchia_ledger.epoch_state(),
         )?;
         // Seed the genesis epoch-state membership snapshots from the genesis SDP
         // ledger (which carries the genesis declarations applied above).
-        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(&mantle_ledger.sdp, eras);
+        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(&mantle_ledger.sdp, config);
         Ok((
             Self {
                 block_number: 0,
@@ -682,7 +655,12 @@ impl LedgerState {
         slot: Slot,
         eras: &EraScheduledConfig,
     ) -> Result<EpochState, LedgerError<Id>> {
-        let state = self.as_in_era_of_slot(slot, eras);
+        let state = self
+            .as_in_era_of_slot(slot, eras)
+            .ok_or(LedgerError::InvalidSlot {
+                parent: self.slot(),
+                block: slot,
+            })?;
         state.cryptarchia_ledger.epoch_state_for_slot(
             slot,
             &state.mantle_ledger.sdp,
@@ -1061,7 +1039,7 @@ mod tests {
                 leader_claim::{LeaderClaimError, LeaderClaimOp, LeaderClaimVerificationContext},
                 transfer::TransferOp,
             },
-            traits::Hashable,
+            traits::Hashable as _,
             transactions::{
                 OpProofs, Ops,
                 hash::TxHashView,
@@ -1115,7 +1093,7 @@ mod tests {
     pub fn create_test_ledger() -> (Ledger<HeaderId>, HeaderId, Utxo) {
         let config = config();
         let utxo = utxo();
-        let genesis_state = LedgerState::from_utxos([utxo], &single_era(config.clone()));
+        let genesis_state = LedgerState::from_utxos([utxo], &config);
         let ledger = Ledger::new([0; 32], genesis_state, Arc::new(single_era(config)));
         (ledger, [0; 32], utxo)
     }
@@ -1126,7 +1104,7 @@ mod tests {
     #[test]
     fn genesis_seeds_epoch_state_sdp_from_mantle() {
         let config = config();
-        let ledger = LedgerState::from_utxos([utxo()], &single_era(config.clone()));
+        let ledger = LedgerState::from_utxos([utxo()], &config);
 
         let expected_for_epoch_0 = ledger
             .mantle_ledger
@@ -1372,7 +1350,7 @@ mod tests {
     #[test]
     fn test_channel_inscribe_operation() {
         let test_config = config();
-        let state = LedgerState::from_utxos([utxo()], &single_era(test_config.clone()));
+        let state = LedgerState::from_utxos([utxo()], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([2; 32]);
 
@@ -1404,7 +1382,7 @@ mod tests {
     #[test]
     fn test_channel_config_operation() {
         let test_config = config();
-        let state = LedgerState::from_utxos([utxo()], &single_era(test_config.clone()));
+        let state = LedgerState::from_utxos([utxo()], &test_config);
         let (_, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([3; 32]);
 
@@ -1449,7 +1427,7 @@ mod tests {
     #[test]
     fn test_jit_config_requires_zero_parent() {
         let test_config = config();
-        let state = LedgerState::from_utxos([utxo()], &single_era(test_config.clone()));
+        let state = LedgerState::from_utxos([utxo()], &test_config);
         let (_, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([0u8; 32]);
 
@@ -1499,7 +1477,7 @@ mod tests {
     #[test]
     fn test_channel_config_valid_after_inscriptions() {
         let test_config = config();
-        let mut state = LedgerState::from_utxos([utxo()], &single_era(test_config.clone()));
+        let mut state = LedgerState::from_utxos([utxo()], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([0u8; 32]);
 
@@ -1569,7 +1547,7 @@ mod tests {
     #[test]
     fn test_channel_config_rejected_after_later_config() {
         let test_config = config();
-        let mut state = LedgerState::from_utxos([utxo()], &single_era(test_config.clone()));
+        let mut state = LedgerState::from_utxos([utxo()], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([0u8; 32]);
 
@@ -1637,7 +1615,7 @@ mod tests {
     #[test]
     fn test_inscription_valid_after_config() {
         let test_config = config();
-        let mut state = LedgerState::from_utxos([utxo()], &single_era(test_config.clone()));
+        let mut state = LedgerState::from_utxos([utxo()], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([0u8; 32]);
 
@@ -1702,7 +1680,7 @@ mod tests {
     fn test_channel_deposit_operation() {
         let test_config = config();
         let (sk, utxo) = utxo_with_sk();
-        let mut ledger_state = LedgerState::from_utxos([utxo], &single_era(test_config.clone()));
+        let mut ledger_state = LedgerState::from_utxos([utxo], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([4; 32]);
 
@@ -1797,7 +1775,7 @@ mod tests {
     fn test_channel_withdraw_operation() {
         let test_config = config();
         let (sk, utxo) = utxo_with_sk();
-        let mut ledger_state = LedgerState::from_utxos([utxo], &single_era(test_config.clone()));
+        let mut ledger_state = LedgerState::from_utxos([utxo], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([9; 32]);
 
@@ -1874,7 +1852,7 @@ mod tests {
     fn test_fee_estimate_covers_config_deposit_and_withdraw_in_one_tx() {
         let test_config = config();
         let (sk, utxo) = utxo_with_sk();
-        let ledger_state = LedgerState::from_utxos([utxo], &single_era(test_config.clone()));
+        let ledger_state = LedgerState::from_utxos([utxo], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([0u8; 32]);
 
@@ -1944,7 +1922,7 @@ mod tests {
     #[test]
     fn test_fee_estimate_covers_inscribe_then_config_in_one_tx() {
         let test_config = config();
-        let state = LedgerState::from_utxos([utxo()], &single_era(test_config.clone()));
+        let state = LedgerState::from_utxos([utxo()], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([0u8; 32]);
 
@@ -2007,7 +1985,7 @@ mod tests {
     fn test_fee_estimate_covers_inscribe_deposit_and_withdraw_in_one_tx() {
         let test_config = config();
         let (sk, utxo) = utxo_with_sk();
-        let ledger_state = LedgerState::from_utxos([utxo], &single_era(test_config.clone()));
+        let ledger_state = LedgerState::from_utxos([utxo], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([0u8; 32]);
 
@@ -2069,7 +2047,7 @@ mod tests {
     fn test_fee_estimate_covers_inscribe_deposit_and_transfer_in_one_tx() {
         let test_config = config();
         let (sk, utxo) = utxo_with_sk();
-        let ledger_state = LedgerState::from_utxos([utxo], &single_era(test_config.clone()));
+        let ledger_state = LedgerState::from_utxos([utxo], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([0u8; 32]);
 
@@ -2131,7 +2109,7 @@ mod tests {
     fn test_channel_deposit_is_not_replayable_after_withdraw() {
         let test_config = config();
         let (sk, utxo) = utxo_with_sk();
-        let mut ledger_state = LedgerState::from_utxos([utxo], &single_era(test_config.clone()));
+        let mut ledger_state = LedgerState::from_utxos([utxo], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([9; 32]);
 
@@ -2193,7 +2171,7 @@ mod tests {
     fn test_channel_withdraw_invalid_helper_backed_proof_fails_on_apply() {
         let test_config = config();
         let (sk, utxo) = utxo_with_sk();
-        let mut ledger_state = LedgerState::from_utxos([utxo], &single_era(test_config.clone()));
+        let mut ledger_state = LedgerState::from_utxos([utxo], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([10; 32]);
 
@@ -2268,7 +2246,7 @@ mod tests {
     #[test]
     fn test_invalid_parent_error() {
         let test_config = config();
-        let mut state = LedgerState::from_utxos([utxo()], &single_era(test_config.clone()));
+        let mut state = LedgerState::from_utxos([utxo()], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([5; 32]);
 
@@ -2342,7 +2320,7 @@ mod tests {
     #[test]
     fn test_unauthorized_signer_error() {
         let test_config = config();
-        let mut state = LedgerState::from_utxos([utxo()], &single_era(test_config.clone()));
+        let mut state = LedgerState::from_utxos([utxo()], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let (unauthorized_signing_key, unauthorized_verifying_key) = create_test_keys_with_seed(3);
         let channel_id = ChannelId::from([6; 32]);
@@ -2396,7 +2374,7 @@ mod tests {
         // Change the keys for channel 1
         // Post another inscription in channel 1
         let test_config = config();
-        let state = LedgerState::from_utxos([utxo()], &single_era(test_config.clone()));
+        let state = LedgerState::from_utxos([utxo()], &test_config);
         let (sk1, vk1) = create_test_keys_with_seed(1);
         let (sk2, vk2) = create_test_keys_with_seed(2);
         let (sk3, vk3) = create_test_keys_with_seed(3);
@@ -2597,61 +2575,10 @@ mod tests {
     }
 
     #[test]
-    fn transactions_that_never_apply_are_inapplicable() {
-        let (sk, utxo) = utxo_with_sk();
-        let eras = single_era(config());
-        let state = LedgerState::from_utxos([utxo], &eras);
-        let gas_context = OpsGasContext::from_channels(&Channels::new(), state.get_gas_prices());
-        let fees = |tx: &SignedOps<Unverified, StandardMode>| {
-            tx.op_refs()
-                .total_gas_cost::<MainnetGasProfile>(&gas_context)
-                .unwrap()
-                .into_inner()
-        };
-        // Spends `utxo`, keeping what its fees leave as change.
-        let mut change = Note::new(1, sk.to_public_key());
-        change.value = utxo.note.value
-            - fees(&create_tx(
-                vec![utxo.id()],
-                vec![change],
-                std::slice::from_ref(&sk),
-            ));
-        let spending = create_tx(vec![utxo.id()], vec![change], std::slice::from_ref(&sk))
-            .preverify()
-            .unwrap();
-        let OpRef::Transfer(transfer) = spending.op_refs().get(0).unwrap() else {
-            panic!("the first op is a transfer")
-        };
-        let change_utxo = transfer.outputs.utxo_by_index(0, transfer).unwrap();
-        // Spends the change, so it only applies once `spending` has.
-        let dependent = create_tx(vec![change_utxo.id()], vec![], std::slice::from_ref(&sk))
-            .preverify()
-            .unwrap();
-        // Spends a note the chain never had.
-        let unknown = create_tx(
-            vec![utxo_with_sk().1.id()],
-            vec![],
-            std::slice::from_ref(&sk),
-        )
-        .preverify()
-        .unwrap();
-        let unknown_hash = unknown.hash();
-
-        let txs = [dependent, spending, unknown];
-        let inapplicable = state
-            .inapplicable_transactions::<_, MainnetGasProfile>(Slot::from(1u64), &eras, &txs)
-            .into_iter()
-            .map(Hashable::hash)
-            .collect::<Vec<_>>();
-
-        assert_eq!(inapplicable, vec![unknown_hash]);
-    }
-
-    #[test]
     fn test_fee_rejection() {
         let utxo = utxo();
         let config = config();
-        let mut ledger = LedgerState::from_utxos([utxo], &single_era(config.clone()));
+        let mut ledger = LedgerState::from_utxos([utxo], &config);
         update_ledger_prices(&mut ledger, 1, 1);
 
         let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(0u8).into()));
@@ -2700,7 +2627,7 @@ mod tests {
     fn test_priority_fees_go_to_leader() {
         let utxo = utxo();
         let config = config();
-        let mut ledger = LedgerState::from_utxos([utxo], &single_era(config.clone()));
+        let mut ledger = LedgerState::from_utxos([utxo], &config);
 
         let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(0u8).into()));
         let sk = ZkKey::from(BigUint::from(0u8));
@@ -2774,7 +2701,7 @@ mod tests {
     fn test_apply_contents_accumulates_storage_gas() {
         let utxo = utxo();
         let config = config();
-        let mut ledger = LedgerState::from_utxos([utxo], &single_era(config.clone()));
+        let mut ledger = LedgerState::from_utxos([utxo], &config);
         update_ledger_prices(&mut ledger, 1, 1);
 
         // No outputs: the whole input covers the gas cost and the remainder is
@@ -2960,7 +2887,7 @@ mod tests {
         /// a seeded reward difficulty.
         fn pow_ledger_state(reward_difficulty: u64) -> (LedgerState, Config) {
             let config = config();
-            let mut state = LedgerState::from_utxos([utxo()], &single_era(config.clone()));
+            let mut state = LedgerState::from_utxos([utxo()], &config);
             state
                 .mantle_ledger
                 .pow
@@ -3090,7 +3017,7 @@ mod tests {
             // the full wiring: preverification, the stateful
             // `ClaimPowReward` arm and the helper-built context.
             let config = config();
-            let mut state = LedgerState::from_utxos([utxo()], &single_era(config.clone()));
+            let mut state = LedgerState::from_utxos([utxo()], &config);
             // The default reward config disables claiming (`rate_num = 0`).
             state
                 .mantle_ledger
@@ -3341,7 +3268,7 @@ mod tests {
             let Config::V1(v1_config) = &mut config;
             v1_config.pow_config.reward.pow_share = 10;
             v1_config.pow_config.reward.share_den = NonZeroU64::new(100).unwrap();
-            let mut state = LedgerState::from_utxos([utxo()], &single_era(config.clone()));
+            let mut state = LedgerState::from_utxos([utxo()], &config);
             let pool_before = state.mantle_ledger.pow.reward_pool();
 
             state = state
@@ -3370,7 +3297,7 @@ mod tests {
             // With `pow_share = 0` every collected fee is pooled for block
             // rewards and nothing accrues to the PoW refill.
             let config = config();
-            let mut state = LedgerState::from_utxos([utxo()], &single_era(config.clone()));
+            let mut state = LedgerState::from_utxos([utxo()], &config);
             let pool_before = state.mantle_ledger.pow.reward_pool();
 
             state = state

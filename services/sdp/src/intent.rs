@@ -520,7 +520,7 @@ mod tests {
 
         LedgerState::from_utxos(
             utxos,
-            &single_era(lb_ledger::Config::V1(lb_ledger::config::v1::Config {
+            &lb_ledger::Config::V1(lb_ledger::config::v1::Config {
                 epoch_config,
                 consensus_config,
                 sdp_config: lb_ledger::mantle::sdp::Config {
@@ -560,29 +560,7 @@ mod tests {
                         target_transactions_per_block: 1.try_into().unwrap(),
                     },
                 },
-            })),
+            }),
         )
-    }
-
-    /// A schedule of a single era, of version 1, running `config` from genesis.
-    fn single_era(
-        config: lb_ledger::Config,
-    ) -> lb_cryptarchia_engine::era::EraSchedule<lb_ledger::Config> {
-        use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion};
-
-        let entry = EraEntry {
-            version: EraVersion::V1,
-            slot_duration: core::time::Duration::from_secs(1),
-            epoch_length_in_slots: NonZero::new(config.epoch_length())
-                .expect("an epoch has at least one slot"),
-            transition_slots: 0,
-            parameters: config,
-        };
-        EraSchedule::new(
-            time::OffsetDateTime::UNIX_EPOCH,
-            entry,
-            EraEntriesAfterGenesis::empty(),
-        )
-        .expect("a single era of version 1 resolves")
     }
 }

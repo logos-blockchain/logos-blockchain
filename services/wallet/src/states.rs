@@ -625,7 +625,7 @@ mod tests {
         };
 
         let genesis = HeaderId::from([0; 32]);
-        let ledger = LedgerState::from_utxos([], &eras);
+        let ledger = LedgerState::from_utxos([], &eras.genesis().entry.parameters);
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
 
@@ -650,7 +650,9 @@ mod tests {
     fn single_era(
         config: lb_ledger::Config,
     ) -> lb_cryptarchia_engine::era::EraSchedule<lb_ledger::Config> {
-        use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion};
+        use lb_cryptarchia_engine::era::{
+            EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion,
+        };
 
         let entry = EraEntry {
             version: EraVersion::V1,

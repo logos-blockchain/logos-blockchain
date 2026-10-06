@@ -71,7 +71,7 @@ fn cryptarchia_switch_to_online() {
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_lib(
         genesis_id,
-        LedgerState::from_utxos([utxo], &single_era(config.clone())),
+        LedgerState::from_utxos([utxo], &config),
         genesis_id,
         Arc::new(single_era(config)),
         lb_cryptarchia_engine::State::Bootstrapping,
@@ -164,7 +164,7 @@ async fn get_block_ids_from_memory_and_storage() {
     let (zk_key, utxo) = utxo();
     let mut cryptarchia = Cryptarchia::from_lib(
         genesis_id,
-        LedgerState::from_utxos([utxo], &single_era(config.clone())),
+        LedgerState::from_utxos([utxo], &config),
         genesis_id,
         Arc::new(single_era(config)),
         lb_cryptarchia_engine::State::Online,
@@ -446,7 +446,7 @@ fn ledger_is_not_commited_if_block_contains_invalid_zkp() {
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_lib(
         genesis_id,
-        LedgerState::from_utxos([utxo], &single_era(config.clone())),
+        LedgerState::from_utxos([utxo], &config),
         genesis_id,
         Arc::new(single_era(config)),
         lb_cryptarchia_engine::State::Bootstrapping,
@@ -512,7 +512,7 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, St
     let (zk_key, utxo) = utxo();
     let cryptarchia = Cryptarchia::from_lib(
         genesis_id,
-        LedgerState::from_utxos([utxo], &single_era(config.clone())),
+        LedgerState::from_utxos([utxo], &config),
         genesis_id,
         Arc::new(single_era(config)),
         lb_cryptarchia_engine::State::Online,
@@ -584,9 +584,7 @@ pub fn schedule(
 }
 
 /// A schedule of a single era, of version 1, running `config` from genesis.
-pub fn single_era(
-    config: lb_ledger::Config,
-) -> EraSchedule<lb_ledger::Config> {
+pub fn single_era(config: lb_ledger::Config) -> EraSchedule<lb_ledger::Config> {
     schedule(config, [])
 }
 
@@ -796,7 +794,7 @@ pub fn genesis_cryptarchia_over(
 ) -> Cryptarchia {
     Cryptarchia::from_lib(
         GENESIS_ID.into(),
-        LedgerState::from_utxos([utxo], &ledger_eras),
+        LedgerState::from_utxos([utxo], &ledger_eras.genesis().entry.parameters),
         GENESIS_ID.into(),
         Arc::new(ledger_eras),
         lb_cryptarchia_engine::State::Bootstrapping,

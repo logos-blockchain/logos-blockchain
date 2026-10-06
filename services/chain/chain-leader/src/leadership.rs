@@ -32,7 +32,7 @@ use lb_wallet_service::{
 };
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 #[cfg(test)]
-pub use pol_tests::{single_era, test_config};
+pub use pol_tests::test_config;
 use rand::rngs::OsRng;
 use tokio::{
     sync::{mpsc, oneshot},
@@ -798,7 +798,7 @@ mod pol_tests {
     }
 
     /// A schedule of a single era, of version 1, running `config` from genesis.
-    pub fn single_era(config: lb_ledger::Config) -> EraSchedule<lb_ledger::Config> {
+    fn single_era(config: lb_ledger::Config) -> EraSchedule<lb_ledger::Config> {
         use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
 
         let entry = EraEntry {

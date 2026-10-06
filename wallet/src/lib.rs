@@ -940,7 +940,7 @@ mod tests {
                 Utxo::new(tx_hash(0), 1, Note::new(20, bob)),
                 Utxo::new(tx_hash(0), 2, Note::new(4, alice)),
             ],
-            &single_era(ledger_config()),
+            &ledger_config(),
         );
 
         let wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
@@ -997,7 +997,7 @@ mod tests {
         let (voucher_cm, voucher_nf) = voucher(1, 0);
         let mut state = WalletState::from_ledger(
             &HashMap::<ZkPublicKey, u64>::new(),
-            &LedgerState::from_utxos([], &single_era(ledger_config())),
+            &LedgerState::from_utxos([], &ledger_config()),
         );
         state.vouchers = MerkleMountainRange::new().push(voucher_cm).unwrap();
         state.voucher_paths = rpds::HashTrieMapSync::new_sync()
@@ -1050,7 +1050,7 @@ mod tests {
 
         let genesis = HeaderId::from([0; 32]);
 
-        let genesis_ledger = LedgerState::from_utxos([], &single_era(ledger_config()));
+        let genesis_ledger = LedgerState::from_utxos([], &ledger_config());
 
         let (v1_cm, v1_nf) = voucher(1, 0);
         let (v2_cm, v2_nf) = voucher(1, 1);
@@ -1211,7 +1211,7 @@ mod tests {
         let alice = pk(1);
         let bob = pk(2);
         let genesis = HeaderId::from([0; 32]);
-        let genesis_ledger = LedgerState::from_utxos([], &single_era(ledger_config()));
+        let genesis_ledger = LedgerState::from_utxos([], &ledger_config());
         let (v_cm, _v_nf) = voucher(1, 0);
 
         let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
@@ -1272,7 +1272,7 @@ mod tests {
         let alice = pk(1);
         let bob = pk(2);
         let genesis = HeaderId::from([0; 32]);
-        let genesis_ledger = LedgerState::from_utxos([], &single_era(ledger_config()));
+        let genesis_ledger = LedgerState::from_utxos([], &ledger_config());
         let (v_cm, _v_nf) = voucher(1, 0);
 
         let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
@@ -1368,7 +1368,7 @@ mod tests {
         let alice = pk(1);
         let bob = pk(2);
         let genesis = HeaderId::from([0; 32]);
-        let ledger = LedgerState::from_utxos([], &single_era(ledger_config()));
+        let ledger = LedgerState::from_utxos([], &ledger_config());
         let (voucher_cm, _voucher_nf) = voucher(1, 0);
 
         // A wallet that only knows alice's key.
@@ -1414,7 +1414,7 @@ mod tests {
         let alice = pk(1);
         let utxo1 = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
         let utxo2 = Utxo::new(tx_hash(0), 1, Note::new(5000, alice));
-        let ledger_state = LedgerState::from_utxos([utxo1, utxo2], &single_era(ledger_config()));
+        let ledger_state = LedgerState::from_utxos([utxo1, utxo2], &ledger_config());
 
         let mut wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
@@ -1469,7 +1469,7 @@ mod tests {
     fn test_fund_tx_with_priority_fee_percentage() {
         let alice = pk(1);
         let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
-        let ledger_state = LedgerState::from_utxos([utxo], &single_era(ledger_config()));
+        let ledger_state = LedgerState::from_utxos([utxo], &ledger_config());
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
@@ -1538,7 +1538,7 @@ mod tests {
         let alice = pk(1);
         // The wallet has a spendable note available...
         let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
-        let ledger_state = LedgerState::from_utxos([utxo], &single_era(ledger_config()));
+        let ledger_state = LedgerState::from_utxos([utxo], &ledger_config());
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
@@ -1588,7 +1588,7 @@ mod tests {
                 Utxo::new(tx_hash(0), 2, Note::new(100, alice)),
                 Utxo::new(tx_hash(0), 3, Note::new(100, alice)),
             ],
-            &single_era(ledger_config()),
+            &ledger_config(),
         );
 
         let context = OpsContext {
@@ -1627,7 +1627,7 @@ mod tests {
     #[test]
     fn test_fund_tx_zero_funds() {
         let alice = pk(1);
-        let ledger_state = LedgerState::from_utxos([], &single_era(ledger_config()));
+        let ledger_state = LedgerState::from_utxos([], &ledger_config());
 
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
@@ -1654,7 +1654,7 @@ mod tests {
     fn test_fund_tx_all_service_notes() {
         let alice = pk(1);
         let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
-        let ledger_state = LedgerState::from_utxos([utxo], &single_era(ledger_config()));
+        let ledger_state = LedgerState::from_utxos([utxo], &ledger_config());
 
         let mut wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
@@ -1685,7 +1685,7 @@ mod tests {
         let bob = pk(2);
         let ledger_state = LedgerState::from_utxos(
             [Utxo::new(tx_hash(0), 0, Note::new(1_000_000, bob))],
-            &single_era(ledger_config()),
+            &ledger_config(),
         );
 
         let wallet_state =
@@ -1742,7 +1742,7 @@ mod tests {
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
                 [Utxo::new(tx_hash(0), 0, Note::new(754, alice))],
-                &single_era(ledger_config()),
+                &ledger_config(),
             ),
         );
 
@@ -1781,7 +1781,7 @@ mod tests {
                 &HashMap::from_iter([(alice, 1)]),
                 &LedgerState::from_utxos(
                     [Utxo::new(tx_hash(0), 0, Note::new(value, alice))],
-                    &single_era(ledger_config()),
+                    &ledger_config(),
                 ),
             );
 
@@ -1805,7 +1805,7 @@ mod tests {
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
                 [Utxo::new(tx_hash(0), 0, Note::new(795, alice))],
-                &single_era(ledger_config()),
+                &ledger_config(),
             ),
         );
 
@@ -1843,28 +1843,6 @@ mod tests {
     }
 
     #[must_use]
-    /// A schedule of a single era, of version 1, running `config` from genesis.
-    fn single_era(
-        config: lb_ledger::Config,
-    ) -> lb_cryptarchia_engine::era::EraSchedule<lb_ledger::Config> {
-        use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion};
-
-        let entry = EraEntry {
-            version: EraVersion::V1,
-            slot_duration: core::time::Duration::from_secs(1),
-            epoch_length_in_slots: NonZero::new(config.epoch_length())
-                .expect("an epoch has at least one slot"),
-            transition_slots: 0,
-            parameters: config,
-        };
-        EraSchedule::new(
-            time::OffsetDateTime::UNIX_EPOCH,
-            entry,
-            EraEntriesAfterGenesis::empty(),
-        )
-        .expect("a single era of version 1 resolves")
-    }
-
     fn ledger_config() -> lb_ledger::Config {
         let epoch_config = EpochConfig {
             epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
@@ -1972,7 +1950,7 @@ mod tests {
 
         // Seed the wallet with a 100 NMO note owned by alice.
         let alice_utxo = Utxo::new(tx_hash(0), 0, Note::new(100, alice));
-        let genesis_ledger = LedgerState::from_utxos([alice_utxo], &single_era(ledger_config()));
+        let genesis_ledger = LedgerState::from_utxos([alice_utxo], &ledger_config());
         let (v_cm, _) = voucher(1, 0);
         let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
             [(alice, 1)],
@@ -2048,7 +2026,7 @@ mod tests {
         // Seed the wallet with 100 NMO note with `pk1` and mark it as a
         // channel note via a prior `ChannelDeposit`.
         let pk1_utxo = Utxo::new(tx_hash(0), 0, Note::new(100, pk1));
-        let genesis_ledger = LedgerState::from_utxos([pk1_utxo], &single_era(ledger_config()));
+        let genesis_ledger = LedgerState::from_utxos([pk1_utxo], &ledger_config());
         let (v_cm_1, _) = voucher(1, 0);
         let (v_cm_2, _) = voucher(1, 1);
         let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
@@ -2135,7 +2113,7 @@ mod tests {
         let genesis = HeaderId::from([0; 32]);
 
         let alice_utxo = Utxo::new(tx_hash(0), 0, Note::new(100, alice));
-        let genesis_ledger = LedgerState::from_utxos([alice_utxo], &single_era(ledger_config()));
+        let genesis_ledger = LedgerState::from_utxos([alice_utxo], &ledger_config());
         let (v_cm_1, _) = voucher(1, 0);
         let (v_cm_2, _) = voucher(1, 1);
         let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
@@ -2206,7 +2184,7 @@ mod tests {
 
         // Seed Alice with a 100 NMO note and deposit it into a channel.
         let alice_utxo = Utxo::new(tx_hash(0), 0, Note::new(100, alice));
-        let genesis_ledger = LedgerState::from_utxos([alice_utxo], &single_era(ledger_config()));
+        let genesis_ledger = LedgerState::from_utxos([alice_utxo], &ledger_config());
         let (v_cm_1, _) = voucher(1, 0);
         let (v_cm_2, _) = voucher(1, 1);
         let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(

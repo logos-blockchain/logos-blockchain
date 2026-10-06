@@ -215,7 +215,7 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
     .unwrap();
 
     TxPool {
-        genesis: LedgerState::from_utxos(utxos, &eras),
+        genesis: LedgerState::from_utxos(utxos, &eras.genesis().entry.parameters),
         config,
         txs,
     }

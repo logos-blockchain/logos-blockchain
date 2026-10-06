@@ -181,6 +181,7 @@ impl CurrentEpochTracker {
             target_epoch_state: TargetEpochState::new(
                 last_epoch_state.epoch(),
                 providers,
+                target_settings.minimum_network_size,
                 token_evaluation,
                 proof_verifier,
                 self.epoch_income,

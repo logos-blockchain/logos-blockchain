@@ -121,6 +121,10 @@ pub enum Error {
     InvalidUncle { uncle: HeaderId, reason: UncleError },
     #[error("Batch ZKP verification error: {0}")]
     BatchZkpVerification(#[from] lb_core::mantle::batch::Error),
+    #[error(
+        "An era after genesis starts at epoch 1, which the genesis state sets up under the genesis era"
+    )]
+    EraAtEpochOne,
 }
 
 struct InitializedCryptarchia {

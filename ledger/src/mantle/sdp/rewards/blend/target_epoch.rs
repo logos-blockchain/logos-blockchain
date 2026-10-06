@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::HashMap, iter::once};
+use std::{cmp::Ordering, collections::HashMap, iter::once, num::NonZeroU64};
 
 use lb_blend_message::{
     encap::ProofsVerifier as ProofsVerifierTrait,
@@ -27,6 +27,9 @@ pub struct TargetEpochState<ProofsVerifier> {
     epoch: Epoch,
     /// The providers in the target epoch (their public keys and indices).
     providers: HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>,
+    /// The minimum network size of the target epoch's era, which the target
+    /// epoch was established under.
+    minimum_network_size: NonZeroU64,
     /// Parameters for evaluating activity proofs in the target epoch
     token_evaluation: BlendingTokenEvaluation,
     /// Verifier for `PoQ` and `PoSel` in the target epoch.
@@ -39,6 +42,7 @@ impl<ProofsVerifier> TargetEpochState<ProofsVerifier> {
     pub const fn new(
         epoch: Epoch,
         providers: HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>,
+        minimum_network_size: NonZeroU64,
         token_evaluation: BlendingTokenEvaluation,
         proof_verifier: ProofsVerifier,
         epoch_income: Value,
@@ -46,6 +50,7 @@ impl<ProofsVerifier> TargetEpochState<ProofsVerifier> {
         Self {
             epoch,
             providers,
+            minimum_network_size,
             token_evaluation,
             proof_verifier,
             epoch_income,
@@ -76,9 +81,6 @@ impl<ProofsVerifier> TargetEpochState<ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait,
 {
-    /// Verifies an activity proof for this target epoch. A target epoch only
-    /// exists with at least the minimum network size of its era, checked when
-    /// it was established (see `CurrentEpochTracker::finalize`).
     pub fn verify_proof(
         &self,
         provider_id: &ProviderId,
@@ -93,6 +95,10 @@ where
         }
 
         let num_providers = self.num_providers();
+        assert!(
+            num_providers >= self.minimum_network_size.get(),
+            "number of providers must be >= minimum_network_size"
+        );
         let &(zk_id, index) = self
             .providers
             .get(provider_id)

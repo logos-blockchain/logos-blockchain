@@ -943,7 +943,7 @@ mod tests {
         let ledger_eras = single_era(ledger_config());
         lb_chain_service::Cryptarchia::from_lib(
             [GENESIS_ID; 32].into(),
-            LedgerState::from_utxos(empty(), &ledger_eras),
+            LedgerState::from_utxos(empty(), &ledger_eras.genesis().entry.parameters),
             [GENESIS_ID; 32].into(),
             Arc::new(ledger_eras),
             lb_cryptarchia_engine::State::Bootstrapping,
@@ -972,12 +972,13 @@ mod tests {
         }
     }
 
-    #[must_use]
     /// A schedule of a single era, of version 1, running `config` from genesis.
     fn single_era(
         config: lb_ledger::Config,
     ) -> lb_cryptarchia_engine::era::EraSchedule<lb_ledger::Config> {
-        use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion};
+        use lb_cryptarchia_engine::era::{
+            EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion,
+        };
 
         let entry = EraEntry {
             version: EraVersion::V1,
@@ -995,6 +996,7 @@ mod tests {
         .expect("a single era of version 1 resolves")
     }
 
+    #[must_use]
     fn ledger_config() -> lb_ledger::Config {
         let epoch_config = EpochConfig {
             epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),

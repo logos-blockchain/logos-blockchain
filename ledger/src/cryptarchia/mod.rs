@@ -59,7 +59,7 @@ const STORAGE_MARKET_CLAMP_DOWN_NUMERATOR: u128 = 7;
 const STORAGE_MARKET_CLAMP_UP_NUMERATOR: u128 = 9;
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
-use super::{Balance, LedgerError, mantle};
+use super::{Balance, Config, LedgerError, mantle};
 use crate::WINDOW_SIZE;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -674,14 +674,12 @@ impl LedgerState {
     /// snapshot. Once the genesis `SdpLedger` is available, this seeds the
     /// active-declarations snapshot for epochs 0 and 1.
     #[must_use]
-    pub fn with_genesis_sdp(mut self, sdp: &SdpLedger, eras: &EraScheduledConfig) -> Self {
-        for epoch_state in [&mut self.epoch_state, &mut self.next_epoch_state] {
-            let service_params = &config_for_epoch(eras, epoch_state.epoch)
-                .sdp_config()
-                .service_params;
-            epoch_state.active_declarations =
-                Arc::new(sdp.active_declarations(epoch_state.epoch, service_params));
-        }
+    pub fn with_genesis_sdp(mut self, sdp: &SdpLedger, genesis_config: &Config) -> Self {
+        let service_params = &genesis_config.sdp_config().service_params;
+        self.epoch_state.active_declarations =
+            Arc::new(sdp.active_declarations(self.epoch_state.epoch, service_params));
+        self.next_epoch_state.active_declarations =
+            Arc::new(sdp.active_declarations(self.next_epoch_state.epoch, service_params));
         self
     }
 
@@ -739,7 +737,7 @@ impl LedgerState {
 
     pub fn from_genesis_tx<Id>(
         transfer: &SignedOperation<TransferOp, Verified, GenesisMode>,
-        eras: &EraScheduledConfig,
+        genesis_config: &Config,
         epoch_nonce: Fr,
     ) -> Result<Self, LedgerError<Id>> {
         let operation = transfer.operation();
@@ -756,16 +754,19 @@ impl LedgerState {
             return Err(LedgerError::InputInGenesis(first_input));
         }
 
-        Ok(Self::from_utxos(operation.utxos(), eras, epoch_nonce))
+        Ok(Self::from_utxos(
+            operation.utxos(),
+            genesis_config,
+            epoch_nonce,
+        ))
     }
 
     /// The state at genesis, under the config of the genesis era.
     pub fn from_utxos(
         utxos: impl IntoIterator<Item = Utxo>,
-        eras: &EraScheduledConfig,
+        genesis_config: &Config,
         nonce: Fr,
     ) -> Self {
-        let config = &eras.genesis().entry.parameters;
         let utxos = utxos
             .into_iter()
             .map(|utxo| (utxo.id(), utxo))
@@ -773,15 +774,19 @@ impl LedgerState {
         let total_stake = utxos
             .utxos()
             .iter()
-            .filter(|(_, (utxo, _))| config.faucet_pk().is_none_or(|fpk| utxo.note.pk != fpk))
+            .filter(|(_, (utxo, _))| {
+                genesis_config
+                    .faucet_pk()
+                    .is_none_or(|fpk| utxo.note.pk != fpk)
+            })
             .map(|(_, (utxo, _))| utxo.note.value)
             .sum::<Value>()
             .max(1); // TODO: Change total_stake to NonZeroU64: https://github.com/logos-blockchain/logos-blockchain/issues/2166
-        let (lottery_0, lottery_1) = config
+        let (lottery_0, lottery_1) = genesis_config
             .lottery_constants()
             .compute_lottery_values(total_stake);
         let slot = Slot::genesis();
-        let block_density = BlockDensity::new(Epoch::new(0), eras);
+        let block_density = BlockDensity::from_genesis_config(genesis_config);
         Self {
             utxos: utxos.clone(),
             nonce,
@@ -792,7 +797,7 @@ impl LedgerState {
             next_epoch_state: EpochState {
                 epoch: 1.into(),
                 nonce,
-                blend_pow_difficulty: config.pow_config().blend.base_difficulty.into(),
+                blend_pow_difficulty: genesis_config.pow_config().blend.base_difficulty.into(),
                 utxos: utxos.clone(),
                 total_stake,
                 lottery_0,
@@ -802,7 +807,7 @@ impl LedgerState {
             epoch_state: EpochState {
                 epoch: 0.into(),
                 nonce,
-                blend_pow_difficulty: config.pow_config().blend.base_difficulty.into(),
+                blend_pow_difficulty: genesis_config.pow_config().blend.base_difficulty.into(),
                 utxos,
                 total_stake,
                 lottery_0,
@@ -907,7 +912,7 @@ pub mod tests {
 
     use super::*;
     use crate::{
-        Config, Ledger,
+        Ledger,
         config::{schedule, single_era},
         leader_proof::LeaderProof,
         mantle::{
@@ -2055,7 +2060,7 @@ pub mod tests {
         let output_note1 = Note::new(4000, output_note1_sk.to_public_key());
         let output_note2 = Note::new(3000, output_note2_sk.to_public_key());
 
-        let ledger_state = LedgerState::from_utxos([input_utxo], &single_era(config()), Fr::ZERO);
+        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
         let (_tx, transfer_op, transfer_proof) =
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
 
@@ -2135,7 +2140,7 @@ pub mod tests {
             note: Note::new(999, Fr::from(BigUint::from(1u8)).into()),
         };
 
-        let ledger_state = LedgerState::from_utxos([input_utxo], &single_era(config()), Fr::ZERO);
+        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
 
         let invalid_utxos = [
             non_existent_utxo_1,
@@ -2168,7 +2173,7 @@ pub mod tests {
 
         let output_note = Note::new(1, Fr::from(BigUint::from(2u8)).into());
 
-        let ledger_state = LedgerState::from_utxos([input_utxo], &single_era(config()), Fr::ZERO);
+        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
         let (_tx, transfer_op, transfer_proof) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![output_note, output_note]);
 
@@ -2204,7 +2209,7 @@ pub mod tests {
             note: input_note,
         };
 
-        let ledger_state = LedgerState::from_utxos([input_utxo], &single_era(config()), Fr::ZERO);
+        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
         let (_tx, transfer_op, transfer_proof) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![]);
 
@@ -2628,7 +2633,7 @@ pub mod tests {
     #[test]
     fn test_execution_market_update() {
         // Create a base ledger first
-        let mut ledger = LedgerState::from_utxos([], &single_era(config()), Fr::ZERO);
+        let mut ledger = LedgerState::from_utxos([], &config(), Fr::ZERO);
 
         // 1) G_avg = (1_700_000 + 9*1_596_730)/10 = 1_607_057
         // price = ceil(10_000 * (11_177_110 + 1_607_057) / 12_773_840) = 10_009

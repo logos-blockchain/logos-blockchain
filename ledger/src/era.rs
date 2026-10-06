@@ -102,7 +102,7 @@ mod tests {
     #[test]
     fn a_state_crosses_into_an_era_of_its_version_unchanged() {
         let eras = two_eras();
-        let state = LedgerState::from_utxos([utxo()], &eras);
+        let state = LedgerState::from_utxos([utxo()], &eras.genesis().entry.parameters);
         let next_era = eras.epoch_starting_slot(Epoch::new(1));
 
         assert_eq!(
@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn a_state_is_borrowed_within_its_own_era() {
         let eras = two_eras();
-        let state = LedgerState::from_utxos([utxo()], &eras);
+        let state = LedgerState::from_utxos([utxo()], &eras.genesis().entry.parameters);
         let last_slot_of_first_era =
             Slot::new(eras.epoch_starting_slot(Epoch::new(1)).into_inner() - 1);
 
