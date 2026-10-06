@@ -3,6 +3,7 @@ use std::fmt::{Debug, Display};
 use futures::{StreamExt as _, TryStreamExt as _};
 use lb_chain_service::{ChainServiceInfo, CryptarchiaConsensus, api::CryptarchiaServiceApi};
 use lb_core::{
+    era::EraSchedules,
     header::HeaderId,
     mantle::{
         SignedOps, ledger::verification_mode::StandardMode, transactions::states::Preverified,
@@ -27,6 +28,20 @@ where
     let chain_api =
         CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
     Ok(chain_api.info().await?)
+}
+
+/// What decodes the chain's blocks: the era schedule, whose era of a block's
+/// slot picks its codec, and the context of its transactions.
+pub async fn block_decode_context<RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+) -> Result<(EraSchedules, ()), DynError>
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    Ok((chain_api.get_ledger_eras().await?.map(|_| ()), ()))
 }
 
 const HEADERS_LIMIT: usize = 512;

@@ -15,7 +15,7 @@ use lb_binary_codec::{
     canonical::{BinaryDecode, BinaryEncode},
 };
 use lb_core::{
-    block::{Block, v1},
+    block::Block,
     events::Events,
     header::HeaderId,
     mantle::{
@@ -23,7 +23,7 @@ use lb_core::{
         traits::{Hashable, StorageSize},
     },
 };
-use lb_cryptarchia_engine::{Slot, era::EraVersion};
+use lb_cryptarchia_engine::Slot;
 use overwatch::{
     DynError,
     overwatch::{OverwatchHandle, errors::Error as OverwatchError},
@@ -76,7 +76,6 @@ impl<Tx> StorageApi<Tx> {
         self.store_raw(key, value.to_bytes()?).await
     }
 
-    /// Stores `value` as it is.
     pub async fn store_raw(&self, key: Bytes, value: Bytes) -> Result<(), DynError> {
         self.relay.send(StorageMsg::Store { key, value }).await?;
         Ok(())
@@ -101,15 +100,30 @@ impl<Tx> StorageApi<Tx> {
         Ok(receiver.await?)
     }
 
-    /// The canonical encoding of a stored block, as peers sync it.
+    /// Return the stored block bytes.
     pub async fn get_block_bytes(&self, id: &HeaderId) -> Result<Option<Bytes>, DynError> {
         self.request(|response_tx| StorageMsg::GetBlock {
             header_id: *id,
             response_tx,
         })
-        .await?
-        .map(|record| split_stored_block(&record).map(|(_, block)| block))
-        .transpose()
+        .await
+    }
+
+    pub async fn remove_block(&self, id: HeaderId) -> Result<Option<Bytes>, DynError> {
+        self.request(|response_tx| StorageMsg::RemoveBlock {
+            header_id: id,
+            response_tx,
+        })
+        .await
+    }
+
+    pub async fn remove_blocks(
+        &self,
+        ids: impl Iterator<Item = HeaderId>,
+    ) -> impl Iterator<Item = Result<Option<Bytes>, DynError>> {
+        join_all(ids.map(|id| self.remove_block(id)))
+            .await
+            .into_iter()
     }
 
     pub async fn get_block_parent(&self, id: &HeaderId) -> Option<HeaderId> {
@@ -212,18 +226,15 @@ impl<Tx> StorageApi<Tx>
 where
     Tx: BinaryEncode + Hashable<Hash = TxHash> + StorageSize,
 {
-    /// Stores `block`, of an era of `version`, with its events and the
-    /// immutable block identifiers it makes final.
     pub async fn store_block_data(
         &self,
         id: HeaderId,
         parent_id: HeaderId,
         block: Block<Tx>,
-        version: EraVersion,
         events: Events,
         immutable_ids: BTreeMap<Slot, HeaderId>,
     ) -> Result<(), DynError> {
-        let block = stored_block(version, &block);
+        let block = Bytes::from(block.encode());
         let events = Bytes::try_from(events)?;
         self.request(|response_tx| StorageMsg::StoreBlockData {
             header_id: id,
@@ -238,81 +249,40 @@ where
     }
 }
 
+/// Blocks read back decoded with the caller's `context`, the era schedule whose
+/// era of a block's slot picks its codec and the context of its transactions:
+/// storage keeps no era of its own.
 impl<Tx> StorageApi<Tx>
 where
-    Tx: BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
+    Tx: BinaryDecode<Context: Sync> + Hashable<Hash = TxHash> + StorageSize,
 {
-    pub async fn get_block(&self, id: &HeaderId) -> Option<Block<Tx>> {
-        self.try_get_block(id).await.ok().flatten()
-    }
-
-    /// Read and verify a block, returning storage and decoding errors.
-    pub async fn try_get_block(&self, id: &HeaderId) -> Result<Option<Block<Tx>>, DynError> {
-        self.request(|response_tx| StorageMsg::GetBlock {
-            header_id: *id,
-            response_tx,
-        })
-        .await?
-        .map(|record| decode_stored_block(&record))
-        .transpose()
-    }
-
-    /// Read and verify a block, returning storage and decoding errors.
-    pub async fn load_block(&self, id: &HeaderId) -> Result<Option<Block<Tx>>, DynError> {
-        self.try_get_block(id).await
-    }
-
-    pub async fn remove_block(&self, id: HeaderId) -> Result<Option<Block<Tx>>, DynError> {
-        self.request(|response_tx| StorageMsg::RemoveBlock {
-            header_id: id,
-            response_tx,
-        })
-        .await?
-        .map(|record| decode_stored_block(&record))
-        .transpose()
-    }
-
-    pub async fn remove_blocks(
+    pub async fn get_block(
         &self,
-        ids: impl Iterator<Item = HeaderId>,
-    ) -> impl Iterator<Item = Result<Option<Block<Tx>>, DynError>> {
-        join_all(ids.map(|id| self.remove_block(id)))
-            .await
-            .into_iter()
+        id: &HeaderId,
+        context: &<Block<Tx> as BinaryDecode>::Context,
+    ) -> Option<Block<Tx>> {
+        self.try_get_block(id, context).await.ok().flatten()
     }
-}
 
-/// How a block is stored: the version of the era of its slot, a `u16` in
-/// little-endian order, then the block's canonical encoding. A node reads its
-/// own blocks with the version stored next to them, without the era schedule,
-/// and serves peers the encoding alone.
-fn stored_block<Tx>(version: EraVersion, block: &Block<Tx>) -> Bytes
-where
-    Tx: BinaryEncode + Hashable<Hash = TxHash> + StorageSize,
-{
-    let mut record = Vec::with_capacity(size_of::<u16>() + block.encoded_length());
-    record.extend_from_slice(&version.tag().to_le_bytes());
-    block.encode_into(&mut record);
-    record.into()
-}
+    /// Read and verify a block, returning storage and decoding errors.
+    pub async fn try_get_block(
+        &self,
+        id: &HeaderId,
+        context: &<Block<Tx> as BinaryDecode>::Context,
+    ) -> Result<Option<Block<Tx>>, DynError> {
+        self.get_block_bytes(id)
+            .await?
+            .map(|block| Block::decode_all(&block, context).map_err(Into::into))
+            .transpose()
+    }
 
-/// The version and the canonical encoding of a block stored as
-/// [`stored_block`] lays it out.
-fn split_stored_block(record: &Bytes) -> Result<(EraVersion, Bytes), DynError> {
-    let tag = record
-        .first_chunk()
-        .ok_or("a stored block starts with the version of its era")?;
-    let version = EraVersion::try_from(u16::from_le_bytes(*tag))?;
-    Ok((version, record.slice(size_of::<u16>()..)))
-}
-
-fn decode_stored_block<Tx>(record: &Bytes) -> Result<Block<Tx>, DynError>
-where
-    Tx: BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
-{
-    let (version, block) = split_stored_block(record)?;
-    match version {
-        EraVersion::V1 => Ok(Block::V1(v1::Block::decode_all(&block, &())?)),
+    /// Read and verify a block, returning storage and decoding errors.
+    pub async fn load_block(
+        &self,
+        id: &HeaderId,
+        context: &<Block<Tx> as BinaryDecode>::Context,
+    ) -> Result<Option<Block<Tx>>, DynError> {
+        self.try_get_block(id, context).await
     }
 }
 

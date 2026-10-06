@@ -1,5 +1,5 @@
 use core::fmt::Debug;
-use std::{collections::HashMap, fmt::Display, num::NonZeroUsize};
+use std::{collections::HashMap, fmt::Display, num::NonZeroUsize, sync::Arc};
 
 use futures::{Stream, StreamExt as _};
 use lb_binary_codec::canonical::BinaryDecode;
@@ -10,6 +10,7 @@ use lb_chain_service::{
 };
 use lb_core::{
     block::Block,
+    era::EraSchedules,
     header::HeaderId,
     mantle::{
         SignedOps,
@@ -35,7 +36,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::warn;
 
 use crate::http::{
-    consensus::{Cryptarchia, cryptarchia_info, cryptarchia_ledger_state},
+    consensus::{Cryptarchia, block_decode_context, cryptarchia_info, cryptarchia_ledger_state},
     errors::BlockSlotRangeError,
 };
 
@@ -253,12 +254,18 @@ where
         .await?;
 
     let storage = StorageApi::<Transaction>::from_overwatch_handle(handle).await?;
+    let eras = CryptarchiaServiceApi::<ConsensusService>::from_overwatch_handle(handle)
+        .await
+        .get_ledger_eras()
+        .await?;
+    let decode_context = Arc::new((eras.map(|_| ()), ()));
 
     let new_blocks_stream = processed_blocks_stream.filter_map(move |event| {
         let storage = storage.clone();
+        let decode_context = Arc::clone(&decode_context);
         async move {
             let event = event.ok()?;
-            let block = storage.get_block(&event.block_id).await?;
+            let block = storage.get_block(&event.block_id, &decode_context).await?;
             Some(BlockWithChainState {
                 block,
                 tip: event.tip,
@@ -290,6 +297,7 @@ where
 
 async fn load_blocks_with_chain_state_by_ids<Transaction>(
     storage: &StorageApi<Transaction>,
+    decode_context: &(EraSchedules, ()),
     header_ids: Vec<HeaderId>,
     chain_info: &CryptarchiaInfo,
     blocks_limit: usize,
@@ -308,7 +316,7 @@ where
 {
     let mut blocks = Vec::with_capacity(header_ids.len().min(blocks_limit));
     for header_id in header_ids {
-        let Some(block) = storage.get_block(&header_id).await else {
+        let Some(block) = storage.get_block(&header_id, decode_context).await else {
             warn!(
                 target: LOG_TARGET,
                 "missing block body for indexed header {header_id}, skipping"
@@ -395,6 +403,7 @@ where
     if gated_slot_from > slot_to {
         return Ok(Vec::new());
     }
+    let decode_context = block_decode_context::<RuntimeServiceId>(handle).await?;
     let mut retried = false;
 
     loop {
@@ -404,7 +413,7 @@ where
             break;
         }
 
-        let Some(block) = storage.get_block(&current_id).await else {
+        let Some(block) = storage.get_block(&current_id, &decode_context).await else {
             if retried {
                 return Err(format!(
                     "canonical chain inconsistency: missing block {current_id} while traversing \
@@ -485,8 +494,13 @@ where
         + 'static
         + Hashable<Hash = TxHash>
         + StorageSize,
-    RuntimeServiceId:
-        Debug + Send + Sync + Display + 'static + AsServiceId<StorageService<RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<StorageService<RuntimeServiceId>>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
     let limit = NonZeroUsize::new(remaining.saturating_mul(2).max(1))
         .expect("remaining is positive while fetching immutable blocks");
@@ -499,7 +513,9 @@ where
     )
     .await?;
 
-    load_blocks_with_chain_state_by_ids(storage, header_ids, chain_info, remaining).await
+    let decode_context = block_decode_context::<RuntimeServiceId>(handle).await?;
+    load_blocks_with_chain_state_by_ids(storage, &decode_context, header_ids, chain_info, remaining)
+        .await
 }
 
 pub async fn get_blocks_in_slot_range_with_snapshot<Transaction, RuntimeServiceId>(
@@ -711,11 +727,17 @@ where
         + 'static
         + Hashable<Hash = TxHash>
         + StorageSize,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<RuntimeServiceId>> + 'static,
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + AsServiceId<StorageService<RuntimeServiceId>>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + 'static,
 {
     let storage = StorageApi::<_>::from_overwatch_handle(handle).await?;
-    Ok(storage.get_block(&header_id).await)
+    let decode_context = block_decode_context::<RuntimeServiceId>(handle).await?;
+    Ok(storage.get_block(&header_id, &decode_context).await)
 }
 
 /// Fetch transactions by their hashes.

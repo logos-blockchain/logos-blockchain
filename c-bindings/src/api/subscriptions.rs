@@ -77,11 +77,21 @@ pub fn subscribe_to_new_blocks_sync(
                 overwatch,
             )
             .await;
+        let eras = match api.get_ledger_eras().await {
+            Ok(eras) => eras,
+            Err(error) => {
+                return OperationStatus::error(
+                    OperationStatusCode::RelayError,
+                    format!("Failed to get the era schedule: {error}"),
+                );
+            }
+        };
+        let decode_context = (eras.map(|_| ()), ());
         match api.subscribe_new_blocks().await {
             Ok(mut block_stream) => {
                 runtime_handler.spawn(async move {
                     while let Ok(event) = block_stream.recv().await {
-                        let res = storage.load_block(&event.block_id).await;
+                        let res = storage.load_block(&event.block_id, &decode_context).await;
                         if let Ok(Some(block)) = res {
                             let txs_with_id: Vec<TxWithId> = block
                                 .transactions_iter()

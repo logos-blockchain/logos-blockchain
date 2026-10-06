@@ -297,8 +297,12 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     let lib = [0; 32].into();
     let missing_tip = [1; 32].into();
 
+    let decode_context = (
+        single_era(ledger_config(3.try_into().unwrap())).map(|_| ()),
+        (),
+    );
     let recovery_blocks = CryptarchiaConsensus::<_, SystemTimeBackend, TestRuntimeServiceId>::load_recovery_blocks_or_fall_back_to_lib(
-        missing_tip, lib, relays.storage().clone()
+        missing_tip, lib, relays.storage().clone(), &decode_context
     )
     .await;
 

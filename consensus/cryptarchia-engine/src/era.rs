@@ -306,6 +306,11 @@ impl<Parameters> EraSchedule<Parameters> {
             .expect("At least genesis era fulfils this predicate.")
     }
 
+    pub fn at_time(&self, time: OffsetDateTime) -> Option<&ScheduledEra<Parameters>> {
+        let slot = self.slot_at(time)?;
+        Some(self.at_slot(slot))
+    }
+
     pub fn elapsed_slots_since_era_start(&self, slot: Slot) -> u64 {
         let era_scheduled = self.at_slot(slot);
         slot.into_inner()
@@ -315,7 +320,7 @@ impl<Parameters> EraSchedule<Parameters> {
     /// The eras the network accepts at `slot`: the era of `slot`, and the era
     /// before it if `slot` is within the transition period of its era.
     #[must_use]
-    pub fn in_force(&self, slot: Slot) -> EraInForce {
+    pub fn in_force_at_slot(&self, slot: Slot) -> EraInForce {
         let era_scheduled = self.at_slot(slot);
         let elapsed_slots_since_era_start = self.elapsed_slots_since_era_start(slot);
         let retiring_era = era_scheduled
@@ -648,7 +653,7 @@ mod tests {
     fn the_era_before_is_accepted_during_the_transition_period() {
         let eras = four_eras();
         let in_force = [0, 299, 300, 309, 310, 400, 402, 403, 412, 413]
-            .map(|slot| (slot, eras.in_force(Slot::new(slot))));
+            .map(|slot| (slot, eras.in_force_at_slot(Slot::new(slot))));
         let era = |era, retiring: Option<u16>| EraInForce {
             era: Era::new(era),
             retiring: retiring.map(Era::new),

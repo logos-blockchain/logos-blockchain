@@ -39,8 +39,8 @@ pub fn recovery_key(suffix: &[u8]) -> Bytes {
     key.into()
 }
 
-/// The recovery records in storage, for the chain whose eras have the fork
-/// digests `forks`.
+/// The recovery records in storage, for the chain whose eras are represented by
+/// the fork digests `forks`.
 pub fn load_recovery_data(
     settings: RocksBackendSettings,
     forks: Arc<ForkDigests>,
@@ -62,8 +62,7 @@ fn recovery_data_from_backend(
 /// Takes the record under `key_suffix` out of `data` and reads the state it
 /// carries, brought to the version this release writes.
 ///
-/// A record whose stamp names no era of the chain, written on another chain
-/// or too short to carry a stamp, is discarded with a warning.
+/// A record written under a different fork digest is discarded with a warning.
 ///
 /// # Errors
 ///
@@ -80,7 +79,7 @@ where
     let Some((state_version, fork_digest, state)) = read_record(&record) else {
         warn!(
             target: LOG_TARGET,
-            "Discarding the recovery record {}, too short to carry a stamp",
+            "Discarding the recovery record {}: unexpected EOF.",
             String::from_utf8_lossy(&key)
         );
         return Ok(None);
@@ -92,9 +91,8 @@ where
     {
         warn!(
             target: LOG_TARGET,
-            "Discarding the recovery record {}, written on another chain, under fork {}",
+            "Discarding the recovery record {}, written on another chain, under fork {fork_digest}",
             String::from_utf8_lossy(&key),
-            fork_digest
         );
         return Ok(None);
     }
@@ -115,13 +113,29 @@ where
     }
 }
 
-/// The recovery record of `state`: its stamp, the version of the state's
+type StateVersionEncodeFn = fn(StateVersion) -> [u8; 2];
+type StateVersionDecodeFn = fn([u8; 2]) -> StateVersion;
+fn state_version_codecs() -> (StateVersionEncodeFn, StateVersionDecodeFn) {
+    let encode_fn = |version: StateVersion| version.get().to_le_bytes();
+    let decode_fn = |bytes: [u8; 2]| StateVersion::new(u16::from_le_bytes(bytes));
+    (encode_fn, decode_fn)
+}
+
+type ForkDigestEncodeFn = fn(ForkDigest) -> [u8; 32];
+type ForkDigestDecodeFn = fn([u8; 32]) -> ForkDigest;
+fn fork_digest_codecs() -> (ForkDigestEncodeFn, ForkDigestDecodeFn) {
+    let encode_fn = |fork_digest: ForkDigest| fork_digest.into();
+    let decode_fn = |bytes: [u8; 32]| bytes.into();
+    (encode_fn, decode_fn)
+}
+
+/// The recovery record of `state`: the version of the state's
 /// layout and the fork digest of the era in force when it is written, then the
 /// state.
 fn write_record(state_version: StateVersion, fork_digest: ForkDigest, state: &[u8]) -> Bytes {
     [
-        &state_version.get().to_le_bytes()[..],
-        &<[u8; 32]>::from(fork_digest),
+        state_version_codecs().0(state_version).as_slice(),
+        fork_digest_codecs().0(fork_digest).as_slice(),
         state,
     ]
     .concat()
@@ -130,21 +144,23 @@ fn write_record(state_version: StateVersion, fork_digest: ForkDigest, state: &[u
 
 /// The state version, the fork digest and the state of `record`, as
 /// [`write_record`] lays them out. `None` when the record is too short to
-/// carry a stamp.
+/// carry the necessary metadata.
 fn read_record(record: &[u8]) -> Option<(StateVersion, ForkDigest, &[u8])> {
     let (state_version, record) = record.split_first_chunk()?;
     let (fork_digest, state) = record.split_first_chunk()?;
     Some((
-        StateVersion::new(u16::from_le_bytes(*state_version)),
-        ForkDigest::from(*fork_digest),
+        state_version_codecs().1(*state_version),
+        fork_digest_codecs().1(*fork_digest),
         state,
     ))
 }
 
-/// The fork digest of the era in force at `time`.
 fn fork_in_force(forks: &ForkDigests, time: OffsetDateTime) -> ForkDigest {
-    let slot = forks.slot_at(time).unwrap_or(Slot::genesis());
-    forks.at_slot(slot).entry.parameters
+    forks
+        .at_time(time)
+        .unwrap_or_else(|| forks.genesis())
+        .entry
+        .parameters
 }
 
 pub struct StorageRecoveryBackend<State, Settings, RuntimeServiceId> {

@@ -113,7 +113,7 @@ where
     }
 
     async fn follow_eras_at(&self, slot: Slot) {
-        let in_force = self.settings.topics.in_force(slot);
+        let in_force = self.settings.topics.in_force_at_slot(slot);
         let previous = self.in_force.send_replace(Some(in_force));
         if previous == Some(in_force) {
             return;
@@ -201,7 +201,11 @@ where
 }
 
 /// Whether `topic` is the topic of an era in force.
-fn is_in_force(topics: &EraSchedule<TopicHash>, in_force: Option<EraInForce>, topic: &TopicHash) -> bool {
+fn is_in_force(
+    topics: &EraSchedule<TopicHash>,
+    in_force: Option<EraInForce>,
+    topic: &TopicHash,
+) -> bool {
     in_force
         .into_iter()
         .flat_map(EraInForce::eras)
@@ -261,7 +265,7 @@ mod tests {
         )
         .unwrap();
         let accepted = |slot: u64| {
-            let in_force = Some(topics.in_force(Slot::new(slot)));
+            let in_force = Some(topics.in_force_at_slot(Slot::new(slot)));
             [0, 1].map(|era| is_in_force(&topics, in_force, &topic(era)))
         };
 

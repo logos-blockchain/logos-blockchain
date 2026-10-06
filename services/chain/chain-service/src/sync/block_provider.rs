@@ -9,7 +9,6 @@ use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _, future, stream, stream::BoxStream};
 use lb_binary_codec::canonical::BinaryDecode;
 use lb_core::{
-    block::Block,
     header::HeaderId,
     mantle::{
         TxHash,
@@ -221,11 +220,7 @@ where
         }
 
         if let Some(target_storage_block) = self.load_immutable_block(target_block).await? {
-            return Ok(BlockInfo {
-                id: target_block,
-                slot: target_storage_block.header().slot(),
-                location: BlockLocation::Storage,
-            });
+            return Ok(target_storage_block);
         }
 
         Err(GetBlocksError::BlockNotFound(target_block))
@@ -293,11 +288,7 @@ where
             .find_max_slot_immutable_block(known_blocks.iter().copied())
             .await?
         {
-            return Ok(Some(BlockInfo {
-                id: immutable_block.header().id(),
-                slot: immutable_block.header().slot(),
-                location: BlockLocation::Storage,
-            }));
+            return Ok(Some(immutable_block));
         }
 
         // Check if the genesis block is stored as immutable
@@ -456,19 +447,18 @@ where
     async fn find_max_slot_immutable_block(
         &self,
         ids: impl Iterator<Item = HeaderId>,
-    ) -> Result<Option<Block<Tx>>, GetBlocksError> {
+    ) -> Result<Option<BlockInfo>, GetBlocksError> {
         Ok(self
             .load_immutable_blocks(ids)
             .await?
-            .iter()
-            .max_by_key(|block| block.header().slot())
-            .cloned())
+            .into_iter()
+            .max_by_key(|block| block.slot))
     }
 
     async fn load_immutable_blocks(
         &self,
         ids: impl Iterator<Item = HeaderId>,
-    ) -> Result<Vec<Block<Tx>>, GetBlocksError> {
+    ) -> Result<Vec<BlockInfo>, GetBlocksError> {
         let mut blocks = Vec::new();
         for id in ids {
             if let Some(block) = self.load_immutable_block(id).await? {
@@ -479,36 +469,34 @@ where
         Ok(blocks)
     }
 
-    /// Loads an immutable block by its ID from the storage.
+    /// Locates an immutable block by its ID in the storage, by the slot its
+    /// encoding starts with, as the encoding of every version does: no era
+    /// schedule is needed to read it.
     /// If the block is not found, or if it is not stored as immutable,
     /// returns [`None`].
     async fn load_immutable_block(
         &self,
         id: HeaderId,
-    ) -> Result<Option<Block<Tx>>, GetBlocksError> {
-        let Some(block) = Self::load_block(id, &self.storage).await? else {
+    ) -> Result<Option<BlockInfo>, GetBlocksError> {
+        let Some(block) = Self::load_block_bytes(id, &self.storage).await? else {
             return Ok(None);
         };
+        let slot = Slot::peek_decode(&block, &())
+            .map_err(|error| GetBlocksError::Storage(error.to_string()))?;
 
         match self
             .storage
-            .get_immutable_block_id(block.header().slot())
+            .get_immutable_block_id(slot)
             .await
             .map_err(|error| GetBlocksError::Storage(error.to_string()))?
         {
-            Some(immutable_id) if immutable_id == id => Ok(Some(block)),
+            Some(immutable_id) if immutable_id == id => Ok(Some(BlockInfo {
+                id,
+                slot,
+                location: BlockLocation::Storage,
+            })),
             Some(_) | None => Ok(None),
         }
-    }
-
-    async fn load_block(
-        id: HeaderId,
-        storage: &StorageApi<Tx>,
-    ) -> Result<Option<Block<Tx>>, GetBlocksError> {
-        storage
-            .try_get_block(&id)
-            .await
-            .map_err(|error| GetBlocksError::Storage(error.to_string()))
     }
 
     async fn load_block_bytes(
@@ -558,7 +546,7 @@ mod tests {
     use std::{collections::BTreeMap, num::NonZero};
 
     use lb_core::{
-        block::{BlockTransactions, UncleHeaders, v1},
+        block::{Block, BlockTransactions, UncleHeaders, v1},
         crypto::ZkHasher,
         events::Events,
         mantle::{
@@ -914,7 +902,6 @@ mod tests {
                     header_id,
                     block.header().parent(),
                     block.clone(),
-                    EraVersion::V1,
                     Events::new(),
                     BTreeMap::new(),
                 )

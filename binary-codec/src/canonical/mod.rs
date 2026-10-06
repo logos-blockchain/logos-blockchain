@@ -93,10 +93,7 @@ pub trait BinaryDecode: CodecExamples + Sized {
     ///
     /// This is useful when you want to peek at the next value without
     /// advancing the input cursor.
-    fn peek_decode<'input>(
-        input: &'input [u8],
-        context: &Self::Context,
-    ) -> Result<Self, DecodeError> {
+    fn peek_decode(input: &[u8], context: &Self::Context) -> Result<Self, DecodeError> {
         let (_, decoded) = Self::decode(input, context)?;
         Ok(decoded)
     }
