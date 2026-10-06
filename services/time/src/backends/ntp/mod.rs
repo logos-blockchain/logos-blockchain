@@ -8,7 +8,8 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
-use lb_cryptarchia_engine::{Slot, era::EraSchedule};
+use lb_core::era::EraSchedules;
+use lb_cryptarchia_engine::Slot;
 use lb_log_targets::time as log_targets_time;
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use sntpc::{NtpResult, fraction_to_nanoseconds};
@@ -80,8 +81,12 @@ impl TimeBackend for NtpTimeBackend {
         ));
         // compute the initial slot ticking stream
         let eras = Arc::new(settings.eras);
-        let (current_slot_tick, slot_timer) =
-            slot_timer(Arc::clone(&eras), OffsetDateTime::now_utc());
+        let local_date = OffsetDateTime::now_utc();
+        let (current_slot_tick, slot_timer) = slot_timer(
+            Arc::clone(&eras),
+            local_date,
+            eras.slot_at(local_date).unwrap_or(Slot::genesis()),
+        );
         (
             current_slot_tick,
             Pin::new(Box::new(NtpStream {
@@ -101,7 +106,7 @@ pub struct NtpStream {
     /// Update interval stream
     interval: NtpResultStream,
     /// The chain's eras, which lay slots and epochs out in time
-    eras: Arc<EraSchedule<()>>,
+    eras: Arc<EraSchedules>,
     /// `SlotTick` interval stream. This stream is replaced when an internal
     /// clock update happens.
     slot_timer: EpochSlotTickStream,
@@ -170,8 +175,8 @@ impl NtpStream {
             }
         };
 
-        let (current_slot_tick, new_slot_timer) = slot_timer(Arc::clone(&this.eras), date);
-        let current_slot = current_slot_tick.slot;
+        let current_slot = this.eras.slot_at(date).unwrap_or(Slot::genesis());
+        let (_, new_slot_timer) = slot_timer(Arc::clone(&this.eras), date, current_slot);
 
         if current_slot < this.last_emitted_slot {
             tracing::warn!(
@@ -225,7 +230,7 @@ mod tests {
     use super::*;
 
     /// One era from the Unix epoch, with slots of 1 s in epochs of 3 slots.
-    fn test_eras() -> EraSchedule<()> {
+    fn test_eras() -> EraSchedules {
         EraSchedule::new(
             OffsetDateTime::UNIX_EPOCH,
             EraEntry {

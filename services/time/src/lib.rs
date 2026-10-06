@@ -4,10 +4,8 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
-use lb_cryptarchia_engine::{
-    Epoch, Slot,
-    era::{Era, EraSchedule},
-};
+use lb_core::era::EraSchedules;
+use lb_cryptarchia_engine::{Epoch, Slot, era::Era};
 use lb_log_targets::time as log_targets_time;
 use log::error;
 use overwatch::{
@@ -77,7 +75,7 @@ impl Debug for TimeServiceMessage {
 pub struct TimeServiceSettings<BackendSettings> {
     /// The chain's eras: when each starts, and how long its slots and epochs
     /// last, which is all the time service needs of them.
-    pub eras: EraSchedule<()>,
+    pub eras: EraSchedules,
     pub backend: BackendSettings,
 }
 

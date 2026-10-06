@@ -277,7 +277,7 @@ impl<Parameters> EraSchedule<Parameters> {
     }
 
     /// Every era, in schedule order.
-    pub fn iter(&self) -> impl Iterator<Item = &ScheduledEra<Parameters>> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &ScheduledEra<Parameters>> {
         once(&self.genesis).chain(&self.after_genesis)
     }
 

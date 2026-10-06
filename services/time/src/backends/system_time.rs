@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use lb_cryptarchia_engine::Slot;
 use time::OffsetDateTime;
 
 use crate::{
@@ -20,7 +21,9 @@ impl TimeBackend for SystemTimeBackend {
 
     fn tick_stream(self) -> (SlotTick, EpochSlotTickStream) {
         let Self { settings } = self;
-        slot_timer(Arc::new(settings.eras), OffsetDateTime::now_utc())
+        let local_date = OffsetDateTime::now_utc();
+        let current_slot = settings.eras.slot_at(local_date).unwrap_or(Slot::genesis());
+        slot_timer(Arc::new(settings.eras), local_date, current_slot)
     }
 }
 
@@ -31,7 +34,7 @@ mod test {
     use futures::StreamExt as _;
     use lb_cryptarchia_engine::{
         Slot,
-        era::{EraEntriesAfterGenesis, EraEntry, EraVersion, EraSchedule},
+        era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion},
     };
     use time::OffsetDateTime;
 
