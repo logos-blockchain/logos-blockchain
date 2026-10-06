@@ -1,13 +1,12 @@
 use std::{pin::Pin, sync::Arc, time::Duration};
 
 use futures::{Stream, StreamExt as _};
-use lb_core::era::EraSchedules;
 use lb_cryptarchia_engine::Slot;
 use time::OffsetDateTime;
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use tokio_stream::wrappers::IntervalStream;
 
-use crate::{EpochSlotTickStream, SlotTick};
+use crate::{EpochSlotTickStream, EraSchedules, SlotTick};
 
 /// Returns the current [`SlotTick`] and a stream of future [`SlotTick`]s
 /// that ticks at the start of each slot, starting from the next slot.

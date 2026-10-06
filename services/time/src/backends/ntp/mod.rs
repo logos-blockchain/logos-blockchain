@@ -8,7 +8,6 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
-use lb_core::era::EraSchedules;
 use lb_cryptarchia_engine::Slot;
 use lb_log_targets::time as log_targets_time;
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
@@ -18,7 +17,7 @@ use tokio::time::{MissedTickBehavior, interval};
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
-    EpochSlotTickStream, SlotTick, TimeServiceSettings,
+    EpochSlotTickStream, EraSchedules, SlotTick, TimeServiceSettings,
     backends::{
         TimeBackend,
         common::slot_timer,

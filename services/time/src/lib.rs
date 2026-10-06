@@ -4,8 +4,10 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
-use lb_core::era::EraSchedules;
-use lb_cryptarchia_engine::{Epoch, Slot, era::Era};
+use lb_cryptarchia_engine::{
+    Epoch, Slot,
+    era::{Era, EraSchedule},
+};
 use lb_log_targets::time as log_targets_time;
 use log::error;
 use overwatch::{
@@ -70,6 +72,10 @@ impl Debug for TimeServiceMessage {
         }
     }
 }
+
+// Service-specific settings instantiated for each era.
+pub type EraSettings = ();
+pub type EraSchedules = EraSchedule<EraSettings>;
 
 #[derive(Clone, Debug)]
 pub struct TimeServiceSettings<BackendSettings> {

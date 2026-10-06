@@ -15,7 +15,6 @@ workspace = true
 [dependencies]
 async-trait           = { workspace = true }
 futures               = { workspace = true }
-lb-core               = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
 lb-log-targets        = { workspace = true }
 lb-tracing            = { workspace = true }

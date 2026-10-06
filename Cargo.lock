@@ -5260,7 +5260,6 @@ dependencies = [
  "async-trait",
  "futures",
  "log",
- "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-log-targets",
  "logos-blockchain-tracing",
