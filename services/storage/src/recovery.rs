@@ -2,8 +2,8 @@ use std::{cmp::Ordering, fmt::Display, marker::PhantomData, sync::Arc};
 
 use bytes::Bytes;
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
-use lb_core::era::ForkDigest;
-use lb_cryptarchia_engine::{Slot, era::EraSchedule};
+use lb_core::era::{ForkDigest, ForkDigests};
+use lb_cryptarchia_engine::Slot;
 use lb_log_targets::utils;
 pub use lb_services_utils::overwatch::recovery::StorageRecoverySettings;
 use lb_services_utils::overwatch::recovery::{
@@ -31,10 +31,6 @@ const LOG_TARGET: &str = utils::RECOVERY;
 
 const RECOVERY_PREFIX: &[u8] = b"recovery/";
 
-/// Opens every stamped record. A record that does not start with it was
-/// written before records were stamped.
-const STAMP_TAG: [u8; 4] = *b"LBSR";
-
 #[must_use]
 pub fn recovery_key(suffix: &[u8]) -> Bytes {
     let mut key = Vec::with_capacity(RECOVERY_PREFIX.len() + suffix.len());
@@ -47,7 +43,7 @@ pub fn recovery_key(suffix: &[u8]) -> Bytes {
 /// digests `forks`.
 pub fn load_recovery_data(
     settings: RocksBackendSettings,
-    forks: Arc<EraSchedule<ForkDigest>>,
+    forks: Arc<ForkDigests>,
 ) -> Result<RecoveryData, DynError> {
     let backend = RocksBackend::new(settings)?;
     recovery_data_from_backend(&backend, forks)
@@ -55,7 +51,7 @@ pub fn load_recovery_data(
 
 fn recovery_data_from_backend(
     backend: &RocksBackend,
-    forks: Arc<EraSchedule<ForkDigest>>,
+    forks: Arc<ForkDigests>,
 ) -> Result<RecoveryData, DynError> {
     backend
         .load_prefix_entries(RECOVERY_PREFIX)
@@ -66,8 +62,8 @@ fn recovery_data_from_backend(
 /// Takes the record under `key_suffix` out of `data` and reads the state it
 /// carries, brought to the version this release writes.
 ///
-/// A record written on another chain, and one written before records were
-/// stamped in a layout the state cannot read, are discarded with a warning.
+/// A record whose stamp names no era of the chain, written on another chain
+/// or too short to carry a stamp, is discarded with a warning.
 ///
 /// # Errors
 ///
@@ -82,16 +78,12 @@ where
         return Ok(None);
     };
     let Some((stamp, state)) = Stamp::read(&record) else {
-        return Ok(State::migrate(StateVersion::new(0), &record)
-            .inspect_err(|error| {
-                warn!(
-                    target: LOG_TARGET,
-                    "Discarding the recovery record {}, written before records were stamped in a \
-                    layout this release cannot read: {error}",
-                    String::from_utf8_lossy(&key)
-                );
-            })
-            .ok());
+        warn!(
+            target: LOG_TARGET,
+            "Discarding the recovery record {}, too short to carry a stamp",
+            String::from_utf8_lossy(&key)
+        );
+        return Ok(None);
     };
     if !data
         .forks()
@@ -135,8 +127,7 @@ impl Stamp {
     /// The record of `state`, stamped.
     fn write(&self, state: &[u8]) -> Bytes {
         [
-            &STAMP_TAG[..],
-            &self.state_version.get().to_le_bytes(),
+            &self.state_version.get().to_le_bytes()[..],
             &<[u8; 32]>::from(self.fork_digest),
             state,
         ]
@@ -145,9 +136,8 @@ impl Stamp {
     }
 
     /// The stamp of `record` and the state after it, `None` when the record
-    /// is not stamped.
+    /// is too short to carry a stamp.
     fn read(record: &[u8]) -> Option<(Self, &[u8])> {
-        let record = record.strip_prefix(&STAMP_TAG)?;
         let (state_version, record) = record.split_first_chunk()?;
         let (fork_digest, state) = record.split_first_chunk()?;
         Some((
@@ -161,7 +151,7 @@ impl Stamp {
 }
 
 /// The fork digest of the era in force at `time`.
-fn fork_in_force(forks: &EraSchedule<ForkDigest>, time: OffsetDateTime) -> ForkDigest {
+fn fork_in_force(forks: &ForkDigests, time: OffsetDateTime) -> ForkDigest {
     let slot = forks.slot_at(time).unwrap_or(Slot::genesis());
     forks.at_slot(slot).entry.parameters
 }
@@ -171,7 +161,7 @@ pub struct StorageRecoveryBackend<State, Settings, RuntimeServiceId> {
     storage: OnceCell<StorageApi>,
     /// The fork digest of every era of the chain, the one in force stamping
     /// each record written.
-    forks: Arc<EraSchedule<ForkDigest>>,
+    forks: Arc<ForkDigests>,
     state: PhantomData<fn() -> State>,
     settings: PhantomData<fn() -> Settings>,
 }
@@ -243,7 +233,7 @@ where
             .map_err(|error| RecoveryError::Backend(error.to_string()))?;
 
         storage
-            .store_bytes(
+            .store_raw(
                 recovery_key(Settings::RECOVERY_KEY_SUFFIX),
                 stamp.write(&state),
             )
@@ -256,7 +246,7 @@ where
 mod tests {
     use std::{collections::HashMap, num::NonZero, time::Duration};
 
-    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion};
     use serde::{Deserialize, Serialize};
 
     use super::*;
@@ -324,7 +314,7 @@ mod tests {
 
     /// A chain of two eras of 10 one-second slots an epoch, from the Unix
     /// epoch: era 1 starts at slot 10, 10 seconds in.
-    fn forks() -> Arc<EraSchedule<ForkDigest>> {
+    fn forks() -> Arc<ForkDigests> {
         let era = |parameters| EraEntry {
             version: EraVersion::V1,
             slot_duration: Duration::from_secs(1),
@@ -492,20 +482,8 @@ mod tests {
     }
 
     #[test]
-    fn unstamped_records_are_read_at_version_zero() {
-        let settings = settings_with_record("legacy".to_bytes().unwrap());
-
-        assert_eq!(
-            load(&settings).unwrap(),
-            Some(TestState {
-                value: "legacy, migrated from version 0".into()
-            })
-        );
-    }
-
-    #[test]
-    fn unreadable_unstamped_records_are_discarded() {
-        let settings = settings_with_record(&b"invalid recovery state"[..]);
+    fn records_too_short_to_carry_a_stamp_are_discarded() {
+        let settings = settings_with_record(&b"too short"[..]);
 
         assert!(load(&settings).unwrap().is_none());
     }

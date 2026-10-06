@@ -15,7 +15,7 @@ use lb_binary_codec::{
     canonical::{BinaryDecode, BinaryEncode},
 };
 use lb_core::{
-    block::Block,
+    block::{Block, v1},
     events::Events,
     header::HeaderId,
     mantle::{
@@ -73,11 +73,11 @@ impl<Tx> StorageApi<Tx> {
     }
 
     pub async fn store<Value: Serialize>(&self, key: Bytes, value: Value) -> Result<(), DynError> {
-        self.store_bytes(key, value.to_bytes()?).await
+        self.store_raw(key, value.to_bytes()?).await
     }
 
     /// Stores `value` as it is.
-    pub async fn store_bytes(&self, key: Bytes, value: Bytes) -> Result<(), DynError> {
+    pub async fn store_raw(&self, key: Bytes, value: Bytes) -> Result<(), DynError> {
         self.relay.send(StorageMsg::Store { key, value }).await?;
         Ok(())
     }
@@ -311,7 +311,9 @@ where
     Tx: BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
 {
     let (version, block) = split_stored_block(record)?;
-    Ok(Block::decode_in(version, &block)?)
+    match version {
+        EraVersion::V1 => Ok(Block::V1(v1::Block::decode_all(&block, &())?)),
+    }
 }
 
 impl<Tx: Serialize + Hashable<Hash = TxHash>> StorageApi<Tx> {

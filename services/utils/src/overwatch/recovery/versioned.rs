@@ -36,8 +36,7 @@ pub trait VersionedState: Sized {
     const VERSION: StateVersion;
 
     /// Reads a state written at the older version `from` and brings it to
-    /// [`Self::VERSION`]. Version 0 is a record written before records
-    /// carried a version.
+    /// [`Self::VERSION`].
     ///
     /// # Errors
     ///

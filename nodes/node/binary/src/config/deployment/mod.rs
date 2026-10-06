@@ -13,7 +13,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{
     Epoch, Slot,
-    era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, ErasError},
+    era::{EraEntriesAfterGenesis, EraEntry, ErasError},
 };
 use lb_era_parameters::{EraDefinition, EraParameters, ProtocolNames, v1};
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
@@ -121,7 +121,9 @@ impl DeploymentSettings {
     /// The schedule resolved: each era with its number, its slot duration and
     /// epoch length, and its definition, its parameters and the digests and
     /// protocol names in force while it is.
-    pub fn era_schedule(&self) -> Result<EraSchedule<EraDefinition>, ErasError> {
+    pub fn era_schedule(
+        &self,
+    ) -> Result<lb_cryptarchia_engine::era::EraSchedule<EraDefinition>, ErasError> {
         let (genesis_id, chain_id) = (self.genesis_id(), self.chain_id());
         let mut era_digests = Vec::with_capacity(self.eras.after_genesis().len() + 1);
         // Called in activation order: the fork digest of an era is over the
@@ -157,7 +159,11 @@ impl DeploymentSettings {
             });
         let after_genesis = EraEntriesAfterGenesis::try_from_iter(after_genesis)
             .expect("a schedule has at most `MAX_ERAS_AFTER_GENESIS` eras after genesis");
-        EraSchedule::new(self.genesis_time().into(), genesis, after_genesis)
+        lb_cryptarchia_engine::era::EraSchedule::new(
+            self.genesis_time().into(),
+            genesis,
+            after_genesis,
+        )
     }
 }
 

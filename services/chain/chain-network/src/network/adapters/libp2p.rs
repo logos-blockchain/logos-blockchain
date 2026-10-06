@@ -219,7 +219,11 @@ where
 }
 
 /// Whether `topic` is the proposal topic of an era in force.
-fn is_in_force(topics: &EraSchedule<TopicHash>, in_force: Option<EraInForce>, topic: &TopicHash) -> bool {
+fn is_in_force(
+    topics: &EraSchedule<TopicHash>,
+    in_force: Option<EraInForce>,
+    topic: &TopicHash,
+) -> bool {
     in_force
         .into_iter()
         .flat_map(EraInForce::eras)
@@ -463,11 +467,11 @@ where
 
         let stream = receiver.await?;
         // A block decodes under the version of the era of its slot.
-        let eras = self.settings.topics.map(|_| ());
+        let context = (self.settings.topics.map(|_| ()), ());
         let stream = stream
             .map_err(|e| Box::new(e) as DynError)
             .map(move |result| {
-                let block: Self::Block = Block::decode_all(&result?, &eras)?;
+                let block: Self::Block = Block::decode_all(&result?, &context)?;
                 Ok((block.header().id(), block))
             });
 

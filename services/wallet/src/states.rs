@@ -15,7 +15,7 @@ use lb_core::{
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
-use lb_services_utils::overwatch::VersionedState;
+use lb_services_utils::overwatch::{StateVersion, VersionedState};
 use lb_wallet::{Voucher, Vouchers, WalletBlock, WalletError, WalletState};
 use overwatch::{DynError, services::state::StateUpdater};
 use serde::{Deserialize, Serialize};
@@ -226,11 +226,11 @@ impl overwatch::services::state::ServiceState for RecoveryState {
 }
 
 impl VersionedState for RecoveryState {
-    const VERSION: u16 = 1;
+    const VERSION: StateVersion = StateVersion::new(1);
 
     /// The only version before 1 is 0, the records written before records
     /// carried a version, in the layout of version 1.
-    fn migrate(_from: u16, bytes: &[u8]) -> Result<Self, DynError> {
+    fn migrate(_from: StateVersion, bytes: &[u8]) -> Result<Self, DynError> {
         Ok(Self::from_bytes(bytes)?)
     }
 }

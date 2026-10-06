@@ -558,7 +558,7 @@ mod tests {
     use std::{collections::BTreeMap, num::NonZero};
 
     use lb_core::{
-        block::{BlockTransactions, UncleHeaders},
+        block::{BlockTransactions, UncleHeaders, v1},
         crypto::ZkHasher,
         events::Events,
         mantle::{
@@ -963,7 +963,7 @@ mod tests {
                 while let Some(res) = &stream.next().await {
                     if let Ok(bytes) = &res {
                         let block: Block<SignedOps<Unverified, StandardMode>> =
-                            Block::decode_in(EraVersion::V1, bytes).unwrap();
+                            Block::V1(v1::Block::decode_all(bytes, &()).unwrap());
                         blocks.push(block.header().id());
                     } else {
                         break;
@@ -1008,7 +1008,7 @@ mod tests {
                     ProviderResponse::Available(mut stream) => match stream.next().await {
                         Some(Ok(bytes)) => {
                             let block: Block<Ops> =
-                                Block::decode_in(EraVersion::V1, &bytes).unwrap();
+                                Block::V1(v1::Block::decode_all(&bytes, &()).unwrap());
                             (
                                 false,
                                 format!("Available(first_block={:?})", block.header().id()),

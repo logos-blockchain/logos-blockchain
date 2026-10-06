@@ -48,7 +48,9 @@ use lb_key_management_system_keys::keys::{
 use lb_ledger::LedgerState;
 use lb_log_targets::pow;
 use lb_services_utils::{
-    overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings, VersionedState},
+    overwatch::{
+        RecoveryData, RecoveryOperator, StateVersion, StorageRecoverySettings, VersionedState,
+    },
     wait_until_services_are_ready,
 };
 use lb_storage_service::{StorageService, recovery::StorageRecoveryBackend};
@@ -403,11 +405,11 @@ impl ServiceState for PoWServiceState {
 }
 
 impl VersionedState for PoWServiceState {
-    const VERSION: u16 = 1;
+    const VERSION: StateVersion = StateVersion::new(1);
 
     /// The only version before 1 is 0, the records written before records
     /// carried a version, in the layout of version 1.
-    fn migrate(_from: u16, bytes: &[u8]) -> Result<Self, DynError> {
+    fn migrate(_from: StateVersion, bytes: &[u8]) -> Result<Self, DynError> {
         Ok(Self::from_bytes(bytes)?)
     }
 }
