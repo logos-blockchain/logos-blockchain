@@ -100,6 +100,10 @@ const fn continuous_workload_dust_threshold(output_value: u64, base_tx_fee: u64)
     }
 }
 
+const fn continuous_workload_sender_fee_requirement(base_tx_fee: u64, fee_sponsored: bool) -> u64 {
+    if fee_sponsored { 0 } else { base_tx_fee }
+}
+
 /// Per-wallet UTXOs prepared for continuous workload transaction batches.
 ///
 /// The ordered map provides the bounded largest-first primary prefix and
@@ -171,9 +175,10 @@ impl WorkloadUtxoPool {
         &self,
         primary_inputs: &[Utxo],
         output_value: u64,
-        base_tx_fee: u64,
+        sender_fee_requirement: u64,
     ) -> WorkloadCandidateSet {
-        let dust_threshold = continuous_workload_dust_threshold(output_value, base_tx_fee);
+        let dust_threshold =
+            continuous_workload_dust_threshold(output_value, sender_fee_requirement);
         let primary_note_ids = primary_inputs.iter().map(Utxo::id).collect::<HashSet<_>>();
         let dust_input_limit = MAX_CONTINUOUS_WORKLOAD_DUST_INPUTS
             .min(MAX_TRANSACTION_INPUTS.saturating_sub(primary_inputs.len()));
@@ -263,12 +268,12 @@ impl WorkloadUtxoPools {
         wallet_name: &str,
         primary_inputs: &[Utxo],
         output_value: u64,
-        base_tx_fee: u64,
+        sender_fee_requirement: u64,
     ) -> Option<WorkloadCandidateSet> {
         Some(self.by_wallet.get(wallet_name)?.candidates_for_primary(
             primary_inputs,
             output_value,
-            base_tx_fee,
+            sender_fee_requirement,
         ))
     }
 
@@ -523,12 +528,16 @@ pub(crate) async fn reserve_workload_transaction_intent_with_primary_and_dust(
                 be estimated: {error}"
             ),
         })?;
+    let fee_sponsored =
+        scenario_fee_account_state(world, sender_wallet_name, available_utxos)?.is_some();
+    let sender_fee_requirement =
+        continuous_workload_sender_fee_requirement(base_tx_fee, fee_sponsored);
     let candidates = workload_pools
         .candidates(
             sender_wallet_name,
             primary_inputs,
             output_value,
-            base_tx_fee,
+            sender_fee_requirement,
         )
         .expect("workload primary prefix was read from the same candidate pool");
 
@@ -593,6 +602,24 @@ const fn is_user_wallet_funds_deficit(error: &StepError) -> bool {
     )
 }
 
+fn restore_preparation_order<T>(
+    expected_count: usize,
+    completed_submissions: impl IntoIterator<Item = (usize, T)>,
+) -> Option<Vec<T>> {
+    let mut ordered = std::iter::repeat_with(|| None)
+        .take(expected_count)
+        .collect::<Vec<_>>();
+
+    for (index, submission) in completed_submissions {
+        let slot = ordered.get_mut(index)?;
+        if slot.replace(submission).is_some() {
+            return None;
+        }
+    }
+
+    ordered.into_iter().collect()
+}
+
 /// Finalize reserved transactions in blocking worker tasks.
 ///
 /// Wallet proof/signing work can be CPU-heavy, so this avoids doing it inline
@@ -605,21 +632,27 @@ pub(crate) async fn finalize_reserved_user_wallet_submissions_concurrently(
         return Ok(Vec::new());
     }
 
+    let submission_count = reserved_submissions.len();
     let mut join_set = JoinSet::new();
-    for reserved_submission in reserved_submissions {
+    for (index, reserved_submission) in reserved_submissions.into_iter().enumerate() {
         let step = step.to_owned();
         join_set.spawn_blocking(move || {
-            finalize_reserved_user_wallet_submission(&step, reserved_submission)
+            (
+                index,
+                finalize_reserved_user_wallet_submission(&step, reserved_submission),
+            )
         });
     }
 
-    let mut signed_submissions = Vec::new();
+    let mut completed_signed_submissions = Vec::with_capacity(submission_count);
     let mut first_error = None;
 
     while let Some(result) = join_set.join_next().await {
         match result {
-            Ok(Ok(signed_submission)) => signed_submissions.push(signed_submission),
-            Ok(Err(error)) => {
+            Ok((index, Ok(signed_submission))) => {
+                completed_signed_submissions.push((index, signed_submission));
+            }
+            Ok((_, Err(error))) => {
                 first_error.get_or_insert(error);
             }
             Err(error) => {
@@ -634,7 +667,13 @@ pub(crate) async fn finalize_reserved_user_wallet_submissions_concurrently(
         return Err(error);
     }
 
-    Ok(signed_submissions)
+    restore_preparation_order(submission_count, completed_signed_submissions).ok_or_else(|| {
+        StepError::LogicalError {
+            message: "Concurrent transaction finalization did not return each prepared \
+                submission exactly once"
+                .to_owned(),
+        }
+    })
 }
 
 /// Get the best n nodes for a random wallet's fork group. All wallets in the
@@ -1636,6 +1675,8 @@ fn group_key_for_wallet(world: &CucumberWorld, wallet_name: &str) -> Result<Stri
 mod cache_removal_tests {
     use lb_chain_service::Epoch;
     use lb_core::{header::HeaderId, mantle::Note};
+    use rand::{SeedableRng as _, seq::SliceRandom as _};
+    use rand_chacha::ChaCha8Rng;
 
     use super::*;
     use crate::common::wallet::TransactionFeeHorizon;
@@ -1912,6 +1953,32 @@ mod cache_removal_tests {
         )
     }
 
+    fn prepare_fee_sponsored_all_provided(
+        sender_utxos: &[Utxo],
+        fee_sponsor_utxos: &[Utxo],
+        output_value: u64,
+    ) -> Result<PreparedWalletTransactionWorkItem, WalletTransactionError> {
+        let sender_account = workload_account();
+        let sender_public_key = sender_account.public_key();
+        let sender = WalletFundingSource::with_change_pk_and_strategy(
+            sender_account,
+            sender_utxos.to_vec(),
+            sender_public_key,
+            WalletInputSelectionStrategy::AllProvided,
+        );
+        let fee_sponsor_account = WalletAccount::deterministic(101, 1_000_000, false)
+            .expect("fee sponsor test account should build");
+        let fee_sponsor = WalletFundingSource::new(fee_sponsor_account, fee_sponsor_utxos.to_vec());
+        let intent = WalletTransactionIntent::transfer(&[(ZkPublicKey::zero(), output_value)])?
+            .with_gas_prices(GasPrices::default());
+
+        prepare_wallet_transaction_work_item(
+            intent,
+            WalletFundingResources::fee_sponsored(sender, fee_sponsor),
+            0,
+        )
+    }
+
     fn input_values(work_item: &PreparedWalletTransactionWorkItem) -> Vec<u64> {
         let (sender_inputs, fee_sponsor_inputs) = work_item
             .reserved_inputs()
@@ -1921,6 +1988,24 @@ mod cache_removal_tests {
             .into_iter()
             .map(|utxo| utxo.note.value)
             .collect()
+    }
+
+    #[test]
+    fn finalization_completion_order_is_restored_before_dependent_shuffle() {
+        let preparation_order = vec![10, 20, 30, 40, 50, 60];
+        let first_completion_order = vec![(3, 40), (0, 10), (5, 60), (2, 30), (1, 20), (4, 50)];
+        let second_completion_order = vec![(4, 50), (5, 60), (1, 20), (0, 10), (3, 40), (2, 30)];
+
+        let mut first = restore_preparation_order(6, first_completion_order)
+            .expect("all first results should be restored by preparation index");
+        let mut second = restore_preparation_order(6, second_completion_order)
+            .expect("all second results should be restored by preparation index");
+        assert_eq!(first, preparation_order);
+        assert_eq!(second, preparation_order);
+
+        first.shuffle(&mut ChaCha8Rng::seed_from_u64(42));
+        second.shuffle(&mut ChaCha8Rng::seed_from_u64(42));
+        assert_eq!(first, second);
     }
 
     #[test]
@@ -2184,6 +2269,12 @@ mod cache_removal_tests {
     }
 
     #[test]
+    fn sponsored_workload_does_not_charge_sender_dust_threshold_for_fees() {
+        assert_eq!(continuous_workload_sender_fee_requirement(700, true), 0);
+        assert_eq!(continuous_workload_sender_fee_requirement(700, false), 700);
+    }
+
+    #[test]
     fn workload_selection_drops_dust_until_actual_funding_succeeds() {
         let primary = workload_utxo(1_000_000_000, 0);
         let dust = (1..=10)
@@ -2370,7 +2461,7 @@ mod cache_removal_tests {
     }
 
     #[test]
-    fn one_lgo_workload_uses_base_fee_as_the_dust_threshold() {
+    fn non_sponsored_one_lgo_workload_uses_base_fee_as_the_dust_threshold() {
         let mut utxos = vec![workload_utxo(430_000, 0), workload_utxo(410_000, 1)];
         utxos.extend((1..=12).map(|index| workload_utxo(1, index + 1)));
         let pool = WorkloadUtxoPool::new(&utxos);
@@ -2398,5 +2489,59 @@ mod cache_removal_tests {
         );
         assert_eq!(input_values(&work_item)[0], 430_000);
         assert_eq!(pool.len(), utxos.len());
+    }
+
+    #[test]
+    fn sponsored_one_lgo_batch_preserves_each_output_for_a_transfer() {
+        let utxos = (0..11)
+            .map(|index| workload_utxo(1, index))
+            .collect::<Vec<_>>();
+        let mut pool = WorkloadUtxoPool::new(&utxos);
+        let intent = WalletTransactionIntent::transfer(&[(ZkPublicKey::zero(), 1)])
+            .expect("one-LGO workload transfer intent")
+            .with_gas_prices(GasPrices::default());
+        let largest = pool.primary().expect("a sender output should be available");
+        let (_, base_tx_fee) = estimate_workload_fee_requirements(&intent, &[largest], 0)
+            .expect("base transaction fee should be estimable");
+        assert!(base_tx_fee >= 1, "test must exercise fee-sized dust");
+        let sender_fee_requirement = continuous_workload_sender_fee_requirement(base_tx_fee, true);
+        assert_eq!(sender_fee_requirement, 0);
+
+        let fee_sponsor_account = WalletAccount::deterministic(101, 1_000_000, false)
+            .expect("fee sponsor test account should build");
+        let mut remaining_sponsor_utxos = (0..11).map(|index| {
+            Utxo::new(
+                [0xFE; 32],
+                index,
+                Note::new(10_000_000, fee_sponsor_account.public_key()),
+            )
+        });
+
+        for transaction_index in 0..11 {
+            let primary = pool
+                .primary()
+                .expect("each transfer needs one sender input");
+            let candidates = pool.candidates_for_primary(&[primary], 1, sender_fee_requirement);
+            assert_eq!(candidates.dust_threshold, 0);
+            assert_eq!(candidates.dust.len(), 0);
+            let selected_inputs = candidates.inputs(candidates.dust.len());
+            assert_eq!(selected_inputs.len(), 1);
+
+            let fee_sponsor_utxo = remaining_sponsor_utxos
+                .next()
+                .expect("each transaction has a unique fee sponsor input");
+            let work_item =
+                prepare_fee_sponsored_all_provided(&selected_inputs, &[fee_sponsor_utxo], 1)
+                    .expect("one sender LGO plus sponsored fees should fund one transfer");
+            let (sender_inputs, fee_sponsor_inputs) = work_item
+                .reserved_inputs()
+                .into_sender_and_fee_sponsor_inputs();
+            assert_eq!(sender_inputs.len(), 1, "transaction {transaction_index}");
+            assert_eq!(sender_inputs[0].note.value, 1);
+            assert_ne!(fee_sponsor_inputs.len(), 0);
+            pool.remove(sender_inputs[0].id());
+        }
+
+        assert_eq!(pool.len(), 0, "all eleven sender outputs funded a transfer");
     }
 }

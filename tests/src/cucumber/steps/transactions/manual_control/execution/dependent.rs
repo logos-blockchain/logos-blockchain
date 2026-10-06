@@ -87,6 +87,11 @@ impl DependentTransactionLoadState {
         })
     }
 
+    #[must_use]
+    pub const fn channel_id(&self) -> ChannelId {
+        self.channel_id
+    }
+
     pub fn begin_burst(&self, round: usize, transaction_count: usize) {
         self.set_last_burst_diagnostics(DependentBurstDiagnostics {
             round,
@@ -258,6 +263,19 @@ mod tests {
         let second = DependentTransactionLoadState::new();
 
         assert_ne!(first.channel_id, second.channel_id);
+    }
+
+    #[test]
+    fn channel_id_accessor_exposes_the_display_hex_used_by_diagnostics() {
+        let state = DependentTransactionLoadState::new();
+        let channel_id = state.channel_id();
+        let inscription = state.allocate_lineage_entry().expect("lineage entry");
+        let channel_id_hex = channel_id.to_string();
+
+        assert_eq!(inscription.operation.channel_id, channel_id);
+        assert_eq!(channel_id_hex.len(), 64);
+        assert!(channel_id_hex.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(channel_id_hex, format!("{channel_id}"));
     }
 
     #[test]

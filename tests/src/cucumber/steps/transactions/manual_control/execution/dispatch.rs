@@ -215,6 +215,9 @@ pub async fn execute_mempool_next_wallet_user_wallet(
         "mempool_transaction_load_started",
         &serde_json::json!({
             "workload_mode": workload_mode,
+            "channel_id": dependent_state
+                .as_ref()
+                .map(|state| state.channel_id().to_string()),
             "wallet_count": wallet_count,
             "transactions_per_wallet": transactions_per_wallet,
             "transactions_per_round": transactions_per_round,
@@ -858,6 +861,7 @@ async fn execute_ring_send_round_with_utxo_cache<S: BuildHasher + Sync>(
                 "workload_mode": workload_mode,
                 "round": round_number,
                 "transaction_count": submitted_hashes.len(),
+                "reserved_input_count": reserved_input_count,
                 "preparation_and_signing_ms": preparation_duration.as_millis(),
                 "shuffle_seed": dependent_diagnostics.as_ref().and_then(|diagnostics| diagnostics.shuffle_seed),
                 "node_selection_ms": node_selection_duration.as_millis(),

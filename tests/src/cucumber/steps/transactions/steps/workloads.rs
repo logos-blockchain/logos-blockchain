@@ -408,6 +408,9 @@ fn start_continuous_next_wallet_load(
                 &serde_json::json!({
                     "wallet_nodes": task_wallet_nodes,
                     "workload_mode": if dependent_mode { "dependent" } else { "independent" },
+                    "channel_id": task_dependent_state
+                        .as_ref()
+                        .map(|state| state.channel_id().to_string()),
                     "wallet_count": wallet_count,
                     "transactions_per_wallet_per_round": num_transactions,
                     "transactions_per_round": transactions_per_round,
