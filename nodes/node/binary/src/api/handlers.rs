@@ -1547,13 +1547,7 @@ pub async fn block<RuntimeServiceId>(
     Path(id): Path<HeaderId>,
 ) -> Response
 where
-    RuntimeServiceId: AsServiceId<StorageService<RuntimeServiceId>>
-        + AsServiceId<Cryptarchia<RuntimeServiceId>>
-        + Debug
-        + Send
-        + Sync
-        + Display
-        + 'static,
+    RuntimeServiceId: AsServiceId<StorageService<RuntimeServiceId>> + Debug + Sync + Display,
 {
     let storage =
         match StorageApi::<SignedOps<Unverified, StandardMode>>::from_overwatch_handle(&handle)
@@ -1562,11 +1556,7 @@ where
             Ok(storage) => storage,
             Err(error) => return ApiError::internal(error).into_response(),
         };
-    let decode_context = match consensus::block_decode_context::<RuntimeServiceId>(&handle).await {
-        Ok(decode_context) => decode_context,
-        Err(error) => return ApiError::Internal(error).into_response(),
-    };
-    let block = storage.try_get_block(&id, &decode_context).await;
+    let block = storage.try_get_block(&id).await;
     match block {
         Ok(Some(block)) => {
             let api_block = ApiBlock::from(&block);

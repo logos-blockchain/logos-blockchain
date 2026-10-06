@@ -522,7 +522,6 @@ where
         };
 
         let mut uncles = Vec::new();
-        let decode_context = (self.cryptarchia.ledger.era_schedule().map(|_| ()), ());
         for candidate in self
             .cryptarchia
             .consensus
@@ -531,12 +530,7 @@ where
             // Every block accepted into the block tree is persisted, so a
             // candidate must be loadable. Even if not, a proposal is still
             // valid with fewer uncles.
-            let Some(block) = self
-                .relays
-                .storage()
-                .get_block(&candidate.id(), &decode_context)
-                .await
-            else {
+            let Some(block) = self.relays.storage().get_block(&candidate.id()).await else {
                 error!(target: LOG_TARGET, candidate = ?candidate.id(), "uncle candidate not found in storage");
                 continue;
             };
@@ -923,12 +917,11 @@ where
         .await;
     }
 
-    let decode_context = (cryptarchia.ledger.era_schedule().map(|_| ()), ());
     let reorged_txs: Vec<_> = join_all(
         applied
             .reorged_blocks
             .iter()
-            .map(|id| relays.storage().get_block(id, &decode_context)),
+            .map(|id| relays.storage().get_block(id)),
     )
     .await
     .into_iter()
@@ -968,12 +961,11 @@ async fn log_newly_canonical_blocks<Tx>(
         return;
     }
 
-    let decode_context = (cryptarchia.ledger.era_schedule().map(|_| ()), ());
     for block_id in newly_canonical_blocks {
         let canonical_block = if *block_id == applied_block.header().id() {
             Some(applied_block.clone())
         } else {
-            storage.get_block(block_id, &decode_context).await
+            storage.get_block(block_id).await
         };
         let Some(canonical_block) = canonical_block else {
             warn!(

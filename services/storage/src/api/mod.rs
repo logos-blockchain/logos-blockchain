@@ -10,10 +10,7 @@ use std::{
 
 use bytes::Bytes;
 use futures::{StreamExt as _, future::join_all, stream::BoxStream};
-use lb_binary_codec::{
-    bincode::{DeserializeOp as _, SerializeOp as _},
-    canonical::{BinaryDecode, BinaryEncode},
-};
+use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::{
     block::Block,
     events::Events,
@@ -76,6 +73,7 @@ impl<Tx> StorageApi<Tx> {
         self.store_raw(key, value.to_bytes()?).await
     }
 
+    /// Stores `value` as it is.
     pub async fn store_raw(&self, key: Bytes, value: Bytes) -> Result<(), DynError> {
         self.relay.send(StorageMsg::Store { key, value }).await?;
         Ok(())
@@ -107,23 +105,6 @@ impl<Tx> StorageApi<Tx> {
             response_tx,
         })
         .await
-    }
-
-    pub async fn remove_block(&self, id: HeaderId) -> Result<Option<Bytes>, DynError> {
-        self.request(|response_tx| StorageMsg::RemoveBlock {
-            header_id: id,
-            response_tx,
-        })
-        .await
-    }
-
-    pub async fn remove_blocks(
-        &self,
-        ids: impl Iterator<Item = HeaderId>,
-    ) -> impl Iterator<Item = Result<Option<Bytes>, DynError>> {
-        join_all(ids.map(|id| self.remove_block(id)))
-            .await
-            .into_iter()
     }
 
     pub async fn get_block_parent(&self, id: &HeaderId) -> Option<HeaderId> {
@@ -224,7 +205,7 @@ impl<Tx: Serialize + Hashable<Hash: Into<TxHash>>> StorageApi<Tx> {
 
 impl<Tx> StorageApi<Tx>
 where
-    Tx: BinaryEncode + Hashable<Hash = TxHash> + StorageSize,
+    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash>,
 {
     pub async fn store_block_data(
         &self,
@@ -234,7 +215,7 @@ where
         events: Events,
         immutable_ids: BTreeMap<Slot, HeaderId>,
     ) -> Result<(), DynError> {
-        let block = Bytes::from(block.encode());
+        let block = block.to_bytes()?;
         let events = Bytes::try_from(events)?;
         self.request(|response_tx| StorageMsg::StoreBlockData {
             header_id: id,
@@ -249,40 +230,55 @@ where
     }
 }
 
-/// Blocks read back decoded with the caller's `context`, the era schedule whose
-/// era of a block's slot picks its codec and the context of its transactions:
-/// storage keeps no era of its own.
 impl<Tx> StorageApi<Tx>
 where
-    Tx: BinaryDecode<Context: Sync> + Hashable<Hash = TxHash> + StorageSize,
+    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
 {
-    pub async fn get_block(
-        &self,
-        id: &HeaderId,
-        context: &<Block<Tx> as BinaryDecode>::Context,
-    ) -> Option<Block<Tx>> {
-        self.try_get_block(id, context).await.ok().flatten()
+    pub async fn get_block(&self, id: &HeaderId) -> Option<Block<Tx>> {
+        let bytes = self
+            .optional_request(|response_tx| StorageMsg::GetBlock {
+                header_id: *id,
+                response_tx,
+            })
+            .await?;
+        Block::from_bytes(&bytes).ok()
     }
 
     /// Read and verify a block, returning storage and decoding errors.
-    pub async fn try_get_block(
-        &self,
-        id: &HeaderId,
-        context: &<Block<Tx> as BinaryDecode>::Context,
-    ) -> Result<Option<Block<Tx>>, DynError> {
+    pub async fn try_get_block(&self, id: &HeaderId) -> Result<Option<Block<Tx>>, DynError> {
         self.get_block_bytes(id)
             .await?
-            .map(|block| Block::decode_all(&block, context).map_err(Into::into))
+            .map(|bytes| Block::from_bytes(&bytes))
             .transpose()
+            .map_err(Into::into)
     }
 
-    /// Read and verify a block, returning storage and decoding errors.
-    pub async fn load_block(
+    /// Decode a stored block without the additional `into_verified` pass.
+    pub async fn load_block(&self, id: &HeaderId) -> Result<Option<Block<Tx>>, DynError> {
+        self.load(Bytes::copy_from_slice(&<[u8; 32]>::from(*id)))
+            .await
+    }
+
+    pub async fn remove_block(&self, id: HeaderId) -> Result<Option<Block<Tx>>, DynError> {
+        let bytes = self
+            .request(|response_tx| StorageMsg::RemoveBlock {
+                header_id: id,
+                response_tx,
+            })
+            .await?;
+        bytes
+            .map(|bytes| Block::from_bytes(&bytes))
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub async fn remove_blocks(
         &self,
-        id: &HeaderId,
-        context: &<Block<Tx> as BinaryDecode>::Context,
-    ) -> Result<Option<Block<Tx>>, DynError> {
-        self.try_get_block(id, context).await
+        ids: impl Iterator<Item = HeaderId>,
+    ) -> impl Iterator<Item = Result<Option<Block<Tx>>, DynError>> {
+        join_all(ids.map(|id| self.remove_block(id)))
+            .await
+            .into_iter()
     }
 }
 

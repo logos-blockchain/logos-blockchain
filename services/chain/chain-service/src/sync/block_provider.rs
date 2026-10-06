@@ -7,8 +7,9 @@ use std::{
 
 use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _, future, stream, stream::BoxStream};
-use lb_binary_codec::canonical::BinaryDecode;
+use lb_binary_codec::canonical::BinaryEncode;
 use lb_core::{
+    block::Block,
     header::HeaderId,
     mantle::{
         TxHash,
@@ -70,7 +71,7 @@ impl<Tx> BlockProvider<Tx> {
 
 impl<Tx> BlockProvider<Tx>
 where
-    Tx: DeserializeOwned + BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
+    Tx: DeserializeOwned + BinaryEncode + Hashable<Hash = TxHash> + StorageSize,
     Tx: Serialize + Clone + Eq + Send + Sync + 'static,
 {
     /// Creates a block stream that leads from one of the [`known_blocks`]
@@ -176,10 +177,12 @@ where
                 let storage = storage.clone();
 
                 async move {
-                    Self::load_block_bytes(id, &storage)
+                    // Peers sync blocks in their canonical encoding.
+                    let block = Self::load_block(id, &storage)
                         .await
                         .map_err(DynError::from)?
-                        .ok_or_else(|| DynError::from(GetBlocksError::BlockNotFound(id)))
+                        .ok_or_else(|| DynError::from(GetBlocksError::BlockNotFound(id)))?;
+                    Ok::<_, DynError>(Bytes::from(block.encode()))
                 }
             })
             .map_err(DynError::from)
@@ -220,7 +223,11 @@ where
         }
 
         if let Some(target_storage_block) = self.load_immutable_block(target_block).await? {
-            return Ok(target_storage_block);
+            return Ok(BlockInfo {
+                id: target_block,
+                slot: target_storage_block.header().slot(),
+                location: BlockLocation::Storage,
+            });
         }
 
         Err(GetBlocksError::BlockNotFound(target_block))
@@ -288,7 +295,11 @@ where
             .find_max_slot_immutable_block(known_blocks.iter().copied())
             .await?
         {
-            return Ok(Some(immutable_block));
+            return Ok(Some(BlockInfo {
+                id: immutable_block.header().id(),
+                slot: immutable_block.header().slot(),
+                location: BlockLocation::Storage,
+            }));
         }
 
         // Check if the genesis block is stored as immutable
@@ -447,18 +458,19 @@ where
     async fn find_max_slot_immutable_block(
         &self,
         ids: impl Iterator<Item = HeaderId>,
-    ) -> Result<Option<BlockInfo>, GetBlocksError> {
+    ) -> Result<Option<Block<Tx>>, GetBlocksError> {
         Ok(self
             .load_immutable_blocks(ids)
             .await?
-            .into_iter()
-            .max_by_key(|block| block.slot))
+            .iter()
+            .max_by_key(|block| block.header().slot())
+            .cloned())
     }
 
     async fn load_immutable_blocks(
         &self,
         ids: impl Iterator<Item = HeaderId>,
-    ) -> Result<Vec<BlockInfo>, GetBlocksError> {
+    ) -> Result<Vec<Block<Tx>>, GetBlocksError> {
         let mut blocks = Vec::new();
         for id in ids {
             if let Some(block) = self.load_immutable_block(id).await? {
@@ -469,42 +481,34 @@ where
         Ok(blocks)
     }
 
-    /// Locates an immutable block by its ID in the storage, by the slot its
-    /// encoding starts with, as the encoding of every version does: no era
-    /// schedule is needed to read it.
+    /// Loads an immutable block by its ID from the storage.
     /// If the block is not found, or if it is not stored as immutable,
     /// returns [`None`].
     async fn load_immutable_block(
         &self,
         id: HeaderId,
-    ) -> Result<Option<BlockInfo>, GetBlocksError> {
-        let Some(block) = Self::load_block_bytes(id, &self.storage).await? else {
+    ) -> Result<Option<Block<Tx>>, GetBlocksError> {
+        let Some(block) = Self::load_block(id, &self.storage).await? else {
             return Ok(None);
         };
-        let slot = Slot::peek_decode(&block, &())
-            .map_err(|error| GetBlocksError::Storage(error.to_string()))?;
 
         match self
             .storage
-            .get_immutable_block_id(slot)
+            .get_immutable_block_id(block.header().slot())
             .await
             .map_err(|error| GetBlocksError::Storage(error.to_string()))?
         {
-            Some(immutable_id) if immutable_id == id => Ok(Some(BlockInfo {
-                id,
-                slot,
-                location: BlockLocation::Storage,
-            })),
+            Some(immutable_id) if immutable_id == id => Ok(Some(block)),
             Some(_) | None => Ok(None),
         }
     }
 
-    async fn load_block_bytes(
+    async fn load_block(
         id: HeaderId,
         storage: &StorageApi<Tx>,
-    ) -> Result<Option<Bytes>, GetBlocksError> {
+    ) -> Result<Option<Block<Tx>>, GetBlocksError> {
         storage
-            .get_block_bytes(&id)
+            .try_get_block(&id)
             .await
             .map_err(|error| GetBlocksError::Storage(error.to_string()))
     }
@@ -545,8 +549,9 @@ where
 mod tests {
     use std::{collections::BTreeMap, num::NonZero};
 
+    use lb_binary_codec::canonical::BinaryDecode as _;
     use lb_core::{
-        block::{Block, BlockTransactions, UncleHeaders, v1},
+        block::{BlockTransactions, UncleHeaders, v1},
         crypto::ZkHasher,
         events::Events,
         mantle::{

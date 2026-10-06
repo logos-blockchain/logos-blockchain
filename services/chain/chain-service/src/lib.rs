@@ -25,7 +25,6 @@ use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
     block::{Block, UncleHeaders, genesis::GenesisBlock},
-    era::EraSchedules,
     events::Events,
     header::HeaderId,
     mantle::{
@@ -891,7 +890,6 @@ where
         tip: HeaderId,
         lib: HeaderId,
         storage: StorageApi<Tx>,
-        decode_context: &(EraSchedules, ()),
     ) -> Result<Vec<Block<Tx>>, Error> {
         let ids = load_block_ids_from_storage(tip, lib, storage.clone())
             .try_collect::<Vec<_>>()
@@ -903,7 +901,7 @@ where
         // is already initialized from it.
         for id in ids.into_iter().rev().skip(1) {
             let block = storage
-                .get_block(&id, decode_context)
+                .get_block(&id)
                 .await
                 .ok_or(Error::HeaderIdNotFound(id))?;
             blocks.push(block);
@@ -916,7 +914,6 @@ where
         tip: HeaderId,
         lib: HeaderId,
         storage: StorageApi<Tx>,
-        decode_context: &(EraSchedules, ()),
     ) -> RecoveryBlocks<Tx> {
         if tip == lib {
             // Cryptarchia already starts from LIB, so there is no branch to replay.
@@ -926,7 +923,7 @@ where
             };
         }
 
-        match Self::load_recovery_blocks_from_storage(tip, lib, storage, decode_context).await {
+        match Self::load_recovery_blocks_from_storage(tip, lib, storage).await {
             Ok(blocks) => RecoveryBlocks {
                 blocks,
                 fell_back_to_lib: false,
@@ -1043,7 +1040,6 @@ where
             recovery_state.tip,
             lib_id,
             relays.storage().clone(),
-            &(cryptarchia.ledger.era_schedule().map(|_| ()), ()),
         )
         .await;
         info!(

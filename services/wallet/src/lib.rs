@@ -1480,17 +1480,14 @@ where
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         ledger_eras: &EraSchedule<lb_ledger::Config>,
     ) {
-        let Ok(block) = Self::load_block(header_id, storage, ledger_eras)
-            .await
-            .inspect_err(|e| {
-                error!(
-                    target: LOG_TARGET,
-                    block_id = ?header_id,
-                    err = %e,
-                    "Failed to fetch new block and ledger for wallet"
-                );
-            })
-        else {
+        let Ok(block) = Self::load_block(header_id, storage).await.inspect_err(|e| {
+            error!(
+                target: LOG_TARGET,
+                block_id = ?header_id,
+                err = %e,
+                "Failed to fetch new block and ledger for wallet"
+            );
+        }) else {
             return;
         };
 
@@ -1537,10 +1534,9 @@ where
     async fn load_block(
         header_id: HeaderId,
         storage: &StorageApi<Tx>,
-        ledger_eras: &EraSchedule<lb_ledger::Config>,
     ) -> Result<Block<Tx>, WalletServiceError> {
         storage
-            .get_block(&header_id, &(ledger_eras.map(|_| ()), ()))
+            .get_block(&header_id)
             .await
             .ok_or(WalletServiceError::BlockNotFoundInStorage(header_id))
     }
@@ -1601,7 +1597,6 @@ where
         let claimed_nullifiers = Self::collect_claimed_nullifiers_from_blocks(
             lib_update.pruned_blocks.immutable_blocks.values(),
             storage,
-            ledger_eras,
         )
         .await;
 
@@ -1621,11 +1616,9 @@ where
     async fn collect_claimed_nullifiers_from_blocks(
         blocks: impl Iterator<Item = &HeaderId>,
         storage: &StorageApi<Tx>,
-        ledger_eras: &EraSchedule<lb_ledger::Config>,
     ) -> Vec<VoucherNullifier> {
-        let decode_context = (ledger_eras.map(|_| ()), ());
         let immutable_blocks: Vec<Block<Tx>> = futures::stream::iter(blocks)
-            .filter_map(async |header_id| storage.get_block(header_id, &decode_context).await)
+            .filter_map(async |header_id| storage.get_block(header_id).await)
             .collect::<Vec<_>>()
             .await;
 
@@ -1697,7 +1690,7 @@ where
                 continue;
             }
 
-            let block = Self::load_block(header_id, storage, ledger_eras).await?;
+            let block = Self::load_block(header_id, storage).await?;
             let events = Self::load_block_events(header_id, storage).await;
             let wallet_block = WalletBlock::from_block(
                 &block,

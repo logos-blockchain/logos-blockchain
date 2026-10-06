@@ -175,8 +175,16 @@ impl BinaryDecode for Proposal {
 }
 
 /// A block, of the version of the era of its slot.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(bound(serialize = "Tx: Clone + Serialize"))]
+///
+/// Its canonical encoding is its version's, which the era of its slot picks.
+/// Its serde form is tagged with its version instead, so that it reads back
+/// without the era schedule: deserializing checks the block as its version's
+/// `reconstruct` does.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "Tx: Clone + Serialize",
+    deserialize = "Tx: Clone + Eq + Deserialize<'de> + Hashable<Hash = TxHash> + StorageSize"
+))]
 pub enum Block<Tx> {
     V1(v1::Block<Tx>),
 }
@@ -493,6 +501,23 @@ mod tests {
 
         assert_eq!(
             Block::decode_all(&block.encode(), &(single_era(), ())).unwrap(),
+            block
+        );
+    }
+
+    /// A block's serde form is tagged with its version, so it reads back
+    /// without the era schedule, as storage reads it.
+    #[test]
+    fn a_block_reads_back_from_its_version_tagged_serde_form() {
+        use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
+
+        let block = block();
+
+        let json = serde_json::to_value(&block).unwrap();
+        assert!(json.get("V1").is_some());
+        assert_eq!(serde_json::from_value::<Block<Ops>>(json).unwrap(), block);
+        assert_eq!(
+            Block::<Ops>::from_bytes(&block.to_bytes().unwrap()).unwrap(),
             block
         );
     }
