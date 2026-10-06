@@ -3,7 +3,6 @@ use std::{cmp::Ordering, fmt::Display, marker::PhantomData, sync::Arc};
 use bytes::Bytes;
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::era::{ForkDigest, ForkDigests};
-use lb_cryptarchia_engine::Slot;
 use lb_log_targets::utils;
 pub use lb_services_utils::overwatch::recovery::StorageRecoverySettings;
 use lb_services_utils::overwatch::recovery::{
