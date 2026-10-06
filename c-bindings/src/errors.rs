@@ -1,6 +1,11 @@
-use std::ffi::{CStr, CString, c_char};
+use std::{
+    any::Any,
+    ffi::{CStr, CString, c_char},
+};
 
-#[derive(Default, PartialEq, Eq, Debug)]
+use lb_c_macros::panic_to_error;
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 #[repr(C)]
 pub enum OperationStatusCode {
     #[default]
@@ -17,6 +22,10 @@ pub enum OperationStatusCode {
     ShutdownError = 0xA,
     ConfigurationError = 0xB,
     ValidationError = 0xC,
+    /// The node is no longer running: its services were stopped, most likely
+    /// because one of them panicked. Only `shutdown_node` works on it, and
+    /// reports why it stopped.
+    NodeStopped = 0xD,
 }
 
 #[derive(Default)]
@@ -24,9 +33,11 @@ pub enum OperationStatusCode {
 pub struct OperationStatus {
     pub code: OperationStatusCode,
 
-    /// A NUL-terminated description of the error.
+    /// A NUL-terminated description of the error. Null on success.
     ///
-    /// The caller must free this with
+    /// The caller must free it, either by passing the whole status to
+    /// [`free_operation_status`]
+    /// or by passing the message to
     /// [`free_cstring`](crate::api::memory::free_cstring).
     pub message: *mut c_char,
 }
@@ -38,22 +49,71 @@ impl OperationStatus {
     };
 
     pub(crate) fn error(code: OperationStatusCode, message: impl Into<String>) -> Self {
-        let message = CString::new(message.into())
-            .expect("Message contained an interior NUL byte.")
+        // A C string cannot hold a NUL byte, but an error message is free to
+        // carry one: many of them echo input the caller or a file supplied.
+        // Escaping keeps the message readable and this function infallible.
+        let message = CString::new(message.into().replace('\0', "\\0"))
+            .unwrap_or_default()
             .into_raw();
         Self { code, message }
     }
 
+    /// The status an exported function returns when its body panicked: see
+    /// [`panic_to_error`](lb_c_macros::panic_to_error).
+    pub(crate) fn from_panic(payload: &(dyn Any + Send)) -> Self {
+        let message = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("no message");
+        Self::error(
+            OperationStatusCode::RuntimeError,
+            format!("Internal panic: {message}"),
+        )
+    }
+
+    /// Whether the status reports success.
+    ///
+    /// Exported for C as `is_ok(const struct OperationStatus *)`. The pointer
+    /// must not be null: it is a reference on the Rust side.
     #[must_use]
     #[unsafe(no_mangle)]
     pub extern "C" fn is_ok(&self) -> bool {
         self.code == OperationStatusCode::Ok
     }
 
+    /// Whether the status reports an error.
+    ///
+    /// Exported for C as `is_error(const struct OperationStatus *)`. The
+    /// pointer must not be null: it is a reference on the Rust side.
     #[must_use]
     #[unsafe(no_mangle)]
     pub extern "C" fn is_error(&self) -> bool {
         !self.is_ok()
+    }
+}
+
+/// Releases an [`OperationStatus`] returned by this library.
+///
+/// The only thing a status owns is its `message`, which is null on success
+/// and on a few errors. This frees it when there is one, so any status —
+/// success or error — can be released without looking inside it.
+///
+/// # Arguments
+///
+/// - `status`: A status returned by any function of this library, including the
+///   `error` field of a result.
+///
+/// # Safety
+///
+/// `status` must come from this library and must not have been released
+/// already, either through this function or by passing its `message` to
+/// [`free_cstring`](crate::api::free_cstring).
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_operation_status(status: OperationStatus) {
+    if !status.message.is_null() {
+        drop(unsafe { CString::from_raw(status.message) });
     }
 }
 

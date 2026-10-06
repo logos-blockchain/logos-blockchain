@@ -18,6 +18,8 @@ pub struct WalletNote {
 #[repr(C)]
 pub struct WalletNotes {
     pub tip: HeaderId,
+    /// When the list is empty this pointer is not null, but it points to
+    /// nothing: check the length before reading through it.
     pub notes: *mut WalletNote,
     pub len: usize,
 }

@@ -285,14 +285,16 @@ async fn step_publish_zone_messages_without_inclusion_for_sequencer(
     let handle = world.zone.sequencer_client(&sequencer_alias)?.clone();
 
     for (message_alias, payload) in rows {
-        let (published, _checkpoint) = handle
-            .publish(payload.clone())
-            .await
-            .map_err(|error| StepError::LogicalError {
-                message: format!(
-                    "Zone publish failed for sequencer '{sequencer_alias}' and message '{message_alias}': {error}"
-                ),
-            })?;
+        // Accepted locally is all this step asks for; a publish issued while
+        // the sequencer is still reconnecting to a restarted node fails fast
+        // and is retried until it is taken.
+        let published = publish_message_with_retry(
+            &handle,
+            &payload,
+            PublishDeadline::from_now(Duration::from_mins(3)),
+        )
+        .await
+        .map_err(|error| zone_step_error(step, &error))?;
         remember_published_zone_message(
             world,
             &sequencer_alias,

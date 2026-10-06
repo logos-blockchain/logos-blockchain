@@ -99,8 +99,8 @@ pub use tx_builder::sign_prepared;
 pub use types::{
     AtomicWithdrawInfo, ChannelNote, ChannelTransferInfo, ChannelUpdate, ChannelUpdateTx,
     ChannelWalletView, DepositInfo, Error, Event, FinalizedOp, FinalizedTx, FundingConfig,
-    InscriptionId, InscriptionInfo, PendingTx, PreparedChannelConfig, PublishResult,
-    SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource,
-    TxStatus, TxStatusUpdate, WithdrawArg, WithdrawInfo, WithdrawInputs,
+    InscriptionId, InscriptionInfo, PendingFunding, PendingTx, PreparedAtomicBundle,
+    PreparedChannelConfig, PublishResult, SequencerChannelView, SequencerCheckpoint,
+    SequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo, WithdrawInputs,
 };
 pub use zone_sequencer::ZoneSequencer;

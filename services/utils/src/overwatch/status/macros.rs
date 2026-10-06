@@ -110,7 +110,7 @@ mod tests {
     use async_trait::async_trait;
     use overwatch::{
         DynError, OpaqueServiceResourcesHandle,
-        overwatch::{Overwatch, OverwatchRunner},
+        overwatch::{Overwatch, OverwatchRunner, Shutdown},
         services::{
             AsServiceId, ServiceCore, ServiceData,
             state::{NoOperator, NoState},
@@ -281,7 +281,7 @@ mod tests {
         }
     }
 
-    #[derive_services]
+    #[derive_services(panic_policy = Shutdown)]
     struct App {
         light_service: LightService,
         heavy_service: HeavyService,
@@ -381,6 +381,8 @@ mod tests {
                 .runtime()
                 .block_on(overwatch_handle.shutdown()),
         );
-        overwatch.blocking_wait_finished();
+        overwatch
+            .blocking_wait_finished()
+            .expect("No service should panic");
     }
 }

@@ -1,5 +1,7 @@
 use std::ffi::{CString, c_char};
 
+use lb_c_macros::panic_to_error;
+
 use crate::{
     OperationStatus, api::config::cstr_to_path, errors::OperationStatusCode,
     result::FfiStatusResult, return_error_if_null_pointer,
@@ -32,6 +34,7 @@ pub type FfiGetPeerIdResult = FfiStatusResult<*mut c_char>;
 /// This function allocates memory for the output C string. The caller must
 /// free this memory using the [`free_cstring`](super::free_cstring) function.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_peer_id(config_path: *const c_char) -> FfiGetPeerIdResult {
     return_error_if_null_pointer!(config_path);

@@ -7,7 +7,7 @@ pub mod panic;
 
 mod codec;
 
-use std::{collections::HashMap, panic::set_hook};
+use std::collections::HashMap;
 
 use color_eyre::eyre::{Result, eyre};
 pub use lb_blend_service::core::backends::libp2p::Libp2pBlendBackend as BlendBackend;
@@ -41,7 +41,7 @@ pub use lb_tx_service::{
 };
 use overwatch::{
     DynError, derive_services,
-    overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
+    overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner, Shutdown},
 };
 use tokio::runtime;
 
@@ -57,7 +57,6 @@ use crate::{
         wallet::ServiceConfig as WalletConfig,
     },
     generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
-    panic::log_and_exit_hook,
 };
 
 fn max_data_size_by_topic(
@@ -137,7 +136,7 @@ pub type StorageService = lb_storage_service::StorageService<RuntimeServiceId>;
 
 pub type SystemSigService = SystemSig<RuntimeServiceId>;
 
-#[derive_services]
+#[derive_services(panic_policy = Shutdown)]
 pub struct LogosBlockchain {
     network: NetworkService,
     blend: BlendService,
@@ -287,8 +286,6 @@ pub fn run_node_from_config(
     };
 
     let http_config = api_config.backend_settings();
-
-    set_hook(Box::new(log_and_exit_hook));
 
     let app = OverwatchRunner::<LogosBlockchain>::run(
         LogosBlockchainServiceSettings {

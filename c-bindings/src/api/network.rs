@@ -1,4 +1,5 @@
 use lb_api_service::http::libp2p::libp2p_info;
+use lb_c_macros::panic_to_error;
 use lb_network_service::backends::libp2p::Libp2pInfo;
 
 use crate::{
@@ -51,7 +52,7 @@ impl From<Libp2pInfo> for NetworkInfo {
 /// A [`Result`] containing the swarm information on success, or an
 /// [`OperationStatus`] error on failure.
 pub(crate) fn get_network_info_sync(node: &LogosBlockchainNode) -> StatusResult<Libp2pInfo> {
-    node.get_runtime_handle()
+    node.get_runtime_handle()?
         .block_on(libp2p_info(node.get_overwatch_handle()))
         .map_err(|error| {
             OperationStatus::error(
@@ -81,6 +82,7 @@ pub type FfiNetworkInfoResult = FfiStatusResult<NetworkInfo>;
 /// must ensure that `node` is non-null and points to a valid
 /// [`LogosBlockchainNode`] instance.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_network_info(
     node: *const LogosBlockchainNode,
