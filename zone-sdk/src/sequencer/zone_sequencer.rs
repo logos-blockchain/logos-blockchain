@@ -47,10 +47,10 @@ use super::{
         validate_multi_sig,
     },
     types::{
-        AtomicWithdrawInfo, ChannelWalletView, Error, Event, FundingConfig, InscriptionInfo,
-        PendingTx, PinDepositInfo, PreparedAtomicBundle, PreparedBundleKind, PreparedChannelConfig,
-        PublishResult, SequencerChannelView, SequencerCheckpoint, SequencerConfig,
-        TurnNotification, WithdrawArg, WithdrawInfo, WithdrawInputs,
+        AtomicWithdrawInfo, ChannelUpdateTx, ChannelWalletView, Error, Event, FundingConfig,
+        InscriptionInfo, PendingTx, PinDepositInfo, PreparedAtomicBundle, PreparedBundleKind,
+        PreparedChannelConfig, PublishResult, SequencerChannelView, SequencerCheckpoint,
+        SequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo, WithdrawInputs,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -426,6 +426,23 @@ where
     #[must_use]
     pub fn checkpoint(&self) -> Option<SequencerCheckpoint> {
         self.checkpoint_tx.borrow().clone()
+    }
+
+    /// Returns the current unfinalized channel history, including pending
+    /// writes. Returns `None` until the live branch is available after
+    /// backfill.
+    ///
+    /// To read the history for a processed block, call this before publishing
+    /// or polling another event. Ordering follows
+    /// [`super::ChannelUpdate::canonical_chain`].
+    #[must_use]
+    pub fn channel_history(&self) -> Option<Vec<ChannelUpdateTx>> {
+        if self.backfill_from.is_some() {
+            return None;
+        }
+
+        let tip = self.current_tip?;
+        Some(self.state.as_ref()?.channel_view_txs(tip, &HashSet::new()))
     }
 
     /// The channel's note set as tracked from block data: finalized base

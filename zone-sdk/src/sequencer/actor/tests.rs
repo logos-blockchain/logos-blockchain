@@ -1278,6 +1278,10 @@ async fn cold_start_backfills_genesis_slot() {
         match sequencer.next_event().await {
             Event::Ready => break,
             Event::BlocksProcessed { finalized, .. } => {
+                assert!(
+                    sequencer.channel_history().is_none(),
+                    "finalized backfill does not know the live branch yet"
+                );
                 finalized_items.extend(finalized);
             }
             Event::TurnNotification { .. } => {}
