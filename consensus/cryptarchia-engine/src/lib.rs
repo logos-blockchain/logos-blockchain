@@ -205,13 +205,20 @@ impl<Id> Branches<Id>
 where
     Id: Eq + Hash + Copy,
 {
-    pub fn from_lib(lib: Id, slot: Slot, length: u64, uncle_slots: UncleSlots) -> Self {
+    /// Creates the tree with `lib` as its only block.
+    pub fn from_lib(
+        lib: Id,
+        lib_parent: Id,
+        slot: Slot,
+        length: u64,
+        uncle_slots: UncleSlots,
+    ) -> Self {
         let mut branches = HashTrieMapSync::new_sync();
         branches.insert_mut(
             lib,
             Branch {
                 id: lib,
-                parent: lib,
+                parent: lib_parent,
                 slot,
                 length,
                 uncle_slots,
@@ -413,8 +420,22 @@ impl<Id> Cryptarchia<Id>
 where
     Id: Eq + Hash + Copy + Debug,
 {
+    /// Creates the chain with `genesis` as its only block.
+    pub fn from_genesis(genesis: Id, config: Config, state: State) -> Self {
+        Self::from_lib(
+            genesis,
+            genesis,
+            config,
+            state,
+            Slot::genesis(),
+            0,
+            UncleSlots::default(),
+        )
+    }
+
     pub fn from_lib(
         id: Id,
+        parent: Id,
         config: Config,
         state: State,
         slot: Slot,
@@ -422,12 +443,12 @@ where
         uncle_slots: UncleSlots,
     ) -> Self {
         Self {
-            branches: Branches::from_lib(id, slot, length, uncle_slots.clone()),
+            branches: Branches::from_lib(id, parent, slot, length, uncle_slots.clone()),
             local_chain: Branch {
                 id,
-                length,
-                parent: id,
+                parent,
                 slot,
+                length,
                 uncle_slots,
             },
             config,
@@ -982,14 +1003,8 @@ pub mod tests {
     /// index, so for a chain of length 10, the sequence of block IDs will be
     /// `[0, hash(1), hash(2), ..., hash(9)]`.
     fn create_canonical_chain(length: NonZero<u64>, c: Option<Config>) -> Cryptarchia<[u8; 32]> {
-        let mut engine = Cryptarchia::from_lib(
-            hash(&0u64),
-            c.unwrap_or_else(config),
-            State::Bootstrapping,
-            0.into(),
-            0,
-            UncleSlots::default(),
-        );
+        let mut engine =
+            Cryptarchia::from_genesis(hash(&0u64), c.unwrap_or_else(config), State::Bootstrapping);
         let mut parent = engine.lib();
         for i in 1..length.get() {
             let new_block = hash(&i);
@@ -1045,7 +1060,7 @@ pub mod tests {
         // └── child
 
         let mut branches =
-            super::Branches::from_lib(hash(&0u64), 0.into(), 0, UncleSlots::default());
+            super::Branches::from_lib(hash(&0u64), hash(&0u64), 0.into(), 0, UncleSlots::default());
         let parent = hash(&1u64);
         let child = hash(&2u64);
 
@@ -1063,7 +1078,13 @@ pub mod tests {
         // b0(LIB) - b1 - b2      c0 (a separate tree)
         let cryptarchia = create_canonical_chain(3.try_into().unwrap(), None);
         let branches = cryptarchia.branches();
-        let other = super::Branches::from_lib(hash(&100u64), 0.into(), 0, UncleSlots::default());
+        let other = super::Branches::from_lib(
+            hash(&100u64),
+            hash(&100u64),
+            0.into(),
+            0,
+            UncleSlots::default(),
+        );
 
         assert!(
             branches
@@ -1079,7 +1100,7 @@ pub mod tests {
     fn walk_back_before_stops_at_the_oldest_block() {
         // b0(LIB, slot 5) - b1(slot 6)
         let mut branches =
-            super::Branches::from_lib(hash(&0u64), 5.into(), 0, UncleSlots::default());
+            super::Branches::from_lib(hash(&0u64), hash(&0u64), 5.into(), 0, UncleSlots::default());
         branches
             .apply_header(hash(&1u64), hash(&0u64), 6.into(), UncleSlots::default())
             .unwrap();
@@ -1280,14 +1301,7 @@ pub mod tests {
 
     #[test]
     fn test_getters() {
-        let engine = <Cryptarchia<_>>::from_lib(
-            hash(&0u64),
-            config(),
-            State::Bootstrapping,
-            0.into(),
-            0,
-            UncleSlots::default(),
-        );
+        let engine = <Cryptarchia<_>>::from_genesis(hash(&0u64), config(), State::Bootstrapping);
         let id_0 = engine.lib();
 
         // Get branch directly from HashMap
@@ -2043,13 +2057,10 @@ mod uncle_tests {
         genesis: HeaderId,
         blocks: impl IntoIterator<Item = (HeaderId, HeaderId, Slot, UncleSlots)>,
     ) -> Cryptarchia<HeaderId> {
-        let mut engine = Cryptarchia::from_lib(
+        let mut engine = Cryptarchia::from_genesis(
             genesis,
             config(uncle_reference_window_in_slot.try_into().unwrap()),
             State::Bootstrapping,
-            0.into(),
-            0,
-            UncleSlots::default(),
         );
         for (id, parent, slot, uncle_slots) in blocks {
             engine.receive_block(id, parent, slot, uncle_slots).unwrap();

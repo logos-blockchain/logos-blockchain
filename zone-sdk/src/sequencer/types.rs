@@ -22,7 +22,9 @@ use lb_core::{
     },
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
-use lb_key_management_system_service::keys::{Ed25519Key, UnverifiedEd25519PublicKey, ZkPublicKey};
+use lb_key_management_system_service::keys::{
+    Ed25519Key, Ed25519PublicKey, Ed25519Signature, UnverifiedEd25519PublicKey, ZkPublicKey,
+};
 
 use super::tx_builder::sign_prepared;
 
@@ -198,6 +200,75 @@ impl PreparedChannelConfig {
         }
         sign_prepared(signing_key, &self.accredited_keys, payload)
     }
+}
+
+/// A funded atomic channel bundle awaiting external multi-sig signatures.
+///
+/// The multi-sig counterpart of [`publish_atomic_withdraw`] /
+/// [`publish_pin_deposit`]. The caller collects a signature from each required
+/// key holder over `sign_payload`, gathers them into
+/// [`IndexedSignatures`](super::IndexedSignatures), and submits via
+/// [`submit_atomic_bundle`]. The bundled inscription is turn-gated, so prepare
+/// and submit from the current-turn sequencer. `tx`, `transfer_proof`,
+/// `inscribe_sig`, and the bundle metadata are opaque — they carry straight
+/// back into submission.
+///
+/// [`publish_atomic_withdraw`]: super::SequencerHandle::publish_atomic_withdraw
+/// [`publish_pin_deposit`]: super::SequencerHandle::publish_pin_deposit
+/// [`submit_atomic_bundle`]: super::SequencerHandle::submit_atomic_bundle
+#[derive(Debug, Clone)]
+pub struct PreparedAtomicBundle {
+    pub(crate) tx: Ops,
+    pub(crate) transfer_proof: Option<OpProof>,
+    pub(crate) pre_fund: MantleTxBuilder,
+    /// The preparing sequencer's inscription signature — authorized by the
+    /// single round-robin sequencer, not the threshold.
+    pub(crate) inscribe_sig: Ed25519Signature,
+    pub(crate) parent: MsgId,
+    pub(crate) msg_id: MsgId,
+    pub(crate) inscribe: Inscription,
+    pub(crate) signer: Ed25519PublicKey,
+    pub(crate) kind: PreparedBundleKind,
+    /// The exact bytes each accredited key must sign (the funded tx hash's
+    /// signing bytes).
+    pub sign_payload: Vec<u8>,
+    /// The channel's current accredited keys, in index order. Each collected
+    /// signature must be indexed by this key's position here.
+    pub accredited_keys: Vec<UnverifiedEd25519PublicKey>,
+    /// The channel's current `transfer_threshold` — how many of the
+    /// `accredited_keys` must sign to authorize the transfer/withdraw ops.
+    pub signing_threshold: u16,
+}
+
+impl PreparedAtomicBundle {
+    /// Sign this bundle with `signing_key`; see
+    /// [`PreparedChannelConfig::sign_with`]. The payload is derived from
+    /// [`Self::tx`], never taken on trust.
+    pub fn sign_with(&self, signing_key: &Ed25519Key) -> Result<IndexedSignature, Error> {
+        let tx_hash = self.tx.hash();
+        let payload = tx_hash.as_signing_bytes();
+        if payload.as_ref() != self.sign_payload.as_slice() {
+            return Err(Error::Network(
+                "sign_payload does not match the hash of tx; refusing to sign a payload the \
+                 inspected ops do not account for"
+                    .into(),
+            ));
+        }
+        sign_prepared(signing_key, &self.accredited_keys, payload)
+    }
+}
+
+/// The op-specific tail of a [`PreparedAtomicBundle`], carried back into
+/// submission.
+#[derive(Debug, Clone)]
+pub enum PreparedBundleKind {
+    AtomicWithdraw {
+        withdraws: Vec<WithdrawInfo>,
+        outputs: Outputs,
+    },
+    PinDeposit {
+        consumed_notes: Inputs,
+    },
 }
 
 /// One withdraw to bundle atomically with an inscription.
@@ -399,10 +470,20 @@ pub enum Error {
     Unavailable { reason: &'static str },
     #[error("network error: {0}")]
     Network(String),
-    /// The submission chains on a channel position that already has a
-    /// pending continuation; re-prepare it on the channel's pending tail.
+    /// The channel moved under the submission: the position it chains on
+    /// already has a pending continuation, or, for a prepared bundle, the
+    /// config (keys/threshold the signatures were collected under) or the
+    /// message tip changed since prepare. Recoverable: re-prepare on the
+    /// channel's current state and re-collect signatures.
     #[error("channel state changed: {0}")]
     ChannelStateChanged(String),
+    /// The channel state is unchanged since prepare, yet the bundle's
+    /// signatures would never verify on the ledger: the bundled inscription
+    /// was signed by another sequencer, or the collected set is malformed
+    /// (wrong count, index outside the accredited keys, or a signature that
+    /// fails against its key). Not recoverable by retrying.
+    #[error("bundle signatures rejected: {0}")]
+    InvalidMultiSig(String),
 }
 
 /// Events emitted by the sequencer.

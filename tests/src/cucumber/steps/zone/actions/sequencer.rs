@@ -1,13 +1,13 @@
 use super::{
-    CommonHttpClient, CucumberWorld, DiscardedPayloads, DriveMode, Elapsed, FundingConfig, GasCost,
-    NodeHttpClient, PolicyRuntime, SEQUENCER_READY_HEIGHT_ADVANCE_TIMEOUT,
-    SEQUENCER_READY_POLL_TIMEOUT, SEQUENCER_READY_TIMEOUT, SequencerCheckpoint,
-    StartedSequencerRuntime, Step, StepError, StepResult, ZONE_TEST_PRIORITY_FEE_PERCENT,
-    ZoneNodeHttpClient, ZoneSequencer, initialize_zone_indexer, log_step_error, sequencer_config,
-    sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
-    start_custom_republish_policy, start_deposit_lifecycle_policy, start_deposit_withdraw_policy,
-    start_republish_lineage_policy, start_sequencer_event_loop, start_sorted_conflict_policy,
-    timeout, wait_for_height,
+    BundleAnnounce, CommonHttpClient, CucumberWorld, DiscardedPayloads, DriveMode, Elapsed,
+    FundingConfig, GasCost, MultiSigBus, NodeHttpClient, PolicyRuntime,
+    SEQUENCER_READY_HEIGHT_ADVANCE_TIMEOUT, SEQUENCER_READY_POLL_TIMEOUT, SEQUENCER_READY_TIMEOUT,
+    SequencerCheckpoint, StartedSequencerRuntime, Step, StepError, StepResult,
+    ZONE_TEST_PRIORITY_FEE_PERCENT, ZoneNodeHttpClient, ZoneSequencer, initialize_zone_indexer,
+    log_step_error, sequencer_config, sequencer_config_with_pending_submit_depth,
+    start_balance_aware_policy, start_custom_republish_policy, start_deposit_lifecycle_policy,
+    start_deposit_withdraw_policy, start_multisig_lifecycle_policy, start_republish_lineage_policy,
+    start_sequencer_event_loop, start_sorted_conflict_policy, timeout, wait_for_height,
 };
 
 pub(in super::super) async fn start_named_sequencer(
@@ -98,6 +98,36 @@ pub(in super::super) async fn start_deposit_withdraw_sequencer(
             target_amount,
             withdraw_outputs,
             recipient,
+        },
+    )
+    .await?;
+    initialize_zone_indexer(world, step, sequencer_alias)
+}
+
+/// Start `sequencer_alias` running the reactive multi-sig deposit lifecycle
+/// policy, sharing the signature `bus` with its peers, plus an indexer.
+pub(in super::super) async fn start_multisig_lifecycle_sequencer(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    withdraw_outputs: Vec<u64>,
+    bus: MultiSigBus,
+    announce: BundleAnnounce,
+) -> StepResult {
+    let recipient = log_step_error(step, sequencer_funding(world, sequencer_alias))?.funding_pk;
+    let signing_key =
+        log_step_error(step, world.zone.sequencer_signing_key(sequencer_alias))?.clone();
+    start_named_sequencer(
+        world,
+        step,
+        sequencer_alias,
+        None,
+        DriveMode::MultiSigLifecycle {
+            withdraw_outputs,
+            recipient,
+            bus,
+            announce,
+            signing_key: Box::new(signing_key),
         },
     )
     .await?;
@@ -257,6 +287,23 @@ fn start_sequencer_runtime(
             recipient,
         } => from_policy_runtime(
             start_deposit_withdraw_policy(sequencer, target_amount, withdraw_outputs, recipient),
+            None,
+        ),
+        DriveMode::MultiSigLifecycle {
+            withdraw_outputs,
+            recipient,
+            bus,
+            announce,
+            signing_key,
+        } => from_policy_runtime(
+            start_multisig_lifecycle_policy(
+                sequencer,
+                withdraw_outputs,
+                recipient,
+                bus,
+                announce,
+                *signing_key,
+            ),
             None,
         ),
     }

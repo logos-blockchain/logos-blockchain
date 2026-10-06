@@ -231,7 +231,7 @@ mod tests {
 
     /// One era from the Unix epoch, with slots of 1 s in epochs of 3 slots.
     fn test_eras() -> EraSchedules {
-        EraSchedule::new(
+        EraSchedules::new(
             OffsetDateTime::UNIX_EPOCH,
             EraEntry {
                 version: EraVersion::V1,

@@ -69,15 +69,11 @@ fn cryptarchia_switch_to_online() {
 
     let (zk_key, utxo) = utxo();
     let genesis_id: HeaderId = [0; 32].into();
-    let mut cryptarchia = Cryptarchia::from_lib(
+    let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
         LedgerState::from_utxos([utxo], &config),
-        genesis_id,
         Arc::new(single_era(config)),
         lb_cryptarchia_engine::State::Bootstrapping,
-        Slot::new(0),
-        0,
-        UncleSlots::default(),
     );
 
     // Add 3 new blocks to the chain
@@ -162,15 +158,11 @@ async fn get_block_ids_from_memory_and_storage() {
     let config = ledger_config(k);
     let genesis_id = [0; 32].into();
     let (zk_key, utxo) = utxo();
-    let mut cryptarchia = Cryptarchia::from_lib(
+    let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
         LedgerState::from_utxos([utxo], &config),
-        genesis_id,
         Arc::new(single_era(config)),
         lb_cryptarchia_engine::State::Online,
-        Slot::genesis(),
-        0,
-        UncleSlots::default(),
     );
 
     // Add 2 blocks (not finalized yet since k=3)
@@ -398,6 +390,108 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
     assert_eq!(initialized.cryptarchia.tip(), b2_id);
 }
 
+/// Header traversal must continue from storage past a recovered LIB, instead of
+/// treating the LIB as genesis.
+///
+/// Build a chain `G -- B1 -- B2`, recover it with `LIB = B1` and `tip = B2`,
+/// and fetch the block IDs from `B2` to `G`.
+#[tokio::test(flavor = "multi_thread")]
+async fn get_block_ids_past_recovered_lib() {
+    type Tx = SignedOps<Preverified, StandardMode>;
+
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    let _storage_svc = spawn_storage_service(storage_rx);
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays = CryptarchiaConsensusRelays::<Tx>::new(
+        OutboundRelay::new(broadcast_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
+        OutboundRelay::new(time_tx),
+    );
+    let (new_block_tx, _new_block_rx) = broadcast::channel(10);
+    let (lib_tx, _lib_rx) = broadcast::channel(10);
+
+    // Before the restart: `B1` and `B2` are verified and stored.
+    let (zk_key, utxo) = utxo();
+    let mut stored = genesis_cryptarchia(utxo);
+    let mut blocks = Vec::new();
+    let mut slot = Slot::genesis().strict_add(1.into());
+    for _ in 0..2 {
+        let (block, _) = try_build_block(
+            &stored,
+            stored.tip(),
+            utxo,
+            &zk_key,
+            slot,
+            UncleHeaders::empty(EraVersion::V1),
+        )
+        .unwrap();
+        slot = block.header().slot().strict_add(1.into());
+        process_block(
+            &mut stored,
+            block.clone(),
+            block.header().slot(),
+            BlockOrigin::Network,
+            &relays,
+            &new_block_tx,
+            &lib_tx,
+        )
+        .await
+        .unwrap();
+        blocks.push(block);
+    }
+    let (b1, b2) = (&blocks[0], &blocks[1]);
+    let (b1_id, b2_id) = (b1.header().id(), b2.header().id());
+
+    let recovery_state = CryptarchiaConsensusState {
+        tip: b2_id,
+        lib: b1_id,
+        lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
+        lib_block_length: 1,
+        lib_block_slot: b1.header().slot(),
+        lib_block_uncle_slots: UncleSlots::default(),
+        genesis_id: GENESIS_ID.into(),
+        storage_blocks_to_remove: HashSet::new(),
+        last_engine_state: None,
+    };
+    let bootstrap_config = BootstrapConfig {
+        prolonged_bootstrap_period: std::time::Duration::ZERO,
+        force_bootstrap: true,
+        offline_grace_period: OfflineGracePeriodConfig::default(),
+    };
+    let initialized = CryptarchiaConsensus::<
+        Tx,
+        SystemTimeBackend,
+        TestRuntimeServiceId,
+    >::initialize_cryptarchia(
+        &recovery_state,
+        &bootstrap_config,
+        Arc::clone(stored.ledger.era_schedule()),
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+        slot,
+    )
+    .await
+    .expect("the chain should be recovered");
+    let cryptarchia = initialized.cryptarchia;
+    assert_eq!(cryptarchia.lib(), b1_id);
+    assert_eq!(cryptarchia.lib_branch().parent(), GENESIS_ID.into());
+
+    let block_ids = get_block_ids(
+        &cryptarchia,
+        b2_id,
+        GENESIS_ID.into(),
+        relays.storage().clone(),
+    )
+    .collect::<Vec<_>>()
+    .await
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()
+    .expect("the traversal should continue from storage past LIB");
+    assert_eq!(block_ids, vec![b2_id, b1_id, GENESIS_ID.into()]);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
@@ -444,15 +538,11 @@ fn ledger_is_not_commited_if_block_contains_invalid_zkp() {
     let config = ledger_config(NonZero::<u32>::new(1).unwrap());
     let (zk_key, utxo) = utxo();
     let genesis_id: HeaderId = [0; 32].into();
-    let mut cryptarchia = Cryptarchia::from_lib(
+    let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
         LedgerState::from_utxos([utxo], &config),
-        genesis_id,
         Arc::new(single_era(config)),
         lb_cryptarchia_engine::State::Bootstrapping,
-        Slot::new(0),
-        0,
-        UncleSlots::default(),
     );
 
     let fake_key = ZkKey::from(Fr::from(42u64));
@@ -510,15 +600,11 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, St
     let config = ledger_config(k);
     let genesis_id = [0; 32].into();
     let (zk_key, utxo) = utxo();
-    let cryptarchia = Cryptarchia::from_lib(
+    let cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
         LedgerState::from_utxos([utxo], &config),
-        genesis_id,
         Arc::new(single_era(config)),
         lb_cryptarchia_engine::State::Online,
-        Slot::genesis(),
-        0,
-        UncleSlots::default(),
     );
     let (block, _) = try_build_block(
         &cryptarchia,
@@ -792,15 +878,11 @@ pub fn genesis_cryptarchia_over(
     ledger_eras: EraSchedule<lb_ledger::Config>,
     utxo: Utxo,
 ) -> Cryptarchia {
-    Cryptarchia::from_lib(
+    Cryptarchia::from_genesis(
         GENESIS_ID.into(),
         LedgerState::from_utxos([utxo], &ledger_eras.genesis().entry.parameters),
-        GENESIS_ID.into(),
         Arc::new(ledger_eras),
         lb_cryptarchia_engine::State::Bootstrapping,
-        Slot::genesis(),
-        0,
-        UncleSlots::default(),
     )
 }
 

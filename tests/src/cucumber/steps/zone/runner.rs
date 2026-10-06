@@ -22,8 +22,9 @@ use lb_core::mantle::{ops::channel::MsgId, transactions::hash::TxHash};
 pub use lb_zone_sdk::sequencer::{
     AtomicWithdrawInfo, ChannelUpdate, ChannelUpdateTx, DepositInfo, Error, Event, FinalizedOp,
     FinalizedTx, FundingConfig, IndexedSignature, InscriptionId, InscriptionInfo, PendingTx,
-    PreparedChannelConfig, PublishResult, SequencerChannelView, SequencerCheckpoint,
-    SequencerClient, SequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo, WithdrawInputs,
+    PreparedAtomicBundle, PreparedChannelConfig, PublishResult, SequencerChannelView,
+    SequencerCheckpoint, SequencerClient, SequencerConfig, TurnNotification, WithdrawArg,
+    WithdrawInfo, WithdrawInputs,
 };
 use lb_zone_sdk::{adapter, sequencer::ZoneSequencer};
 use tokio::{
@@ -111,7 +112,7 @@ pub(super) async fn run<Node, P>(
 /// consumer holds from the stream (adopted, not orphaned since, not
 /// finalized) must equal `common_prefix ++ adopted`, up to the sequencer's own
 /// in-flight publishes, which the prefix carries and the stream never echoes.
-struct ViewChecker {
+pub(super) struct ViewChecker {
     held: HashSet<TxHash>,
     violation: ViewViolation,
 }
@@ -120,7 +121,7 @@ struct ViewChecker {
 pub type ViewViolation = Arc<Mutex<Option<String>>>;
 
 impl ViewChecker {
-    fn new(violation: ViewViolation) -> Self {
+    pub(super) fn new(violation: ViewViolation) -> Self {
         Self {
             held: HashSet::new(),
             violation,
@@ -136,7 +137,7 @@ impl ViewChecker {
         }
     }
 
-    fn observe(&mut self, event: &Event) {
+    pub(super) fn observe(&mut self, event: &Event) {
         let Event::BlocksProcessed {
             checkpoint,
             channel_update,
