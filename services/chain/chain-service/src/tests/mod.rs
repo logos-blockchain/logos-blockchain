@@ -43,10 +43,7 @@ use lb_storage_service::{
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
 use lb_time_service::backends::SystemTimeBackend;
-use lb_utils::{
-    bounded::{BoundedOrderedSet, BoundedVec},
-    math::NonNegativeRatio,
-};
+use lb_utils::{bounded::BoundedVec, math::NonNegativeRatio};
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 use rand::{RngCore as _, thread_rng};
 use tempfile::TempDir;
