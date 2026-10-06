@@ -163,7 +163,8 @@ impl BinaryDecode for Proposal {
         input: &'input [u8],
         eras: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, slot) = Slot::decode(input, &())?;
+        // The slot opens the proposal's header, which reads it again.
+        let slot = Slot::peek_decode(input, &())?;
         let era_for_slot = eras.at_slot(slot).entry.version;
         match era_for_slot {
             EraVersion::V1 => {
@@ -313,7 +314,8 @@ where
         input: &'input [u8],
         (eras, tx_decode_context): &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, slot) = Slot::decode(input, &())?;
+        // The slot opens the block's header, which reads it again.
+        let slot = Slot::peek_decode(input, &())?;
         let era_for_slot = eras.at_slot(slot).entry.version;
         match era_for_slot {
             EraVersion::V1 => <v1::Block<Tx>>::decode(input, tx_decode_context)
@@ -481,5 +483,17 @@ mod tests {
             &Ed25519Key::from_bytes(&[0; 32]),
         )
         .expect("valid block")
+    }
+
+    /// A block decodes under the version of the era of the slot its
+    /// encoding starts with.
+    #[test]
+    fn a_block_decodes_under_the_era_of_its_slot() {
+        let block = block();
+
+        assert_eq!(
+            Block::decode_all(&block.encode(), &(single_era(), ())).unwrap(),
+            block
+        );
     }
 }

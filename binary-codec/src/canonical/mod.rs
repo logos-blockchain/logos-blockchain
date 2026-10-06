@@ -89,6 +89,18 @@ pub trait BinaryDecode: CodecExamples + Sized {
         context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError>;
 
+    /// Decode a value from the front of `input` without consuming it.
+    ///
+    /// This is useful when you want to peek at the next value without
+    /// advancing the input cursor.
+    fn peek_decode<'input>(
+        input: &'input [u8],
+        context: &Self::Context,
+    ) -> Result<Self, DecodeError> {
+        let (_, decoded) = Self::decode(input, context)?;
+        Ok(decoded)
+    }
+
     fn decode_all(input: &[u8], context: &Self::Context) -> Result<Self, DecodeError> {
         let (rest, value) = Self::decode(input, context)?;
         if !rest.is_empty() {

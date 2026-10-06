@@ -5,14 +5,13 @@ use core::{
 };
 
 use futures::{Stream, StreamExt as _, stream, stream::BoxStream};
-use lb_binary_codec::bincode::DeserializeOp;
+use lb_binary_codec::{bincode::DeserializeOp, canonical::BinaryDecode as _};
 use lb_chain_network_service::Message as ChainNetworkMsg;
 use lb_core::{
-    block::encoded_slot,
     header::HeaderId,
     mantle::{traits::Hashable, transactions::hash::PrefixedKey},
 };
-use lb_cryptarchia_engine::era::EraSchedule;
+use lb_cryptarchia_engine::{Slot, era::EraSchedule};
 use lb_log_targets::blend;
 use lb_network_service::{
     NetworkService,
@@ -79,7 +78,7 @@ async fn broadcast_block_proposal(
         );
         return;
     }
-    let Some(slot) = encoded_slot(&proposal) else {
+    let Ok(slot) = Slot::peek_decode(&proposal, &()) else {
         tracing::error!(target: LOG_TARGET, "Refusing to broadcast a block proposal without a slot");
         return;
     };
