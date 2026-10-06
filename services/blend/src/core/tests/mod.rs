@@ -24,7 +24,7 @@ use lb_blend::{
 };
 use lb_chain_service::{Epoch, Slot};
 use lb_core::{crypto::ZkHash, header::HeaderId, sdp::ActivityMetadata};
-use lb_cryptarchia_engine::era::{Era, EraEntriesAfterGenesis, EraEntry, EraVersion, Eras};
+use lb_cryptarchia_engine::era::{Era, EraEntriesAfterGenesis, EraEntry, EraVersion, EraSchedule};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
@@ -2158,7 +2158,7 @@ async fn test_initialize_runs_the_epoch_under_the_settings_of_its_era() {
         parameters: settings,
     };
     // Era 1 starts at epoch 1.
-    let eras = Eras::new(
+    let eras = EraSchedule::new(
         time::OffsetDateTime::UNIX_EPOCH,
         entry(genesis_settings.clone()),
         EraEntriesAfterGenesis::from((NonZeroU32::new(1).unwrap(), entry(era_1_settings.clone()))),

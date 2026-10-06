@@ -35,7 +35,7 @@ use lb_core::{
     },
     sdp::{Declaration, DeclarationId},
 };
-use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots, era::Eras};
+use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots, era::EraSchedule};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 pub use lb_ledger::EpochState;
 use lb_ledger::{ConfigSchedule as _, LedgerState};
@@ -204,7 +204,7 @@ pub enum Query {
     },
     /// Returns the ledger config of every era.
     GetLedgerEras {
-        reply_channel: oneshot::Sender<Arc<Eras<lb_ledger::Config>>>,
+        reply_channel: oneshot::Sender<Arc<EraSchedule<lb_ledger::Config>>>,
     },
     GetBlockEvents {
         id: HeaderId,
@@ -342,7 +342,7 @@ impl Cryptarchia {
         lib_id: HeaderId,
         lib_ledger_state: LedgerState,
         genesis_id: HeaderId,
-        ledger_eras: Arc<Eras<lb_ledger::Config>>,
+        ledger_eras: Arc<EraSchedule<lb_ledger::Config>>,
         state: State,
         lib_slot: Slot,
         lib_length: u64,
@@ -511,7 +511,7 @@ impl Cryptarchia {
         let tip = self.tip_branch();
         let lib = self.lib_branch();
         let state = self.ledger.state(&tip.id()).expect("no state for tip");
-        let eras = self.ledger.eras();
+        let eras = self.ledger.era_schedule();
         let epoch_state = state.epoch_state_for_slot(slot, eras)?;
         let requested_epoch = eras.epoch_of(slot);
 
@@ -591,7 +591,7 @@ impl Cryptarchia {
 pub struct CryptarchiaSettings {
     /// The ledger config of every era, the one each block and each epoch is
     /// run under.
-    pub eras: Arc<Eras<lb_ledger::Config>>,
+    pub eras: Arc<EraSchedule<lb_ledger::Config>>,
     pub starting_state: StartingState,
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
@@ -974,7 +974,7 @@ where
     async fn initialize_cryptarchia(
         recovery_state: &CryptarchiaConsensusState,
         bootstrap_config: &BootstrapConfig,
-        ledger_eras: Arc<Eras<lb_ledger::Config>>,
+        ledger_eras: Arc<EraSchedule<lb_ledger::Config>>,
         relays: &CryptarchiaConsensusRelays<Tx>,
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt as _};
 use lb_blend::scheduling::epoch::{EpochEvent, UninitializedEpochEventStream};
 use lb_chain_service::api::CryptarchiaServiceData;
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
 use lb_log_targets::blend;
 use lb_network_service::NetworkService;
@@ -58,7 +58,7 @@ impl<NodeId, Dispatcher, TimeBackend, ChainService, RuntimeServiceId> ServiceDat
 where
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
-    type Settings = Eras<EraSettings<Dispatcher::Settings>>;
+    type Settings = EraSchedule<EraSettings<Dispatcher::Settings>>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = ServiceMessage<NodeId>;
@@ -225,7 +225,7 @@ async fn run<NodeId, Dispatcher, RuntimeServiceId>(
     membership_stream: &mut (impl Stream<Item = EpochEvent<BlendEpoch<NodeId>>> + Send + Unpin),
     payload_dispatcher: &Dispatcher,
     local_node_id: &NodeId,
-    minimum_network_sizes: &Eras<core::num::NonZeroU64>,
+    minimum_network_sizes: &EraSchedule<core::num::NonZeroU64>,
 ) where
     NodeId: Clone + Eq + Hash + Sync,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,

@@ -19,7 +19,7 @@ use lb_core::{
         transactions::hash::{PrefixedKey as _, TxHashPrefix},
     },
 };
-use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion, Eras};
+use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion, EraSchedule};
 use lb_network_service::{
     NetworkService,
     backends::mock::{Mock, MockBackendMessage, MockConfig, MockMessage},
@@ -98,7 +98,7 @@ fn mock_pool_node_settings(
 ) -> (MockPoolNodeServiceSettings, TempDir) {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let db_path = temp_dir.path().join("test_db");
-    let eras = Eras::new(
+    let eras = EraSchedule::new(
         time::OffsetDateTime::now_utc(),
         EraEntry {
             version: EraVersion::V1,

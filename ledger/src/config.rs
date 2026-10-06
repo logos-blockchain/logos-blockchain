@@ -3,7 +3,7 @@ use std::num::{NonZero, NonZeroU64, NonZeroU128};
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 use lb_core::mantle::{Value, ops::pow::PowReward};
-use lb_cryptarchia_engine::{Epoch, Slot, era::Eras};
+use lb_cryptarchia_engine::{Epoch, Slot, era::EraSchedule};
 pub use lb_groth16::ModulusShift;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_pol::LotteryConstants;
@@ -117,7 +117,7 @@ pub trait ConfigSchedule {
     fn stake_distribution_snapshot(&self, epoch: Epoch) -> Slot;
 }
 
-impl ConfigSchedule for Eras<Config> {
+impl ConfigSchedule for EraSchedule<Config> {
     fn config_at_slot(&self, slot: Slot) -> &Config {
         &self.at_slot(slot).entry.parameters
     }
@@ -158,7 +158,7 @@ impl ConfigSchedule for Eras<Config> {
 pub fn schedule(
     genesis: Config,
     after_genesis: impl IntoIterator<Item = (u32, Config)>,
-) -> Eras<Config> {
+) -> EraSchedule<Config> {
     use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
 
     let entry = |config: Config| EraEntry {
@@ -176,7 +176,7 @@ pub fn schedule(
     });
     let after_genesis = EraEntriesAfterGenesis::try_from_iter(after_genesis)
         .expect("each epoch starts one era at most");
-    Eras::new(
+    EraSchedule::new(
         time::OffsetDateTime::UNIX_EPOCH,
         entry(genesis),
         after_genesis,
@@ -187,7 +187,7 @@ pub fn schedule(
 /// A schedule running `config` alone, from genesis.
 #[cfg(any(test, feature = "test-utils"))]
 #[must_use]
-pub fn single_era(config: Config) -> Eras<Config> {
+pub fn single_era(config: Config) -> EraSchedule<Config> {
     schedule(config, [])
 }
 

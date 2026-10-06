@@ -12,7 +12,7 @@ use lb_core::{
     header::HeaderId,
     sdp::{Declaration, DeclarationId},
 };
-use lb_cryptarchia_engine::{Slot, era::Eras};
+use lb_cryptarchia_engine::{Slot, era::EraSchedule};
 use lb_network_service::message::ChainSyncEvent;
 use overwatch::{
     overwatch::OverwatchHandle,
@@ -304,7 +304,7 @@ where
     }
 
     /// Get the ledger config of every era.
-    pub async fn get_ledger_eras(&self) -> Result<Arc<Eras<lb_ledger::Config>>, ApiError> {
+    pub async fn get_ledger_eras(&self) -> Result<Arc<EraSchedule<lb_ledger::Config>>, ApiError> {
         let (reply_channel, rx) = oneshot::channel();
 
         self.relay

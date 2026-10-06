@@ -5,8 +5,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use lb_core::era::ForkDigest;
-use lb_cryptarchia_engine::era::Eras;
+use lb_core::era::ForkDigests;
 
 use super::{RecoveryError, RecoveryResult};
 
@@ -17,7 +16,7 @@ pub struct RecoveryData {
     entries: Arc<Mutex<HashMap<Vec<u8>, Bytes>>>,
     /// The fork digest of every era of the chain: a record stamped with
     /// another one was written on another chain.
-    forks: Arc<Eras<ForkDigest>>,
+    forks: Arc<ForkDigests>,
 }
 
 pub trait StorageRecoverySettings {
@@ -28,7 +27,7 @@ pub trait StorageRecoverySettings {
 
 impl RecoveryData {
     #[must_use]
-    pub fn new(entries: HashMap<Vec<u8>, Bytes>, forks: Arc<Eras<ForkDigest>>) -> Self {
+    pub fn new(entries: HashMap<Vec<u8>, Bytes>, forks: Arc<ForkDigests>) -> Self {
         Self {
             entries: Arc::new(Mutex::new(entries)),
             forks,
@@ -44,7 +43,7 @@ impl RecoveryData {
 
     /// The fork digest of every era of the chain the records belong to.
     #[must_use]
-    pub const fn forks(&self) -> &Arc<Eras<ForkDigest>> {
+    pub const fn forks(&self) -> &Arc<ForkDigests> {
         &self.forks
     }
 }
@@ -57,8 +56,10 @@ impl fmt::Debug for RecoveryData {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZero, time::Duration};
+    use core::num::NonZero;
+    use std::time::Duration;
 
+    use lb_core::era::ForkDigest;
     use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
     use time::OffsetDateTime;
 
@@ -66,7 +67,7 @@ mod tests {
 
     #[test]
     fn clones_take_their_entries_from_shared_data() {
-        let forks = Eras::new(
+        let forks = ForkDigests::new(
             OffsetDateTime::UNIX_EPOCH,
             EraEntry {
                 version: EraVersion::V1,

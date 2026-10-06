@@ -9,7 +9,7 @@ use bytes::Bytes;
 use lb_blend_service::settings::user::{
     Config as BlendConfig, RequiredValues as BlendRequiredValues,
 };
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_era_parameters::EraDefinition;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_services_utils::overwatch::RecoveryData;
@@ -51,7 +51,7 @@ const MEMPOOL_RECOVERY_MARKER: &[u8] = b"recovery/test/mempool";
 const SDP_RECOVERY_MARKER: &[u8] = b"recovery/test/sdp";
 const WALLET_RECOVERY_MARKER: &[u8] = b"recovery/test/wallet";
 
-fn recovery_data_fixture(eras: &Eras<EraDefinition>) -> RecoveryData {
+fn recovery_data_fixture(eras: &EraSchedule<EraDefinition>) -> RecoveryData {
     RecoveryData::new(
         HashMap::from([
             (BLEND_RECOVERY_MARKER.to_vec(), Bytes::from_static(b"blend")),
@@ -197,7 +197,7 @@ fn build_run_config_from_env_applies_environment_overrides() {
 fn service_settings_receive_recovery_data() {
     const STATE_PATH: &str = "./state";
     let deployment_settings = DeploymentSettings::default();
-    let eras = Arc::new(deployment_settings.eras().unwrap());
+    let eras = Arc::new(deployment_settings.era_schedule().unwrap());
     let recovery_data = recovery_data_fixture(&eras);
 
     let blend_config = BlendConfig::with_required_values(BlendRequiredValues {

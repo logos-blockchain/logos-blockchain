@@ -6,7 +6,7 @@ use lb_binary_codec::bincode::{self, DeserializeOp as _, SerializeOp as _};
 use lb_core::block::MAX_BLOCK_TRANSACTIONS_SIZE;
 use lb_cryptarchia_engine::{
     Slot,
-    era::{Era, EraInForce, Eras},
+    era::{Era, EraInForce, EraSchedule},
 };
 use lb_log_targets::mempool;
 use lb_network_service::{
@@ -201,7 +201,7 @@ where
 }
 
 /// Whether `topic` is the topic of an era in force.
-fn is_in_force(topics: &Eras<TopicHash>, in_force: Option<EraInForce>, topic: &TopicHash) -> bool {
+fn is_in_force(topics: &EraSchedule<TopicHash>, in_force: Option<EraInForce>, topic: &TopicHash) -> bool {
     in_force
         .into_iter()
         .flat_map(EraInForce::eras)
@@ -212,7 +212,7 @@ fn is_in_force(topics: &Eras<TopicHash>, in_force: Option<EraInForce>, topic: &T
 #[derive(Debug)]
 pub struct Settings<K, V> {
     /// The topic of every era.
-    pub topics: Eras<String>,
+    pub topics: EraSchedule<String>,
     pub id: fn(&V) -> K,
 }
 
@@ -254,7 +254,7 @@ mod tests {
             transition_slots: 5,
             parameters: topic(era),
         };
-        let topics = Eras::new(
+        let topics = EraSchedule::new(
             OffsetDateTime::UNIX_EPOCH,
             entry(0),
             EraEntriesAfterGenesis::from((NonZero::new(1).unwrap(), entry(1))),

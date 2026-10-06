@@ -9,7 +9,7 @@ use lb_blend::message::encap::{
     ProofsVerifier as ProofsVerifierTrait, validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_chain_service::Epoch;
-use lb_cryptarchia_engine::era::{Era, Eras};
+use lb_cryptarchia_engine::era::{Era, EraSchedule};
 use lb_log_targets::{blend, diagnostic::BLEND_REACHABILITY};
 use lb_utils::tokio::task::spawn_on;
 use libp2p::PeerId;
@@ -63,7 +63,7 @@ where
     type Settings = Libp2pBlendBackendSettings;
 
     fn new(
-        configs: &Eras<BlendConfig<Self::Settings>>,
+        configs: &EraSchedule<BlendConfig<Self::Settings>>,
         current_era: Era,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         current_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,

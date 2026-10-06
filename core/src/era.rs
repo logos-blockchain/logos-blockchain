@@ -11,9 +11,9 @@ use core::fmt::{self, Debug, Formatter};
 
 use blake2::Digest as _;
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode, codec_fixtures};
-use lb_cryptarchia_engine::Epoch;
 /// The number of an era, defined next to [`Epoch`] in the consensus engine.
 pub use lb_cryptarchia_engine::era::Era;
+use lb_cryptarchia_engine::{Epoch, era::EraSchedule};
 
 use crate::{
     crypto::Hasher,
@@ -118,6 +118,14 @@ impl From<ForkDigest> for [u8; 32] {
 display_hex_bytes_newtype!(ForkDigest);
 serde_bytes_newtype!(ForkDigest, 32);
 codec_fixtures!(ForkDigest, Self([0x22u8; 32]) => "2222222222222222222222222222222222222222222222222222222222222222");
+
+/// A utility type for consumers that are only interested in eras schedule
+/// without any era-specific parameters.
+pub type EraSchedules = EraSchedule<()>;
+
+/// A utility type for consumers that are only interested in past, current, or
+/// future fork digests without any other era-specific parameters.
+pub type ForkDigests = EraSchedule<ForkDigest>;
 
 #[cfg(test)]
 mod tests {

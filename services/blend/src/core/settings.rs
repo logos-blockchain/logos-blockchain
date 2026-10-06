@@ -2,7 +2,7 @@ use core::time::Duration;
 use std::{num::NonZeroU64, sync::Arc};
 
 use lb_core::blend::core_quota;
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
 use lb_poq::Quota;
 use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
@@ -16,7 +16,7 @@ use crate::settings::{TimingSettings, max_data_message_delay_in_rounds};
 /// epoch running under its era's, and the state a previous run left.
 #[derive(Clone, Debug)]
 pub struct CoreServiceSettings<BackendSettings, NetworkSettings> {
-    pub eras: Eras<EraSettings<BackendSettings, NetworkSettings>>,
+    pub eras: EraSchedule<EraSettings<BackendSettings, NetworkSettings>>,
     pub recovery_data: RecoveryData,
 }
 

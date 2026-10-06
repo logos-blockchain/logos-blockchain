@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
                     custom_deployment_path,
                     OnUnknownKeys::Fail,
                 )?
-                .eras()?,
+                .era_schedule()?,
             );
         }
         #[expect(
@@ -120,7 +120,7 @@ async fn main() -> Result<()> {
 /// The fork of every era of `deployment`'s schedule, in activation order.
 fn forks(deployment: &DeploymentSettings) -> Result<String> {
     Ok(deployment
-        .eras()?
+        .era_schedule()?
         .iter()
         .map(|era| {
             format!(

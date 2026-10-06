@@ -22,7 +22,7 @@ use lb_blend::scheduling::{
     message_blend::provers::{leader_and_pow::LeaderAndPowProofsGenerator, pow::new_mining_pool},
 };
 use lb_chain_service::api::CryptarchiaServiceData;
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_key_management_system_service::{
     api::KmsServiceApi, keys::KeyOperators,
     operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
@@ -110,7 +110,7 @@ where
     NodeId: Clone,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
-    type Settings = Eras<EraSettings<Backend::Settings, Dispatcher::Settings>>;
+    type Settings = EraSchedule<EraSettings<Backend::Settings, Dispatcher::Settings>>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = ServiceMessage<NodeId>;
@@ -336,7 +336,7 @@ async fn run<Backend, NodeId, ProofsGenerator, Dispatcher, PolInfoProvider, Runt
     >,
     mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
     local_node_id: NodeId,
-    settings: Eras<RunningSettings<Backend, NodeId, RuntimeServiceId>>,
+    settings: EraSchedule<RunningSettings<Backend, NodeId, RuntimeServiceId>>,
     payload_dispatcher: Dispatcher,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     notify_ready: impl Fn(),

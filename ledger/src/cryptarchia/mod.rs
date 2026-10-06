@@ -19,7 +19,7 @@ use lb_core::{
     proofs::leader_proof::{self, LeaderPublic},
     sdp::Declarations,
 };
-use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots, era::Eras};
+use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots, era::EraSchedule};
 use lb_groth16::{Fr, fr_from_bytes};
 use lb_log_targets::ledger;
 use lb_utxotree::MerklePath;
@@ -116,7 +116,7 @@ impl EpochState {
         ledger: &LedgerState,
         sdp: &SdpLedger,
         pow: &PowState,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
     ) -> Self {
         let config = eras.config_at_epoch(self.epoch);
         let nonce_snapshot_slot = eras.nonce_snapshot(self.epoch);
@@ -266,7 +266,7 @@ impl LedgerState {
         slot: Slot,
         sdp: &SdpLedger,
         pow: &PowState,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
     ) -> Result<Self, LedgerError<Id>> {
         if slot <= self.slot {
             return Err(LedgerError::InvalidSlot {
@@ -518,7 +518,7 @@ impl LedgerState {
         self,
         slot: Slot,
         proof: &LeaderProof,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
     ) -> Result<Self, LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -546,7 +546,7 @@ impl LedgerState {
         uncle_slots: &UncleSlots,
         sdp: &SdpLedger,
         pow: &PowState,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
     ) -> Result<Self, LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -567,7 +567,7 @@ impl LedgerState {
         proof: &LeaderProof,
         sdp: &SdpLedger,
         pow: &PowState,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
     ) -> Result<Self, LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -584,7 +584,7 @@ impl LedgerState {
         proof: &LeaderProof,
         sdp: &SdpLedger,
         pow: &PowState,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
     ) -> Result<(), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -676,7 +676,7 @@ impl LedgerState {
     /// snapshot. Once the genesis `SdpLedger` is available, this seeds the
     /// active-declarations snapshot for epochs 0 and 1.
     #[must_use]
-    pub fn with_genesis_sdp(mut self, sdp: &SdpLedger, eras: &Eras<Config>) -> Self {
+    pub fn with_genesis_sdp(mut self, sdp: &SdpLedger, eras: &EraSchedule<Config>) -> Self {
         for epoch_state in [&mut self.epoch_state, &mut self.next_epoch_state] {
             let service_params = &eras
                 .config_at_epoch(epoch_state.epoch)
@@ -731,7 +731,7 @@ impl LedgerState {
         slot: Slot,
         sdp: &SdpLedger,
         pow: &PowState,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
     ) -> Result<EpochState, LedgerError<Id>> {
         Ok(self
             .clone()
@@ -742,7 +742,7 @@ impl LedgerState {
 
     pub fn from_genesis_tx<Id>(
         transfer: &SignedOperation<TransferOp, Verified, GenesisMode>,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
         epoch_nonce: Fr,
     ) -> Result<Self, LedgerError<Id>> {
         let operation = transfer.operation();
@@ -765,7 +765,7 @@ impl LedgerState {
     /// The state at genesis, under the config of the genesis era.
     pub fn from_utxos(
         utxos: impl IntoIterator<Item = Utxo>,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
         nonce: Fr,
     ) -> Self {
         let config = &eras.genesis().entry.parameters;
@@ -1002,7 +1002,7 @@ pub mod tests {
         slot: u64,
         txs_in_block: u64,
         sdp: &SdpLedger,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
     ) -> LedgerState {
         let previous_epoch_state = state.epoch_state().clone();
         let state = state
@@ -1035,7 +1035,7 @@ pub mod tests {
                 slot,
                 &SdpLedger::new(0.into()),
                 &ledger.state(&parent).unwrap().mantle_ledger.pow,
-                ledger.eras(),
+                ledger.era_schedule(),
             )?;
         let id = make_id(parent, slot, utxo);
         let proof = generate_proof(&ledger_state, &utxo, slot);
@@ -1306,7 +1306,7 @@ pub mod tests {
         let signed_operation =
             SignedOperation::<_, _, StandardMode>::new(declare_op.clone(), proof)
                 .into_state_trusted();
-        let config = ledger.eras().genesis().entry.parameters.clone();
+        let config = ledger.era_schedule().genesis().entry.parameters.clone();
 
         let block_ledger = ledger.states.get_mut(&id).unwrap();
         block_ledger.mantle_ledger = block_ledger
@@ -1930,7 +1930,7 @@ pub mod tests {
         let (ledger, genesis) = ledger(&[utxo], config());
 
         let ledger_state = ledger.state(&genesis).unwrap().clone();
-        let eras = ledger.eras();
+        let eras = ledger.era_schedule();
 
         let slot = Slot::genesis().strict_add(10.into());
         let ledger_state2 = ledger_state
@@ -1970,7 +1970,7 @@ pub mod tests {
             voucher_cm: VoucherCm::default(),
         };
         let update_err = ledger_state
-            .try_apply_proof::<_, ()>(slot, &proof, ledger.eras())
+            .try_apply_proof::<_, ()>(slot, &proof, ledger.era_schedule())
             .err();
 
         assert_eq!(Some(LedgerError::InvalidProof), update_err);
@@ -1995,7 +1995,7 @@ pub mod tests {
             voucher_cm: VoucherCm::default(),
         };
         let update_err = ledger_state
-            .try_apply_proof::<_, ()>(slot, &proof, ledger.eras())
+            .try_apply_proof::<_, ()>(slot, &proof, ledger.era_schedule())
             .err();
 
         assert_eq!(Some(LedgerError::InvalidProof), update_err);
@@ -2229,7 +2229,7 @@ pub mod tests {
     /// rate of 1. Era 1, from epoch 2: k = 4, f = 1/5 and a learning rate of
     /// 1/2, so epochs of 200 slots whose density is measured over the first
     /// 120.
-    fn two_eras() -> (Config, Config, Eras<Config>) {
+    fn two_eras() -> (Config, Config, EraSchedule<Config>) {
         let era_0 = config();
         let era_1 = Config {
             consensus_config: lb_cryptarchia_engine::Config::new(
@@ -2246,7 +2246,7 @@ pub mod tests {
 
     /// The state in epoch 1, the last of era 0, at its first slot, with a
     /// total stake of 10000 and 3 blocks in the density window of epoch 1.
-    fn state_in_last_epoch_of_era_0(eras: &Eras<Config>) -> LedgerState {
+    fn state_in_last_epoch_of_era_0(eras: &EraSchedule<Config>) -> LedgerState {
         let sdp = SdpLedger::new(0.into());
         // Epoch 0 meets the expected density of 6 blocks, so the total stake
         // carries over to epoch 1 unchanged.

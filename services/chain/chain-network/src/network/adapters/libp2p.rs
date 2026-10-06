@@ -16,7 +16,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{
     Slot,
-    era::{Era, EraInForce, Eras},
+    era::{Era, EraInForce, EraSchedule},
 };
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_log_targets::chain;
@@ -70,7 +70,7 @@ pub struct LibP2pAdapterSettings {
     /// The proposal topic of every era: each era's proposals are gossiped on
     /// its topic, and decoded, as its synced blocks are, by the codec of its
     /// version.
-    pub topics: Arc<Eras<String>>,
+    pub topics: Arc<EraSchedule<String>>,
     /// The maximum number of connected peers to attempt downloads from
     /// for each target block.
     pub max_connected_peers_to_try_download: usize,
@@ -219,7 +219,7 @@ where
 }
 
 /// Whether `topic` is the proposal topic of an era in force.
-fn is_in_force(topics: &Eras<TopicHash>, in_force: Option<EraInForce>, topic: &TopicHash) -> bool {
+fn is_in_force(topics: &EraSchedule<TopicHash>, in_force: Option<EraInForce>, topic: &TopicHash) -> bool {
     in_force
         .into_iter()
         .flat_map(EraInForce::eras)
@@ -636,7 +636,7 @@ mod tests {
             transition_slots: 5,
             parameters: topic(era),
         };
-        let topics = Eras::new(
+        let topics = EraSchedule::new(
             OffsetDateTime::UNIX_EPOCH,
             entry(0),
             EraEntriesAfterGenesis::from((NonZero::new(1).unwrap(), entry(1))),

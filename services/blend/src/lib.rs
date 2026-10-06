@@ -14,7 +14,7 @@ use lb_core::{
     mantle::NoteId,
     sdp::{DeclarationId, DeclarationMessage, Locator, ProviderId, ServiceType},
 };
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_key_management_system_service::{
     api::KmsServiceApi,
     keys::{Ed25519PublicKey, PublicKeyEncoding, ZkPublicKey},
@@ -94,7 +94,7 @@ where
     CoreService: ServiceData + CoreServiceComponents<RuntimeServiceId>,
     EdgeService: EdgeServiceComponents,
 {
-    type Settings = Eras<
+    type Settings = EraSchedule<
         EraSettings<
             BlendBackendSettingsOfService<CoreService, RuntimeServiceId>,
             <EdgeService as EdgeServiceComponents>::BackendSettings,

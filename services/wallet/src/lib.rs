@@ -35,7 +35,7 @@ use lb_core::{
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
 };
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::{KMSBackend, preload::PreloadKMSBackend},
@@ -610,7 +610,7 @@ where
         storage: &StorageApi<Tx>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        ledger_eras: &Eras<lb_ledger::Config>,
+        ledger_eras: &EraSchedule<lb_ledger::Config>,
     ) {
         if let Err(err) =
             Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia, ledger_eras).await
@@ -1446,7 +1446,7 @@ where
         state: &mut ServiceState<'_>,
         storage: &StorageApi<Tx>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
-        ledger_eras: &Eras<lb_ledger::Config>,
+        ledger_eras: &EraSchedule<lb_ledger::Config>,
     ) -> Result<(), WalletServiceError> {
         let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
 
@@ -1478,7 +1478,7 @@ where
         state: &mut ServiceState<'_>,
         storage: &StorageApi<Tx>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
-        ledger_eras: &Eras<lb_ledger::Config>,
+        ledger_eras: &EraSchedule<lb_ledger::Config>,
     ) {
         let Ok(block) = Self::load_block(header_id, storage).await.inspect_err(|e| {
             error!(
@@ -1560,7 +1560,7 @@ where
         storage: &StorageApi<Tx>,
         state: &mut ServiceState<'_>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
-        ledger_eras: &Eras<lb_ledger::Config>,
+        ledger_eras: &EraSchedule<lb_ledger::Config>,
     ) {
         log_lib_update(lib_update);
 
@@ -1647,7 +1647,7 @@ where
         state: &mut ServiceState<'_>,
         storage: &StorageApi<Tx>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
-        ledger_eras: &Eras<lb_ledger::Config>,
+        ledger_eras: &EraSchedule<lb_ledger::Config>,
     ) -> Result<(), WalletServiceError> {
         debug!(
             target: LOG_TARGET,

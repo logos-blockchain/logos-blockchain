@@ -7,13 +7,14 @@ pub mod v1;
 use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::{
     Slot, UncleSlots,
-    era::{EraSchedules, EraVersion, Eras},
+    era::{EraSchedule, EraVersion},
 };
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use lb_utils::bounded::{BoundedError, BoundedVec, UpperBoundedOrderedSet, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    era::EraSchedules,
     header::{HeaderId, HeaderRef},
     mantle::{
         traits::{Hashable, StorageSize},
@@ -306,7 +307,7 @@ impl<Tx> BinaryDecode for Block<Tx>
 where
     Tx: BinaryDecode + Hashable<Hash = TxHash> + StorageSize,
 {
-    type Context = (Eras<()>, Tx::Context);
+    type Context = (EraSchedule<()>, Tx::Context);
 
     fn decode<'input>(
         input: &'input [u8],

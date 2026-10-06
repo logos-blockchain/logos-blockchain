@@ -5,7 +5,7 @@ use lb_chain_service::{
     Slot,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_cryptarchia_sync::{GetTipResponse, HeaderId};
 use lb_time_service::SlotTick;
 use overwatch::DynError;
@@ -136,7 +136,7 @@ pub struct PolledTip {
 pub struct TipPollParams {
     /// The cadence of each era: act every this many slots (≈ one expected
     /// block interval, `1/f`).
-    cadence_slots: Arc<Eras<u64>>,
+    cadence_slots: Arc<EraSchedule<u64>>,
     /// Lag, in expected block intervals, beyond which we proactively poll
     /// peers for their tip.
     pub lag_threshold_blocks: u64,

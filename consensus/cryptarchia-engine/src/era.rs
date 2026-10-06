@@ -207,21 +207,17 @@ pub enum ErasError {
     Overflow(Era),
 }
 
-/// A utility type for consumers that are only interested in eras schedule
-/// without any era-specific parameters.
-pub type EraSchedules = Eras<()>;
-
 /// A chain's eras, each resolved against the ones before it.
 ///
 /// Never empty, and the first era starts at genesis: at epoch 0, slot 0 and
 /// the genesis time. Era `n` is the `n`-th entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Eras<Parameters> {
+pub struct EraSchedule<Parameters> {
     genesis: ScheduledEra<Parameters>,
     after_genesis: Vec<ScheduledEra<Parameters>>,
 }
 
-impl<Parameters> Eras<Parameters> {
+impl<Parameters> EraSchedule<Parameters> {
     /// Resolves the eras of a chain that starts at `genesis_time`: the genesis
     /// era, which starts at epoch 0, and the eras after it, keyed by the epoch
     /// each starts at.
@@ -287,7 +283,7 @@ impl<Parameters> Eras<Parameters> {
 
     /// The same schedule, each era carrying what `f` makes of it instead of
     /// its parameters. Numbers, boundaries, versions and lengths are kept.
-    pub fn map<MapFn, Mapped>(&self, mut map_fn: MapFn) -> Eras<Mapped>
+    pub fn map<MapFn, Mapped>(&self, mut map_fn: MapFn) -> EraSchedule<Mapped>
     where
         MapFn: FnMut(&ScheduledEra<Parameters>) -> Mapped,
     {
@@ -297,7 +293,7 @@ impl<Parameters> Eras<Parameters> {
             .iter()
             .map(|era| map_era(era, map_fn(era)))
             .collect();
-        Eras {
+        EraSchedule {
             genesis,
             after_genesis,
         }
@@ -476,7 +472,9 @@ mod tests {
 
     use time::OffsetDateTime;
 
-    use super::{Era, EraEntriesAfterGenesis, EraEntry, EraInForce, EraVersion, Eras, ErasError};
+    use super::{
+        Era, EraEntriesAfterGenesis, EraEntry, EraInForce, EraSchedule, EraVersion, ErasError,
+    };
     use crate::time::{Epoch, Slot};
 
     const GENESIS: OffsetDateTime = OffsetDateTime::UNIX_EPOCH;
@@ -493,13 +491,13 @@ mod tests {
 
     /// The eras of a chain starting with `genesis`, then each era of
     /// `after_genesis` from the epoch it is paired with.
-    fn eras<const AFTER_GENESIS: usize>(
+    fn era_schedule<const AFTER_GENESIS: usize>(
         genesis: EraEntry<()>,
         after_genesis: [(u32, EraEntry<()>); AFTER_GENESIS],
-    ) -> Result<Eras<()>, ErasError> {
+    ) -> Result<EraSchedule<()>, ErasError> {
         let after_genesis =
             after_genesis.map(|(first_epoch, entry)| (NonZero::new(first_epoch).unwrap(), entry));
-        Eras::new(
+        EraSchedule::new(
             GENESIS,
             genesis,
             EraEntriesAfterGenesis::try_from_iter(after_genesis).unwrap(),
@@ -509,8 +507,8 @@ mod tests {
     /// Era 0: slots of 1 s, epochs of 100 slots. Era 1 from epoch 3: slots of
     /// 2 s, epochs of 50 slots. Era 2 from epoch 5: slots of 1.5 s, epochs of
     /// 3 slots. Era 3 from epoch 6: slots of 1 s, epochs of 100 slots.
-    fn four_eras() -> Eras<()> {
-        eras(
+    fn four_eras() -> EraSchedule<()> {
+        era_schedule(
             entry(Duration::from_secs(1), 100),
             [
                 (3, entry(Duration::from_secs(2), 50)),
@@ -699,7 +697,7 @@ mod tests {
 
     #[test]
     fn eras_are_resolved_in_epoch_order_whatever_order_they_are_listed_in() {
-        let listed_backwards = eras(
+        let listed_backwards = era_schedule(
             entry(Duration::from_secs(1), 100),
             [
                 (6, entry(Duration::from_secs(1), 100)),
@@ -717,7 +715,7 @@ mod tests {
         let second = Duration::from_secs(1);
         // Two epochs of the genesis era already run past the last slot.
         assert_eq!(
-            eras(entry(second, u64::MAX), [(2, entry(second, 100))]),
+            era_schedule(entry(second, u64::MAX), [(2, entry(second, 100))]),
             Err(ErasError::Overflow(Era::new(1)))
         );
     }
@@ -727,7 +725,7 @@ mod tests {
         // One epoch of 2^63 slots of 3 s fits the slots, but lasts longer than
         // a `Duration` can hold.
         assert_eq!(
-            eras(
+            era_schedule(
                 entry(Duration::from_secs(3), 1 << 63),
                 [(1, entry(Duration::from_secs(1), 100))]
             ),

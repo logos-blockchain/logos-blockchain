@@ -193,7 +193,7 @@ where
         let config = self
             .cryptarchia
             .ledger
-            .eras()
+            .era_schedule()
             .config_at_slot(tick.slot)
             .consensus_config
             .clone();
@@ -469,7 +469,7 @@ where
             }
             Query::GetLedgerEras { reply_channel } => {
                 reply_channel
-                    .send(Arc::clone(self.cryptarchia.ledger.eras()))
+                    .send(Arc::clone(self.cryptarchia.ledger.era_schedule()))
                     .unwrap_or_else(|_| {
                         error!(target: LOG_TARGET, "Could not send the ledger eras through channel");
                     });
@@ -515,7 +515,7 @@ where
     /// Selects uncles for a new block extending `parent` at `slot`.
     async fn select_uncles(&self, parent: HeaderId, slot: Slot) -> UncleHeaders {
         // An uncle must be of the era of the new block.
-        let era = self.cryptarchia.ledger.eras().at_slot(slot);
+        let era = self.cryptarchia.ledger.era_schedule().at_slot(slot);
         let (era_start, version) = (era.first_slot, era.entry.version);
         let Some(parent_branch) = self.cryptarchia.consensus.branches().get(&parent) else {
             return UncleHeaders::empty(version);
@@ -650,7 +650,7 @@ where
             };
             let inactivity_period = cryptarchia
                 .ledger
-                .eras()
+                .era_schedule()
                 .config_at_slot(block.header().slot())
                 .sdp_config
                 .service_params
@@ -791,7 +791,7 @@ fn log_canonical_blend_snapshots<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx
         );
     }
 
-    let eras = cryptarchia.ledger.eras();
+    let eras = cryptarchia.ledger.era_schedule();
     for epoch_state in [
         committed_state.epoch_state(),
         committed_state.next_epoch_state(),
@@ -856,7 +856,7 @@ where
         block.header().parent(),
         block.header().slot(),
     );
-    let version = cryptarchia.ledger.eras().at_slot(slot).entry.version;
+    let version = cryptarchia.ledger.era_schedule().at_slot(slot).entry.version;
     let prev_lib = cryptarchia.lib();
 
     let mut candidate = cryptarchia.clone();

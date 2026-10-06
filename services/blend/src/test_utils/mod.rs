@@ -7,14 +7,14 @@ pub mod mocks;
 mod libp2p;
 use core::{num::NonZero, time::Duration};
 
-use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion, Eras};
+use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion, EraSchedule};
 use time::OffsetDateTime;
 
 pub use self::libp2p::*;
 
 /// A schedule of a single era, the genesis era, under `settings`.
-pub fn single_era<Settings>(settings: Settings) -> Eras<Settings> {
-    Eras::new(
+pub fn single_era<Settings>(settings: Settings) -> EraSchedule<Settings> {
+    EraSchedule::new(
         OffsetDateTime::UNIX_EPOCH,
         EraEntry {
             version: EraVersion::V1,

@@ -29,7 +29,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{
     EpochConfig, Slot, UncleSlots,
-    era::{EraVersion, Eras},
+    era::{EraSchedule, EraVersion},
 };
 use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, Fr};
@@ -382,7 +382,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
     >::initialize_cryptarchia(
         &recovery_state,
         &bootstrap_config,
-        Arc::clone(stored.ledger.eras()),
+        Arc::clone(stored.ledger.era_schedule()),
         &relays,
         &new_block_tx,
         &lib_tx,
@@ -700,7 +700,7 @@ pub fn chain_with_fork() -> (
 /// [`chain_with_fork`], over the ledger config of every era of `ledger_eras`.
 #[expect(clippy::type_complexity, reason = "a test helper")]
 pub fn chain_with_fork_over(
-    ledger_eras: Eras<lb_ledger::Config>,
+    ledger_eras: EraSchedule<lb_ledger::Config>,
 ) -> (
     Cryptarchia,
     Block<SignedOps<Preverified, StandardMode>>,
@@ -750,7 +750,10 @@ pub fn genesis_cryptarchia(utxo: Utxo) -> Cryptarchia {
 
 /// [`genesis_cryptarchia`], over the ledger config of every era of
 /// `ledger_eras`.
-pub fn genesis_cryptarchia_over(ledger_eras: Eras<lb_ledger::Config>, utxo: Utxo) -> Cryptarchia {
+pub fn genesis_cryptarchia_over(
+    ledger_eras: EraSchedule<lb_ledger::Config>,
+    utxo: Utxo,
+) -> Cryptarchia {
     Cryptarchia::from_lib(
         GENESIS_ID.into(),
         LedgerState::from_utxos([utxo], &ledger_eras),

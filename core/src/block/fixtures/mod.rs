@@ -4,6 +4,8 @@ use lb_binary_codec::canonical::{
     CodecExamples, CodecFixture, CodecFixtures, codec_fixtures, decode_fixture_hex,
 };
 
+#[cfg(test)]
+use crate::era::EraSchedules;
 use crate::{
     block::{
         Block, BlockTransactionReferences, Proposal, References,
@@ -28,10 +30,10 @@ pub(super) fn three_references() -> BlockTransactionReferences {
 /// A chain of a single era, of version 1, from genesis: what decodes the
 /// block and the proposal fixtures.
 #[cfg(test)]
-pub(super) fn single_era() -> lb_cryptarchia_engine::era::Eras<()> {
-    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion, Eras};
+pub(super) fn single_era() -> EraSchedules {
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion};
 
-    Eras::new(
+    EraSchedule::new(
         time::OffsetDateTime::UNIX_EPOCH,
         EraEntry {
             version: EraVersion::V1,
@@ -66,25 +68,5 @@ where
             bytes: Cow::Owned(decode_fixture_hex(BLOCK_HEX)),
         }]
         .into()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::single_era;
-    use crate::{
-        block::Block,
-        mantle::{
-            ledger::verification_mode::StandardMode,
-            transactions::{SignedOps, states::Unverified},
-        },
-    };
-
-    #[test]
-    fn block_codec_fixtures_round_trip() {
-        lb_binary_codec::canonical::assert_codec_fixtures_with::<
-            Block<SignedOps<Unverified, StandardMode>>,
-            _,
-        >(single_era);
     }
 }

@@ -1,4 +1,4 @@
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_era_parameters::EraDefinition;
 use lb_time_service::{
     TimeServiceSettings,
@@ -17,7 +17,7 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_time_service_settings(
         self,
-        eras: &Eras<EraDefinition>,
+        eras: &EraSchedule<EraDefinition>,
     ) -> TimeServiceSettings<NtpTimeBackendSettings> {
         TimeServiceSettings {
             // The time service only needs when each era starts and how long

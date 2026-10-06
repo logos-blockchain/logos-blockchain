@@ -53,7 +53,7 @@ use lb_blend::{
 };
 use lb_chain_service::{Epoch, api::CryptarchiaServiceData};
 use lb_core::sdp::ActivityMetadata;
-use lb_cryptarchia_engine::era::{Era, Eras};
+use lb_cryptarchia_engine::era::{Era, EraSchedule};
 use lb_key_management_system_service::{
     api::KmsServiceApi,
     keys::{KeyOperators, PublicKeyEncoding},
@@ -548,7 +548,7 @@ async fn initialize<
     KmsAdapter,
     RuntimeServiceId,
 >(
-    blend_configs: Eras<RunningBlendConfig<Backend::Settings>>,
+    blend_configs: EraSchedule<RunningBlendConfig<Backend::Settings>>,
     public_epoch_stream: impl Stream<Item = BlendEpoch<NodeId>> + Send + Unpin + 'static,
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     kms_adapter: KmsAdapter,
@@ -920,7 +920,7 @@ async fn run_event_loop<
     remaining_epoch_stream: &mut (
              impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
          ),
-    blend_configs: &Eras<RunningBlendConfig<Backend::Settings>>,
+    blend_configs: &EraSchedule<RunningBlendConfig<Backend::Settings>>,
     backend: &mut Backend,
     payload_dispatcher: &Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
@@ -1114,7 +1114,7 @@ async fn run_current_epoch<
     remaining_epoch_stream: &mut (
              impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
          ),
-    blend_configs: &Eras<RunningBlendConfig<Backend::Settings>>,
+    blend_configs: &EraSchedule<RunningBlendConfig<Backend::Settings>>,
     backend: &mut Backend,
     payload_dispatcher: &Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
@@ -1204,7 +1204,7 @@ async fn run_during_transition<
     remaining_epoch_stream: &mut (
              impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
          ),
-    blend_configs: &Eras<RunningBlendConfig<Backend::Settings>>,
+    blend_configs: &EraSchedule<RunningBlendConfig<Backend::Settings>>,
     backend: &mut Backend,
     payload_dispatcher: &Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
@@ -1486,7 +1486,7 @@ async fn rotate<
     previous_era: Era,
     components: Components<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
     latest_secret_pol_info: &mut Option<PolEpochInfo>,
-    blend_configs: &Eras<RunningBlendConfig<Backend::Settings>>,
+    blend_configs: &EraSchedule<RunningBlendConfig<Backend::Settings>>,
     backend: &mut Backend,
     recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> StageOutcome<

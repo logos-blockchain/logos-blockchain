@@ -4,7 +4,7 @@ use lb_core::mantle::{
     traits::Hashable as _,
     transactions::{hash::TxHash, states::Preverified},
 };
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_era_parameters::EraDefinition;
 use lb_services_utils::overwatch::RecoveryData;
 use lb_tx_service::{
@@ -24,7 +24,7 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_mempool_service_settings(
         self,
-        eras: &Eras<EraDefinition>,
+        eras: &EraSchedule<EraDefinition>,
         recovery_data: RecoveryData,
     ) -> TxMempoolSettings<
         MempoolSettings,

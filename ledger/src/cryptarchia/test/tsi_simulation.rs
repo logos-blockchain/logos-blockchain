@@ -374,7 +374,7 @@ fn apply_block_to_ledger(
             slot,
             &SdpLedger::new(0.into()),
             &crate::cryptarchia::tests::pow_state(),
-            ledger.eras(),
+            ledger.era_schedule(),
         )
         .expect("epoch state update");
     let id = block_id(parent, slot);

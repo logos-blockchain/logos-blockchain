@@ -175,7 +175,7 @@ pub fn run_node_from_config(
 
     // The schedule, resolved once and shared by every service, each of which
     // follows the era in force on its own.
-    let eras = Arc::new(config.deployment.eras()?);
+    let eras = Arc::new(config.deployment.era_schedule()?);
     // The names the network service starts with. Kademlia's and identify's are
     // the chain's own, the same in every era; the chain sync protocols and the
     // gossip topics follow the era in force, set by the services that use them

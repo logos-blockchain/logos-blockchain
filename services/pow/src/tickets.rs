@@ -31,7 +31,7 @@ use lb_core::{
         ops::pow::{ClaimPowRewardOp, PowTarget},
     },
 };
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_key_management_system_keys::keys::UnsecuredZkKey;
 use lb_ledger::LedgerState;
 use lb_log_targets::pow;
@@ -108,7 +108,7 @@ pub struct TicketGenerator {
     /// What the service follows of every era, the acceptance window among it:
     /// a block older than the window of the tip's era leaves the reward window
     /// and its search is pruned.
-    eras: Eras<EraSettings>,
+    eras: EraSchedule<EraSettings>,
     /// Winning tickets the node already holds but whose reward has not been
     /// paid out of the pool yet (ready plus pending claims). They count against
     /// the pool when sizing a new block's search. Kept current by the consumer
@@ -131,7 +131,7 @@ impl TicketGenerator {
         cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData>,
         pool: Arc<ThreadPool>,
         max_tickets_per_block: NonZeroUsize,
-        eras: Eras<EraSettings>,
+        eras: EraSchedule<EraSettings>,
     ) -> Result<Self, lb_chain_service::api::ApiError>
     where
         CryptarchiaServiceData:
@@ -619,7 +619,7 @@ mod tests {
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
-            eras: crate::service::tests::eras(),
+            eras: crate::service::tests::era_schedule(),
             outstanding_tickets: 0,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
@@ -641,7 +641,7 @@ mod tests {
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
-            eras: crate::service::tests::eras(),
+            eras: crate::service::tests::era_schedule(),
             outstanding_tickets: 0,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
@@ -658,7 +658,7 @@ mod tests {
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
-            eras: crate::service::tests::eras(),
+            eras: crate::service::tests::era_schedule(),
             outstanding_tickets: 0,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Pending));
@@ -682,7 +682,7 @@ mod tests {
             tip,
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
-            eras: crate::service::tests::eras(),
+            eras: crate::service::tests::era_schedule(),
             outstanding_tickets: 0,
         };
 
@@ -708,7 +708,7 @@ mod tests {
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
-            eras: crate::service::tests::eras(),
+            eras: crate::service::tests::era_schedule(),
             outstanding_tickets: 0,
         };
 

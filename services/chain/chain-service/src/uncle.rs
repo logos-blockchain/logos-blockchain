@@ -46,7 +46,7 @@ impl Cryptarchia {
 
         // Each uncle's slot must be older than the block's slot, and of the
         // block's era.
-        let eras = self.ledger.eras();
+        let eras = self.ledger.era_schedule();
         let era = eras.at_slot(slot).era;
         for uncle in block.uncle_headers().iter() {
             let uncle_slot = uncle.header().slot();
@@ -68,7 +68,7 @@ impl Cryptarchia {
         // uncle reference window.
         let uncle_reference_window = self
             .ledger
-            .eras()
+            .era_schedule()
             .config_at_slot(slot)
             .consensus_config
             .uncle_reference_window_in_slot()
@@ -151,7 +151,7 @@ impl Cryptarchia {
             .verify_proof_of_leadership::<_, HeaderId>(
                 uncle.header().slot(),
                 uncle.header().leader_proof(),
-                self.ledger.eras(),
+                self.ledger.era_schedule(),
             )
             .map_err(|_| UncleError::InvalidProof)
     }
@@ -304,7 +304,7 @@ mod tests {
         // parent, which puts the uncle's parent outside the window.
         let uncle_reference_window = cryptarchia
             .ledger
-            .eras()
+            .era_schedule()
             .genesis()
             .entry
             .parameters

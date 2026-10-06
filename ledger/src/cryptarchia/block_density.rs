@@ -1,6 +1,6 @@
 use std::ops::RangeInclusive;
 
-use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots, era::Eras};
+use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots, era::EraSchedule};
 use rpds::HashTrieSetSync;
 
 use crate::{Config, config::ConfigSchedule as _};
@@ -14,7 +14,7 @@ pub struct BlockDensity {
 }
 
 impl BlockDensity {
-    pub fn new(epoch: Epoch, eras: &Eras<Config>) -> Self {
+    pub fn new(epoch: Epoch, eras: &EraSchedule<Config>) -> Self {
         Self {
             period_range: Self::compute_period_range(epoch, eras),
             occupied_slots: HashTrieSetSync::new_sync(),
@@ -27,7 +27,7 @@ impl BlockDensity {
     /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
     /// the block density for epoch 2 will be computed during [200, 259],
     /// which is the Stake Distribution Snapshot + Buffer phases of epoch 2.
-    fn compute_period_range(epoch: Epoch, eras: &Eras<Config>) -> RangeInclusive<Slot> {
+    fn compute_period_range(epoch: Epoch, eras: &EraSchedule<Config>) -> RangeInclusive<Slot> {
         let start = eras.epoch_starting_slot(epoch);
         let period = eras.config_at_epoch(epoch).total_stake_inference_period();
         start..=Slot::new(start.into_inner().strict_add(period).strict_sub(1))

@@ -6,7 +6,7 @@ use lb_blend::{
     scheduling::membership::Membership,
 };
 use lb_chain_service::Epoch;
-use lb_cryptarchia_engine::era::{Era, Eras};
+use lb_cryptarchia_engine::era::{Era, EraSchedule};
 use overwatch::overwatch::handle::OverwatchHandle;
 
 use crate::{core::settings::RunningBlendConfig as BlendConfig, message::NetworkInfo};
@@ -36,7 +36,7 @@ pub trait BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId> {
     /// A backend for the epoch of `current_epoch_info`, of era `current_era`,
     /// on a chain whose eras' settings are `service_configs`.
     fn new(
-        service_configs: &Eras<BlendConfig<Self::Settings>>,
+        service_configs: &EraSchedule<BlendConfig<Self::Settings>>,
         current_era: Era,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         current_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>,

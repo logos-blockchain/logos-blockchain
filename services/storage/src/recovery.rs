@@ -3,7 +3,7 @@ use std::{cmp::Ordering, fmt::Display, marker::PhantomData, sync::Arc};
 use bytes::Bytes;
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::era::ForkDigest;
-use lb_cryptarchia_engine::{Slot, era::Eras};
+use lb_cryptarchia_engine::{Slot, era::EraSchedule};
 use lb_log_targets::utils;
 pub use lb_services_utils::overwatch::recovery::StorageRecoverySettings;
 use lb_services_utils::overwatch::recovery::{
@@ -47,7 +47,7 @@ pub fn recovery_key(suffix: &[u8]) -> Bytes {
 /// digests `forks`.
 pub fn load_recovery_data(
     settings: RocksBackendSettings,
-    forks: Arc<Eras<ForkDigest>>,
+    forks: Arc<EraSchedule<ForkDigest>>,
 ) -> Result<RecoveryData, DynError> {
     let backend = RocksBackend::new(settings)?;
     recovery_data_from_backend(&backend, forks)
@@ -55,7 +55,7 @@ pub fn load_recovery_data(
 
 fn recovery_data_from_backend(
     backend: &RocksBackend,
-    forks: Arc<Eras<ForkDigest>>,
+    forks: Arc<EraSchedule<ForkDigest>>,
 ) -> Result<RecoveryData, DynError> {
     backend
         .load_prefix_entries(RECOVERY_PREFIX)
@@ -82,7 +82,7 @@ where
         return Ok(None);
     };
     let Some((stamp, state)) = Stamp::read(&record) else {
-        return Ok(State::migrate(0, &record)
+        return Ok(State::migrate(StateVersion::new(0), &record)
             .inspect_err(|error| {
                 warn!(
                     target: LOG_TARGET,
@@ -161,7 +161,7 @@ impl Stamp {
 }
 
 /// The fork digest of the era in force at `time`.
-fn fork_in_force(forks: &Eras<ForkDigest>, time: OffsetDateTime) -> ForkDigest {
+fn fork_in_force(forks: &EraSchedule<ForkDigest>, time: OffsetDateTime) -> ForkDigest {
     let slot = forks.slot_at(time).unwrap_or(Slot::genesis());
     forks.at_slot(slot).entry.parameters
 }
@@ -171,7 +171,7 @@ pub struct StorageRecoveryBackend<State, Settings, RuntimeServiceId> {
     storage: OnceCell<StorageApi>,
     /// The fork digest of every era of the chain, the one in force stamping
     /// each record written.
-    forks: Arc<Eras<ForkDigest>>,
+    forks: Arc<EraSchedule<ForkDigest>>,
     state: PhantomData<fn() -> State>,
     settings: PhantomData<fn() -> Settings>,
 }
@@ -296,9 +296,9 @@ mod tests {
     }
 
     impl VersionedState for TestState {
-        const VERSION: u16 = 2;
+        const VERSION: StateVersion = StateVersion::new(2);
 
-        fn migrate(from: u16, bytes: &[u8]) -> Result<Self, DynError> {
+        fn migrate(from: StateVersion, bytes: &[u8]) -> Result<Self, DynError> {
             let value = String::from_bytes(bytes)?;
             Ok(Self {
                 value: format!("{value}, migrated from version {from}"),
@@ -324,7 +324,7 @@ mod tests {
 
     /// A chain of two eras of 10 one-second slots an epoch, from the Unix
     /// epoch: era 1 starts at slot 10, 10 seconds in.
-    fn forks() -> Arc<Eras<ForkDigest>> {
+    fn forks() -> Arc<EraSchedule<ForkDigest>> {
         let era = |parameters| EraEntry {
             version: EraVersion::V1,
             slot_duration: Duration::from_secs(1),
@@ -333,7 +333,7 @@ mod tests {
             parameters,
         };
         Arc::new(
-            Eras::new(
+            EraSchedule::new(
                 OffsetDateTime::UNIX_EPOCH,
                 era(ERA_0.into()),
                 EraEntriesAfterGenesis::from((NonZero::new(1).unwrap(), era(ERA_1.into()))),
@@ -354,7 +354,7 @@ mod tests {
         }
     }
 
-    fn stamped(state_version: u16, fork_digest: [u8; 32], state: &[u8]) -> Bytes {
+    fn stamped(state_version: StateVersion, fork_digest: [u8; 32], state: &[u8]) -> Bytes {
         Stamp {
             state_version,
             fork_digest: fork_digest.into(),
@@ -382,7 +382,7 @@ mod tests {
         };
         let directory = tempfile::tempdir().unwrap();
         let reader = rocks_backend(&directory);
-        let record = stamped(2, ERA_0, &expected.to_bytes().unwrap());
+        let record = stamped(StateVersion::new(2), ERA_0, &expected.to_bytes().unwrap());
         reader
             .txn(move |database| {
                 database.put(recovery_key(TestSettings::RECOVERY_KEY_SUFFIX), record)?;
@@ -424,7 +424,11 @@ mod tests {
             let state = TestState {
                 value: "restored".into(),
             };
-            let settings = settings_with_record(stamped(2, fork, &state.to_bytes().unwrap()));
+            let settings = settings_with_record(stamped(
+                StateVersion::new(2),
+                fork,
+                &state.to_bytes().unwrap(),
+            ));
 
             assert_eq!(load(&settings).unwrap(), Some(state));
         }
@@ -435,14 +439,22 @@ mod tests {
         let state = TestState {
             value: "elsewhere".into(),
         };
-        let settings = settings_with_record(stamped(2, [3; 32], &state.to_bytes().unwrap()));
+        let settings = settings_with_record(stamped(
+            StateVersion::new(2),
+            [3; 32],
+            &state.to_bytes().unwrap(),
+        ));
 
         assert!(load(&settings).unwrap().is_none());
     }
 
     #[test]
     fn older_versions_are_migrated() {
-        let settings = settings_with_record(stamped(1, ERA_1, &"old".to_bytes().unwrap()));
+        let settings = settings_with_record(stamped(
+            StateVersion::new(1),
+            ERA_1,
+            &"old".to_bytes().unwrap(),
+        ));
 
         assert_eq!(
             load(&settings).unwrap(),
@@ -454,20 +466,26 @@ mod tests {
 
     #[test]
     fn newer_versions_are_refused() {
-        let settings = settings_with_record(stamped(3, ERA_0, b"from a later release"));
+        let settings = settings_with_record(stamped(
+            StateVersion::new(3),
+            ERA_0,
+            b"from a later release",
+        ));
 
         assert!(matches!(
             load(&settings),
-            Err(RecoveryError::NewerVersion {
-                found: 3,
-                current: 2
-            })
+            Err(RecoveryError::NewerVersion { found, current })
+                if found == StateVersion::new(3) && current == StateVersion::new(2)
         ));
     }
 
     #[test]
     fn states_that_do_not_read_at_their_version_are_errors() {
-        let settings = settings_with_record(stamped(2, ERA_0, b"invalid recovery state"));
+        let settings = settings_with_record(stamped(
+            StateVersion::new(2),
+            ERA_0,
+            b"invalid recovery state",
+        ));
 
         assert!(matches!(load(&settings), Err(RecoveryError::Backend(_))));
         assert!(load(&settings).unwrap().is_none());

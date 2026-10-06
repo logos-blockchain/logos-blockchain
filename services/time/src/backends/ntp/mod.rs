@@ -8,7 +8,7 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
-use lb_cryptarchia_engine::{Slot, era::Eras};
+use lb_cryptarchia_engine::{Slot, era::EraSchedule};
 use lb_log_targets::time as log_targets_time;
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use sntpc::{NtpResult, fraction_to_nanoseconds};
@@ -101,7 +101,7 @@ pub struct NtpStream {
     /// Update interval stream
     interval: NtpResultStream,
     /// The chain's eras, which lay slots and epochs out in time
-    eras: Arc<Eras<()>>,
+    eras: Arc<EraSchedule<()>>,
     /// `SlotTick` interval stream. This stream is replaced when an internal
     /// clock update happens.
     slot_timer: EpochSlotTickStream,
@@ -225,8 +225,8 @@ mod tests {
     use super::*;
 
     /// One era from the Unix epoch, with slots of 1 s in epochs of 3 slots.
-    fn test_eras() -> Eras<()> {
-        Eras::new(
+    fn test_eras() -> EraSchedule<()> {
+        EraSchedule::new(
             OffsetDateTime::UNIX_EPOCH,
             EraEntry {
                 version: EraVersion::V1,

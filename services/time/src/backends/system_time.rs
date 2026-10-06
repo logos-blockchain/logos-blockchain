@@ -31,7 +31,7 @@ mod test {
     use futures::StreamExt as _;
     use lb_cryptarchia_engine::{
         Slot,
-        era::{EraEntriesAfterGenesis, EraEntry, EraVersion, Eras},
+        era::{EraEntriesAfterGenesis, EraEntry, EraVersion, EraSchedule},
     };
     use time::OffsetDateTime;
 
@@ -45,7 +45,7 @@ mod test {
         const SAMPLE_SIZE: u64 = 5;
         // The initial slot is 0 but we expect the stream starts from the next slot (1).
         let expected: Vec<_> = (1..=SAMPLE_SIZE).map(Slot::from).collect();
-        let eras = Eras::new(
+        let eras = EraSchedule::new(
             OffsetDateTime::now_utc(),
             EraEntry {
                 version: EraVersion::V1,

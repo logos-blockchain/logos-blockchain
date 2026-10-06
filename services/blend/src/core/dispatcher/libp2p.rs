@@ -12,7 +12,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{traits::Hashable, transactions::hash::PrefixedKey},
 };
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_log_targets::blend;
 use lb_network_service::{
     NetworkService,
@@ -60,14 +60,14 @@ where
 #[derive(Debug, Clone)]
 pub struct Libp2pBroadcastSettings {
     /// The proposal topic of every era.
-    pub topics: Eras<String>,
+    pub topics: EraSchedule<String>,
 }
 
 /// Broadcast an unencrypted block proposal to the network by publishing it
 /// under the proposal topic of its era, the era of its slot.
 async fn broadcast_block_proposal(
     network_relay: &NetworkRelay,
-    topics: &Eras<String>,
+    topics: &EraSchedule<String>,
     proposal: Vec<u8>,
 ) {
     if proposal.len() > MAX_PAYLOAD_BODY_SIZE {
@@ -340,7 +340,7 @@ mod tests {
             transition_slots: 0,
             parameters: format!("/proposals/{era}"),
         };
-        let topics = Eras::new(
+        let topics = EraSchedule::new(
             OffsetDateTime::UNIX_EPOCH,
             entry(0),
             EraEntriesAfterGenesis::from((NonZero::new(1).unwrap(), entry(1))),

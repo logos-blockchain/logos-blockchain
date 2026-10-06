@@ -19,7 +19,7 @@ use lb_blend_service::{
         TimingSettings, user::Config,
     },
 };
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_era_parameters::{EraDefinition, EraParameters, v1};
 use lb_services_utils::overwatch::RecoveryData;
 
@@ -33,10 +33,10 @@ type Libp2pBlendSettings = BlendSettings<
 /// The settings the Blend services run, each in every era: the proxy's, which
 /// picks between the others, and one for each of the services it can start.
 type BlendServicesSettings = (
-    Eras<Libp2pBlendSettings>,
+    EraSchedule<Libp2pBlendSettings>,
     BlendCoreSettings<Libp2pCoreBlendBackendSettings, Libp2pBroadcastSettings>,
-    Eras<BlendEdgeSettings<Libp2pEdgeBlendBackendSettings, Libp2pBroadcastSettings>>,
-    Eras<BlendBroadcastSettings<Libp2pBroadcastSettings>>,
+    EraSchedule<BlendEdgeSettings<Libp2pEdgeBlendBackendSettings, Libp2pBroadcastSettings>>,
+    EraSchedule<BlendBroadcastSettings<Libp2pBroadcastSettings>>,
 );
 
 /// Blend service config: the user-provided configuration, completed with the
@@ -49,7 +49,7 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_blend_services_settings(
         self,
-        eras: &Eras<EraDefinition>,
+        eras: &EraSchedule<EraDefinition>,
         recovery_data: RecoveryData,
     ) -> BlendServicesSettings {
         let blend_settings = eras.map(|era| era_settings(&self.user, &era.entry.parameters, eras));
@@ -75,7 +75,7 @@ impl ServiceConfig {
 fn era_settings(
     user: &Config,
     era: &EraDefinition,
-    eras: &Eras<EraDefinition>,
+    eras: &EraSchedule<EraDefinition>,
 ) -> Libp2pBlendSettings {
     match &era.parameters {
         EraParameters::V1(parameters) => {
@@ -90,7 +90,7 @@ fn v1_settings(
     user: &Config,
     parameters: &v1::Parameters,
     era: &EraDefinition,
-    eras: &Eras<EraDefinition>,
+    eras: &EraSchedule<EraDefinition>,
 ) -> Settings<Libp2pCoreBlendBackendSettings, Libp2pEdgeBlendBackendSettings, Libp2pBroadcastSettings>
 {
     let blend = &parameters.blend;

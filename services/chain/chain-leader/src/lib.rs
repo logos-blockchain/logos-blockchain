@@ -31,7 +31,7 @@ use lb_core::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
     sdp::blend::PolEpochState,
 };
-use lb_cryptarchia_engine::{Slot, era::Eras};
+use lb_cryptarchia_engine::{Slot, era::EraSchedule};
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
 use lb_ledger::{ConfigSchedule as _, LedgerState};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
@@ -190,7 +190,7 @@ impl Debug for LeaderMsg {
 pub struct LeaderSettings {
     /// The ledger config of every era: each proposal is built under the one
     /// of the era of the slot it is for.
-    pub eras: Arc<Eras<lb_ledger::Config>>,
+    pub eras: Arc<EraSchedule<lb_ledger::Config>>,
     pub wallet_config: LeaderWalletConfig,
 }
 
@@ -637,7 +637,7 @@ where
             RuntimeServiceId,
         >,
         mut ledger_state: LedgerState,
-        ledger_eras: &Eras<lb_ledger::Config>,
+        ledger_eras: &EraSchedule<lb_ledger::Config>,
     ) -> Result<Block<Mempool::Item>, Error> {
         let txs_stream = relays
             .mempool_adapter()
@@ -740,7 +740,7 @@ where
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         kms: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
         time_relay: &OutboundRelay<TimeServiceMessage>,
-        ledger_eras: &Arc<Eras<lb_ledger::Config>>,
+        ledger_eras: &Arc<EraSchedule<lb_ledger::Config>>,
         config: &LeaderWalletConfig,
         mempool: &MempoolAdapter<Mempool::Item>,
     ) {

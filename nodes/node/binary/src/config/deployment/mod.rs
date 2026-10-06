@@ -13,7 +13,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{
     Epoch, Slot,
-    era::{EraEntriesAfterGenesis, EraEntry, Eras, ErasError},
+    era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, ErasError},
 };
 use lb_era_parameters::{EraDefinition, EraParameters, ProtocolNames, v1};
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
@@ -90,7 +90,7 @@ impl DeploymentSettings {
     /// The protocol and topic names of this deployment's chain now: those of
     /// the era in force by the wall clock.
     pub fn protocol_names_in_force(&self) -> Result<ProtocolNames, ErasError> {
-        let eras = self.eras()?;
+        let eras = self.era_schedule()?;
         let now = eras
             .slot_at(time::OffsetDateTime::now_utc())
             .unwrap_or(Slot::genesis());
@@ -121,7 +121,7 @@ impl DeploymentSettings {
     /// The schedule resolved: each era with its number, its slot duration and
     /// epoch length, and its definition, its parameters and the digests and
     /// protocol names in force while it is.
-    pub fn eras(&self) -> Result<Eras<EraDefinition>, ErasError> {
+    pub fn era_schedule(&self) -> Result<EraSchedule<EraDefinition>, ErasError> {
         let (genesis_id, chain_id) = (self.genesis_id(), self.chain_id());
         let mut era_digests = Vec::with_capacity(self.eras.after_genesis().len() + 1);
         // Called in activation order: the fork digest of an era is over the
@@ -157,7 +157,7 @@ impl DeploymentSettings {
             });
         let after_genesis = EraEntriesAfterGenesis::try_from_iter(after_genesis)
             .expect("a schedule has at most `MAX_ERAS_AFTER_GENESIS` eras after genesis");
-        Eras::new(self.genesis_time().into(), genesis, after_genesis)
+        EraSchedule::new(self.genesis_time().into(), genesis, after_genesis)
     }
 }
 
@@ -301,7 +301,7 @@ mod tests {
         // A second era moves neither the start of the genesis era nor the fork
         // it follows.
         let settings = two_era_settings();
-        let eras = settings.eras().unwrap();
+        let eras = settings.era_schedule().unwrap();
         let genesis = eras.genesis();
         assert_eq!(genesis.entry.version, EraVersion::V1);
         assert_eq!(
@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn every_era_of_a_schedule_runs_on_a_fork_of_its_own() {
         let settings = two_era_settings();
-        let eras = settings.eras().unwrap();
+        let eras = settings.era_schedule().unwrap();
         let [genesis, second] = [Era::GENESIS, Era::new(1)].map(|era| eras.get(era).unwrap());
 
         assert_eq!(second.first_epoch, Epoch::new(100));

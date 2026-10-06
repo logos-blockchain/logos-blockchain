@@ -4,7 +4,7 @@
 use core::time::Duration;
 
 use lb_chain_service::Epoch;
-use lb_cryptarchia_engine::era::{Era, Eras, ScheduledEra};
+use lb_cryptarchia_engine::era::{Era, EraSchedule, ScheduledEra};
 
 use crate::settings::TimingSettings;
 
@@ -13,12 +13,12 @@ use crate::settings::TimingSettings;
 /// # Panics
 ///
 /// If the schedule has no era `era`: every epoch's era is scheduled.
-pub fn scheduled<Settings>(eras: &Eras<Settings>, era: Era) -> &ScheduledEra<Settings> {
+pub fn scheduled<Settings>(eras: &EraSchedule<Settings>, era: Era) -> &ScheduledEra<Settings> {
     eras.get(era).expect("every epoch's era is scheduled")
 }
 
 /// A service's settings in era `era`.
-pub fn settings_in<Settings>(eras: &Eras<Settings>, era: Era) -> &Settings {
+pub fn settings_in<Settings>(eras: &EraSchedule<Settings>, era: Era) -> &Settings {
     &scheduled(eras, era).entry.parameters
 }
 
@@ -27,7 +27,7 @@ pub fn settings_in<Settings>(eras: &Eras<Settings>, era: Era) -> &Settings {
 /// least the era's own transition period too, during which the network keeps
 /// accepting the protocols of the era before it.
 pub fn transition_period<Settings>(
-    eras: &Eras<Settings>,
+    eras: &EraSchedule<Settings>,
     era: Era,
     epoch: Epoch,
     timing: impl FnOnce(&Settings) -> &TimingSettings,
@@ -49,7 +49,7 @@ mod tests {
     use core::{num::NonZero, time::Duration};
 
     use lb_chain_service::Epoch;
-    use lb_cryptarchia_engine::era::{Era, EraEntriesAfterGenesis, EraEntry, EraVersion, Eras};
+    use lb_cryptarchia_engine::era::{Era, EraEntriesAfterGenesis, EraEntry, EraVersion, EraSchedule};
     use time::OffsetDateTime;
 
     use super::transition_period;
@@ -68,7 +68,7 @@ mod tests {
 
     /// Era 1 starts at epoch 2: its slots last 2 s and its transition period
     /// 30 slots, 60 s.
-    fn two_eras(era_1_epoch_transition: Duration) -> Eras<TimingSettings> {
+    fn two_eras(era_1_epoch_transition: Duration) -> EraSchedule<TimingSettings> {
         let entry = |slot_duration, epoch_transition| EraEntry {
             version: EraVersion::V1,
             slot_duration,
@@ -76,7 +76,7 @@ mod tests {
             transition_slots: 30,
             parameters: timing(epoch_transition),
         };
-        Eras::new(
+        EraSchedule::new(
             OffsetDateTime::UNIX_EPOCH,
             entry(Duration::from_secs(1), Duration::from_secs(5)),
             EraEntriesAfterGenesis::from((
@@ -87,7 +87,7 @@ mod tests {
         .unwrap()
     }
 
-    fn period(eras: &Eras<TimingSettings>, era: u16, epoch: u32) -> Duration {
+    fn period(eras: &EraSchedule<TimingSettings>, era: u16, epoch: u32) -> Duration {
         transition_period(eras, Era::new(era), Epoch::new(epoch), |time| time)
     }
 

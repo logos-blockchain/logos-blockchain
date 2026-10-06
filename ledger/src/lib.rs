@@ -48,7 +48,7 @@ use lb_core::{
     },
     proofs::leader_proof,
 };
-use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots, era::Eras};
+use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots, era::EraSchedule};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 use mantle::LedgerState as MantleLedger;
@@ -155,14 +155,14 @@ pub struct Ledger<Id: Eq + Hash> {
     states: HashTrieMapSync<Id, LedgerState>,
     /// The config of every era: each block is applied under the config of the
     /// era of its slot, and each epoch is settled under the config of its era.
-    eras: Arc<Eras<Config>>,
+    eras: Arc<EraSchedule<Config>>,
 }
 
 impl<Id> Ledger<Id>
 where
     Id: Eq + Hash + Copy,
 {
-    pub fn new(id: Id, mut state: LedgerState, eras: Arc<Eras<Config>>) -> Self
+    pub fn new(id: Id, mut state: LedgerState, eras: Arc<EraSchedule<Config>>) -> Self
     where
         Id: Into<BlockHash>,
     {
@@ -223,7 +223,7 @@ where
 
     /// The config of every era.
     #[must_use]
-    pub const fn eras(&self) -> &Arc<Eras<Config>> {
+    pub const fn era_schedule(&self) -> &Arc<EraSchedule<Config>> {
         &self.eras
     }
 
@@ -263,7 +263,7 @@ impl LedgerState {
         proof: &LeaderProof,
         uncle_slots: &UncleSlots,
         txs: impl Iterator<Item = Tx>,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
     ) -> Result<(Self, Events, DeferredZkpVerifications), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
@@ -319,7 +319,7 @@ impl LedgerState {
         slot: Slot,
         proof: &LeaderProof,
         uncle_slots: &UncleSlots,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
     ) -> Result<(Self, Vec<HeaderEvent>), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -373,7 +373,7 @@ impl LedgerState {
         &self,
         slot: Slot,
         proof: &LeaderProof,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
     ) -> Result<(), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -578,7 +578,7 @@ impl LedgerState {
     pub fn inapplicable_transactions<'tx, Tx, Profile: GasProfile>(
         &self,
         slot: Slot,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
         txs: &'tx [Tx],
     ) -> Vec<&'tx Tx>
     where
@@ -607,7 +607,7 @@ impl LedgerState {
         }
     }
 
-    pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, eras: &Eras<Config>) -> Self {
+    pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, eras: &EraSchedule<Config>) -> Self {
         let cryptarchia_ledger = CryptarchiaLedger::from_utxos(utxos, eras, Fr::ZERO);
         let mantle_ledger = MantleLedger::new(
             eras.config_at_epoch(Epoch::new(0)),
@@ -625,7 +625,7 @@ impl LedgerState {
 
     pub fn from_genesis_tx<Id>(
         tx: impl GenesisTx,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
         epoch_nonce: Fr,
     ) -> Result<(Self, Vec<TxEvent>), LedgerError<Id>> {
         let GenesisOps {
@@ -680,7 +680,7 @@ impl LedgerState {
     pub fn epoch_state_for_slot<Id>(
         &self,
         slot: Slot,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
     ) -> Result<EpochState, LedgerError<Id>> {
         let state = self.in_era_of(slot, eras);
         state.cryptarchia_ledger.epoch_state_for_slot(
@@ -1274,7 +1274,7 @@ mod tests {
             .epoch_state
             .clone();
 
-        let config = ledger.eras().genesis().entry.parameters.clone();
+        let config = ledger.era_schedule().genesis().entry.parameters.clone();
         let active_op = SDPActiveOp {
             declaration_id,
             nonce,

@@ -6,7 +6,7 @@ use std::{
 use futures::{Stream, StreamExt as _};
 use lb_cryptarchia_engine::{
     Epoch, Slot,
-    era::{Era, Eras},
+    era::{Era, EraSchedule},
 };
 use lb_log_targets::time as log_targets_time;
 use log::error;
@@ -77,7 +77,7 @@ impl Debug for TimeServiceMessage {
 pub struct TimeServiceSettings<BackendSettings> {
     /// The chain's eras: when each starts, and how long its slots and epochs
     /// last, which is all the time service needs of them.
-    pub eras: Eras<()>,
+    pub eras: EraSchedule<()>,
     pub backend: BackendSettings,
 }
 

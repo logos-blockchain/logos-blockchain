@@ -40,7 +40,7 @@ use lb_core::{
         },
     },
 };
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_key_management_system_keys::keys::{
     MAX_ZK_SIGNING_KEYS, UnsecuredZkKey, ZkPublicKey, ZkSignature,
@@ -203,7 +203,7 @@ pub struct PoWServiceSettings {
     /// it leaves auto-claim off, so rewards are only claimed on demand.
     pub auto_claim: AutoClaimSettings,
     /// What the service follows of every era.
-    pub eras: Eras<EraSettings>,
+    pub eras: EraSchedule<EraSettings>,
     /// Storage-recovery bookkeeping, populated by the runtime on startup.
     pub recovery_data: RecoveryData,
 }
@@ -240,14 +240,14 @@ impl EraSettings {
 }
 
 /// The settings of the era of `slot`.
-pub fn era_settings_at(eras: &Eras<EraSettings>, slot: Slot) -> EraSettings {
+pub fn era_settings_at(eras: &EraSchedule<EraSettings>, slot: Slot) -> EraSettings {
     eras.at_slot(slot).entry.parameters
 }
 
 /// Whether the era of the chain's current slot pays `PoW` rewards.
 async fn rewards_enabled_now<CryptarchiaService>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
-    eras: &Eras<EraSettings>,
+    eras: &EraSchedule<EraSettings>,
 ) -> Result<bool, lb_chain_service::api::ApiError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -948,7 +948,7 @@ async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, Runtime
     targets: &[ClaimTarget],
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
-    eras: &Eras<EraSettings>,
+    eras: &EraSchedule<EraSettings>,
 ) -> bool
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1006,7 +1006,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
-    eras: &Eras<EraSettings>,
+    eras: &EraSchedule<EraSettings>,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     BlendService: BlendServiceData,
@@ -1072,7 +1072,7 @@ async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeSe
     claim_address: Option<ZkPublicKey>,
     targets: &[ClaimTarget],
     state: &mut PoWServiceState,
-    eras: &Eras<EraSettings>,
+    eras: &EraSchedule<EraSettings>,
 ) -> Result<Option<TxHash>, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1146,7 +1146,7 @@ async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
-    eras: &Eras<EraSettings>,
+    eras: &EraSchedule<EraSettings>,
     available_pool: Value,
 ) -> Result<Option<PublishedClaim>, PoWError>
 where
@@ -1250,7 +1250,7 @@ fn is_within_reward_window(block_slot: Slot, current_slot: Slot, slot_window: No
 fn prune_expired_tickets(
     state: &mut PoWServiceState,
     current_slot: Slot,
-    eras: &Eras<EraSettings>,
+    eras: &EraSchedule<EraSettings>,
 ) {
     // The window of the era a claim made now lands in.
     let slot_window = era_settings_at(eras, current_slot).slot_window();
@@ -1275,7 +1275,7 @@ async fn respond_claimable_rewards<CryptarchiaService>(
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     response: oneshot::Sender<ClaimableRewardsInfo>,
-    eras: &Eras<EraSettings>,
+    eras: &EraSchedule<EraSettings>,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
@@ -1311,7 +1311,7 @@ async fn retire_settled_claims<CryptarchiaService>(
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     processed_block: Result<ProcessedBlockEvent, BroadcastStreamRecvError>,
-    eras: &Eras<EraSettings>,
+    eras: &EraSchedule<EraSettings>,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
@@ -1394,7 +1394,7 @@ where
 fn claimable_rewards_info(
     ready_to_claim: &[WinningTicket],
     current_slot: Slot,
-    eras: &Eras<EraSettings>,
+    eras: &EraSchedule<EraSettings>,
 ) -> ClaimableRewardsInfo {
     let current = u64::from(current_slot);
     let slot_window = era_settings_at(eras, current_slot).slot_window();
@@ -1736,7 +1736,7 @@ pub mod tests {
             },
         },
     };
-    use lb_cryptarchia_engine::era::Eras;
+    use lb_cryptarchia_engine::era::EraSchedule;
     use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
 
     use super::{
@@ -1754,8 +1754,8 @@ pub mod tests {
     const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
 
     /// A single era, whose window is [`SLOT_WINDOW`].
-    pub fn eras() -> Eras<EraSettings> {
-        Eras::new(
+    pub fn era_schedule() -> EraSchedule<EraSettings> {
+        EraSchedule::new(
             time::OffsetDateTime::UNIX_EPOCH,
             lb_cryptarchia_engine::era::EraEntry {
                 version: lb_cryptarchia_engine::era::EraVersion::V1,
@@ -2278,7 +2278,7 @@ pub mod tests {
 
     #[test]
     fn claimable_rewards_info_is_empty_without_tickets() {
-        let info = claimable_rewards_info(&[], Slot::new(100), &eras());
+        let info = claimable_rewards_info(&[], Slot::new(100), &era_schedule());
         assert_eq!(info.claimable_tickets, 0);
         assert_eq!(info.slots_until_expiry, []);
     }
@@ -2288,7 +2288,7 @@ pub mod tests {
         // SLOT_WINDOW is 100, so a block at slot S is claimable up to slot S +
         // 100.
         let tickets = [winning_ticket(50), winning_ticket(90)];
-        let info = claimable_rewards_info(&tickets, Slot::new(100), &eras());
+        let info = claimable_rewards_info(&tickets, Slot::new(100), &era_schedule());
         assert_eq!(info.claimable_tickets, 2);
         // (50 + 100) - 100 = 50, (90 + 100) - 100 = 90
         assert_eq!(info.slots_until_expiry, vec![Slot::new(50), Slot::new(90)]);
@@ -2298,7 +2298,7 @@ pub mod tests {
     fn claimable_rewards_info_includes_the_last_valid_slot() {
         // A block at slot 50 is still claimable at exactly slot 150 (gap ==
         // window).
-        let info = claimable_rewards_info(&[winning_ticket(50)], Slot::new(150), &eras());
+        let info = claimable_rewards_info(&[winning_ticket(50)], Slot::new(150), &era_schedule());
         assert_eq!(info.claimable_tickets, 1);
         assert_eq!(info.slots_until_expiry, vec![Slot::new(0)]);
     }
@@ -2311,7 +2311,7 @@ pub mod tests {
             ready_to_claim: vec![winning_ticket(10), winning_ticket(150)],
             pending_to_claim: vec![winning_ticket(20), winning_ticket(180)],
         };
-        prune_expired_tickets(&mut state, Slot::new(200), &eras());
+        prune_expired_tickets(&mut state, Slot::new(200), &era_schedule());
 
         let ready_slots: Vec<u64> = state
             .ready_to_claim
@@ -2341,7 +2341,7 @@ pub mod tests {
                 rewards_enabled: true,
             },
         };
-        let eras = Eras::new(
+        let eras = EraSchedule::new(
             time::OffsetDateTime::UNIX_EPOCH,
             entry(SLOT_WINDOW),
             lb_cryptarchia_engine::era::EraEntriesAfterGenesis::from((
@@ -2372,7 +2372,7 @@ pub mod tests {
             ready_to_claim: vec![winning_ticket(50)],
             pending_to_claim: vec![],
         };
-        prune_expired_tickets(&mut state, Slot::new(150), &eras());
+        prune_expired_tickets(&mut state, Slot::new(150), &era_schedule());
         assert_eq!(state.ready_to_claim.len(), 1);
     }
 
@@ -2385,7 +2385,7 @@ pub mod tests {
             pending_to_claim: vec![winning_ticket(20)],
         };
         assert_eq!(state.outstanding_tickets(), 3);
-        prune_expired_tickets(&mut state, Slot::new(200), &eras());
+        prune_expired_tickets(&mut state, Slot::new(200), &era_schedule());
         assert_eq!(state.outstanding_tickets(), 1);
     }
 }

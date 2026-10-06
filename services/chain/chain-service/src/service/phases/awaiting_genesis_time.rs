@@ -84,7 +84,7 @@ where
         state_recording_timer: tokio::time::Interval,
         prolonged_bootstrap_period: Duration,
     ) -> Self {
-        let era = cryptarchia.ledger.eras().at_slot(current_slot).era;
+        let era = cryptarchia.ledger.era_schedule().at_slot(current_slot).era;
         Self {
             phase: AwaitingGenesisTime {
                 genesis_timer: create_genesis_timer(starting_state),

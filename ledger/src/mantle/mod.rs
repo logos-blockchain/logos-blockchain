@@ -25,7 +25,7 @@ use lb_core::{
     },
     sdp::service_notes::ServiceNotes,
 };
-use lb_cryptarchia_engine::{Slot, era::Eras};
+use lb_cryptarchia_engine::{Slot, era::EraSchedule};
 use lb_log_targets::ledger;
 use lb_mmr::MerkleMountainRange;
 use sdp::Error as SdpLedgerError;
@@ -157,7 +157,7 @@ impl LedgerState {
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
         voucher: VoucherCm,
-        eras: &Eras<Config>,
+        eras: &EraSchedule<Config>,
     ) -> Result<(Self, HeaderEffect), Error> {
         let last_config = eras.config_at_epoch(last_epoch_state.epoch);
         let config = eras.config_at_epoch(epoch_state.epoch);

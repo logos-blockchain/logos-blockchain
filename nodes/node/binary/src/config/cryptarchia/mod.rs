@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
 use lb_core::block::genesis::GenesisBlock;
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_era_parameters::{EraDefinition, EraParameters};
 use lb_libp2p::PeerId;
 use lb_services_utils::overwatch::RecoveryData;
@@ -19,7 +19,7 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_cryptarchia_services_settings(
         self,
-        eras: &Eras<EraDefinition>,
+        eras: &EraSchedule<EraDefinition>,
         genesis_block: GenesisBlock,
         recovery_data: RecoveryData,
     ) -> (

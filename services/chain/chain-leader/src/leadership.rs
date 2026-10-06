@@ -17,7 +17,7 @@ use lb_core::{
     },
     sdp::blend::{PolEpochState, PolEpochStateSource},
 };
-use lb_cryptarchia_engine::{Epoch, Slot, era::Eras};
+use lb_cryptarchia_engine::{Epoch, Slot, era::EraSchedule};
 use lb_key_management_system_service::{
     api::KmsServiceApi, backend::preload::KeyId, keys::Ed25519Key,
     operators::zk::leader::BuildPrivateInputsWithLeaderKey,
@@ -286,7 +286,7 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
     wallet_api: WalletApi<Wallet, RuntimeServiceId>,
     kms: KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
     time_relay: OutboundRelay<TimeServiceMessage>,
-    ledger_eras: Arc<Eras<lb_ledger::Config>>,
+    ledger_eras: Arc<EraSchedule<lb_ledger::Config>>,
     epoch_handoff_sender: mpsc::Sender<WinningPolEpochSlots>,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -416,7 +416,7 @@ async fn next_epoch_tick(
 pub async fn fetch_slot_context<CryptarchiaService, Wallet, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
-    ledger_eras: &Eras<lb_ledger::Config>,
+    ledger_eras: &EraSchedule<lb_ledger::Config>,
     slot: Slot,
 ) -> Option<SlotContext>
 where
@@ -477,7 +477,7 @@ where
 /// previous epoch, not that it is unspent. Slots earlier than `start_slot` are
 /// skipped so a mid-epoch subscriber wastes no work.
 fn epoch_winning_slots_stream<RuntimeServiceId>(
-    ledger_eras: &Eras<lb_ledger::Config>,
+    ledger_eras: &EraSchedule<lb_ledger::Config>,
     epoch_state: EpochState,
     eligible_aged: &[UtxoWithKeyId],
     kms: impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Send + Sync + 'static,

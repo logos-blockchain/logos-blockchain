@@ -9,7 +9,7 @@ use lb_core::{
         transactions::{OpProofs, states::Preverified},
     },
 };
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_storage_service::{
     recovery::{load_recovery_data, take_state},
@@ -247,18 +247,20 @@ fn recovery_storage_settings(node_info: &NodeInfo) -> Result<RocksBackendSetting
 
 /// The fork digest of every era of the node's chain, which its recovery
 /// records are stamped with.
-fn recovery_forks(node_info: &NodeInfo) -> Result<Arc<Eras<ForkDigest>>, StepError> {
+fn recovery_forks(node_info: &NodeInfo) -> Result<Arc<EraSchedule<ForkDigest>>, StepError> {
     let deployment = deployment_config_from_yaml(&node_info.runtime_dir.join("deployment.yaml"))?;
-    let eras = deployment.eras().map_err(|error| StepError::LogicalError {
-        message: format!("Invalid era schedule in the node's deployment: {error}"),
-    })?;
+    let eras = deployment
+        .era_schedule()
+        .map_err(|error| StepError::LogicalError {
+            message: format!("Invalid era schedule in the node's deployment: {error}"),
+        })?;
 
     Ok(Arc::new(eras.map(|era| era.entry.parameters.fork_digest)))
 }
 
 fn read_recovered_mempool_pending_hashes(
     storage_settings: RocksBackendSettings,
-    forks: Arc<Eras<ForkDigest>>,
+    forks: Arc<EraSchedule<ForkDigest>>,
 ) -> Result<Option<BTreeSet<TxHash>>, StepError> {
     if !storage_settings.db_path.exists() {
         return Ok(None);

@@ -5,7 +5,7 @@ use std::{
 };
 
 use lb_blend::scheduling::epoch::EpochEvent;
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use overwatch::{
     overwatch::OverwatchHandle,
@@ -111,7 +111,7 @@ where
         self,
         event: EpochEvent<BlendEpoch<NodeId>>,
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-        minimum_network_sizes: &Eras<NonZeroU64>,
+        minimum_network_sizes: &EraSchedule<NonZeroU64>,
     ) -> Result<Self, orchestrator::Error<CoreService::Message>>
     where
         NodeId: Eq + Hash,

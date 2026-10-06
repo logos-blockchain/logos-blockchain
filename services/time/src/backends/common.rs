@@ -6,7 +6,7 @@ use std::{
 };
 
 use futures::Stream;
-use lb_cryptarchia_engine::{Slot, era::Eras};
+use lb_cryptarchia_engine::{Slot, era::EraSchedule};
 use time::OffsetDateTime;
 use tokio::time::{Instant, Sleep, sleep_until};
 
@@ -15,7 +15,7 @@ use crate::{EpochSlotTickStream, SlotTick};
 /// Returns the [`SlotTick`] in progress at `now` and a stream of the next ones,
 /// ticking at the start of each slot from the next one on, as `eras` lays the
 /// slots out in time.
-pub fn slot_timer(eras: Arc<Eras<()>>, now: OffsetDateTime) -> (SlotTick, EpochSlotTickStream) {
+pub fn slot_timer(eras: Arc<EraSchedule<()>>, now: OffsetDateTime) -> (SlotTick, EpochSlotTickStream) {
     let current_slot = eras.slot_at(now).unwrap_or(Slot::genesis());
     let current_tick = slot_tick(&eras, current_slot);
     (
@@ -25,7 +25,7 @@ pub fn slot_timer(eras: Arc<Eras<()>>, now: OffsetDateTime) -> (SlotTick, EpochS
 }
 
 /// The tick of `slot`, with its epoch and era.
-pub fn slot_tick<Parameters>(eras: &Eras<Parameters>, slot: Slot) -> SlotTick {
+pub fn slot_tick<Parameters>(eras: &EraSchedule<Parameters>, slot: Slot) -> SlotTick {
     SlotTick {
         era: eras.at_slot(slot).era,
         epoch: eras.epoch_of(slot),
@@ -37,7 +37,7 @@ pub fn slot_tick<Parameters>(eras: &Eras<Parameters>, slot: Slot) -> SlotTick {
 /// lasts the slot duration of its own era, so a boundary between eras with
 /// different slot durations needs no special handling.
 struct SlotTimer {
-    eras: Arc<Eras<()>>,
+    eras: Arc<EraSchedule<()>>,
     /// The wall-clock time `started` stands for. Deadlines are tokio instants,
     /// derived from wall-clock times through this pair, so that tests can
     /// control them.
@@ -48,7 +48,7 @@ struct SlotTimer {
 }
 
 impl SlotTimer {
-    fn new(eras: Arc<Eras<()>>, now: OffsetDateTime, current_slot: Slot) -> Self {
+    fn new(eras: Arc<EraSchedule<()>>, now: OffsetDateTime, current_slot: Slot) -> Self {
         let started = Instant::now();
         let mut timer = Self {
             eras,
@@ -126,7 +126,7 @@ mod tests {
         // 3 s in epochs of 2 slots.
         let genesis = OffsetDateTime::UNIX_EPOCH;
         let eras = Arc::new(
-            Eras::new(
+            EraSchedule::new(
                 genesis,
                 entry(Duration::from_secs(1), 2),
                 EraEntriesAfterGenesis::from((
@@ -158,7 +158,7 @@ mod tests {
     async fn a_late_tick_skips_the_slots_it_missed() {
         let genesis = OffsetDateTime::UNIX_EPOCH;
         let eras = Arc::new(
-            Eras::new(
+            EraSchedule::new(
                 genesis,
                 entry(Duration::from_secs(1), 10),
                 EraEntriesAfterGenesis::empty(),

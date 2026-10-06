@@ -28,7 +28,7 @@ use lb_blend::{
     },
 };
 use lb_chain_service::Epoch;
-use lb_cryptarchia_engine::era::Eras;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_libp2p::{DialError, DialErrorExt as _, DialOpts, SwarmEvent};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, swarm::dial_opts::PeerCondition};
@@ -189,7 +189,7 @@ pub struct SwarmParams<'config, Rng, ProofsVerifier> {
     /// The settings of the era of the current epoch.
     pub config: &'config BlendConfig<Libp2pBlendBackendSettings>,
     /// The settings of every era.
-    pub configs: &'config Eras<BlendConfig<Libp2pBlendBackendSettings>>,
+    pub configs: &'config EraSchedule<BlendConfig<Libp2pBlendBackendSettings>>,
     pub current_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
     pub rng: Rng,
     pub swarm_message_receiver: mpsc::Receiver<BlendSwarmMessage<ProofsVerifier>>,
