@@ -82,7 +82,7 @@ use crate::{
             submit_signed_transaction, transfer_funds, wallet_fund_tx,
         },
     },
-    errors::{free_operation_status, is_error, is_ok},
+    errors::free_operation_status,
     result::FfiResult,
     return_error_if_null_pointer,
 };
@@ -408,15 +408,10 @@ mod no_node {
     fn status_helpers() {
         let ok = OperationStatus::OK;
         let error = OperationStatus::error(OperationStatusCode::NotFound, "nope");
-        unsafe {
-            assert!(is_ok(&raw const ok));
-            assert!(!is_error(&raw const ok));
-            assert!(!is_ok(&raw const error));
-            assert!(is_error(&raw const error));
-            // No status is not a success.
-            assert!(!is_ok(ptr::null()));
-            assert!(is_error(ptr::null()));
-        }
+        assert!(ok.is_ok());
+        assert!(!ok.is_error());
+        assert!(!error.is_ok());
+        assert!(error.is_error());
         assert_eq!(
             consume(error),
             (OperationStatusCode::NotFound, "nope".into())

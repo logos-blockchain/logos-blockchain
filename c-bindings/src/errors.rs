@@ -68,47 +68,25 @@ impl OperationStatus {
         )
     }
 
+    /// Whether the status reports success.
+    ///
+    /// Exported for C as `is_ok(const struct OperationStatus *)`. The pointer
+    /// must not be null: it is a reference on the Rust side.
     #[must_use]
-    pub fn is_ok(&self) -> bool {
+    #[unsafe(no_mangle)]
+    pub extern "C" fn is_ok(&self) -> bool {
         self.code == OperationStatusCode::Ok
     }
 
+    /// Whether the status reports an error.
+    ///
+    /// Exported for C as `is_error(const struct OperationStatus *)`. The
+    /// pointer must not be null: it is a reference on the Rust side.
     #[must_use]
-    pub fn is_error(&self) -> bool {
+    #[unsafe(no_mangle)]
+    pub extern "C" fn is_error(&self) -> bool {
         !self.is_ok()
     }
-}
-
-/// Whether a status reports success.
-///
-/// # Arguments
-///
-/// - `status`: A pointer to an [`OperationStatus`]. A null pointer is not a
-///   success, so it yields `false`.
-///
-/// # Safety
-///
-/// A non-null `status` must point to a valid [`OperationStatus`].
-#[must_use]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn is_ok(status: *const OperationStatus) -> bool {
-    unsafe { status.as_ref() }.is_some_and(OperationStatus::is_ok)
-}
-
-/// Whether a status reports an error.
-///
-/// # Arguments
-///
-/// - `status`: A pointer to an [`OperationStatus`]. A null pointer counts as an
-///   error, so it yields `true`.
-///
-/// # Safety
-///
-/// A non-null `status` must point to a valid [`OperationStatus`].
-#[must_use]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn is_error(status: *const OperationStatus) -> bool {
-    !unsafe { is_ok(status) }
 }
 
 /// Releases an [`OperationStatus`] returned by this library.
