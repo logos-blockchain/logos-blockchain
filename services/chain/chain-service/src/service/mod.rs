@@ -877,15 +877,22 @@ where
         }
     }
 
-    let reorged_txs = load_block_txs(applied.reorged_blocks.iter(), relays.storage()).await;
-    let newly_canonical_txs =
-        newly_canonical_txs(&block, &applied.newly_canonical_blocks, relays.storage()).await;
+    let newly_canonical_txs: Vec<_> =
+        newly_canonical_txs(&block, &applied.newly_canonical_blocks, relays.storage())
+            .await
+            .collect();
+    let reorged_txs = reorged_txs(
+        applied.reorged_blocks.iter(),
+        &newly_canonical_txs,
+        relays.storage(),
+    )
+    .await;
 
     Ok(ProcessBlockOutcome {
         pruned_blocks: applied.pruned_blocks,
         reorged_block_ids: applied.reorged_blocks.iter().copied().collect(),
         reorged_txs: reorged_txs.collect(),
-        newly_canonical_txs: newly_canonical_txs.collect(),
+        newly_canonical_txs,
     })
 }
 
@@ -961,6 +968,37 @@ where
     early_txs
         .map(|tx| tx.hash())
         .chain(applied_txs.map(Hashable::hash))
+}
+
+/// Transactions carried by `reorged_blocks` that are not in
+/// `newly_canonical_txs`.
+///
+/// The newly canonical blocks often carry the same transactions as the reorged
+/// blocks. Those transactions are still canonical.
+async fn reorged_txs<'a, Tx>(
+    reorged_blocks: impl Iterator<Item = &'a HeaderId>,
+    newly_canonical_txs: &[TxHash],
+    storage: &StorageApi<Tx>,
+) -> impl Iterator<Item = Tx>
+where
+    Tx: Hashable<Hash = TxHash>
+        + StorageSize
+        + Serialize
+        + DeserializeOwned
+        + Clone
+        + Eq
+        + Send
+        + Sync
+        + 'static,
+{
+    let mut reorged_txs = load_block_txs(reorged_blocks, storage).await.peekable();
+    // Most blocks reorg nothing, so the set is built only when needed.
+    let newly_canonical_txs: HashSet<TxHash> = if reorged_txs.peek().is_some() {
+        newly_canonical_txs.iter().copied().collect()
+    } else {
+        HashSet::new()
+    };
+    reorged_txs.filter(move |tx| !newly_canonical_txs.contains(&tx.hash()))
 }
 
 async fn log_newly_canonical_blocks<Tx>(
