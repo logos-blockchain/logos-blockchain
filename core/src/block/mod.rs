@@ -415,7 +415,7 @@ mod tests {
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::UnsecuredZkKey;
     use lb_pol::LotteryConstants;
-    use lb_utils::{bounded::BoundedOrderedSet, math::NonNegativeRatio};
+    use lb_utils::math::NonNegativeRatio;
     use lb_utxotree::UtxoTree;
 
     use super::*;
@@ -860,12 +860,9 @@ mod tests {
         let proposal = Block::create(
             [0u8; 32].into(),
             Slot::from(42u64),
-            UncleHeaders::new(
-                BoundedOrderedSet::try_from_iter(std::array::from_fn::<_, MAX_UNCLES, _>(|slot| {
-                    signed_uncle(slot as u64, &proof)
-                }))
-                .unwrap(),
-            ),
+            UncleHeaders::new(std::array::from_fn::<_, MAX_UNCLES, _>(|slot| {
+                signed_uncle(slot as u64, &proof)
+            })),
             proof,
             BlockTransactions::<Ops>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
             &Ed25519Key::from_bytes(&[0; 32]),
@@ -880,10 +877,7 @@ mod tests {
     #[test]
     fn body_root_accepts_carried_uncle_headers() {
         let proof = create_proof();
-        let uncles = UncleHeaders::new(
-            BoundedOrderedSet::try_from_iter([signed_uncle(1, &proof), signed_uncle(2, &proof)])
-                .unwrap(),
-        );
+        let uncles = UncleHeaders::new([signed_uncle(1, &proof), signed_uncle(2, &proof)]);
 
         block_with_uncles(uncles, proof)
             .into_verified()
@@ -893,7 +887,7 @@ mod tests {
     #[test]
     fn body_root_rejects_dropped_uncle_header() {
         let proof = create_proof();
-        let uncles = UncleHeaders::new(BoundedOrderedSet::from(signed_uncle(1, &proof)));
+        let uncles = UncleHeaders::new([signed_uncle(1, &proof)]);
         let mut block = block_with_uncles(uncles, proof);
 
         block.uncle_headers = UncleHeaders::empty();
@@ -907,11 +901,11 @@ mod tests {
     #[test]
     fn body_root_rejects_substituted_uncle_header() {
         let proof = create_proof();
-        let uncles = UncleHeaders::new(BoundedOrderedSet::from(signed_uncle(1, &proof)));
+        let uncles = UncleHeaders::new([signed_uncle(1, &proof)]);
         let mut block = block_with_uncles(uncles, proof.clone());
 
         // Same count, but a different header than the one committed to.
-        block.uncle_headers = UncleHeaders::new(BoundedOrderedSet::from(signed_uncle(2, &proof)));
+        block.uncle_headers = UncleHeaders::new([signed_uncle(2, &proof)]);
 
         assert!(matches!(
             block.into_verified(),
@@ -923,15 +917,10 @@ mod tests {
     fn body_root_rejects_reordered_uncle_headers() {
         let proof = create_proof();
         let (first, second) = (signed_uncle(1, &proof), signed_uncle(2, &proof));
-        let mut block = block_with_uncles(
-            UncleHeaders::new(
-                BoundedOrderedSet::try_from_iter([first.clone(), second.clone()]).unwrap(),
-            ),
-            proof,
-        );
+        let mut block =
+            block_with_uncles(UncleHeaders::new([first.clone(), second.clone()]), proof);
 
-        block.uncle_headers =
-            UncleHeaders::new(BoundedOrderedSet::try_from_iter([second, first]).unwrap());
+        block.uncle_headers = UncleHeaders::new([second, first]);
 
         assert!(matches!(
             block.into_verified(),
@@ -943,20 +932,15 @@ mod tests {
     fn body_root_rejects_tampered_uncle_signature() {
         let proof = create_proof();
         let uncle = signed_uncle(1, &proof);
-        let mut block = block_with_uncles(
-            UncleHeaders::new(BoundedOrderedSet::from(uncle.clone())),
-            proof,
-        );
+        let mut block = block_with_uncles(UncleHeaders::new([uncle.clone()]), proof);
 
         // Replace only the signature, leaving the header it signs untouched.
         let other_signature = uncle
             .header()
             .sign(&Ed25519Key::from_bytes(&[1; 32]))
             .expect("header signing should succeed");
-        block.uncle_headers = UncleHeaders::new(BoundedOrderedSet::from(SignedHeader::new(
-            uncle.header().clone(),
-            other_signature,
-        )));
+        block.uncle_headers =
+            UncleHeaders::new([SignedHeader::new(uncle.header().clone(), other_signature)]);
 
         assert!(matches!(
             block.into_verified(),
