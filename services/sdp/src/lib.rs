@@ -1,8 +1,10 @@
+pub mod activity_submission;
 pub mod api;
 mod intent;
 pub mod mempool;
 mod metrics;
 pub mod state;
+pub mod status;
 pub mod wallet;
 
 use std::fmt::{Debug, Display};
@@ -42,13 +44,15 @@ use tokio_stream::{
 };
 use tracing::{debug, error, info, trace, warn};
 
-pub use crate::{api::SdpServiceApi, intent::Config as ActiveMessageTrackerConfig};
 use crate::{
+    activity_submission::{ActivityProofReport, ActivityProofSubmissionError, ActivitySubmission},
     intent::IntentTracker,
     mempool::SdpMempoolAdapter,
     state::{SdpState, SdpStateStorage},
+    status::BlendStatus,
     wallet::{SdpWalletAdapter, SdpWalletConfig},
 };
+pub use crate::{api::SdpServiceApi, intent::Config as ActiveMessageTrackerConfig};
 
 const LOG_TARGET: &str = sdp::ROOT;
 
@@ -125,9 +129,9 @@ pub struct RuntimeDeclaration {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ActivitySubmission {
-    tip: HeaderId,
-    tx_id: TxHash,
+pub struct SdpStatus {
+    pub participation: Option<Participation>,
+    pub last_activity_proof_report: Option<ActivityProofReport>,
 }
 
 const fn next_message_nonce(current_ledger_nonce: Nonce) -> Option<Nonce> {
@@ -173,8 +177,11 @@ pub enum SdpMessage {
         declaration_id: DeclarationId,
         reply_channel: oneshot::Sender<Result<SdpSubmission, DynError>>,
     },
-    GetParticipation {
-        reply_channel: oneshot::Sender<Option<Participation>>,
+    GetStatus {
+        reply_channel: oneshot::Sender<SdpStatus>,
+    },
+    GetBlendStatus {
+        reply_channel: oneshot::Sender<Result<BlendStatus, DynError>>,
     },
     SetCurrentDeclarationId {
         declaration_id: Option<DeclarationId>,
@@ -217,6 +224,7 @@ where
     active_message_tracker: Option<IntentTracker<Activity, CryptarchiaServiceApi<ChainService>>>,
     /// Activity message restored from the previous run, to be tracked again.
     restored_activity: Option<Activity>,
+    last_activity_proof_report: Option<ActivityProofReport>,
     _phantom: std::marker::PhantomData<(ChainService, StateStorage)>,
 }
 
@@ -275,6 +283,7 @@ where
             active_message_tracker_config: settings.active_message_tracker,
             active_message_tracker: None,
             restored_activity: initial_state.pending_activity,
+            last_activity_proof_report: initial_state.last_activity_proof_report,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -404,9 +413,15 @@ where
                 )
                 .await;
             }
-            SdpMessage::GetParticipation { reply_channel } => {
-                if reply_channel.send(self.participation).is_err() {
-                    error!(target: LOG_TARGET, "Failed to send get participation response");
+            SdpMessage::GetStatus { reply_channel } => {
+                if reply_channel.send(self.status()).is_err() {
+                    error!(target: LOG_TARGET, "Failed to send status response.");
+                }
+            }
+            SdpMessage::GetBlendStatus { reply_channel } => {
+                let status = self.blend_status(chain_api).await;
+                if reply_channel.send(status).is_err() {
+                    error!(target: LOG_TARGET, "Failed to send Blend status response.");
                 }
             }
             SdpMessage::SetCurrentDeclarationId {
@@ -416,6 +431,31 @@ where
                 self.handle_set_current_declaration_id(declaration_id, reply_channel, chain_api)
                     .await;
             }
+        }
+    }
+
+    async fn blend_status(
+        &self,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
+    ) -> Result<BlendStatus, DynError> {
+        let declaration_id = self
+            .participation
+            .map(|participation| participation.declaration_id());
+        let Some(chain_status) = chain_api.get_blend_status(declaration_id).await? else {
+            return Err("Ledger state not found for the tip".into());
+        };
+        Ok(BlendStatus::new(
+            self.participation,
+            self.last_activity_proof_report,
+            chain_status,
+        ))
+    }
+
+    #[must_use]
+    const fn status(&self) -> SdpStatus {
+        SdpStatus {
+            participation: self.participation,
+            last_activity_proof_report: self.last_activity_proof_report,
         }
     }
 
@@ -480,7 +520,7 @@ where
     }
 
     async fn handle_active_message_status(
-        &self,
+        &mut self,
         activity: Activity,
         status: IntentStatus,
         wallet_adapter: &WalletAdapter,
@@ -490,7 +530,7 @@ where
         match status {
             IntentStatus::NotApplied => {
                 trace!(target: LOG_TARGET, "active message status: not applied in the tip ledger: resubmitting it");
-                self.submit_activity(activity, wallet_adapter, mempool_adapter, chain_api)
+                self.handle_submit_activity(activity, wallet_adapter, mempool_adapter, chain_api)
                     .await;
             }
             IntentStatus::Applied => {
@@ -724,7 +764,7 @@ where
         };
 
         let submission = self
-            .submit_activity(activity.clone(), wallet_adapter, mempool_adapter, chain_api)
+            .handle_submit_activity(activity.clone(), wallet_adapter, mempool_adapter, chain_api)
             .await;
 
         Self::reply(
@@ -755,18 +795,38 @@ where
         self.update_state();
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        clippy::too_many_lines,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
-    async fn submit_activity(
-        &self,
+    /// Submits `activity` and records the outcome for
+    /// [`SdpMessage::GetStatus`].
+    async fn handle_submit_activity(
+        &mut self,
         activity: Activity,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Option<ActivitySubmission> {
+        let epoch = activity.metadata.origin_epoch();
+        let submission = self
+            .try_submit_activity(activity, wallet_adapter, mempool_adapter, chain_api)
+            .await;
+
+        self.last_activity_proof_report = Some(ActivityProofReport { epoch, submission });
+        self.update_state();
+
+        submission.ok()
+    }
+
+    #[expect(
+        clippy::cognitive_complexity,
+        clippy::too_many_lines,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
+    async fn try_submit_activity(
+        &self,
+        activity: Activity,
+        wallet_adapter: &WalletAdapter,
+        mempool_adapter: &MempoolAdapter,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
+    ) -> Result<ActivitySubmission, ActivityProofSubmissionError> {
         trace!(
             target: LOG_TARGET,
             epoch = ?activity.metadata.submission_epoch(),
@@ -783,12 +843,12 @@ where
             .await
         else {
             error!(target: LOG_TARGET, "Can't find declaration. Cannot post activity without declaration.");
-            return None;
+            return Err(ActivityProofSubmissionError::DeclarationNotFound);
         };
 
         let Some(nonce) = next_message_nonce(declaration.nonce) else {
             error!(target: LOG_TARGET, "SDP nonce sequence exhausted; cannot post activity");
-            return None;
+            return Err(ActivityProofSubmissionError::TransactionBuildFailed);
         };
 
         let proof_epoch = u32::from(activity.metadata.origin_epoch());
@@ -835,7 +895,7 @@ where
                     "Failed to create SDP activity transaction"
                 );
                 metrics::activity_tx_failures_total();
-                return None;
+                return Err(ActivityProofSubmissionError::TransactionBuildFailed);
             }
         };
 
@@ -871,7 +931,7 @@ where
                 "Failed to submit SDP activity transaction"
             );
             metrics::activity_mempool_failures_total();
-            return None;
+            return Err(ActivityProofSubmissionError::MempoolRejected);
         }
 
         info!(
@@ -888,7 +948,7 @@ where
             "Submitted SDP activity transaction"
         );
         metrics::activity_success_total();
-        Some(ActivitySubmission {
+        Ok(ActivitySubmission {
             tip: declaration.tip,
             tx_id,
         })
@@ -1071,7 +1131,11 @@ where
             .map(|tracker| tracker.intent().clone());
         self.service_resources_handle
             .state_updater
-            .update(Some(SdpState::new(self.participation, pending_activity)));
+            .update(Some(SdpState::new(
+                self.participation,
+                pending_activity,
+                self.last_activity_proof_report,
+            )));
     }
 }
 
