@@ -236,7 +236,7 @@ let (result, checkpoint) = sequencer
     .submit_channel_config(prepared, signatures)?;
 ```
 
-The `Multi-sig channel config escalates across independent signers` scenario in `tests/cucumber_tests/features/zone.feature` runs this flow with distinct signers.
+The `Multi-sig deposit lifecycle reacts across independent sequencers` scenario in `tests/cucumber_tests/features/zone.feature` runs this flow with distinct signers, then pins and withdraws a deposit under the resulting 2-of-3 config via `prepare_pin_deposit` / `prepare_atomic_withdraw` and `submit_atomic_bundle`.
 
 
 ## Competing writes and republish

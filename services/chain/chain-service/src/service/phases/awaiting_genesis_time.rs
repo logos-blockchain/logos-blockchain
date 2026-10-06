@@ -163,19 +163,18 @@ where
 /// if the starting state is `Genesis` and the genesis time is in the future.
 /// Returns `None`, otherwise.
 fn create_genesis_timer(starting_state: StartingState) -> Option<Pin<Box<Sleep>>> {
-    if let StartingState::Genesis { genesis_block } = starting_state {
-        let genesis_time: OffsetDateTime = genesis_block
-            .genesis_tx()
-            .cryptarchia_parameter()
-            .genesis_time
-            .into();
-        let now = OffsetDateTime::now_utc();
+    let StartingState::Genesis { genesis_block } = starting_state;
+    let genesis_time: OffsetDateTime = genesis_block
+        .genesis_tx()
+        .cryptarchia_parameter()
+        .genesis_time
+        .into();
+    let now = OffsetDateTime::now_utc();
 
-        if genesis_time > now {
-            info!(target: LOG_TARGET, %genesis_time, "genesis time is in the future");
-            let delay = (genesis_time - now).try_into().unwrap_or_default();
-            return Some(Box::pin(tokio::time::sleep(delay)));
-        }
+    if genesis_time > now {
+        info!(target: LOG_TARGET, %genesis_time, "genesis time is in the future");
+        let delay = (genesis_time - now).try_into().unwrap_or_default();
+        return Some(Box::pin(tokio::time::sleep(delay)));
     }
     None
 }

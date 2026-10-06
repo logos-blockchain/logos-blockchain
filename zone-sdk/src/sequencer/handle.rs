@@ -11,7 +11,10 @@ use lb_core::{
 use lb_key_management_system_service::keys::Ed25519Signature;
 
 use super::{
-    types::{ChannelWalletView, Error, PreparedChannelConfig, WithdrawArg, WithdrawInputs},
+    types::{
+        ChannelWalletView, Error, PreparedAtomicBundle, PreparedChannelConfig, WithdrawArg,
+        WithdrawInputs,
+    },
     zone_sequencer::ZoneSequencer,
 };
 use crate::{adapter, sequencer::zone_sequencer::PublishReceipt};
@@ -261,6 +264,50 @@ where
         self.sequencer
             .do_publish_pin_deposit(inscribe, consumed_notes)
             .await
+    }
+
+    /// Build and fund an atomic withdraw bundle for external multi-sig signing
+    /// — the multi-sig counterpart of [`Self::publish_atomic_withdraw`].
+    /// Collect signatures over `sign_payload` and submit via
+    /// [`Self::submit_atomic_bundle`]; the bundled inscription is turn-gated,
+    /// so prepare and submit from the current-turn sequencer.
+    pub async fn prepare_atomic_withdraw(
+        &mut self,
+        inscribe: Inscription,
+        withdraws: Vec<WithdrawArg>,
+        inputs: WithdrawInputs,
+    ) -> Result<PreparedAtomicBundle, Error> {
+        self.sequencer
+            .do_prepare_atomic_withdraw(inscribe, withdraws, inputs)
+            .await
+    }
+
+    /// Build and fund a pin-deposit bundle for external multi-sig signing — the
+    /// multi-sig counterpart of [`Self::publish_pin_deposit`]. See
+    /// [`Self::prepare_atomic_withdraw`] for the signing/submission contract.
+    pub async fn prepare_pin_deposit(
+        &mut self,
+        inscribe: Inscription,
+        consumed_notes: Vec<NoteId>,
+    ) -> Result<PreparedAtomicBundle, Error> {
+        self.sequencer
+            .do_prepare_pin_deposit(inscribe, consumed_notes)
+            .await
+    }
+
+    /// Submit a [`PreparedAtomicBundle`] with its externally-collected
+    /// signatures.
+    ///
+    /// `signatures` must be indexed against
+    /// [`PreparedAtomicBundle::accredited_keys`], with at most one signature
+    /// per index, in any order. Handles both atomic-withdraw and pin-deposit
+    /// bundles.
+    pub fn submit_atomic_bundle(
+        &mut self,
+        prepared: PreparedAtomicBundle,
+        signatures: IndexedSignatures,
+    ) -> Result<PublishReceipt, Error> {
+        self.sequencer.do_submit_atomic_bundle(prepared, signatures)
     }
 
     /// The channel's tracked note set — see [`ZoneSequencer::channel_wallet`].
