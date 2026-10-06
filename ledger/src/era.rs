@@ -2,7 +2,10 @@
 
 use std::borrow::Cow;
 
-use lb_cryptarchia_engine::{Slot, era::ScheduledEra};
+use lb_cryptarchia_engine::{
+    Slot,
+    era::{Era, ScheduledEra},
+};
 
 use crate::{Config, LedgerState, config::EraScheduledConfig};
 
@@ -10,39 +13,59 @@ use crate::{Config, LedgerState, config::EraScheduledConfig};
     clippy::multiple_inherent_impl,
     reason = "grouping how a state crosses era boundaries separately from the main impl"
 )]
+// TODO: LedgerState will soon be converted into a versioned enum, so the
+// functions below won't return `Self` as in a specific version, but would
+// return the overall enum instead.
 impl LedgerState {
     /// The state brought from the era of its own slot into the era of `slot`,
     /// across every era boundary in between.
-    pub(crate) fn into_era_of(self, slot: Slot, eras: &EraScheduledConfig) -> Self {
-        let (from, into) = (eras.at_slot(self.slot()).era, eras.at_slot(slot).era);
-        eras.iter()
-            .zip(eras.iter().skip(1))
-            .filter(|(_, next)| from < next.era && next.era <= into)
-            .fold(self, |state, (previous, next)| {
-                state.into_next_era(previous, next)
-            })
+    ///
+    /// It returns `None` if the provided slot is past the slot the ledger state
+    /// is tracking.
+    pub(crate) fn migrate_to_future_slot(
+        self,
+        slot: Slot,
+        eras: &EraScheduledConfig,
+    ) -> Option<Self> {
+        if slot < self.slot() {
+            return None;
+        }
+
+        let from = eras.at_slot(self.slot()).era.into_inner();
+        let into = eras.at_slot(slot).era.into_inner();
+        let era_schedule_for = |era| {
+            eras.get(Era::new(era))
+                .expect("every era up to the one of a slot is scheduled")
+        };
+
+        let mut state = self;
+        for era in from..into {
+            state = state.into_next_era(era_schedule_for(era), era_schedule_for(era + 1));
+        }
+        Some(state)
     }
 
     /// The state as the era of `slot` holds it, borrowed when that is the era
     /// of its own slot.
-    pub(crate) fn in_era_of(&self, slot: Slot, eras: &EraScheduledConfig) -> Cow<'_, Self> {
+    pub(crate) fn as_in_era_of_slot(
+        &self,
+        slot: Slot,
+        eras: &EraScheduledConfig,
+    ) -> Option<Cow<'_, Self>> {
         if eras.at_slot(self.slot()).era == eras.at_slot(slot).era {
-            Cow::Borrowed(self)
+            Some(Cow::Borrowed(self))
         } else {
-            Cow::Owned(self.clone().into_era_of(slot, eras))
+            Some(Cow::Owned(self.clone().migrate_to_future_slot(slot, eras)?))
         }
     }
 
     /// The state at the end of era `previous`, brought into era `next`, the
     /// one after it.
+    // TODO: This will return the versioned enum once LedgerState is converted into
+    // one.
     fn into_next_era(self, previous: &ScheduledEra<Config>, next: &ScheduledEra<Config>) -> Self {
         // The ledger's version in an era is its config's.
         match (&previous.entry.parameters, &next.entry.parameters) {
-            // Within a version, an era changes only the values of the
-            // parameters, which the ledger reads from the config of the era
-            // whenever it uses them: every component carries over unchanged.
-            // A new component must be named here, so that the version that
-            // adds it says what it becomes at an era boundary.
             (Config::V1(_), Config::V1(_)) => {
                 let Self {
                     block_number,
@@ -82,7 +105,10 @@ mod tests {
         let state = LedgerState::from_utxos([utxo()], &eras);
         let next_era = eras.epoch_starting_slot(Epoch::new(1));
 
-        assert_eq!(state.clone().into_era_of(next_era, &eras), state);
+        assert_eq!(
+            state.clone().migrate_to_future_slot(next_era, &eras),
+            Some(state)
+        );
     }
 
     #[test]
@@ -93,12 +119,12 @@ mod tests {
             Slot::new(eras.epoch_starting_slot(Epoch::new(1)).into_inner() - 1);
 
         assert!(matches!(
-            state.in_era_of(last_slot_of_first_era, &eras),
-            Cow::Borrowed(_)
+            state.as_in_era_of_slot(last_slot_of_first_era, &eras),
+            Some(Cow::Borrowed(_))
         ));
         assert!(matches!(
-            state.in_era_of(eras.epoch_starting_slot(Epoch::new(1)), &eras),
-            Cow::Owned(_)
+            state.as_in_era_of_slot(eras.epoch_starting_slot(Epoch::new(1)), &eras),
+            Some(Cow::Owned(_))
         ));
     }
 }

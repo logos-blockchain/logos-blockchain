@@ -98,7 +98,7 @@ impl LedgerState {
         tx_events.extend(events);
 
         let (sdp, events) = sdp::SdpLedger::from_genesis(
-            &config.sdp_config(),
+            config.sdp_config(),
             utxo_tree,
             &channels,
             epoch_state,
@@ -169,8 +169,8 @@ impl LedgerState {
         let config = config_at_epoch(eras, epoch_state.epoch);
         self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
         let (new_sdp, effect) = self.sdp.try_apply_header(
-            &last_config.sdp_config(),
-            &config.sdp_config(),
+            last_config.sdp_config(),
+            config.sdp_config(),
             last_epoch_state,
             epoch_state,
         )?;
@@ -243,7 +243,7 @@ impl LedgerState {
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (sdp, events) = self
             .sdp
-            .try_apply_sdp_declaration(utxo_tree, sdp_declare_op, &config.sdp_config())
+            .try_apply_sdp_declaration(utxo_tree, sdp_declare_op, config.sdp_config())
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP declare message"),
             )?;
@@ -258,7 +258,7 @@ impl LedgerState {
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (sdp, events) = self
             .sdp
-            .apply_active_msg(sdp_active_op, &config.sdp_config())
+            .apply_active_msg(sdp_active_op, config.sdp_config())
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP active message"),
             )?;
@@ -273,7 +273,7 @@ impl LedgerState {
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (result, events) = self
             .sdp
-            .apply_withdrawn_msg(sdp_withdraw_op, &config.sdp_config())
+            .apply_withdrawn_msg(sdp_withdraw_op, config.sdp_config())
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP withdraw message"),
             )?;

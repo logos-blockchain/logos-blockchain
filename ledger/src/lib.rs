@@ -326,7 +326,7 @@ impl LedgerState {
     {
         // A block is applied under the era of its slot, which the state
         // crosses into first.
-        let state = self.into_era_of(slot, eras);
+        let state = self.migrate_to_future_slot(slot, eras);
         let last_epoch_state = state.cryptarchia_ledger.epoch_state().clone();
         let mut cryptarchia_ledger = state
             .cryptarchia_ledger
@@ -378,7 +378,7 @@ impl LedgerState {
     where
         LeaderProof: leader_proof::LeaderProof,
     {
-        let state = self.in_era_of(slot, eras);
+        let state = self.as_in_era_of_slot(slot, eras);
         state.cryptarchia_ledger.verify_proof_of_leadership(
             slot,
             proof,
@@ -585,7 +585,7 @@ impl LedgerState {
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
         let config = config_at_slot(eras, slot);
-        let mut state = self.in_era_of(slot, eras).into_owned();
+        let mut state = self.as_in_era_of_slot(slot, eras).into_owned();
         let mut pending = txs.iter().collect::<Vec<_>>();
         loop {
             let still_pending = pending.len();
@@ -682,7 +682,7 @@ impl LedgerState {
         slot: Slot,
         eras: &EraScheduledConfig,
     ) -> Result<EpochState, LedgerError<Id>> {
-        let state = self.in_era_of(slot, eras);
+        let state = self.as_in_era_of_slot(slot, eras);
         state.cryptarchia_ledger.epoch_state_for_slot(
             slot,
             &state.mantle_ledger.sdp,
