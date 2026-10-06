@@ -33,7 +33,7 @@ use tracing::error;
 
 use crate::{
     Config, EpochState, UtxoTree,
-    config::{EraScheduledConfig, config_at_epoch},
+    config::{EraScheduledConfig, config_for_epoch},
     mantle::sdp::HeaderEffect,
 };
 
@@ -165,8 +165,8 @@ impl LedgerState {
         voucher: VoucherCm,
         eras: &EraScheduledConfig,
     ) -> Result<(Self, HeaderEffect), Error> {
-        let last_config = config_at_epoch(eras, last_epoch_state.epoch);
-        let config = config_at_epoch(eras, epoch_state.epoch);
+        let last_config = config_for_epoch(eras, last_epoch_state.epoch);
+        let config = config_for_epoch(eras, epoch_state.epoch);
         self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
         let (new_sdp, effect) = self.sdp.try_apply_header(
             last_config.sdp_config(),

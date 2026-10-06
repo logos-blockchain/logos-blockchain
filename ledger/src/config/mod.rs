@@ -86,13 +86,13 @@ impl Config {
 
 /// The config of the era `slot` belongs to.
 #[must_use]
-pub fn config_at_slot(eras: &EraScheduledConfig, slot: Slot) -> &Config {
+pub fn config_for_slot(eras: &EraScheduledConfig, slot: Slot) -> &Config {
     &eras.at_slot(slot).entry.parameters
 }
 
 /// The config of the era `epoch` belongs to.
 #[must_use]
-pub fn config_at_epoch(eras: &EraScheduledConfig, epoch: Epoch) -> &Config {
+pub fn config_for_epoch(eras: &EraScheduledConfig, epoch: Epoch) -> &Config {
     &eras.at_epoch(epoch).entry.parameters
 }
 
@@ -108,12 +108,26 @@ pub fn config_at_epoch(eras: &EraScheduledConfig, epoch: Epoch) -> &Config {
 #[must_use]
 pub fn nonce_snapshot(eras: &EraScheduledConfig, epoch: Epoch) -> Slot {
     let previous_epoch = epoch.strict_sub(1.into());
-    let offset = config_at_epoch(eras, previous_epoch).nonce_contribution_period();
+    let offset = config_for_epoch(eras, previous_epoch).nonce_contribution_period();
     Slot::new(
         eras.epoch_starting_slot(previous_epoch)
             .into_inner()
             .strict_add(offset),
     )
+}
+
+/// The slot at which the total stake for a given epoch is snapshotted
+///
+/// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
+/// the total stake for epoch 1 will be snapshotted at slot 60, which is the
+/// 1st slot of the last phase of epoch 0.
+///
+/// # Panics
+///
+/// For epoch 0, which no epoch precedes.
+#[must_use]
+pub fn total_stake_snapshot(eras: &EraScheduledConfig, epoch: Epoch) -> Slot {
+    nonce_snapshot(eras, epoch)
 }
 
 /// The slot at which the stake distribution of `epoch` is snapshotted: the

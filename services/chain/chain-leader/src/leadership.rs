@@ -22,7 +22,7 @@ use lb_key_management_system_service::{
     api::KmsServiceApi, backend::preload::KeyId, keys::Ed25519Key,
     operators::zk::leader::BuildPrivateInputsWithLeaderKey,
 };
-use lb_ledger::{EpochState, UtxoTree, config::config_at_slot};
+use lb_ledger::{EpochState, UtxoTree, config::config_for_slot};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_time_service::{EpochSlotTickStream, SlotTick, TimeServiceMessage};
 use lb_utils::tokio::task::spawn_blocking;
@@ -441,7 +441,7 @@ where
         .get_leader_aged_notes(Some(wallet_tip))
         .await
         .ok()?;
-    let eligible = match &config_at_slot(ledger_eras, slot).faucet_pk() {
+    let eligible = match &config_for_slot(ledger_eras, slot).faucet_pk() {
         Some(faucet_pk) => eligible_utxos
             .response
             .into_iter()
@@ -798,9 +798,7 @@ mod pol_tests {
     }
 
     /// A schedule of a single era, of version 1, running `config` from genesis.
-    pub fn single_era(
-        config: lb_ledger::Config,
-    ) -> EraSchedule<lb_ledger::Config> {
+    pub fn single_era(config: lb_ledger::Config) -> EraSchedule<lb_ledger::Config> {
         use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
 
         let entry = EraEntry {

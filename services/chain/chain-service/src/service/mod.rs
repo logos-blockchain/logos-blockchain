@@ -26,7 +26,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot, era::Era};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, GetTipResponseReason, ProviderResponse};
-use lb_ledger::config::{config_at_slot, stake_distribution_snapshot};
+use lb_ledger::config::{config_for_slot, stake_distribution_snapshot};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::api::StorageApi;
@@ -190,7 +190,7 @@ where
     /// Enters the era of `tick`, now in force: fork choice, the LIB and uncle
     /// selection follow its consensus config from now on.
     async fn enter_era(&mut self, tick: SlotTick) {
-        let config = config_at_slot(self.cryptarchia.ledger.era_schedule(), tick.slot)
+        let config = config_for_slot(self.cryptarchia.ledger.era_schedule(), tick.slot)
             .consensus_config()
             .clone();
         let previous_lib = self.cryptarchia.lib();
@@ -645,7 +645,7 @@ where
                 continue;
             };
             let inactivity_period =
-                config_at_slot(cryptarchia.ledger.era_schedule(), block.header().slot())
+                config_for_slot(cryptarchia.ledger.era_schedule(), block.header().slot())
                     .sdp_config()
                     .service_params
                     .get(&new_declaration.service_type)

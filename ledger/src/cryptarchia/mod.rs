@@ -25,7 +25,7 @@ use lb_log_targets::ledger;
 use lb_utxotree::MerklePath;
 
 use crate::{
-    config::{EraScheduledConfig, config_at_epoch, nonce_snapshot, stake_distribution_snapshot},
+    config::{EraScheduledConfig, config_for_epoch, nonce_snapshot, stake_distribution_snapshot},
     cryptarchia::{
         block_density::BlockDensity,
         stake::{PRECISION, StakeInference},
@@ -118,7 +118,7 @@ impl EpochState {
         pow: &PowState,
         eras: &EraScheduledConfig,
     ) -> Self {
-        let config = config_at_epoch(eras, self.epoch);
+        let config = config_for_epoch(eras, self.epoch);
         let nonce_snapshot_slot = nonce_snapshot(eras, self.epoch);
         let (nonce, blend_pow_difficulty) = if ledger.slot < nonce_snapshot_slot {
             // The Blend difficulty is snapshotted together with the nonce, and
@@ -309,12 +309,12 @@ impl LedgerState {
 
             // Infer the new total stake from the block density measured during
             // the epoch that ends, under the config of its era.
-            let total_stake = StakeInference::from_config(config_at_epoch(eras, current_epoch))
+            let total_stake = StakeInference::from_config(config_for_epoch(eras, current_epoch))
                 .total_stake_inference::<PRECISION>(
                 self.epoch_state.total_stake,
                 self.block_density.current_block_density(),
             );
-            let (lottery_0, lottery_1) = config_at_epoch(eras, new_epoch)
+            let (lottery_0, lottery_1) = config_for_epoch(eras, new_epoch)
                 .lottery_constants()
                 .compute_lottery_values(total_stake);
 
@@ -354,7 +354,7 @@ impl LedgerState {
                 active_declarations: Arc::new(
                     sdp.active_declarations(
                         next_epoch_state_epoch,
-                        &config_at_epoch(eras, next_epoch_state_epoch)
+                        &config_for_epoch(eras, next_epoch_state_epoch)
                             .sdp_config()
                             .service_params,
                     ),
@@ -382,19 +382,20 @@ impl LedgerState {
 
             // First, infer total stake using block density of the current epoch,
             // under the config of its era
-            let mut total_stake = StakeInference::from_config(config_at_epoch(eras, current_epoch))
-                .total_stake_inference::<PRECISION>(
-                    self.epoch_state.total_stake,
-                    self.block_density.current_block_density(),
-                );
+            let mut total_stake =
+                StakeInference::from_config(config_for_epoch(eras, current_epoch))
+                    .total_stake_inference::<PRECISION>(
+                        self.epoch_state.total_stake,
+                        self.block_density.current_block_density(),
+                    );
             // Adjust total stake with zero block density for skipped epochs,
             // each under the config of its era
             for skipped_epoch in u32::from(next_epoch_state.epoch())..u32::from(new_epoch) {
                 total_stake =
-                    StakeInference::from_config(config_at_epoch(eras, Epoch::new(skipped_epoch)))
+                    StakeInference::from_config(config_for_epoch(eras, Epoch::new(skipped_epoch)))
                         .total_stake_inference::<PRECISION>(total_stake, 0);
             }
-            let new_config = config_at_epoch(eras, new_epoch);
+            let new_config = config_for_epoch(eras, new_epoch);
             let (lottery_0, lottery_1) = new_config
                 .lottery_constants()
                 .compute_lottery_values(total_stake);
@@ -453,7 +454,7 @@ impl LedgerState {
                 active_declarations: Arc::new(
                     sdp.active_declarations(
                         next_epoch_state_epoch,
-                        &config_at_epoch(eras, next_epoch_state_epoch)
+                        &config_for_epoch(eras, next_epoch_state_epoch)
                             .sdp_config()
                             .service_params,
                     ),
@@ -675,7 +676,7 @@ impl LedgerState {
     #[must_use]
     pub fn with_genesis_sdp(mut self, sdp: &SdpLedger, eras: &EraScheduledConfig) -> Self {
         for epoch_state in [&mut self.epoch_state, &mut self.next_epoch_state] {
-            let service_params = &config_at_epoch(eras, epoch_state.epoch)
+            let service_params = &config_for_epoch(eras, epoch_state.epoch)
                 .sdp_config()
                 .service_params;
             epoch_state.active_declarations =
@@ -1008,7 +1009,7 @@ pub mod tests {
             .try_apply_header(
                 &previous_epoch_state,
                 state.epoch_state(),
-                config_at_epoch(eras, state.epoch_state().epoch),
+                config_for_epoch(eras, state.epoch_state().epoch),
             )
             .unwrap();
         pow.record_block_txs(txs_in_block);

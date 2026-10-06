@@ -56,7 +56,7 @@ use rpds::HashTrieMapSync;
 use thiserror::Error;
 
 use crate::{
-    config::{EraScheduledConfig, RewardPoWConfig, config_at_epoch, config_at_slot},
+    config::{EraScheduledConfig, RewardPoWConfig, config_for_epoch, config_for_slot},
     mantle::helpers::MantleOperationVerificationHelper,
     update::{BatchVerifiedUpdate, PreparedUpdate},
 };
@@ -172,7 +172,7 @@ where
         let slot = state.slot();
         state
             .mantle_ledger
-            .add_seen_block(id.into(), slot, config_at_slot(&eras, slot));
+            .add_seen_block(id.into(), slot, config_for_slot(&eras, slot));
         Self {
             states: HashTrieMapSync::new_sync().insert(id, state),
             eras,
@@ -273,7 +273,7 @@ impl LedgerState {
     {
         let (mut state, header_events) = self.try_apply_header(slot, proof, uncle_slots, eras)?;
         // The block's contents follow the config of the era of its slot.
-        let config = config_at_slot(eras, slot);
+        let config = config_for_slot(eras, slot);
         // Record the applied block among the recently seen blocks `PoW`
         // claims may anchor to. This is the canonical apply path, where the
         // block's id is known — unlike a proposer's direct
@@ -584,7 +584,7 @@ impl LedgerState {
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
-        let config = config_at_slot(eras, slot);
+        let config = config_for_slot(eras, slot);
         let mut state = self.as_in_era_of_slot(slot, eras).into_owned();
         let mut pending = txs.iter().collect::<Vec<_>>();
         loop {
@@ -610,7 +610,7 @@ impl LedgerState {
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, eras: &EraScheduledConfig) -> Self {
         let cryptarchia_ledger = CryptarchiaLedger::from_utxos(utxos, eras, Fr::ZERO);
         let mantle_ledger = MantleLedger::new(
-            config_at_epoch(eras, Epoch::new(0)),
+            config_for_epoch(eras, Epoch::new(0)),
             cryptarchia_ledger.epoch_state(),
         );
         // Seed the genesis epoch-state membership snapshots from the genesis SDP
@@ -637,7 +637,7 @@ impl LedgerState {
         let (mantle_ledger, events) = MantleLedger::from_genesis_tx(
             inscription,
             declarations,
-            config_at_epoch(eras, Epoch::new(0)),
+            config_for_epoch(eras, Epoch::new(0)),
             cryptarchia_ledger.latest_utxos(),
             cryptarchia_ledger.epoch_state(),
         )?;

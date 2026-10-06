@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use rpds::HashTrieSetSync;
 
-use crate::config::{EraScheduledConfig, config_at_epoch};
+use crate::config::{EraScheduledConfig, config_for_epoch, total_stake_snapshot};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockDensity {
@@ -21,16 +21,20 @@ impl BlockDensity {
         }
     }
 
-    /// The range of slots used to compute the block density for a given epoch:
-    /// its Stake Distribution Snapshot + Buffer phases, laid out by its era.
+    /// The range of slots used to compute the block density for a given epoch
     ///
     /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
     /// the block density for epoch 2 will be computed during [200, 259],
     /// which is the Stake Distribution Snapshot + Buffer phases of epoch 2.
     fn compute_period_range(epoch: Epoch, eras: &EraScheduledConfig) -> RangeInclusive<Slot> {
-        let start = eras.epoch_starting_slot(epoch);
-        let period = config_at_epoch(eras, epoch).total_stake_inference_period();
-        start..=Slot::new(start.into_inner().strict_add(period).strict_sub(1))
+        let snapshot_slot_for_next_epoch = total_stake_snapshot(eras, epoch.strict_add(1.into()));
+        let start = snapshot_slot_for_next_epoch.saturating_sub(
+            config_for_epoch(eras, epoch)
+                .total_stake_inference_period()
+                .into(),
+        );
+        let end = snapshot_slot_for_next_epoch.saturating_sub(1.into());
+        start..=end
     }
 
     /// Marks the slots occupied by a block and the uncles it references.
