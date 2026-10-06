@@ -16,11 +16,12 @@ use lb_core::{
     },
 };
 use lb_node::config::deployment::DeploymentSettings;
+use lb_sdp_service::DeclarationConfig;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use logos_blockchain_tools::{
     apply_dotted_kv,
     genesis::{
-        distribution::{self, Faucet, ProviderInfo, StakeHolderInfo},
+        distribution::{self, Faucet, StakeHolderInfo},
         inscription::{self, InscribeParams},
     },
     overwrite_yaml, set_at_path,
@@ -245,7 +246,7 @@ fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
     );
 
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
-    let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
+    let providers: Vec<DeclarationConfig> = load_yaml_file(&args.providers)?;
     let faucet: Faucet = load_yaml_file(&args.faucet)?;
     let (transfer_op, declarations) = distribution::distribute(stakeholders, providers, &faucet)
         .map_err(|e| anyhow::anyhow!(e))
@@ -429,7 +430,7 @@ fn build_genesis_block(
 
 fn run_distribute(args: &DistributeArgs) -> Result<()> {
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
-    let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
+    let providers: Vec<DeclarationConfig> = load_yaml_file(&args.providers)?;
     let faucet: Faucet = load_yaml_file(&args.faucet)?;
 
     let (transfer_op, declarations) = distribution::distribute(stakeholders, providers, &faucet)
