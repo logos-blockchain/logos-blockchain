@@ -164,7 +164,7 @@ where
             PolProvider,
             _,
         >(
-            UninitializedEpochEventStream::new(epoch_stream, |_: &_| Duration::ZERO),
+            UninitializedEpochEventStream::new(epoch_stream, Duration::ZERO),
             ReceiverStream::new(msg_receiver),
             local_node,
             single_era(settings),

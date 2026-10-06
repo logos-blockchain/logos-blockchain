@@ -24,7 +24,7 @@ use lb_blend::{
 };
 use lb_chain_service::{Epoch, Slot};
 use lb_core::{crypto::ZkHash, header::HeaderId, sdp::ActivityMetadata};
-use lb_cryptarchia_engine::era::{Era, EraEntriesAfterGenesis, EraEntry, EraVersion, EraSchedule};
+use lb_cryptarchia_engine::era::{Era, EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};

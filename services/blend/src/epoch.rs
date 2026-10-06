@@ -33,17 +33,6 @@ impl<NodeId, CorePoQGenerator> CoreEpochStateInfo<NodeId, CorePoQGenerator> {
         }
     }
 
-    /// The epoch.
-    #[must_use]
-    pub const fn epoch(&self) -> Epoch {
-        match self {
-            Self::Core(info) => info.public.epoch,
-            Self::NotCore { epoch, .. } => *epoch,
-        }
-    }
-}
-
-impl<NodeId, CorePoQGenerator> CoreEpochStateInfo<NodeId, CorePoQGenerator> {
     #[must_use]
     pub fn epoch(&self) -> Epoch {
         match self {

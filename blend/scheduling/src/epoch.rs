@@ -13,17 +13,14 @@ use crate::stream::{FirstReadyStreamError, UninitializedFirstReadyStream};
 /// A staging type that initializes a [`EpochEventStream`] by consuming
 /// the first [`Event`] from the underlying stream, expected to be yielded
 /// within a short timeout.
-///
-/// `TransitionPeriod` says how long the transition into each epoch lasts, from
-/// the epoch's event.
-pub struct UninitializedEpochEventStream<EventStream, TransitionPeriod> {
+pub struct UninitializedEpochEventStream<EventStream> {
     stream: UninitializedFirstReadyStream<EventStream>,
-    transition_period: TransitionPeriod,
+    transition_period: Duration,
 }
 
-impl<EventStream, TransitionPeriod> UninitializedEpochEventStream<EventStream, TransitionPeriod> {
+impl<EventStream> UninitializedEpochEventStream<EventStream> {
     #[must_use]
-    pub const fn new(event_stream: EventStream, transition_period: TransitionPeriod) -> Self {
+    pub const fn new(event_stream: EventStream, transition_period: Duration) -> Self {
         Self {
             stream: UninitializedFirstReadyStream::new(event_stream),
             transition_period,
@@ -31,10 +28,9 @@ impl<EventStream, TransitionPeriod> UninitializedEpochEventStream<EventStream, T
     }
 }
 
-impl<EventStream, TransitionPeriod> UninitializedEpochEventStream<EventStream, TransitionPeriod>
+impl<EventStream> UninitializedEpochEventStream<EventStream>
 where
     EventStream: futures::Stream + Unpin,
-    TransitionPeriod: Fn(&EventStream::Item) -> Duration,
 {
     /// Initializes a [`EpochEventStream`] by consuming the first [`Epoch`]
     /// from the underlying stream.
@@ -46,13 +42,7 @@ where
     /// an epoch.
     pub async fn await_first_ready(
         self,
-    ) -> Result<
-        (
-            EventStream::Item,
-            EpochEventStream<EventStream, TransitionPeriod>,
-        ),
-        FirstReadyStreamError,
-    > {
+    ) -> Result<(EventStream::Item, EpochEventStream<EventStream>), FirstReadyStreamError> {
         let (first_epoch, remaining_stream) = self.stream.first().await?;
         Ok((
             first_epoch,
@@ -73,7 +63,7 @@ pub enum EpochEvent<Event> {
 /// It wraps a stream of [`Epoch`]s and yields a [`EpochEvent::NewEpoch`]
 /// as soon as a new [`Epoch`] is available from the inner stream.
 /// Then, it yields a [`EpochEvent::TransitionPeriodExpired`] after
-/// the transition period of that epoch has elapsed.
+/// the transition period has elapsed.
 ///
 /// # Stream Timeline
 /// ```text
@@ -82,15 +72,15 @@ pub enum EpochEvent<Event> {
 ///
 /// (O: NewEpoch, E: TransitionPeriodExpired, E*: Epochs)
 /// ```
-pub struct EpochEventStream<EventStream, TransitionPeriod> {
+pub struct EpochEventStream<EventStream> {
     event_stream: EventStream,
-    transition_period: TransitionPeriod,
+    transition_period: Duration,
     transition_period_timer: Option<Pin<Box<Sleep>>>,
 }
 
-impl<EventStream, TransitionPeriod> EpochEventStream<EventStream, TransitionPeriod> {
+impl<EventStream> EpochEventStream<EventStream> {
     #[must_use]
-    const fn new(event_stream: EventStream, transition_period: TransitionPeriod) -> Self {
+    const fn new(event_stream: EventStream, transition_period: Duration) -> Self {
         Self {
             event_stream,
             transition_period,
@@ -99,11 +89,9 @@ impl<EventStream, TransitionPeriod> EpochEventStream<EventStream, TransitionPeri
     }
 }
 
-impl<EventStream, TransitionPeriod> futures::Stream
-    for EpochEventStream<EventStream, TransitionPeriod>
+impl<EventStream> futures::Stream for EpochEventStream<EventStream>
 where
     EventStream: futures::Stream + Unpin,
-    TransitionPeriod: Fn(&EventStream::Item) -> Duration + Unpin,
 {
     type Item = EpochEvent<EventStream::Item>;
 
@@ -114,8 +102,7 @@ where
                 // Start the transition period timer, and yield the new epoch.
                 // If the previous transition period timer has not been expired yet,
                 // it will be overwritten.
-                let transition_period = (self.transition_period)(&epoch);
-                self.transition_period_timer = Some(Box::pin(sleep(transition_period)));
+                self.transition_period_timer = Some(Box::pin(sleep(self.transition_period)));
                 return Poll::Ready(Some(EpochEvent::NewEpoch(epoch)));
             }
             Poll::Ready(None) => return Poll::Ready(None),
@@ -149,7 +136,7 @@ mod tests {
 
         let mut stream = EpochEventStream::new(
             Box::pin(IntervalStream::new(interval(epoch_duration))),
-            move |_: &_| transition_period,
+            transition_period,
         );
 
         // NewEpoch should be emitted immediately.
@@ -203,7 +190,7 @@ mod tests {
 
         let mut stream = EpochEventStream::new(
             Box::pin(IntervalStream::new(interval(epoch_duration))),
-            move |_: &_| transition_period,
+            transition_period,
         );
 
         // NewEpoch should be emitted immediately.
@@ -220,34 +207,6 @@ mod tests {
             elapsed.abs_diff(epoch_duration) <= time_tolerance,
             "elapsed:{elapsed:?}, expected:{epoch_duration:?}",
         );
-    }
-
-    #[tokio::test]
-    async fn each_epoch_has_its_own_transition_period() {
-        let time_tolerance = Duration::from_millis(50);
-        // The first epoch's transition lasts 100 ms, the second's 300 ms.
-        let mut stream = EpochEventStream::new(
-            Box::pin(
-                IntervalStream::new(interval(Duration::from_secs(1)))
-                    .enumerate()
-                    .map(|(epoch, _)| epoch),
-            ),
-            |epoch: &usize| Duration::from_millis(if *epoch == 0 { 100 } else { 300 }),
-        );
-
-        for expected_transition in [100, 300].map(Duration::from_millis) {
-            assert!(matches!(stream.next().await, Some(EpochEvent::NewEpoch(_))));
-            let start_time = Instant::now();
-            assert!(matches!(
-                stream.next().await,
-                Some(EpochEvent::TransitionPeriodExpired)
-            ));
-            let elapsed = start_time.elapsed();
-            assert!(
-                elapsed.abs_diff(expected_transition) <= time_tolerance,
-                "elapsed:{elapsed:?}, expected:{expected_transition:?}",
-            );
-        }
     }
 
     #[tokio::test]

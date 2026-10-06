@@ -106,7 +106,7 @@ use crate::{
     delivery::{broadcast_undelivered_messages, next_undelivered_messages},
     epoch::{CoreEpochInfo, CoreEpochPublicInfo, CoreEpochStateInfo, MismatchedZkId},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
-    era::{settings_in, transition_period},
+    era::{epoch_transition_period_in_force, settings_in},
     kms::PreloadKmsService,
     membership::{
         self,
@@ -667,12 +667,7 @@ where
     let (current_epoch_info, remaining_epoch_stream) = Box::pin(
         UninitializedEpochEventStream::new(
             epoch_stream,
-            move |epoch_info: &Result<CoreEpochStateInfo<_, _>, MismatchedZkId>| {
-                // A mismatched ID stops the service before any transition.
-                epoch_info.as_ref().map_or(Duration::ZERO, |epoch_info| {
-                    transition_period(&timings, epoch_info.era(), epoch_info.epoch(), |time| time)
-                })
-            },
+            epoch_transition_period_in_force(&timings),
         )
         .await_first_ready(),
     )

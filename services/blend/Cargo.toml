@@ -46,6 +46,7 @@ rayon                            = { workspace = true }
 serde                            = { workspace = true }
 serde_with                       = { workspace = true }
 thiserror                        = { workspace = true }
+time                             = { workspace = true }
 tokio                            = { workspace = true }
 tokio-stream                     = { workspace = true }
 tracing                          = { workspace = true }
@@ -55,7 +56,6 @@ lb-blend          = { features = ["unsafe-test-functions"], workspace = true }
 libp2p            = { features = ["plaintext", "tcp", "yamux"], workspace = true }
 libp2p-swarm-test = { workspace = true }
 test-log          = { features = ["trace"], workspace = true }
-time              = { workspace = true }
 tokio             = { features = ["test-util"], workspace = true }
 
 [features]

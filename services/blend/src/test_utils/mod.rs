@@ -7,7 +7,7 @@ pub mod mocks;
 mod libp2p;
 use core::{num::NonZero, time::Duration};
 
-use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion, EraSchedule};
+use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion};
 use time::OffsetDateTime;
 
 pub use self::libp2p::*;

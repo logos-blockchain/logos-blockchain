@@ -49,7 +49,7 @@ use crate::{
     delivery::{FailureDetector, broadcast_undelivered_messages, next_undelivered_messages},
     edge::{current_epoch::CurrentEpoch, handlers::Error, settings::RunningBlendConfig},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
-    era::{settings_in, transition_period},
+    era::{epoch_transition_period_in_force, settings_in},
     kms::PreloadKmsService,
     membership::{self, chain::BlendEpoch, node_id},
     message::{DataPayload, NetworkInfo, ServiceMessage},
@@ -264,9 +264,7 @@ where
         run::<Backend, _, ProofsGenerator, _, PolInfoProvider, _>(
             UninitializedEpochEventStream::new(
                 public_epoch_stream,
-                move |(epoch, _): &BlendEpoch<_>| {
-                    transition_period(&timings, epoch.era, epoch.epoch, |time| time)
-                },
+                epoch_transition_period_in_force(&timings),
             ),
             Box::pin(inbound_relay),
             local_node_id,
@@ -332,7 +330,6 @@ where
 async fn run<Backend, NodeId, ProofsGenerator, Dispatcher, PolInfoProvider, RuntimeServiceId>(
     public_epoch_stream: UninitializedEpochEventStream<
         impl Stream<Item = BlendEpoch<NodeId>> + Unpin,
-        impl Fn(&BlendEpoch<NodeId>) -> Duration + Unpin,
     >,
     mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
     local_node_id: NodeId,

@@ -45,9 +45,9 @@ use crate::{
         },
     },
     edge::service_components::ServiceComponents as EdgeServiceComponents,
-    era::{settings_in, transition_period},
+    era::{epoch_transition_period_in_force, settings_in},
     kms::PreloadKmsService,
-    membership::{chain::BlendEpoch, node_id},
+    membership::node_id,
     message::{ProxyServiceMessage, ServiceMessage},
     mode::ModeMembership,
     orchestrator::Instance,
@@ -264,9 +264,7 @@ where
         let ((epoch, membership_info), mut remaining_membership_stream) =
             UninitializedEpochEventStream::new(
                 membership_stream,
-                move |(epoch, _): &BlendEpoch<_>| {
-                    transition_period(&timings, epoch.era, epoch.epoch, |time| time)
-                },
+                epoch_transition_period_in_force(&timings),
             )
             .await_first_ready()
             .await

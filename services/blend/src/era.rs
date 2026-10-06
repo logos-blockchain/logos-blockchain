@@ -3,8 +3,8 @@
 
 use core::time::Duration;
 
-use lb_chain_service::Epoch;
 use lb_cryptarchia_engine::era::{Era, EraSchedule, ScheduledEra};
+use time::OffsetDateTime;
 
 use crate::settings::TimingSettings;
 
@@ -22,37 +22,28 @@ pub fn settings_in<Settings>(eras: &EraSchedule<Settings>, era: Era) -> &Setting
     &scheduled(eras, era).entry.parameters
 }
 
-/// How long the transition into `epoch`, an epoch of era `era`, lasts: the
-/// epoch transition period of the era. An epoch that opens an era lasts at
-/// least the era's own transition period too, during which the network keeps
-/// accepting the protocols of the era before it.
-pub fn transition_period<Settings>(
-    eras: &EraSchedule<Settings>,
-    era: Era,
-    epoch: Epoch,
-    timing: impl FnOnce(&Settings) -> &TimingSettings,
-) -> Duration {
-    let scheduled = scheduled(eras, era);
-    let epoch_transition = timing(&scheduled.entry.parameters).epoch_transition_period;
-    if era == Era::GENESIS || epoch != scheduled.first_epoch {
-        return epoch_transition;
-    }
-    let era_transition = scheduled
+/// The epoch transition period of the era in force now by the wall clock, the
+/// genesis era's before genesis: how long a service's epochs transition for.
+///
+/// It stays the same when a later era changes it. Following the change is left
+/// to Blend's era-activated network behaviour.
+pub fn epoch_transition_period_in_force(timings: &EraSchedule<TimingSettings>) -> Duration {
+    timings
+        .at_time(OffsetDateTime::now_utc())
+        .unwrap_or_else(|| timings.genesis())
         .entry
-        .slot_duration
-        .saturating_mul(u32::try_from(scheduled.entry.transition_slots).unwrap_or(u32::MAX));
-    epoch_transition.max(era_transition)
+        .parameters
+        .epoch_transition_period
 }
 
 #[cfg(test)]
 mod tests {
     use core::{num::NonZero, time::Duration};
 
-    use lb_chain_service::Epoch;
-    use lb_cryptarchia_engine::era::{Era, EraEntriesAfterGenesis, EraEntry, EraVersion, EraSchedule};
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion};
     use time::OffsetDateTime;
 
-    use super::transition_period;
+    use super::epoch_transition_period_in_force;
     use crate::settings::TimingSettings;
 
     fn timing(epoch_transition_period: Duration) -> TimingSettings {
@@ -66,45 +57,39 @@ mod tests {
         }
     }
 
-    /// Era 1 starts at epoch 2: its slots last 2 s and its transition period
-    /// 30 slots, 60 s.
-    fn two_eras(era_1_epoch_transition: Duration) -> EraSchedule<TimingSettings> {
-        let entry = |slot_duration, epoch_transition| EraEntry {
+    /// Two eras from `genesis_time`, whose epochs transition for 5 s and 7 s:
+    /// era 1 starts at epoch 2, 20 s after genesis.
+    fn two_eras(genesis_time: OffsetDateTime) -> EraSchedule<TimingSettings> {
+        let entry = |epoch_transition| EraEntry {
             version: EraVersion::V1,
-            slot_duration,
+            slot_duration: Duration::from_secs(1),
             epoch_length_in_slots: NonZero::new(10).unwrap(),
             transition_slots: 30,
             parameters: timing(epoch_transition),
         };
         EraSchedule::new(
-            OffsetDateTime::UNIX_EPOCH,
-            entry(Duration::from_secs(1), Duration::from_secs(5)),
-            EraEntriesAfterGenesis::from((
-                NonZero::new(2).unwrap(),
-                entry(Duration::from_secs(2), era_1_epoch_transition),
-            )),
+            genesis_time,
+            entry(Duration::from_secs(5)),
+            EraEntriesAfterGenesis::from((NonZero::new(2).unwrap(), entry(Duration::from_secs(7)))),
         )
         .unwrap()
     }
 
-    fn period(eras: &EraSchedule<TimingSettings>, era: u16, epoch: u32) -> Duration {
-        transition_period(eras, Era::new(era), Epoch::new(epoch), |time| time)
+    #[test]
+    fn epochs_transition_for_the_period_of_the_era_in_force() {
+        let started = two_eras(OffsetDateTime::UNIX_EPOCH);
+        assert_eq!(
+            epoch_transition_period_in_force(&started),
+            Duration::from_secs(7)
+        );
     }
 
     #[test]
-    fn the_epoch_that_opens_an_era_lasts_at_least_the_era_transition() {
-        let eras = two_eras(Duration::from_secs(5));
-        // The genesis era has no era before it to transition from.
-        assert_eq!(period(&eras, 0, 0), Duration::from_secs(5));
-        assert_eq!(period(&eras, 0, 1), Duration::from_secs(5));
-        // Era 1's first epoch, then a later one.
-        assert_eq!(period(&eras, 1, 2), Duration::from_secs(60));
-        assert_eq!(period(&eras, 1, 3), Duration::from_secs(5));
-    }
-
-    #[test]
-    fn a_longer_epoch_transition_outlasts_the_era_transition() {
-        let eras = two_eras(Duration::from_secs(90));
-        assert_eq!(period(&eras, 1, 2), Duration::from_secs(90));
+    fn before_genesis_epochs_transition_for_the_genesis_era_period() {
+        let not_started = two_eras(OffsetDateTime::now_utc() + time::Duration::days(1));
+        assert_eq!(
+            epoch_transition_period_in_force(&not_started),
+            Duration::from_secs(5)
+        );
     }
 }
