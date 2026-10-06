@@ -32,7 +32,8 @@ pub unsafe fn free<Type>(pointer: *mut Type) -> OperationStatus {
 ///
 /// An [`OperationStatus`] indicating success or failure. A null `pointer`
 /// frees nothing and returns a `NullPointer` error. Like any error, it owns a
-/// message: release it with [`free_operation_status`].
+/// message: release it with
+/// [`free_operation_status`](crate::errors::free_operation_status).
 ///
 /// # Safety
 ///
@@ -45,28 +46,4 @@ pub unsafe extern "C" fn free_cstring(pointer: *mut c_char) -> OperationStatus {
     return_error_if_null_pointer!(pointer);
     drop(unsafe { CString::from_raw(pointer) });
     OperationStatus::OK
-}
-
-/// Releases an [`OperationStatus`] returned by this library.
-///
-/// The only thing a status owns is its `message`, which is null on success
-/// and on a few errors. This frees it when there is one, so any status —
-/// success or error — can be released without looking inside it.
-///
-/// # Arguments
-///
-/// - `status`: A status returned by any function of this library, including the
-///   `error` field of a result.
-///
-/// # Safety
-///
-/// `status` must come from this library and must not have been released
-/// already, either through this function or by passing its `message` to
-/// [`free_cstring`].
-#[panic_to_error]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_operation_status(status: OperationStatus) {
-    if !status.message.is_null() {
-        drop(unsafe { CString::from_raw(status.message) });
-    }
 }

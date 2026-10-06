@@ -5,8 +5,8 @@ use lb_node::config::DeploymentSettings;
 
 use crate::{
     OperationStatus,
-    api::{free, free_cstring, free_operation_status, lifecycle::resolve_run_config},
-    errors::OperationStatusCode,
+    api::{free, free_cstring, lifecycle::resolve_run_config},
+    errors::{OperationStatusCode, free_operation_status},
     result::FfiStatusResult,
     return_error_if_null_pointer,
 };

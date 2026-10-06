@@ -3,6 +3,8 @@ use std::{
     ffi::{CStr, CString, c_char},
 };
 
+use lb_c_macros::panic_to_error;
+
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 #[repr(C)]
 pub enum OperationStatusCode {
@@ -30,7 +32,7 @@ pub struct OperationStatus {
     /// A NUL-terminated description of the error. Null on success.
     ///
     /// The caller must free it, either by passing the whole status to
-    /// [`free_operation_status`](crate::api::memory::free_operation_status)
+    /// [`free_operation_status`]
     /// or by passing the message to
     /// [`free_cstring`](crate::api::memory::free_cstring).
     pub message: *mut c_char,
@@ -107,6 +109,30 @@ pub unsafe extern "C" fn is_ok(status: *const OperationStatus) -> bool {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn is_error(status: *const OperationStatus) -> bool {
     !unsafe { is_ok(status) }
+}
+
+/// Releases an [`OperationStatus`] returned by this library.
+///
+/// The only thing a status owns is its `message`, which is null on success
+/// and on a few errors. This frees it when there is one, so any status —
+/// success or error — can be released without looking inside it.
+///
+/// # Arguments
+///
+/// - `status`: A status returned by any function of this library, including the
+///   `error` field of a result.
+///
+/// # Safety
+///
+/// `status` must come from this library and must not have been released
+/// already, either through this function or by passing its `message` to
+/// [`free_cstring`](crate::api::free_cstring).
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_operation_status(status: OperationStatus) {
+    if !status.message.is_null() {
+        drop(unsafe { CString::from_raw(status.message) });
+    }
 }
 
 impl std::fmt::Debug for OperationStatus {

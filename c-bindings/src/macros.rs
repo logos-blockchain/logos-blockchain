@@ -1,4 +1,7 @@
-use crate::{api::free_operation_status, errors::OperationStatus, result::FfiResult};
+use crate::{
+    errors::{OperationStatus, free_operation_status},
+    result::FfiResult,
+};
 
 /// Checks if a pointer is null and returns from the calling function with a
 /// null-pointer error status.

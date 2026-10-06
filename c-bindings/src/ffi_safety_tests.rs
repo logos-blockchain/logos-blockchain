@@ -53,7 +53,7 @@ use crate::{
         },
         cryptarchia::{free_cryptarchia_info, get_block_events, get_cryptarchia_info},
         deployment::{free_deployment_info, get_deployment_info},
-        free_cstring, free_operation_status,
+        free_cstring,
         keys::{KeyType, add_key, generate_key, remove_key},
         leader::leader_claim,
         lifecycle::{shutdown_node, start_lb_node},
@@ -82,7 +82,7 @@ use crate::{
             submit_signed_transaction, transfer_funds, wallet_fund_tx,
         },
     },
-    errors::{is_error, is_ok},
+    errors::{free_operation_status, is_error, is_ok},
     result::FfiResult,
     return_error_if_null_pointer,
 };

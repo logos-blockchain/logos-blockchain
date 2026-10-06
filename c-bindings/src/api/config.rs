@@ -528,10 +528,13 @@ mod test {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::api::{
-        free_cstring, free_operation_status,
-        keys::{KeyType, add_key, generate_key, remove_key},
-        peer::get_peer_id,
+    use crate::{
+        api::{
+            free_cstring,
+            keys::{KeyType, add_key, generate_key, remove_key},
+            peer::get_peer_id,
+        },
+        errors::free_operation_status,
     };
 
     const NO_INSERT: MergeConfigFlags = MergeConfigFlags {

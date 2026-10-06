@@ -20,6 +20,15 @@ type LogosBlockchainOverwatch = Overwatch<RuntimeServiceId>;
 /// `cbindgen` emits it as an opaque type: C code cannot copy it, build one of
 /// its own or reach into its fields, all of which would leave it holding
 /// pointers the node frees on shutdown.
+///
+/// The pointer is owned by the caller until it is passed to `shutdown_node`.
+/// These rules apply to every function that takes one:
+///
+/// - It may be used from several threads at the same time.
+/// - No call may be in progress on any thread when `shutdown_node` is called,
+///   and none may be made afterwards: the handle is freed there.
+/// - It must not be used from inside a subscription callback. Such calls fail
+///   with a `RuntimeError` status.
 pub struct LogosBlockchainNode {
     // Declared before `runtime` so that it is dropped first: the services stop
     // while the runtime they run on is still alive.

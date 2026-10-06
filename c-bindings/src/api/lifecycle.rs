@@ -43,17 +43,8 @@ pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlo
 /// An [`FfiInitializedLogosBlockchainNodeResult`] containing either a pointer
 /// to the initialized [`LogosBlockchainNode`] or an error code.
 ///
-/// # The node handle
-///
-/// The returned pointer is an opaque handle, owned by the caller until it is
-/// passed to [`shutdown_node`]. The rules for it apply to every function that
-/// takes a [`LogosBlockchainNode`]:
-///
-/// - It may be used from several threads at the same time.
-/// - No call may be in progress on any thread when [`shutdown_node`] is called,
-///   and none may be made afterwards: the handle is freed there.
-/// - It must not be used from inside a subscription callback. Such calls fail
-///   with [`OperationStatusCode::RuntimeError`].
+/// The returned pointer is an opaque handle: see [`LogosBlockchainNode`] for
+/// the rules on using it.
 ///
 /// # Safety
 ///
@@ -234,11 +225,13 @@ unsafe fn get_deployment_config(
 ///
 /// # Returns
 ///
-/// An [`OperationStatus`] indicating success or failure.
-///
-/// Calling this from inside a subscription callback fails with
-/// [`OperationStatusCode::RuntimeError`]. In that one case the node keeps
-/// running and `node` stays valid.
+/// An [`OperationStatus`]:
+/// - [`Ok`](OperationStatusCode::Ok) once every service has stopped and the
+///   node is freed.
+/// - [`ShutdownError`](OperationStatusCode::ShutdownError) when the shutdown
+///   itself fails. The node is freed all the same.
+/// - [`RuntimeError`](OperationStatusCode::RuntimeError) when called from
+///   inside a subscription callback. Nothing is done: the node keeps running.
 ///
 /// # Safety
 ///
@@ -246,15 +239,13 @@ unsafe fn get_deployment_config(
 /// - `node` is a valid pointer to a [`LogosBlockchainNode`] instance
 /// - The [`LogosBlockchainNode`] instance was created by this library
 /// - No other call using `node` is in progress on any thread
-/// - The pointer will not be used after this function returns. The node is
-///   consumed and freed even when the shutdown itself reports an error; the one
-///   exception is the callback case above.
+/// - The pointer will not be used after this function returns, unless the call
+///   was refused with [`RuntimeError`](OperationStatusCode::RuntimeError): only
+///   then is the node left untouched and the pointer still valid.
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn shutdown_node(node: *mut LogosBlockchainNode) -> OperationStatus {
     return_error_if_null_pointer!(node);
-    // Checked before taking ownership: on this error the node keeps running
-    // and the pointer stays valid.
     unwrap_or_return_error!(ensure_blocking_allowed());
     let node = unsafe { Box::from_raw(node) };
     node.shutdown()
@@ -269,9 +260,9 @@ mod test {
     use serial_test::serial;
     use tempfile::TempDir;
 
-    use crate::api::{
-        free_operation_status,
-        lifecycle::{shutdown_node, start_lb_node},
+    use crate::{
+        api::lifecycle::{shutdown_node, start_lb_node},
+        errors::free_operation_status,
     };
 
     static REPOSITORY_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
