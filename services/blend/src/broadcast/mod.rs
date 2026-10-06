@@ -311,6 +311,9 @@ async fn handle_inbound_message<NodeId, Dispatcher, RuntimeServiceId>(
         ServiceMessage::GetPendingTransactions { reply } => {
             drop(reply.send(Vec::new()));
         }
+        ServiceMessage::GetCoreStatus { reply } => {
+            let _ = reply.send(None);
+        }
     }
 }
 

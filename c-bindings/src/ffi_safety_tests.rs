@@ -46,7 +46,8 @@ use crate::{
     LogosBlockchainNode, OperationStatus, OperationStatusCode,
     api::{
         blend::{
-            blend_info, blend_join_as_core_node, blend_requirements, blend_rewards, blend_withdraw,
+            blend_info, blend_join_as_core_node, blend_requirements, blend_rewards, blend_status,
+            blend_withdraw,
         },
         chain::get_chain_id,
         channel::get_channel_state,
@@ -257,6 +258,7 @@ mod no_node {
             assert_eq!(code(blend_requirements(node)), np);
             assert_eq!(code(blend_withdraw(node)), np);
             assert_eq!(code(blend_rewards(node)), np);
+            assert_eq!(code(blend_status(node)), np);
             assert_eq!(code(shutdown_node(ptr::null_mut())), np);
 
             assert_eq!(code(start_lb_node(null_s, null_s)), np);

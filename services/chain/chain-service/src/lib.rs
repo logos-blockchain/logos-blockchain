@@ -215,6 +215,12 @@ pub enum Query {
         declaration_id: DeclarationId,
         reply_channel: oneshot::Sender<Option<BlendRewards>>,
     },
+    /// Returns the Blend status at the tip, with the declaration
+    /// `declaration_id` if there is one
+    GetBlendStatus {
+        declaration_id: Option<DeclarationId>,
+        reply_channel: oneshot::Sender<Option<BlendStatus>>,
+    },
     GetEpochState {
         slot: Slot,
         reply_channel: oneshot::Sender<Result<EpochState, Error>>,
@@ -272,6 +278,24 @@ pub struct CryptarchiaInfo {
 pub struct BlendRewards {
     /// The declaration's `zk_id`. Rewards are minted to it.
     pub zk_id: ZkPublicKey,
+    /// `None` while no epoch is being paid out.
+    pub estimate: Option<RewardEstimate>,
+}
+
+/// The Blend status at the tip.
+#[derive(Debug, Clone)]
+pub struct BlendStatus {
+    pub epoch: Epoch,
+    /// `None` if the declaration is not in the ledger.
+    pub declaration_status: Option<BlendDeclarationStatus>,
+}
+
+/// A declaration's Blend status at the tip.
+#[derive(Debug, Clone)]
+pub struct BlendDeclarationStatus {
+    pub declaration: Declaration,
+    /// Whether the declaration is in the current epoch's Blend snapshot.
+    pub is_in_snapshot: bool,
     /// `None` while no epoch is being paid out.
     pub estimate: Option<RewardEstimate>,
 }

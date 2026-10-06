@@ -21,7 +21,7 @@ use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
 use crate::{
-    AppliedBlock, BlendRewards, ChainServiceInfo, ConsensusMsg, CryptarchiaInfo,
+    AppliedBlock, BlendRewards, BlendStatus, ChainServiceInfo, ConsensusMsg, CryptarchiaInfo,
     EpochStateQueryResult, LibUpdate, ProcessedBlockEvent, Query,
 };
 
@@ -353,6 +353,36 @@ where
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetBlendRewards"))
+        })
+    }
+
+    /// Fetch the Blend status at the tip, with the declaration `declaration_id`
+    /// if there is one
+    ///
+    /// # Returns
+    ///
+    /// The [`BlendStatus`], or `None` if there's no ledger state for the tip.
+    pub async fn get_blend_status(
+        &self,
+        declaration_id: Option<DeclarationId>,
+    ) -> Result<Option<BlendStatus>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(
+                Query::GetBlendStatus {
+                    declaration_id,
+                    reply_channel,
+                }
+                .into(),
+            )
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetBlendStatus"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetBlendStatus"))
         })
     }
 

@@ -31,6 +31,31 @@ pub struct CoreInfo<NodeId> {
     pub old_epoch_peers: Option<Vec<NodeId>>,
 }
 
+/// A core node's Blend status.
+#[derive(Debug, Clone, Copy)]
+pub struct CoreStatus {
+    pub session_peers: SessionPeers,
+    /// Blending tokens collected in the current epoch.
+    pub tokens_collected: usize,
+}
+
+/// The negotiated peers for the current epoch.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionPeers {
+    pub total: usize,
+    pub healthy: usize,
+}
+
+impl<NodeId> From<&CoreInfo<NodeId>> for SessionPeers {
+    fn from(core_info: &CoreInfo<NodeId>) -> Self {
+        let peers = &core_info.current_epoch_peers;
+        Self {
+            total: peers.len(),
+            healthy: peers.iter().filter(|(_, healthy)| *healthy).count(),
+        }
+    }
+}
+
 pub enum ProxyServiceMessage<InnerMessage> {
     Inner(InnerMessage),
     JoinAsCore {
@@ -65,6 +90,11 @@ pub enum ServiceMessage<NodeId> {
     GetPendingTransactions {
         reply: oneshot::Sender<Vec<Vec<u8>>>,
     },
+    /// Request this node's core status. `None` when the node is not a core
+    /// node.
+    GetCoreStatus {
+        reply: oneshot::Sender<Option<CoreStatus>>,
+    },
 }
 
 impl<NodeId> Debug for ServiceMessage<NodeId> {
@@ -75,6 +105,7 @@ impl<NodeId> Debug for ServiceMessage<NodeId> {
             Self::GetPendingTransactions { .. } => {
                 f.debug_struct("GetPendingTransactions").finish()
             }
+            Self::GetCoreStatus { .. } => f.debug_struct("GetCoreStatus").finish(),
         }
     }
 }

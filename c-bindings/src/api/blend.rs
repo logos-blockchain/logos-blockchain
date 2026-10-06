@@ -1,7 +1,7 @@
 use std::ffi::{CString, c_char};
 
 use lb_api_service::http::blend;
-use lb_blend_service::message::NetworkInfo;
+use lb_blend_service::message::{CoreStatus, NetworkInfo};
 use lb_c_macros::panic_to_error;
 use lb_chain_service::Epoch;
 use lb_core::{
@@ -14,15 +14,15 @@ use lb_node::{
     RuntimeServiceId, config::deployment::era::ruleset::EraRuleset,
     generic_services::blend::BlendService,
 };
-use lb_sdp_service::{SdpMessage, SdpSubmission};
+use lb_sdp_service::{SdpMessage, SdpStatus, SdpSubmission, status};
 use multiaddr::PeerId;
 use overwatch::overwatch::OverwatchHandle;
 
 use crate::{
     LogosBlockchainNode,
     api::{
-        chain::api::ChainFfiApi, cryptarchia::TxHash, sdp::make_sdp_request,
-        time::get_time_info_sync, types::value::Value,
+        chain::api::ChainFfiApi, common::overwatch::ensure_ready, cryptarchia::TxHash,
+        sdp::make_sdp_request, time::get_time_info_sync, types::value::Value,
     },
     errors::{OperationStatus, OperationStatusCode},
     option::FfiOption,
@@ -306,8 +306,8 @@ pub struct BlendWithdrawal {
 async fn post_withdraw(
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
 ) -> StatusResult<SdpSubmission> {
-    let participation = make_sdp_request(overwatch_handle, |reply_channel| {
-        SdpMessage::GetParticipation { reply_channel }
+    let SdpStatus { participation, .. } = make_sdp_request(overwatch_handle, |reply_channel| {
+        SdpMessage::GetStatus { reply_channel }
     })
     .await?;
 
@@ -433,6 +433,8 @@ pub struct BlendRewardEstimate {
     pub pool: Value,
     /// The activity epoch's network.
     pub network: BlendNetwork,
+    /// Whether the node was in the activity epoch, and so can earn from it.
+    pub in_activity_epoch: bool,
     /// Whether the node submitted its activity proof.
     pub did_submit_proof: bool,
     /// Whether the node earns the double reward.
@@ -447,6 +449,7 @@ impl From<ledger_blend::RewardEstimate> for BlendRewardEstimate {
             activity_epoch: estimate.activity_epoch.into(),
             pool: estimate.pool,
             network: estimate.network.into(),
+            in_activity_epoch: estimate.in_activity_epoch,
             did_submit_proof: estimate.did_submit_proof,
             is_premium: estimate.is_premium,
             estimated_reward: estimate.estimated_reward,
@@ -490,8 +493,8 @@ fn blend_rewards_sync(node: &LogosBlockchainNode) -> StatusResult<BlendRewards> 
     node.get_runtime_handle()?.block_on(async {
         let chain_ffi_api = ChainFfiApi::from_overwatch_handle(overwatch_handle).await?;
         chain_ffi_api.ensure_online().await?;
-        let participation = make_sdp_request(overwatch_handle, |reply_channel| {
-            SdpMessage::GetParticipation { reply_channel }
+        let SdpStatus { participation, .. } = make_sdp_request(overwatch_handle, |reply_channel| {
+            SdpMessage::GetStatus { reply_channel }
         })
         .await?;
         // A withdrawn declaration still earns until its `withdraw_at`.
@@ -539,4 +542,251 @@ pub unsafe extern "C" fn blend_rewards(node: *const LogosBlockchainNode) -> FfiB
 
     let node = unsafe { &*node };
     blend_rewards_sync(node).into()
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub enum DeclarationState {
+    #[default]
+    NotDeclared,
+    Pending,
+    Activating,
+    Active,
+    Inactive,
+    Withdrawn,
+}
+
+impl From<status::DeclarationState> for DeclarationState {
+    fn from(state: status::DeclarationState) -> Self {
+        match state {
+            status::DeclarationState::NotDeclared => Self::NotDeclared,
+            status::DeclarationState::Pending => Self::Pending,
+            status::DeclarationState::Activating => Self::Activating,
+            status::DeclarationState::Active => Self::Active,
+            status::DeclarationState::Inactive => Self::Inactive,
+            status::DeclarationState::Withdrawn => Self::Withdrawn,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub enum ActivityState {
+    #[default]
+    Pending,
+    Accepted,
+    Failed,
+    NotRequired,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub enum ActivityReason {
+    #[default]
+    NoProof,
+    DeclarationNotFound,
+    TxBuildFailed,
+    PostFailed,
+    FirstEpoch,
+    NetworkBelowMinimum,
+    NotInActivityEpoch,
+}
+
+impl From<status::FailureReason> for ActivityReason {
+    fn from(reason: status::FailureReason) -> Self {
+        match reason {
+            status::FailureReason::NoProof => Self::NoProof,
+            status::FailureReason::DeclarationNotFound => Self::DeclarationNotFound,
+            status::FailureReason::TxBuildFailed => Self::TxBuildFailed,
+            status::FailureReason::PostFailed => Self::PostFailed,
+        }
+    }
+}
+
+impl From<status::NotRequiredReason> for ActivityReason {
+    fn from(reason: status::NotRequiredReason) -> Self {
+        match reason {
+            status::NotRequiredReason::FirstEpoch => Self::FirstEpoch,
+            status::NotRequiredReason::NetworkBelowMinimum => Self::NetworkBelowMinimum,
+            status::NotRequiredReason::NotInActivityEpoch => Self::NotInActivityEpoch,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct DeclarationStatus {
+    pub id: DeclarationId,
+    /// As 32 bytes.
+    pub provider_id: [u8; KEY_SIZE],
+    /// As 32 little-endian bytes.
+    pub zk_id: [u8; KEY_SIZE],
+    /// As 32 little-endian bytes.
+    pub locked_note_id: [u8; KEY_SIZE],
+    pub created_epoch: u32,
+    pub active_from_epoch: u32,
+    pub withdraw_at: FfiOption<u32>,
+}
+
+impl From<status::DeclarationStatus> for DeclarationStatus {
+    fn from(status: status::DeclarationStatus) -> Self {
+        let declaration = status.declaration;
+        Self {
+            id: status.id.into(),
+            provider_id: *declaration.provider_id.as_ref(),
+            zk_id: fr_to_bytes(declaration.zk_id.as_fr()),
+            locked_note_id: fr_to_bytes(declaration.service_note_id.as_fr()),
+            created_epoch: declaration.created.into(),
+            active_from_epoch: status.active_from_epoch.into(),
+            withdraw_at: declaration.withdraw_at.map(Into::into).into(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct ActivityStatus {
+    pub result: ActivityState,
+    /// Set when `result` is `Failed` or `NotRequired`.
+    pub reason: FfiOption<ActivityReason>,
+    pub last_active_epoch: u32,
+}
+
+impl From<status::ActivityStatus> for ActivityStatus {
+    fn from(status: status::ActivityStatus) -> Self {
+        let (result, reason) = match status.result {
+            status::ActivityResult::Pending => (ActivityState::Pending, None),
+            status::ActivityResult::Accepted => (ActivityState::Accepted, None),
+            status::ActivityResult::Failed(reason) => (ActivityState::Failed, Some(reason.into())),
+            status::ActivityResult::NotRequired(reason) => {
+                (ActivityState::NotRequired, Some(reason.into()))
+            }
+        };
+        Self {
+            result,
+            reason: reason.into(),
+            last_active_epoch: status.last_active_epoch.into(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct SessionPeers {
+    pub total: usize,
+    pub healthy: usize,
+}
+
+impl From<lb_blend_service::message::SessionPeers> for SessionPeers {
+    fn from(peers: lb_blend_service::message::SessionPeers) -> Self {
+        Self {
+            total: peers.total,
+            healthy: peers.healthy,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct BlendStatus {
+    pub is_core: bool,
+    pub state: DeclarationState,
+    pub current_epoch: u32,
+    pub declaration: FfiOption<DeclarationStatus>,
+    pub activity: FfiOption<ActivityStatus>,
+    /// Blending tokens collected this epoch. `None` when not a core node.
+    pub tokens_collected: FfiOption<usize>,
+    pub session_peers: FfiOption<SessionPeers>,
+}
+
+impl BlendStatus {
+    fn new(status: status::BlendStatus, core_status: Option<CoreStatus>) -> Self {
+        Self {
+            is_core: core_status.is_some(),
+            state: status.declaration_state.into(),
+            current_epoch: status.epoch.into(),
+            declaration: status.declaration.map(Into::into).into(),
+            activity: status.activity.map(Into::into).into(),
+            tokens_collected: core_status
+                .map(|core_status| core_status.tokens_collected)
+                .into(),
+            session_peers: core_status
+                .map(|core_status| core_status.session_peers.into())
+                .into(),
+        }
+    }
+}
+
+/// Gets this node's Blend status: core or edge, its declaration and how its
+/// activity for the epoch being paid out stands.
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+///
+/// # Returns
+///
+/// The status on success, or an [`OperationStatus`] error on failure. Fails
+/// right away if the node is not `Online`.
+fn blend_status_sync(node: &LogosBlockchainNode) -> StatusResult<BlendStatus> {
+    let overwatch_handle = node.get_overwatch_handle();
+    node.get_runtime_handle()?.block_on(async {
+        ensure_ready::<BlendService<RuntimeServiceId>>(overwatch_handle).await?;
+
+        let chain_ffi_api = ChainFfiApi::from_overwatch_handle(overwatch_handle).await?;
+        chain_ffi_api.ensure_online().await?;
+
+        let status = make_sdp_request(overwatch_handle, |reply_channel| {
+            SdpMessage::GetBlendStatus { reply_channel }
+        })
+        .await?
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::ServiceError,
+                format!("Failed to get the Blend status: {error}"),
+            )
+        })?;
+
+        let core_status = blend::blend_core_status::<
+            BlendService<RuntimeServiceId>,
+            RuntimeServiceId,
+        >(overwatch_handle)
+        .await
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::RelayError,
+                format!("Failed to query the Blend service: {error}"),
+            )
+        })?;
+
+        Ok(BlendStatus::new(status, core_status))
+    })
+}
+
+pub type FfiBlendStatusResult = FfiStatusResult<BlendStatus>;
+
+/// Gets this node's Blend status: core or edge, its declaration and how its
+/// activity for the epoch being paid out stands.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
+///
+/// # Returns
+///
+/// A [`FfiBlendStatusResult`] containing the [`BlendStatus`] on success, or an
+/// [`OperationStatus`] error on failure.
+/// Fails right away if the node is not `Online`.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+#[must_use]
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blend_status(node: *const LogosBlockchainNode) -> FfiBlendStatusResult {
+    return_error_if_null_pointer!(node);
+
+    let node = unsafe { &*node };
+    blend_status_sync(node).into()
 }
