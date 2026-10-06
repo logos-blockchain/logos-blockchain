@@ -5108,6 +5108,7 @@ dependencies = [
  "thiserror 2.0.21",
  "time",
  "tokio",
+ "tokio-stream",
  "tracing",
 ]
 
@@ -5281,8 +5282,8 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
- "rand 0.8.6",
  "serde",
+ "tempfile",
  "tokio",
  "tonic",
  "tracing",
@@ -5448,6 +5449,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-stream",
  "tracing",
 ]
 

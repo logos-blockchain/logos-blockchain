@@ -72,7 +72,7 @@ use crate::{
             tokio_console::profile::TokioConsoleProfile,
             zone::runner::{
                 Event, IndexedSignature, InscriptionId, PreparedChannelConfig, SequencerCheckpoint,
-                SequencerClient, TxStatusUpdate,
+                SequencerClient,
             },
         },
         utils::{make_builder, shared_host_bin_path},
@@ -205,7 +205,6 @@ pub struct ZoneSequencerRuntime {
     checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
     channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
     turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
-    tx_status_rx: Option<tokio::sync::broadcast::Receiver<TxStatusUpdate>>,
     discarded_payloads: Option<ZoneDiscardedPayloads>,
 }
 
@@ -257,7 +256,6 @@ pub struct ZoneState {
     prepared_configs: HashMap<String, PreparedChannelConfig>,
     prepared_config_signatures: HashMap<String, IndexedSignatures>,
     sequencer_startups: HashMap<String, ZoneSequencerStartup>,
-    observed_mempool_pending: HashMap<String, HashSet<InscriptionId>>,
     sorted_total_payloads: Option<usize>,
     sorted_expected_by_sequencer: Option<HashMap<String, Vec<Inscription>>>,
     expected_custom_payloads: Vec<Inscription>,
@@ -521,6 +519,14 @@ impl ZoneState {
             .collect()
     }
 
+    pub fn published_message(&self, alias: &str) -> Result<&ZonePublishedMessage, StepError> {
+        self.published_messages
+            .get(alias)
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("Zone message alias '{alias}' is not tracked"),
+            })
+    }
+
     pub fn message_tx_hashes_for_aliases(
         &self,
         aliases: &[String],
@@ -538,28 +544,6 @@ impl ZoneState {
                     })
             })
             .collect()
-    }
-
-    pub fn record_mempool_pending(
-        &mut self,
-        sequencer_alias: impl Into<String>,
-        tx_hashes: impl IntoIterator<Item = InscriptionId>,
-    ) {
-        self.observed_mempool_pending
-            .entry(sequencer_alias.into())
-            .or_default()
-            .extend(tx_hashes);
-    }
-
-    #[must_use]
-    pub fn has_observed_mempool_pending(
-        &self,
-        sequencer_alias: &str,
-        tx_hash: &InscriptionId,
-    ) -> bool {
-        self.observed_mempool_pending
-            .get(sequencer_alias)
-            .is_some_and(|observed| observed.contains(tx_hash))
     }
 
     pub fn published_message_payloads(&self) -> Result<Vec<Inscription>, StepError> {
@@ -667,24 +651,6 @@ impl ZoneState {
             .map(|runtime| runtime.checkpoint_rx.clone())
     }
 
-    pub fn take_sequencer_tx_status_rx(
-        &mut self,
-        sequencer_alias: &str,
-    ) -> Result<tokio::sync::broadcast::Receiver<TxStatusUpdate>, StepError> {
-        self.runtimes
-            .get_mut(sequencer_alias)
-            .ok_or_else(|| StepError::LogicalError {
-                message: format!("Zone sequencer '{sequencer_alias}' is not running"),
-            })?
-            .tx_status_rx
-            .take()
-            .ok_or_else(|| StepError::LogicalError {
-                message: format!(
-                    "Zone sequencer '{sequencer_alias}' tx-status receiver was already consumed"
-                ),
-            })
-    }
-
     pub fn resolve_checkpoint(
         &self,
         alias: impl AsRef<str>,
@@ -713,7 +679,6 @@ impl ZoneState {
         checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
         channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
         turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
-        tx_status_rx: tokio::sync::broadcast::Receiver<TxStatusUpdate>,
         discarded_payloads: Option<ZoneDiscardedPayloads>,
         view_violation: ZoneViewViolation,
     ) {
@@ -734,7 +699,6 @@ impl ZoneState {
                 checkpoint_rx,
                 channel_view_rx,
                 turn_to_write_rx,
-                tx_status_rx: Some(tx_status_rx),
                 discarded_payloads,
             },
         );

@@ -35,7 +35,6 @@ opentelemetry-otlp = { features = [
 ], workspace = true }
 opentelemetry-semantic-conventions = { workspace = true }
 opentelemetry_sdk = { features = ["logs", "rt-tokio"], workspace = true }
-rand = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
@@ -46,3 +45,6 @@ tracing-loki = { features = ["compat-0-2-1"], workspace = true }
 tracing-opentelemetry = { features = ["metrics"], workspace = true }
 tracing-subscriber = { features = ["env-filter", "std"], workspace = true }
 url = { features = ["serde"], workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -58,8 +58,8 @@ use tracing::warn;
 use super::runner::{
     self, ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, FundingConfig,
     InscriptionId, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
-    SequencerCheckpoint, SequencerClient, SequencerConfig, TurnNotification, TxStatus,
-    TxStatusUpdate, WithdrawArg, WithdrawInputs,
+    SequencerCheckpoint, SequencerClient, SequencerConfig, TurnNotification, WithdrawArg,
+    WithdrawInputs,
 };
 
 /// Inscriptions in the just-finalized txs — the permanent, settled part of the
@@ -251,7 +251,6 @@ pub struct PolicyRuntime {
     pub ready_rx: tokio::sync::watch::Receiver<bool>,
     pub channel_view_rx: tokio::sync::watch::Receiver<SequencerChannelView>,
     pub turn_to_write_rx: tokio::sync::watch::Receiver<TurnNotification>,
-    pub tx_status_rx: tokio::sync::broadcast::Receiver<TxStatusUpdate>,
 }
 
 fn to_policy_runtime(rt: runner::Runtime) -> PolicyRuntime {
@@ -264,7 +263,6 @@ fn to_policy_runtime(rt: runner::Runtime) -> PolicyRuntime {
         ready_rx: rt.ready_rx,
         channel_view_rx: rt.channel_view_rx,
         turn_to_write_rx: rt.turn_to_write_rx,
-        tx_status_rx: rt.tx_status_rx,
     }
 }
 
@@ -286,10 +284,9 @@ pub(super) use observation::{
     sequencer_config_with_pending_submit_depth, wait_for_channel_transfer_input_count,
     wait_for_channel_view, wait_for_channel_wallet_counts, wait_for_channel_wallet_note,
     wait_for_deposit, wait_for_exact_indexed_payload_count,
-    wait_for_finalized_deposit_via_sequencer_and_collect_mempool_pending,
-    wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pending, wait_for_lib_advance,
-    wait_for_on_chain_statuses_and_collect_mempool_pending, wait_for_transactions_finalized,
-    wait_for_turn_to_write, wait_for_tx_status_lifecycle, wait_for_withdraw,
+    wait_for_finalized_deposit_via_sequencer, wait_for_finalized_withdraw_via_sequencer,
+    wait_for_lib_advance, wait_for_transactions_finalized, wait_for_turn_to_write,
+    wait_for_withdraw,
 };
 pub(super) use policies::{
     start_balance_aware_policy, start_republish_lineage_policy, start_sequencer_event_loop,

@@ -38,15 +38,15 @@ use super::{
     slot_clock::SlotClock,
     state::{BlockChannelTx, ParentTaken, TxState},
     tx_builder::{
-        assemble_channel_config_tx, build_and_fund_config, build_atomic_bundle_ops_proofs,
-        create_channel_config_tx, create_inscribe_tx, find_own_key_index, fund_ops,
-        prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
+        assemble_channel_config_tx, build_and_fund_config, create_channel_config_tx,
+        create_inscribe_tx, find_own_key_index, fund_ops, prepare_tx as build_prepare_tx,
+        sign_own_tx, sign_tx as build_sign_tx,
     },
     types::{
         AtomicWithdrawInfo, ChannelWalletView, Error, Event, FundingConfig, InscriptionInfo,
         PendingTx, PinDepositInfo, PreparedChannelConfig, PublishResult, SequencerChannelView,
-        SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
-        WithdrawArg, WithdrawInfo, WithdrawInputs,
+        SequencerCheckpoint, SequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo,
+        WithdrawInputs,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -96,6 +96,12 @@ pub struct ZoneSequencer<Node> {
     // completes.
     pub(super) connected: bool,
 
+    // Absolute end of the reconnect back-off currently running, if any. A
+    // field rather than a local in `wait_reconnect_delay` so a caller that
+    // drops `next_event()` mid-wait (its own `select!` losing the race)
+    // resumes the same deadline instead of restarting it.
+    pub(super) reconnect_until: Option<tokio::time::Instant>,
+
     // Resubmission
     pub(super) resubmit_interval: tokio::time::Interval,
 
@@ -144,7 +150,6 @@ pub struct ZoneSequencer<Node> {
     pub(super) channel_view_tx: watch::Sender<SequencerChannelView>,
     pub(super) turn_to_write_tx: watch::Sender<TurnNotification>,
     pub(super) checkpoint_tx: watch::Sender<Option<SequencerCheckpoint>>,
-    pub(super) tx_status_tx: broadcast::Sender<TxStatusUpdate>,
 
     // Request channel for actor-routed commands from cheap-to-clone
     // `SequencerClient`s. `request_tx` is retained so `client()` can vend new
@@ -268,6 +273,7 @@ where
                 lib_slot,
                 channel_notes,
                 finalized_config,
+                funding,
             } = cp;
             let finalized_msg =
                 restored_pending_channel_tip(&pending_txs, channel_id).unwrap_or(last_msg_id);
@@ -279,7 +285,7 @@ where
                     warn!(target: TARGET, "Dropping checkpointed tx {hash:?}: {taken}");
                 }
             }
-            tx_state.prune_local_tx_tracking(config.max_local_tx_tracking);
+            tx_state.restore_fundings(funding, lib_slot);
             (Some(tx_state), lib_slot, last_msg_id, false)
         } else {
             info!(target: TARGET, "Starting fresh (no checkpoint)");
@@ -301,7 +307,6 @@ where
             .as_ref()
             .map(|s| build_checkpoint(s, last_msg_id, lib_slot));
         let (checkpoint_tx, _) = watch::channel(initial_checkpoint);
-        let (tx_status_tx, _) = broadcast::channel(256);
         let (request_tx, request_rx) = mpsc::unbounded_channel();
 
         Self {
@@ -319,6 +324,7 @@ where
             blocks_stream: None,
             pending_block_event: None,
             connected: false,
+            reconnect_until: None,
             resubmit_interval,
             in_flight: FuturesUnordered::new(),
             resubmit_active: Arc::new(AtomicBool::new(false)),
@@ -333,7 +339,6 @@ where
             channel_view_tx,
             turn_to_write_tx,
             checkpoint_tx,
-            tx_status_tx,
             request_tx,
             request_rx,
         }
@@ -371,7 +376,6 @@ where
             self.channel_view_tx.clone(),
             self.turn_to_write_tx.clone(),
             self.checkpoint_tx.clone(),
-            self.tx_status_tx.clone(),
         )
     }
 
@@ -384,6 +388,15 @@ where
     #[must_use]
     pub fn is_ready(&self) -> bool {
         *self.ready_tx.borrow()
+    }
+
+    /// Whether the live block stream is open and the cached channel state
+    /// reflects the latest observed block. `false` while (re)connecting, when
+    /// every publish-type operation fails fast with [`Error::Unavailable`].
+    /// Sync snapshot read.
+    #[must_use]
+    pub const fn is_connected(&self) -> bool {
+        self.connected
     }
 
     /// Current persistence checkpoint, if one has been produced.
@@ -459,17 +472,6 @@ where
         rx
     }
 
-    /// Subscribe to tx-status changes.
-    ///
-    /// These updates are broadcast as soon as the sequencer classifies a tx.
-    /// When a block causes `OnChain`, `Orphaned`, or `Finalized`, the matching
-    /// [`super::Event::BlocksProcessed`] is queued separately and may be
-    /// observed later by consumers listening to both streams.
-    #[must_use]
-    pub fn subscribe_tx_status(&self) -> broadcast::Receiver<TxStatusUpdate> {
-        self.tx_status_tx.subscribe()
-    }
-
     /// Subscribe to the broadcast channel of events.
     ///
     /// The broadcast carries exactly the events [`Self::next_event`] returns,
@@ -492,11 +494,22 @@ where
     /// completions, reconnect retries), so the caller's loop body always
     /// receives a real [`Event`] — no `Option` unwrapping required.
     ///
-    /// # Block-event cancellation safety
+    /// # Cancellation safety
     ///
-    /// Cancelling this future does not lose or partially apply a block event.
-    /// A pulled block is retained until its event is returned, and all fallible
-    /// node reads complete before the corresponding state mutation.
+    /// Safe to drop at any point, which the documented drive pattern (this
+    /// future as one arm of the caller's `select!`) relies on:
+    ///
+    /// - A block event is never lost or partially applied. A pulled block is
+    ///   retained until its event is returned, and all fallible node reads
+    ///   complete before the corresponding state mutation.
+    /// - A reconnect resumes rather than restarts. Every connect step stores
+    ///   its result on `self` before the next await, and the reconnect back-off
+    ///   keeps its absolute deadline across cancellations.
+    /// - A backfill batch that is dropped mid-fetch is fetched again from the
+    ///   same range.
+    ///
+    /// The cost of a cancellation is therefore at most one in-flight node
+    /// request, which is reissued on the next call.
     ///
     /// A [`SequencerClient`](super::SequencerClient) command selected from the
     /// request queue may instead fail with [`Error::Unavailable`] if this
@@ -558,6 +571,7 @@ where
                 None
             }
             _ = self.resubmit_interval.tick(), if self.current_tip.is_some() => {
+                self.refund_stale_pending().await;
                 self.resubmit_pending();
                 None
             }
@@ -568,10 +582,8 @@ where
             Some(results) = self.in_flight.next() => {
                 for (tx_hash, success) in results {
                     self.posting.remove(&tx_hash);
-                    if success
-                        && let Some(state) = self.state.as_mut()
-                        && state.mark_pending_inscription_posted(&tx_hash) {
-                            self.queue_tx_status(tx_hash, TxStatus::PendingMempool);
+                    if success && let Some(state) = self.state.as_mut() {
+                        state.mark_pending_inscription_posted(&tx_hash);
                     }
                 }
                 self.buffered_events.pop_front().map(|event| self.emit_now(event))
@@ -693,15 +705,23 @@ where
     /// [`Self::ensure_connected`] succeeds, since `request_rx` is otherwise
     /// only drained from `step`'s `select!` after connection.
     ///
-    /// The sleep is pinned so the backoff keeps elapsing across iterations: any
-    /// number of requests can be serviced during the wait without resetting or
-    /// short-circuiting the delay.
+    /// The deadline is absolute and stored on `self`, so the backoff keeps
+    /// elapsing across iterations and across cancellations: any number of
+    /// requests can be serviced during the wait, and a caller that drops
+    /// [`Self::next_event`] while this is sleeping resumes the same deadline
+    /// on its next call instead of starting a fresh delay.
     pub(super) async fn wait_reconnect_delay(&mut self) {
-        let sleep = tokio::time::sleep(self.config.reconnect_delay);
+        let until = *self
+            .reconnect_until
+            .get_or_insert_with(|| tokio::time::Instant::now() + self.config.reconnect_delay);
+        let sleep = tokio::time::sleep_until(until);
         tokio::pin!(sleep);
         loop {
             tokio::select! {
-                () = &mut sleep => break,
+                () = &mut sleep => {
+                    self.reconnect_until = None;
+                    return;
+                }
                 Some(request) = self.request_rx.recv() => self.handle_request(request).await,
             }
         }
@@ -743,7 +763,7 @@ where
         self.ensure_fundable()?;
 
         let parent = self.compute_publish_parent();
-        let (signed_tx, new_msg_id) = create_inscribe_tx(
+        let (signed_tx, new_msg_id, pre_fund) = create_inscribe_tx(
             &self.node,
             &self.config.funding,
             self.channel_id,
@@ -773,8 +793,8 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         state.submit_inscription(signed_tx.clone(), parent, new_msg_id, data)?;
+        state.stamp_funding(&id, self.lib_slot, Some(pre_fund));
         self.last_msg_id = new_msg_id;
-        self.queue_tx_status(id, TxStatus::AcceptedLocally);
 
         if self.can_publish_inscription_now() {
             self.queue_publish_post(id, signed_tx);
@@ -808,7 +828,6 @@ where
     /// computation, status queueing and checkpointing. Scoped to single-signer
     /// (centralized) channels — only the sequencer's own signature proves the
     /// transfer and withdraw ops.
-    #[expect(clippy::too_many_lines, reason = "single bundle assembly pipeline")]
     pub(super) async fn do_publish_atomic_withdraw(
         &mut self,
         inscribe: Inscription,
@@ -869,15 +888,9 @@ where
             Op::ChannelWithdraw(withdraw_op.clone()),
         ];
 
-        let (tx, transfer_proof) = fund_ops(&self.node, &self.config.funding, ops).await?;
-        let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
-        let ops_proofs =
-            build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
-        let signed_tx = SignedOps::from_parts(tx, ops_proofs).map_err(|error| {
-            Error::Network(format!(
-                "failed to build signed atomic withdraw tx: {error:?}"
-            ))
-        })?;
+        let (tx, transfer_proof, pre_fund) =
+            fund_ops(&self.node, &self.config.funding, ops).await?;
+        let signed_tx = sign_own_tx(tx, transfer_proof, &self.signing_key, Some(own_key_index))?;
 
         let tx_hash = signed_tx.hash();
         let withdraw_infos = vec![WithdrawInfo {
@@ -908,8 +921,8 @@ where
             withdraw_infos.clone(),
             outputs.clone(),
         )?;
+        state.stamp_funding(&tx_hash, self.lib_slot, Some(pre_fund));
         self.last_msg_id = msg_id;
-        self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
         if self.can_publish_inscription_now() {
             self.queue_publish_post(tx_hash, signed_tx);
@@ -1054,13 +1067,9 @@ where
             Op::ChannelTransfer(transfer_op),
         ];
 
-        let (tx, transfer_proof) = fund_ops(&self.node, &self.config.funding, ops).await?;
-        let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
-        let ops_proofs =
-            build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
-        let signed_tx = SignedOps::from_parts(tx, ops_proofs).map_err(|error| {
-            Error::Network(format!("failed to build signed atomic fund tx: {error:?}"))
-        })?;
+        let (tx, transfer_proof, pre_fund) =
+            fund_ops(&self.node, &self.config.funding, ops).await?;
+        let signed_tx = sign_own_tx(tx, transfer_proof, &self.signing_key, Some(own_key_index))?;
 
         let tx_hash = signed_tx.hash();
 
@@ -1082,8 +1091,8 @@ where
             inscribe.clone(),
             consumed_inputs.clone(),
         )?;
+        state.stamp_funding(&tx_hash, self.lib_slot, Some(pre_fund));
         self.last_msg_id = msg_id;
-        self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
         if self.can_publish_inscription_now() {
             self.queue_publish_post(tx_hash, signed_tx);
@@ -1223,7 +1232,7 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         state.submit_other(signed_tx.clone(), self.channel_id)?;
-        self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
+        state.stamp_funding(&tx_hash, self.lib_slot, None);
 
         info!(target: TARGET, "Submitted channel_config transaction {}", hex::encode(tx_hash.0));
 
@@ -1291,6 +1300,14 @@ where
             (Some(state), Some(tip)) => state.config_tip_at(tip),
             _ => MsgId::root(),
         };
+
+        // Refuse early, before signatures are collected over it, if a config
+        // already pends on this parent; expiry frees the position.
+        if let Some(state) = self.state.as_ref()
+            && let Some(by) = state.pending_config_child(parent)
+        {
+            return Err(ParentTaken { parent, by }.into());
+        }
 
         let (tx, transfer_proof) = build_and_fund_config(
             &self.node,
@@ -1365,6 +1382,7 @@ where
         let state = self.state.as_mut().unwrap();
         let id = tx.hash();
         let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id)?;
+        state.stamp_funding(&id, self.lib_slot, None);
         let parent_msg = self.last_msg_id;
         // The tip the tx leaves behind is defined by its inscriptions (the
         // last one); a tx without any — e.g. a pure config — leaves the tip
@@ -1379,7 +1397,6 @@ where
             );
         }
         self.last_msg_id = new_tip;
-        self.queue_tx_status(id, TxStatus::AcceptedLocally);
 
         info!(target: TARGET, "Submitted tx including inscription {:?}", id);
 
@@ -1444,29 +1461,6 @@ where
     pub(super) fn emit_now(&self, event: Event) -> Event {
         drop(self.event_tx.send(event.clone()));
         event
-    }
-
-    pub(super) fn queue_tx_status(&mut self, tx_hash: TxHash, status: TxStatus) {
-        let update = TxStatusUpdate { tx_hash, status };
-        drop(self.tx_status_tx.send(update));
-        if matches!(status, TxStatus::PendingMempool) {
-            self.buffered_events
-                .push_back(Event::MempoolPending(tx_hash));
-        }
-        if let Some(state) = self.state.as_mut() {
-            match status {
-                TxStatus::AcceptedLocally => {
-                    state.prune_local_tx_tracking(self.config.max_local_tx_tracking);
-                }
-                TxStatus::Finalized(TxSource::Local) => {
-                    state.remove_local_tx(&tx_hash);
-                }
-                TxStatus::PendingMempool
-                | TxStatus::OnChain(_)
-                | TxStatus::Orphaned(_)
-                | TxStatus::Finalized(TxSource::Other) => {}
-            }
-        }
     }
 
     /// Push a single-tx publish post into `in_flight`. Used by
@@ -1561,6 +1555,7 @@ pub(super) fn build_checkpoint(
         lib_slot,
         channel_notes: state.channel_notes_base(),
         finalized_config: state.finalized_config(),
+        funding: state.funding_records(),
     }
 }
 
