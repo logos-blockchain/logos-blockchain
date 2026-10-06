@@ -77,7 +77,7 @@ where
     let Some(record) = data.take(&key)? else {
         return Ok(None);
     };
-    let Some((stamp, state)) = Stamp::read(&record) else {
+    let Some((state_version, fork_digest, state)) = read_record(&record) else {
         warn!(
             target: LOG_TARGET,
             "Discarding the recovery record {}, too short to carry a stamp",
@@ -88,66 +88,57 @@ where
     if !data
         .forks()
         .iter()
-        .any(|era| era.entry.parameters == stamp.fork_digest)
+        .any(|era| era.entry.parameters == fork_digest)
     {
         warn!(
             target: LOG_TARGET,
             "Discarding the recovery record {}, written on another chain, under fork {}",
             String::from_utf8_lossy(&key),
-            stamp.fork_digest
+            fork_digest
         );
         return Ok(None);
     }
-    match stamp.state_version.cmp(&State::VERSION) {
+    match state_version.cmp(&State::VERSION) {
         Ordering::Equal => State::from_bytes(state)
             .map(Some)
             .map_err(|error| RecoveryError::Backend(error.to_string())),
-        Ordering::Less => State::migrate(stamp.state_version, state)
+        Ordering::Less => State::migrate(state_version, state)
             .map(Some)
             .map_err(|error| RecoveryError::Migration {
-                from: stamp.state_version,
+                from: state_version,
                 error,
             }),
         Ordering::Greater => Err(RecoveryError::NewerVersion {
-            found: stamp.state_version,
+            found: state_version,
             current: State::VERSION,
         }),
     }
 }
 
-/// What a recovery record carries ahead of the state: the version of the
-/// state's layout, and the fork digest of the era in force when it was
-/// written.
-struct Stamp {
-    state_version: StateVersion,
-    fork_digest: ForkDigest,
+/// The recovery record of `state`: its stamp, the version of the state's
+/// layout and the fork digest of the era in force when it is written, then the
+/// state.
+fn write_record(state_version: StateVersion, fork_digest: ForkDigest, state: &[u8]) -> Bytes {
+    [
+        &state_version.get().to_le_bytes()[..],
+        &<[u8; 32]>::from(fork_digest),
+        state,
+    ]
+    .concat()
+    .into()
 }
 
-impl Stamp {
-    /// The record of `state`, stamped.
-    fn write(&self, state: &[u8]) -> Bytes {
-        [
-            &self.state_version.get().to_le_bytes()[..],
-            &<[u8; 32]>::from(self.fork_digest),
-            state,
-        ]
-        .concat()
-        .into()
-    }
-
-    /// The stamp of `record` and the state after it, `None` when the record
-    /// is too short to carry a stamp.
-    fn read(record: &[u8]) -> Option<(Self, &[u8])> {
-        let (state_version, record) = record.split_first_chunk()?;
-        let (fork_digest, state) = record.split_first_chunk()?;
-        Some((
-            Self {
-                state_version: StateVersion::new(u16::from_le_bytes(*state_version)),
-                fork_digest: ForkDigest::from(*fork_digest),
-            },
-            state,
-        ))
-    }
+/// The state version, the fork digest and the state of `record`, as
+/// [`write_record`] lays them out. `None` when the record is too short to
+/// carry a stamp.
+fn read_record(record: &[u8]) -> Option<(StateVersion, ForkDigest, &[u8])> {
+    let (state_version, record) = record.split_first_chunk()?;
+    let (fork_digest, state) = record.split_first_chunk()?;
+    Some((
+        StateVersion::new(u16::from_le_bytes(*state_version)),
+        ForkDigest::from(*fork_digest),
+        state,
+    ))
 }
 
 /// The fork digest of the era in force at `time`.
@@ -224,19 +215,17 @@ where
                     .map_err(|error| RecoveryError::Backend(error.to_string()))
             })
             .await?;
-        let stamp = Stamp {
-            state_version: State::VERSION,
-            fork_digest: fork_in_force(&self.forks, OffsetDateTime::now_utc()),
-        };
         let state = state
             .to_bytes()
             .map_err(|error| RecoveryError::Backend(error.to_string()))?;
+        let record = write_record(
+            State::VERSION,
+            fork_in_force(&self.forks, OffsetDateTime::now_utc()),
+            &state,
+        );
 
         storage
-            .store_raw(
-                recovery_key(Settings::RECOVERY_KEY_SUFFIX),
-                stamp.write(&state),
-            )
+            .store_raw(recovery_key(Settings::RECOVERY_KEY_SUFFIX), record)
             .await
             .map_err(|error| RecoveryError::Backend(error.to_string()))
     }
@@ -344,14 +333,6 @@ mod tests {
         }
     }
 
-    fn stamped(state_version: StateVersion, fork_digest: [u8; 32], state: &[u8]) -> Bytes {
-        Stamp {
-            state_version,
-            fork_digest: fork_digest.into(),
-        }
-        .write(state)
-    }
-
     fn load(settings: &TestSettings) -> RecoveryResult<Option<TestState>> {
         <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(settings)
     }
@@ -372,7 +353,11 @@ mod tests {
         };
         let directory = tempfile::tempdir().unwrap();
         let reader = rocks_backend(&directory);
-        let record = stamped(StateVersion::new(2), ERA_0, &expected.to_bytes().unwrap());
+        let record = write_record(
+            StateVersion::new(2),
+            ERA_0.into(),
+            &expected.to_bytes().unwrap(),
+        );
         reader
             .txn(move |database| {
                 database.put(recovery_key(TestSettings::RECOVERY_KEY_SUFFIX), record)?;
@@ -414,9 +399,9 @@ mod tests {
             let state = TestState {
                 value: "restored".into(),
             };
-            let settings = settings_with_record(stamped(
+            let settings = settings_with_record(write_record(
                 StateVersion::new(2),
-                fork,
+                fork.into(),
                 &state.to_bytes().unwrap(),
             ));
 
@@ -429,9 +414,9 @@ mod tests {
         let state = TestState {
             value: "elsewhere".into(),
         };
-        let settings = settings_with_record(stamped(
+        let settings = settings_with_record(write_record(
             StateVersion::new(2),
-            [3; 32],
+            [3; 32].into(),
             &state.to_bytes().unwrap(),
         ));
 
@@ -440,9 +425,9 @@ mod tests {
 
     #[test]
     fn older_versions_are_migrated() {
-        let settings = settings_with_record(stamped(
+        let settings = settings_with_record(write_record(
             StateVersion::new(1),
-            ERA_1,
+            ERA_1.into(),
             &"old".to_bytes().unwrap(),
         ));
 
@@ -456,9 +441,9 @@ mod tests {
 
     #[test]
     fn newer_versions_are_refused() {
-        let settings = settings_with_record(stamped(
+        let settings = settings_with_record(write_record(
             StateVersion::new(3),
-            ERA_0,
+            ERA_0.into(),
             b"from a later release",
         ));
 
@@ -471,9 +456,9 @@ mod tests {
 
     #[test]
     fn states_that_do_not_read_at_their_version_are_errors() {
-        let settings = settings_with_record(stamped(
+        let settings = settings_with_record(write_record(
             StateVersion::new(2),
-            ERA_0,
+            ERA_0.into(),
             b"invalid recovery state",
         ));
 
