@@ -4,10 +4,10 @@ pub mod runtime_info;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-pub use implementation::{ExternalDeploymentFactory, LocalImplementation, PreparedDeployment};
+pub use implementation::{DeploymentInput, ExternalDeploymentFactory, LocalImplementation};
 use lb_testing_framework::SharedDeployment;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext, DeployedApp};
-use testing_framework_core::scenario::{Application, ClusterHandle, DynError, NodeControl};
+use testing_framework_core::scenario::{ClusterHandle, DynError, NodeControl};
 
 use self::runtime_info::{NodeRuntimeInfoProvider, NodeRuntimeInfoSource};
 
@@ -23,8 +23,7 @@ pub struct CucumberClusterApp<A> {
 #[async_trait]
 impl<A, E> AppDeployment<AppHostEnv> for CucumberClusterApp<A>
 where
-    E: Application,
-    E::NodeConfig: NodeRuntimeInfoProvider,
+    E: NodeRuntimeInfoProvider,
     A: AppDeployment<AppHostEnv, Handle = ClusterHandle<E>>,
 {
     type Handle = Arc<dyn NodeControl>;

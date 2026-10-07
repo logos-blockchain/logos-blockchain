@@ -3,7 +3,9 @@ use std::{collections::HashMap, hash::BuildHasher, time::Duration};
 use lb_libp2p::{Multiaddr, PeerId, Protocol};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig,
-    configs::{deployment::NodeBinaryProfile, wallet::WalletAccount},
+    configs::{
+        PreparedDeployment, build_plan, deployment::NodeBinaryProfile, wallet::WalletAccount,
+    },
     internal::DeploymentPlan,
     resolve_automatic_genesis_time,
 };
@@ -44,6 +46,17 @@ pub fn build_manual_cluster_deployment(
     world: &mut CucumberWorld,
     nodes_count: usize,
 ) -> Result<DeploymentPlan, StepError> {
+    build_plan(prepare_manual_cluster_deployment(world, nodes_count)?).map_err(|e| {
+        StepError::LogicalError {
+            message: format!("failed to build Logos manual cluster: {e}"),
+        }
+    })
+}
+
+fn prepare_manual_cluster_deployment(
+    world: &mut CucumberWorld,
+    nodes_count: usize,
+) -> Result<PreparedDeployment, StepError> {
     let genesis_time = world.lifecycle.genesis_time.unwrap_or_else(|| {
         let genesis_time = resolve_automatic_genesis_time();
         world.set_genesis_time(genesis_time);
@@ -104,12 +117,12 @@ pub fn build_manual_cluster_deployment(
 
     let deployment = DeploymentBuilder::new(config)
         .with_deployment_seed(world.manual_cluster_deployment_seed())
-        .build()
+        .prepare()
         .map_err(|e| StepError::LogicalError {
             message: format!("failed to build manual cluster: {e}"),
         })?;
 
-    if let Some(genesis_block) = deployment.config.genesis_block.clone() {
+    if let Some(genesis_block) = deployment.config().genesis_block.clone() {
         world.chain.genesis_block_utxos =
             crate::cucumber::steps::nodes::genesis_block_utxos(genesis_block.genesis_tx());
         world.chain.genesis_block_id = Some(genesis_block.header().id());
@@ -122,7 +135,7 @@ pub async fn install_local_manual_cluster(
     world: &mut CucumberWorld,
     spec: ManualClusterSpec,
 ) -> Result<(), StepError> {
-    let deployment = build_manual_cluster_from_spec(world, spec)?;
+    let deployment = prepare_manual_cluster_from_spec(world, spec)?;
     let app = world.cluster.implementation.deploy(deployment).await?;
     world.cluster.install_local(app)?;
     world.cluster.manual_cluster_spec = Some(spec);
@@ -130,10 +143,10 @@ pub async fn install_local_manual_cluster(
     Ok(())
 }
 
-fn build_devnet_manual_cluster_deployment(
+fn prepare_devnet_manual_cluster_deployment(
     world: &mut CucumberWorld,
     nodes_count: usize,
-) -> Result<DeploymentPlan, StepError> {
+) -> Result<PreparedDeployment, StepError> {
     let genesis_time = world.lifecycle.genesis_time.unwrap_or_else(|| {
         let genesis_time = resolve_automatic_genesis_time();
         world.set_genesis_time(genesis_time);
@@ -164,20 +177,20 @@ fn build_devnet_manual_cluster_deployment(
 
     let deployment = DeploymentBuilder::new(config)
         .with_deployment_seed(world.manual_cluster_deployment_seed())
-        .build()
+        .prepare()
         .map_err(|e| StepError::LogicalError {
             message: format!("failed to build devnet manual cluster: {e}"),
         })?;
     Ok(deployment)
 }
 
-fn build_manual_cluster_from_spec(
+fn prepare_manual_cluster_from_spec(
     world: &mut CucumberWorld,
     spec: ManualClusterSpec,
-) -> Result<DeploymentPlan, StepError> {
+) -> Result<PreparedDeployment, StepError> {
     match spec.kind {
-        ManualClusterKind::Generated => build_manual_cluster_deployment(world, spec.capacity),
-        ManualClusterKind::Devnet => build_devnet_manual_cluster_deployment(world, spec.capacity),
+        ManualClusterKind::Generated => prepare_manual_cluster_deployment(world, spec.capacity),
+        ManualClusterKind::Devnet => prepare_devnet_manual_cluster_deployment(world, spec.capacity),
     }
 }
 

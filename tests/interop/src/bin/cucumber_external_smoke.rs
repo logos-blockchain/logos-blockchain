@@ -8,11 +8,10 @@ use std::process::ExitCode;
 use async_trait::async_trait;
 use logos_blockchain_tests::cucumber::{
     deployment::{
-        ExternalDeploymentFactory, LocalDeployment, LocalImplementation, PreparedDeployment,
+        DeploymentInput, ExternalDeploymentFactory, LocalDeployment, LocalImplementation,
     },
     runner,
 };
-use testing_framework_app::AppDeployer;
 use testing_framework_core::scenario::DynError;
 
 #[tokio::main]
@@ -32,12 +31,10 @@ impl ExternalDeploymentFactory for ExternalLogosFactory {
         "external-logos-smoke"
     }
 
-    async fn deploy(&self, deployment: PreparedDeployment) -> Result<LocalDeployment, DynError> {
-        // Prepare an on-demand cluster from the scenario's original Logos plan.
+    async fn deploy(&self, deployment: DeploymentInput) -> Result<LocalDeployment, DynError> {
+        // Prepare an on-demand cluster from the scenario's prepared network.
         // Subsequent steps start the node processes, connect them, check peers
         // and stop them; those steps stay in the shared suite.
-        AppDeployer::new()
-            .deploy(deployment.into_logos_app()?)
-            .await
+        deployment.deploy_logos().await
     }
 }
