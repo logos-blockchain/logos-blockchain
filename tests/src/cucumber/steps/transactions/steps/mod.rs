@@ -14,10 +14,13 @@ use crate::{
             transactions::{
                 drain_wallets::{drain_all_node_wallets, drain_node_wallet, drain_user_wallet},
                 manual_control::{
-                    execute_coin_splits_all_user_wallets,
+                    DependentTransactionLoadState, execute_coin_splits_all_user_wallets,
+                    execute_continuous_dependent_next_wallet_user_wallet_with_cancellation,
                     execute_continuous_next_wallet_user_wallet,
                     execute_continuous_next_wallet_user_wallet_with_cancellation,
-                    execute_continuous_round_robin_user_wallets, log_wallet_balances,
+                    execute_continuous_round_robin_user_wallets,
+                    execute_mempool_diagnostic_coin_splits,
+                    execute_mempool_next_wallet_user_wallet, log_wallet_balances,
                     parsing::ManualCommand, perform_manual_step_control,
                     verify_min_outputs_all_user_wallets,
                 },

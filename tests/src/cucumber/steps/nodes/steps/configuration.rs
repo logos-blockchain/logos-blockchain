@@ -5,8 +5,8 @@ use super::{
     set_deployment_config_override, set_user_config_override, when,
 };
 
-#[given(expr = "the cluster uses Blend diagnostic parameter set {string}")]
-#[when(expr = "the cluster uses Blend diagnostic parameter set {string}")]
+#[given(expr = "the cluster uses diagnostic parameter set {string}")]
+#[when(expr = "the cluster uses diagnostic parameter set {string}")]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "Cucumber step arguments must use owned types"

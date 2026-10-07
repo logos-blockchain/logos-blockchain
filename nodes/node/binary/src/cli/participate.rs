@@ -87,10 +87,9 @@ fn build_blend_data(
     let locators = Locators::from(Locator::try_from(locator_addr).map_err(|e| eyre!("{e}"))?);
     let (_, blend_key) = keystore.get_zk(KeyTitle::BLEND_ZK)?;
 
-    // Declaration ID is not required when providing participation information for
-    // genesis ceremony, but it is still useful to have when configuring the
-    // node. SDP service configuration expects Declaration ID set in the config
-    // if a node is registered as an initial service provider.
+    // Declaration ID is not required for the genesis ceremony, but it is still
+    // useful for looking the declaration up once it is on chain. The service
+    // note is not part of the ID, so a zero one is fine here.
     let declaration_id = DeclarationMessage {
         service_type: ServiceType::BlendNetwork,
         locators: locators.clone(),

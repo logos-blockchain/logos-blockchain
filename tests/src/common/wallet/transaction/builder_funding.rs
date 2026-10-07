@@ -9,12 +9,12 @@ use lb_core::mantle::{
     ops::transfer::TransferOp,
     transactions::{MantleTxBuilder, tx_list::ops::OpsContext},
 };
-use lb_key_management_system_service::keys::{MAX_ZK_SIGNING_KEYS, ZkPublicKey};
+use lb_key_management_system_service::keys::{Ed25519Key, MAX_ZK_SIGNING_KEYS, ZkPublicKey};
 use lb_mmr::MerkleMountainRange;
 use lb_wallet::{WalletError, WalletState};
 use rpds::{HashTrieMapSync, HashTrieSetSync};
 
-use super::intent::WalletTransactionIntent;
+use super::{error::WalletTransactionError, intent::WalletTransactionIntent};
 use crate::common::wallet::{
     WalletFundingOutcome, WalletFundingPlan, WalletFundingResources, WalletFundingSource,
     WalletFundingUtxos, WalletInputSelectionStrategy, WalletSelectedInputs,
@@ -68,9 +68,10 @@ pub(super) fn fund_wallet_transaction(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
     priority_fee_percent: u64,
-) -> Result<(MantleTxBuilder, OpsContext), WalletError> {
+) -> Result<(MantleTxBuilder, OpsContext, Vec<Ed25519Key>), WalletError> {
     let (sender, fee_sponsor) = resources.into_parts();
-    let (tx_builder, context, sender_output_total) = intent.into_parts();
+    let (tx_builder, context, sender_output_total, leading_inscription_signers) =
+        intent.into_parts();
 
     let funded_builder = match fee_sponsor {
         None => {
@@ -83,17 +84,63 @@ pub(super) fn fund_wallet_transaction(
                 priority_fee_percent,
             )?
         }
-        Some(fee_sponsor) => fund_sponsored_wallet_transaction(
-            tx_builder,
-            sender_output_total,
-            fee_sponsor.into_funding_utxos(),
-            sender.into_funding_utxos(),
-            &context,
-            priority_fee_percent,
-        )?,
+        Some(fee_sponsor) => {
+            let (sender, input_selection_strategy) = sender.into_funding_parts();
+            fund_sponsored_wallet_transaction(
+                tx_builder,
+                sender_output_total,
+                fee_sponsor.into_funding_utxos(),
+                sender,
+                input_selection_strategy,
+                &context,
+                priority_fee_percent,
+            )?
+        }
     };
 
-    Ok((funded_builder, context))
+    Ok((funded_builder, context, leading_inscription_signers))
+}
+
+/// Estimate the exact gas reserve for a bounded continuous-workload input
+/// candidate, both with and without a change output. This is diagnostic-only:
+/// funding still goes through the normal transaction builder.
+pub fn estimate_workload_fee_requirements(
+    intent: &WalletTransactionIntent,
+    candidate_inputs: &[Utxo],
+    priority_fee_percent: u64,
+) -> Result<(u64, u64), WalletTransactionError> {
+    let (tx_builder, context, _, _) = intent.clone().into_parts();
+    let builder_with_inputs = extend_wallet_funding_inputs(&tx_builder, candidate_inputs)?;
+    let fee_without_change = required_fee_with_priority(
+        builder_with_inputs
+            .minimum_gas_cost::<MainnetGasProfile>(&context)?
+            .into_inner(),
+        priority_fee_percent,
+    )?;
+    let builder_with_change =
+        builder_with_inputs.add_ledger_output(Note::new(0, ZkPublicKey::zero()))?;
+    let fee_with_change = required_fee_with_priority(
+        builder_with_change
+            .minimum_gas_cost::<MainnetGasProfile>(&context)?
+            .into_inner(),
+        priority_fee_percent,
+    )?;
+
+    Ok((fee_without_change, fee_with_change))
+}
+
+fn required_fee_with_priority(
+    mandatory_fee: u64,
+    priority_fee_percent: u64,
+) -> Result<u64, WalletTransactionError> {
+    let mandatory_fee = u128::from(mandatory_fee);
+    let priority_fee = mandatory_fee
+        .checked_mul(u128::from(priority_fee_percent))
+        .and_then(|fee| fee.checked_add(99))
+        .ok_or(lb_core::mantle::gas::GasOverflow)?
+        / 100;
+    u64::try_from(mandatory_fee + priority_fee)
+        .map_err(|_| lb_core::mantle::gas::GasOverflow.into())
 }
 
 fn fund_unsponsored_wallet_transaction(
@@ -131,13 +178,25 @@ fn fund_sponsored_wallet_transaction(
     output_total: u64,
     fee_sponsor: WalletFundingUtxos,
     sender: WalletFundingUtxos,
+    input_selection_strategy: WalletInputSelectionStrategy,
     context: &OpsContext,
     priority_fee_percent: u64,
 ) -> Result<MantleTxBuilder, WalletError> {
     let sender_change_pk = sender.change_pk();
     let fee_sponsor_change_pk = fee_sponsor.change_pk();
-    let sender_inputs =
-        WalletSelectedInputs::largest_first_covering(sender.into_available_utxos(), output_total)?;
+    let sender_inputs = match input_selection_strategy {
+        WalletInputSelectionStrategy::AllProvided => WalletSelectedInputs::all_provided_covering(
+            sender.into_available_utxos(),
+            output_total,
+        )?,
+        WalletInputSelectionStrategy::LargestFirst
+        | WalletInputSelectionStrategy::SmallestFirst => {
+            WalletSelectedInputs::largest_first_covering(
+                sender.into_available_utxos(),
+                output_total,
+            )?
+        }
+    };
     let builder_with_sender_outputs = add_sender_change_output(
         tx_builder,
         sender_change_pk,
@@ -425,7 +484,6 @@ mod tests {
         },
         transactions::{GasPrices, tx_list::ops::OpsGasContext},
     };
-    use lb_key_management_system_service::keys::Ed25519Key;
     use lb_testing_framework::configs::wallet::WalletAccount;
 
     use super::*;

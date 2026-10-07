@@ -188,6 +188,77 @@ jobs:
           include-hidden-files: true
           path: tests/.run_*
 
+  ffi-valgrind:
+    name: FFI valgrind tests
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        !startsWith(github.event.pull_request.title, '[WIP]') &&
+        !contains(github.event.pull_request.labels.*.name, 'DO NOT MERGE')
+      }}
+    # Valgrind is Linux-only, and the node needs more memory than GitHub-hosted runners have.
+    runs-on: [ self-hosted, Linux ]
+    timeout-minutes: 90
+    steps:
+      - name: Disable rustup override
+        run: rustup override unset || true
+
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          fetch-depth: 0
+
+      # The run needs a full build and several minutes under valgrind, so it is
+      # skipped unless the bindings themselves changed.
+      - name: Check whether the C bindings changed
+        id: changes
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if git diff --quiet "origin/$BASE_REF...HEAD" -- c-bindings .github/workflows/code-check.yml; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prune disk space (cache-aware, self-hosted)
+        if: steps.changes.outputs.run == 'true'
+        uses: ./.github/actions/prune-disk-space
+
+      # These tests are `#[ignore]`d for the regular runners: they only run
+      # here, with Cargo starting the test binary through valgrind. Any invalid
+      # access or definite leak fails the job.
+      #
+      # Valgrind comes from nix: the runner has no passwordless sudo to install
+      # it with, and nix is already there.
+      #
+      # Valgrind cannot start on Ubuntu's own dynamic loader: it needs a few of
+      # its symbols, which Ubuntu strips and ships in `libc6-dbg` (not
+      # installable here either). So the test binary is started through the
+      # loader of nix's glibc instead, which keeps them. That glibc is newer
+      # than the one the binary was built against, which glibc supports; the
+      # remaining libraries (libstdc++, libgcc_s) still come from the system.
+      - name: Run the FFI safety tests under valgrind
+        if: steps.changes.outputs.run == 'true'
+        env:
+          # Blocks take far longer to arrive under valgrind.
+          FFI_AUDIT_WAIT_SECS: 600
+        run: |
+          glibc="$(nix build --no-link --print-out-paths 'nixpkgs#glibc^out')"
+          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="valgrind \
+            --leak-check=full --errors-for-leak-kinds=definite --error-exitcode=1 \
+            --num-callers=30 --suppressions=$GITHUB_WORKSPACE/c-bindings/valgrind.supp \
+            $glibc/lib/ld-linux-x86-64.so.2 \
+            --library-path $glibc/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
+          nix shell 'nixpkgs#valgrind' --command \
+            cargo test --locked -p logos-blockchain-c -- --ignored --test-threads=1 ffi_safety_tests
+
+      - name: Clean up build artifacts
+        if: success() || failure()
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: clean
+
   # Stable required check for nextest unit tests.
   #
   # On pull requests, this job succeeds only when both self-hosted nextest unit

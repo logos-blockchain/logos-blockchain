@@ -1758,7 +1758,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1986,7 +1986,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3109,7 +3109,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4282,6 +4282,7 @@ dependencies = [
  "futures",
  "logos-blockchain-api-service",
  "logos-blockchain-blend-service",
+ "logos-blockchain-c-macros",
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
@@ -4304,6 +4305,15 @@ dependencies = [
  "serial_test",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "logos-blockchain-c-macros"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -4545,6 +4555,7 @@ dependencies = [
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-libp2p",
  "logos-blockchain-node",
+ "logos-blockchain-sdp-service",
  "logos-blockchain-tracing",
  "logos-blockchain-utils",
  "num-bigint",
@@ -5232,6 +5243,7 @@ dependencies = [
  "logos-sql",
  "num-bigint",
  "rand 0.8.6",
+ "rand_chacha 0.3.1",
  "reqwest 0.12.28",
  "rpds",
  "rusqlite",
@@ -5289,6 +5301,7 @@ dependencies = [
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-node",
+ "logos-blockchain-sdp-service",
  "logos-blockchain-utils",
  "num-bigint",
  "serde",
@@ -6006,7 +6019,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6327,7 +6340,7 @@ dependencies = [
 [[package]]
 name = "overwatch"
 version = "0.2.0"
-source = "git+https://github.com/logos-co/Overwatch?rev=8f06c685948620d5d9931ed8f5bdb86e6cbffcd9#8f06c685948620d5d9931ed8f5bdb86e6cbffcd9"
+source = "git+https://github.com/logos-co/Overwatch?rev=fc71a844886f9fb8f382ecfadcebff455e33474b#fc71a844886f9fb8f382ecfadcebff455e33474b"
 dependencies = [
  "async-trait",
  "futures",
@@ -6342,7 +6355,7 @@ dependencies = [
 [[package]]
 name = "overwatch-derive"
 version = "0.2.0"
-source = "git+https://github.com/logos-co/Overwatch?rev=8f06c685948620d5d9931ed8f5bdb86e6cbffcd9#8f06c685948620d5d9931ed8f5bdb86e6cbffcd9"
+source = "git+https://github.com/logos-co/Overwatch?rev=fc71a844886f9fb8f382ecfadcebff455e33474b#fc71a844886f9fb8f382ecfadcebff455e33474b"
 dependencies = [
  "convert_case 0.8.0",
  "manyhow",
@@ -7539,7 +7552,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8300,7 +8313,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8332,7 +8345,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9556,7 +9569,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

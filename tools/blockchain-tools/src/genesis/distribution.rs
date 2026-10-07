@@ -6,9 +6,10 @@ use lb_core::{
         ledger::{Inputs, Outputs},
         ops::{sdp::SDPDeclareOp, transfer::TransferOp},
     },
-    sdp::{Locators, ServiceType},
+    sdp::ServiceType,
 };
-use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
+use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_sdp_service::DeclarationConfig;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -16,14 +17,6 @@ use thiserror::Error;
 pub struct StakeHolderInfo {
     pub zk_id: ZkPublicKey,
     pub stake: NoteValue,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ProviderInfo {
-    pub provider_id: Ed25519PublicKey,
-    pub zk_id: ZkPublicKey,
-    pub locators: Locators,
-    pub service_type: ServiceType,
 }
 
 /// `Faucet` is used to register a faucet key with it's value.
@@ -69,7 +62,7 @@ impl GenesisTransferOp {
 #[derive(Error, Debug)]
 pub enum DistributionError {
     #[error("Provider with ZK ID {0:?} is not a registered stakeholder")]
-    ProviderNotStakeHolder(Box<ProviderInfo>),
+    ProviderNotStakeHolder(Box<DeclarationConfig>),
 
     #[error("Note already used for service {0:?}")]
     NoteAlreadyUsedForService(ServiceType),
@@ -85,7 +78,7 @@ pub fn distribute<S, P>(
 ) -> Result<(GenesisTransferOp, Vec<SDPDeclareOp>), DistributionError>
 where
     S: IntoIterator<Item = StakeHolderInfo> + Clone,
-    P: IntoIterator<Item = ProviderInfo>,
+    P: IntoIterator<Item = DeclarationConfig>,
 {
     let stake_holder_keys: HashSet<ZkPublicKey> =
         stake_holders.clone().into_iter().map(|s| s.zk_id).collect();
@@ -111,7 +104,7 @@ where
             declarations.push(SDPDeclareOp {
                 service_type: provider.service_type,
                 locators: provider.locators,
-                provider_id: provider.provider_id.into(),
+                provider_id: provider.provider_id,
                 zk_id: provider.zk_id,
                 service_note_id: utxo.id(),
             });
@@ -123,7 +116,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use lb_core::sdp::Locator;
+    use lb_core::sdp::{Locator, ProviderId};
+    use lb_key_management_system_keys::keys::Ed25519PublicKey;
     use num_bigint::BigUint;
 
     use super::*;
@@ -132,8 +126,8 @@ mod tests {
         ZkPublicKey::from(BigUint::from(byte))
     }
 
-    fn mock_ed_pk(byte: u8) -> Ed25519PublicKey {
-        Ed25519PublicKey::from_bytes(&[byte; 32]).unwrap()
+    fn mock_provider_id(byte: u8) -> ProviderId {
+        ProviderId(Ed25519PublicKey::from_bytes(&[byte; 32]).unwrap())
     }
 
     #[test]
@@ -152,8 +146,8 @@ mod tests {
             },
         ];
 
-        let providers = vec![ProviderInfo {
-            provider_id: mock_ed_pk(10),
+        let providers = vec![DeclarationConfig {
+            provider_id: mock_provider_id(10),
             zk_id: zk_id_1,
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
             service_type: ServiceType::BlendNetwork,
@@ -189,8 +183,8 @@ mod tests {
             stake: 1000,
         }];
 
-        let providers = vec![ProviderInfo {
-            provider_id: mock_ed_pk(10),
+        let providers = vec![DeclarationConfig {
+            provider_id: mock_provider_id(10),
             zk_id: mock_zk_pk(2),
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
             service_type: ServiceType::BlendNetwork,
@@ -220,14 +214,14 @@ mod tests {
 
         // Two providers trying to use the same note for the same ServiceType.
         let providers = vec![
-            ProviderInfo {
-                provider_id: mock_ed_pk(10),
+            DeclarationConfig {
+                provider_id: mock_provider_id(10),
                 zk_id,
                 locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
                 service_type: ServiceType::BlendNetwork,
             },
-            ProviderInfo {
-                provider_id: mock_ed_pk(11),
+            DeclarationConfig {
+                provider_id: mock_provider_id(11),
                 zk_id,
                 locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
                 service_type: ServiceType::BlendNetwork,

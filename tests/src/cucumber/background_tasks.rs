@@ -502,7 +502,7 @@ mod background_task_tests {
             .await
             .expect("abnormal cleanup should stop the task successfully");
 
-        let timeline = fs::read_to_string(temp_dir.path().join("blend_diagnostic_timeline.ndjson"))
+        let timeline = fs::read_to_string(temp_dir.path().join("diagnostic_timeline.ndjson"))
             .expect("cleanup timeline should be readable");
         let records = timeline
             .lines()

@@ -126,7 +126,7 @@ mod tests {
     use futures::StreamExt as _;
     use overwatch::{
         DynError, OpaqueServiceResourcesHandle,
-        overwatch::OverwatchRunner,
+        overwatch::{OverwatchRunner, Shutdown},
         services::{
             ServiceCore,
             resources::ServiceResourcesHandle,
@@ -216,7 +216,7 @@ mod tests {
         });
     }
 
-    #[overwatch::derive_services]
+    #[overwatch::derive_services(panic_policy = Shutdown)]
     struct Services {
         pong: PongService,
     }

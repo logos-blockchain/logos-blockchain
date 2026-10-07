@@ -1,4 +1,7 @@
-use crate::{errors::OperationStatus, result::FfiResult};
+use crate::{
+    errors::{OperationStatus, free_operation_status},
+    result::FfiResult,
+};
 
 /// Checks if a pointer is null and returns from the calling function with a
 /// null-pointer error status.
@@ -68,5 +71,9 @@ impl FfiReturn for OperationStatus {
 }
 
 impl FfiReturn for () {
-    fn from_operation_status(_status: OperationStatus) -> Self {}
+    /// There is nowhere to report the error, so it is released: dropping it
+    /// would leak its message.
+    fn from_operation_status(status: OperationStatus) -> Self {
+        unsafe { free_operation_status(status) };
+    }
 }

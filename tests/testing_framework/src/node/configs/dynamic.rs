@@ -75,9 +75,7 @@ pub fn create_node_config_for_node(
         tracing_config,
         time_config: time_config.clone(),
         kms_config,
-        sdp_config: GeneralSdpConfig {
-            declaration_id: None,
-        },
+        sdp_config: GeneralSdpConfig { declaration: None },
     })
 }
 

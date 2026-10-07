@@ -267,7 +267,7 @@ mod tests {
     use libp2p::Multiaddr;
     use overwatch::{
         DynError, OpaqueServiceResourcesHandle,
-        overwatch::OverwatchRunner,
+        overwatch::{OverwatchRunner, Shutdown},
         services::{
             ServiceCore,
             resources::ServiceResourcesHandle,
@@ -511,7 +511,7 @@ mod tests {
 
     type TestInstance = Instance<CoreService, EdgeService, BroadcastService, RuntimeServiceId>;
 
-    #[overwatch::derive_services]
+    #[overwatch::derive_services(panic_policy = Shutdown)]
     struct Services {
         core: CoreService,
         edge: EdgeService,

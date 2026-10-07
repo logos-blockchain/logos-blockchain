@@ -1,5 +1,6 @@
 use std::ffi::{CString, c_char};
 
+use lb_c_macros::panic_to_error;
 use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_node::{RuntimeServiceId, generic_services::CryptarchiaService};
 
@@ -98,7 +99,7 @@ impl From<lb_chain_service::ChainServiceInfo> for CryptarchiaInfo {
 pub(crate) fn get_cryptarchia_info_sync(
     node: &LogosBlockchainNode,
 ) -> StatusResult<lb_chain_service::ChainServiceInfo> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
 
     let Ok(info) = runtime_handle.block_on(lb_api_service::http::consensus::cryptarchia_info(
         node.get_overwatch_handle(),
@@ -137,6 +138,7 @@ pub type FfiCryptarchiaInfoResult = FfiStatusResult<*mut CryptarchiaInfo>;
 /// This function allocates memory for the output [`CryptarchiaInfo`] struct.
 /// The caller must free this memory using the [`free_cryptarchia_info`]
 /// function.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_cryptarchia_info(
     node: *const LogosBlockchainNode,
@@ -154,9 +156,15 @@ pub unsafe extern "C" fn get_cryptarchia_info(
 /// # Arguments
 ///
 /// - `pointer`: A pointer to the [`CryptarchiaInfo`] struct to be freed.
+///
+/// # Safety
+///
+/// A non-null `pointer` must come from [`get_cryptarchia_info`] and must not
+/// have been freed already.
+#[panic_to_error]
 #[unsafe(no_mangle)]
-pub extern "C" fn free_cryptarchia_info(pointer: *mut CryptarchiaInfo) -> OperationStatus {
-    free::<CryptarchiaInfo>(pointer)
+pub unsafe extern "C" fn free_cryptarchia_info(pointer: *mut CryptarchiaInfo) -> OperationStatus {
+    unsafe { free::<CryptarchiaInfo>(pointer) }
 }
 
 /// Gets a block's events as a JSON string.
@@ -179,7 +187,7 @@ pub(crate) fn get_block_events_sync(
     node: &LogosBlockchainNode,
     header_id: HeaderId,
 ) -> StatusResult<CString> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     let overwatch_handle = node.get_overwatch_handle();
 
     let events = runtime_handle.block_on(async move {
@@ -252,6 +260,7 @@ pub type FfiGetBlockEventsResult = FfiStatusResult<*mut c_char>;
 ///
 /// This function allocates memory for the output C string. The caller must
 /// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_block_events(
     node: *const LogosBlockchainNode,

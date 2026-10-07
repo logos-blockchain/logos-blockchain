@@ -1,0 +1,21 @@
+# Suppressions for the `ffi_safety_tests` valgrind run.
+#
+# Only leaks that are known, tracked and outside `c-bindings` belong here: the
+# point of the run is that anything else definitely lost fails the job.
+
+# The circom-generated witness calculators leak a small `new[]` block on every
+# call: 12 bytes per leader proof, 128 bytes per ZK signature.
+{
+   circom_pol_witness_leak
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:pol_generate_witness
+}
+{
+   circom_signature_witness_leak
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:signature_generate_witness
+}

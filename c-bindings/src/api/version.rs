@@ -1,5 +1,7 @@
 use std::ffi::{CString, c_char};
 
+use lb_c_macros::panic_to_error;
+
 use crate::{OperationStatus, errors::OperationStatusCode, result::FfiStatusResult};
 
 /// Result type for [`get_build_version_info`]. On success, `value` is a pointer
@@ -22,6 +24,7 @@ pub type FfiGetBuildVersionInfoResult = FfiStatusResult<*mut c_char>;
 /// This function allocates memory for the output C string. The caller must
 /// free this memory using the [`free_cstring`](super::free_cstring) function.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub extern "C" fn get_build_version_info() -> FfiGetBuildVersionInfoResult {
     let version_info = lb_version::build_version_info();

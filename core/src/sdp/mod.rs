@@ -538,22 +538,12 @@ pub struct DeclarationMessage {
 impl DeclarationMessage {
     #[must_use]
     pub fn id(&self) -> DeclarationId {
-        let mut hasher = Blake2b::new();
-        let service = match self.service_type {
-            ServiceType::BlendNetwork => "BN",
-        };
-
-        // From the
-        // [spec](https://lip.logos.co/blockchain/raw/bedrock-service-declaration-protocol.html#declaration-storage):
-        // declaration_id = Hash(service||provider_id||zk_id||locators)
-        hasher.update(service.as_bytes());
-        hasher.update(self.provider_id.as_ref());
-        hasher.update(fr_to_bytes(self.zk_id.as_fr()));
-        // The locators go in through the wire encoding, which prefixes the list
-        // with its count and every locator with its byte length.
-        hasher.update(self.locators.encode());
-
-        DeclarationId(hasher.finalize().into())
+        declaration_id(
+            self.service_type,
+            &self.provider_id,
+            &self.zk_id,
+            &self.locators,
+        )
     }
 
     pub(crate) fn preverify(
@@ -584,6 +574,28 @@ impl DeclarationMessage {
             service_note_id: NoteId(Fr::from(26u64)),
         }
     }
+}
+
+#[must_use]
+pub fn declaration_id(
+    service_type: ServiceType,
+    provider_id: &ProviderId,
+    zk_id: &ZkPublicKey,
+    locators: &Locators,
+) -> DeclarationId {
+    let mut hasher = Blake2b::new();
+
+    // From the
+    // [spec](https://lip.logos.co/blockchain/raw/bedrock-service-declaration-protocol.html#declaration-storage):
+    // declaration_id = Hash(service||provider_id||zk_id||locators)
+    hasher.update(<ServiceType as AsRef<str>>::as_ref(&service_type).as_bytes());
+    hasher.update(provider_id.as_ref());
+    hasher.update(fr_to_bytes(zk_id.as_fr()));
+    // The locators go in through the wire encoding, which prefixes the list
+    // with its count and every locator with its byte length.
+    hasher.update(locators.encode());
+
+    DeclarationId(hasher.finalize().into())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]

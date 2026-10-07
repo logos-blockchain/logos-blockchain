@@ -221,6 +221,24 @@ impl WalletSelectedInputs {
         Err(WalletError::InsufficientFunds { available })
     }
 
+    /// Require every provided UTXO while verifying the target is covered.
+    pub(crate) fn all_provided_covering(
+        utxos: Vec<Utxo>,
+        target: u64,
+    ) -> Result<Self, WalletError> {
+        let total = utxos
+            .iter()
+            .fold(0u64, |sum, utxo| sum.saturating_add(utxo.note.value));
+        if total < target {
+            return Err(WalletError::InsufficientFunds { available: total });
+        }
+
+        Ok(Self {
+            inputs: utxos,
+            total,
+        })
+    }
+
     #[must_use]
     pub const fn total(&self) -> u64 {
         self.total
@@ -552,5 +570,28 @@ mod tests {
 
         assert_eq!(selected_count, 2);
         assert_eq!(observed_input_values, vec![vec![], vec![5], vec![5, 10]],);
+    }
+
+    #[test]
+    fn largest_first_uses_reusable_change_before_incoming_one_lgo_dust() {
+        let plan = WalletFundingPlan::largest_first(
+            vec![utxo(1, 0), utxo(430_000, 1), utxo(429_000, 2)],
+            Vec::new(),
+        );
+        let selected = plan
+            .fund_with::<_, WalletError>(|selected_inputs| {
+                let values = selected_inputs
+                    .iter()
+                    .map(|utxo| utxo.note.value)
+                    .collect::<Vec<_>>();
+                if values.iter().sum::<u64>() >= 1 {
+                    Ok(WalletFundingOutcome::Funded(values))
+                } else {
+                    Ok(WalletFundingOutcome::NeedsMoreInputs)
+                }
+            })
+            .expect("the largest reusable change output should fund the transfer");
+
+        assert_eq!(selected, vec![430_000]);
     }
 }

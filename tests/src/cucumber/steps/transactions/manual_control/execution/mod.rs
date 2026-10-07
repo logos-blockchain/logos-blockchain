@@ -93,6 +93,7 @@ const MANUAL_COMMAND_POLL_INTERVAL_ENV: &str = "CUCUMBER_MANUAL_COMMAND_POLL_INT
 const MAX_TEST_EPOCH_HEADROOM: u32 = 16;
 
 mod control;
+mod dependent;
 mod dispatch;
 mod fee_policy;
 mod round_robin;
@@ -100,17 +101,21 @@ mod transactions;
 mod wallet_state;
 
 pub use control::perform_manual_step_control;
+pub use dependent::DependentTransactionLoadState;
 pub use dispatch::{
-    execute_coin_splits_all_user_wallets, execute_continuous_next_wallet_user_wallet,
+    execute_coin_splits_all_user_wallets,
+    execute_continuous_dependent_next_wallet_user_wallet_with_cancellation,
+    execute_continuous_next_wallet_user_wallet,
     execute_continuous_next_wallet_user_wallet_with_cancellation,
     execute_continuous_round_robin_user_wallets, execute_manual_command,
-    verify_min_outputs_all_user_wallets,
+    execute_mempool_next_wallet_user_wallet, verify_min_outputs_all_user_wallets,
 };
 use dispatch::{log_phase_counts, verify_transactions_mined};
 pub use fee_policy::build_cycle_fee_policy;
 use round_robin::{
     all_user_wallets, execute_continuous_round_robin, verify_no_duplicate_transactions,
 };
+pub use transactions::execute_mempool_diagnostic_coin_splits;
 use transactions::{
     execute_coin_split, execute_coin_split_with_utxo_cache, execute_send, handle_verify_command,
     prepare_coin_splits_all_wallets_with_utxo_cache, prepare_ring_send_round_send_with_utxo_cache,

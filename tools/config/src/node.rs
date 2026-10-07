@@ -37,7 +37,7 @@ pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
     let mut sdp_config = SdpConfig::with_required_values(SdpConfigRequiredValues {
         funding_pk: config.consensus_config.funding_sk.as_public_key(),
     });
-    sdp_config.declaration_id = config.sdp_config.declaration_id;
+    sdp_config.declaration = config.sdp_config.declaration;
 
     UserConfig {
         network: config.network_config,

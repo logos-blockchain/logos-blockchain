@@ -1,13 +1,11 @@
 use std::iter::repeat_n;
 
-use lb_core::{
-    mantle::{ops::OpRef, traits::MantleTx as _, transactions::GenesisTx},
-    sdp::DeclarationId,
-};
+use lb_core::mantle::{ops::OpRef, traits::MantleTx as _, transactions::GenesisTx};
+use lb_sdp_service::DeclarationConfig;
 
 #[derive(Clone)]
 pub struct GeneralSdpConfig {
-    pub declaration_id: Option<DeclarationId>,
+    pub declaration: Option<DeclarationConfig>,
 }
 
 #[must_use]
@@ -16,8 +14,8 @@ pub fn create_sdp_configs(genesis_tx: &GenesisTx, count: usize) -> Vec<GeneralSd
         .op_refs()
         .into_iter()
         .filter_map(|op| match op {
-            OpRef::SDPDeclare(decl) => Some(GeneralSdpConfig {
-                declaration_id: Some(decl.id()),
+            OpRef::SDPDeclare(declaration) => Some(GeneralSdpConfig {
+                declaration: Some(declaration.into()),
             }),
             _ => None,
         })
@@ -30,9 +28,7 @@ pub fn create_sdp_configs(genesis_tx: &GenesisTx, count: usize) -> Vec<GeneralSd
     );
 
     configs.extend(repeat_n(
-        GeneralSdpConfig {
-            declaration_id: None,
-        },
+        GeneralSdpConfig { declaration: None },
         count - configs.len(),
     ));
     assert_eq!(configs.len(), count);

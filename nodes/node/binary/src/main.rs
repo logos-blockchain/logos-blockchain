@@ -6,7 +6,9 @@ use logos_blockchain_node::{
     UserConfig,
     cli::{CliArgs, Command, build_run_config},
     config::deployment::DeploymentSettings,
-    get_services_to_start, run_node_from_config,
+    get_services_to_start,
+    panic::log_and_exit_hook,
+    run_node_from_config,
 };
 
 #[tokio::main]
@@ -92,6 +94,13 @@ async fn main() -> Result<()> {
     let chain_id = run_config.deployment.chain_id();
     let forks = forks(&run_config.deployment)?;
 
+    // A panic in any service leaves the node in an unknown state, so the
+    // standalone binary logs it and exits. The hook is process-wide, which is
+    // why it is installed here rather than in `run_node_from_config`: that
+    // function is also how the node is started when embedded as a library,
+    // where ending the host process is not the node's call to make.
+    std::panic::set_hook(Box::new(log_and_exit_hook));
+
     let app = run_node_from_config(run_config, None)
         .map_err(|e| eyre!("{e}"))
         .inspect_err(|e| {
@@ -113,8 +122,8 @@ async fn main() -> Result<()> {
         "Running chain {chain_id}: {forks}."
     );
 
-    app.wait_finished().await;
-    Ok(())
+    // An error here means Overwatch shut down because a service panicked.
+    app.wait_finished().await.map_err(|panic| eyre!("{panic}"))
 }
 
 /// The fork of every era of `deployment`'s schedule, in activation order.

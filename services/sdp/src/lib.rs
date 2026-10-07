@@ -21,8 +21,8 @@ use lb_core::{
         transactions::{MantleTxBuilder, states::Preverified},
     },
     sdp::{
-        ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, ProviderId,
-        WithdrawMessage,
+        ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locators, ProviderId,
+        ServiceType, WithdrawMessage, declaration_id,
     },
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -64,15 +64,50 @@ pub enum SdpError {
     ChainApi(#[from] DynError),
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct DeclarationConfig {
+    pub provider_id: ProviderId,
+    pub zk_id: ZkPublicKey,
+    pub locators: Locators,
+    pub service_type: ServiceType,
+}
+
+impl DeclarationConfig {
+    #[must_use]
+    pub fn id(&self) -> DeclarationId {
+        declaration_id(
+            self.service_type,
+            &self.provider_id,
+            &self.zk_id,
+            &self.locators,
+        )
+    }
+}
+
+impl From<&DeclarationMessage> for DeclarationConfig {
+    fn from(message: &DeclarationMessage) -> Self {
+        Self {
+            provider_id: message.provider_id,
+            zk_id: message.zk_id,
+            locators: message.locators.clone(),
+            service_type: message.service_type,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SdpSettings {
-    /// Declaration ID for this node (set after posting declaration).
-    /// On startup, the full declaration info (`zk_id`, `service_note_id`,
-    /// nonce) will be fetched from the ledger.
-    pub declaration_id: Option<DeclarationId>,
+    pub declaration: Option<DeclarationConfig>,
     pub wallet_config: SdpWalletConfig,
     pub active_message_tracker: intent::Config,
     pub recovery_data: RecoveryData,
+}
+
+impl SdpSettings {
+    #[must_use]
+    pub fn declaration_id(&self) -> Option<DeclarationId> {
+        self.declaration.as_ref().map(DeclarationConfig::id)
+    }
 }
 
 impl StorageRecoverySettings for SdpSettings {
@@ -180,7 +215,7 @@ where
         let declaration_id = initial_state
             .updated
             .and(initial_state.declaration_id)
-            .or(settings.declaration_id);
+            .or_else(|| settings.declaration_id());
 
         Ok(Self {
             declaration_id,

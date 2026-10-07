@@ -48,7 +48,7 @@ use logos_blockchain_tx_service::{
     tx::{service::GenericTxMempoolService, state::TxMempoolState},
 };
 use overwatch::{
-    overwatch::OverwatchRunner,
+    overwatch::{OverwatchRunner, Shutdown},
     services::{ServiceData, relay::OutboundRelay},
 };
 use overwatch_derive::*;
@@ -74,7 +74,7 @@ type MockMempoolService = GenericTxMempoolService<
     RuntimeServiceId,
 >;
 
-#[derive_services]
+#[derive_services(panic_policy = Shutdown)]
 struct MockPoolNode {
     logging: Tracing<RuntimeServiceId>,
     time: TimeService<SystemTimeBackend, RuntimeServiceId>,
@@ -609,7 +609,8 @@ fn local_submission_rejects_oversized_tx() {
         );
 
         drop(app.runtime().handle().block_on(app.handle().shutdown()));
-        app.blocking_wait_finished();
+        app.blocking_wait_finished()
+            .expect("No service should panic");
     });
 }
 
@@ -666,7 +667,8 @@ fn mempool_view_preserves_receive_order() {
         assert_eq!(pending, expected_txs);
 
         drop(app.runtime().handle().block_on(app.handle().shutdown()));
-        app.blocking_wait_finished();
+        app.blocking_wait_finished()
+            .expect("No service should panic");
     });
 }
 
@@ -753,7 +755,8 @@ fn test_mock_mempool() {
         }
 
         drop(app.runtime().handle().block_on(app.handle().shutdown()));
-        app.blocking_wait_finished();
+        app.blocking_wait_finished()
+            .expect("No service should panic");
 
         let recovery_data = load_recovery_data(
             rocksdb::RocksBackendSettings {
@@ -860,6 +863,7 @@ fn prefix_lookup_tracks_the_pending_set() {
         );
 
         drop(app.runtime().handle().block_on(app.handle().shutdown()));
-        app.blocking_wait_finished();
+        app.blocking_wait_finished()
+            .expect("No service should panic");
     });
 }
