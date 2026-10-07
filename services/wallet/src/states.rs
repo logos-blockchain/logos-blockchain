@@ -651,11 +651,9 @@ mod tests {
         config: lb_ledger::Config,
     ) -> lb_cryptarchia_engine::era::EraSchedule<lb_ledger::Config> {
         use lb_cryptarchia_engine::era::{
-            EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion,
-        };
+            EraEntriesAfterGenesis, EraEntry, EraSchedule, };
 
         let entry = EraEntry {
-            version: EraVersion::V1,
             slot_duration: core::time::Duration::from_secs(1),
             epoch_length_in_slots: core::num::NonZero::new(config.epoch_length())
                 .expect("an epoch has at least one slot"),

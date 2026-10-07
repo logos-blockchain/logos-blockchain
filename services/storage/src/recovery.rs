@@ -250,7 +250,7 @@ where
 mod tests {
     use std::{collections::HashMap, num::NonZero, time::Duration};
 
-    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion};
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule};
     use serde::{Deserialize, Serialize};
 
     use super::*;
@@ -320,7 +320,6 @@ mod tests {
     /// epoch: era 1 starts at slot 10, 10 seconds in.
     fn forks() -> Arc<ForkDigests> {
         let era = |parameters| EraEntry {
-            version: EraVersion::V1,
             slot_duration: Duration::from_secs(1),
             epoch_length_in_slots: NonZero::new(10).unwrap(),
             transition_slots: 0,

@@ -4613,7 +4613,6 @@ dependencies = [
  "rpds",
  "serde",
  "serde_with",
- "strum",
  "thiserror 2.0.21",
  "time",
  "tracing",

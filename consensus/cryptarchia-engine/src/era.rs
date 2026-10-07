@@ -1,13 +1,11 @@
 //! The eras of a chain, resolved into slots and wall-clock time.
 //!
 //! An era is a range of consecutive epochs governed by one set of parameters.
-//! Eras are numbered from 0, the era that starts at genesis, and each one names
-//! the version of its parameter set: the rules, the parameter layout and the
-//! codecs it runs. Every era has its own slot duration and epoch length, so its
-//! boundaries are resolved era by era: an era's first slot follows the previous
-//! era's last epoch, measured in the previous era's epoch length, and its start
-//! time follows the previous era's last slot, measured in the previous era's
-//! slot duration.
+//! Eras are numbered from 0, the era that starts at genesis. Every era has its
+//! own slot duration and epoch length, so its boundaries are resolved era by
+//! era: an era's first slot follows the previous era's last epoch, measured in
+//! the previous era's epoch length, and its start time follows the previous
+//! era's last slot, measured in the previous era's slot duration.
 
 use core::{iter::once, num::NonZero, time::Duration};
 
@@ -16,7 +14,6 @@ use lb_utils::{
     bounded_duration::{MinimalBoundedDuration, SECOND},
 };
 use serde::{Deserialize, Serialize};
-use strum::{EnumIter, IntoEnumIterator as _};
 use thiserror::Error;
 use time::OffsetDateTime;
 
@@ -42,59 +39,6 @@ impl Era {
     }
 }
 
-/// The version of an era's parameter set: the rules, the parameter layout and
-/// the codecs that go with them.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    EnumIter,
-    serde::Serialize,
-    serde::Deserialize,
-)]
-#[repr(u16)]
-#[serde(try_from = "u16", into = "u16")]
-pub enum EraVersion {
-    V1 = 1,
-}
-
-impl EraVersion {
-    #[must_use]
-    pub const fn tag(&self) -> u16 {
-        *self as u16
-    }
-
-    fn variants_iter() -> impl Iterator<Item = Self> {
-        Self::iter()
-    }
-}
-
-impl From<EraVersion> for u16 {
-    fn from(version: EraVersion) -> Self {
-        version.tag()
-    }
-}
-
-/// A tag no version of this release carries.
-#[derive(Debug, Error, PartialEq, Eq)]
-#[error("unknown era version {0}")]
-pub struct UnknownEraVersion(pub u16);
-
-impl TryFrom<u16> for EraVersion {
-    type Error = UnknownEraVersion;
-
-    fn try_from(tag: u16) -> Result<Self, Self::Error> {
-        Self::variants_iter()
-            .find(|version| version.tag() == tag)
-            .ok_or(UnknownEraVersion(tag))
-    }
-}
-
 /// The most eras a chain can have after its genesis era: eras are numbered by
 /// a `u16`, and the genesis era is era 0.
 pub const MAX_ERAS_AFTER_GENESIS: usize = u16::MAX as usize;
@@ -108,15 +52,14 @@ pub const MAX_ERAS_AFTER_GENESIS: usize = u16::MAX as usize;
 pub type EraEntriesAfterGenesis<Parameters> =
     UpperBoundedBTreeMap<NonZero<u32>, EraEntry<Parameters>, MAX_ERAS_AFTER_GENESIS>;
 
-/// An era as a schedule lists it: the version of its parameters, the length of
-/// its slots and epochs, its transition period, and what it carries.
+/// An era as a schedule lists it: the length of its slots and epochs, its
+/// transition period, and what it carries.
 ///
 /// The genesis era starts at epoch 0, and every later era at the epoch it is
 /// keyed by in [`EraEntriesAfterGenesis`].
 #[serde_with::serde_as]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EraEntry<Parameters> {
-    pub version: EraVersion,
     #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
     pub slot_duration: Duration,
     pub epoch_length_in_slots: NonZero<u64>,
@@ -194,15 +137,6 @@ impl EraInForce {
 /// Why a schedule's eras cannot be resolved.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ErasError {
-    #[error(
-        "era {} runs version {next:?}, older than the version {previous:?} of the era before it",
-        .era.into_inner()
-    )]
-    VersionGoesBack {
-        era: Era,
-        previous: EraVersion,
-        next: EraVersion,
-    },
     #[error("era {} starts beyond the slots or the time this node can represent", .0.into_inner())]
     Overflow(Era),
 }
@@ -238,15 +172,6 @@ impl<Parameters> EraSchedule<Parameters> {
                     .checked_add(1)
                     .expect("a chain has at most `MAX_ERAS_AFTER_GENESIS` eras after genesis"),
             );
-            // A later era never runs an older rule set, so the state of a
-            // chain only ever crosses into a version from the one before.
-            if entry.version < previous_era.entry.version {
-                return Err(ErasError::VersionGoesBack {
-                    era,
-                    previous: previous_era.entry.version,
-                    next: entry.version,
-                });
-            }
             let (first_slot, start_time) = previous_era
                 .epoch_start_time(first_epoch)
                 .ok_or(ErasError::Overflow(era))?;
@@ -282,7 +207,7 @@ impl<Parameters> EraSchedule<Parameters> {
     }
 
     /// The same schedule, each era carrying what `f` makes of it instead of
-    /// its parameters. Numbers, boundaries, versions and lengths are kept.
+    /// its parameters. Numbers, boundaries and lengths are kept.
     pub fn map<MapFn, Mapped>(&self, mut map_fn: MapFn) -> EraSchedule<Mapped>
     where
         MapFn: FnMut(&ScheduledEra<Parameters>) -> Mapped,
@@ -461,7 +386,6 @@ const fn map_era<Parameters, Mapped>(
                 epoch_length_in_slots,
                 slot_duration,
                 transition_slots,
-                version,
                 ..
             },
         era,
@@ -477,7 +401,6 @@ const fn map_era<Parameters, Mapped>(
         first_slot: *first_slot,
         start_time: *start_time,
         entry: EraEntry {
-            version: *version,
             slot_duration: *slot_duration,
             epoch_length_in_slots: *epoch_length_in_slots,
             transition_slots: *transition_slots,
@@ -492,16 +415,13 @@ mod tests {
 
     use time::OffsetDateTime;
 
-    use super::{
-        Era, EraEntriesAfterGenesis, EraEntry, EraInForce, EraSchedule, EraVersion, ErasError,
-    };
+    use super::{Era, EraEntriesAfterGenesis, EraEntry, EraInForce, EraSchedule, ErasError};
     use crate::time::{Epoch, Slot};
 
     const GENESIS: OffsetDateTime = OffsetDateTime::UNIX_EPOCH;
 
     fn entry(slot_duration: Duration, epoch_length: u64) -> EraEntry<()> {
         EraEntry {
-            version: EraVersion::V1,
             slot_duration,
             epoch_length_in_slots: NonZero::new(epoch_length).unwrap(),
             transition_slots: 10,

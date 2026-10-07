@@ -134,7 +134,6 @@ impl DeploymentSettings {
             let fork_digest =
                 ForkDigest::compute(genesis_id, &chain_id, era_digests.iter().copied());
             EraEntry {
-                version: parameters.version(),
                 slot_duration: parameters.slot_duration(),
                 epoch_length_in_slots: parameters.epoch_length(),
                 transition_slots: parameters.transition_slots(),
@@ -205,7 +204,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use lb_core::era::Era;
-    use lb_cryptarchia_engine::{Epoch, era::EraVersion};
+    use lb_cryptarchia_engine::Epoch;
     use lb_era_parameters::EraParameters;
 
     use crate::config::{
@@ -309,7 +308,6 @@ mod tests {
         let settings = two_era_settings();
         let eras = settings.era_schedule().unwrap();
         let genesis = eras.genesis();
-        assert_eq!(genesis.entry.version, EraVersion::V1);
         assert_eq!(
             genesis.entry.parameters.fork_digest,
             DeploymentSettings::default().genesis_fork_digest()

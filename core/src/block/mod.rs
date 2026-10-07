@@ -4,17 +4,15 @@ pub mod genesis;
 
 pub mod v1;
 
+use std::collections::BTreeMap;
+
 use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
-use lb_cryptarchia_engine::{
-    Slot, UncleSlots,
-    era::{EraSchedule, EraVersion},
-};
+use lb_cryptarchia_engine::{Slot, UncleSlots};
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use lb_utils::bounded::{BoundedError, BoundedVec, UpperBoundedOrderedSet, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    era::EraSchedules,
     header::{HeaderId, HeaderRef},
     mantle::{
         traits::{Hashable, StorageSize},
@@ -154,32 +152,11 @@ impl BinaryEncode for Proposal {
     }
 }
 
-/// Decodes a proposal with the codec of the version of the era of its slot,
-/// read off the start of its encoding.
-impl BinaryDecode for Proposal {
-    type Context = EraSchedules;
-
-    fn decode<'input>(
-        input: &'input [u8],
-        eras: &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        // The slot opens the proposal's header, which reads it again.
-        let slot = Slot::peek_decode(input, &())?;
-        let era_for_slot = eras.at_slot(slot).entry.version;
-        match era_for_slot {
-            EraVersion::V1 => {
-                v1::Proposal::decode(input, &()).map(|(rest, proposal)| (rest, Self::V1(proposal)))
-            }
-        }
-    }
-}
-
 /// A block, of the version of the era of its slot.
 ///
-/// Its canonical encoding is its version's, which the era of its slot picks.
-/// Its serde form is tagged with its version instead, so that it reads back
-/// without the era schedule: deserializing checks the block as its version's
-/// `reconstruct` does.
+/// Its canonical encoding is its version's. Its serde form is tagged with its
+/// version, so that it reads back on its own: deserializing checks the block as
+/// its version's `reconstruct` does.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(
     serialize = "Tx: Clone + Serialize",
@@ -310,61 +287,93 @@ where
     }
 }
 
-/// Decodes a block with the codec of the version of the era of its slot,
-/// read off the start of its encoding, and checks it.
+/// A layout of blocks, and of their headers and proposals.
+#[derive(Clone, Copy, Debug)]
+pub enum BlockVersion {
+    V1,
+}
+
+/// The block version of every slot. Which era runs which version is not decided
+/// here: the node decides it, for each deployment.
+#[derive(Clone, Debug)]
+pub struct BlockVersions {
+    genesis: BlockVersion,
+    after_genesis: BTreeMap<Slot, BlockVersion>,
+}
+
+impl BlockVersions {
+    /// Blocks of version `genesis` from genesis on, then of each version of
+    /// `after_genesis` from its slot on.
+    #[must_use]
+    pub fn new<AfterGenesisVersionSchedule>(
+        genesis: BlockVersion,
+        after_genesis: AfterGenesisVersionSchedule,
+    ) -> Self
+    where
+        AfterGenesisVersionSchedule: IntoIterator<Item = (Slot, BlockVersion)>,
+    {
+        Self {
+            genesis,
+            after_genesis: after_genesis.into_iter().collect(),
+        }
+    }
+
+    /// The version of the blocks at `slot`.
+    #[must_use]
+    pub fn at_slot(&self, slot: Slot) -> BlockVersion {
+        self.after_genesis
+            .range(..=slot)
+            .next_back()
+            .map_or(self.genesis, |(_, version)| *version)
+    }
+}
+
+/// Decodes a block with the codec of the version of its slot, read off the
+/// start of its encoding, and checks it.
 impl<Tx> BinaryDecode for Block<Tx>
 where
     Tx: BinaryDecode + Hashable<Hash = TxHash> + StorageSize,
 {
-    type Context = (EraSchedule<()>, Tx::Context);
+    type Context = (BlockVersions, Tx::Context);
 
     fn decode<'input>(
         input: &'input [u8],
-        (eras, tx_decode_context): &Self::Context,
+        (block_versions, tx_decode_context): &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        // The slot opens the block's header, which reads it again.
+        // The slot opens the header of every version, which reads it again.
         let slot = Slot::peek_decode(input, &())?;
-        let era_for_slot = eras.at_slot(slot).entry.version;
-        match era_for_slot {
-            EraVersion::V1 => <v1::Block<Tx>>::decode(input, tx_decode_context)
+        match block_versions.at_slot(slot) {
+            BlockVersion::V1 => <v1::Block<Tx>>::decode(input, tx_decode_context)
                 .map(|(rest, block)| (rest, Self::V1(block))),
         }
     }
 }
 
-/// The uncle headers a leader gathers for a new block, of the version of the
-/// era of the block.
+/// The uncle headers a leader gathers for a new block.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UncleHeaders {
     V1(v1::UncleHeaders),
 }
 
 impl UncleHeaders {
-    /// No uncle headers, for a block of an era of `version`.
+    /// No uncle headers, of version 1, the only version.
     #[must_use]
-    pub fn empty(version: EraVersion) -> Self {
-        match version {
-            EraVersion::V1 => Self::V1(v1::UncleHeaders::empty()),
-        }
+    pub fn empty() -> Self {
+        Self::V1(v1::UncleHeaders::empty())
     }
 
-    /// The signed headers of `blocks`, as the uncles of a block of an era of
-    /// `version`. An uncle is of the era of the block that carries it, and so
-    /// of its version.
-    pub fn of_blocks<'block, Tx: 'block>(
-        version: EraVersion,
-        blocks: impl IntoIterator<Item = &'block Block<Tx>>,
-    ) -> Result<Self, BoundedError> {
-        match version {
-            EraVersion::V1 => {
-                let signed_headers = blocks.into_iter().map(|block| match block {
-                    Block::V1(block) => block.signed_header(),
-                });
-                Ok(Self::V1(v1::UncleHeaders::new(
-                    UpperBoundedOrderedSet::try_from_iter(signed_headers)?,
-                )))
-            }
-        }
+    /// The signed headers of `blocks`, as the uncles of a block. An uncle is of
+    /// the era of the block that carries it, and so of its version.
+    pub fn of_blocks<'block, Tx: 'block, Blocks>(blocks: Blocks) -> Result<Self, BoundedError>
+    where
+        Blocks: IntoIterator<Item = &'block Block<Tx>>,
+    {
+        let signed_headers = blocks.into_iter().map(|block| match block {
+            Block::V1(block) => block.signed_header(),
+        });
+        Ok(Self::V1(v1::UncleHeaders::new(
+            UpperBoundedOrderedSet::try_from_iter(signed_headers)?,
+        )))
     }
 
     /// The slots of the uncles.
@@ -479,13 +488,13 @@ pub fn verify_header_signature(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{block::fixtures::single_era, mantle::transactions::Ops};
+    use crate::mantle::transactions::Ops;
 
     fn block() -> Block<Ops> {
         Block::create(
             [0u8; 32].into(),
             Slot::from(0x0102_0304_0506_0708u64),
-            UncleHeaders::empty(EraVersion::V1),
+            UncleHeaders::empty(),
             v1::tests::create_proof(),
             BlockTransactions::try_from(vec![Ops::new_unchecked(vec![]); 3]).unwrap(),
             &Ed25519Key::from_bytes(&[0; 32]),
@@ -493,14 +502,14 @@ mod tests {
         .expect("valid block")
     }
 
-    /// A block decodes under the version of the era of the slot its
-    /// encoding starts with.
+    /// A block decodes under the version of the slot its encoding starts with.
     #[test]
-    fn a_block_decodes_under_the_era_of_its_slot() {
+    fn a_block_decodes_under_the_version_of_its_slot() {
         let block = block();
+        let block_versions = BlockVersions::new(BlockVersion::V1, []);
 
         assert_eq!(
-            Block::decode_all(&block.encode(), &(single_era(), ())).unwrap(),
+            Block::decode_all(&block.encode(), &(block_versions, ())).unwrap(),
             block
         );
     }

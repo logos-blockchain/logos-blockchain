@@ -1760,7 +1760,6 @@ pub mod tests {
         EraSchedule::new(
             time::OffsetDateTime::UNIX_EPOCH,
             lb_cryptarchia_engine::era::EraEntry {
-                version: lb_cryptarchia_engine::era::EraVersion::V1,
                 slot_duration: core::time::Duration::from_secs(1),
                 epoch_length_in_slots: NonZeroU64::new(1_000).unwrap(),
                 transition_slots: 0,
@@ -2334,7 +2333,6 @@ pub mod tests {
     #[test]
     fn prune_expired_tickets_follows_the_window_of_the_era_in_force() {
         let entry = |slot_window| lb_cryptarchia_engine::era::EraEntry {
-            version: lb_cryptarchia_engine::era::EraVersion::V1,
             slot_duration: core::time::Duration::from_secs(1),
             epoch_length_in_slots: NonZeroU64::new(1_000).unwrap(),
             transition_slots: 0,

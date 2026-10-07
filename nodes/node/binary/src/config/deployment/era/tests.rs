@@ -2,10 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use lb_cryptarchia_engine::{
-    Epoch,
-    era::{EraVersion, MAX_ERAS_AFTER_GENESIS},
-};
+use lb_cryptarchia_engine::{Epoch, era::MAX_ERAS_AFTER_GENESIS};
 use lb_era_parameters::EraParameters;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 
@@ -32,7 +29,7 @@ fn parameters_are_tagged_with_their_version() {
 fn parameters_round_trip() {
     let parameters = parameters();
     let decoded: EraParameters = serde_yaml::from_str(&yaml(&parameters)).unwrap();
-    assert_eq!(decoded.version(), EraVersion::V1);
+    assert_eq!(decoded.tag(), 1);
     assert_eq!(yaml(&decoded), yaml(&parameters));
 }
 

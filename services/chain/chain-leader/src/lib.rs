@@ -29,7 +29,6 @@ use lb_core::{
     proofs::leader_proof::LeaderPrivate,
     sdp::blend::PolEpochState,
 };
-use lb_cryptarchia_engine::era::EraVersion;
 use lb_key_management_system_service::api::KmsServiceApi;
 use lb_ledger::{LedgerState, config::EraScheduledConfig};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
@@ -467,25 +466,21 @@ where
 
                         if let Some((proof, signing_key)) = proof {
                             // TODO: spawn as a separate task?
-                            // A block is built by the rules of its version, the version of its
-                            // slot's era.
-                            let block = match ledger_eras.at_slot(slot).entry.version {
-                                EraVersion::V1 => v1::propose_block(
-                                    wallet_tip,
-                                    slot,
-                                    proof,
-                                    &signing_key,
-                                    &cryptarchia_api,
-                                    relays.mempool_adapter(),
-                                    tip_state,
-                                    &ledger_eras,
-                                )
-                                .await
-                                .map(Block::V1),
-                            };
-                            match block {
+                            // TODO: Add block versioning based on era schedule, later on.
+                            match v1::propose_block(
+                                wallet_tip,
+                                slot,
+                                proof,
+                                &signing_key,
+                                &cryptarchia_api,
+                                relays.mempool_adapter(),
+                                tip_state,
+                                &ledger_eras,
+                            )
+                            .await
+                            {
                                 Ok(block) => {
-                                    Self::apply_and_publish_block_proposal(block, &chain_network_api, &blend_adapter).await;
+                                    Self::apply_and_publish_block_proposal(Block::V1(block), &chain_network_api, &blend_adapter).await;
                                 }
                                 Err(e) => {
                                     metrics::consensus_proposals_create_failed("propose_block");

@@ -1,5 +1,5 @@
 //! Blocks of version 1: how the leader builds them. The service's main loop
-//! dispatches each won slot here by the version of the slot's era.
+//! builds a block here for each slot it wins.
 
 mod tx_selection;
 

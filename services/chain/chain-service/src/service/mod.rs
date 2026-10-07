@@ -472,10 +472,14 @@ where
     /// Selects uncles for a new block extending `parent` at `slot`.
     async fn select_uncles(&self, parent: HeaderId, slot: Slot) -> UncleHeaders {
         // An uncle must be of the era of the new block.
-        let slot_era = self.cryptarchia.ledger.era_schedule().at_slot(slot);
-        let (era_starting_slot, era_version) = (slot_era.first_slot, slot_era.entry.version);
+        let era_starting_slot = self
+            .cryptarchia
+            .ledger
+            .era_schedule()
+            .at_slot(slot)
+            .first_slot;
         let Some(parent_branch) = self.cryptarchia.consensus.branches().get(&parent) else {
-            return UncleHeaders::empty(era_version);
+            return UncleHeaders::empty();
         };
 
         let mut uncles = Vec::new();
@@ -494,8 +498,7 @@ where
             uncles.push(block);
         }
 
-        UncleHeaders::of_blocks(era_version, &uncles)
-            .expect("at most MAX_UNCLES unique uncles are selected")
+        UncleHeaders::of_blocks(&uncles).expect("at most MAX_UNCLES unique uncles are selected")
     }
 
     /// Record the current service state.

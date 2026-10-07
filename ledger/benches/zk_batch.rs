@@ -39,7 +39,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{
     EpochConfig,
-    era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion},
+    era::{EraEntriesAfterGenesis, EraEntry, EraSchedule},
 };
 use lb_key_management_system_keys::keys::ZkKey;
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
@@ -204,7 +204,6 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
     let eras = EraSchedule::new(
         time::OffsetDateTime::UNIX_EPOCH,
         EraEntry {
-            version: EraVersion::V1,
             slot_duration: Duration::from_secs(1),
             epoch_length_in_slots: NonZero::new(config.epoch_length()).unwrap(),
             transition_slots: 0,

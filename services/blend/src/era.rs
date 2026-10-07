@@ -40,7 +40,7 @@ pub fn epoch_transition_period_in_force(timings: &EraSchedule<TimingSettings>) -
 mod tests {
     use core::{num::NonZero, time::Duration};
 
-    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion};
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule};
     use time::OffsetDateTime;
 
     use super::epoch_transition_period_in_force;
@@ -61,7 +61,6 @@ mod tests {
     /// era 1 starts at epoch 2, 20 s after genesis.
     fn two_eras(genesis_time: OffsetDateTime) -> EraSchedule<TimingSettings> {
         let entry = |epoch_transition| EraEntry {
-            version: EraVersion::V1,
             slot_duration: Duration::from_secs(1),
             epoch_length_in_slots: NonZero::new(10).unwrap(),
             transition_slots: 30,

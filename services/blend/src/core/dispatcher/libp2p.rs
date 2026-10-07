@@ -323,7 +323,7 @@ where
 mod tests {
     use core::{num::NonZero, time::Duration};
 
-    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry};
     use time::OffsetDateTime;
     use tokio::sync::mpsc;
 
@@ -333,7 +333,6 @@ mod tests {
     async fn a_proposal_is_broadcast_on_the_topic_of_its_era() {
         // Era 1 starts at slot 10.
         let entry = |era| EraEntry {
-            version: EraVersion::V1,
             slot_duration: Duration::from_secs(1),
             epoch_length_in_slots: NonZero::new(10).unwrap(),
             transition_slots: 0,

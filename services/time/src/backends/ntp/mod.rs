@@ -224,7 +224,7 @@ impl NtpStream {
 mod tests {
     use std::num::NonZero;
 
-    use lb_cryptarchia_engine::era::{Era, EraEntriesAfterGenesis, EraEntry, EraVersion};
+    use lb_cryptarchia_engine::era::{Era, EraEntriesAfterGenesis, EraEntry};
 
     use super::*;
 
@@ -233,7 +233,6 @@ mod tests {
         EraSchedules::new(
             OffsetDateTime::UNIX_EPOCH,
             EraEntry {
-                version: EraVersion::V1,
                 slot_duration: Duration::from_secs(1),
                 epoch_length_in_slots: NonZero::new(3).unwrap(),
                 transition_slots: 0,

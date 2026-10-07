@@ -24,7 +24,6 @@ lb-utils        = { features = ["time"], workspace = true }
 rpds            = { workspace = true }
 serde           = { workspace = true }
 serde_with      = { features = ["macros"], workspace = true }
-strum           = { features = ["derive"], workspace = true }
 thiserror       = { workspace = true }
 time            = { workspace = true }
 tracing         = { workspace = true }

@@ -27,10 +27,7 @@ use lb_core::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
     sdp::ServiceParameters,
 };
-use lb_cryptarchia_engine::{
-    EpochConfig, Slot, UncleSlots,
-    era::{EraSchedule, EraVersion},
-};
+use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots, era::EraSchedule};
 use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
@@ -88,7 +85,7 @@ fn cryptarchia_switch_to_online() {
             utxo,
             &zk_key,
             slot,
-            UncleHeaders::empty(EraVersion::V1),
+            UncleHeaders::empty(),
         )
         .expect("should find a winning slot");
 
@@ -164,7 +161,7 @@ async fn get_block_ids_from_memory_and_storage() {
             utxo,
             &zk_key,
             slot,
-            UncleHeaders::empty(EraVersion::V1),
+            UncleHeaders::empty(),
         )
         .unwrap();
         process_block(
@@ -218,7 +215,7 @@ async fn get_block_ids_from_memory_and_storage() {
             utxo,
             &zk_key,
             slot,
-            UncleHeaders::empty(EraVersion::V1),
+            UncleHeaders::empty(),
         )
         .unwrap();
         process_block(
@@ -412,7 +409,7 @@ async fn get_block_ids_past_recovered_lib() {
             utxo,
             &zk_key,
             slot,
-            UncleHeaders::empty(EraVersion::V1),
+            UncleHeaders::empty(),
         )
         .unwrap();
         slot = block.header().slot().strict_add(1.into());
@@ -542,7 +539,7 @@ fn ledger_is_not_commited_if_block_contains_invalid_zkp() {
         utxo,
         &zk_key,
         Slot::new(1),
-        UncleHeaders::empty(EraVersion::V1),
+        UncleHeaders::empty(),
         BlockTransactions::from([transfer_tx_with_fake_sig(utxo, &fake_key)]),
     )
     .expect("should find a winning slot");
@@ -601,7 +598,7 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, St
         utxo,
         &zk_key,
         Slot::new(1),
-        UncleHeaders::empty(EraVersion::V1),
+        UncleHeaders::empty(),
     )
     .unwrap();
 
@@ -637,7 +634,6 @@ pub fn schedule(
     use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry};
 
     let entry = |config: lb_ledger::Config| EraEntry {
-        version: EraVersion::V1,
         slot_duration: core::time::Duration::from_secs(1),
         epoch_length_in_slots: NonZero::new(config.epoch_length())
             .expect("an epoch has at least one slot"),
@@ -834,7 +830,7 @@ pub fn chain_with_fork_over(
         utxo,
         &zk_key,
         Slot::new(1),
-        UncleHeaders::empty(EraVersion::V1),
+        UncleHeaders::empty(),
     )
     .unwrap();
     let (b1, _) = try_build_block(
@@ -843,7 +839,7 @@ pub fn chain_with_fork_over(
         utxo,
         &zk_key,
         Slot::new(1),
-        UncleHeaders::empty(EraVersion::V1),
+        UncleHeaders::empty(),
     )
     .unwrap();
     let b1_header_slot = b1.header().slot();
@@ -877,7 +873,7 @@ pub fn genesis_cryptarchia_over(
 
 /// `block`, as the only uncle of another block of its era.
 pub fn uncle(block: &Block<SignedOps<Preverified, StandardMode>>) -> UncleHeaders {
-    UncleHeaders::of_blocks(EraVersion::V1, [block]).expect("one uncle is within the bound")
+    UncleHeaders::of_blocks([block]).expect("one uncle is within the bound")
 }
 
 pub fn utxo() -> (ZkKey, Utxo) {

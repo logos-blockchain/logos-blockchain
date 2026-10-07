@@ -800,10 +800,9 @@ mod pol_tests {
 
     /// A schedule of a single era, of version 1, running `config` from genesis.
     fn single_era(config: lb_ledger::Config) -> EraScheduledConfig {
-        use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
+        use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry};
 
         let entry = EraEntry {
-            version: EraVersion::V1,
             slot_duration: core::time::Duration::from_secs(1),
             epoch_length_in_slots: NonZero::new(config.epoch_length())
                 .expect("an epoch has at least one slot"),

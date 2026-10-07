@@ -60,7 +60,7 @@ mod tests {
     use std::time::Duration;
 
     use lb_core::era::ForkDigest;
-    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry};
     use time::OffsetDateTime;
 
     use super::*;
@@ -70,7 +70,6 @@ mod tests {
         let forks = ForkDigests::new(
             OffsetDateTime::UNIX_EPOCH,
             EraEntry {
-                version: EraVersion::V1,
                 slot_duration: Duration::from_secs(1),
                 epoch_length_in_slots: NonZero::new(10).unwrap(),
                 transition_slots: 0,

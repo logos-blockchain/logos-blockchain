@@ -29,7 +29,7 @@ use lb_core::{
         },
     },
 };
-use lb_cryptarchia_engine::era::{Era, EraSchedule, EraVersion};
+use lb_cryptarchia_engine::era::{Era, EraSchedule};
 pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
 use lb_log_targets::chain;
@@ -424,7 +424,7 @@ where
         }
 
         // The proposals of the era in force.
-        let mut incoming_proposals = listen_to_proposals(&era_adapter, &eras).await?;
+        let mut incoming_proposals = listen_to_proposals(&era_adapter).await?;
         let mut chainsync_events = network_adapter.chainsync_events_stream().await?;
 
         // Keep a handle to the adapter for the proactive tip-poll watchdog before
@@ -541,7 +541,7 @@ where
                         if tick.era > era_adapter.0 {
                             let new_era_adapter =
                                 join_era(&eras, tick.era, relays.network_relay()).await;
-                            match listen_to_proposals(&new_era_adapter, &eras).await {
+                            match listen_to_proposals(&new_era_adapter).await {
                                 Ok(proposals) => {
                                     era_adapter = new_era_adapter;
                                     incoming_proposals = proposals;
@@ -1233,24 +1233,13 @@ where
 
 /// Listens to the proposals of the era of `era_adapter`.
 async fn listen_to_proposals<EraAdapter, RuntimeServiceId>(
-    (era, era_adapter): &(Era, EraAdapter),
-    eras: &EraSchedule<EraAdapter::Settings>,
+    (_, era_adapter): &(Era, EraAdapter),
 ) -> Result<BoxedStream<Proposal>, DynError>
 where
-    EraAdapter: EraNetworkAdapter<RuntimeServiceId, Settings: Sync> + Sync,
+    EraAdapter: EraNetworkAdapter<RuntimeServiceId> + Sync,
 {
-    let version = eras
-        .get(*era)
-        .expect("an era with an adapter is scheduled")
-        .entry
-        .version;
-    // An era's proposals are of the version of the era.
-    match version {
-        EraVersion::V1 => {
-            let proposals = era_adapter.proposals_stream::<v1::Proposal>(()).await?;
-            Ok(Box::new(proposals.map(Proposal::V1)))
-        }
-    }
+    let proposals = era_adapter.proposals_stream::<v1::Proposal>(()).await?;
+    Ok(Box::new(proposals.map(Proposal::V1)))
 }
 
 /// The single local transaction a reference means.
@@ -1498,7 +1487,7 @@ mod tests {
         let genuine = Block::create(
             HeaderId::from([0; 32]),
             Slot::new(1),
-            UncleHeaders::empty(EraVersion::V1),
+            UncleHeaders::empty(),
             leader_proof(&leader_key.public_key()),
             BlockTransactions::<Ops>::empty(),
             &leader_key,

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use lb_chain_network_service::network::adapters::libp2p::{
     LibP2pAdapterSettings, LibP2pEraAdapterSettings,
 };
-use lb_core::block::genesis::GenesisBlock;
-use lb_cryptarchia_engine::era::EraSchedule;
+use lb_core::block::{BlockVersion, BlockVersions, genesis::GenesisBlock};
+use lb_cryptarchia_engine::era::{EraSchedule, ScheduledEra};
 use lb_era_parameters::{EraDefinition, EraParameters};
 use lb_libp2p::PeerId;
 use lb_services_utils::overwatch::RecoveryData;
@@ -82,7 +82,7 @@ impl ServiceConfig {
                 },
             },
             network: LibP2pAdapterSettings {
-                eras: eras.map(|_| ()),
+                block_versions: block_versions(eras),
                 tx_decoding_context: (),
                 max_connected_peers_to_try_download: self
                     .user
@@ -130,4 +130,17 @@ impl ServiceConfig {
             chain_leader_settings,
         )
     }
+}
+
+/// The version of the blocks of each era, from its first slot on.
+fn block_versions(eras: &EraSchedule<EraDefinition>) -> BlockVersions {
+    let block_version = |era: &ScheduledEra<EraDefinition>| match &era.entry.parameters.parameters {
+        EraParameters::V1(_) => BlockVersion::V1,
+    };
+    BlockVersions::new(
+        block_version(eras.genesis()),
+        eras.iter()
+            .skip(1)
+            .map(|era| (era.first_slot, block_version(era))),
+    )
 }

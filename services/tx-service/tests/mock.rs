@@ -19,7 +19,7 @@ use lb_core::{
         transactions::hash::{PrefixedKey as _, TxHashPrefix},
     },
 };
-use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion};
+use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule};
 use lb_network_service::{
     NetworkService,
     backends::mock::{Mock, MockBackendMessage, MockConfig, MockMessage},
@@ -101,7 +101,6 @@ fn mock_pool_node_settings(
     let eras = EraSchedule::new(
         time::OffsetDateTime::now_utc(),
         EraEntry {
-            version: EraVersion::V1,
             slot_duration: Duration::from_secs(1),
             epoch_length_in_slots: 100.try_into().unwrap(),
             transition_slots: 0,

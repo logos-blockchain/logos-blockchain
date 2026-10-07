@@ -4,7 +4,6 @@
 use core::{num::NonZero, time::Duration};
 
 use lb_core::era::{EraDigest, ForkDigest};
-use lb_cryptarchia_engine::era::EraVersion;
 use serde::{Deserialize, Serialize};
 
 pub mod v1;
@@ -23,16 +22,12 @@ pub enum EraParameters {
 }
 
 impl EraParameters {
-    /// The version of the parameter set.
+    /// The version of the parameter set, as written ahead of its encoding.
     #[must_use]
-    pub const fn version(&self) -> EraVersion {
+    pub const fn tag(&self) -> u16 {
         match self {
-            Self::V1(_) => EraVersion::V1,
+            Self::V1(_) => 1,
         }
-    }
-
-    const fn tag(&self) -> u16 {
-        self.version().tag()
     }
 
     /// How long each slot of the era lasts.

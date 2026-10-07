@@ -111,6 +111,15 @@ pub enum EraScheduleError {
     OutOfOrder { previous: Epoch, next: Epoch },
     #[error("a schedule has at most {MAX_ERAS_AFTER_GENESIS} eras after its genesis era, not {0}")]
     TooManyEras(usize),
+    #[error(
+        "the era from epoch {} has parameters of version {next}, older than the version {previous} of the era before it",
+        .epoch.into_inner()
+    )]
+    VersionGoesBack {
+        epoch: Epoch,
+        previous: u16,
+        next: u16,
+    },
 }
 
 impl TryFrom<BTreeMap<Epoch, EraParameters>> for EraSchedule {
@@ -118,8 +127,9 @@ impl TryFrom<BTreeMap<Epoch, EraParameters>> for EraSchedule {
 
     /// Builds a schedule from eras keyed by their first epoch. The map keeps
     /// them unique and ordered, so what remains to check is that the first one
-    /// starts at genesis, and that there are no more after it than a chain can
-    /// number.
+    /// starts at genesis, that there are no more after it than a chain can
+    /// number, and that no era's parameters are of an older version than the
+    /// ones of the era before it.
     fn try_from(mut eras: BTreeMap<Epoch, EraParameters>) -> Result<Self, Self::Error> {
         let Some((first_epoch, genesis)) = eras.pop_first() else {
             return Err(EraScheduleError::Empty);
@@ -129,6 +139,20 @@ impl TryFrom<BTreeMap<Epoch, EraParameters>> for EraSchedule {
         }
         if eras.len() > MAX_ERAS_AFTER_GENESIS {
             return Err(EraScheduleError::TooManyEras(eras.len()));
+        }
+        // A later era never runs an older parameter set, so the state of a
+        // chain only ever crosses into a version from the one before.
+        let mut previous = genesis.tag();
+        for (&epoch, parameters) in &eras {
+            let next = parameters.tag();
+            if next < previous {
+                return Err(EraScheduleError::VersionGoesBack {
+                    epoch,
+                    previous,
+                    next,
+                });
+            }
+            previous = next;
         }
         let after_genesis = eras
             .into_iter()

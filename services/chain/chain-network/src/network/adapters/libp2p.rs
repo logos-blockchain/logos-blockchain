@@ -5,8 +5,7 @@ use std::{
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
 use lb_binary_codec::canonical::BinaryDecode;
 use lb_core::{
-    block::Block,
-    era::EraSchedules,
+    block::{Block, BlockVersions},
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
@@ -60,9 +59,9 @@ where
 
 #[derive(Debug, Clone)]
 pub struct LibP2pAdapterSettings<TxDecodingContext> {
-    /// The chain's eras: a synced block decodes under the version of the era
-    /// of its slot.
-    pub eras: EraSchedules,
+    /// The block version of every slot: a synced block decodes under the
+    /// version of its slot.
+    pub block_versions: BlockVersions,
     /// Context to use when decoding transactions in received blocks.
     pub tx_decoding_context: TxDecodingContext,
     /// The maximum number of connected peers to attempt downloads from
@@ -360,9 +359,8 @@ where
         }
 
         let stream = receiver.await?;
-        // A block decodes under the version of the era of its slot.
         let decoding_context = (
-            self.settings.eras.clone(),
+            self.settings.block_versions.clone(),
             self.settings.tx_decoding_context.clone(),
         );
         let stream = stream

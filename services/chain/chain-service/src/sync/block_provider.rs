@@ -562,7 +562,7 @@ mod tests {
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
-    use lb_cryptarchia_engine::{Config, UncleSlots, era::EraVersion};
+    use lb_cryptarchia_engine::{Config, UncleSlots};
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
     use lb_storage_service::{StorageMsg, StorageService, rocksdb::RocksBackendSettings};
@@ -879,7 +879,7 @@ mod tests {
             Block::create(
                 prev_header,
                 slot,
-                UncleHeaders::empty(EraVersion::V1),
+                UncleHeaders::empty(),
                 self.proof.clone(),
                 BlockTransactions::empty(),
                 &dummy_signing_key,
