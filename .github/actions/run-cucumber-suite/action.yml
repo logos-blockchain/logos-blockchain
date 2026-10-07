@@ -5,6 +5,14 @@ inputs:
   suite_tag:
     description: Cucumber tag expression without the broken/undefined filter
     required: true
+  executable:
+    description: Absolute path to a built runner executable; defaults to the normal Cargo test runner
+    required: false
+    default: ""
+  scenario_name:
+    description: Optional scenario-name regular expression for the supplied executable
+    required: false
+    default: ""
   suite_name:
     description: Short suite name used in step output and artifact naming
     required: true
@@ -26,7 +34,7 @@ runs:
     - name: Run cucumber - ${{ inputs.suite_tag }}
       id: run_suite
       continue-on-error: true
-      if: ${{ inputs.verbose_console != 'true' }}
+      if: ${{ inputs.executable == '' && inputs.verbose_console != 'true' }}
       uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
       env:
         CUCUMBER_LOG_LEVEL: debug
@@ -42,7 +50,7 @@ runs:
     - name: Run cucumber - ${{ inputs.suite_tag }} (verbose)
       id: run_suite_verbose
       continue-on-error: true
-      if: ${{ inputs.verbose_console == 'true' }}
+      if: ${{ inputs.executable == '' && inputs.verbose_console == 'true' }}
       uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
       env:
         CUCUMBER_LOG_LEVEL: debug
@@ -56,8 +64,31 @@ runs:
           --locked -p logos-blockchain-tests --features cucumber
           --test cucumber -- --tags "${{ inputs.suite_tag }} and not (@broken or @undefined_behaviour)"
 
+    - name: Run cucumber executable - ${{ inputs.suite_name }}
+      id: run_external
+      continue-on-error: true
+      if: ${{ inputs.executable != '' }}
+      shell: bash
+      working-directory: tests
+      env:
+        CUCUMBER_LOG_LEVEL: debug
+        CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
+        USE_LOCAL_HOST_NTP_TIME_CONFIG: true
+        CUCUMBER_VERBOSE_CONSOLE: ${{ inputs.verbose_console }}
+        MAX_CUCUMBER_CONCURRENT_SCENARIOS: ${{ inputs.max_concurrent_scenarios }}
+        RUNNER_EXECUTABLE: ${{ inputs.executable }}
+        SUITE_TAG: ${{ inputs.suite_tag }}
+        SCENARIO_NAME: ${{ inputs.scenario_name }}
+      run: |
+        args=(--tags "$SUITE_TAG and not (@broken or @undefined_behaviour)")
+        if [[ -n "$SCENARIO_NAME" ]]; then
+          args+=(--name "$SCENARIO_NAME")
+        fi
+
+        "$RUNNER_EXECUTABLE" "${args[@]}"
+
     - name: Upload cucumber logs on failure
-      if: ${{ steps.run_suite.outcome == 'failure' || steps.run_suite_verbose.outcome == 'failure' }}
+      if: ${{ steps.run_suite.outcome == 'failure' || steps.run_suite_verbose.outcome == 'failure' || steps.run_external.outcome == 'failure' }}
       continue-on-error: true
       uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
       with:
@@ -66,6 +97,6 @@ runs:
         path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/${{ inputs.artifact_subdir }}/**
 
     - name: Fail suite
-      if: ${{ steps.run_suite.outcome == 'failure' || steps.run_suite_verbose.outcome == 'failure' }}
+      if: ${{ steps.run_suite.outcome == 'failure' || steps.run_suite_verbose.outcome == 'failure' || steps.run_external.outcome == 'failure' }}
       shell: bash
       run: exit 1

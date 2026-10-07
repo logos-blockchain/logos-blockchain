@@ -8,12 +8,36 @@ use testing_framework_core::{scenario::DynError, topology::FixedDeploymentProvid
 use super::{CucumberClusterApp, LocalDeployment};
 use crate::cucumber::error::StepError;
 
-/// Prepares an external implementation from the suite's shared network inputs.
+/// A scenario's prepared deployment, retaining the original Logos
+/// configuration.
+///
+/// Other implementations consume the shared inputs without depending on that
+/// configuration. Logos callers reuse the original plan rather than generate it
+/// again from the smaller shared input set.
+pub struct PreparedDeployment {
+    logos_plan: DeploymentPlan,
+}
+
+impl PreparedDeployment {
+    pub fn shared_inputs(&self) -> Result<SharedDeployment, DynError> {
+        SharedDeployment::from_plan(&self.logos_plan)
+    }
+
+    pub fn into_logos_app(self) -> Result<CucumberClusterApp<LbcClusterApp>, DynError> {
+        let inputs = self.shared_inputs()?;
+        let app = LbcClusterApp::new(Box::new(FixedDeploymentProvider::new(self.logos_plan)))
+            .with_on_demand_start();
+
+        Ok(CucumberClusterApp { app, inputs })
+    }
+}
+
+/// Deploys the scenario through an integration's selected apps.
 #[async_trait]
 pub trait ExternalDeploymentFactory: Debug + Send + Sync {
     fn name(&self) -> &'static str;
 
-    async fn deploy(&self, inputs: SharedDeployment) -> Result<LocalDeployment, DynError>;
+    async fn deploy(&self, deployment: PreparedDeployment) -> Result<LocalDeployment, DynError>;
 }
 
 /// The default Logos deployment or a factory supplied by an integration runner.
@@ -49,18 +73,15 @@ impl LocalImplementation {
     }
 
     pub async fn deploy(self, deployment: DeploymentPlan) -> Result<LocalDeployment, StepError> {
-        let inputs = SharedDeployment::from_plan(&deployment)?;
+        let deployment = PreparedDeployment {
+            logos_plan: deployment,
+        };
 
         match self {
-            Self::Logos => {
-                let app = LbcClusterApp::new(Box::new(FixedDeploymentProvider::new(deployment)))
-                    .with_on_demand_start();
-
-                Ok(AppDeployer::new()
-                    .deploy(CucumberClusterApp { app, inputs })
-                    .await?)
-            }
-            Self::External(factory) => Ok(factory.deploy(inputs).await?),
+            Self::Logos => Ok(AppDeployer::new()
+                .deploy(deployment.into_logos_app()?)
+                .await?),
+            Self::External(factory) => Ok(factory.deploy(deployment).await?),
         }
     }
 }
@@ -190,11 +211,14 @@ mod tests {
             "test"
         }
 
-        async fn deploy(&self, inputs: SharedDeployment) -> Result<LocalDeployment, DynError> {
+        async fn deploy(
+            &self,
+            deployment: PreparedDeployment,
+        ) -> Result<LocalDeployment, DynError> {
             AppDeployer::new()
                 .deploy(CucumberClusterApp {
                     app: TestApp,
-                    inputs,
+                    inputs: deployment.shared_inputs()?,
                 })
                 .await
         }

@@ -4,7 +4,7 @@ pub mod runtime_info;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-pub use implementation::{ExternalDeploymentFactory, LocalImplementation};
+pub use implementation::{ExternalDeploymentFactory, LocalImplementation, PreparedDeployment};
 use lb_testing_framework::SharedDeployment;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext, DeployedApp};
 use testing_framework_core::scenario::{Application, ClusterHandle, DynError, NodeControl};
