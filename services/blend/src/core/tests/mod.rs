@@ -620,6 +620,7 @@ async fn test_handle_epoch_transition_expired() {
     // Check that an activity proof has been submitted to SDP service.
     let lb_sdp_service::SdpMessage::PostActivity {
         metadata: ActivityMetadata::Blend(activity_proof),
+        ..
     } = sdp_relay_receiver
         .try_recv()
         .expect("an activity proof must be submitted")
@@ -2103,6 +2104,7 @@ async fn test_initialize_submits_activity_proof_for_the_previous_epoch() {
             sdp_relay_receiver.try_recv(),
             Ok(lb_sdp_service::SdpMessage::PostActivity {
                 metadata: ActivityMetadata::Blend(_),
+                ..
             })
         ),
         "the previous epoch's tokens should be submitted as an activity proof, not dropped"

@@ -12,7 +12,7 @@ use lb_blend::scheduling::epoch::UninitializedEpochEventStream;
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     mantle::NoteId,
-    sdp::{DeclarationId, DeclarationMessage, Locator, ProviderId, ServiceType},
+    sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
 use lb_key_management_system_service::{
     api::KmsServiceApi,
@@ -20,7 +20,7 @@ use lb_key_management_system_service::{
 };
 use lb_log_targets::blend;
 use lb_network_service::NetworkService;
-use lb_sdp_service::{SdpMessage, SdpServiceApi};
+use lb_sdp_service::{SdpMessage, SdpServiceApi, SdpSubmission};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::TimeService;
 use overwatch::{
@@ -324,7 +324,7 @@ async fn submit_blend_sdp_declaration<SdpService>(
     service_note_id: NoteId,
     non_ephemeral_signing_key_public: Ed25519PublicKey,
     zk_id: ZkPublicKey,
-) -> Result<DeclarationId, lb_sdp_service::api::Error>
+) -> Result<SdpSubmission, lb_sdp_service::api::Error>
 where
     SdpService: ServiceData<Message = SdpMessage>,
 {

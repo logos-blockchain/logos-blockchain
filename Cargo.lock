@@ -4529,6 +4529,7 @@ dependencies = [
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
+ "logos-blockchain-sdp-service",
  "logos-blockchain-version",
  "reqwest 0.12.28",
  "serde",
@@ -5120,6 +5121,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "utoipa",
 ]
 
 [[package]]
@@ -8364,6 +8366,7 @@ dependencies = [
  "logos-blockchain-libp2p",
  "logos-blockchain-network-service",
  "logos-blockchain-node",
+ "logos-blockchain-sdp-service",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "num-bigint",

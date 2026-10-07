@@ -37,6 +37,7 @@ use lb_http_api_common::{
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_network_service::backends::libp2p::Libp2pInfo;
+use lb_sdp_service::SdpSubmission;
 use lb_tx_service::MempoolMetrics;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -416,7 +417,7 @@ impl NodeHttpClient {
         &self,
         locator: Locator,
         service_note_id: NoteId,
-    ) -> Result<DeclarationId, Error> {
+    ) -> Result<SdpSubmission, Error> {
         self.http_client
             .join_blend_network(
                 &self.base_url,

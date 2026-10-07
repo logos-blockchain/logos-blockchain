@@ -674,7 +674,7 @@ where
     path = paths::BLEND_JOIN_NETWORK,
     request_body = JoinBlendRequestBody,
     responses(
-        (status = 200, description = "Join the blend network", body = Option<lb_core::sdp::DeclarationId>),
+        (status = 200, description = "Join the blend network", body = lb_sdp_service::SdpSubmission),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1110,7 +1110,7 @@ where
     post,
     path = paths::SDP_POST_DECLARATION,
     responses(
-        (status = 200, description = "Post declaration to SDP service", body = lb_core::sdp::DeclarationId),
+        (status = 200, description = "Post declaration to SDP service", body = lb_sdp_service::SdpSubmission),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1158,7 +1158,7 @@ where
     post,
     path = paths::SDP_POST_ACTIVITY,
     responses(
-        (status = 200, description = "Post activity to SDP service"),
+        (status = 200, description = "Post activity to SDP service", body = lb_sdp_service::SdpSubmission),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1206,7 +1206,7 @@ where
     post,
     path = paths::SDP_POST_WITHDRAWAL,
     responses(
-        (status = 200, description = "Post withdrawal to SDP service"),
+        (status = 200, description = "Post withdrawal to SDP service", body = lb_sdp_service::SdpSubmission),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]

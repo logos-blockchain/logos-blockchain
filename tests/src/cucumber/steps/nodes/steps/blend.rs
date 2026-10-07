@@ -721,7 +721,7 @@ async fn step_run_blend_sdp_declaration_api(
         .client
         .clone();
 
-    let declaration_id = declarer_node_client
+    let submission = declarer_node_client
         .join_blend_network(locator, service_note_id)
         .await
         .inspect_err(|error| {
@@ -730,7 +730,9 @@ async fn step_run_blend_sdp_declaration_api(
 
     info!(
         target: TARGET,
-        "Node '{declarer_node_name}' joined blend core via API, declaration id: {declaration_id}"
+        "Node '{declarer_node_name}' joined blend core via API, declaration id: {}, tx id: {:?}",
+        submission.declaration_id,
+        submission.tx_id,
     );
 
     Ok(())
