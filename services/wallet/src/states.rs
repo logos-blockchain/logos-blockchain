@@ -35,6 +35,9 @@ pub struct ClaimableVouchers {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PendingClaim {
     immutable_blocks_since_reservation: u64,
+    /// The security parameter `k` of the era of the tip the claim was reserved
+    /// on: the reservation expires once `k` blocks became immutable since.
+    security_param: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -43,7 +46,7 @@ struct PendingClaims {
 }
 
 impl PendingClaims {
-    fn reserve(&mut self, nullifier: VoucherNullifier) {
+    fn reserve(&mut self, nullifier: VoucherNullifier, security_param: u64) {
         debug!(
             target: wallet::SERVICE,
             ?nullifier,
@@ -53,6 +56,7 @@ impl PendingClaims {
             nullifier,
             PendingClaim {
                 immutable_blocks_since_reservation: 0,
+                security_param,
             },
         );
     }
@@ -75,12 +79,8 @@ impl PendingClaims {
     ///
     /// Each LIB update adds `new_immutable_blocks_count` to every reservation's
     /// `immutable_blocks_since_reservation` counter. A reservation expires once
-    /// that counter reaches `max_immutable_blocks_since_reservation`.
-    fn evict_expired(
-        &mut self,
-        new_immutable_blocks_count: u64,
-        max_immutable_blocks_since_reservation: u64,
-    ) {
+    /// that counter reaches the security parameter it was reserved under.
+    fn evict_expired(&mut self, new_immutable_blocks_count: u64) {
         if new_immutable_blocks_count == 0 {
             return;
         }
@@ -92,15 +92,14 @@ impl PendingClaims {
                 .immutable_blocks_since_reservation
                 .saturating_add(new_immutable_blocks_count);
 
-            let expired =
-                claim.immutable_blocks_since_reservation >= max_immutable_blocks_since_reservation;
+            let expired = claim.immutable_blocks_since_reservation >= claim.security_param;
 
             if expired {
                 debug!(
                     target: wallet::SERVICE,
                     ?nullifier,
                     immutable_blocks_since_reservation = claim.immutable_blocks_since_reservation,
-                    max_immutable_blocks_since_reservation,
+                    security_param = claim.security_param,
                     "Removing pending claim reservation after LIB progress"
                 );
             }
@@ -228,9 +227,7 @@ impl overwatch::services::state::ServiceState for RecoveryState {
 impl VersionedState for RecoveryState {
     const VERSION: StateVersion = StateVersion::new(1);
 
-    /// The only version before 1 is 0, the records written before records
-    /// carried a version, in the layout of version 1.
-    fn migrate(_from: StateVersion, bytes: &[u8]) -> Result<Self, DynError> {
+    fn migrate(_: StateVersion, bytes: &[u8]) -> Result<Self, DynError> {
         Ok(Self::from_bytes(bytes)?)
     }
 }
@@ -244,7 +241,6 @@ pub struct ServiceState<'u> {
     pending_claims: PendingClaims,
     pending_notes: PendingNotes,
     pending_note_expiry_blocks: u64,
-    security_param: u64,
 }
 
 impl<'u> ServiceState<'u> {
@@ -254,7 +250,6 @@ impl<'u> ServiceState<'u> {
         lib: HeaderId,
         lib_ledger: &LedgerState,
         updater: &'u StateUpdater<Option<RecoveryState>>,
-        security_param: u64,
     ) -> Self {
         let RecoveryState {
             next_new_voucher_index,
@@ -288,7 +283,6 @@ impl<'u> ServiceState<'u> {
             pending_claims,
             pending_notes: PendingNotes::default(),
             pending_note_expiry_blocks: settings.pending_note_expiry_blocks,
-            security_param,
         }
     }
 
@@ -342,7 +336,7 @@ impl<'u> ServiceState<'u> {
         self.wallet.prune_states(pruned_blocks);
         self.wallet.prune_vouchers(pruned_nullifiers);
         self.pending_claims
-            .evict_expired(new_immutable_blocks_count, self.security_param);
+            .evict_expired(new_immutable_blocks_count);
         self.pending_notes
             .evict_expired(new_immutable_blocks_count, self.pending_note_expiry_blocks);
         self.update_state();
@@ -377,8 +371,10 @@ impl<'u> ServiceState<'u> {
         Ok(ClaimableVouchers { available, pending })
     }
 
-    pub fn reserve_claim(&mut self, nullifier: VoucherNullifier) {
-        self.pending_claims.reserve(nullifier);
+    /// Reserves the voucher of `nullifier` for a claim built on a tip of the
+    /// era whose security parameter is `security_param`.
+    pub fn reserve_claim(&mut self, nullifier: VoucherNullifier, security_param: u64) {
+        self.pending_claims.reserve(nullifier, security_param);
     }
 
     pub fn release_claim_reservation(&mut self, nullifier: VoucherNullifier) {
@@ -446,8 +442,8 @@ mod tests {
         let nullifier = VoucherNullifier::default();
         let mut pending_claims = PendingClaims::default();
 
-        pending_claims.reserve(nullifier);
-        pending_claims.evict_expired(0, EXPIRY_BLOCKS);
+        pending_claims.reserve(nullifier, EXPIRY_BLOCKS);
+        pending_claims.evict_expired(0);
 
         assert!(pending_claims.is_reserved(&nullifier));
     }
@@ -457,12 +453,27 @@ mod tests {
         let nullifier = VoucherNullifier::default();
         let mut pending_claims = PendingClaims::default();
 
-        pending_claims.reserve(nullifier);
-        pending_claims.evict_expired(EXPIRY_BLOCKS - 1, EXPIRY_BLOCKS);
+        pending_claims.reserve(nullifier, EXPIRY_BLOCKS);
+        pending_claims.evict_expired(EXPIRY_BLOCKS - 1);
         assert!(pending_claims.is_reserved(&nullifier));
 
-        pending_claims.evict_expired(1, EXPIRY_BLOCKS);
+        pending_claims.evict_expired(1);
         assert!(!pending_claims.is_reserved(&nullifier));
+    }
+
+    #[test]
+    fn each_pending_claim_expires_under_its_own_security_param() {
+        let (short, long) = (VoucherNullifier::default(), VoucherNullifier::from(Fr::ONE));
+        let mut pending_claims = PendingClaims::default();
+
+        pending_claims.reserve(short, EXPIRY_BLOCKS);
+        pending_claims.reserve(long, 2 * EXPIRY_BLOCKS);
+        pending_claims.evict_expired(EXPIRY_BLOCKS);
+        assert!(!pending_claims.is_reserved(&short));
+        assert!(pending_claims.is_reserved(&long));
+
+        pending_claims.evict_expired(EXPIRY_BLOCKS);
+        assert!(!pending_claims.is_reserved(&long));
     }
 
     #[test]
@@ -629,7 +640,7 @@ mod tests {
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
 
-        let mut state = ServiceState::new(recovery, &settings, genesis, &ledger, &updater, 5);
+        let mut state = ServiceState::new(recovery, &settings, genesis, &ledger, &updater);
 
         // The first post-online LibUpdate delivers a new_lib the wallet never
         // applied (the silent bootstrap->online LIB jump outran the wallet).
@@ -650,8 +661,7 @@ mod tests {
     fn single_era(
         config: lb_ledger::Config,
     ) -> lb_cryptarchia_engine::era::EraSchedule<lb_ledger::Config> {
-        use lb_cryptarchia_engine::era::{
-            EraEntriesAfterGenesis, EraEntry, EraSchedule, };
+        use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule};
 
         let entry = EraEntry {
             slot_duration: core::time::Duration::from_secs(1),

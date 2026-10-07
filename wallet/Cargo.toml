@@ -34,7 +34,6 @@ lb-groth16            = { workspace = true }
 lb-pol                = { workspace = true }
 lb-utils              = { workspace = true }
 lb-utxotree           = { workspace = true }
-time                  = { workspace = true }
 
 [features]
 default = []

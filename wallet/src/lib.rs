@@ -1328,7 +1328,7 @@ mod tests {
     //     let alice = pk(1);
     //     let bob = pk(2);
     //     let genesis = HeaderId::from([0; 32]);
-    //     let ledger = LedgerState::from_utxos([], &single_era(ledger_config()));
+    //     let ledger = LedgerState::from_utxos([], &ledger_config());
     //     let (voucher_cm, _voucher_nf) = voucher(1, 0);
     //     let alice_withdraw_utxo = Utxo::new(tx_hash(1), 0, Note::new(42, alice));
     //     let bob_withdraw_utxo = Utxo::new(tx_hash(1), 1, Note::new(7, bob));

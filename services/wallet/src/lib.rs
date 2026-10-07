@@ -45,7 +45,7 @@ use lb_key_management_system_service::{
     },
     operators::zk::voucher::UnsafeVoucherOperator,
 };
-use lb_ledger::LedgerState;
+use lb_ledger::{LedgerState, config::config_for_slot};
 use lb_log_targets::wallet;
 use lb_mmr::MerklePath;
 use lb_services_utils::{
@@ -502,16 +502,6 @@ where
         let mut lib_updates = BroadcastStream::new(cryptarchia_api.subscribe_lib_updates().await?);
 
         let ledger_eras = cryptarchia_api.get_ledger_eras().await?;
-        // A pending claim is held until `k` blocks became immutable after its
-        // reservation. The largest `k` of the schedule holds it long enough in
-        // every era.
-        let security_param = ledger_eras
-            .iter()
-            .map(|era| {
-                NonZeroU64::from(era.entry.parameters.consensus_config().security_param()).get()
-            })
-            .max()
-            .expect("a schedule has at least one era");
 
         // Initialize wallet from LIB and LIB LedgerState
         let lib = cryptarchia_info.lib;
@@ -528,7 +518,6 @@ where
             lib,
             &lib_ledger,
             &service_resources_handle.state_updater,
-            security_param,
         );
         let voucher_master_key_id = settings.voucher_master_key_id;
 
@@ -725,8 +714,14 @@ where
                 // threshold, by 720 bytes for `PoW` and 112 for the uncle
                 // slots.
                 // TODO: consider passing it by reference so we can remove `Box::pin`.
-                let response =
-                    Box::pin(Self::build_leader_claim_tx(request, ledger, state, kms)).await;
+                let response = Box::pin(Self::build_leader_claim_tx(
+                    request,
+                    ledger,
+                    ledger_eras,
+                    state,
+                    kms,
+                ))
+                .await;
 
                 match response {
                     Ok(built_tx) => {
@@ -1288,11 +1283,21 @@ where
     async fn build_leader_claim_tx(
         request: LeaderClaimTxRequest,
         ledger: LedgerState,
+        ledger_eras: &EraSchedule<lb_ledger::Config>,
         state: &mut ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<LeaderClaimTx, WalletServiceError> {
-        let voucher_nullifier = Self::reserve_claimable_voucher(state, request.tip)?
-            .ok_or(WalletServiceError::NoClaimableVoucher)?;
+        // The voucher stays reserved until the blocks of the tip's era that
+        // could carry the claim are immutable.
+        let security_param = NonZeroU64::from(
+            config_for_slot(ledger_eras, ledger.slot())
+                .consensus_config()
+                .security_param(),
+        )
+        .get();
+        let voucher_nullifier =
+            Self::reserve_claimable_voucher(state, request.tip, security_param)?
+                .ok_or(WalletServiceError::NoClaimableVoucher)?;
 
         let result =
             Self::build_reserved_leader_claim_tx(request, voucher_nullifier, ledger, state, kms)
@@ -1312,6 +1317,7 @@ where
     fn reserve_claimable_voucher(
         state: &mut ServiceState<'_>,
         tip: HeaderId,
+        security_param: u64,
     ) -> Result<Option<VoucherNullifier>, WalletServiceError> {
         let claimable_vouchers = state.claimable_vouchers(tip)?;
 
@@ -1320,7 +1326,7 @@ where
             claimable_vouchers.pending.len(),
         ) {
             (Some(voucher), _) => {
-                state.reserve_claim(voucher.nullifier);
+                state.reserve_claim(voucher.nullifier, security_param);
 
                 debug!(
                     target: LOG_TARGET,
