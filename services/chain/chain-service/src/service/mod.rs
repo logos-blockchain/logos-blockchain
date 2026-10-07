@@ -27,7 +27,7 @@ use lb_cryptarchia_sync::{BlocksUnavailableReason, GetTipResponseReason, Provide
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::api::StorageApi;
-use lb_utils::bounded::UpperBoundedOrderedSet;
+use lb_utils::bounded::UpperBoundedVec;
 use overwatch::{
     DynError,
     services::{relay::InboundRelay, state::StateUpdater},
@@ -467,7 +467,7 @@ where
         }
 
         UncleHeaders::new(
-            UpperBoundedOrderedSet::try_from(uncles)
+            UpperBoundedVec::try_from(uncles)
                 .expect("at most MAX_UNCLES unique uncles are selected"),
         )
     }
