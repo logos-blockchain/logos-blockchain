@@ -112,7 +112,7 @@ where
                 finalized,
                 ..
             } => (Some(channel_update), Some(finalized)),
-            _ => return,
+            Event::TurnNotification { .. } => return,
         };
 
         if let Some(finalized) = finalized {

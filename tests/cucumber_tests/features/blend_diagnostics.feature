@@ -4,7 +4,7 @@ Feature: Blend diagnostics
   Scenario Outline: Observe TSI after majority Blend provider outage and partial recovery parameter_set=<parameter_set>
     Given I have a cluster with capacity of 10 nodes
     And the first 10 nodes are declared as blend providers
-    And the cluster uses Blend diagnostic parameter set "<parameter_set>"
+    And the cluster uses diagnostic parameter set "<parameter_set>"
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
 
     And I start node "NODE_2"
@@ -87,7 +87,7 @@ Feature: Blend diagnostics
   Scenario Outline: Observe EDGE fork churn after Blend provider reachability outage and partial recovery parameter_set=<parameter_set>
     Given I have a cluster with capacity of 12 nodes
     And the first 8 nodes are declared as blend providers
-    And the cluster uses Blend diagnostic parameter set "<parameter_set>"
+    And the cluster uses diagnostic parameter set "<parameter_set>"
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
     And Blend provider endpoints use controllable test relays
 
@@ -141,7 +141,7 @@ Feature: Blend diagnostics
 
     Given I have a cluster with capacity of 12 nodes
     And the first 8 nodes are declared as blend providers
-    And the cluster uses Blend diagnostic parameter set "<parameter_set>"
+    And the cluster uses diagnostic parameter set "<parameter_set>"
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
     And Blend provider endpoints use controllable test relays
 
@@ -188,7 +188,7 @@ Feature: Blend diagnostics
       | 12            | 2           | 110000000    |
     And I have a cluster with capacity of 12 nodes
     And the first 8 nodes are declared as blend providers
-    And the cluster uses Blend diagnostic parameter set "<parameter_set>"
+    And the cluster uses diagnostic parameter set "<parameter_set>"
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
 
     # Start all Blend providers before the non-provider EDGE/load population.
@@ -252,7 +252,7 @@ Feature: Blend diagnostics
       | 12            | 2           | 110000000     |
     And I have a cluster with capacity of 12 nodes
     And the first 8 nodes are declared as blend providers
-    And the cluster uses Blend diagnostic parameter set "<parameter_set>"
+    And the cluster uses diagnostic parameter set "<parameter_set>"
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
     And Blend provider endpoints use controllable test relays
 

@@ -7,6 +7,7 @@ use super::{
     validate_fee_horizon_after_wallet_batch, verify_transactions_mined,
     wait_for_observed_transaction_hashes, warn,
 };
+use crate::cucumber::steps::nodes::diagnostics::BlendDiagnosticEventLogger;
 
 fn destructure_round_robin_command(
     command: &ManualCommand,
@@ -50,6 +51,10 @@ pub(super) fn all_user_wallets(world: &CucumberWorld) -> Result<Vec<String>, Ste
 }
 
 #[expect(clippy::too_many_arguments, reason = "Transaction preparation inputs")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "One round owns reservation, preparation timing, and submission verification"
+)]
 async fn prepare_and_submit_round_robin_transactions(
     world: &mut CucumberWorld,
     step: &str,
@@ -60,36 +65,85 @@ async fn prepare_and_submit_round_robin_transactions(
     available_utxos: &mut WalletUtxos,
     epochs_headroom: u32,
 ) -> Result<(HashSet<TxHash>, HashSet<NoteId>), StepError> {
+    let preparation_started = Instant::now();
     let policy = build_cycle_fee_policy(world, step, &wallet_names[0], epochs_headroom).await?;
 
     let mut signed_submissions = Vec::with_capacity(wallet_names.len() * num_transactions);
     let mut prepared_counts = BTreeMap::new();
+    let mut workload_pools = utils::WorkloadUtxoPools::from_cache(available_utxos);
+    let candidate_counts = wallet_names
+        .iter()
+        .map(|wallet| workload_pools.candidate_count(wallet))
+        .collect::<Vec<_>>();
+    let mut reservation_duration = Duration::ZERO;
+    let mut finalization_duration = Duration::ZERO;
     for sender in wallet_names {
         let recipients = recipient_wallets(wallet_names, sender)?;
-        let mut prepared = prepare_round_robin_with_utxo_cache(
-            world,
-            step,
-            sender,
-            &recipients,
-            num_transactions,
-            value,
-            available_utxos,
-            Some(policy.horizon.ceiling_prices.clone()),
-            policy.priority_fee_percent,
-        )
-        .await
-        .map_err(|e| StepError::StepFail {
-            message: format!(
-                "CONTINUOUS ROUND ROBIN cycle {} failed to prepare transactions for sender \
+        let (mut prepared, wallet_reservation_duration, wallet_finalization_duration) =
+            prepare_round_robin_with_utxo_cache(
+                world,
+                step,
+                sender,
+                &recipients,
+                num_transactions,
+                value,
+                available_utxos,
+                &mut workload_pools,
+                Some(policy.horizon.ceiling_prices.clone()),
+                policy.priority_fee_percent,
+            )
+            .await
+            .map_err(|e| StepError::StepFail {
+                message: format!(
+                    "CONTINUOUS ROUND ROBIN cycle {} failed to prepare transactions for sender \
                     '{sender}': {e}",
-                cycle + 1,
-            ),
-        })?;
+                    cycle + 1,
+                ),
+            })?;
+        reservation_duration += wallet_reservation_duration;
+        finalization_duration += wallet_finalization_duration;
 
         prepared_counts.insert(sender.clone(), prepared.len());
         validate_fee_horizon_after_wallet_batch(world, &policy, sender, prepared.len()).await?;
         signed_submissions.append(&mut prepared);
     }
+
+    let total_preparation_duration = preparation_started.elapsed();
+    let transaction_count = wallet_names.len() * num_transactions;
+    let transactions_per_second = if total_preparation_duration.is_zero() {
+        0.0
+    } else {
+        transaction_count as f64 / total_preparation_duration.as_secs_f64()
+    };
+    info!(
+        target: TARGET,
+        cycle = cycle + 1,
+        wallets = wallet_names.len(),
+        transactions_per_wallet = num_transactions,
+        total_transactions = transaction_count,
+        candidate_utxos_min = candidate_counts.iter().copied().min().unwrap_or(0),
+        candidate_utxos_max = candidate_counts.iter().copied().max().unwrap_or(0),
+        reservation_ms = reservation_duration.as_millis(),
+        signing_finalization_ms = finalization_duration.as_millis(),
+        total_pre_submission_ms = total_preparation_duration.as_millis(),
+        transactions_per_second,
+        "CONTINUOUS ROUND ROBIN preparation timing"
+    );
+    BlendDiagnosticEventLogger::from_world(world).append_named_timeline_record(
+        "continuous_round_robin_preparation",
+        &serde_json::json!({
+            "cycle": cycle + 1,
+            "wallet_count": wallet_names.len(),
+            "transactions_per_wallet": num_transactions,
+            "total_transactions": transaction_count,
+            "candidate_utxos_min": candidate_counts.iter().copied().min().unwrap_or(0),
+            "candidate_utxos_max": candidate_counts.iter().copied().max().unwrap_or(0),
+            "reservation_ms": reservation_duration.as_millis(),
+            "signing_finalization_ms": finalization_duration.as_millis(),
+            "total_pre_submission_ms": total_preparation_duration.as_millis(),
+            "transactions_per_second": transactions_per_second,
+        }),
+    );
 
     let mut cycle_used_input_note_ids: HashSet<NoteId> = HashSet::new();
     for submission in &signed_submissions {
@@ -509,10 +563,12 @@ async fn prepare_round_robin_with_utxo_cache(
     transactions: usize,
     value: u64,
     available_utxos: &mut WalletUtxos,
+    workload_pools: &mut utils::WorkloadUtxoPools,
     gas_prices: Option<GasPrices>,
     priority_fee_percent: u64,
-) -> Result<Vec<SignedUserWalletSubmission>, StepError> {
+) -> Result<(Vec<SignedUserWalletSubmission>, Duration, Duration), StepError> {
     let mut reserved_submissions = Vec::with_capacity(transactions);
+    let reservation_started = Instant::now();
 
     for i in 0..transactions {
         let receiver_name = &recipients[i % recipients.len()];
@@ -520,20 +576,38 @@ async fn prepare_round_robin_with_utxo_cache(
         let receiver_pk = receiver.public_key;
 
         let receivers = vec![(receiver_pk, value)];
-        let reserved_submission =
-            utils::reserve_user_wallet_transaction_submission_with_utxo_cache(
-                world,
-                step,
-                sender,
-                &receivers,
-                available_utxos,
-                gas_prices.clone(),
-                priority_fee_percent,
-            )
-            .await?;
+        let transaction_intent = crate::common::wallet::WalletTransactionIntent::transfer(
+            &receivers,
+        )
+        .map_err(|error| StepError::LogicalError {
+            message: error.to_string(),
+        })?;
+        let reserved_submission = utils::reserve_workload_transaction_intent_with_primary_and_dust(
+            world,
+            step,
+            sender,
+            transaction_intent,
+            value,
+            available_utxos,
+            workload_pools,
+            gas_prices.clone(),
+            priority_fee_percent,
+        )
+        .await?;
 
         reserved_submissions.push(reserved_submission);
     }
 
-    utils::finalize_reserved_user_wallet_submissions_concurrently(step, reserved_submissions).await
+    let reservation_duration = reservation_started.elapsed();
+    let finalization_started = Instant::now();
+    let signed_submissions =
+        utils::finalize_reserved_user_wallet_submissions_concurrently(step, reserved_submissions)
+            .await?;
+    let finalization_duration = finalization_started.elapsed();
+
+    Ok((
+        signed_submissions,
+        reservation_duration,
+        finalization_duration,
+    ))
 }

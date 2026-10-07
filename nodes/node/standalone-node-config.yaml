@@ -154,7 +154,7 @@ time:
       listening_interface: 0.0.0.0
     update_interval: '15.000000000'
 sdp:
-  declaration_id: null
+  declaration: null
   wallet:
     max_tx_fee: 18446744073709551615
     funding_pk: 9750fa86471fddc69749aa9f8568ef6635e64d9f9aa815e8cb932cea183c8e18

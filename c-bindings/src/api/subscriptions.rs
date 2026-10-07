@@ -1,6 +1,7 @@
 use std::ffi::{CString, c_char};
 
 use futures::StreamExt as _;
+use lb_c_macros::panic_to_error;
 use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
     block::{Block as CoreBlock, BlockTransactions},
@@ -23,9 +24,9 @@ use serde::Serialize;
 use crate::{
     LogosBlockchainNode, OperationStatus,
     api::types::block::Block,
-    callbacks::{BoxedCallback, CCallback, into_boxed_callback},
+    callbacks::{BoxedCallback, EventCallback, into_boxed_callback},
     errors::OperationStatusCode,
-    logging, return_error_if_null_pointer,
+    logging, return_error_if_null_pointer, unwrap_or_return_error,
 };
 
 #[derive(Serialize)]
@@ -60,7 +61,7 @@ pub fn subscribe_to_new_blocks_sync(
     node: &LogosBlockchainNode,
     mut callback_per_block: BoxedCallback<*const c_char>,
 ) -> OperationStatus {
-    let runtime_handler = node.get_runtime_handle();
+    let runtime_handler = unwrap_or_return_error!(node.get_runtime_handle());
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
         let Ok(storage) =
@@ -146,17 +147,31 @@ pub fn subscribe_to_new_blocks_sync(
 ///
 /// An [`OperationStatus`] indicating success or failure.
 ///
+/// A null callback is accepted: the call then subscribes to nothing and
+/// returns success.
+///
+/// The callback runs on one of the node's own threads. It must not call back
+/// into the node: every function taking a [`LogosBlockchainNode`] fails with
+/// [`OperationStatusCode::RuntimeError`] when called from inside a callback.
+/// Hand the event to another thread instead.
+///
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn subscribe_to_new_blocks(
     node: *const LogosBlockchainNode,
-    callback_per_block: CCallback<*const c_char>,
+    callback_per_block: EventCallback,
 ) -> OperationStatus {
     return_error_if_null_pointer!(node);
+    // Without a callback there is nobody to deliver events to, so nothing is
+    // subscribed.
+    let Some(callback_per_block) = callback_per_block else {
+        return OperationStatus::OK;
+    };
     let node = unsafe { &*node };
-    let callback_per_block = into_boxed_callback(callback_per_block);
+    let callback_per_block = unsafe { into_boxed_callback(callback_per_block) };
     subscribe_to_new_blocks_sync(node, callback_per_block)
 }
 
@@ -176,7 +191,7 @@ pub fn subscribe_to_processed_blocks_sync(
     node: &LogosBlockchainNode,
     mut on_event: BoxedCallback<*const c_char>,
 ) -> OperationStatus {
-    let runtime_handler = node.get_runtime_handle();
+    let runtime_handler = unwrap_or_return_error!(node.get_runtime_handle());
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
         let stream = match lb_api_service::http::mantle::get_new_blocks_stream::<
@@ -228,17 +243,31 @@ pub fn subscribe_to_processed_blocks_sync(
 /// An [`OperationStatus`] indicating whether the subscription was established.
 /// On error, the callback is never called.
 ///
+/// A null callback is accepted: the call then subscribes to nothing and
+/// returns success.
+///
+/// The callback runs on one of the node's own threads. It must not call back
+/// into the node: every function taking a [`LogosBlockchainNode`] fails with
+/// [`OperationStatusCode::RuntimeError`] when called from inside a callback.
+/// Hand the event to another thread instead.
+///
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn subscribe_to_processed_blocks(
     node: *const LogosBlockchainNode,
-    callback_per_event: CCallback<*const c_char>,
+    callback_per_event: EventCallback,
 ) -> OperationStatus {
     return_error_if_null_pointer!(node);
+    // Without a callback there is nobody to deliver events to, so nothing is
+    // subscribed.
+    let Some(callback_per_event) = callback_per_event else {
+        return OperationStatus::OK;
+    };
     let node = unsafe { &*node };
-    subscribe_to_processed_blocks_sync(node, into_boxed_callback(callback_per_event))
+    subscribe_to_processed_blocks_sync(node, unsafe { into_boxed_callback(callback_per_event) })
 }
 
 #[must_use]
@@ -246,7 +275,7 @@ pub fn subscribe_to_lib_blocks_sync(
     node: &LogosBlockchainNode,
     mut on_event: BoxedCallback<*const c_char>,
 ) -> OperationStatus {
-    let runtime_handler = node.get_runtime_handle();
+    let runtime_handler = unwrap_or_return_error!(node.get_runtime_handle());
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
         let stream = match lb_api_service::http::mantle::lib_block_stream(overwatch).await {
@@ -301,15 +330,29 @@ pub fn subscribe_to_lib_blocks_sync(
 /// An [`OperationStatus`] indicating whether the subscription was established.
 /// On error, the callback is never called.
 ///
+/// A null callback is accepted: the call then subscribes to nothing and
+/// returns success.
+///
+/// The callback runs on one of the node's own threads. It must not call back
+/// into the node: every function taking a [`LogosBlockchainNode`] fails with
+/// [`OperationStatusCode::RuntimeError`] when called from inside a callback.
+/// Hand the event to another thread instead.
+///
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn subscribe_to_lib_blocks(
     node: *const LogosBlockchainNode,
-    callback_per_event: CCallback<*const c_char>,
+    callback_per_event: EventCallback,
 ) -> OperationStatus {
     return_error_if_null_pointer!(node);
+    // Without a callback there is nobody to deliver events to, so nothing is
+    // subscribed.
+    let Some(callback_per_event) = callback_per_event else {
+        return OperationStatus::OK;
+    };
     let node = unsafe { &*node };
-    subscribe_to_lib_blocks_sync(node, into_boxed_callback(callback_per_event))
+    subscribe_to_lib_blocks_sync(node, unsafe { into_boxed_callback(callback_per_event) })
 }

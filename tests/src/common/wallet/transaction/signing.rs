@@ -8,7 +8,7 @@ use lb_core::mantle::{
     traits::Hashable as _,
     transactions::{MantleTxBuilder, OpProofs, Ops, tx_list::ops::OpsContext},
 };
-use lb_key_management_system_service::keys::ZkKey;
+use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
 
 use super::{error::WalletTransactionError, signed::SignedWalletTransaction};
 use crate::common::wallet::WalletReservedInputs;
@@ -121,4 +121,70 @@ pub(super) fn build_transfer_proofs(
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(OpProofs::try_from(proofs).expect("transaction proofs are bounded"))
+}
+
+pub(super) fn build_leading_inscription_proofs(
+    ops: &[Op],
+    tx_hash: &TxHash,
+    signing_keys: &[Ed25519Key],
+) -> Result<OpProofs, WalletTransactionError> {
+    let proofs = ops
+        .iter()
+        .take(signing_keys.len())
+        .zip(signing_keys)
+        .map(|(op, signing_key)| {
+            let Op::ChannelInscribe(inscription) = op else {
+                return Err(WalletTransactionError::InvalidLeadingInscriptionSigner);
+            };
+            if inscription.signer != signing_key.public_key().into_unverified() {
+                return Err(WalletTransactionError::InvalidLeadingInscriptionSigner);
+            }
+
+            Ok(OpProof::Ed25519Sig(
+                signing_key.sign_payload(tx_hash.as_signing_bytes()),
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if proofs.len() != signing_keys.len() {
+        return Err(WalletTransactionError::InvalidLeadingInscriptionSigner);
+    }
+
+    Ok(OpProofs::try_from(proofs).expect("transaction proofs are bounded"))
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_core::mantle::ops::channel::{
+        ChannelId, MsgId,
+        inscribe::{Inscription, InscriptionOp},
+    };
+
+    use super::*;
+
+    #[test]
+    fn leading_inscription_signature_uses_the_complete_transaction_hash() {
+        let signing_key = Ed25519Key::from_bytes(&[0x42; 32]);
+        let operation = InscriptionOp {
+            channel_id: ChannelId::from([0x24; 32]),
+            inscription: Inscription::try_from(1u64.to_le_bytes().to_vec())
+                .expect("small fixed-width payload"),
+            parent: MsgId::root(),
+            signer: signing_key.public_key().into_unverified(),
+        };
+        let tx_hash = TxHash::default();
+        let proofs = build_leading_inscription_proofs(
+            &[Op::ChannelInscribe(operation)],
+            &tx_hash,
+            std::slice::from_ref(&signing_key),
+        )
+        .expect("inscription proof");
+        let Some(OpProof::Ed25519Sig(signature)) = proofs.into_inner().into_inner().pop() else {
+            panic!("inscription proof should use Ed25519");
+        };
+
+        signing_key
+            .public_key()
+            .verify(tx_hash.as_signing_bytes(), &signature)
+            .expect("signature should cover the transaction hash");
+    }
 }

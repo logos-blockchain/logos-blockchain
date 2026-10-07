@@ -30,7 +30,7 @@ use crate::cucumber::{
     world::{BlendDiagnosticPhase, CucumberWorld},
 };
 
-const TIMELINE_FILE: &str = "blend_diagnostic_timeline.ndjson";
+const TIMELINE_FILE: &str = "diagnostic_timeline.ndjson";
 const DIAGNOSTIC_QUERY_TIMEOUT: Duration = Duration::from_millis(1_500);
 
 #[derive(Clone)]
@@ -67,7 +67,7 @@ impl BlendDiagnosticEventLogger {
                 }
                 let timestamp = OffsetDateTime::now_utc();
                 let header = serde_json::json!({
-                    "event": "blend_diagnostic_timeline_header",
+                    "event": "diagnostic_timeline_header",
                     "date": timestamp.date().to_string(),
                     "time": timestamp.time().to_string(),
                     "scenario": self
@@ -93,7 +93,7 @@ impl BlendDiagnosticEventLogger {
                 event = "timeline_write_failure",
                 path = %path.display(),
                 error = %error,
-                "Could not persist Blend diagnostic timeline record"
+                "Could not persist diagnostic timeline record"
             );
         }
     }
@@ -355,7 +355,7 @@ pub fn set_blend_diagnostic_parameter_set(
     let parameter_set = BlendDiagnosticParameterSet::from_name(parameter_set_name).ok_or_else(|| {
         StepError::InvalidArgument {
             message: format!(
-                "unknown Blend diagnostic parameter set `{parameter_set_name}`; expected `clean_control`, `testnet_representative`, or `fast_repro`"
+                "unknown diagnostic parameter set `{parameter_set_name}`; expected `clean_control`, `testnet_representative`, or `fast_repro`"
             ),
         }
     })?;
@@ -363,7 +363,7 @@ pub fn set_blend_diagnostic_parameter_set(
     let security_parameter = NonZero::new(parameter_set.security_parameter).ok_or_else(|| {
         StepError::InvalidArgument {
             message: format!(
-                "Blend diagnostic parameter set `{parameter_set_name}` has an invalid security parameter"
+                "diagnostic parameter set `{parameter_set_name}` has an invalid security parameter"
             ),
         }
     })?;
@@ -1617,7 +1617,7 @@ mod tests {
 
         let header: serde_json::Value =
             serde_json::from_str(lines[0]).expect("header should be valid JSON");
-        assert_eq!(header["event"], "blend_diagnostic_timeline_header");
+        assert_eq!(header["event"], "diagnostic_timeline_header");
         assert_eq!(header["scenario"], "timeline header scenario");
         assert!(header["date"].is_string());
         assert!(header["time"].is_string());

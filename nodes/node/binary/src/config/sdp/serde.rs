@@ -1,18 +1,14 @@
 use std::num::NonZeroU64;
 
-use lb_core::{
-    mantle::{Value, gas::GasCost},
-    sdp::DeclarationId,
-};
+use lb_core::mantle::{Value, gas::GasCost};
 use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_sdp_service::DeclarationConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
-    /// Declaration ID (if set, full declaration info will be fetched from
-    /// ledger on startup).
     #[serde(default)]
-    pub declaration_id: Option<DeclarationId>,
+    pub declaration: Option<DeclarationConfig>,
     pub wallet: WalletConfig,
     #[serde(default)]
     pub active_message_tracker: ActiveMessageTrackerConfig,
@@ -56,7 +52,7 @@ impl Config {
                 funding_pk,
                 max_tx_fee: default_max_tx_fee(),
             },
-            declaration_id: None,
+            declaration: None,
             active_message_tracker: ActiveMessageTrackerConfig::default(),
         }
     }

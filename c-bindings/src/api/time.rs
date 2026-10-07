@@ -1,3 +1,4 @@
+use lb_c_macros::panic_to_error;
 use lb_node::TimeService;
 use lb_time_service::TimeServiceMessage;
 use tokio::sync::oneshot;
@@ -33,7 +34,7 @@ pub struct TimeInfo {
 /// A `Result` containing the [`TimeInfo`] on success, or an
 /// [`OperationStatus`] error on failure.
 pub(crate) fn get_time_info_sync(node: &LogosBlockchainNode) -> StatusResult<TimeInfo> {
-    let runtime_handle = node.get_runtime_handle();
+    let runtime_handle = node.get_runtime_handle()?;
     let overwatch_handle = node.get_overwatch_handle();
 
     runtime_handle.block_on(async move {
@@ -103,6 +104,7 @@ pub type FfiTimeInfoResult = FfiStatusResult<*mut TimeInfo>;
 ///
 /// This function allocates memory for the output [`TimeInfo`] struct. The
 /// caller must free this memory using the [`free_time_info`] function.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_time_info(node: *const LogosBlockchainNode) -> FfiTimeInfoResult {
     return_error_if_null_pointer!(node);
@@ -117,7 +119,13 @@ pub unsafe extern "C" fn get_time_info(node: *const LogosBlockchainNode) -> FfiT
 /// # Arguments
 ///
 /// - `pointer`: A pointer to the [`TimeInfo`] struct to be freed.
+///
+/// # Safety
+///
+/// A non-null `pointer` must come from [`get_time_info`] and must not have
+/// been freed already.
+#[panic_to_error]
 #[unsafe(no_mangle)]
-pub extern "C" fn free_time_info(pointer: *mut TimeInfo) -> OperationStatus {
-    free::<TimeInfo>(pointer)
+pub unsafe extern "C" fn free_time_info(pointer: *mut TimeInfo) -> OperationStatus {
+    unsafe { free::<TimeInfo>(pointer) }
 }

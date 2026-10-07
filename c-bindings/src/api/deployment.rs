@@ -1,11 +1,12 @@
 use std::ffi::{CString, c_char};
 
+use lb_c_macros::panic_to_error;
 use lb_node::config::DeploymentSettings;
 
 use crate::{
     OperationStatus,
     api::{free, free_cstring, lifecycle::resolve_run_config},
-    errors::OperationStatusCode,
+    errors::{OperationStatusCode, free_operation_status},
     result::FfiStatusResult,
     return_error_if_null_pointer,
 };
@@ -36,18 +37,31 @@ impl DeploymentInfo {
         // Only single-era schedules are supported for now, so the genesis era
         // is in force.
         let protocol_names = deployment.genesis_protocol_names();
+
+        // Every string is built before any of them is turned into a raw
+        // pointer, so a failure part-way drops the ones already built instead
+        // of leaking them.
+        let chain_id = to_c_string(deployment.chain_id().as_ref())?;
+        let blend = to_c_string(protocol_names.blend.as_ref())?;
+        let cryptarchia = to_c_string(&protocol_names.cryptarchia_topic)?;
+        let kademlia = to_c_string(protocol_names.kademlia.as_ref())?;
+        let identify = to_c_string(protocol_names.identify.as_ref())?;
+        let chain_sync = to_c_string(protocol_names.chain_sync.as_ref())?;
+        let mempool = to_c_string(&protocol_names.mempool_topic)?;
+        let node_version = to_c_string(&lb_version::build_version_info().version)?;
+
         Ok(Self {
-            chain_id: into_c_string(deployment.chain_id().as_ref())?,
+            chain_id: chain_id.into_raw(),
             genesis_time: deployment.genesis_time().unix_timestamp(),
             protocol_names: ProtocolNames {
-                blend: into_c_string(protocol_names.blend.as_ref())?,
-                cryptarchia: into_c_string(&protocol_names.cryptarchia_topic)?,
-                kademlia: into_c_string(protocol_names.kademlia.as_ref())?,
-                identify: into_c_string(protocol_names.identify.as_ref())?,
-                chain_sync: into_c_string(protocol_names.chain_sync.as_ref())?,
-                mempool: into_c_string(&protocol_names.mempool_topic)?,
+                blend: blend.into_raw(),
+                cryptarchia: cryptarchia.into_raw(),
+                kademlia: kademlia.into_raw(),
+                identify: identify.into_raw(),
+                chain_sync: chain_sync.into_raw(),
+                mempool: mempool.into_raw(),
             },
-            node_version: into_c_string(&lb_version::build_version_info().version)?,
+            node_version: node_version.into_raw(),
         })
     }
 
@@ -62,13 +76,15 @@ impl DeploymentInfo {
             self.protocol_names.mempool,
             self.node_version,
         ] {
-            unsafe { free_cstring(pointer) };
+            // A null field has nothing to free; the status reporting it does.
+            let status = unsafe { free_cstring(pointer) };
+            unsafe { free_operation_status(status) };
         }
     }
 }
 
-fn into_c_string(value: &str) -> Result<*mut c_char, OperationStatus> {
-    CString::new(value).map(CString::into_raw).map_err(|error| {
+fn to_c_string(value: &str) -> Result<CString, OperationStatus> {
+    CString::new(value).map_err(|error| {
         OperationStatus::error(
             OperationStatusCode::RuntimeError,
             format!("Failed to create CString: {error}"),
@@ -105,6 +121,7 @@ pub type FfiDeploymentInfoResult = FfiStatusResult<*mut DeploymentInfo>;
 /// This function allocates the struct and every string it holds. The caller
 /// must free all of it with [`free_deployment_info`].
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_deployment_info(
     config_path: *const c_char,
@@ -112,7 +129,7 @@ pub unsafe extern "C" fn get_deployment_info(
 ) -> FfiDeploymentInfoResult {
     return_error_if_null_pointer!(config_path);
 
-    let run_config = match resolve_run_config(config_path, custom_deployment_path) {
+    let run_config = match unsafe { resolve_run_config(config_path, custom_deployment_path) } {
         Ok(run_config) => run_config,
         Err(error) => return FfiDeploymentInfoResult::err(error),
     };
@@ -127,16 +144,18 @@ pub unsafe extern "C" fn get_deployment_info(
 ///
 /// # Arguments
 ///
-/// - `pointer`: A pointer to the [`DeploymentInfo`] to be freed.
+/// - `pointer`: A pointer to the [`DeploymentInfo`] to be freed. A null pointer
+///   frees nothing and returns a `NullPointer` error.
 ///
 /// # Safety
 ///
-/// The pointer must come from [`get_deployment_info`] and must not have been
-/// freed already.
+/// A non-null pointer must come from [`get_deployment_info`] and must not have
+/// been freed already.
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_deployment_info(pointer: *mut DeploymentInfo) -> OperationStatus {
     return_error_if_null_pointer!(pointer);
     let deployment_info = unsafe { &mut *pointer };
     unsafe { deployment_info.free() };
-    free::<DeploymentInfo>(pointer)
+    unsafe { free::<DeploymentInfo>(pointer) }
 }

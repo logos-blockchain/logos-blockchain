@@ -38,6 +38,7 @@ pub use transaction::{
     transfer_proofs_for_funded_wallet_tx, wallet_state_from_utxos,
 };
 pub(crate) use transaction::{
-    PreparedWalletTransactionWorkItem, extend_wallet_funding_inputs,
-    finalize_prepared_wallet_transaction, prepare_wallet_transaction_work_item,
+    PreparedWalletTransactionWorkItem, estimate_workload_fee_requirements,
+    extend_wallet_funding_inputs, finalize_prepared_wallet_transaction,
+    prepare_wallet_transaction_work_item,
 };

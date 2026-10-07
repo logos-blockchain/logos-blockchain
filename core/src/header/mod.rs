@@ -407,7 +407,6 @@ fn test_serde_json_rejects_oversized_hex() {
 #[cfg(test)]
 mod body_root_test_vectors {
     use lb_poseidon2::Fr;
-    use lb_utils::bounded::BoundedOrderedSet;
 
     use super::*;
     use crate::{
@@ -495,9 +494,7 @@ mod body_root_test_vectors {
         // 4. The same transactions with two carried uncles. Nothing downstream consumes
         //    this vector; it is here so that another implementation can check its
         //    `uncle_headers` encoding, signatures included.
-        let uncles = UncleHeaders::new(
-            BoundedOrderedSet::try_from_iter([uncle(0x66), uncle(0x77)]).unwrap(),
-        );
+        let uncles = UncleHeaders::new([uncle(0x66), uncle(0x77)]);
         println!("================================================================");
         println!("vector 4  : body_root with 2 uncles, over vector 2's transactions");
         println!("{:20}: {:02x}", "uncle_count", uncles.len());

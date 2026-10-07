@@ -34,7 +34,7 @@ impl ServiceState for SdpState {
 
     fn from_settings(settings: &Self::Settings) -> Result<Self, Self::Error> {
         Ok(Self {
-            declaration_id: settings.declaration_id,
+            declaration_id: settings.declaration_id(),
             updated: None,
             pending_activity: None,
         })
