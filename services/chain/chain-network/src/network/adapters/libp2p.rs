@@ -1,4 +1,6 @@
-use std::{collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, time::Instant};
+use std::{
+    collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, mem, time::Instant,
+};
 
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
 use lb_binary_codec::canonical::{BinaryDecode, DecodeError};
@@ -17,12 +19,12 @@ use lb_log_targets::chain;
 use lb_network_service::{
     NetworkService,
     backends::libp2p::{
-        ChainSyncCommand, Command, DiscoveryCommand, Libp2p, NetworkCommand, PeerId,
-        PubSubCommand::{self, Subscribe, Unsubscribe},
+        ChainSyncCommand, Command, DiscoveryCommand, Libp2p, NetworkCommand, PeerId, PubSubCommand,
         TopicHash,
     },
     message::{ChainSyncEvent, NetworkMsg},
 };
+use lb_utils::tokio::task::spawn;
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
@@ -453,14 +455,27 @@ pub struct LibP2pEraAdapter<RuntimeServiceId> {
     version: EraVersion,
 }
 
-impl<RuntimeServiceId> LibP2pEraAdapter<RuntimeServiceId> {
-    async fn send_pubsub_command(relay: &Relay<Libp2p, RuntimeServiceId>, command: PubSubCommand) {
-        if let Err(error) = relay
-            .send(NetworkMsg::Process(Command::PubSub(command)))
-            .await
-        {
-            tracing::error!(target: LOG_TARGET, "error sending a pubsub command: {error}");
-        }
+/// Leaves the era's topic.
+impl<RuntimeServiceId> Drop for LibP2pEraAdapter<RuntimeServiceId> {
+    fn drop(&mut self) {
+        // Dropping cannot wait for the network service: a task of its own sends
+        // the unsubscribe.
+        let topic = mem::take(&mut self.settings.topic);
+        let network_relay = self.network_relay.clone();
+        drop(spawn("logos/chain/unsubscribe", async move {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "Unsubscribing chain-network adapter from pubsub topic {topic}"
+            );
+            if let Err(error) = network_relay
+                .send(NetworkMsg::Process(Command::PubSub(
+                    PubSubCommand::Unsubscribe(topic),
+                )))
+                .await
+            {
+                tracing::error!(target: LOG_TARGET, "error unsubscribing from a topic: {error}");
+            }
+        }));
     }
 }
 
@@ -486,7 +501,14 @@ impl<RuntimeServiceId> EraNetworkAdapter<RuntimeServiceId> for LibP2pEraAdapter<
             "Subscribing chain-network adapter to pubsub topic {}",
             settings.topic
         );
-        Self::send_pubsub_command(&network_relay, Subscribe(settings.topic.clone())).await;
+        if let Err(error) = network_relay
+            .send(NetworkMsg::Process(Command::PubSub(
+                PubSubCommand::Subscribe(settings.topic.clone()),
+            )))
+            .await
+        {
+            tracing::error!(target: LOG_TARGET, "error subscribing to {}: {error}", settings.topic);
+        }
         Self {
             network_relay,
             settings,
@@ -522,15 +544,6 @@ impl<RuntimeServiceId> EraNetworkAdapter<RuntimeServiceId> for LibP2pEraAdapter<
                 None
             }
         })))
-    }
-
-    async fn retire(self) {
-        tracing::debug!(
-            target: LOG_TARGET,
-            "Unsubscribing chain-network adapter from pubsub topic {}",
-            self.settings.topic
-        );
-        Self::send_pubsub_command(&self.network_relay, Unsubscribe(self.settings.topic)).await;
     }
 }
 

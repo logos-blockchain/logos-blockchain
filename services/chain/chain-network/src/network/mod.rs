@@ -14,8 +14,7 @@ use overwatch::{
 
 pub(crate) type BoxedStream<T> = Box<dyn Stream<Item = T> + Send + Unpin>;
 
-/// The chain's network in every era: chain sync, which speaks one protocol in
-/// every era.
+/// The chain's network part that does not depend on eras: chain sync.
 #[async_trait::async_trait]
 pub trait NetworkAdapter<RuntimeServiceId> {
     type Backend: NetworkBackend<RuntimeServiceId> + 'static;
@@ -59,17 +58,14 @@ pub trait NetworkAdapter<RuntimeServiceId> {
     ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError>;
 }
 
-/// The chain's network in one era: the proposals gossiped on its topic. The
-/// adapter of an era lives while the era is in force, and retires when it no
-/// longer is.
+/// The chain's network in one era: the proposals gossiped on its topic.
+/// Dropping the adapter leaves the era.
 #[async_trait::async_trait]
-pub trait EraNetworkAdapter<RuntimeServiceId>: Sized {
+pub trait EraNetworkAdapter<RuntimeServiceId> {
     type Backend: NetworkBackend<RuntimeServiceId> + 'static;
     type Settings: Clone + 'static;
     type Proposal;
 
-    /// Joins the era `settings` describe, whose proposals decode by the codec
-    /// of `version`.
     async fn new(
         settings: Self::Settings,
         version: EraVersion,
@@ -79,7 +75,4 @@ pub trait EraNetworkAdapter<RuntimeServiceId>: Sized {
     ) -> Self;
 
     async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError>;
-
-    /// Leaves the era: its proposals are no longer listened to.
-    async fn retire(self);
 }

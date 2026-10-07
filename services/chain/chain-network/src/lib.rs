@@ -1207,8 +1207,8 @@ where
 }
 
 /// Brings `era_adapters` in line with the eras in force at `slot`: the adapter
-/// of each era no longer in force retires, and each era that came into force
-/// gets an adapter.
+/// of each era no longer in force is dropped, which leaves the era, and each
+/// era that came into force gets an adapter.
 async fn follow_eras_at<EraAdapter, RuntimeServiceId>(
     era_adapters: &mut BTreeMap<Era, EraAdapter>,
     eras: &EraSchedule<EraAdapter::Settings>,
@@ -1222,16 +1222,7 @@ async fn follow_eras_at<EraAdapter, RuntimeServiceId>(
     RuntimeServiceId: Send + Sync,
 {
     let in_force = eras.in_force_at_slot(slot);
-    let retired: Vec<Era> = era_adapters
-        .keys()
-        .copied()
-        .filter(|era| !in_force.eras().any(|in_force| in_force == *era))
-        .collect();
-    for era in retired {
-        if let Some(era_adapter) = era_adapters.remove(&era) {
-            era_adapter.retire().await;
-        }
-    }
+    era_adapters.retain(|era, _| in_force.eras().any(|in_force| in_force == *era));
     for era in in_force.eras() {
         if era_adapters.contains_key(&era) {
             continue;
@@ -1620,7 +1611,7 @@ mod tests {
         Groth16LeaderProof::decode_all(&bytes).expect("leader proof bytes must decode")
     }
 
-    /// Records the eras it joins and retires from.
+    /// Records the eras it joins and leaves.
     struct RecordingEraAdapter {
         settings: RecordingSettings,
     }
@@ -1655,13 +1646,15 @@ mod tests {
         async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
             unimplemented!()
         }
+    }
 
-        async fn retire(self) {
+    impl Drop for RecordingEraAdapter {
+        fn drop(&mut self) {
             self.settings
                 .log
                 .lock()
                 .unwrap()
-                .push(format!("retire {}", self.settings.era));
+                .push(format!("leave {}", self.settings.era));
         }
     }
 
@@ -1702,7 +1695,7 @@ mod tests {
 
         assert_eq!(
             *log.lock().unwrap(),
-            ["join era 0", "join era 1", "retire era 0"]
+            ["join era 0", "join era 1", "leave era 0"]
         );
         assert_eq!(
             era_adapters.keys().copied().collect::<Vec<_>>(),

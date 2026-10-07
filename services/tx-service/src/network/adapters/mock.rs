@@ -1,4 +1,4 @@
-use futures::{Stream, StreamExt as _};
+use futures::{Stream, StreamExt as _, future::BoxFuture};
 use lb_core::mantle::mock::{MockTransaction, MockTxId};
 use lb_log_targets::mempool;
 use lb_network_service::{
@@ -18,14 +18,6 @@ const LOG_TARGET: &str = mempool::network::ROOT;
 
 pub struct MockAdapter<RuntimeServiceId> {
     network_relay: OutboundRelay<<NetworkService<Mock, RuntimeServiceId> as ServiceData>::Message>,
-}
-
-impl<RuntimeServiceId> Clone for MockAdapter<RuntimeServiceId> {
-    fn clone(&self) -> Self {
-        Self {
-            network_relay: self.network_relay.clone(),
-        }
-    }
 }
 
 #[async_trait::async_trait]
@@ -91,19 +83,18 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
         })))
     }
 
-    async fn send(&self, msg: Self::Payload) {
-        if let Err(error) = self
-            .network_relay
-            .send(NetworkMsg::Process(MockBackendMessage::Broadcast {
-                topic: MOCK_PUB_SUB_TOPIC.into(),
-                msg: msg.message().clone(),
-            }))
-            .await
-        {
-            tracing::error!(target: LOG_TARGET, "failed to send item to topic: {error}");
-        }
+    fn send(&self, msg: Self::Payload) -> BoxFuture<'static, ()> {
+        let network_relay = self.network_relay.clone();
+        Box::pin(async move {
+            if let Err(error) = network_relay
+                .send(NetworkMsg::Process(MockBackendMessage::Broadcast {
+                    topic: MOCK_PUB_SUB_TOPIC.into(),
+                    msg: msg.message().clone(),
+                }))
+                .await
+            {
+                tracing::error!(target: LOG_TARGET, "failed to send item to topic: {error}");
+            }
+        })
     }
-
-    /// Its one topic serves every era, so there is nothing to leave.
-    async fn retire(self) {}
 }

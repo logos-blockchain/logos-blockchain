@@ -1,6 +1,6 @@
-use core::marker::PhantomData;
+use core::{marker::PhantomData, mem};
 
-use futures::Stream;
+use futures::{Stream, future::BoxFuture};
 use lb_binary_codec::bincode::{self, DeserializeOp as _, SerializeOp as _};
 use lb_core::block::MAX_BLOCK_TRANSACTIONS_SIZE;
 use lb_log_targets::mempool;
@@ -10,6 +10,7 @@ use lb_network_service::{
     message::NetworkMsg,
 };
 use lb_time_service::backends::TimeBackend;
+use lb_utils::tokio::task::spawn;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio_stream::StreamExt as _;
@@ -39,15 +40,26 @@ pub struct Libp2pAdapter<Item, Key, Clock, RuntimeServiceId> {
     _clock: PhantomData<fn() -> Clock>,
 }
 
-impl<Item, Key, Clock, RuntimeServiceId> Clone
+/// Leaves the era's topic.
+impl<Item, Key, Clock, RuntimeServiceId> Drop
     for Libp2pAdapter<Item, Key, Clock, RuntimeServiceId>
 {
-    fn clone(&self) -> Self {
-        Self {
-            network_relay: self.network_relay.clone(),
-            settings: self.settings.clone(),
-            _clock: PhantomData,
-        }
+    fn drop(&mut self) {
+        // Dropping cannot wait for the network service: a task of its own sends
+        // the unsubscribe.
+        let topic = mem::take(&mut self.settings.topic);
+        let network_relay = self.network_relay.clone();
+        drop(spawn("logos/mempool/unsubscribe", async move {
+            tracing::debug!(target: LOG_TARGET, "Unsubscribing tx adapter from pubsub topic {topic}");
+            if let Err(error) = network_relay
+                .send(NetworkMsg::Process(Command::PubSub(
+                    PubSubCommand::Unsubscribe(topic),
+                )))
+                .await
+            {
+                tracing::error!(target: LOG_TARGET, "failed to leave the topic: {error}");
+            }
+        }));
     }
 }
 
@@ -115,25 +127,26 @@ where
         })))
     }
 
-    async fn send(&self, item: Item) {
-        let serialized = item
-            .to_bytes()
-            .expect("Item should be able to be serialized");
-        if !transaction_gossip_size_is_valid(serialized.len()) {
-            tracing::debug!(
-                target: LOG_TARGET,
-                size = serialized.len(),
-                maximum = MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
-                "Not broadcasting an oversized transaction"
-            );
-            return;
-        }
-        {
-            if let Err(error) = self
-                .network_relay
+    fn send(&self, item: Item) -> BoxFuture<'static, ()> {
+        let network_relay = self.network_relay.clone();
+        let topic = self.settings.topic.clone();
+        Box::pin(async move {
+            let serialized = item
+                .to_bytes()
+                .expect("Item should be able to be serialized");
+            if !transaction_gossip_size_is_valid(serialized.len()) {
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    size = serialized.len(),
+                    maximum = MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
+                    "Not broadcasting an oversized transaction"
+                );
+                return;
+            }
+            if let Err(error) = network_relay
                 .send(NetworkMsg::Process(Command::PubSub(
                     PubSubCommand::Broadcast {
-                        topic: self.settings.topic.clone(),
+                        topic,
                         message: serialized.to_vec().into_boxed_slice(),
                     },
                 )))
@@ -141,41 +154,14 @@ where
             {
                 tracing::error!(target: LOG_TARGET, "failed to send item to topic: {error}");
             }
-        }
-    }
-
-    async fn retire(self) {
-        tracing::debug!(
-            target: LOG_TARGET,
-            "Unsubscribing tx adapter from pubsub topic {}",
-            self.settings.topic
-        );
-        if let Err(error) = self
-            .network_relay
-            .send(NetworkMsg::Process(Command::PubSub(
-                PubSubCommand::Unsubscribe(self.settings.topic),
-            )))
-            .await
-        {
-            tracing::error!(target: LOG_TARGET, "failed to leave the topic: {error}");
-        }
+        })
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Settings<K, V> {
     pub topic: String,
     pub id: fn(&V) -> K,
-}
-
-// Not derived, which would ask `K` and `V` to be `Clone`.
-impl<K, V> Clone for Settings<K, V> {
-    fn clone(&self) -> Self {
-        Self {
-            topic: self.topic.clone(),
-            id: self.id,
-        }
-    }
 }
 
 #[cfg(test)]

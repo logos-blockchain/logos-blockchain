@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use futures::StreamExt as _;
+use futures::{StreamExt as _, future::BoxFuture};
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
     mantle::{
@@ -439,8 +439,7 @@ where
                 Self::handle_add_success(
                     pool,
                     &state_updater,
-                    network_adapter.clone(),
-                    item,
+                    network_adapter.send(item),
                     reply_channel,
                 );
             }
@@ -448,10 +447,10 @@ where
                 // Tx already in pool, but since this came from a local submission
                 // (not gossip), re-gossip it so leader nodes can pick it up.
                 Self::notify_about_accepted_item(accepted_items_channel_sender, item.clone());
-                let adapter = network_adapter.clone();
-                spawn("logos/mempool/transaction-regossip", async move {
-                    adapter.send(item).await;
-                });
+                spawn(
+                    "logos/mempool/transaction-regossip",
+                    network_adapter.send(item),
+                );
                 if let Err(e) = reply_channel.send(Ok(())) {
                     tracing::debug!(target: LOG_TARGET, "Failed to send add reply: {:?}", e);
                 }
@@ -521,15 +520,12 @@ where
     fn handle_add_success(
         pool: &Pool,
         state_updater: &MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
-        adapter: NetworkAdapter,
-        item_for_broadcast: Pool::Item,
+        broadcast: BoxFuture<'static, ()>,
         reply_channel: oneshot::Sender<Result<(), MempoolError>>,
     ) {
         state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
 
-        spawn("logos/mempool/transaction-broadcast", async move {
-            adapter.send(item_for_broadcast).await;
-        });
+        spawn("logos/mempool/transaction-broadcast", broadcast);
 
         if let Err(e) = reply_channel.send(Ok(())) {
             tracing::debug!(target: LOG_TARGET, "Failed to send add reply: {:?}", e);
@@ -665,8 +661,9 @@ where
     }
 
     /// Brings the adapters in line with the eras in force at `slot`: the
-    /// adapter of each era no longer in force retires, and each era that came
-    /// into force gets an adapter, whose items join the others.
+    /// adapter of each era no longer in force is dropped, which leaves the era,
+    /// and each era that came into force gets an adapter, whose items join the
+    /// others.
     async fn follow_eras_at(&mut self, slot: Slot) {
         let in_force = self.eras.in_force_at_slot(slot);
         let retired: Vec<Era> = self
@@ -677,9 +674,7 @@ where
             .collect();
         for era in retired {
             self.items.remove(&era);
-            if let Some(network_adapter) = self.by_era.remove(&era) {
-                network_adapter.retire().await;
-            }
+            self.by_era.remove(&era);
         }
         for era in in_force.eras() {
             if self.by_era.contains_key(&era) {
