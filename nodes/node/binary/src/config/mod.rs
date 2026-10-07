@@ -6,7 +6,6 @@ use std::{
 
 use clap::{Parser, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
-pub use lb_blend_service::settings::user::Config as BlendConfig;
 use lb_core::sdp::ProviderId;
 use lb_groth16::fr_from_bytes;
 use lb_key_management_system_service::{
@@ -22,10 +21,11 @@ use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 
 pub use crate::config::{
-    api::serde::Config as ApiConfig, cryptarchia::serde::Config as CryptarchiaConfig,
-    deployment::DeploymentSettings, kms::serde::Config as KmsConfig,
-    mempool::serde::Config as MempoolConfig, network::serde::Config as NetworkConfig,
-    pow::serde::Config as PoWConfig, sdp::serde::Config as SdpConfig, state::Config as StateConfig,
+    api::serde::Config as ApiConfig, blend::serde::Config as BlendConfig,
+    cryptarchia::serde::Config as CryptarchiaConfig, deployment::DeploymentSettings,
+    kms::serde::Config as KmsConfig, mempool::serde::Config as MempoolConfig,
+    network::serde::Config as NetworkConfig, pow::serde::Config as PoWConfig,
+    sdp::serde::Config as SdpConfig, state::Config as StateConfig,
     storage::serde::Config as StorageConfig, time::serde::Config as TimeConfig,
     tracing::serde::Config as TracingConfig, wallet::serde::Config as WalletConfig,
 };

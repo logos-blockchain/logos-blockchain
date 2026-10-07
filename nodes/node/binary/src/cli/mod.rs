@@ -10,7 +10,6 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
-use lb_blend_service::settings::user::core::BackendConfig as BlendCoreConfig;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use libp2p::Multiaddr;
 
@@ -22,8 +21,9 @@ use crate::{
     config::{
         ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, LogArgs,
         NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig, api::serde::AxumBackendSettings,
-        network::serde::SwarmConfig, update_api, update_blend, update_cryptarchia, update_network,
-        update_sdp, update_state, update_tracing,
+        blend::serde::core::BackendConfig as BlendCoreConfig, network::serde::SwarmConfig,
+        update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
+        update_tracing,
     },
 };
 

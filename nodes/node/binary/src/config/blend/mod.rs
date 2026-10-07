@@ -16,12 +16,16 @@ use lb_blend_service::{
     },
     settings::{
         CommonSettings, CoreSettings, EdgeSettings, EraSettings as BlendSettings, Settings,
-        TimingSettings, user::Config,
+        TimingSettings,
     },
 };
 use lb_cryptarchia_engine::era::EraSchedule;
 use lb_era_parameters::{EraDefinition, EraParameters, v1};
 use lb_services_utils::overwatch::RecoveryData;
+
+use crate::config::blend::serde::Config;
+
+pub mod serde;
 
 /// The settings of the Blend services in an era, on the libp2p backends.
 type Libp2pBlendSettings = BlendSettings<

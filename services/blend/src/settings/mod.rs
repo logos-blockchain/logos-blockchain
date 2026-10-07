@@ -19,11 +19,7 @@ mod edge;
 pub use self::edge::EdgeSettings;
 mod timing;
 pub use self::timing::TimingSettings;
-pub mod user;
 
-/// The settings of the Blend services in an era, in Blend's own versions:
-/// the node builds them from the era's parameters, and each service takes its
-/// part of them.
 #[derive(Clone, Debug)]
 pub enum EraSettings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings> {
     V1(Settings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>),

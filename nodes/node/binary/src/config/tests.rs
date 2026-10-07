@@ -6,9 +6,6 @@ use std::{
 };
 
 use bytes::Bytes;
-use lb_blend_service::settings::user::{
-    Config as BlendConfig, RequiredValues as BlendRequiredValues,
-};
 use lb_cryptarchia_engine::era::EraSchedule;
 use lb_era_parameters::EraDefinition;
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -21,7 +18,10 @@ use crate::{
     cli::{CliArgs, build_run_config_from_env},
     config::{
         DeploymentSettings, RequiredValues as ConfigRequiredValues,
-        blend::ServiceConfig as BlendServiceConfig,
+        blend::{
+            ServiceConfig as BlendServiceConfig,
+            serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
+        },
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues,
         },

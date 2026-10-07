@@ -4,7 +4,6 @@ use lb_key_management_system_service::backend::preload::KeyId;
 
 use crate::settings::TimingSettings;
 
-/// The broadcast service's settings in an era, in Blend's own versions.
 #[derive(Clone, Debug)]
 pub enum EraSettings<NetworkSettings> {
     V1(StartingBlendConfig<NetworkSettings>),

@@ -110,7 +110,7 @@ where
             ..
         } = self;
 
-        // Every era runs version 1, the only version of Blend.
+        // Every era runs version 1, the only version of Blend, so far.
         let settings_in_every_era = settings_handle
             .notifier()
             .get_updated_settings()
