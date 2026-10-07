@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use lb_libp2p::identity::{Keypair, ed25519};
 use testing_framework_core::scenario::DynError;
 
@@ -19,18 +21,42 @@ pub struct SharedDeployment {
     // Empty generated deployments have no genesis or deployment settings yet.
     deployment_yaml: Option<String>,
     network_keys: Vec<Keypair>,
+    slots_per_epoch: Option<NonZeroU64>,
 }
 
 impl SharedDeployment {
+    #[must_use]
+    pub const fn from_parts(
+        deployment_yaml: Option<String>,
+        network_keys: Vec<Keypair>,
+        slots_per_epoch: Option<NonZeroU64>,
+    ) -> Self {
+        Self {
+            deployment_yaml,
+            network_keys,
+            slots_per_epoch,
+        }
+    }
+
     /// Extracts shared inputs while leaving the typed Logos plan available to
     /// its adapter. Node overrides supply the effective network identities.
     pub fn from_plan(plan: &DeploymentPlan) -> Result<Self, DynError> {
-        let deployment_yaml = plan
+        let settings = plan
             .config()
             .genesis_block
             .as_ref()
-            .map(|genesis| {
-                serde_yaml::to_string(&deployment_settings_for_topology(genesis, plan.config()))
+            .map(|genesis| deployment_settings_for_topology(genesis, plan.config()));
+        let deployment_yaml = settings.as_ref().map(serde_yaml::to_string).transpose()?;
+        let slots_per_epoch = settings
+            .as_ref()
+            .map(|settings| {
+                NonZeroU64::new(
+                    settings
+                        .genesis_era_parameters()
+                        .cryptarchia
+                        .slots_per_epoch(),
+                )
+                .ok_or("shared deployment has zero slots per epoch")
             })
             .transpose()?;
 
@@ -49,12 +75,18 @@ impl SharedDeployment {
         Ok(Self {
             deployment_yaml,
             network_keys,
+            slots_per_epoch,
         })
     }
 
     #[must_use]
     pub const fn node_count(&self) -> usize {
         self.network_keys.len()
+    }
+
+    pub fn slots_per_epoch(&self) -> Result<NonZeroU64, DynError> {
+        self.slots_per_epoch
+            .ok_or_else(|| "shared deployment has no epoch settings".into())
     }
 
     pub fn network_key(&self, index: usize) -> Result<&Keypair, DynError> {
@@ -88,6 +120,14 @@ mod tests {
 
         let shared = SharedDeployment::from_plan(&plan).unwrap();
         assert_eq!(shared.node_count(), 1);
+        assert_eq!(
+            shared.slots_per_epoch().unwrap().get(),
+            config
+                .deployment
+                .genesis_era_parameters()
+                .cryptarchia
+                .slots_per_epoch(),
+        );
         assert_eq!(
             shared.network_key(0).unwrap().public(),
             expected.public().into()

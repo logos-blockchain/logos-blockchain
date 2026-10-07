@@ -8,7 +8,7 @@ use std::{
 };
 
 pub use lb_config::consensus::SdpFundingConfig;
-use lb_config::kms::key_id_for_preload_backend;
+use lb_config::preparation::prepare_network;
 use lb_core::{block::genesis::GenesisBlock, mantle::GenesisTime};
 use lb_node::config::{RunConfig, deployment::DeploymentSettings};
 use lb_utils::math::NonNegativeRatio;
@@ -21,16 +21,8 @@ use super::{
     wallet::{WalletConfig, WalletConfigError},
 };
 use crate::{
-    env::replace_default_env,
     get_reserved_available_udp_port,
-    node::{
-        DeploymentPlan, NodePlan,
-        configs::{
-            Config,
-            create_node_configs_from_ids_with_additional_wallet_outputs_and_sdp_funding_config,
-            postprocess,
-        },
-    },
+    node::{DeploymentPlan, configs::preparation::PreparedDeployment},
 };
 
 pub type DynError = Box<dyn Error + Send + Sync + 'static>;
@@ -130,7 +122,7 @@ pub struct TopologyConfig {
     allow_multiple_genesis_tokens: bool,
     allow_zero_value_genesis_tokens: bool,
     pub test_context: Option<String>,
-    node_binary_profile: NodeBinaryProfile,
+    pub(super) node_binary_profile: NodeBinaryProfile,
 }
 
 impl TopologyConfig {
@@ -320,7 +312,14 @@ impl DeploymentBuilder {
         self
     }
 
-    pub fn build(mut self) -> Result<DeploymentPlan, TopologyBuildError> {
+    pub fn build(self) -> Result<DeploymentPlan, TopologyBuildError> {
+        super::build_plan(self.prepare()?)
+    }
+
+    /// Prepares the shared network before constructing any Logos service
+    /// config. Other implementations can consume these inputs without
+    /// building a Logos plan.
+    pub fn prepare(mut self) -> Result<PreparedDeployment, TopologyBuildError> {
         let genesis_time = self
             .config
             .requested_genesis_time
@@ -334,7 +333,10 @@ impl DeploymentBuilder {
 
         let node_count = self.config.n_nodes;
         if node_count == 0 {
-            return Ok(DeploymentPlan::new(self.config, Vec::new()));
+            return Ok(PreparedDeployment {
+                config: self.config,
+                network: None,
+            });
         }
 
         assert!(
@@ -354,43 +356,22 @@ impl DeploymentBuilder {
             .collect::<Vec<_>>();
 
         let blend_ports = allocate_blend_ports(node_count)?;
-        let (mut node_configs, genesis_block) =
-            create_node_configs_from_ids_with_additional_wallet_outputs_and_sdp_funding_config(
-                &ids,
-                &blend_ports,
-                self.config.blend_core_nodes,
-                self.config.network_params.as_ref(),
-                self.config.test_context.as_deref(),
-                wallet_accounts.len(),
-                self.config.sdp_funding_config,
-                genesis_time,
-            );
-
-        let genesis_block = postprocess::apply_wallet_genesis_overrides(
-            &mut node_configs,
-            &genesis_block,
+        let network = prepare_network(
+            &ids,
+            &blend_ports,
             self.config.blend_core_nodes,
+            wallet_accounts.len(),
             &wallet_accounts,
-            key_id_for_preload_backend,
-            self.config.test_context.as_deref(),
             self.config.sdp_funding_config,
+            self.config.test_context.as_deref(),
             genesis_time,
         );
+        self.config.genesis_block = Some(network.genesis.clone());
 
-        let nodes = build_node_plans(node_count, &ids, &node_configs)?;
-        self.config.genesis_block = Some(genesis_block);
-
-        if self.config.node_binary_profile == NodeBinaryProfile::Normal {
-            let _unused =
-                replace_default_env(NODE_BINARY_PROFILE, NodeBinaryProfile::Normal.to_string());
-        } else {
-            let _unused = replace_default_env(
-                NODE_BINARY_PROFILE,
-                NodeBinaryProfile::TokioConsole.to_string(),
-            );
-        }
-
-        Ok(DeploymentPlan::new(self.config, nodes))
+        Ok(PreparedDeployment {
+            config: self.config,
+            network: Some(network),
+        })
     }
 }
 
@@ -428,39 +409,6 @@ where
     for id in ids {
         rng.fill(id);
     }
-}
-
-fn build_node_plans(
-    node_count: usize,
-    ids: &[[u8; 32]],
-    node_configs: &[Config],
-) -> Result<Vec<NodePlan>, TopologyBuildError> {
-    ensure_vector_len("ids", node_count, ids.len())?;
-    ensure_vector_len("node_configs", node_count, node_configs.len())?;
-
-    Ok(ids
-        .iter()
-        .copied()
-        .zip(node_configs.iter().cloned())
-        .enumerate()
-        .map(|(index, (id, general))| NodePlan { index, id, general })
-        .collect())
-}
-
-const fn ensure_vector_len(
-    label: &'static str,
-    expected: usize,
-    actual: usize,
-) -> Result<(), TopologyBuildError> {
-    if expected == actual {
-        return Ok(());
-    }
-
-    Err(TopologyBuildError::VectorLenMismatch {
-        label,
-        expected,
-        actual,
-    })
 }
 
 impl DeploymentProvider<DeploymentPlan> for DeploymentBuilder {
