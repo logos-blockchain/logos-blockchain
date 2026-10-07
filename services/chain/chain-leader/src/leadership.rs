@@ -17,12 +17,15 @@ use lb_core::{
     },
     sdp::blend::{PolEpochState, PolEpochStateSource},
 };
-use lb_cryptarchia_engine::{Epoch, Slot, era::EraSchedule};
+use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_service::{
     api::KmsServiceApi, backend::preload::KeyId, keys::Ed25519Key,
     operators::zk::leader::BuildPrivateInputsWithLeaderKey,
 };
-use lb_ledger::{EpochState, UtxoTree, config::config_for_slot};
+use lb_ledger::{
+    EpochState, UtxoTree,
+    config::{EraScheduledConfig, config_for_slot},
+};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_time_service::{EpochSlotTickStream, SlotTick, TimeServiceMessage};
 use lb_utils::tokio::task::spawn_blocking;
@@ -286,7 +289,7 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
     wallet_api: WalletApi<Wallet, RuntimeServiceId>,
     kms: KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
     time_relay: OutboundRelay<TimeServiceMessage>,
-    ledger_eras: Arc<EraSchedule<lb_ledger::Config>>,
+    ledger_eras: Arc<EraScheduledConfig>,
     epoch_handoff_sender: mpsc::Sender<WinningPolEpochSlots>,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -416,7 +419,7 @@ async fn next_epoch_tick(
 pub async fn fetch_slot_context<CryptarchiaService, Wallet, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
-    ledger_eras: &EraSchedule<lb_ledger::Config>,
+    ledger_eras: &EraScheduledConfig,
     slot: Slot,
 ) -> Option<SlotContext>
 where
@@ -477,16 +480,14 @@ where
 /// previous epoch, not that it is unspent. Slots earlier than `start_slot` are
 /// skipped so a mid-epoch subscriber wastes no work.
 fn epoch_winning_slots_stream<RuntimeServiceId>(
-    ledger_eras: &EraSchedule<lb_ledger::Config>,
+    ledger_eras: &EraScheduledConfig,
     epoch_state: EpochState,
     eligible_aged: &[UtxoWithKeyId],
     kms: impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Send + Sync + 'static,
     start_slot: Slot,
 ) -> WinningPolSlotStream {
-    // The epoch's slots, laid out by its era.
     let epoch_first_slot = u64::from(ledger_eras.epoch_starting_slot(epoch_state.epoch));
-    let epoch_last_slot =
-        u64::from(ledger_eras.epoch_starting_slot(epoch_state.epoch.strict_add(1.into()))) - 1;
+    let epoch_last_slot = u64::from(ledger_eras.epoch_ending_slot(epoch_state.epoch));
     // Skip slots earlier than the start slot: a mid-epoch subscriber does not
     // waste work on slots it has already passed.
     let scan_starting_slot = u64::from(start_slot).max(epoch_first_slot);
@@ -567,7 +568,7 @@ mod pol_tests {
         proofs::leader_proof::{LeaderProof as _, check_winning},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use lb_cryptarchia_engine::EpochConfig;
+    use lb_cryptarchia_engine::{EpochConfig, era::EraSchedule};
     use lb_groth16::{Fr, fr_from_bytes_unchecked};
     use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkKey};
     use lb_ledger::{
@@ -798,7 +799,7 @@ mod pol_tests {
     }
 
     /// A schedule of a single era, of version 1, running `config` from genesis.
-    fn single_era(config: lb_ledger::Config) -> EraSchedule<lb_ledger::Config> {
+    fn single_era(config: lb_ledger::Config) -> EraScheduledConfig {
         use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
 
         let entry = EraEntry {

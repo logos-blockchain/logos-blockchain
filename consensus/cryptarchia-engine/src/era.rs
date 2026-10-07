@@ -371,6 +371,21 @@ impl<Parameters> EraSchedule<Parameters> {
         )
     }
 
+    /// The last slot of `epoch`, counted in the epoch length of its era.
+    ///
+    /// # Panics
+    ///
+    /// If the slot does not fit a [`Slot`].
+    #[must_use]
+    pub fn epoch_ending_slot(&self, epoch: Epoch) -> Slot {
+        let epoch_length = self.at_epoch(epoch).entry.epoch_length_in_slots.get();
+        Slot::new(
+            self.epoch_starting_slot(epoch)
+                .into_inner()
+                .strict_add(epoch_length - 1),
+        )
+    }
+
     /// The epoch `slot` belongs to, counted in the epoch length of its era.
     ///
     /// # Panics
@@ -425,14 +440,14 @@ impl<Parameters> EraSchedule<Parameters> {
 
     /// The last era `started` holds for, given that it holds for the eras up
     /// to some point of the schedule and for none after it.
-    fn last_started<StartedFn>(&self, mut started: StartedFn) -> Option<&ScheduledEra<Parameters>>
+    fn last_started<Condition>(&self, mut condition: Condition) -> Option<&ScheduledEra<Parameters>>
     where
-        StartedFn: FnMut(&ScheduledEra<Parameters>) -> bool,
+        Condition: FnMut(&ScheduledEra<Parameters>) -> bool,
     {
-        if !started(&self.genesis) {
+        if !condition(&self.genesis) {
             return None;
         }
-        match self.after_genesis.partition_point(started) {
+        match self.after_genesis.partition_point(condition) {
             0 => Some(&self.genesis),
             started_after_genesis => Some(&self.after_genesis[started_after_genesis - 1]),
         }
