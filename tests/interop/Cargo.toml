@@ -32,6 +32,10 @@ tempfile = { workspace = true }
 name = "cucumber_nimbos"
 path = "src/bin/cucumber_nimbos.rs"
 
+[[bin]]
+name = "cucumber_external_smoke"
+path = "src/bin/cucumber_external_smoke.rs"
+
 [[test]]
 name = "logos_nimbos_mixed"
 path = "tests/logos_nimbos_mixed.rs"

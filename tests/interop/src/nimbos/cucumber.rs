@@ -1,9 +1,9 @@
 use std::{env, path::PathBuf};
 
 use async_trait::async_trait;
-use lb_testing_framework::SharedDeployment;
 use logos_blockchain_tests::cucumber::deployment::{
     CucumberClusterApp, ExternalDeploymentFactory, LocalDeployment, LocalImplementation,
+    PreparedDeployment,
     runtime_info::{NodeRuntimeInfo, NodeRuntimeInfoProvider},
 };
 use testing_framework_app::{AppDeployer, ClusterApp};
@@ -26,7 +26,8 @@ impl ExternalDeploymentFactory for NimbosFactory {
         "nimbos"
     }
 
-    async fn deploy(&self, inputs: SharedDeployment) -> Result<LocalDeployment, DynError> {
+    async fn deploy(&self, prepared: PreparedDeployment) -> Result<LocalDeployment, DynError> {
+        let inputs = prepared.shared_inputs()?;
         let binary = PathBuf::from(env::var("NIMBOS_NODE_BIN")?);
         let circuits = PathBuf::from(env::var("NIMBOS_CIRCUITS_DIR")?);
         let deployment = NimbosEnv::prepare_deployment(&inputs, &binary, &circuits)?;

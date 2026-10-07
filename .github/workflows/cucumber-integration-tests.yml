@@ -106,6 +106,21 @@ jobs:
 
       - *check_peer_success
 
+      - name: Run external Cucumber runner smoke test
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 15
+        uses: ./.github/actions/run-cucumber-suite
+        env:
+          CUCUMBER_RETRIES: "0"
+        with:
+          executable: ${{ github.workspace }}/target/release/cucumber_external_smoke
+          scenario_name: '^Two nodes connect at runtime$'
+          suite_tag: "@smoke_ci"
+          suite_name: external-runner
+          artifact_subdir: Test harness
+
+      - *check_peer_success
+
       # Run cucumber integration tests with environment variables for binaries and test params
       # Special exclusion tags (we want to run the rest of the tests and not fail the workflow):
       # - @broken = tests that are broken and must still be fixed
