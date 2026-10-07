@@ -5,7 +5,8 @@ use std::{
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
 use lb_binary_codec::canonical::{BinaryDecode, DecodeError};
 use lb_core::{
-    block::{Block, Proposal, v1},
+    block::{Block, Proposal},
+    era::EraSchedules,
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
@@ -13,7 +14,6 @@ use lb_core::{
         transactions::states::Preverified,
     },
 };
-use lb_cryptarchia_engine::era::{EraSchedule, EraVersion};
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_log_targets::chain;
 use lb_network_service::{
@@ -50,19 +50,21 @@ const LOG_TARGET: &str = chain::network::LIBP2P;
 #[derive(Clone)]
 pub struct LibP2pAdapter<Tx, RuntimeServiceId>
 where
-    Tx: Clone + Eq,
+    Tx: Clone + Eq + BinaryDecode,
 {
     network_relay:
         OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
-    settings: LibP2pAdapterSettings,
+    settings: LibP2pAdapterSettings<Tx::Context>,
     _phantom_tx: PhantomData<Tx>,
 }
 
 #[derive(Debug, Clone)]
-pub struct LibP2pAdapterSettings {
+pub struct LibP2pAdapterSettings<TxDecodingContext> {
     /// The chain's eras: a synced block decodes under the version of the era
     /// of its slot.
-    pub eras: EraSchedule<()>,
+    pub eras: EraSchedules,
+    /// Context to use when decoding transactions in received blocks.
+    pub tx_decoding_context: TxDecodingContext,
     /// The maximum number of connected peers to attempt downloads from
     /// for each target block.
     pub max_connected_peers_to_try_download: usize,
@@ -73,7 +75,7 @@ pub struct LibP2pAdapterSettings {
 
 impl<Tx, RuntimeServiceId> LibP2pAdapter<Tx, RuntimeServiceId>
 where
-    Tx: Clone + Eq + Serialize,
+    Tx: Clone + Eq + Serialize + BinaryDecode,
 {
     // Requests a blocks stream from a single peer and validates the first item
     // before this peer is considered a successful candidate by `select_ok`.
@@ -108,7 +110,7 @@ where
             + StorageSize
             + Serialize
             + DeserializeOwned
-            + BinaryDecode<Context = ()>
+            + BinaryDecode<Context: Clone + Send + Sync>
             + Clone
             + Eq
             + Send
@@ -197,7 +199,7 @@ where
         + StorageSize
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context: Clone + Send + Sync>
         + Clone
         + Eq
         + Send
@@ -205,7 +207,7 @@ where
         + 'static,
 {
     type Backend = Libp2p;
-    type Settings = LibP2pAdapterSettings;
+    type Settings = LibP2pAdapterSettings<Tx::Context>;
     type PeerId = PeerId;
     type Block = Block<Tx>;
 
@@ -359,11 +361,15 @@ where
 
         let stream = receiver.await?;
         // A block decodes under the version of the era of its slot.
-        let context = (self.settings.eras.clone(), ());
+        let decoding_context = (
+            self.settings.eras.clone(),
+            self.settings.tx_decoding_context.clone(),
+        );
         let stream = stream
             .map_err(|e| Box::new(e) as DynError)
             .map(move |result| {
-                let block: Self::Block = Block::decode_all(&result?, &context)?;
+                let block_bytes = result?;
+                let block: Self::Block = Block::decode_all(&block_bytes, &decoding_context)?;
                 Ok((block.header().id(), block))
             });
 
@@ -452,7 +458,6 @@ where
 pub struct LibP2pEraAdapter<RuntimeServiceId> {
     network_relay: Relay<Libp2p, RuntimeServiceId>,
     settings: LibP2pEraAdapterSettings,
-    version: EraVersion,
 }
 
 /// Leaves the era's topic.
@@ -483,6 +488,8 @@ impl<RuntimeServiceId> Drop for LibP2pEraAdapter<RuntimeServiceId> {
 pub struct LibP2pEraAdapterSettings {
     /// The topic the era's proposals are gossiped on.
     pub topic: String,
+    /// Decodes a proposal of the era, with the codec of its version.
+    pub versioned_proposal_decoding_fn: fn(&[u8]) -> Result<Proposal, DecodeError>,
 }
 
 #[async_trait::async_trait]
@@ -491,11 +498,7 @@ impl<RuntimeServiceId> EraNetworkAdapter<RuntimeServiceId> for LibP2pEraAdapter<
     type Settings = LibP2pEraAdapterSettings;
     type Proposal = Proposal;
 
-    async fn new(
-        settings: Self::Settings,
-        version: EraVersion,
-        network_relay: Relay<Libp2p, RuntimeServiceId>,
-    ) -> Self {
+    async fn new(settings: Self::Settings, network_relay: Relay<Libp2p, RuntimeServiceId>) -> Self {
         tracing::debug!(
             target: LOG_TARGET,
             "Subscribing chain-network adapter to pubsub topic {}",
@@ -512,7 +515,6 @@ impl<RuntimeServiceId> EraNetworkAdapter<RuntimeServiceId> for LibP2pEraAdapter<
         Self {
             network_relay,
             settings,
-            version,
         }
     }
 
@@ -526,31 +528,22 @@ impl<RuntimeServiceId> EraNetworkAdapter<RuntimeServiceId> for LibP2pEraAdapter<
             return Err(Box::new(error));
         }
         let topic_hash = TopicHash::from_raw(self.settings.topic.clone());
-        let version = self.version;
+        let decode = self.settings.versioned_proposal_decoding_fn;
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
-            Ok(message) if message.topic == topic_hash => {
-                match decode_proposal(version, &message.data) {
-                    Ok(proposal) => Some(proposal),
-                    Err(e) => {
-                        tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
-                        None
-                    }
+            Ok(message) if message.topic == topic_hash => match decode(&message.data) {
+                Ok(proposal) => Some(proposal),
+                Err(e) => {
+                    tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
+                    None
                 }
-            }
+            },
             Ok(_) => None,
             Err(BroadcastStreamRecvError::Lagged(n)) => {
                 tracing::error!(target: LOG_TARGET, "lagged messages: {n}");
                 None
             }
         })))
-    }
-}
-
-/// Decodes a proposal with the codec of `version`.
-fn decode_proposal(version: EraVersion, bytes: &[u8]) -> Result<Proposal, DecodeError> {
-    match version {
-        EraVersion::V1 => v1::Proposal::decode_all(bytes, &()).map(Proposal::V1),
     }
 }
 
@@ -628,10 +621,10 @@ mod tests {
                 HeaderId::from([9u8; 32]),
             )),
         );
-        let first_item: Result<(HeaderId, Block<()>), DynError> = Err(Box::new(block_not_found));
+        let first_item: Result<(HeaderId, Block<u64>), DynError> = Err(Box::new(block_not_found));
 
         assert!(
-            LibP2pAdapter::<(), ()>::check_first_block_response_ready(Some(first_item)).is_err()
+            LibP2pAdapter::<u64, ()>::check_first_block_response_ready(Some(first_item)).is_err()
         );
     }
 
@@ -641,17 +634,17 @@ mod tests {
             PeerId::random(),
             ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::Unknown),
         );
-        let first_item: Result<(HeaderId, Block<()>), DynError> = Err(Box::new(unknown));
+        let first_item: Result<(HeaderId, Block<u64>), DynError> = Err(Box::new(unknown));
 
         assert!(
-            LibP2pAdapter::<(), ()>::check_first_block_response_ready(Some(first_item)).is_err()
+            LibP2pAdapter::<u64, ()>::check_first_block_response_ready(Some(first_item)).is_err()
         );
     }
 
     #[test]
     fn validate_first_block_response_accepts_empty_stream() {
         assert!(
-            LibP2pAdapter::<(), ()>::check_first_block_response_ready(None)
+            LibP2pAdapter::<u64, ()>::check_first_block_response_ready(None)
                 .unwrap()
                 .is_none()
         );

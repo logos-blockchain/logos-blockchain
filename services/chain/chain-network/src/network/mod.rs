@@ -4,7 +4,6 @@ use std::collections::HashSet;
 
 use futures::Stream;
 use lb_core::header::HeaderId;
-use lb_cryptarchia_engine::era::EraVersion;
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
 use overwatch::{
@@ -18,7 +17,7 @@ pub(crate) type BoxedStream<T> = Box<dyn Stream<Item = T> + Send + Unpin>;
 #[async_trait::async_trait]
 pub trait NetworkAdapter<RuntimeServiceId> {
     type Backend: NetworkBackend<RuntimeServiceId> + 'static;
-    type Settings: Clone + 'static;
+    type Settings;
     type PeerId;
     type Block;
 
@@ -63,12 +62,11 @@ pub trait NetworkAdapter<RuntimeServiceId> {
 #[async_trait::async_trait]
 pub trait EraNetworkAdapter<RuntimeServiceId> {
     type Backend: NetworkBackend<RuntimeServiceId> + 'static;
-    type Settings: Clone + 'static;
+    type Settings;
     type Proposal;
 
     async fn new(
         settings: Self::Settings,
-        version: EraVersion,
         network_relay: OutboundRelay<
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,

@@ -240,13 +240,13 @@ where
         + Send
         + Sync
         + 'static,
-    NetAdapter::Settings: Send + Sync + 'static,
+    NetAdapter::Settings: Clone + Send + Sync + 'static,
     NetAdapter::PeerId: Clone + Eq + Hash + Copy + Debug + Send + Sync + Unpin + 'static,
     EraAdapter: EraNetworkAdapter<RuntimeServiceId, Backend = NetAdapter::Backend, Proposal = Proposal>
         + Send
         + Sync
         + 'static,
-    EraAdapter::Settings: Send + Sync,
+    EraAdapter::Settings: Clone + Send + Sync,
     Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash> + Send + Sync + 'static,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync + 'static,
@@ -1218,7 +1218,7 @@ async fn follow_eras_at<EraAdapter, RuntimeServiceId>(
     >,
 ) where
     EraAdapter: EraNetworkAdapter<RuntimeServiceId> + Send,
-    EraAdapter::Settings: Sync,
+    EraAdapter::Settings: Clone + Sync,
     RuntimeServiceId: Send + Sync,
 {
     let in_force = eras.in_force_at_slot(slot);
@@ -1227,13 +1227,13 @@ async fn follow_eras_at<EraAdapter, RuntimeServiceId>(
         if era_adapters.contains_key(&era) {
             continue;
         }
-        let scheduled = eras.get(era).expect("an era in force is scheduled");
-        let era_adapter = EraAdapter::new(
-            scheduled.entry.parameters.clone(),
-            scheduled.entry.version,
-            network_relay.clone(),
-        )
-        .await;
+        let settings = eras
+            .get(era)
+            .expect("an era in force is scheduled")
+            .entry
+            .parameters
+            .clone();
+        let era_adapter = EraAdapter::new(settings, network_relay.clone()).await;
         era_adapters.insert(era, era_adapter);
     }
 }
@@ -1630,7 +1630,6 @@ mod tests {
 
         async fn new(
             settings: Self::Settings,
-            _version: EraVersion,
             _network_relay: OutboundRelay<
                 <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
             >,
