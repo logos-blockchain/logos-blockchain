@@ -14,6 +14,7 @@ use tokio::time::{Instant, sleep};
 use tracing::warn;
 
 use crate::cucumber::{
+    deployment::saved,
     error::{StepError, StepResult},
     fee_reserve::create_scenario_fee_wallet_account,
     steps::TARGET,
@@ -135,6 +136,10 @@ pub async fn install_local_manual_cluster(
     world: &mut CucumberWorld,
     spec: ManualClusterSpec,
 ) -> Result<(), StepError> {
+    if let Some(path) = world.cluster.prepared_config.clone() {
+        return saved::install_cluster(world, &path, spec).await;
+    }
+
     let deployment = prepare_manual_cluster_from_spec(world, spec)?;
     let app = world.cluster.implementation.deploy(deployment).await?;
     world.cluster.install_local(app)?;

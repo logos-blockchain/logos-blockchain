@@ -18,6 +18,7 @@ pub use render::build_plan;
 pub use crate::{
     local::build_node_run_config,
     preparation::{SharedDeployment, wallet},
+    saved::{PreparedConfigBundle, SavedDeployment},
 };
 
 pub mod network {

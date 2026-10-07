@@ -3,6 +3,7 @@ use super::{
     StepError, StepResult, TARGET, TimeDuration, ensure_node_binary_built, given, info,
     rebuild_pending_local_manual_cluster, sleep, then, when,
 };
+use crate::cucumber::deployment::saved;
 
 pub(super) fn resolve_step_genesis_time(
     step_value: &str,
@@ -49,6 +50,7 @@ async fn step_chain_starts_from_now(
     step: &Step,
     seconds: i64,
 ) -> StepResult {
+    saved::require_generated_config(&world.cluster, "changing the genesis time")?;
     let node_binary_profile = if world.tokio_console_profile_enabled() {
         NodeBinaryProfile::TokioConsole
     } else {

@@ -16,10 +16,11 @@ stay in the existing test suite.
 The Cucumber scenarios and steps remain in `logos-blockchain-tests`. An
 integration selects `LocalImplementation::External` and supplies an
 `ExternalDeploymentFactory`. The factory receives a `DeploymentInput` for
-each scenario, containing its prepared network.
+each scenario, containing either a prepared network or saved configuration.
 Other implementations obtain `SharedDeployment` through
 `shared_inputs()` and prepare their native configuration. Logos callers use
-`deploy_logos()` to render the prepared network, retaining its keys and scenario settings.
+`deploy_logos()` to render the prepared network or launch the saved
+configuration, retaining its keys and scenario settings.
 The factory deploys the resulting TF app. Shared steps use TF node control and
 `NodeRuntimeInfo`; operations that require typed Logos configuration remain
 Logos-specific and fail explicitly on other applications.

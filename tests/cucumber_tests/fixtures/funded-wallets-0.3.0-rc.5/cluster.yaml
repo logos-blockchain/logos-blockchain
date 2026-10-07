@@ -1,0 +1,47 @@
+# Native configuration for logos-blockchain-node 0.3.0-rc.5 (2c652646).
+# Captured with the matching pre-era runner from the existing mempool inclusion scenario.
+# Public test keys only. Each scenario starts a fresh database using the same genesis.
+deployment: deployment.yaml
+nodes:
+  - node-1.yaml
+slots_per_epoch: 2000
+supported_scenarios:
+  - Included transaction is removed from mempool view
+  - Included transaction stays absent from mempool after restart
+  - Preverification rejects a structurally invalid transaction
+wallets:
+  1:
+    label: wallet-user-1
+    secret_key: "776c010000000000000000000000000000000000000000000000000000000000"
+    value: 1000
+  2:
+    label: wallet-user-2
+    secret_key: "776c020000000000000000000000000000000000000000000000000000000000"
+    value: 0
+# Original output identities seed the Cucumber wallet scanner.
+genesis_utxos:
+  - op_id: [2, 53, 81, 17, 206, 150, 83, 156, 22, 54, 99, 221, 132, 217, 52, 121, 79, 228, 6, 71, 14, 253, 189, 229, 7, 157, 113, 25, 168, 144, 18, 32]
+    output_index: 0
+    note:
+      value: 100000
+      pk: "ba3201f80c963661b72a7453b0c5b0e2fd7e59fc46f5cf62b5a9bec7b9d0aa0c"
+  - op_id: [2, 53, 81, 17, 206, 150, 83, 156, 22, 54, 99, 221, 132, 217, 52, 121, 79, 228, 6, 71, 14, 253, 189, 229, 7, 157, 113, 25, 168, 144, 18, 32]
+    output_index: 1
+    note:
+      value: 1
+      pk: "4d14ec3dd6ee0cc4ecc81e2277b3df287c704d18fe470bd1c0d2cb469876780a"
+  - op_id: [2, 53, 81, 17, 206, 150, 83, 156, 22, 54, 99, 221, 132, 217, 52, 121, 79, 228, 6, 71, 14, 253, 189, 229, 7, 157, 113, 25, 168, 144, 18, 32]
+    output_index: 2
+    note:
+      value: 10000
+      pk: "2ccd764432f924dea1c6c16ed232f7262418fa4974dc3885569cd8802c4a5803"
+  - op_id: [2, 53, 81, 17, 206, 150, 83, 156, 22, 54, 99, 221, 132, 217, 52, 121, 79, 228, 6, 71, 14, 253, 189, 229, 7, 157, 113, 25, 168, 144, 18, 32]
+    output_index: 3
+    note:
+      value: 1000
+      pk: "8f73b29f2d53db30db75f80a1cf08d07816bfa53b2f182ad765763d0404e4f1c"
+  - op_id: [2, 53, 81, 17, 206, 150, 83, 156, 22, 54, 99, 221, 132, 217, 52, 121, 79, 228, 6, 71, 14, 253, 189, 229, 7, 157, 113, 25, 168, 144, 18, 32]
+    output_index: 4
+    note:
+      value: 1000
+      pk: "8f73b29f2d53db30db75f80a1cf08d07816bfa53b2f182ad765763d0404e4f1c"

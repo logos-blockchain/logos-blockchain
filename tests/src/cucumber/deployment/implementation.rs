@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use async_trait::async_trait;
 use lb_testing_framework::{
-    LbcClusterApp, SharedDeployment,
+    LbcClusterApp, SavedDeployment, SharedDeployment,
     configs::{PreparedDeployment, build_plan},
 };
 use testing_framework_app::AppDeployer;
@@ -24,21 +24,30 @@ impl CucumberClusterApp<LbcClusterApp> {
     }
 }
 
-/// Prepared network input for the selected implementation.
-/// Native rendering stays with the adapter.
-pub struct DeploymentInput {
-    deployment: PreparedDeployment,
+/// Prepared input for the selected implementation, generated now or loaded
+/// from a saved compatibility bundle. Native rendering stays with the adapter.
+pub enum DeploymentInput {
+    Generated(Box<PreparedDeployment>),
+    Saved(SavedDeployment),
 }
 
 impl DeploymentInput {
     pub fn shared_inputs(&self) -> Result<SharedDeployment, DynError> {
-        self.deployment.shared_inputs()
+        match self {
+            Self::Generated(deployment) => deployment.shared_inputs(),
+            Self::Saved(deployment) => Ok(deployment.shared_deployment().clone()),
+        }
     }
 
     pub async fn deploy_logos(self) -> Result<LocalDeployment, DynError> {
-        AppDeployer::new()
-            .deploy(CucumberClusterApp::from_logos(self.deployment)?)
-            .await
+        match self {
+            Self::Generated(deployment) => {
+                AppDeployer::new()
+                    .deploy(CucumberClusterApp::from_logos(*deployment)?)
+                    .await
+            }
+            Self::Saved(deployment) => super::saved::deploy_logos(deployment).await,
+        }
     }
 }
 
@@ -86,8 +95,14 @@ impl LocalImplementation {
         self,
         deployment: PreparedDeployment,
     ) -> Result<LocalDeployment, StepError> {
-        let deployment = DeploymentInput { deployment };
+        self.deploy_input(DeploymentInput::Generated(Box::new(deployment)))
+            .await
+    }
 
+    pub(super) async fn deploy_input(
+        self,
+        deployment: DeploymentInput,
+    ) -> Result<LocalDeployment, StepError> {
         match self {
             Self::Logos => Ok(deployment.deploy_logos().await?),
             Self::External(factory) => Ok(factory.deploy(deployment).await?),
