@@ -9,7 +9,7 @@ use crate::kms::key_id_for_preload_backend;
 
 pub type GeneralBlendConfig = (blend::Config, Ed25519Key, ZkKey);
 
-const DEFAULT_BLEND_LISTENING_HOST: &str = "127.0.0.1";
+pub(crate) const DEFAULT_BLEND_LISTENING_HOST: &str = "127.0.0.1";
 
 #[must_use]
 pub fn create_blend_configs(ids: &[[u8; 32]], ports: &[u16]) -> Vec<GeneralBlendConfig> {
@@ -25,18 +25,25 @@ pub fn create_blend_configs_with_listening_host(
     ids.iter()
         .zip(ports)
         .map(|(id, port)| {
-            let private_key = Ed25519Key::from_bytes(id);
-            let secret_zk_key =
-                ZkKey::from(BigUint::from_bytes_le(private_key.public_key().as_bytes()));
+            let (private_key, secret_zk_key) = keys_from_id(id);
             let mut base_config = blend::Config::with_required_values(blend::RequiredValues {
                 non_ephemeral_signing_key_id: key_id_for_preload_backend(
                     &private_key.clone().into(),
                 ),
                 secret_key_kms_id: key_id_for_preload_backend(&secret_zk_key.clone().into()),
             });
-            base_config.core.backend.listening_address =
-                Multiaddr::from_str(&format!("/ip4/{host}/udp/{port}/quic-v1")).unwrap();
+            base_config.core.backend.listening_address = listening_address(host, *port);
             (base_config, private_key, secret_zk_key)
         })
         .collect()
+}
+
+pub(crate) fn keys_from_id(id: &[u8; 32]) -> (Ed25519Key, ZkKey) {
+    let key = Ed25519Key::from_bytes(id);
+    let zk_key = ZkKey::from(BigUint::from_bytes_le(key.public_key().as_bytes()));
+    (key, zk_key)
+}
+
+pub(crate) fn listening_address(host: &str, port: u16) -> Multiaddr {
+    Multiaddr::from_str(&format!("/ip4/{host}/udp/{port}/quic-v1")).unwrap()
 }

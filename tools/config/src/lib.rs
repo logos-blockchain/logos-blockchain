@@ -2,9 +2,12 @@ pub mod api;
 pub mod blend;
 pub mod consensus;
 pub mod deployment;
+pub mod funding;
 pub mod kms;
+pub mod logos;
 pub mod network;
 pub mod node;
+pub mod preparation;
 pub mod sdp;
 pub mod time;
 pub mod tracing;
@@ -13,26 +16,14 @@ mod unique;
 use core::time::Duration;
 use std::sync::LazyLock;
 
-use blend::GeneralBlendConfig;
-use lb_core::{
-    block::genesis::GenesisBlock,
-    mantle::{GenesisTime, traits::GenesisTx as _},
-    sdp::{Locator, ServiceType},
-};
-use lb_node::config::KmsConfig;
-use network::{GeneralNetworkConfig, NetworkParams};
+use lb_core::{block::genesis::GenesisBlock, mantle::GenesisTime};
+pub use logos::{GeneralConfig, create_general_configs_from_prepared_network};
+use network::NetworkParams;
 use rand::{Rng as _, thread_rng};
-use tracing::GeneralTracingConfig;
 
 use crate::{
-    api::GeneralApiConfig,
-    consensus::{
-        GeneralConsensusConfig, ProviderInfo, SHORT_PROLONGED_BOOTSTRAP_PERIOD, SdpFundingConfig,
-        create_genesis_block_with_declarations,
-    },
-    kms::create_kms_configs,
-    sdp::{GeneralSdpConfig, create_sdp_configs},
-    time::{GeneralTimeConfig, set_time_config},
+    consensus::{SHORT_PROLONGED_BOOTSTRAP_PERIOD, SdpFundingConfig},
+    preparation::prepare_network,
 };
 
 /// Global flag indicating whether debug tracing configuration is enabled to
@@ -41,18 +32,6 @@ pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(|| {
     std::env::var("LOGOS_BLOCKCHAIN_TESTS_TRACING")
         .is_ok_and(|val| val.eq_ignore_ascii_case("true"))
 });
-
-#[derive(Clone)]
-pub struct GeneralConfig {
-    pub api_config: GeneralApiConfig,
-    pub consensus_config: GeneralConsensusConfig,
-    pub network_config: GeneralNetworkConfig,
-    pub blend_config: GeneralBlendConfig,
-    pub tracing_config: GeneralTracingConfig,
-    pub time_config: GeneralTimeConfig,
-    pub kms_config: KmsConfig,
-    pub sdp_config: GeneralSdpConfig,
-}
 
 #[must_use]
 pub fn create_general_configs(
@@ -182,74 +161,21 @@ pub fn create_general_configs_from_ids_with_additional_wallet_outputs_and_sdp_fu
     sdp_funding_config: SdpFundingConfig,
     genesis_time: GenesisTime,
 ) -> (Vec<GeneralConfig>, GenesisBlock) {
-    let n_nodes = ids.len();
-
-    assert_eq!(
-        ids.len(),
-        blend_ports.len(),
-        "blend_ports({}) must match ids({})",
-        blend_ports.len(),
-        ids.len()
-    );
-    assert!(
-        n_blend_core_nodes <= ids.len(),
-        "n_blend_core_nodes({n_blend_core_nodes}) must be less than or equal to ids.len()({})",
-        ids.len()
-    );
-
-    let (consensus_configs, genesis_block) =
-        consensus::create_consensus_configs_with_additional_wallet_outputs_and_sdp_funding_config(
-            ids,
-            prolonged_bootstrap_period,
-            test_context,
-            additional_wallet_outputs,
-            sdp_funding_config,
-            genesis_time,
-        );
-    let network_configs = network::create_network_configs(ids, network_params);
-    let api_configs = api::create_api_configs(ids);
-    let blend_configs = blend::create_blend_configs(ids, blend_ports);
-    let tracing_configs = tracing::create_tracing_configs(ids);
-    let time_config = set_time_config();
-
-    let providers: Vec<_> = blend_configs
-        .iter()
-        .enumerate()
-        .take(n_blend_core_nodes)
-        .map(
-            |(i, (blend_conf, private_key, secret_zk_key))| ProviderInfo {
-                service_type: ServiceType::BlendNetwork,
-                provider_sk: private_key.clone(),
-                zk_sk: secret_zk_key.clone(),
-                locator: Locator::new_unchecked(blend_conf.core.backend.listening_address.clone()),
-                note: consensus_configs[i].blend_note.clone(),
-            },
-        )
-        .collect();
-    let genesis_tx = genesis_block.genesis_tx().clone();
-    let genesis_ops = genesis_tx.into_genesis_ops();
-    let transfer_op = genesis_ops.transfer.operation();
-    let genesis_block_with_declarations = create_genesis_block_with_declarations(
-        transfer_op.clone(),
-        providers,
+    let prepared = prepare_network(
+        ids,
+        blend_ports,
+        n_blend_core_nodes,
+        additional_wallet_outputs,
+        &[],
+        sdp_funding_config,
         test_context,
         genesis_time,
     );
-    let sdp_configs = create_sdp_configs(genesis_block_with_declarations.genesis_tx(), n_nodes);
-    let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, None);
-
-    let general_configs = (0..n_nodes)
-        .map(|i| GeneralConfig {
-            api_config: api_configs[i].clone(),
-            consensus_config: consensus_configs[i].clone(),
-            network_config: network_configs[i].clone(),
-            blend_config: blend_configs[i].clone(),
-            tracing_config: tracing_configs[i].clone(),
-            time_config: time_config.clone(),
-            kms_config: kms_configs[i].clone(),
-            sdp_config: sdp_configs[i].clone(),
-        })
-        .collect();
-
-    (general_configs, genesis_block_with_declarations)
+    let configs = create_general_configs_from_prepared_network(
+        &prepared,
+        network_params,
+        prolonged_bootstrap_period,
+        &[],
+    );
+    (configs, prepared.genesis)
 }

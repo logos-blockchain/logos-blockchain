@@ -124,6 +124,7 @@ pub struct ServiceNote {
     pub output_index: usize,
 }
 
+#[derive(Clone)]
 pub struct BaseConsensusMaterial {
     pub regular_note_keys: Vec<ZkKey>,
     pub blend_notes: Vec<ServiceNote>,
@@ -292,27 +293,28 @@ pub fn create_consensus_configs_with_additional_wallet_outputs_and_sdp_funding_c
     let genesis_block = create_genesis_block(&material.utxos, test_context, genesis_time);
 
     (
-        material
-            .regular_note_keys
-            .into_iter()
-            .enumerate()
-            .map(|(i, sk)| {
-                let funding_sk = material.sdp_notes[i].sk.clone();
-                let funding_pk = material.sdp_notes[i].pk;
-                let blend_note = material.blend_notes[i].clone();
-
-                GeneralConsensusConfig {
-                    blend_note,
-                    known_key: sk,
-                    funding_sk,
-                    funding_pk,
-                    other_keys: Vec::new(),
-                    prolonged_bootstrap_period,
-                }
-            })
-            .collect(),
+        configs_from_material(&material, prolonged_bootstrap_period),
         genesis_block,
     )
+}
+
+pub(crate) fn configs_from_material(
+    material: &BaseConsensusMaterial,
+    prolonged_bootstrap_period: Duration,
+) -> Vec<GeneralConsensusConfig> {
+    material
+        .regular_note_keys
+        .iter()
+        .enumerate()
+        .map(|(i, key)| GeneralConsensusConfig {
+            known_key: key.clone(),
+            blend_note: material.blend_notes[i].clone(),
+            funding_sk: material.sdp_notes[i].sk.clone(),
+            funding_pk: material.sdp_notes[i].pk,
+            other_keys: Vec::new(),
+            prolonged_bootstrap_period,
+        })
+        .collect()
 }
 
 #[must_use]

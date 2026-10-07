@@ -1,5 +1,9 @@
 pub mod deployment;
 mod dynamic;
+mod logos;
+pub use logos::build_plan;
+mod preparation;
+pub use preparation::PreparedDeployment;
 pub(crate) mod node_configs;
 pub mod postprocess;
 mod shared_deployment;
@@ -19,10 +23,7 @@ pub mod network {
 pub(crate) use dynamic::create_node_config_for_node;
 use lb_config::deployment::e2e_deployment_settings_with_genesis_block;
 pub use node_configs::GeneralConfig as Config;
-pub(crate) use node_configs::{
-    create_general_configs_from_ids_with_additional_wallet_outputs_and_sdp_funding_config as create_node_configs_from_ids_with_additional_wallet_outputs_and_sdp_funding_config,
-    network::{Libp2pNetworkLayout, NetworkParams},
-};
+pub(crate) use node_configs::network::{Libp2pNetworkLayout, NetworkParams};
 
 #[must_use]
 pub fn default_e2e_deployment_settings(
