@@ -21,7 +21,7 @@ use std::{
 
 use educe::Educe;
 use futures::{Stream, TryStreamExt as _};
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
+use lb_binary_codec::canonical::BinaryEncode;
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
     block::{Block, UncleHeaders, genesis::GenesisBlock},
@@ -35,10 +35,13 @@ use lb_core::{
     },
     sdp::{Declaration, DeclarationId},
 };
-use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots, era::EraSchedule};
+use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 pub use lb_ledger::EpochState;
-use lb_ledger::{LedgerState, config::config_for_slot};
+use lb_ledger::{
+    LedgerState,
+    config::{EraScheduledConfig, config_for_slot},
+};
 use lb_log_targets::chain;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
@@ -121,10 +124,6 @@ pub enum Error {
     InvalidUncle { uncle: HeaderId, reason: UncleError },
     #[error("Batch ZKP verification error: {0}")]
     BatchZkpVerification(#[from] lb_core::mantle::batch::Error),
-    #[error(
-        "An era after genesis starts at epoch 1, which the genesis state sets up under the genesis era"
-    )]
-    EraAtEpochOne,
 }
 
 struct InitializedCryptarchia {
@@ -208,7 +207,7 @@ pub enum Query {
     },
     /// Returns the ledger config of every era.
     GetLedgerEras {
-        reply_channel: oneshot::Sender<Arc<EraSchedule<lb_ledger::Config>>>,
+        reply_channel: oneshot::Sender<Arc<EraScheduledConfig>>,
     },
     GetBlockEvents {
         id: HeaderId,
@@ -341,7 +340,7 @@ impl Cryptarchia {
     pub fn from_genesis(
         genesis_id: HeaderId,
         genesis_ledger_state: LedgerState,
-        ledger_eras: Arc<EraSchedule<lb_ledger::Config>>,
+        ledger_eras: Arc<EraScheduledConfig>,
         state: State,
     ) -> Self {
         Self::from_lib(
@@ -368,7 +367,7 @@ impl Cryptarchia {
         lib_parent: HeaderId,
         lib_ledger_state: LedgerState,
         genesis_id: HeaderId,
-        ledger_eras: Arc<EraSchedule<lb_ledger::Config>>,
+        ledger_eras: Arc<EraScheduledConfig>,
         state: State,
         lib_slot: Slot,
         lib_length: u64,
@@ -577,14 +576,6 @@ impl Cryptarchia {
         log_pruned_ledger_states(pruned_states_count);
     }
 
-    /// Enters an era: the engine follows `config` from now on, and the ledger
-    /// states of the blocks it prunes are dropped.
-    fn enter_era(&mut self, config: lb_cryptarchia_engine::Config) -> PrunedBlocks<HeaderId> {
-        let pruned_blocks = self.consensus.enter_era(config);
-        self.prune_ledger_states(pruned_blocks.all());
-        pruned_blocks
-    }
-
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
         let (consensus, pruned_blocks) = self.consensus.online();
         let mut cryptarchia = Self {
@@ -615,9 +606,7 @@ impl Cryptarchia {
 
 #[derive(Debug, Clone)]
 pub struct CryptarchiaSettings {
-    /// The ledger config of every era, the one each block and each epoch is
-    /// run under.
-    pub eras: Arc<EraSchedule<lb_ledger::Config>>,
+    pub eras: Arc<EraScheduledConfig>,
     pub starting_state: StartingState,
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
@@ -684,7 +673,6 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -859,8 +847,6 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryEncode
-        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -997,7 +983,7 @@ where
     async fn initialize_cryptarchia(
         recovery_state: &CryptarchiaConsensusState,
         bootstrap_config: &BootstrapConfig,
-        ledger_eras: Arc<EraSchedule<lb_ledger::Config>>,
+        ledger_eras: Arc<EraScheduledConfig>,
         relays: &CryptarchiaConsensusRelays<Tx>,
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,
@@ -1016,7 +1002,7 @@ where
             bootstrap_config,
             recovery_state.last_engine_state.as_ref(),
         );
-        let in_force = config_for_slot(&ledger_eras, current_slot)
+        let current_slot_config = config_for_slot(&ledger_eras, current_slot)
             .consensus_config()
             .clone();
         let mut cryptarchia = Self::cryptarchia_from_recovered_lib(
@@ -1026,9 +1012,8 @@ where
             relays.storage(),
         )
         .await?;
-        // Follow the era in force, from the LIB. The block tree only holds the
-        // LIB yet, so nothing is pruned.
-        drop(cryptarchia.enter_era(in_force));
+        // Follow the era in force.
+        cryptarchia.consensus.enter_era(current_slot_config);
 
         // Stream the already applied state.
         let init_tip = cryptarchia.tip_branch();
@@ -1112,7 +1097,7 @@ where
     /// storage.
     async fn cryptarchia_from_recovered_lib(
         recovery_state: &CryptarchiaConsensusState,
-        ledger_eras: Arc<EraSchedule<lb_ledger::Config>>,
+        ledger_eras: Arc<EraScheduledConfig>,
         state: State,
         storage: &StorageApi<Tx>,
     ) -> Result<Cryptarchia, Error> {

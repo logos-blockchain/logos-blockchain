@@ -11,7 +11,6 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _, future::join_all, stream};
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockInfo};
 use lb_core::{
     block::{Block, UncleHeaders},
@@ -127,8 +126,7 @@ where
     lib_subscription_sender: broadcast::Sender<LibUpdate>,
     chain_online_notifier: ChainOnlineNotifier,
     current_slot: Slot,
-    /// The era the chain follows: the era of the last slot tick.
-    era: Era,
+    current_era: Era,
     storage_blocks_to_remove: HashSet<HeaderId>,
     relays: CryptarchiaConsensusRelays<Tx>,
     sync_blocks_provider: BlockProvider<Tx>,
@@ -149,8 +147,6 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryEncode
-        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -167,7 +163,7 @@ where
             lib_subscription_sender: self.lib_subscription_sender,
             chain_online_notifier: self.chain_online_notifier,
             current_slot: self.current_slot,
-            era: self.era,
+            current_era: self.current_era,
             storage_blocks_to_remove: self.storage_blocks_to_remove,
             relays: self.relays,
             sync_blocks_provider: self.sync_blocks_provider,
@@ -180,62 +176,27 @@ where
 
     /// Follows the clock: records the slot in progress, and enters its era
     /// when the chain follows another one.
-    async fn on_slot_tick(&mut self, tick: SlotTick) {
-        self.current_slot = tick.slot;
-        if tick.era != self.era {
-            self.enter_era(tick).await;
+    fn on_slot_tick(&mut self, tick: SlotTick) {
+        self.current_slot = self.current_slot.max(tick.slot);
+        if tick.era > self.current_era {
+            self.enter_era(tick);
         }
     }
 
     /// Enters the era of `tick`, now in force: fork choice, the LIB and uncle
     /// selection follow its consensus config from now on.
-    async fn enter_era(&mut self, tick: SlotTick) {
+    fn enter_era(&mut self, tick: SlotTick) {
         let config = config_for_slot(self.cryptarchia.ledger.era_schedule(), tick.slot)
             .consensus_config()
             .clone();
-        let previous_lib = self.cryptarchia.lib();
-        let pruned_blocks = self.cryptarchia.enter_era(config);
-        self.era = tick.era;
+        self.cryptarchia.consensus.enter_era(config);
+        self.current_era = tick.era;
         info!(
             target: LOG_TARGET,
             era = tick.era.into_inner(),
             slot = u64::from(tick.slot),
             "entered era"
         );
-        // The LIB only moves when the new era has a smaller k.
-        if self.cryptarchia.lib() == previous_lib {
-            return;
-        }
-        if let Err(err) = self
-            .relays
-            .storage()
-            .store_immutable_block_ids(immutable_blocks_index(
-                &pruned_blocks,
-                Some(previous_lib),
-                self.cryptarchia.lib(),
-                self.cryptarchia.lib_branch().slot(),
-            ))
-            .await
-        {
-            error!(target: LOG_TARGET, %err, "failed to store immutable block IDs");
-        }
-        announce_new_lib(
-            &self.cryptarchia,
-            &previous_lib,
-            &pruned_blocks,
-            0,
-            &self.relays,
-            &self.lib_subscription_sender,
-        )
-        .await;
-        self.retire_epoch_state_query_sources_behind_lib();
-        self.storage_blocks_to_remove = delete_stale_blocks_from_storage(
-            pruned_blocks.stale_blocks().copied(),
-            &self.storage_blocks_to_remove,
-            self.relays.storage(),
-        )
-        .await;
-        self.record_recovery_state();
     }
 
     /// Apply a block to the chain and reply with the result.
@@ -511,17 +472,17 @@ where
     /// Selects uncles for a new block extending `parent` at `slot`.
     async fn select_uncles(&self, parent: HeaderId, slot: Slot) -> UncleHeaders {
         // An uncle must be of the era of the new block.
-        let era = self.cryptarchia.ledger.era_schedule().at_slot(slot);
-        let (era_start, version) = (era.first_slot, era.entry.version);
+        let slot_era = self.cryptarchia.ledger.era_schedule().at_slot(slot);
+        let (era_starting_slot, era_version) = (slot_era.first_slot, slot_era.entry.version);
         let Some(parent_branch) = self.cryptarchia.consensus.branches().get(&parent) else {
-            return UncleHeaders::empty(version);
+            return UncleHeaders::empty(era_version);
         };
 
         let mut uncles = Vec::new();
-        for candidate in self
-            .cryptarchia
-            .consensus
-            .select_uncles(parent_branch, slot, era_start)
+        for candidate in
+            self.cryptarchia
+                .consensus
+                .select_uncles(parent_branch, slot, era_starting_slot)
         {
             // Every block accepted into the block tree is persisted, so a
             // candidate must be loadable. Even if not, a proposal is still
@@ -533,7 +494,7 @@ where
             uncles.push(block);
         }
 
-        UncleHeaders::of_blocks(version, &uncles)
+        UncleHeaders::of_blocks(era_version, &uncles)
             .expect("at most MAX_UNCLES unique uncles are selected")
     }
 
@@ -837,8 +798,6 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryEncode
-        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -900,15 +859,40 @@ where
     }
 
     if prev_lib != new_lib {
-        announce_new_lib(
-            cryptarchia,
+        log_lib_advanced(
             &prev_lib,
-            &applied.pruned_blocks,
+            &new_lib,
+            applied.pruned_blocks.stale_blocks().count(),
+            applied.pruned_blocks.immutable_blocks().len(),
             applied.reorged_blocks.len(),
-            relays,
-            lib_broadcaster,
-        )
-        .await;
+        );
+
+        let height = cryptarchia
+            .consensus
+            .branches()
+            .get(&cryptarchia.lib())
+            .expect("LIB branch not available")
+            .length();
+        let block_info = BlockInfo {
+            height,
+            header_id: new_lib,
+        };
+
+        if let Err(e) = broadcast_finalized_block(relays.broadcast_relay(), block_info).await {
+            warn!(target: LOG_TARGET, "Failed to notify finalized-block subscribers: {e}");
+        }
+
+        let lib_update = LibUpdate {
+            new_lib: cryptarchia.lib(),
+            pruned_blocks: PrunedBlocksInfo {
+                stale_blocks: applied.pruned_blocks.stale_blocks().copied().collect(),
+                immutable_blocks: applied.pruned_blocks.immutable_blocks().clone(),
+            },
+        };
+
+        if let Err(e) = lib_broadcaster.send(lib_update) {
+            warn!(target: LOG_TARGET, "No LIB-update subscribers to notify: {e}");
+        }
     }
 
     let reorged_txs: Vec<_> = join_all(
@@ -944,8 +928,6 @@ async fn log_newly_canonical_blocks<Tx>(
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryEncode
-        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -1001,8 +983,6 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryEncode
-        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -1056,8 +1036,6 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryEncode
-        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -1107,14 +1085,7 @@ pub async fn delete_stale_blocks_from_storage<Tx>(
     storage: &StorageApi<Tx>,
 ) -> HashSet<HeaderId>
 where
-    Tx: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + BinaryEncode
-        + BinaryDecode<Context = ()>
-        + Hashable<Hash = TxHash>
-        + StorageSize,
+    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
 {
     match delete_blocks_from_storage(
         stale_blocks.chain(additional_blocks.iter().copied()),
@@ -1144,14 +1115,7 @@ async fn delete_blocks_from_storage<Headers, Tx>(
 ) -> Result<(), Vec<(HeaderId, DynError)>>
 where
     Headers: Iterator<Item = HeaderId> + Send,
-    Tx: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + BinaryEncode
-        + BinaryDecode<Context = ()>
-        + Hashable<Hash = TxHash>
-        + StorageSize,
+    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
 {
     let blocks_to_delete = block_headers.collect::<Vec<_>>();
     let block_deletion_outcomes = blocks_to_delete.iter().copied().zip(
@@ -1211,45 +1175,6 @@ fn immutable_blocks_index(
     }
 
     immutable_blocks
-}
-
-/// Announces a LIB that moved up from `previous_lib`: logs it, broadcasts the
-/// new LIB as finalized, and notifies the LIB subscribers.
-async fn announce_new_lib<Tx>(
-    cryptarchia: &Cryptarchia,
-    previous_lib: &HeaderId,
-    pruned_blocks: &PrunedBlocks<HeaderId>,
-    reorged_blocks_count: usize,
-    relays: &CryptarchiaConsensusRelays<Tx>,
-    lib_broadcaster: &broadcast::Sender<LibUpdate>,
-) {
-    let new_lib = cryptarchia.lib();
-    log_lib_advanced(
-        previous_lib,
-        &new_lib,
-        pruned_blocks.stale_blocks().count(),
-        pruned_blocks.immutable_blocks().len(),
-        reorged_blocks_count,
-    );
-
-    let block_info = BlockInfo {
-        height: cryptarchia.lib_branch().length(),
-        header_id: new_lib,
-    };
-    if let Err(e) = broadcast_finalized_block(relays.broadcast_relay(), block_info).await {
-        warn!(target: LOG_TARGET, "Failed to notify finalized-block subscribers: {e}");
-    }
-
-    let lib_update = LibUpdate {
-        new_lib,
-        pruned_blocks: PrunedBlocksInfo {
-            stale_blocks: pruned_blocks.stale_blocks().copied().collect(),
-            immutable_blocks: pruned_blocks.immutable_blocks().clone(),
-        },
-    };
-    if let Err(e) = lib_broadcaster.send(lib_update) {
-        warn!(target: LOG_TARGET, "No LIB-update subscribers to notify: {e}");
-    }
 }
 
 async fn broadcast_finalized_block(

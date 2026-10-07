@@ -1,6 +1,5 @@
 use std::fmt::{Debug, Display};
 
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService};
 use lb_core::mantle::traits::{PreverifiedMantleTransaction, StorageSize};
 use lb_storage_service::{StorageService, api::StorageApi};
@@ -50,8 +49,6 @@ impl<Tx> CryptarchiaConsensusRelays<Tx> {
             + Eq
             + Serialize
             + DeserializeOwned
-            + BinaryEncode
-            + BinaryDecode<Context = ()>
             + Send
             + Sync
             + Unpin

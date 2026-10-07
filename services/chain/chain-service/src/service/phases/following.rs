@@ -2,7 +2,7 @@ use core::fmt::{self, Debug};
 use std::collections::HashSet;
 
 use futures::StreamExt as _;
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
+use lb_binary_codec::canonical::BinaryEncode;
 use lb_core::mantle::{
     ledger::verification_mode::StandardMode,
     traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
@@ -40,7 +40,6 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -66,7 +65,7 @@ where
                         debug!(target: LOG_TARGET, "ignoring IbdCompleted: already in {:?} phase", self.phase);
                     }
                 },
-                Some(tick) = self.slot_timer.next() => self.on_slot_tick(tick).await,
+                Some(tick) = self.slot_timer.next() => self.on_slot_tick(tick),
                 _ = self.state_recording_timer.tick() => self.record_recovery_state(),
             }
         }

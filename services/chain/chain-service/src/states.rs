@@ -2,7 +2,6 @@ use std::{collections::HashSet, time::SystemTime};
 
 use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_core::{header::HeaderId, mantle::traits::GenesisTx as _};
-use lb_cryptarchia_engine::{Epoch, era::Era};
 use lb_ledger::LedgerState;
 use lb_services_utils::overwatch::{StateVersion, VersionedState};
 use overwatch::{DynError, services::state::ServiceState};
@@ -82,15 +81,6 @@ impl ServiceState for CryptarchiaConsensusState {
     fn from_settings(
         settings: &<Self as ServiceState>::Settings,
     ) -> Result<Self, <Self as ServiceState>::Error> {
-        // The genesis state sets up epochs 0 and 1 under the genesis config, so
-        // both must be of the genesis era.
-        if settings
-            .eras
-            .get(Era::new(1))
-            .is_some_and(|era| era.first_epoch == Epoch::new(1))
-        {
-            return Err(Error::EraAtEpochOne);
-        }
         let StartingState::Genesis { genesis_block } = &settings.starting_state;
         let genesis_id = genesis_block.header().id();
         let genesis_tx = genesis_block.genesis_tx();
@@ -118,9 +108,7 @@ impl ServiceState for CryptarchiaConsensusState {
 impl VersionedState for CryptarchiaConsensusState {
     const VERSION: StateVersion = StateVersion::new(1);
 
-    /// The only version before 1 is 0, the records written before records
-    /// carried a version, in the layout of version 1.
-    fn migrate(_from: StateVersion, bytes: &[u8]) -> Result<Self, DynError> {
+    fn migrate(_: StateVersion, bytes: &[u8]) -> Result<Self, DynError> {
         Ok(Self::from_bytes(bytes)?)
     }
 }

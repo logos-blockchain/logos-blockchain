@@ -2,7 +2,6 @@ use core::fmt::{self, Debug};
 use std::{collections::HashSet, pin::Pin, time::Duration};
 
 use futures::StreamExt as _;
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -59,8 +58,6 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryEncode
-        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -84,7 +81,7 @@ where
         state_recording_timer: tokio::time::Interval,
         prolonged_bootstrap_period: Duration,
     ) -> Self {
-        let era = cryptarchia.ledger.era_schedule().at_slot(current_slot).era;
+        let current_era = cryptarchia.ledger.era_schedule().at_slot(current_slot).era;
         Self {
             phase: AwaitingGenesisTime {
                 genesis_timer: create_genesis_timer(starting_state),
@@ -96,7 +93,7 @@ where
             lib_subscription_sender,
             chain_online_notifier,
             current_slot,
-            era,
+            current_era,
             storage_blocks_to_remove,
             relays,
             sync_blocks_provider,
@@ -145,7 +142,7 @@ where
                         ibd_skipped = true;
                     }
                 },
-                Some(tick) = self.slot_timer.next() => self.on_slot_tick(tick).await,
+                Some(tick) = self.slot_timer.next() => self.on_slot_tick(tick),
                 _ = self.state_recording_timer.tick() => self.record_recovery_state(),
             }
         }
