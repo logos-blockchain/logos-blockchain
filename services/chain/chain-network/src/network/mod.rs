@@ -3,6 +3,7 @@ pub mod adapters;
 use std::collections::HashSet;
 
 use futures::Stream;
+use lb_binary_codec::canonical::BinaryDecode;
 use lb_core::header::HeaderId;
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
@@ -63,7 +64,6 @@ pub trait NetworkAdapter<RuntimeServiceId> {
 pub trait EraNetworkAdapter<RuntimeServiceId> {
     type Backend: NetworkBackend<RuntimeServiceId> + 'static;
     type Settings;
-    type Proposal;
 
     async fn new(
         settings: Self::Settings,
@@ -72,5 +72,12 @@ pub trait EraNetworkAdapter<RuntimeServiceId> {
         >,
     ) -> Self;
 
-    async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError>;
+    /// The era's proposals, decoded with `decoding_context` as `Proposal`: the
+    /// proposal type of the era's version.
+    async fn proposals_stream<Proposal>(
+        &self,
+        proposal_decoding_context: Proposal::Context,
+    ) -> Result<BoxedStream<Proposal>, DynError>
+    where
+        Proposal: BinaryDecode<Context: Send + 'static> + Send + 'static;
 }

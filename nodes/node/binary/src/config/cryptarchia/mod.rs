@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
-use lb_binary_codec::canonical::BinaryDecode as _;
 use lb_chain_network_service::network::adapters::libp2p::{
     LibP2pAdapterSettings, LibP2pEraAdapterSettings,
 };
-use lb_core::block::{Proposal, genesis::GenesisBlock, v1};
-use lb_cryptarchia_engine::era::{EraSchedule, EraVersion};
+use lb_core::block::genesis::GenesisBlock;
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_era_parameters::{EraDefinition, EraParameters};
 use lb_libp2p::PeerId;
 use lb_services_utils::overwatch::RecoveryData;
@@ -104,12 +103,6 @@ impl ServiceConfig {
                         .protocol_names
                         .cryptarchia_topic
                         .clone(),
-                    // Each era's proposals decode with the codec of its version.
-                    versioned_proposal_decoding_fn: match era.entry.version {
-                        EraVersion::V1 => {
-                            |bytes| v1::Proposal::decode_all(bytes, &()).map(Proposal::V1)
-                        }
-                    },
                 }
             })),
             sync: lb_chain_network_service::SyncConfig {

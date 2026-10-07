@@ -3,9 +3,9 @@ use std::{
 };
 
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
-use lb_binary_codec::canonical::{BinaryDecode, DecodeError};
+use lb_binary_codec::canonical::BinaryDecode;
 use lb_core::{
-    block::{Block, Proposal},
+    block::Block,
     era::EraSchedules,
     header::HeaderId,
     mantle::{
@@ -488,15 +488,12 @@ impl<RuntimeServiceId> Drop for LibP2pEraAdapter<RuntimeServiceId> {
 pub struct LibP2pEraAdapterSettings {
     /// The topic the era's proposals are gossiped on.
     pub topic: String,
-    /// Decodes a proposal of the era, with the codec of its version.
-    pub versioned_proposal_decoding_fn: fn(&[u8]) -> Result<Proposal, DecodeError>,
 }
 
 #[async_trait::async_trait]
 impl<RuntimeServiceId> EraNetworkAdapter<RuntimeServiceId> for LibP2pEraAdapter<RuntimeServiceId> {
     type Backend = Libp2p;
     type Settings = LibP2pEraAdapterSettings;
-    type Proposal = Proposal;
 
     async fn new(settings: Self::Settings, network_relay: Relay<Libp2p, RuntimeServiceId>) -> Self {
         tracing::debug!(
@@ -518,7 +515,13 @@ impl<RuntimeServiceId> EraNetworkAdapter<RuntimeServiceId> for LibP2pEraAdapter<
         }
     }
 
-    async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
+    async fn proposals_stream<Proposal>(
+        &self,
+        proposal_decoding_context: Proposal::Context,
+    ) -> Result<BoxedStream<Proposal>, DynError>
+    where
+        Proposal: BinaryDecode<Context: Send + 'static> + Send + 'static,
+    {
         let (sender, receiver) = oneshot::channel();
         if let Err(error) = self
             .network_relay
@@ -528,16 +531,17 @@ impl<RuntimeServiceId> EraNetworkAdapter<RuntimeServiceId> for LibP2pEraAdapter<
             return Err(Box::new(error));
         }
         let topic_hash = TopicHash::from_raw(self.settings.topic.clone());
-        let decode = self.settings.versioned_proposal_decoding_fn;
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
-            Ok(message) if message.topic == topic_hash => match decode(&message.data) {
-                Ok(proposal) => Some(proposal),
-                Err(e) => {
-                    tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
-                    None
+            Ok(message) if message.topic == topic_hash => {
+                match Proposal::decode_all(&message.data, &proposal_decoding_context) {
+                    Ok(proposal) => Some(proposal),
+                    Err(e) => {
+                        tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
+                        None
+                    }
                 }
-            },
+            }
             Ok(_) => None,
             Err(BroadcastStreamRecvError::Lagged(n)) => {
                 tracing::error!(target: LOG_TARGET, "lagged messages: {n}");

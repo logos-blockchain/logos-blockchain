@@ -115,8 +115,7 @@ where
         Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Item>,
         Mempool::Key: Send,
         NetworkAdapter::Settings: Sync + Send,
-        EraAdapter: network::EraNetworkAdapter<RuntimeServiceId>,
-        EraAdapter::Settings: Sync + Send,
+        EraAdapter: network::EraNetworkAdapter<RuntimeServiceId, Settings: Send + Sync>,
         TimeBackend: TimeBackendTrait,
         TimeBackend::Settings: Clone + Send + Sync,
         RuntimeServiceId: Debug
