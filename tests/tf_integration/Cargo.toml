@@ -1,0 +1,36 @@
+[package]
+description          = "Executable integrations and mixed blockchain tests"
+edition.workspace    = true
+license.workspace    = true
+name                 = "blockchain-test-tf-integration"
+publish              = false
+repository.workspace = true
+version.workspace    = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait            = { workspace = true }
+blockchain-test-nimbos = { workspace = true }
+lb-testing-framework   = { workspace = true }
+libp2p                 = { features = ["ed25519"], workspace = true }
+logos-blockchain-tests = { path = ".." }
+testing-framework-app  = { workspace = true }
+testing-framework-core = { workspace = true }
+tokio                  = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[bin]]
+name = "cucumber_nimbos"
+path = "src/bin/cucumber_nimbos.rs"
+
+[[bin]]
+name = "cucumber_external_smoke"
+path = "src/bin/cucumber_external_smoke.rs"
+
+[[test]]
+name = "logos_nimbos_mixed"
+path = "tests/logos_nimbos_mixed.rs"

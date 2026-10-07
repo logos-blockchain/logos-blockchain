@@ -1,0 +1,27 @@
+[package]
+description          = "Nimbos adapter for blockchain tests"
+edition.workspace    = true
+license.workspace    = true
+name                 = "blockchain-test-nimbos"
+publish              = false
+repository.workspace = true
+version.workspace    = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait                    = { workspace = true }
+blockchain-test-support        = { workspace = true }
+libp2p                         = { workspace = true, features = ["ed25519"] }
+multiaddr                      = { workspace = true }
+serde                          = { workspace = true, features = ["derive"] }
+serde_yaml                     = { workspace = true }
+testing-framework-core         = { workspace = true }
+testing-framework-runner-local = { workspace = true }
+toml                           = "0.9.12"
+url                            = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio    = { workspace = true, features = ["macros", "rt-multi-thread"] }
