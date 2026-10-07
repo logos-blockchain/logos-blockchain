@@ -884,8 +884,8 @@ where
     Ok(ProcessBlockOutcome {
         pruned_blocks: applied.pruned_blocks,
         reorged_block_ids: applied.reorged_blocks.iter().copied().collect(),
-        reorged_txs,
-        newly_canonical_txs,
+        reorged_txs: reorged_txs.collect(),
+        newly_canonical_txs: newly_canonical_txs.collect(),
     })
 }
 
@@ -893,7 +893,7 @@ where
 async fn load_block_txs<'a, Tx>(
     block_ids: impl Iterator<Item = &'a HeaderId>,
     storage: &StorageApi<Tx>,
-) -> Vec<Tx>
+) -> impl Iterator<Item = Tx>
 where
     Tx: Hashable<Hash = TxHash>
         + StorageSize
@@ -916,7 +916,6 @@ where
     .into_iter()
     .flatten()
     .flat_map(Block::into_transactions)
-    .collect()
 }
 
 /// Tx hashes carried by `newly_canonical_blocks`.
@@ -929,7 +928,7 @@ async fn newly_canonical_txs<Tx>(
     applied_block: &Block<Tx>,
     newly_canonical_blocks: &[HeaderId],
     storage: &StorageApi<Tx>,
-) -> Vec<TxHash>
+) -> impl Iterator<Item = TxHash>
 where
     Tx: Hashable<Hash = TxHash>
         + StorageSize
@@ -946,7 +945,7 @@ where
     let early_txs = load_block_txs(
         newly_canonical_blocks
             .iter()
-            .filter(|block_id| **block_id != applied_block_id),
+            .filter(move |block_id| **block_id != applied_block_id),
         storage,
     )
     .await;
@@ -960,10 +959,8 @@ where
 
     // Return all gathered txs.
     early_txs
-        .iter()
-        .chain(applied_txs)
-        .map(Hashable::hash)
-        .collect()
+        .map(|tx| tx.hash())
+        .chain(applied_txs.map(Hashable::hash))
 }
 
 async fn log_newly_canonical_blocks<Tx>(
