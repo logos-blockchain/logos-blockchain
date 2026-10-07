@@ -32,6 +32,7 @@ use lb_sdp_service::{
     wallet::SdpWalletAdapter,
 };
 use lb_storage_service::StorageService;
+use lb_time_service::backends::NtpTimeBackend;
 use lb_tx_service::{TxMempoolService, backend::Mempool};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
@@ -166,7 +167,7 @@ where
                     RuntimeServiceId,
                 >,
                 MempoolStorageAdapter,
-                lb_time_service::backends::NtpTimeBackend,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >

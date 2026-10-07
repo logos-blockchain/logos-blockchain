@@ -410,7 +410,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
@@ -571,7 +571,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,

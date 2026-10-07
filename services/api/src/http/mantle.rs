@@ -23,6 +23,7 @@ use lb_core::{
 };
 use lb_log_targets::api;
 use lb_storage_service::{StorageService, api::StorageApi};
+use lb_time_service::backends::NtpTimeBackend;
 use lb_tx_service::{
     MempoolMetrics, MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
@@ -69,7 +70,7 @@ pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
         RuntimeServiceId,
     >,
     StorageAdapter,
-    lb_time_service::backends::NtpTimeBackend,
+    NtpTimeBackend,
     RuntimeServiceId,
 >;
 
@@ -232,7 +233,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode
         + Send
         + Sync
         + 'static
@@ -299,7 +300,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode
         + Send
         + Sync
         + 'static
@@ -370,7 +371,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode
         + Send
         + Sync
         + 'static
@@ -479,7 +480,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode
         + Send
         + Sync
         + 'static
@@ -516,7 +517,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode
         + Send
         + Sync
         + 'static
@@ -640,7 +641,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode
         + Send
         + Sync
         + 'static
@@ -705,7 +706,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode
         + Send
         + Sync
         + 'static
