@@ -543,15 +543,11 @@ async fn fork_switch_reports_transactions_of_every_newly_canonical_block() {
     let (zk_key, leader_utxo) = utxo();
     let (_, funding_utxo_a) = utxo();
     let (_, funding_utxo_b) = utxo();
-    let genesis = Cryptarchia::from_lib(
+    let genesis = Cryptarchia::from_genesis(
         genesis_id,
         LedgerState::from_utxos([leader_utxo, funding_utxo_a, funding_utxo_b], &config),
-        genesis_id,
         config,
         lb_cryptarchia_engine::State::Online,
-        Slot::genesis(),
-        0,
-        UncleSlots::default(),
     );
     let tx1 = burn_tx(funding_utxo_a, &zk_key);
     let tx2 = burn_tx(funding_utxo_b, &zk_key);
