@@ -1,6 +1,8 @@
 use std::ffi::{CString, c_char};
 
 use lb_c_macros::panic_to_error;
+use lb_chain_service::Epoch;
+use lb_core::sdp::{SNAPSHOT_FINALIZATION_DELAY, ServiceType};
 use lb_libp2p::protocol_name::ProtocolScope;
 use lb_node::config::DeploymentSettings;
 
@@ -24,6 +26,47 @@ pub struct ProtocolNames {
     pub mempool: *mut c_char,
 }
 
+/// What a node needs to take part in Blend.
+#[repr(C)]
+pub struct BlendRequirements {
+    pub min_stake: u64,
+    pub declaration_activation_delay_epochs: u32,
+    pub withdrawal_unlock_delay_epochs: u32,
+    pub inactivity_period_epochs: u32,
+    pub minimum_network_size: u64,
+}
+
+impl BlendRequirements {
+    fn new(deployment: &DeploymentSettings) -> Result<Self, OperationStatus> {
+        let sdp_config = &deployment.genesis_era_parameters().cryptarchia.sdp_config;
+        let blend_params = sdp_config
+            .service_params
+            .get(&ServiceType::BlendNetwork)
+            .ok_or_else(|| {
+                OperationStatus::error(
+                    OperationStatusCode::ConfigurationError,
+                    "The deployment has no Blend service parameters.",
+                )
+            })?;
+
+        let withdrawal_unlock_delay_epochs =
+            Epoch::new(SNAPSHOT_FINALIZATION_DELAY.into_inner() + 1);
+        let minimum_network_size = deployment
+            .genesis_era_parameters()
+            .blend_reward_params()
+            .minimum_network_size
+            .get();
+
+        Ok(Self {
+            min_stake: sdp_config.min_stake.threshold,
+            declaration_activation_delay_epochs: SNAPSHOT_FINALIZATION_DELAY.into(),
+            withdrawal_unlock_delay_epochs: withdrawal_unlock_delay_epochs.into(),
+            inactivity_period_epochs: blend_params.inactivity_period.into_inner().into(),
+            minimum_network_size,
+        })
+    }
+}
+
 /// What a configuration file says about the chain it points at.
 #[repr(C)]
 pub struct DeploymentInfo {
@@ -31,6 +74,7 @@ pub struct DeploymentInfo {
     pub genesis_time: u32,
     pub node_version: *mut c_char,
     pub protocol_names: ProtocolNames,
+    pub blend_requirements: BlendRequirements,
 }
 
 impl DeploymentInfo {
@@ -38,6 +82,7 @@ impl DeploymentInfo {
         let deployment_chain_id = deployment.chain_id();
         let chain = ProtocolScope::Chain(deployment.genesis_id());
         let fork = ProtocolScope::Fork(deployment.fork_digest_in_force());
+        let blend_requirements = BlendRequirements::new(deployment)?;
 
         // Every string is built before any of them is turned into a raw
         // pointer, so a failure part-way drops the ones already built instead
@@ -63,6 +108,7 @@ impl DeploymentInfo {
                 mempool: mempool.into_raw(),
             },
             node_version: node_version.into_raw(),
+            blend_requirements,
         })
     }
 
