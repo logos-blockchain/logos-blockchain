@@ -6,7 +6,6 @@ use lb_network_service::{
     backends::mock::{Mock, MockBackendMessage, MockContentTopic, MockMessage, NetworkEvent},
     message::NetworkMsg,
 };
-use lb_time_service::backends::SystemTimeBackend;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 
 use crate::network::NetworkAdapter;
@@ -26,7 +25,6 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
     type Settings = ();
     type Payload = MockTransaction<MockMessage>;
     type Key = MockTxId;
-    type TimeBackend = SystemTimeBackend;
 
     async fn new(
         _settings: Self::Settings,

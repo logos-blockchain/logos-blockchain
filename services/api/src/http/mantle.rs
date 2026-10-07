@@ -59,7 +59,6 @@ pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
     MempoolNetworkAdapter<
         SignedOps<Preverified, StandardMode>,
         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-        lb_time_service::backends::NtpTimeBackend,
         RuntimeServiceId,
     >,
     Mempool<
@@ -70,6 +69,7 @@ pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
         RuntimeServiceId,
     >,
     StorageAdapter,
+    lb_time_service::backends::NtpTimeBackend,
     RuntimeServiceId,
 >;
 

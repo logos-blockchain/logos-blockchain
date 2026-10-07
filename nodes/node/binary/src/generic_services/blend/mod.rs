@@ -27,6 +27,7 @@ pub type BlendPayloadDispatcher<RuntimeServiceId> =
     lb_blend_service::core::dispatcher::libp2p::Libp2pPayloadDispatcher<
         MempoolNetworkAdapter<RuntimeServiceId>,
         MempoolPool<RuntimeServiceId>,
+        NtpTimeBackend,
         ChainNetworkService<RuntimeServiceId>,
         RuntimeServiceId,
     >;

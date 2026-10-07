@@ -128,7 +128,13 @@ where
             + AsServiceId<NetworkService<NetworkAdapter::Backend, RuntimeServiceId>>
             + AsServiceId<StorageService<RuntimeServiceId>>
             + AsServiceId<
-                TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
+                TxMempoolService<
+                    MempoolNetAdapter,
+                    Mempool,
+                    Mempool::Storage,
+                    TimeBackend,
+                    RuntimeServiceId,
+                >,
             >
             + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
     {
@@ -144,7 +150,7 @@ where
 
         let mempool_relay = service_resources_handle
             .overwatch_handle
-            .relay::<TxMempoolService<_, _, _, _>>()
+            .relay::<TxMempoolService<_, _, _, _, _>>()
             .await
             .expect("Relay connection with MempoolService should succeed");
 

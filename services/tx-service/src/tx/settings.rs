@@ -8,8 +8,8 @@ pub const RECOVERY_KEY_SUFFIX: &[u8] = b"mempool";
 pub struct TxMempoolSettings<PoolSettings, NetworkAdapterSettings> {
     /// The mempool settings.
     pub pool: PoolSettings,
-    /// The network adapter settings of every era: each era in force has an
-    /// adapter of its own, to its topic.
+    /// The network adapter settings of every era: the era in force has an
+    /// adapter of its own for stuff like topics.
     pub network_adapters: EraSchedule<NetworkAdapterSettings>,
     pub recovery_data: RecoveryData,
 }

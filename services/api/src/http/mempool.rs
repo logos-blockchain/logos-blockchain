@@ -13,6 +13,7 @@ pub async fn add_tx<
     MempoolNetworkBackend,
     MempoolNetworkAdapter,
     StorageAdapter,
+    MempoolTimeBackend,
     Item,
     Key,
     RuntimeServiceId,
@@ -55,6 +56,7 @@ where
                 MempoolNetworkAdapter,
                 Mempool<HeaderId, Item, Key, StorageAdapter, RuntimeServiceId>,
                 StorageAdapter,
+                MempoolTimeBackend,
                 RuntimeServiceId,
             >,
         >,
@@ -64,6 +66,7 @@ where
             MempoolNetworkAdapter,
             Mempool<HeaderId, Item, Key, StorageAdapter, RuntimeServiceId>,
             StorageAdapter,
+            MempoolTimeBackend,
             RuntimeServiceId,
         >>()
         .await?;

@@ -26,7 +26,7 @@ use tokio::sync::oneshot;
 
 type MempoolRelay<Item, Key> = OutboundRelay<MempoolMsg<HeaderId, Item, Item, Key>>;
 
-pub struct SdpMempoolAdapter<MempoolNetAdapter, Mempool, RuntimeServiceId>
+pub struct SdpMempoolAdapter<MempoolNetAdapter, Mempool, MempoolTimeBackend, RuntimeServiceId>
 where
     Mempool: MemPool<BlockId = HeaderId, Key = TxHash>,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Key = Mempool::Key>,
@@ -34,12 +34,16 @@ where
     Mempool::Key: Debug + 'static,
 {
     pub mempool_relay: MempoolRelay<Mempool::Item, Mempool::Key>,
-    _phantom: PhantomData<(MempoolNetAdapter, RuntimeServiceId)>,
+    #[expect(
+        clippy::type_complexity,
+        reason = "Phantom data stuff to not require Send/Sync on type parameters that are only used as tags"
+    )]
+    _phantom: PhantomData<fn() -> (MempoolNetAdapter, MempoolTimeBackend, RuntimeServiceId)>,
 }
 
 #[async_trait::async_trait]
-impl<MempoolNetAdapter, Mempool, RuntimeServiceId> SdpMempoolAdapterTrait
-    for SdpMempoolAdapter<MempoolNetAdapter, Mempool, RuntimeServiceId>
+impl<MempoolNetAdapter, Mempool, MempoolTimeBackend, RuntimeServiceId> SdpMempoolAdapterTrait
+    for SdpMempoolAdapter<MempoolNetAdapter, Mempool, MempoolTimeBackend, RuntimeServiceId>
 where
     Mempool: RecoverableMempool<
             BlockId = HeaderId,
@@ -62,8 +66,13 @@ where
         + 'static
         + AsServiceId<StorageService<RuntimeServiceId>>,
 {
-    type MempoolService =
-        TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>;
+    type MempoolService = TxMempoolService<
+        MempoolNetAdapter,
+        Mempool,
+        Mempool::Storage,
+        MempoolTimeBackend,
+        RuntimeServiceId,
+    >;
     type Tx = SignedOps<Preverified, StandardMode>;
 
     fn new(mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>) -> Self {

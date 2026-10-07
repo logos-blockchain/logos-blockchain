@@ -279,7 +279,13 @@ where
         + AsServiceId<NetworkService<NetAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<
-            TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
+            TxMempoolService<
+                MempoolNetAdapter,
+                Mempool,
+                Mempool::Storage,
+                TimeBackend,
+                RuntimeServiceId,
+            >,
         >
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
 {
@@ -323,7 +329,7 @@ where
             &self.service_resources_handle.overwatch_handle,
             Some(Duration::from_mins(1)),
             NetworkService<_, _>,
-            TxMempoolService<_, _, _, _>,
+            TxMempoolService<_, _, _, _, _>,
             TimeService<_, _>
         )
         .await?;

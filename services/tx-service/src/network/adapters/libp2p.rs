@@ -1,4 +1,4 @@
-use core::{marker::PhantomData, mem};
+use core::mem;
 
 use futures::{Stream, future::BoxFuture};
 use lb_binary_codec::bincode::{self, DeserializeOp as _, SerializeOp as _};
@@ -9,7 +9,6 @@ use lb_network_service::{
     backends::libp2p::{Command, Libp2p, Message, PubSubCommand, TopicHash},
     message::NetworkMsg,
 };
-use lb_time_service::backends::TimeBackend;
 use lb_utils::tokio::task::spawn;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
@@ -33,17 +32,14 @@ const fn transaction_gossip_size_is_valid(size: usize) -> bool {
     size <= MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE
 }
 
-pub struct Libp2pAdapter<Item, Key, Clock, RuntimeServiceId> {
+pub struct Libp2pAdapter<Item, Key, RuntimeServiceId> {
     network_relay:
         OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
     settings: Settings<Key, Item>,
-    _clock: PhantomData<fn() -> Clock>,
 }
 
 /// Leaves the era's topic.
-impl<Item, Key, Clock, RuntimeServiceId> Drop
-    for Libp2pAdapter<Item, Key, Clock, RuntimeServiceId>
-{
+impl<Item, Key, RuntimeServiceId> Drop for Libp2pAdapter<Item, Key, RuntimeServiceId> {
     fn drop(&mut self) {
         // Dropping cannot wait for the network service: a task of its own sends
         // the unsubscribe.
@@ -64,18 +60,16 @@ impl<Item, Key, Clock, RuntimeServiceId> Drop
 }
 
 #[async_trait::async_trait]
-impl<Item, Key, Clock, RuntimeServiceId> NetworkAdapter<RuntimeServiceId>
-    for Libp2pAdapter<Item, Key, Clock, RuntimeServiceId>
+impl<Item, Key, RuntimeServiceId> NetworkAdapter<RuntimeServiceId>
+    for Libp2pAdapter<Item, Key, RuntimeServiceId>
 where
     Item: DeserializeOwned + Serialize + Send + Sync + 'static + Clone,
     Key: Clone + Send + Sync + 'static,
-    Clock: TimeBackend + 'static,
 {
     type Backend = Libp2p;
     type Settings = Settings<Key, Item>;
     type Payload = Item;
     type Key = Key;
-    type TimeBackend = Clock;
 
     async fn new(
         settings: Self::Settings,
@@ -97,7 +91,6 @@ where
         Self {
             network_relay,
             settings,
-            _clock: PhantomData,
         }
     }
 

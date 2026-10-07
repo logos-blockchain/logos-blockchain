@@ -71,6 +71,7 @@ type MockMempoolService = GenericTxMempoolService<
     MockAdapter<RuntimeServiceId>,
     MockRecoveryBackend,
     RocksStorageAdapter<MockTransaction<MockMessage>, MockTxId>,
+    SystemTimeBackend,
     RuntimeServiceId,
 >;
 

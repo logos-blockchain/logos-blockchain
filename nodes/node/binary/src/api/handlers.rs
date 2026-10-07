@@ -394,7 +394,6 @@ where
                 MempoolNetworkAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<
@@ -405,6 +404,7 @@ where
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >,
@@ -449,7 +449,6 @@ where
                 MempoolNetworkAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<
@@ -460,6 +459,7 @@ where
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >,
@@ -782,7 +782,6 @@ where
                 MempoolNetworkAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<
@@ -793,6 +792,7 @@ where
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >,
@@ -802,10 +802,10 @@ where
         MempoolNetworkAdapter<
             SignedOps<Preverified, StandardMode>,
             <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-            NtpTimeBackend,
             RuntimeServiceId,
         >,
         StorageAdapter,
+        NtpTimeBackend,
         SignedOps<Preverified, StandardMode>,
         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
         RuntimeServiceId,
@@ -846,7 +846,6 @@ where
                 MempoolNetworkAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<
@@ -857,6 +856,7 @@ where
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >,
@@ -892,7 +892,6 @@ where
                 MempoolNetworkAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<
@@ -903,6 +902,7 @@ where
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >,
@@ -939,7 +939,6 @@ where
                 MempoolNetworkAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<
@@ -950,6 +949,7 @@ where
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >,
@@ -959,7 +959,6 @@ where
             MempoolNetworkAdapter<
                 SignedOps<Preverified, StandardMode>,
                 <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                NtpTimeBackend,
                 RuntimeServiceId,
             >,
             Mempool<
@@ -970,6 +969,7 @@ where
                 RuntimeServiceId,
             >,
             StorageAdapter,
+            NtpTimeBackend,
             RuntimeServiceId,
         >>()
         .await?;
@@ -1055,7 +1055,6 @@ where
                 MempoolNetworkAdapter<
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
                 Mempool<
@@ -1066,6 +1065,7 @@ where
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >,
@@ -1102,10 +1102,10 @@ where
             MempoolNetworkAdapter<
                 SignedOps<Preverified, StandardMode>,
                 <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                NtpTimeBackend,
                 RuntimeServiceId,
             >,
             StorageAdapter,
+            NtpTimeBackend,
             SignedOps<Preverified, StandardMode>,
             <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
             RuntimeServiceId,
@@ -1992,7 +1992,6 @@ pub mod wallet {
                     MempoolNetworkAdapter<
                         SignedOps<Preverified, StandardMode>,
                         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                        NtpTimeBackend,
                         RuntimeServiceId,
                     >,
                     Mempool<
@@ -2003,6 +2002,7 @@ pub mod wallet {
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
             >,
@@ -2036,10 +2036,10 @@ pub mod wallet {
                     MempoolNetworkAdapter<
                         SignedOps<Preverified, StandardMode>,
                         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                        NtpTimeBackend,
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
+                    NtpTimeBackend,
                     SignedOps<Preverified, StandardMode>,
                     <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     RuntimeServiceId,
@@ -2091,7 +2091,6 @@ pub mod wallet {
                     MempoolNetworkAdapter<
                         SignedOps<Preverified, StandardMode>,
                         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                        NtpTimeBackend,
                         RuntimeServiceId,
                     >,
                     Mempool<
@@ -2102,6 +2101,7 @@ pub mod wallet {
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
             >,
@@ -2152,7 +2152,6 @@ pub mod wallet {
                     MempoolNetworkAdapter<
                         SignedOps<Preverified, StandardMode>,
                         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                        NtpTimeBackend,
                         RuntimeServiceId,
                     >,
                     Mempool<
@@ -2163,6 +2162,7 @@ pub mod wallet {
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
             >,
@@ -2213,7 +2213,6 @@ pub mod wallet {
                     MempoolNetworkAdapter<
                         SignedOps<Preverified, StandardMode>,
                         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                        NtpTimeBackend,
                         RuntimeServiceId,
                     >,
                     Mempool<
@@ -2224,6 +2223,7 @@ pub mod wallet {
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
             >,

@@ -39,8 +39,13 @@ type ChainNetworkRelay<Item> = OutboundRelay<ChainNetworkMsg<Item>>;
 
 /// A payload dispatcher for a node whose network service uses the libp2p
 /// backend.
-pub struct Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
-where
+pub struct Libp2pPayloadDispatcher<
+    MempoolNetAdapter,
+    Mempool,
+    MempoolTimeBackend,
+    ChainNetwork,
+    RuntimeServiceId,
+> where
     Mempool: RecoverableMempool<BlockId = HeaderId>,
 {
     network_relay: NetworkRelay,
@@ -51,7 +56,14 @@ where
         clippy::type_complexity,
         reason = "Phantom data stuff to not require Send/Sync on type parameters that are only used as tags"
     )]
-    _phantom: PhantomData<fn() -> (MempoolNetAdapter, ChainNetwork, RuntimeServiceId)>,
+    _phantom: PhantomData<
+        fn() -> (
+            MempoolNetAdapter,
+            MempoolTimeBackend,
+            ChainNetwork,
+            RuntimeServiceId,
+        ),
+    >,
 }
 
 /// Settings used to broadcast messages to the network service that uses libp2p
@@ -241,8 +253,15 @@ where
 }
 
 #[async_trait::async_trait]
-impl<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId> PayloadDispatcher<RuntimeServiceId>
-    for Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
+impl<MempoolNetAdapter, Mempool, MempoolTimeBackend, ChainNetwork, RuntimeServiceId>
+    PayloadDispatcher<RuntimeServiceId>
+    for Libp2pPayloadDispatcher<
+        MempoolNetAdapter,
+        Mempool,
+        MempoolTimeBackend,
+        ChainNetwork,
+        RuntimeServiceId,
+    >
 where
     Mempool: RecoverableMempool<BlockId = HeaderId, RecoveryState: 'static> + Send + Sync + 'static,
     Mempool::Item:
@@ -255,6 +274,7 @@ where
         + Sync
         + 'static,
     MempoolNetAdapter::Settings: Clone + Send + Sync,
+    MempoolTimeBackend: 'static,
     ChainNetwork: ServiceData<Message = ChainNetworkMsg<Mempool::Item>> + Send + Sync + 'static,
     RuntimeServiceId: Clone
         + Debug
@@ -266,8 +286,13 @@ where
 {
     type Backend = Libp2p;
     type ChainNetworkService = ChainNetwork;
-    type MempoolService =
-        TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>;
+    type MempoolService = TxMempoolService<
+        MempoolNetAdapter,
+        Mempool,
+        Mempool::Storage,
+        MempoolTimeBackend,
+        RuntimeServiceId,
+    >;
     type Settings = Libp2pBroadcastSettings;
 
     fn new(
