@@ -54,11 +54,12 @@ use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 use mantle::LedgerState as MantleLedger;
 use rpds::HashTrieMapSync;
 use thiserror::Error;
+pub use update::BatchVerifiedUpdate;
 
 use crate::{
     config::{EraScheduledConfig, RewardPoWConfig, config_for_slot},
     mantle::helpers::MantleOperationVerificationHelper,
-    update::{BatchVerifiedUpdate, PreparedUpdate},
+    update::PreparedUpdate,
 };
 
 const WINDOW_SIZE: usize = 120;

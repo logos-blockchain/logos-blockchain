@@ -9,6 +9,7 @@ mod sync;
 #[cfg(test)]
 mod tests;
 mod uncle;
+mod v1;
 
 use core::fmt::Debug;
 use std::{
@@ -28,7 +29,6 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
         transactions::states::Preverified,
@@ -473,37 +473,9 @@ impl Cryptarchia {
             });
         }
 
-        // A block is valid only if every uncle it carries is valid.
-        if origin == BlockOrigin::Network {
-            self.verify_uncles(&block)?;
-        }
-
-        let block_uncle_headers_slots = block.uncle_headers().slots();
-        let leader_proof = header.leader_proof().clone();
-
-        let transactions = block.into_transactions();
-
-        // Apply the block to the ledger, and batch-verify ZK proofs.
-        // This ledger update is not finalized yet, and will be committed only after
-        // checking if the block is accepted by the consensus engine.
-        let update = self
-            .ledger
-            .prepare_update::<_, _, MainnetGasProfile>(
-                id,
-                parent,
-                slot,
-                &leader_proof,
-                &block_uncle_headers_slots,
-                transactions.into_iter(),
-            )
-            .map_err(|err| match err {
-                lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
-                    parent,
-                    info: Box::new(self.info()),
-                },
-                err => Error::Ledger(err),
-            })?
-            .verify_batch_proofs()?;
+        let (update, block_uncle_headers_slots) = match block {
+            Block::V1(block) => self.prepare_v1_block(block, origin)?,
+        };
 
         let outcome = self
             .consensus
