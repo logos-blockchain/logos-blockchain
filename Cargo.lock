@@ -4291,6 +4291,7 @@ dependencies = [
  "logos-blockchain-network-service",
  "logos-blockchain-node",
  "logos-blockchain-pow-service",
+ "logos-blockchain-sdp-service",
  "logos-blockchain-storage-service",
  "logos-blockchain-time-service",
  "logos-blockchain-utils",
