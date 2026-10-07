@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::{Slot, UncleSlots};
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
-use lb_utils::bounded::{BoundedError, BoundedVec, UpperBoundedOrderedSet, UpperBoundedVec};
+use lb_utils::bounded::{BoundedError, BoundedVec, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -358,7 +358,7 @@ pub enum UncleHeaders {
 impl UncleHeaders {
     /// No uncle headers, of version 1, the only version.
     #[must_use]
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self::V1(v1::UncleHeaders::empty())
     }
 
@@ -372,7 +372,7 @@ impl UncleHeaders {
             Block::V1(block) => block.signed_header(),
         });
         Ok(Self::V1(v1::UncleHeaders::new(
-            UpperBoundedOrderedSet::try_from_iter(signed_headers)?,
+            UpperBoundedVec::try_from_iter(signed_headers)?,
         )))
     }
 
@@ -413,14 +413,14 @@ impl<'block> UncleHeadersRef<'block> {
     }
 
     #[must_use]
-    pub fn len(self) -> usize {
+    pub const fn len(self) -> usize {
         match self {
             Self::V1(uncle_headers) => uncle_headers.len(),
         }
     }
 
     #[must_use]
-    pub fn is_empty(self) -> bool {
+    pub const fn is_empty(self) -> bool {
         match self {
             Self::V1(uncle_headers) => uncle_headers.is_empty(),
         }

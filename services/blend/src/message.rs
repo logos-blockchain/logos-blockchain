@@ -3,10 +3,8 @@ use core::fmt::{self, Debug, Formatter};
 use lb_binary_codec::{bincode::SerializeOp, canonical::BinaryEncode};
 pub use lb_blend::message::MAX_PAYLOAD_BODY_SIZE;
 use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
-use lb_core::{
-    mantle::NoteId,
-    sdp::{DeclarationId, Locator},
-};
+use lb_core::{mantle::NoteId, sdp::Locator};
+use lb_sdp_service::SdpSubmission;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
@@ -32,7 +30,7 @@ pub enum ProxyServiceMessage<InnerMessage> {
     JoinAsCore {
         locator: Locator,
         service_note_id: NoteId,
-        reply: oneshot::Sender<Result<DeclarationId, lb_sdp_service::api::Error>>,
+        reply: oneshot::Sender<Result<SdpSubmission, lb_sdp_service::api::Error>>,
     },
 }
 

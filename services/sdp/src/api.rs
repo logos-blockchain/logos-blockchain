@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 
-use lb_core::sdp::{DeclarationId, DeclarationMessage};
+use lb_core::sdp::DeclarationMessage;
 use overwatch::{
     DynError,
     overwatch::OverwatchHandle,
@@ -11,7 +11,7 @@ use overwatch::{
 };
 use tokio::sync::{oneshot, oneshot::error::RecvError};
 
-use crate::SdpMessage;
+use crate::{SdpMessage, SdpSubmission};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -59,7 +59,7 @@ where
     pub async fn post_declaration(
         &self,
         declaration: DeclarationMessage,
-    ) -> Result<DeclarationId, Error> {
+    ) -> Result<SdpSubmission, Error> {
         let (reply_channel, receiver) = oneshot::channel();
         let declaration = Box::new(declaration);
         self.publish(SdpMessage::PostDeclaration {

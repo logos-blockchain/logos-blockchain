@@ -143,7 +143,7 @@ async fn post_blend_declaration(
         .await
         .with_context(|| "Failed to validate values from user config")?;
 
-    let declaration_id = client
+    let submission = client
         .join_blend_network(
             &node_address,
             JoinBlendRequestBody {
@@ -154,7 +154,10 @@ async fn post_blend_declaration(
         .await
         .context("Failed to post Blend join network declaration")?;
 
-    println!("Declaration posted successfully: {declaration_id}");
+    println!(
+        "Declaration posted successfully: {} (tx id: {:?})",
+        submission.declaration_id, submission.tx_id
+    );
     Ok(())
 }
 

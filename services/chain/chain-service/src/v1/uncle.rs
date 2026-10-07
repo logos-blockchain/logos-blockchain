@@ -163,7 +163,7 @@ mod tests {
     };
     use lb_cryptarchia_engine::Slot;
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
-    use lb_utils::bounded::BoundedOrderedSet;
+    use lb_utils::bounded::BoundedVec;
     use rand::thread_rng;
 
     use super::*;
@@ -423,7 +423,7 @@ mod tests {
 
     /// `header`, signed with `signature`, as the only uncle of a block.
     fn v1_uncle(header: Header, signature: Ed25519Signature) -> UncleHeaders {
-        UncleHeaders::V1(v1::UncleHeaders::new(BoundedOrderedSet::from(
+        UncleHeaders::V1(v1::UncleHeaders::new(BoundedVec::from(
             v1::SignedHeader::new(header, signature),
         )))
     }

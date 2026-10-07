@@ -18,7 +18,7 @@ use lb_core::{
         NoteId, SignedOps,
         ledger::verification_mode::StandardMode,
         traits::Hashable as _,
-        transactions::{MantleTxBuilder, states::Preverified},
+        transactions::{MantleTxBuilder, TxHash, states::Preverified},
     },
     sdp::{
         ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locators, ProviderId,
@@ -128,6 +128,12 @@ pub struct RuntimeDeclaration {
     pub tip: HeaderId,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ActivitySubmission {
+    tip: HeaderId,
+    tx_id: TxHash,
+}
+
 #[derive(Clone, Debug)]
 struct RuntimeDeclarationContext {
     declaration: RuntimeDeclaration,
@@ -136,17 +142,36 @@ struct RuntimeDeclarationContext {
     provider_id: ProviderId,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct SdpSubmission {
+    pub declaration_id: DeclarationId,
+    pub tx_id: Option<TxHash>,
+}
+
+impl SdpSubmission {
+    #[must_use]
+    pub const fn submitted(declaration_id: DeclarationId, tx_id: TxHash) -> Self {
+        Self {
+            declaration_id,
+            tx_id: Some(tx_id),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum SdpMessage {
     PostDeclaration {
         declaration: Box<DeclarationMessage>,
-        reply_channel: oneshot::Sender<Result<DeclarationId, DynError>>,
+        reply_channel: oneshot::Sender<Result<SdpSubmission, DynError>>,
     },
     PostActivity {
         metadata: ActivityMetadata, // DA/Blend specific metadata
+        reply_channel: Option<oneshot::Sender<Result<SdpSubmission, DynError>>>,
     },
     PostWithdrawal {
         declaration_id: DeclarationId,
+        reply_channel: oneshot::Sender<Result<SdpSubmission, DynError>>,
     },
     SetCurrentDeclarationId {
         declaration_id: Option<DeclarationId>,
@@ -309,11 +334,20 @@ where
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) {
         match msg {
-            SdpMessage::PostActivity { metadata } => {
+            SdpMessage::PostActivity {
+                metadata,
+                reply_channel,
+            } => {
                 metrics::activity_posts_total();
 
-                self.handle_post_activity(metadata, wallet_adapter, mempool_adapter, chain_api)
-                    .await;
+                self.handle_post_activity(
+                    metadata,
+                    wallet_adapter,
+                    mempool_adapter,
+                    chain_api,
+                    reply_channel,
+                )
+                .await;
             }
             SdpMessage::PostDeclaration {
                 declaration,
@@ -329,7 +363,10 @@ where
                 )
                 .await;
             }
-            SdpMessage::PostWithdrawal { declaration_id } => {
+            SdpMessage::PostWithdrawal {
+                declaration_id,
+                reply_channel,
+            } => {
                 metrics::withdrawals_total();
 
                 self.handle_post_withdrawal(
@@ -337,6 +374,7 @@ where
                     wallet_adapter,
                     mempool_adapter,
                     chain_api,
+                    reply_channel,
                 )
                 .await;
             }
@@ -533,6 +571,19 @@ where
         }
     }
 
+    fn reply(
+        reply_channel: Option<oneshot::Sender<Result<SdpSubmission, DynError>>>,
+        response: Result<SdpSubmission, DynError>,
+        request: &str,
+    ) {
+        let Some(reply_channel) = reply_channel else {
+            return;
+        };
+        if reply_channel.send(response).is_err() {
+            tracing::error!(target: LOG_TARGET, "Failed to send {request} response");
+        }
+    }
+
     #[expect(
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
@@ -542,7 +593,7 @@ where
         declaration: Box<DeclarationMessage>,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
-        reply_channel: oneshot::Sender<Result<DeclarationId, DynError>>,
+        reply_channel: oneshot::Sender<Result<SdpSubmission, DynError>>,
     ) {
         let tx_builder = MantleTxBuilder::new();
         let declaration_id = declaration.id();
@@ -567,6 +618,7 @@ where
             Err(e) => {
                 tracing::error!(target: LOG_TARGET, "Failed to create declaration transaction: {:?}", e);
                 metrics::declaration_tx_failures_total();
+                Self::reply(Some(reply_channel), Err(e.into()), "post declaration");
                 return;
             }
         };
@@ -586,6 +638,7 @@ where
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             tracing::error!(target: LOG_TARGET, "Failed to post declaration to mempool: {:?}", e);
             metrics::declaration_mempool_failures_total();
+            Self::reply(Some(reply_channel), Err(e.into()), "post declaration");
             return;
         }
 
@@ -600,11 +653,12 @@ where
             "Submitted SDP declaration transaction"
         );
 
-        if let Err(e) = reply_channel.send(Ok(declaration_id)) {
-            tracing::error!(target: LOG_TARGET, "Failed to send post declaration response: {:?}", e);
-        } else {
-            metrics::declaration_success_total();
-        }
+        metrics::declaration_success_total();
+        Self::reply(
+            Some(reply_channel),
+            Ok(SdpSubmission::submitted(declaration_id, tx_id)),
+            "post declaration",
+        );
 
         self.declaration_id = Some(declaration_id);
         self.update_state();
@@ -616,9 +670,17 @@ where
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         chain_api: &CryptarchiaServiceApi<ChainService>,
+        reply_channel: Option<oneshot::Sender<Result<SdpSubmission, DynError>>>,
     ) {
         let Some(declaration_id) = self.declaration_id else {
             tracing::error!(target: LOG_TARGET, "No declaration_id set. Cannot post activity without declaration.");
+            Self::reply(
+                reply_channel,
+                Err(DynError::from(
+                    "No declaration_id set. Cannot post activity without declaration.",
+                )),
+                "post activity",
+            );
             return;
         };
 
@@ -627,10 +689,22 @@ where
             metadata,
         };
 
-        let tip = self
+        let submission = self
             .submit_activity(activity.clone(), wallet_adapter, mempool_adapter, chain_api)
-            .await
-            .map_or_default(Some);
+            .await;
+
+        Self::reply(
+            reply_channel,
+            submission.map_or_else(
+                || Err(DynError::from("Failed to submit activity transaction")),
+                |ActivitySubmission { tx_id, .. }| {
+                    Ok(SdpSubmission::submitted(declaration_id, tx_id))
+                },
+            ),
+            "post activity",
+        );
+
+        let tip = submission.map(|ActivitySubmission { tip, .. }| tip);
 
         if self
             .active_message_tracker
@@ -658,7 +732,7 @@ where
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         chain_api: &CryptarchiaServiceApi<ChainService>,
-    ) -> Option<HeaderId> {
+    ) -> Option<ActivitySubmission> {
         trace!(
             target: LOG_TARGET,
             epoch = ?activity.metadata.submission_epoch(),
@@ -780,7 +854,10 @@ where
             "Submitted SDP activity transaction"
         );
         metrics::activity_success_total();
-        Some(declaration.tip)
+        Some(ActivitySubmission {
+            tip: declaration.tip,
+            tx_id,
+        })
     }
 
     #[expect(
@@ -793,6 +870,7 @@ where
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         chain_api: &CryptarchiaServiceApi<ChainService>,
+        reply_channel: oneshot::Sender<Result<SdpSubmission, DynError>>,
     ) {
         let Ok(RuntimeDeclarationContext { declaration, .. }) = self
             .try_fetch_runtime_declaration(declaration_id, chain_api)
@@ -800,12 +878,24 @@ where
         else {
             tracing::error!(target: LOG_TARGET, "Can't find declaration. Cannot post activity without declaration.");
             metrics::withdrawal_validation_failures_total();
+            Self::reply(
+                Some(reply_channel),
+                Err(DynError::from(
+                    "Can't find declaration. Cannot post withdrawal without declaration.",
+                )),
+                "post withdrawal",
+            );
             return;
         };
 
         let Some(nonce) = declaration.nonce.checked_add(1) else {
             tracing::error!(target: LOG_TARGET, "Can't bump nonce");
             metrics::withdrawal_validation_failures_total();
+            Self::reply(
+                Some(reply_channel),
+                Err(DynError::from("Can't bump nonce")),
+                "post withdrawal",
+            );
             return;
         };
 
@@ -825,17 +915,27 @@ where
             Err(e) => {
                 tracing::error!(target: LOG_TARGET, "Failed to create withdrawal transaction: {:?}", e);
                 metrics::withdrawal_tx_failures_total();
+                Self::reply(Some(reply_channel), Err(e.into()), "post withdrawal");
                 return;
             }
         };
 
+        let tx_id = signed_tx.hash();
+
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             tracing::error!(target: LOG_TARGET, "Failed to post withdrawal to mempool: {:?}", e);
             metrics::withdrawal_mempool_failures_total();
+            Self::reply(Some(reply_channel), Err(e.into()), "post withdrawal");
             return;
         }
 
         metrics::withdrawal_success_total();
+
+        Self::reply(
+            Some(reply_channel),
+            Ok(SdpSubmission::submitted(declaration_id, tx_id)),
+            "post withdrawal",
+        );
 
         self.declaration_id = None;
         self.active_message_tracker = None;

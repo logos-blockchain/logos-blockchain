@@ -313,20 +313,32 @@ pub struct AutoClaimSettings {
 /// Default number of ticket-search attempts kept in flight concurrently per
 /// block.
 const fn default_max_tickets_per_block() -> NonZeroUsize {
-    NonZeroUsize::new(4).expect("4 is non-zero")
+    NonZeroUsize::new(1).expect("1 is non-zero")
+}
+
+/// Default size of the dedicated ticket-search pool: a single worker, so an
+/// unconfigured node does not take over every core of the host it runs on.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Serde default for an `Option` field."
+)]
+const fn default_max_threads() -> Option<NonZeroUsize> {
+    Some(NonZeroUsize::new(1).expect("1 is non-zero"))
 }
 
 /// Tuning knobs for the Proof-of-Work ticket search.
 ///
 /// The search is CPU-bound and runs on a dedicated thread pool so it does not
-/// starve Tokio's runtime threads. Both fields have sensible defaults, so an
-/// omitted `mining` section keeps the previous behaviour. The non-zero types
+/// starve Tokio's runtime threads. Both fields have conservative defaults (a
+/// single worker thread and one attempt in flight per block), so an omitted
+/// `mining` section mines without taking over the host. The non-zero types
 /// make a `0` configuration a deserialization error rather than a silent stall.
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct PoWMiningSettings {
-    /// Worker threads in the dedicated ticket-search pool. `None` lets rayon
-    /// pick its default (one thread per logical CPU).
-    #[serde(default)]
+    /// Worker threads in the dedicated ticket-search pool. Defaults to one
+    /// thread when omitted; an explicit `null` lets rayon pick its default
+    /// (one thread per logical CPU).
+    #[serde(default = "default_max_threads")]
     pub max_threads: Option<NonZeroUsize>,
     /// Ticket-search attempts kept in flight concurrently per block.
     ///
@@ -340,7 +352,7 @@ pub struct PoWMiningSettings {
 impl Default for PoWMiningSettings {
     fn default() -> Self {
         Self {
-            max_threads: None,
+            max_threads: default_max_threads(),
             max_tickets_per_block: default_max_tickets_per_block(),
         }
     }

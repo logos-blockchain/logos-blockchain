@@ -11,7 +11,7 @@ use lb_core::{
         ops::channel::ChannelId, transactions::states::Unverified,
     },
     proofs::leader_proof::Groth16LeaderProof,
-    sdp::{DeclarationId, DeclarationMessage},
+    sdp::DeclarationMessage,
 };
 pub use lb_core::{
     events::{Event, Events, TxEventPayload},
@@ -45,6 +45,7 @@ use lb_http_api_common::{
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
 use lb_log_targets::http_client;
+pub use lb_sdp_service::SdpSubmission;
 use lb_version::BuildVersionInfo;
 use log::warn;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
@@ -345,11 +346,14 @@ impl CommonHttpClient {
     }
 
     /// Post a service declaration to the SDP endpoint.
+    ///
+    /// Returns the declaration id and the id of the transaction posted to the
+    /// mempool.
     pub async fn post_declaration(
         &self,
         base_url: Url,
         declaration: &DeclarationMessage,
-    ) -> Result<DeclarationId, Error> {
+    ) -> Result<SdpSubmission, Error> {
         let request_url = base_url
             .join(SDP_POST_DECLARATION.trim_start_matches('/'))
             .map_err(Error::Url)?;
@@ -718,12 +722,13 @@ impl CommonHttpClient {
     }
 
     /// Post a request via an SDP declaration to join the blend network and
-    /// returns its declaration ID if successful.
+    /// returns its declaration ID and the id of the transaction posted to the
+    /// mempool if successful.
     pub async fn join_blend_network(
         &self,
         base_url: &Url,
         body: JoinBlendRequestBody,
-    ) -> Result<DeclarationId, Error> {
+    ) -> Result<SdpSubmission, Error> {
         let request_url = base_url
             .join(BLEND_JOIN_NETWORK.trim_start_matches('/'))
             .map_err(Error::Url)?;

@@ -8,6 +8,7 @@ use lb_core::{
 };
 use lb_groth16::fr_from_bytes;
 use lb_node::{RuntimeServiceId, generic_services::blend::BlendService};
+use lb_sdp_service::SdpSubmission;
 use multiaddr::PeerId;
 
 use crate::{
@@ -94,7 +95,7 @@ pub unsafe extern "C" fn blend_join_as_core_node(
     let node = unsafe { &*node };
 
     let runtime_handle = unwrap_or_return_error!(node.get_runtime_handle());
-    let result: StatusResult<sdp::DeclarationId> = runtime_handle.block_on(async {
+    let result: StatusResult<SdpSubmission> = runtime_handle.block_on(async {
         lb_api_service::http::blend::blend_join_network::<
             BlendService<RuntimeServiceId>,
             RuntimeServiceId,
@@ -108,7 +109,9 @@ pub unsafe extern "C" fn blend_join_as_core_node(
         })
     });
 
-    result.map(DeclarationId::from).into()
+    result
+        .map(|submission| DeclarationId::from(submission.declaration_id))
+        .into()
 }
 
 /// Gets the current Blend network information.

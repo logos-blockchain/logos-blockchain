@@ -2779,6 +2779,7 @@ async fn submit_activity_proof(
     let result = sdp_relay
         .send(SdpMessage::PostActivity {
             metadata: ActivityMetadata::Blend(Box::new((&proof).into())),
+            reply_channel: None,
         })
         .await;
     match &result {

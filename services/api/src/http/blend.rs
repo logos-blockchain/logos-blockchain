@@ -30,7 +30,7 @@ pub async fn blend_join_network<BlendService, RuntimeServiceId>(
     handle: &overwatch::overwatch::OverwatchHandle<RuntimeServiceId>,
     locator: lb_core::sdp::Locator,
     service_note_id: lb_core::mantle::NoteId,
-) -> Result<lb_core::sdp::DeclarationId, overwatch::DynError>
+) -> Result<lb_sdp_service::SdpSubmission, overwatch::DynError>
 where
     BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
     RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,

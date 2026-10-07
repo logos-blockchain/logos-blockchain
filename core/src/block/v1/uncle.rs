@@ -1,7 +1,7 @@
 use lb_binary_codec::canonical::BinaryCodec;
 use lb_cryptarchia_engine::{MAX_UNCLES, Slot, UncleSlots};
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_utils::bounded::UpperBoundedOrderedSet;
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -11,7 +11,7 @@ use crate::{
 
 /// Signed headers of the uncles referenced by a block.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
-pub struct UncleHeaders(UpperBoundedOrderedSet<SignedHeader, MAX_UNCLES>);
+pub struct UncleHeaders(UpperBoundedVec<SignedHeader, MAX_UNCLES>);
 
 impl UncleHeaders {
     /// The maximum canonical representation of the bounded uncle list.
@@ -19,13 +19,13 @@ impl UncleHeaders {
         1 + MAX_UNCLES * SignedHeader::CANONICAL_ENCODED_SIZE;
 
     #[must_use]
-    pub fn new(headers: impl Into<UpperBoundedOrderedSet<SignedHeader, MAX_UNCLES>>) -> Self {
+    pub fn new(headers: impl Into<UpperBoundedVec<SignedHeader, MAX_UNCLES>>) -> Self {
         Self(headers.into())
     }
 
     #[must_use]
-    pub fn empty() -> Self {
-        Self(UpperBoundedOrderedSet::empty())
+    pub const fn empty() -> Self {
+        Self(UpperBoundedVec::empty())
     }
 
     /// The slots the carried headers occupy.
@@ -46,12 +46,12 @@ impl UncleHeaders {
     }
 
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.0.len()
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
