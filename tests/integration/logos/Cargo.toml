@@ -1,0 +1,53 @@
+[package]
+description          = "Logos blockchain test-framework integration crate"
+edition.workspace    = true
+license.workspace    = true
+name                 = "blockchain-test-logos"
+publish              = false
+readme.workspace     = true
+repository.workspace = true
+version.workspace    = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow                           = { workspace = true }
+async-trait                      = { workspace = true }
+blockchain-test-support          = { workspace = true }
+cfgsync-adapter                  = { workspace = true }
+cfgsync-artifacts                = { workspace = true }
+common-http-client               = { workspace = true }
+flate2                           = { features = ["rust_backend"], workspace = true }
+futures                          = { workspace = true }
+hex                              = { workspace = true }
+lb-binary-codec                  = { workspace = true }
+lb-blend-service                 = { workspace = true }
+lb-chain-service                 = { workspace = true }
+lb-config                        = { features = ["testing"], workspace = true }
+lb-core                          = { workspace = true }
+lb-http-api-common               = { workspace = true }
+lb-key-management-system-service = { workspace = true }
+lb-libp2p                        = { workspace = true }
+lb-network-service               = { workspace = true }
+lb-node                          = { features = ["testing"], workspace = true }
+lb-tx-service                    = { workspace = true }
+lb-utils                         = { workspace = true }
+rand                             = { workspace = true }
+reqwest                          = { features = ["json"], workspace = true }
+serde                            = { workspace = true }
+serde_json                       = { workspace = true }
+serde_yaml                       = { workspace = true }
+sysinfo                          = { features = ["disk", "system"], workspace = true }
+tar                              = { workspace = true }
+tempfile                         = { workspace = true }
+testing-framework-app            = { workspace = true }
+testing-framework-core           = { workspace = true }
+testing-framework-runner-compose = { workspace = true }
+testing-framework-runner-k8s     = { workspace = true }
+testing-framework-runner-local   = { workspace = true }
+thiserror                        = { workspace = true }
+time                             = { workspace = true }
+tokio                            = { features = ["macros", "process", "rt-multi-thread", "time"], workspace = true }
+tracing                          = { workspace = true }
+uuid                             = { workspace = true }

@@ -812,23 +812,97 @@ dependencies = [
 ]
 
 [[package]]
-name = "blockchain-test-interop"
+name = "blockchain-test-logos"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blockchain-test-support",
+ "cfgsync-adapter",
+ "cfgsync-artifacts",
+ "flate2",
+ "futures",
+ "hex",
+ "logos-blockchain-binary-codec",
+ "logos-blockchain-blend-service",
+ "logos-blockchain-chain-service",
+ "logos-blockchain-common-http-client",
+ "logos-blockchain-config",
+ "logos-blockchain-core",
+ "logos-blockchain-http-api-common",
+ "logos-blockchain-key-management-system-service",
+ "logos-blockchain-libp2p",
+ "logos-blockchain-network-service",
+ "logos-blockchain-node",
+ "logos-blockchain-tx-service",
+ "logos-blockchain-utils",
+ "rand 0.8.6",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sysinfo",
+ "tar",
+ "tempfile",
+ "testing-framework-app",
+ "testing-framework-core",
+ "testing-framework-runner-compose",
+ "testing-framework-runner-k8s",
+ "testing-framework-runner-local",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "blockchain-test-nimbos"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "blockchain-test-support",
  "libp2p",
- "logos-blockchain-tests",
  "multiaddr",
  "serde",
  "serde_yaml",
  "tempfile",
- "testing-framework",
- "testing-framework-app",
  "testing-framework-core",
  "testing-framework-runner-local",
  "tokio",
  "toml",
  "url",
+]
+
+[[package]]
+name = "blockchain-test-support"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "logos-blockchain-binary-codec",
+ "logos-blockchain-key-management-system-service",
+ "logos-blockchain-libp2p",
+ "logos-blockchain-utils",
+ "num-bigint",
+ "rand 0.8.6",
+ "serde",
+ "testing-framework-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "blockchain-test-tf-integration"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "blockchain-test-logos",
+ "blockchain-test-nimbos",
+ "libp2p",
+ "logos-blockchain-tests",
+ "tempfile",
+ "testing-framework-app",
+ "testing-framework-core",
+ "tokio",
 ]
 
 [[package]]
@@ -5188,6 +5262,8 @@ dependencies = [
  "async-trait",
  "axum 0.7.9",
  "bincode",
+ "blockchain-test-logos",
+ "blockchain-test-support",
  "cucumber",
  "divan",
  "ed25519",
@@ -5231,7 +5307,6 @@ dependencies = [
  "strum",
  "strum_macros",
  "tempfile",
- "testing-framework",
  "testing-framework-app",
  "testing-framework-core",
  "testing-framework-runner-local",
@@ -8346,51 +8421,6 @@ checksum = "944ad38adcbb71eaa682c56bceeb079e4ca82b4b3edc2a0fde5cb297b77dac8d"
 dependencies = [
  "syn 2.0.118",
  "test-log-core",
-]
-
-[[package]]
-name = "testing-framework"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "cfgsync-adapter",
- "cfgsync-artifacts",
- "flate2",
- "futures",
- "hex",
- "logos-blockchain-binary-codec",
- "logos-blockchain-blend-service",
- "logos-blockchain-chain-service",
- "logos-blockchain-common-http-client",
- "logos-blockchain-config",
- "logos-blockchain-core",
- "logos-blockchain-http-api-common",
- "logos-blockchain-key-management-system-service",
- "logos-blockchain-libp2p",
- "logos-blockchain-network-service",
- "logos-blockchain-node",
- "logos-blockchain-tx-service",
- "logos-blockchain-utils",
- "num-bigint",
- "rand 0.8.6",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "serde_yaml",
- "sysinfo",
- "tar",
- "tempfile",
- "testing-framework-app",
- "testing-framework-core",
- "testing-framework-runner-compose",
- "testing-framework-runner-k8s",
- "testing-framework-runner-local",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tracing",
- "uuid",
 ]
 
 [[package]]

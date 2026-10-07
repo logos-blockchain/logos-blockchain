@@ -2,8 +2,8 @@
 # Keep this version in sync also in the following places:
 # * flake.nix
 # * deployment/Dockerfile
-# * tests/testing_framework/assets/runtime/Dockerfile.node (2 places)
-# * tests/testing_framework/assets/runtime/Dockerfile.cfgsync
+# * tests/integration/logos/assets/runtime/Dockerfile.node (2 places)
+# * tests/integration/logos/assets/runtime/Dockerfile.cfgsync
 # Also, update the version of the nightly toolchain to the latest nightly of the new version specified in the following places:
 # * .github/workflows/code-check.yml (fmt job)
 # * .pre-commit-config.yml (fmt hook)

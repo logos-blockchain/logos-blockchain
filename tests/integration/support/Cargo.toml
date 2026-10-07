@@ -1,0 +1,23 @@
+[package]
+description          = "Shared inputs and runtime contracts for blockchain tests"
+edition.workspace    = true
+license.workspace    = true
+name                 = "blockchain-test-support"
+publish              = false
+repository.workspace = true
+version.workspace    = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hex                              = { workspace = true }
+lb-binary-codec                  = { workspace = true }
+lb-key-management-system-service = { workspace = true }
+lb-libp2p                        = { workspace = true }
+lb-utils                         = { workspace = true }
+num-bigint                       = { workspace = true }
+rand                             = { workspace = true }
+serde                            = { workspace = true, features = ["derive"] }
+testing-framework-core           = { workspace = true }
+thiserror                        = { workspace = true }
