@@ -181,7 +181,7 @@ mod tests {
     use lb_key_management_system_service::keys::ZkKey;
 
     use super::*;
-    use crate::{leadership, txs_for_block};
+    use crate::{leadership, v1::txs_for_block};
 
     fn transfer_heavy_transaction(
         transaction_index: usize,

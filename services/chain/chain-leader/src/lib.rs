@@ -5,38 +5,33 @@ mod leadership;
 mod mempool;
 mod metrics;
 mod relays;
-mod tx_selection;
+mod v1;
 mod wallet;
 
 use core::fmt::Debug;
 use std::{fmt::Display, pin::Pin, sync::Arc, time::Duration};
 
-use futures::{Stream, StreamExt as _, stream};
+use futures::{Stream, StreamExt as _};
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
 use lb_chain_service::{
     Epoch,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{
-        Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE, UncleHeaders,
-    },
+    block::{Block, Error as BlockError},
     header::HeaderId,
     mantle::{
-        OpRef, SignedOps,
+        SignedOps,
         ledger::verification_mode::StandardMode,
-        traits::{Hashable, MantleTx, SignedMantleTx, StorageSize},
+        traits::{Hashable, SignedMantleTx},
         transactions::{hash::TxHash, states::Preverified},
     },
-    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
+    proofs::leader_proof::LeaderPrivate,
     sdp::blend::PolEpochState,
 };
-use lb_cryptarchia_engine::Slot;
-use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
-use lb_ledger::{
-    LedgerState,
-    config::{EraScheduledConfig, config_for_slot},
-};
+use lb_cryptarchia_engine::era::EraVersion;
+use lb_key_management_system_service::api::KmsServiceApi;
+use lb_ledger::{LedgerState, config::EraScheduledConfig};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
@@ -57,9 +52,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{Level, error, info, instrument, span, trace};
+use tracing::{Level, error, info, span, trace};
 use tracing_futures::Instrument as _;
-use tx_selection::{TransactionSelection, select_transactions};
 
 pub use crate::wallet::LeaderWalletConfig;
 use crate::{
@@ -69,36 +63,6 @@ use crate::{
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::CryptarchiaConsensusRelays,
 };
-
-fn log_sdp_activity_selected_for_proposal<Tx>(block: &Block<Tx>, ledger_state: &LedgerState)
-where
-    Tx: MantleTx,
-{
-    for (tx, active) in block.transactions_iter().flat_map(|tx| {
-        tx.op_refs_iter().filter_map(move |op| match op {
-            OpRef::SDPActive(active) => Some((tx, active)),
-            _ => None,
-        })
-    }) {
-        let provider_id = ledger_state
-            .mantle_ledger()
-            .sdp_ledger()
-            .get_declaration(&active.declaration_id)
-            .map(|declaration| declaration.provider_id);
-        tracing::debug!(
-            target: LOG_TARGET,
-            diagnostic = BLEND_REACHABILITY,
-            event = "sdp_activity_selected_for_proposal",
-            tx_id = %tx.hash(),
-            provider_id = ?provider_id,
-            declaration_id = %active.declaration_id,
-            proof_epoch = u32::from(active.metadata.origin_epoch()),
-            proposal_block_id = %block.header().id(),
-            proposal_slot = u64::from(block.header().slot()),
-            "Selected SDP activity transaction for proposal"
-        );
-    }
-}
 
 /// The per-subscriber stream of per-epoch winning slots. Each item carries the
 /// state used to construct its stream and that epoch's stream of winning slots.
@@ -354,12 +318,13 @@ where
 
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn run(mut self) -> Result<(), DynError> {
-        let relays = CryptarchiaConsensusRelays::from_service_resources_handle::<
-            Self,
-            TimeBackend,
-            CryptarchiaService,
-        >(&self.service_resources_handle)
-        .await;
+        let relays =
+            CryptarchiaConsensusRelays::<BlendService, _, _, _>::from_service_resources_handle::<
+                Self,
+                TimeBackend,
+                CryptarchiaService,
+            >(&self.service_resources_handle)
+            .await;
 
         // Create the API wrapper for chain service communication
         let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService>::from_overwatch_handle(
@@ -502,18 +467,23 @@ where
 
                         if let Some((proof, signing_key)) = proof {
                             // TODO: spawn as a separate task?
-                            match Self::propose_block(
-                                wallet_tip,
-                                slot,
-                                proof,
-                                &signing_key,
-                                &cryptarchia_api,
-                                &relays,
-                                tip_state,
-                                &ledger_eras,
-                            )
-                            .await
-                            {
+                            // A block is built by the rules of its version, the version of its
+                            // slot's era.
+                            let block = match ledger_eras.at_slot(slot).entry.version {
+                                EraVersion::V1 => v1::propose_block(
+                                    wallet_tip,
+                                    slot,
+                                    proof,
+                                    &signing_key,
+                                    &cryptarchia_api,
+                                    relays.mempool_adapter(),
+                                    tip_state,
+                                    &ledger_eras,
+                                )
+                                .await
+                                .map(Block::V1),
+                            };
+                            match block {
                                 Ok(block) => {
                                     Self::apply_and_publish_block_proposal(block, &chain_network_api, &blend_adapter).await;
                                 }
@@ -612,99 +582,6 @@ where
         + AsServiceId<Wallet>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>,
 {
-    #[instrument(
-        target = LOG_TARGET,
-        level = "debug",
-        skip(
-            relays,
-            ledger_state,
-            ledger_eras,
-            cryptarchia_api,
-            proof,
-            signing_key
-        )
-    )]
-    #[expect(clippy::too_many_arguments, reason = "Need all args")]
-    async fn propose_block(
-        parent: HeaderId,
-        slot: Slot,
-        proof: Groth16LeaderProof,
-        signing_key: &Ed25519Key,
-        cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
-        relays: &CryptarchiaConsensusRelays<
-            BlendService,
-            Mempool,
-            MempoolNetAdapter,
-            RuntimeServiceId,
-        >,
-        mut ledger_state: LedgerState,
-        ledger_eras: &EraScheduledConfig,
-    ) -> Result<Block<Mempool::Item>, Error> {
-        let txs_stream = relays
-            .mempool_adapter()
-            .get_mempool_view([0; 32].into())
-            .await
-            .map_err(Error::FetchBlockTransactions)?;
-
-        let tx_stream: Pin<Box<_>> = Box::pin(txs_stream);
-
-        let uncle_headers = cryptarchia_api
-            .select_uncles(parent, slot)
-            .await
-            .unwrap_or_else(|err| {
-                error!(target: LOG_TARGET, ?slot, %err, "failed to select uncles");
-                // A proposal without uncles is still valid
-                UncleHeaders::empty(ledger_eras.at_slot(slot).entry.version)
-            });
-
-        (ledger_state, _) = ledger_state
-            .clone()
-            .try_apply_header::<Groth16LeaderProof, HeaderId>(
-                slot,
-                &proof,
-                &uncle_headers.slots(),
-                ledger_eras,
-            )?;
-        // Collect all candidate transactions up front so the ones that fail can
-        // be retried across multiple rounds.
-        let TransactionSelection {
-            ledger_state,
-            selected_txs,
-            invalid_tx_hashes,
-        } = select_transactions(
-            ledger_state,
-            tx_stream.collect().await,
-            config_for_slot(ledger_eras, slot),
-        );
-
-        if !invalid_tx_hashes.is_empty()
-            && let Err(e) = relays
-                .mempool_adapter()
-                .remove_transactions(&invalid_tx_hashes)
-                .await
-        {
-            error!(target: LOG_TARGET, "Failed to remove invalid transactions from mempool: {e:?}");
-        }
-
-        let valid_tx_stream = stream::iter(selected_txs);
-        let txs = txs_for_block(valid_tx_stream).await;
-
-        let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
-        if tracing::enabled!(Level::DEBUG) {
-            log_sdp_activity_selected_for_proposal(&block, &ledger_state);
-        }
-
-        info!(
-            target: LOG_TARGET,
-            "proposed block {:?} with {} transactions ({} removed)",
-            block.header().id(),
-            block.transactions_iter().len(),
-            invalid_tx_hashes.len()
-        );
-
-        Ok(block)
-    }
-
     /// Apply our own proposed block to the chain and publish it to the blend
     /// network.
     async fn apply_and_publish_block_proposal(
@@ -822,123 +699,5 @@ where
             .await?
             .ok_or(Error::LedgerStateNotFound(tip))?;
         Ok((tip, ledger_state))
-    }
-}
-
-/// Select transactions for a block, truncating the stream at the first
-/// transaction that trips the block size or count limits.
-async fn txs_for_block<Tx, S>(mut txs: S) -> BlockTransactions<Tx>
-where
-    Tx: StorageSize,
-    S: Stream<Item = Tx> + Unpin,
-{
-    let mut block_transactions_size: usize = 0;
-    let mut selected_txs = BlockTransactions::empty();
-
-    loop {
-        let Some(tx) = txs.next().await else {
-            break;
-        };
-
-        let tx_size = tx.storage_size();
-        let Some(next_block_transactions_size) = block_transactions_size.checked_add(tx_size)
-        else {
-            break;
-        };
-
-        if next_block_transactions_size > MAX_BLOCK_TRANSACTIONS_SIZE {
-            break;
-        }
-
-        if selected_txs.try_push(tx).is_err() {
-            break;
-        }
-        block_transactions_size = next_block_transactions_size;
-    }
-
-    selected_txs
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Clone)]
-    struct TestTx {
-        size: usize,
-    }
-
-    impl StorageSize for TestTx {
-        fn storage_size(&self) -> usize {
-            self.size
-        }
-    }
-
-    #[tokio::test]
-    async fn block_tx_selection_respects_transaction_count_limit() {
-        let txs = stream::iter(vec![
-            TestTx { size: 1 };
-            BlockTransactions::<TestTx>::MAX + 1
-        ]);
-
-        let selected = txs_for_block(txs).await;
-
-        assert_eq!(selected.len(), BlockTransactions::<TestTx>::MAX);
-    }
-
-    #[tokio::test]
-    async fn block_tx_selection_respects_block_size_limit() {
-        let txs = stream::iter(vec![
-            TestTx {
-                size: MAX_BLOCK_TRANSACTIONS_SIZE / 2,
-            },
-            TestTx {
-                size: MAX_BLOCK_TRANSACTIONS_SIZE / 2,
-            },
-            TestTx { size: 1 },
-        ]);
-
-        let selected = txs_for_block(txs).await;
-        let selected_size: usize = selected.iter().map(StorageSize::storage_size).sum();
-
-        assert_eq!(selected.len(), 2);
-        assert_eq!(selected_size, MAX_BLOCK_TRANSACTIONS_SIZE);
-    }
-
-    #[tokio::test]
-    async fn block_tx_selection_stops_at_first_transaction_that_does_not_fit() {
-        // The middle transaction does not fit alongside the first, so selection
-        // must stop there and must not pull the third (which would fit on its
-        // own) ahead of it — doing so could drop a dependency of the third.
-        let txs = stream::iter(vec![
-            TestTx { size: 10 },
-            TestTx {
-                size: MAX_BLOCK_TRANSACTIONS_SIZE,
-            },
-            TestTx { size: 10 },
-        ]);
-
-        let selected = txs_for_block(txs).await;
-
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected.as_slice()[0].storage_size(), 10);
-    }
-
-    #[tokio::test]
-    async fn block_tx_selection_stops_at_leading_oversized_transaction() {
-        // A transaction larger than the whole block can never fit. Selection
-        // stops at it rather than skipping past to later transactions, which may
-        // depend on it. (In practice such transactions are filtered out before
-        // reaching here, but the prefix invariant must hold regardless.)
-        let txs = stream::iter(vec![
-            TestTx {
-                size: MAX_BLOCK_TRANSACTIONS_SIZE + 1,
-            },
-            TestTx { size: 1 },
-        ]);
-
-        let selected = txs_for_block(txs).await;
-
-        assert!(selected.is_empty());
     }
 }
