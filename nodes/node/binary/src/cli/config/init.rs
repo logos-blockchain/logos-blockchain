@@ -213,16 +213,20 @@ fn build_kms_config(keystore: &Keystore) -> KmsConfig {
     kms_config
 }
 
-/// Mining defaults, with auto-claim paying the `PoWClaim` key without a cap,
-/// so a generated node claims its mined rewards unattended once mining is
-/// started.
+/// Balance, in tokens, the generated auto-claim target aims for before it
+/// stops being paid.
+const DEFAULT_POW_CLAIM_THRESHOLD: Value = 2_000_000_000;
+
+/// Mining defaults, with auto-claim paying the `PoWClaim` key up to
+/// [`DEFAULT_POW_CLAIM_THRESHOLD`], so a generated node claims its mined
+/// rewards unattended once mining is started.
 fn build_pow_config(keystore: &Keystore) -> Result<PoWConfig, KeystoreError> {
     let (_, pow_claim_key) = keystore.get_zk(KeyTitle::POW_CLAIM)?;
 
     let mut pow_config = PoWConfig::default();
     pow_config.auto_claim.targets = vec![ClaimTarget {
         public_key: pow_claim_key.to_public_key(),
-        threshold: Value::MAX,
+        threshold: DEFAULT_POW_CLAIM_THRESHOLD,
     }];
 
     Ok(pow_config)
