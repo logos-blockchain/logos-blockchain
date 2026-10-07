@@ -134,6 +134,7 @@ impl PeerBlacklist {
         }
         if let Some(now) = restarted_at {
             for entry in &mut self.entries {
+                // Extend expiry of blacklist entries based on new era's rules.
                 entry.expires_at = now.saturating_add(expiry);
             }
         }

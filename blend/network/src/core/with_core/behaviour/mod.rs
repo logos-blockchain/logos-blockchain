@@ -397,7 +397,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         &mut self,
         new_epoch_info: (Membership<PeerId>, Epoch),
         new_proofs_verifier: ProofsVerifier,
-        new_era: Option<((&CommonConfig, &Config), StreamProtocol)>,
+        new_era: Option<((&CommonConfig, &Config), Option<RoundClock>, StreamProtocol)>,
     ) {
         let current_epoch_number = self.current_epoch_info.1;
 
@@ -433,8 +433,8 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
 
         // Taken after the old epoch was handed what it needs of the era it
         // belongs to.
-        if let Some((era, protocol_name)) = new_era {
-            self.enter_era(era, protocol_name);
+        if let Some((new_era_config, new_round_clock, new_era_protocol_name)) = new_era {
+            self.enter_era(new_era_config, new_round_clock, new_era_protocol_name);
         }
 
         tracing::debug!(target: LOG_TARGET, "Started a new epoch by passing negotiated peers and exchanged message IDs to the old epoch. Now, no negotiated peers in the current epoch.");
@@ -443,38 +443,41 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     /// Takes the settings of the era of the epoch that starts: the
     /// connections it negotiates speak its protocol and carry messages of its
     /// layers, while the old epoch's keep their own until the transition
-    /// period ends. A new round duration restarts the round clock.
+    /// period ends. A new round clock, which comes with a new round duration,
+    /// restarts the rounds.
     fn enter_era(
         &mut self,
-        (common_config, core_config): (&CommonConfig, &Config),
-        protocol_name: StreamProtocol,
+        (new_era_common_config, new_era_core_config): (&CommonConfig, &Config),
+        new_round_clock: Option<RoundClock>,
+        new_protocol_name: StreamProtocol,
     ) {
-        let restarted_at = (common_config.round_duration_in_seconds
-            != self.round_clock.round_duration_in_seconds())
-        .then(|| {
-            self.round_clock = RoundClock::new(common_config.round_duration_in_seconds);
+        self.target_peering_degree = new_era_core_config.target_peering_degree;
+        self.protocol_name = new_protocol_name;
+        self.minimum_network_size = new_era_common_config.minimum_network_size;
+        self.num_blend_layers = new_era_common_config.num_blend_layers;
+        self.connection_share_per_round = new_era_core_config.connection_share_per_round;
+        self.send_deadline = new_era_core_config.send_deadline_in_rounds;
+        self.handshake_deadline = new_era_core_config.handshake_deadline_in_rounds;
+        self.handshake_upgrade_timeout = handshake_upgrade_timeout(
+            new_era_common_config.round_duration_in_seconds,
+            new_era_core_config.handshake_deadline_in_rounds,
+        );
+        self.liveness = PeerLivenessMap::new(RoundCount::new(
+            new_era_core_config.liveness_window_in_rounds,
+        ));
+
+        let restart_round = new_round_clock.map(|new_round_clock| {
+            self.round_clock = new_round_clock;
             self.current_round = self.round_clock.current_round();
             // Counted on the old clock.
             self.below_target_degree_since = None;
             self.current_round
         });
-        self.target_peering_degree = core_config.target_peering_degree;
-        self.protocol_name = protocol_name;
-        self.minimum_network_size = common_config.minimum_network_size;
-        self.num_blend_layers = common_config.num_blend_layers;
-        self.connection_share_per_round = core_config.connection_share_per_round;
-        self.send_deadline = core_config.send_deadline_in_rounds;
-        self.handshake_deadline = core_config.handshake_deadline_in_rounds;
-        self.handshake_upgrade_timeout = handshake_upgrade_timeout(
-            common_config.round_duration_in_seconds,
-            core_config.handshake_deadline_in_rounds,
-        );
-        self.liveness =
-            PeerLivenessMap::new(RoundCount::new(core_config.liveness_window_in_rounds));
+
         self.blacklist.enter_era(
-            blacklist_capacity(core_config.target_peering_degree),
-            RoundCount::new(core_config.liveness_window_in_rounds),
-            restarted_at,
+            blacklist_capacity(new_era_core_config.target_peering_degree),
+            RoundCount::new(new_era_core_config.liveness_window_in_rounds),
+            restart_round,
         );
     }
 

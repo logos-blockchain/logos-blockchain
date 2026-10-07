@@ -7,7 +7,7 @@ use either::Either;
 use futures::StreamExt as _;
 use lb_blend_membership::Membership;
 use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
-use lb_blend_primitives::time::RoundCount;
+use lb_blend_primitives::time::{RoundClock, RoundCount};
 use lb_cryptarchia_engine::Epoch;
 use lb_libp2p::{NetworkBehaviour as _, SwarmEvent};
 use libp2p::{Multiaddr, StreamProtocol, swarm::ConnectionId};
@@ -65,7 +65,11 @@ async fn nodes_that_entered_a_new_era_connect_under_its_protocol() {
         swarm.behaviour_mut().start_new_epoch(
             (membership.clone(), Epoch::new(1)),
             TestProofsVerifier::accepting(),
-            Some(((&common, &core), NEXT_PROTOCOL_NAME)),
+            Some((
+                (&common, &core),
+                Some(RoundClock::new(common.round_duration_in_seconds)),
+                NEXT_PROTOCOL_NAME,
+            )),
         );
         let behaviour = swarm.behaviour();
         assert_eq!(behaviour.protocol_name, NEXT_PROTOCOL_NAME);

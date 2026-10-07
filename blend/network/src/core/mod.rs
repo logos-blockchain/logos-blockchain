@@ -85,22 +85,35 @@ where
         new_proofs_verifier: ProofsVerifier,
         new_era: Option<(&Config, StreamProtocol)>,
     ) {
+        // As on creation, both sides count rounds on one clock: an era with a
+        // new round duration starts a new one, and both keep theirs otherwise.
+        let new_era = new_era.map(|(config, protocol_name)| {
+            let round_duration = config.common.round_duration_in_seconds;
+            let new_round_clock = (round_duration
+                != self.with_core().round_clock().round_duration_in_seconds())
+            .then(|| RoundClock::new(round_duration));
+            (config, new_round_clock, protocol_name)
+        });
         self.with_core_mut().start_new_epoch(
             new_epoch_info.clone(),
             new_proofs_verifier.clone(),
-            new_era.as_ref().map(|(config, protocol_name)| {
-                ((&config.common, &config.with_core), protocol_name.clone())
-            }),
+            new_era
+                .as_ref()
+                .map(|(config, new_round_clock, protocol_name)| {
+                    (
+                        (&config.common, &config.with_core),
+                        new_round_clock.clone(),
+                        protocol_name.clone(),
+                    )
+                }),
         );
-        // Both sides keep counting the same rounds.
-        let round_clock = self.with_core().round_clock().clone();
         self.with_edge_mut().start_new_epoch(
             new_epoch_info,
             new_proofs_verifier,
-            new_era.map(|(config, protocol_name)| {
+            new_era.map(|(config, new_round_clock, protocol_name)| {
                 (
                     (&config.common, &config.with_edge),
-                    round_clock,
+                    new_round_clock,
                     protocol_name,
                 )
             }),
