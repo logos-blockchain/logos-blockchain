@@ -1,3 +1,4 @@
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
 
 pub const RECOVERY_KEY_SUFFIX: &[u8] = b"mempool";
@@ -7,8 +8,9 @@ pub const RECOVERY_KEY_SUFFIX: &[u8] = b"mempool";
 pub struct TxMempoolSettings<PoolSettings, NetworkAdapterSettings> {
     /// The mempool settings.
     pub pool: PoolSettings,
-    /// The network adapter settings.
-    pub network_adapter: NetworkAdapterSettings,
+    /// The network adapter settings of every era: each era in force has an
+    /// adapter of its own, to its topic.
+    pub network_adapters: EraSchedule<NetworkAdapterSettings>,
     pub recovery_data: RecoveryData,
 }
 

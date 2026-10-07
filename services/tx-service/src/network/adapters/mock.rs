@@ -1,6 +1,5 @@
 use futures::{Stream, StreamExt as _};
 use lb_core::mantle::mock::{MockTransaction, MockTxId};
-use lb_cryptarchia_engine::Slot;
 use lb_log_targets::mempool;
 use lb_network_service::{
     NetworkService,
@@ -67,9 +66,6 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
         Self { network_relay }
     }
 
-    /// The mock network has one topic in every era.
-    async fn follow_eras_at(&self, _slot: Slot) {}
-
     async fn payload_stream(
         &self,
     ) -> Box<dyn Stream<Item = (Self::Key, Self::Payload)> + Unpin + Send> {
@@ -107,4 +103,7 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
             tracing::error!(target: LOG_TARGET, "failed to send item to topic: {error}");
         }
     }
+
+    /// Its one topic serves every era, so there is nothing to leave.
+    async fn retire(self) {}
 }

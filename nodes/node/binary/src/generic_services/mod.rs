@@ -1,5 +1,5 @@
 use lb_chain_leader_service::CryptarchiaLeader;
-use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapter;
+use lb_chain_network_service::network::adapters::libp2p::{LibP2pAdapter, LibP2pEraAdapter};
 use lb_chain_service::CryptarchiaConsensus;
 use lb_core::{
     header::HeaderId,
@@ -76,6 +76,7 @@ pub type CryptarchiaService<RuntimeServiceId> =
 pub type ChainNetworkService<RuntimeServiceId> = lb_chain_network_service::ChainNetwork<
     CryptarchiaService<RuntimeServiceId>,
     LibP2pAdapter<SignedOps<Preverified, StandardMode>, RuntimeServiceId>,
+    LibP2pEraAdapter<RuntimeServiceId>,
     MempoolBackend<RuntimeServiceId>,
     MempoolAdapter<RuntimeServiceId>,
     NtpTimeBackend,

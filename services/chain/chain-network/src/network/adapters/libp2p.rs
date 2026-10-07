@@ -1,12 +1,9 @@
-use std::{
-    collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, sync::Arc,
-    time::Instant,
-};
+use std::{collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, time::Instant};
 
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
-use lb_binary_codec::canonical::BinaryDecode;
+use lb_binary_codec::canonical::{BinaryDecode, DecodeError};
 use lb_core::{
-    block::{Block, Proposal},
+    block::{Block, Proposal, v1},
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
@@ -14,10 +11,7 @@ use lb_core::{
         transactions::states::Preverified,
     },
 };
-use lb_cryptarchia_engine::{
-    Slot,
-    era::{Era, EraInForce, EraSchedule},
-};
+use lb_cryptarchia_engine::era::{EraSchedule, EraVersion};
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_log_targets::chain;
 use lb_network_service::{
@@ -35,12 +29,12 @@ use overwatch::{
 };
 use rand::{seq::IteratorRandom as _, thread_rng};
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
 use tokio_stream::{StreamExt as _, wrappers::errors::BroadcastStreamRecvError};
 
 use crate::{
     metrics,
-    network::{BoxedStream, NetworkAdapter},
+    network::{BoxedStream, EraNetworkAdapter, NetworkAdapter},
 };
 
 type Relay<T, RuntimeServiceId> =
@@ -59,18 +53,14 @@ where
     network_relay:
         OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
     settings: LibP2pAdapterSettings,
-    /// The eras in force the adapter follows, shared by its clones: `None`
-    /// until it follows a slot.
-    in_force: Arc<watch::Sender<Option<EraInForce>>>,
     _phantom_tx: PhantomData<Tx>,
 }
 
 #[derive(Debug, Clone)]
 pub struct LibP2pAdapterSettings {
-    /// The proposal topic of every era: each era's proposals are gossiped on
-    /// its topic, and decoded, as its synced blocks are, by the codec of its
-    /// version.
-    pub topics: Arc<EraSchedule<String>>,
+    /// The chain's eras: a synced block decodes under the version of the era
+    /// of its slot.
+    pub eras: EraSchedule<()>,
     /// The maximum number of connected peers to attempt downloads from
     /// for each target block.
     pub max_connected_peers_to_try_download: usize,
@@ -142,26 +132,6 @@ where
         }
     }
 
-    async fn send_pubsub_command(relay: &Relay<Libp2p, RuntimeServiceId>, command: PubSubCommand) {
-        if let Err(error) = relay
-            .send(NetworkMsg::Process(Command::PubSub(command)))
-            .await
-        {
-            tracing::error!(target: LOG_TARGET, "error sending a pubsub command: {error}");
-        }
-    }
-
-    /// The topic the proposals of `era` are gossiped on.
-    fn proposal_topic(&self, era: Era) -> &str {
-        &self
-            .settings
-            .topics
-            .get(era)
-            .expect("an era in force is scheduled")
-            .entry
-            .parameters
-    }
-
     async fn get_connected_peers(
         relay: &Relay<Libp2p, RuntimeServiceId>,
     ) -> Result<HashSet<PeerId>, DynError> {
@@ -218,19 +188,6 @@ where
     }
 }
 
-/// Whether `topic` is the proposal topic of an era in force.
-fn is_in_force(
-    topics: &EraSchedule<TopicHash>,
-    in_force: Option<EraInForce>,
-    topic: &TopicHash,
-) -> bool {
-    in_force
-        .into_iter()
-        .flat_map(EraInForce::eras)
-        .filter_map(|era| topics.get(era))
-        .any(|era| era.entry.parameters == *topic)
-}
-
 #[async_trait::async_trait]
 impl<Tx, RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for LibP2pAdapter<Tx, RuntimeServiceId>
 where
@@ -249,7 +206,6 @@ where
     type Settings = LibP2pAdapterSettings;
     type PeerId = PeerId;
     type Block = Block<Tx>;
-    type Proposal = Proposal;
 
     async fn new(settings: Self::Settings, network_relay: Relay<Libp2p, RuntimeServiceId>) -> Self {
         tracing::trace!(target: LOG_TARGET, "Starting up...");
@@ -260,74 +216,8 @@ where
         Self {
             network_relay,
             settings,
-            in_force: Arc::new(watch::Sender::new(None)),
             _phantom_tx: PhantomData,
         }
-    }
-
-    async fn follow_eras_at(&self, slot: Slot) {
-        let in_force = self.settings.topics.in_force_at_slot(slot);
-        let previous = self.in_force.send_replace(Some(in_force));
-        if previous == Some(in_force) {
-            return;
-        }
-        let previously: Vec<Era> = previous.into_iter().flat_map(EraInForce::eras).collect();
-        for era in in_force.eras().filter(|era| !previously.contains(era)) {
-            let topic = self.proposal_topic(era);
-            tracing::debug!(
-                target: LOG_TARGET,
-                era = era.into_inner(),
-                "Subscribing chain-network adapter to pubsub topic {topic}"
-            );
-            Self::send_pubsub_command(&self.network_relay, Subscribe(topic.into())).await;
-        }
-        for era in previously
-            .into_iter()
-            .filter(|era| !in_force.eras().any(|in_force| in_force == *era))
-        {
-            let topic = self.proposal_topic(era);
-            tracing::debug!(
-                target: LOG_TARGET,
-                era = era.into_inner(),
-                "Unsubscribing chain-network adapter from pubsub topic {topic}"
-            );
-            Self::send_pubsub_command(&self.network_relay, Unsubscribe(topic.into())).await;
-        }
-    }
-
-    async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
-        let (sender, receiver) = oneshot::channel();
-        if let Err(error) = self
-            .network_relay
-            .send(NetworkMsg::SubscribeToPubSub { sender })
-            .await
-        {
-            return Err(Box::new(error));
-        }
-        let topics = self
-            .settings
-            .topics
-            .map(|era| TopicHash::from_raw(era.entry.parameters.clone()));
-        // A proposal decodes under the version of the era of its slot.
-        let eras = self.settings.topics.map(|_| ());
-        let in_force = self.in_force.subscribe();
-        let stream = receiver.await.map_err(Box::new)?;
-        Ok(Box::new(stream.filter_map(move |message| match message {
-            Ok(message) if is_in_force(&topics, *in_force.borrow(), &message.topic) => {
-                match Proposal::decode_all(&message.data, &eras) {
-                    Ok(proposal) => Some(proposal),
-                    Err(e) => {
-                        tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
-                        None
-                    }
-                }
-            }
-            Ok(_) => None,
-            Err(BroadcastStreamRecvError::Lagged(n)) => {
-                tracing::error!(target: LOG_TARGET, "lagged messages: {n}");
-                None
-            }
-        })))
     }
 
     async fn chainsync_events_stream(&self) -> Result<BoxedStream<ChainSyncEvent>, DynError> {
@@ -467,7 +357,7 @@ where
 
         let stream = receiver.await?;
         // A block decodes under the version of the era of its slot.
-        let context = (self.settings.topics.map(|_| ()), ());
+        let context = (self.settings.eras.clone(), ());
         let stream = stream
             .map_err(|e| Box::new(e) as DynError)
             .map(move |result| {
@@ -556,6 +446,101 @@ where
     }
 }
 
+/// The proposals of one era, gossiped on its topic.
+pub struct LibP2pEraAdapter<RuntimeServiceId> {
+    network_relay: Relay<Libp2p, RuntimeServiceId>,
+    settings: LibP2pEraAdapterSettings,
+    version: EraVersion,
+}
+
+impl<RuntimeServiceId> LibP2pEraAdapter<RuntimeServiceId> {
+    async fn send_pubsub_command(relay: &Relay<Libp2p, RuntimeServiceId>, command: PubSubCommand) {
+        if let Err(error) = relay
+            .send(NetworkMsg::Process(Command::PubSub(command)))
+            .await
+        {
+            tracing::error!(target: LOG_TARGET, "error sending a pubsub command: {error}");
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LibP2pEraAdapterSettings {
+    /// The topic the era's proposals are gossiped on.
+    pub topic: String,
+}
+
+#[async_trait::async_trait]
+impl<RuntimeServiceId> EraNetworkAdapter<RuntimeServiceId> for LibP2pEraAdapter<RuntimeServiceId> {
+    type Backend = Libp2p;
+    type Settings = LibP2pEraAdapterSettings;
+    type Proposal = Proposal;
+
+    async fn new(
+        settings: Self::Settings,
+        version: EraVersion,
+        network_relay: Relay<Libp2p, RuntimeServiceId>,
+    ) -> Self {
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Subscribing chain-network adapter to pubsub topic {}",
+            settings.topic
+        );
+        Self::send_pubsub_command(&network_relay, Subscribe(settings.topic.clone())).await;
+        Self {
+            network_relay,
+            settings,
+            version,
+        }
+    }
+
+    async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
+        let (sender, receiver) = oneshot::channel();
+        if let Err(error) = self
+            .network_relay
+            .send(NetworkMsg::SubscribeToPubSub { sender })
+            .await
+        {
+            return Err(Box::new(error));
+        }
+        let topic_hash = TopicHash::from_raw(self.settings.topic.clone());
+        let version = self.version;
+        let stream = receiver.await.map_err(Box::new)?;
+        Ok(Box::new(stream.filter_map(move |message| match message {
+            Ok(message) if message.topic == topic_hash => {
+                match decode_proposal(version, &message.data) {
+                    Ok(proposal) => Some(proposal),
+                    Err(e) => {
+                        tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
+                        None
+                    }
+                }
+            }
+            Ok(_) => None,
+            Err(BroadcastStreamRecvError::Lagged(n)) => {
+                tracing::error!(target: LOG_TARGET, "lagged messages: {n}");
+                None
+            }
+        })))
+    }
+
+    async fn retire(self) {
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Unsubscribing chain-network adapter from pubsub topic {}",
+            self.settings.topic
+        );
+        Self::send_pubsub_command(&self.network_relay, Unsubscribe(self.settings.topic)).await;
+    }
+}
+
+/// Decodes a proposal with the codec of `version`.
+fn decode_proposal(version: EraVersion, bytes: &[u8]) -> Result<Proposal, DecodeError> {
+    match version {
+        EraVersion::V1 => v1::Proposal::decode_all(bytes, &()).map(Proposal::V1),
+    }
+}
+
 /// Selects peers to attempt downloads from.
 ///
 /// Returns at most `max_connected_peers + max_discovered_peers` peers in total:
@@ -618,46 +603,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use core::{num::NonZero, time::Duration};
-
-    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
     use lb_cryptarchia_sync::{BlocksUnavailableReason, ChainSyncError, ChainSyncErrorKind};
-    use time::OffsetDateTime;
 
     use super::*;
-
-    fn topic(era: u32) -> TopicHash {
-        TopicHash::from_raw(format!("/proposals/{era}"))
-    }
-
-    #[test]
-    fn only_the_proposal_topics_of_the_eras_in_force_are_accepted() {
-        // Era 1 starts at slot 10, and its first 5 slots still accept era 0.
-        let entry = |era| EraEntry {
-            version: EraVersion::V1,
-            slot_duration: Duration::from_secs(1),
-            epoch_length_in_slots: NonZero::new(10).unwrap(),
-            transition_slots: 5,
-            parameters: topic(era),
-        };
-        let topics = EraSchedule::new(
-            OffsetDateTime::UNIX_EPOCH,
-            entry(0),
-            EraEntriesAfterGenesis::from((NonZero::new(1).unwrap(), entry(1))),
-        )
-        .unwrap();
-        let accepted = |slot: u64| {
-            let in_force = Some(topics.in_force_at_slot(Slot::new(slot)));
-            [0, 1].map(|era| is_in_force(&topics, in_force, &topic(era)))
-        };
-
-        assert_eq!(accepted(9), [true, false]);
-        assert_eq!(accepted(10), [true, true]);
-        assert_eq!(accepted(14), [true, true]);
-        assert_eq!(accepted(15), [false, true]);
-        // Nothing before the adapter follows a slot.
-        assert!(!is_in_force(&topics, None, &topic(0)));
-    }
 
     #[test]
     fn validate_first_block_response_rejects_block_not_found() {

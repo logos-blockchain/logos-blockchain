@@ -364,10 +364,7 @@ mod tests {
     };
 
     use futures::stream;
-    use lb_core::{
-        block::Proposal,
-        sdp::{MinStake, ServiceParameters, ServiceType},
-    };
+    use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
     use lb_ledger::{
         LedgerState,
@@ -825,7 +822,6 @@ mod tests {
         type Settings = ();
         type PeerId = NodeId;
         type Block = Block;
-        type Proposal = Proposal;
 
         async fn new(
             _settings: Self::Settings,
@@ -833,14 +829,6 @@ mod tests {
                 <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
             >,
         ) -> Self {
-            unimplemented!()
-        }
-
-        async fn follow_eras_at(&self, _slot: Slot) {
-            unimplemented!()
-        }
-
-        async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
             unimplemented!()
         }
 

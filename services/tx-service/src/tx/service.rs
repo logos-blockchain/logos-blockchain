@@ -5,6 +5,7 @@ pub mod openapi {
 }
 
 use std::{
+    collections::BTreeMap,
     fmt::{Debug, Display},
     marker::PhantomData,
     pin::Pin,
@@ -19,8 +20,12 @@ use lb_core::{
         transactions::hash::PrefixedKey,
     },
 };
+use lb_cryptarchia_engine::{
+    Slot,
+    era::{Era, EraSchedule},
+};
 use lb_log_targets::mempool;
-use lb_network_service::NetworkService;
+use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_services_utils::{
     overwatch::{RecoveryOperator, recovery::operators::RecoveryBackend as RecoveryBackendTrait},
     wait_until_services_are_ready,
@@ -30,9 +35,10 @@ use lb_time_service::{EpochSlotTickStream, TimeService, TimeServiceMessage};
 use lb_utils::tokio::task::spawn;
 use overwatch::{
     OpaqueServiceResourcesHandle,
-    services::{AsServiceId, ServiceCore, ServiceData},
+    services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
 };
 use tokio::sync::{broadcast, oneshot};
+use tokio_stream::StreamMap;
 
 use crate::{
     MempoolMetrics, MempoolMsg, TxsWithCommonPrefix,
@@ -265,13 +271,13 @@ where
             receiver.await?
         };
 
-        // One adapter, shared by every broadcast, follows the eras in force.
-        let network_adapter =
-            NetworkAdapter::new(settings.network_adapter, network_service_relay).await;
-        network_adapter.follow_eras_at(current_tick.slot).await;
-
-        // Queue for network messages
-        let mut network_items = network_adapter.payload_stream().await;
+        // Each era in force has an adapter of its own, to its topic.
+        let mut network_adapters = NetworkAdapters::new(
+            settings.network_adapters,
+            network_service_relay,
+            current_tick.slot,
+        )
+        .await;
 
         self.service_resources_handle.status_updater.notify_ready();
         tracing::info!(
@@ -291,8 +297,7 @@ where
 
         self.run_event_loop(
             &mut pool,
-            &network_adapter,
-            &mut network_items,
+            &mut network_adapters,
             &mut slot_ticks,
             &accepted_items_channel_sender,
         )
@@ -308,8 +313,10 @@ where
     Pool::Item: Hashable<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
     Pool::Key: PrefixedKey<Prefix: Send + Sync>,
     Pool::Settings: Clone,
-    NetworkAdapter:
-        NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item> + Send + Sync + 'static,
+    NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item, Key = Pool::Key>
+        + Send
+        + Sync
+        + 'static,
     NetworkAdapter::Settings: Clone + Send + 'static,
     RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: 'static,
@@ -317,8 +324,7 @@ where
     async fn run_event_loop(
         &mut self,
         pool: &mut Pool,
-        network_adapter: &NetworkAdapter,
-        network_items: &mut Box<dyn futures::Stream<Item = (Pool::Key, Pool::Item)> + Unpin + Send>,
+        network_adapters: &mut NetworkAdapters<NetworkAdapter, RuntimeServiceId>,
         slot_ticks: &mut EpochSlotTickStream,
         accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
     ) -> Result<(), overwatch::DynError>
@@ -331,13 +337,14 @@ where
                 // Queue for relay messages
                 Some(relay_msg) = self.service_resources_handle.inbound_relay.recv() => {
                     let state_updater = self.service_resources_handle.state_updater.clone();
-                    Self::handle_mempool_message(pool, relay_msg, network_adapter, state_updater, accepted_items_channel_sender).await;
+                    Self::handle_mempool_message(pool, relay_msg, network_adapters.in_force(), state_updater, accepted_items_channel_sender).await;
                 }
-                Some((key, item)) = network_items.next() => {
+                // Queue for network messages
+                Some((_, (key, item))) = network_adapters.items.next() => {
                     Self::handle_network_item(pool, key, item, &self.service_resources_handle.state_updater, accepted_items_channel_sender).await;
                 }
                 Some(tick) = slot_ticks.next() => {
-                    network_adapter.follow_eras_at(tick.slot).await;
+                    network_adapters.follow_eras_at(tick.slot).await;
                 }
             }
         }
@@ -611,5 +618,92 @@ where
                 );
             }
         }
+    }
+}
+
+/// The network adapters of the eras in force, each to its era's topic, and the
+/// items gossiped on them.
+struct NetworkAdapters<NetworkAdapter, RuntimeServiceId>
+where
+    NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId>,
+{
+    /// The adapter settings of every era.
+    eras: EraSchedule<NetworkAdapter::Settings>,
+    network_relay: OutboundRelay<BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>>,
+    by_era: BTreeMap<Era, NetworkAdapter>,
+    items: StreamMap<Era, NetworkItems<NetworkAdapter, RuntimeServiceId>>,
+}
+
+type NetworkItems<NetworkAdapter, RuntimeServiceId> = Box<
+    dyn futures::Stream<
+            Item = (
+                <NetworkAdapter as NetworkAdapterTrait<RuntimeServiceId>>::Key,
+                <NetworkAdapter as NetworkAdapterTrait<RuntimeServiceId>>::Payload,
+            ),
+        > + Unpin
+        + Send,
+>;
+
+impl<NetworkAdapter, RuntimeServiceId> NetworkAdapters<NetworkAdapter, RuntimeServiceId>
+where
+    NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId>,
+{
+    /// The adapters of the eras in force at `slot`.
+    async fn new(
+        eras: EraSchedule<NetworkAdapter::Settings>,
+        network_relay: OutboundRelay<BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>>,
+        slot: Slot,
+    ) -> Self {
+        let mut network_adapters = Self {
+            eras,
+            network_relay,
+            by_era: BTreeMap::new(),
+            items: StreamMap::new(),
+        };
+        network_adapters.follow_eras_at(slot).await;
+        network_adapters
+    }
+
+    /// Brings the adapters in line with the eras in force at `slot`: the
+    /// adapter of each era no longer in force retires, and each era that came
+    /// into force gets an adapter, whose items join the others.
+    async fn follow_eras_at(&mut self, slot: Slot) {
+        let in_force = self.eras.in_force_at_slot(slot);
+        let retired: Vec<Era> = self
+            .by_era
+            .keys()
+            .copied()
+            .filter(|era| !in_force.eras().any(|in_force| in_force == *era))
+            .collect();
+        for era in retired {
+            self.items.remove(&era);
+            if let Some(network_adapter) = self.by_era.remove(&era) {
+                network_adapter.retire().await;
+            }
+        }
+        for era in in_force.eras() {
+            if self.by_era.contains_key(&era) {
+                continue;
+            }
+            let settings = self
+                .eras
+                .get(era)
+                .expect("an era in force is scheduled")
+                .entry
+                .parameters
+                .clone();
+            let network_adapter = NetworkAdapter::new(settings, self.network_relay.clone()).await;
+            self.items
+                .insert(era, network_adapter.payload_stream().await);
+            self.by_era.insert(era, network_adapter);
+        }
+    }
+
+    /// The adapter of the era in force, which broadcasts.
+    fn in_force(&self) -> &NetworkAdapter {
+        self.by_era
+            .values()
+            .next_back()
+            .expect("an era is always in force")
     }
 }

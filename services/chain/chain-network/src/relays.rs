@@ -93,11 +93,16 @@ where
     }
 
     #[expect(clippy::allow_attributes_without_reason)]
-    pub async fn from_service_resources_handle<TimeBackend>(
+    #[expect(
+        clippy::type_complexity,
+        reason = "The handle of the service, with every type parameter of it"
+    )]
+    pub async fn from_service_resources_handle<TimeBackend, EraAdapter>(
         service_resources_handle: &OpaqueServiceResourcesHandle<
             ChainNetwork<
                 Cryptarchia,
                 NetworkAdapter,
+                EraAdapter,
                 Mempool,
                 MempoolNetAdapter,
                 TimeBackend,
@@ -110,6 +115,8 @@ where
         Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Item>,
         Mempool::Key: Send,
         NetworkAdapter::Settings: Sync + Send,
+        EraAdapter: network::EraNetworkAdapter<RuntimeServiceId>,
+        EraAdapter::Settings: Sync + Send,
         TimeBackend: TimeBackendTrait,
         TimeBackend::Settings: Clone + Send + Sync,
         RuntimeServiceId: Debug

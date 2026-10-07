@@ -19,7 +19,7 @@ use lb_core::{
         transactions::hash::{PrefixedKey as _, TxHashPrefix},
     },
 };
-use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion, EraSchedule};
+use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraVersion};
 use lb_network_service::{
     NetworkService,
     backends::mock::{Mock, MockBackendMessage, MockConfig, MockMessage},
@@ -130,7 +130,7 @@ fn mock_pool_node_settings(
             },
             mockpool: TxMempoolSettings {
                 pool: MempoolSettings::default(),
-                network_adapter: (),
+                network_adapters: eras.clone(),
                 recovery_data: RecoveryData::new(HashMap::new(), forks),
             },
             logging: TracingSettings::default(),
@@ -695,6 +695,7 @@ fn test_mock_mempool() {
     run_with_mock_pool_node(predefined_messages.clone(), |settings, temp_dir| {
         let exp_txns: HashSet<MockMessage> = predefined_messages.iter().cloned().collect();
         let forks = Arc::clone(settings.mockpool.recovery_data.forks());
+        let network_adapters = settings.mockpool.network_adapters.clone();
         let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
             .map_err(|e| eprintln!("Error encountered: {e}"))
             .unwrap();
@@ -769,7 +770,7 @@ fn test_mock_mempool() {
         .expect("Should load recovery data from storage.");
         let recovery_settings = TxMempoolSettings {
             pool: MempoolSettings::default(),
-            network_adapter: (),
+            network_adapters,
             recovery_data,
         };
         let recovered_state =

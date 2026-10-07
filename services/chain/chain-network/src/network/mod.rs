@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use futures::Stream;
 use lb_core::header::HeaderId;
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::era::EraVersion;
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
 use overwatch::{
@@ -14,13 +14,14 @@ use overwatch::{
 
 pub(crate) type BoxedStream<T> = Box<dyn Stream<Item = T> + Send + Unpin>;
 
+/// The chain's network in every era: chain sync, which speaks one protocol in
+/// every era.
 #[async_trait::async_trait]
 pub trait NetworkAdapter<RuntimeServiceId> {
     type Backend: NetworkBackend<RuntimeServiceId> + 'static;
     type Settings: Clone + 'static;
     type PeerId;
     type Block;
-    type Proposal;
 
     async fn new(
         settings: Self::Settings,
@@ -28,13 +29,6 @@ pub trait NetworkAdapter<RuntimeServiceId> {
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
     ) -> Self;
-
-    /// Follows the eras in force at `slot`: listens to the proposals of the
-    /// era in force and of the era it retires, if any, and stops listening to
-    /// the eras no longer in force. Every clone of the adapter follows them.
-    async fn follow_eras_at(&self, slot: Slot);
-
-    async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError>;
 
     async fn chainsync_events_stream(&self) -> Result<BoxedStream<ChainSyncEvent>, DynError>;
 
@@ -63,4 +57,29 @@ pub trait NetworkAdapter<RuntimeServiceId> {
         latest_immutable_block: HeaderId,
         additional_blocks: HashSet<HeaderId>,
     ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError>;
+}
+
+/// The chain's network in one era: the proposals gossiped on its topic. The
+/// adapter of an era lives while the era is in force, and retires when it no
+/// longer is.
+#[async_trait::async_trait]
+pub trait EraNetworkAdapter<RuntimeServiceId>: Sized {
+    type Backend: NetworkBackend<RuntimeServiceId> + 'static;
+    type Settings: Clone + 'static;
+    type Proposal;
+
+    /// Joins the era `settings` describe, whose proposals decode by the codec
+    /// of `version`.
+    async fn new(
+        settings: Self::Settings,
+        version: EraVersion,
+        network_relay: OutboundRelay<
+            <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
+        >,
+    ) -> Self;
+
+    async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError>;
+
+    /// Leaves the era: its proposals are no longer listened to.
+    async fn retire(self);
 }

@@ -1,12 +1,13 @@
 pub mod adapters;
 
 use futures::Stream;
-use lb_cryptarchia_engine::Slot;
 use lb_network_service::{NetworkService, backends::NetworkBackend};
 use lb_time_service::backends::TimeBackend;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 
-/// The mempool's side of the network. Its clones share what it follows.
+/// The mempool's side of the network in one era: the items gossiped on its
+/// topic. The adapter of an era lives while the era is in force, and retires
+/// when it no longer is.
 #[async_trait::async_trait]
 pub trait NetworkAdapter<RuntimeServiceId>: Clone {
     type Backend: NetworkBackend<RuntimeServiceId> + 'static;
@@ -23,14 +24,12 @@ pub trait NetworkAdapter<RuntimeServiceId>: Clone {
         >,
     ) -> Self;
 
-    /// Follows the eras in force at `slot`: receives the items gossiped on
-    /// the topics of the era in force and of the era it retires, if any, and
-    /// broadcasts on the era in force's.
-    async fn follow_eras_at(&self, slot: Slot);
-
     async fn payload_stream(
         &self,
     ) -> Box<dyn Stream<Item = (Self::Key, Self::Payload)> + Unpin + Send>;
 
     async fn send(&self, payload: Self::Payload);
+
+    /// Leaves the era: its topic is no longer listened to.
+    async fn retire(self);
 }

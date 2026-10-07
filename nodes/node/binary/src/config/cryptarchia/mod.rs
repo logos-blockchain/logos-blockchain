@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
+use lb_chain_network_service::network::adapters::libp2p::{
+    LibP2pAdapterSettings, LibP2pEraAdapterSettings,
+};
 use lb_core::block::genesis::GenesisBlock;
 use lb_cryptarchia_engine::era::EraSchedule;
 use lb_era_parameters::{EraDefinition, EraParameters};
@@ -24,7 +26,11 @@ impl ServiceConfig {
         recovery_data: RecoveryData,
     ) -> (
         lb_chain_service::CryptarchiaSettings,
-        lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
+        lb_chain_network_service::ChainNetworkSettings<
+            PeerId,
+            LibP2pAdapterSettings,
+            LibP2pEraAdapterSettings,
+        >,
         lb_chain_leader_service::LeaderSettings,
     ) {
         // The ledger config of every era, which the chain service runs and the
@@ -76,13 +82,7 @@ impl ServiceConfig {
                 },
             },
             network: LibP2pAdapterSettings {
-                topics: Arc::new(eras.map(|era| {
-                    era.entry
-                        .parameters
-                        .protocol_names
-                        .cryptarchia_topic
-                        .clone()
-                })),
+                eras: eras.map(|_| ()),
                 max_connected_peers_to_try_download: self
                     .user
                     .network
@@ -94,6 +94,16 @@ impl ServiceConfig {
                     .network
                     .max_discovered_peers_to_try_download,
             },
+            eras: Arc::new(eras.map(|era| {
+                LibP2pEraAdapterSettings {
+                    topic: era
+                        .entry
+                        .parameters
+                        .protocol_names
+                        .cryptarchia_topic
+                        .clone(),
+                }
+            })),
             sync: lb_chain_network_service::SyncConfig {
                 orphan: lb_chain_network_service::OrphanConfig {
                     max_orphan_cache_size: self.user.network.sync.orphan.max_orphan_cache_size,

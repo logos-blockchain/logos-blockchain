@@ -648,7 +648,6 @@ mod tests {
         type Settings = ();
         type PeerId = ();
         type Block = TestBlock;
-        type Proposal = ();
 
         async fn new(
             _settings: Self::Settings,
@@ -657,14 +656,6 @@ mod tests {
             >,
         ) -> Self {
             Self::new()
-        }
-
-        async fn follow_eras_at(&self, _slot: lb_cryptarchia_engine::Slot) {
-            unimplemented!()
-        }
-
-        async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
-            unimplemented!()
         }
 
         async fn chainsync_events_stream(&self) -> Result<BoxedStream<ChainSyncEvent>, DynError> {

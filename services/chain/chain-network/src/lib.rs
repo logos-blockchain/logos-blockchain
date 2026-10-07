@@ -8,8 +8,10 @@ mod sync;
 
 use core::fmt::Debug;
 use std::{
+    collections::BTreeMap,
     fmt::Display,
     hash::Hash,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -28,6 +30,7 @@ use lb_core::{
         },
     },
 };
+use lb_cryptarchia_engine::era::{Era, EraSchedule};
 pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
 use lb_log_targets::chain;
@@ -40,11 +43,12 @@ use lb_tx_service::{
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
 };
 use lb_utils::{bounded::BoundedError, tokio::task::spawn};
-use network::NetworkAdapter;
+use network::{BoxedStream, EraNetworkAdapter, NetworkAdapter};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
         AsServiceId, ServiceCore, ServiceData,
+        relay::OutboundRelay,
         state::{NoOperator, NoState},
     },
 };
@@ -55,6 +59,7 @@ use tokio::{
     task::JoinHandle,
     time::sleep,
 };
+use tokio_stream::StreamMap;
 use tracing::{Level, debug, error, info, instrument, span, trace, warn};
 use tracing_futures::Instrument as _;
 
@@ -134,12 +139,15 @@ pub enum Message<Tx> {
     },
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct ChainNetworkSettings<NodeId, NetworkAdapterSettings>
+#[derive(Debug, Clone)]
+pub struct ChainNetworkSettings<NodeId, NetworkAdapterSettings, EraAdapterSettings>
 where
     NodeId: Clone + Eq + Hash,
 {
     pub network: NetworkAdapterSettings,
+    /// The adapter settings of every era: each era in force has an adapter of
+    /// its own, to its proposals.
+    pub eras: Arc<EraSchedule<EraAdapterSettings>>,
     pub bootstrap: BootstrapConfig<NodeId>,
     pub sync: SyncConfig,
 }
@@ -148,6 +156,7 @@ where
 pub struct ChainNetwork<
     Cryptarchia,
     NetAdapter,
+    EraAdapter,
     Mempool,
     MempoolNetAdapter,
     TimeBackend,
@@ -158,6 +167,8 @@ pub struct ChainNetwork<
     NetAdapter::Backend: 'static,
     NetAdapter::Settings: Send,
     NetAdapter::PeerId: Clone + Eq + Hash,
+    EraAdapter: EraNetworkAdapter<RuntimeServiceId>,
+    EraAdapter::Settings: Send,
     Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash>,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone,
@@ -174,10 +185,12 @@ pub struct ChainNetwork<
     received_proposals_sender: broadcast::Sender<Proposal>,
 }
 
-impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId> ServiceData
+impl<Cryptarchia, NetAdapter, EraAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
+    ServiceData
     for ChainNetwork<
         Cryptarchia,
         NetAdapter,
+        EraAdapter,
         Mempool,
         MempoolNetAdapter,
         TimeBackend,
@@ -188,6 +201,8 @@ where
     NetAdapter: NetworkAdapter<RuntimeServiceId>,
     NetAdapter::Settings: Send,
     NetAdapter::PeerId: Clone + Eq + Hash,
+    EraAdapter: EraNetworkAdapter<RuntimeServiceId>,
+    EraAdapter::Settings: Send,
     Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash>,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone,
@@ -199,18 +214,20 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
 {
-    type Settings = ChainNetworkSettings<NetAdapter::PeerId, NetAdapter::Settings>;
+    type Settings =
+        ChainNetworkSettings<NetAdapter::PeerId, NetAdapter::Settings, EraAdapter::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = Message<Mempool::Item>;
 }
 
 #[async_trait::async_trait]
-impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
+impl<Cryptarchia, NetAdapter, EraAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
     ServiceCore<RuntimeServiceId>
     for ChainNetwork<
         Cryptarchia,
         NetAdapter,
+        EraAdapter,
         Mempool,
         MempoolNetAdapter,
         TimeBackend,
@@ -218,13 +235,18 @@ impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeSe
     >
 where
     Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Item>,
-    NetAdapter: NetworkAdapter<RuntimeServiceId, Block = Block<Mempool::Item>, Proposal = Proposal>
+    NetAdapter: NetworkAdapter<RuntimeServiceId, Block = Block<Mempool::Item>>
         + Clone
         + Send
         + Sync
         + 'static,
     NetAdapter::Settings: Send + Sync + 'static,
     NetAdapter::PeerId: Clone + Eq + Hash + Copy + Debug + Send + Sync + Unpin + 'static,
+    EraAdapter: EraNetworkAdapter<RuntimeServiceId, Backend = NetAdapter::Backend, Proposal = Proposal>
+        + Send
+        + Sync
+        + 'static,
+    EraAdapter::Settings: Send + Sync,
     Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash> + Send + Sync + 'static,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync + 'static,
@@ -282,13 +304,14 @@ where
             MempoolNetAdapter,
             NetAdapter,
             RuntimeServiceId,
-        > = ChainNetworkRelays::from_service_resources_handle::<TimeBackend>(
+        > = ChainNetworkRelays::from_service_resources_handle::<TimeBackend, EraAdapter>(
             &self.service_resources_handle,
         )
         .await;
 
         let ChainNetworkSettings {
             network: network_config,
+            eras,
             bootstrap: bootstrap_config,
             sync: sync_config,
         } = self
@@ -314,9 +337,9 @@ where
         )
         .await?;
 
-        // The slot clock: the adapter follows the eras in force through it, and
-        // the tip-poll watchdog below runs on it. Subscribed before the current
-        // slot is read, so that no tick falls between them.
+        // The slot clock: the era adapters follow the eras in force through it,
+        // and the tip-poll watchdog below runs on it. Subscribed before the
+        // current slot is read, so that no tick falls between them.
         let mut slot_ticks = {
             let (sender, receiver) = oneshot::channel();
             relays
@@ -345,7 +368,15 @@ where
         };
 
         let network_adapter = NetAdapter::new(network_config, relays.network_relay().clone()).await;
-        network_adapter.follow_eras_at(current_tick.slot).await;
+        // Each era in force has an adapter of its own, to its proposals.
+        let mut era_adapters: BTreeMap<Era, EraAdapter> = BTreeMap::new();
+        follow_eras_at(
+            &mut era_adapters,
+            &eras,
+            current_tick.slot,
+            relays.network_relay(),
+        )
+        .await;
 
         let initial_block_download = InitialBlockDownload::new(
             ChainNetworkIbdBlockProcessor::<_, Mempool> {
@@ -355,16 +386,17 @@ where
             network_adapter.clone(),
         );
 
-        // The download may outlast an era boundary: the adapter keeps following
-        // the eras in force meanwhile, so it keeps speaking the network's
-        // protocols.
+        // The download may outlast an era boundary: the era adapters keep
+        // following the eras in force meanwhile.
         let initial_block_download =
             initial_block_download.run(bootstrap_config.ibd, &sync_config.orphan);
         tokio::pin!(initial_block_download);
         let initial_block_download_result = loop {
             tokio::select! {
                 result = &mut initial_block_download => break result,
-                Some(tick) = slot_ticks.next() => network_adapter.follow_eras_at(tick.slot).await,
+                Some(tick) = slot_ticks.next() => {
+                    follow_eras_at(&mut era_adapters, &eras, tick.slot, relays.network_relay()).await;
+                }
             }
         };
         match initial_block_download_result {
@@ -396,13 +428,14 @@ where
             }
         }
 
-        let mut incoming_proposals = network_adapter.proposals_stream().await?;
+        // The proposals of every era in force.
+        let mut incoming_proposals = StreamMap::new();
+        listen_to_proposals(&era_adapters, &mut incoming_proposals).await;
         let mut chainsync_events = network_adapter.chainsync_events_stream().await?;
 
-        // Keep a handle to the adapter, to follow the eras in force and for the
-        // proactive tip-poll watchdog, before the downloader takes ownership of
-        // it.
-        let adapter = network_adapter.clone();
+        // Keep a handle to the adapter for the proactive tip-poll watchdog before
+        // the downloader takes ownership of it.
+        let tip_poll_adapter = network_adapter.clone();
 
         let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
             network_adapter,
@@ -442,7 +475,7 @@ where
         let async_loop = async {
             loop {
                 tokio::select! {
-                    Some(proposal) = incoming_proposals.next() => {
+                    Some((_, proposal)) = incoming_proposals.next() => {
                         self.note_received_proposal(&proposal);
                         self.handle_incoming_proposal(
                             proposal,
@@ -511,7 +544,8 @@ where
                     }
 
                     Some(tick) = slot_ticks.next() => {
-                        adapter.follow_eras_at(tick.slot).await;
+                        follow_eras_at(&mut era_adapters, &eras, tick.slot, relays.network_relay()).await;
+                        listen_to_proposals(&era_adapters, &mut incoming_proposals).await;
 
                         let Some(params) = tip_poll_params.clone() else {
                             continue;
@@ -525,7 +559,7 @@ where
                         // The task makes `GetTip` requests handled by this event loop in peers' side.
                         // All two nodes make `GetTip` requests simultaneously to each other,
                         // `poll_peer_tips_if_behind` will cause deadlock unless it's spawned off.
-                        let adapter = adapter.clone();
+                        let adapter = tip_poll_adapter.clone();
                         let cryptarchia = relays.cryptarchia().clone();
                         let tx = polled_tip_tx.clone();
                         tip_poll_task = Some(spawn("logos/chain/tip-poll", async move {
@@ -563,17 +597,30 @@ where
     }
 }
 
-impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
-    ChainNetwork<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
+impl<Cryptarchia, NetAdapter, EraAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
+    ChainNetwork<
+        Cryptarchia,
+        NetAdapter,
+        EraAdapter,
+        Mempool,
+        MempoolNetAdapter,
+        TimeBackend,
+        RuntimeServiceId,
+    >
 where
     Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Item>,
-    NetAdapter: NetworkAdapter<RuntimeServiceId, Block = Block<Mempool::Item>, Proposal = Proposal>
+    NetAdapter: NetworkAdapter<RuntimeServiceId, Block = Block<Mempool::Item>>
         + Clone
         + Send
         + Sync
         + 'static,
     NetAdapter::Settings: Send + Sync + 'static,
     NetAdapter::PeerId: Clone + Eq + Hash + Copy + Debug + Send + Sync,
+    EraAdapter: EraNetworkAdapter<RuntimeServiceId, Backend = NetAdapter::Backend, Proposal = Proposal>
+        + Send
+        + Sync
+        + 'static,
+    EraAdapter::Settings: Send + Sync,
     Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash> + Send + Sync + 'static,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync + 'static,
@@ -1159,6 +1206,78 @@ where
         .map_err(|_| Error::NoMatchingReconstruction)
 }
 
+/// Brings `era_adapters` in line with the eras in force at `slot`: the adapter
+/// of each era no longer in force retires, and each era that came into force
+/// gets an adapter.
+async fn follow_eras_at<EraAdapter, RuntimeServiceId>(
+    era_adapters: &mut BTreeMap<Era, EraAdapter>,
+    eras: &EraSchedule<EraAdapter::Settings>,
+    slot: Slot,
+    network_relay: &OutboundRelay<
+        <NetworkService<EraAdapter::Backend, RuntimeServiceId> as ServiceData>::Message,
+    >,
+) where
+    EraAdapter: EraNetworkAdapter<RuntimeServiceId> + Send,
+    EraAdapter::Settings: Sync,
+    RuntimeServiceId: Send + Sync,
+{
+    let in_force = eras.in_force_at_slot(slot);
+    let retired: Vec<Era> = era_adapters
+        .keys()
+        .copied()
+        .filter(|era| !in_force.eras().any(|in_force| in_force == *era))
+        .collect();
+    for era in retired {
+        if let Some(era_adapter) = era_adapters.remove(&era) {
+            era_adapter.retire().await;
+        }
+    }
+    for era in in_force.eras() {
+        if era_adapters.contains_key(&era) {
+            continue;
+        }
+        let scheduled = eras.get(era).expect("an era in force is scheduled");
+        let era_adapter = EraAdapter::new(
+            scheduled.entry.parameters.clone(),
+            scheduled.entry.version,
+            network_relay.clone(),
+        )
+        .await;
+        era_adapters.insert(era, era_adapter);
+    }
+}
+
+/// Listens to the proposals of every era adapter, and of no other era. An era
+/// whose proposals cannot be listened to is tried again on the next call.
+async fn listen_to_proposals<EraAdapter, RuntimeServiceId>(
+    era_adapters: &BTreeMap<Era, EraAdapter>,
+    proposals: &mut StreamMap<Era, BoxedStream<EraAdapter::Proposal>>,
+) where
+    EraAdapter: EraNetworkAdapter<RuntimeServiceId> + Sync,
+{
+    let retired: Vec<Era> = proposals
+        .keys()
+        .filter(|era| !era_adapters.contains_key(era))
+        .copied()
+        .collect();
+    for era in retired {
+        proposals.remove(&era);
+    }
+    for (era, era_adapter) in era_adapters {
+        if proposals.contains_key(era) {
+            continue;
+        }
+        match era_adapter.proposals_stream().await {
+            Ok(era_proposals) => {
+                proposals.insert(*era, era_proposals);
+            }
+            Err(e) => {
+                error!(target: LOG_TARGET, era = era.into_inner(), %e, "Failed to listen to the proposals of an era");
+            }
+        }
+    }
+}
+
 /// The single local transaction a reference means.
 ///
 /// A reference resolves only when the match is unique. Zero matches means the
@@ -1215,15 +1334,13 @@ mod tests {
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
-    use lb_cryptarchia_engine::era::EraVersion;
+    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry, EraVersion};
     use lb_cryptarchia_sync::GetTipResponse;
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
     use lb_network_service::{backends::mock::Mock, message::ChainSyncEvent};
     use lb_tx_service::TxsWithCommonPrefix;
-    use overwatch::services::relay::OutboundRelay;
 
     use super::*;
-    use crate::network::BoxedStream;
 
     /// A transaction that is nothing but its hash, which is all
     /// [`resolve_reference`] looks at.
@@ -1451,7 +1568,6 @@ mod tests {
         type Settings = ();
         type PeerId = ();
         type Block = ();
-        type Proposal = ();
 
         async fn new(
             _settings: Self::Settings,
@@ -1459,14 +1575,6 @@ mod tests {
                 <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
             >,
         ) -> Self {
-            unimplemented!()
-        }
-
-        async fn follow_eras_at(&self, _slot: Slot) {
-            unimplemented!()
-        }
-
-        async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
             unimplemented!()
         }
 
@@ -1510,5 +1618,95 @@ mod tests {
         // voucher_cm (32B)`
         let bytes = [&[0u8; 160][..], leader_key.as_bytes(), &[0u8; 32]].concat();
         Groth16LeaderProof::decode_all(&bytes).expect("leader proof bytes must decode")
+    }
+
+    /// Records the eras it joins and retires from.
+    struct RecordingEraAdapter {
+        settings: RecordingSettings,
+    }
+
+    #[derive(Clone)]
+    struct RecordingSettings {
+        era: &'static str,
+        log: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl<RuntimeServiceId: Send + Sync> EraNetworkAdapter<RuntimeServiceId> for RecordingEraAdapter {
+        type Backend = Mock;
+        type Settings = RecordingSettings;
+        type Proposal = ();
+
+        async fn new(
+            settings: Self::Settings,
+            _version: EraVersion,
+            _network_relay: OutboundRelay<
+                <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
+            >,
+        ) -> Self {
+            settings
+                .log
+                .lock()
+                .unwrap()
+                .push(format!("join {}", settings.era));
+            Self { settings }
+        }
+
+        async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
+            unimplemented!()
+        }
+
+        async fn retire(self) {
+            self.settings
+                .log
+                .lock()
+                .unwrap()
+                .push(format!("retire {}", self.settings.era));
+        }
+    }
+
+    #[tokio::test]
+    async fn an_era_has_an_adapter_while_it_is_in_force() {
+        // Era 1 starts at slot 10, and its first 5 slots still accept era 0.
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let entry = |era| EraEntry {
+            version: EraVersion::V1,
+            slot_duration: Duration::from_secs(1),
+            epoch_length_in_slots: core::num::NonZero::new(10).unwrap(),
+            transition_slots: 5,
+            parameters: RecordingSettings {
+                era,
+                log: Arc::clone(&log),
+            },
+        };
+        let eras = EraSchedule::new(
+            time::OffsetDateTime::UNIX_EPOCH,
+            entry("era 0"),
+            EraEntriesAfterGenesis::from((core::num::NonZero::new(1).unwrap(), entry("era 1"))),
+        )
+        .unwrap();
+        let (relay_sender, _relay_receiver) = mpsc::channel(1);
+        let network_relay =
+            OutboundRelay::<<NetworkService<Mock, ()> as ServiceData>::Message>::new(relay_sender);
+        let mut era_adapters = BTreeMap::new();
+
+        for slot in [9, 10, 14, 15] {
+            follow_eras_at::<RecordingEraAdapter, ()>(
+                &mut era_adapters,
+                &eras,
+                Slot::new(slot),
+                &network_relay,
+            )
+            .await;
+        }
+
+        assert_eq!(
+            *log.lock().unwrap(),
+            ["join era 0", "join era 1", "retire era 0"]
+        );
+        assert_eq!(
+            era_adapters.keys().copied().collect::<Vec<_>>(),
+            [Era::new(1)]
+        );
     }
 }
