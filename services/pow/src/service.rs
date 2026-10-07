@@ -247,7 +247,7 @@ pub fn era_settings_at(eras: &EraSchedule<EraSettings>, slot: Slot) -> EraSettin
 }
 
 /// Whether the era of the chain's current slot pays `PoW` rewards.
-async fn rewards_enabled_now<CryptarchiaService>(
+async fn does_era_pay_rewards<CryptarchiaService>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     eras: &EraSchedule<EraSettings>,
 ) -> Result<bool, lb_chain_service::api::ApiError>
@@ -419,9 +419,7 @@ impl ServiceState for PoWServiceState {
 impl VersionedState for PoWServiceState {
     const VERSION: StateVersion = StateVersion::new(1);
 
-    /// The only version before 1 is 0, the records written before records
-    /// carried a version, in the layout of version 1.
-    fn migrate(_from: StateVersion, bytes: &[u8]) -> Result<Self, DynError> {
+    fn migrate(_: StateVersion, bytes: &[u8]) -> Result<Self, DynError> {
         Ok(Self::from_bytes(bytes)?)
     }
 }
@@ -611,7 +609,7 @@ where
         // flag, so a restart re-arms it and the thresholds are re-evaluated
         // against fresh balances.
         let auto_claim = &settings.auto_claim;
-        let mut auto_claiming = rewards_enabled_now(&cryptarchia_api, &settings.eras).await?
+        let mut auto_claiming = does_era_pay_rewards(&cryptarchia_api, &settings.eras).await?
             && !auto_claim.targets.is_empty();
 
         // One stream for either pacing, so the run loop has a single arm and
@@ -646,7 +644,7 @@ where
                             is_mining = false;
                         }
                         PoWServiceMessage::StartAutoClaim => {
-                            if !rewards_enabled_now(&cryptarchia_api, &settings.eras).await.unwrap_or(false) {
+                            if !does_era_pay_rewards(&cryptarchia_api, &settings.eras).await.unwrap_or(false) {
                                 warn!(target: LOG_TARGET, "PoW auto-claim not started: rewards disabled");
                             } else if auto_claim.targets.is_empty() {
                                 warn!(target: LOG_TARGET, "PoW auto-claim not started: no claim targets configured");
@@ -688,7 +686,7 @@ where
                         PoWServiceMessage::Status { response } => {
                             let status = PoWStatus {
                                 is_mining,
-                                are_rewards_enabled: rewards_enabled_now(&cryptarchia_api, &settings.eras).await.unwrap_or(false),
+                                are_rewards_enabled: does_era_pay_rewards(&cryptarchia_api, &settings.eras).await.unwrap_or(false),
                                 auto_claim: auto_claim_status(&wallet_api, auto_claim, auto_claiming).await,
                             };
                             if response.send(status).is_err() {
