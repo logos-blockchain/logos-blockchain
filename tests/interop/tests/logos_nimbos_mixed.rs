@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use blockchain_test_interop::nimbos::NimbosEnv;
 use lb_testing_framework::{
     DeploymentBuilder, LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL, LbcEnv, NodeHttpClient,
-    SharedDeployment, TopologyConfig,
+    SharedDeployment, TopologyConfig, configs::build_plan,
 };
 use libp2p::{Multiaddr, PeerId, multiaddr::Protocol};
 use testing_framework_app::{AppDeployer, AppDeployment, AppHostEnv, ClusterApp, DeployContext};
@@ -24,8 +24,7 @@ use tokio::time::{sleep, timeout};
 /// binary. Nimbos preparation rejects settings it cannot represent faithfully.
 ///
 /// ```text
-/// cargo test -p blockchain-test-interop \
-///   --test logos_nimbos_mixed -- --ignored
+/// cargo test -p blockchain-test-interop --test logos_nimbos_mixed -- --ignored
 /// ```
 #[tokio::test]
 #[ignore = "requires a Logos binary path or release URL, NIMBOS_NODE_BIN and NIMBOS_CIRCUITS_DIR"]
@@ -43,11 +42,11 @@ async fn nimbos_nodes_connect_to_logos_nodes() -> Result<(), DynError> {
     }
 
     let dir = tempfile::tempdir()?;
-    let plan = DeploymentBuilder::new(TopologyConfig::with_node_numbers(2))
+    let prepared = DeploymentBuilder::new(TopologyConfig::with_node_numbers(2))
         .scenario_base_dir(dir.path().join("logos"))
-        .build()?;
-    let shared = SharedDeployment::from_plan(&plan)?;
-    let logos = ClusterApp::<LbcEnv>::new(plan);
+        .prepare()?;
+    let shared = prepared.shared_inputs()?;
+    let logos = ClusterApp::<LbcEnv>::new(build_plan(prepared)?);
 
     check_mixed_cluster(logos, shared).await
 }
@@ -106,7 +105,8 @@ where
     Ok(())
 }
 
-/// Prepare both child deployments from one generated network definition.
+/// Prepare both child deployments from one generated network
+/// definition.
 ///
 /// Each adapter uses the shared genesis and chain parameters to produce its
 /// native configuration before either cluster is started.

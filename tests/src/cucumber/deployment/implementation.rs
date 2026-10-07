@@ -1,34 +1,44 @@
 use std::fmt::Debug;
 
 use async_trait::async_trait;
-use lb_testing_framework::{LbcClusterApp, SharedDeployment, internal::DeploymentPlan};
+use lb_testing_framework::{
+    LbcClusterApp, SharedDeployment,
+    configs::{PreparedDeployment, build_plan},
+};
 use testing_framework_app::AppDeployer;
 use testing_framework_core::{scenario::DynError, topology::FixedDeploymentProvider};
 
 use super::{CucumberClusterApp, LocalDeployment};
 use crate::cucumber::error::StepError;
 
-/// A scenario's prepared deployment, retaining the original Logos
-/// configuration.
-///
-/// Other implementations consume the shared inputs without depending on that
-/// configuration. Logos callers reuse the original plan rather than generate it
-/// again from the smaller shared input set.
-pub struct PreparedDeployment {
-    logos_plan: DeploymentPlan,
+impl CucumberClusterApp<LbcClusterApp> {
+    /// Renders Logos configuration from the scenario's prepared network and
+    /// leaves process startup to the Cucumber lifecycle steps.
+    pub fn from_logos(deployment: PreparedDeployment) -> Result<Self, DynError> {
+        let inputs = deployment.shared_inputs()?;
+        let plan = build_plan(deployment)?;
+        let app =
+            LbcClusterApp::new(Box::new(FixedDeploymentProvider::new(plan))).with_on_demand_start();
+
+        Ok(Self { app, inputs })
+    }
 }
 
-impl PreparedDeployment {
+/// Prepared network input for the selected implementation.
+/// Native rendering stays with the adapter.
+pub struct DeploymentInput {
+    deployment: PreparedDeployment,
+}
+
+impl DeploymentInput {
     pub fn shared_inputs(&self) -> Result<SharedDeployment, DynError> {
-        SharedDeployment::from_plan(&self.logos_plan)
+        self.deployment.shared_inputs()
     }
 
-    pub fn into_logos_app(self) -> Result<CucumberClusterApp<LbcClusterApp>, DynError> {
-        let inputs = self.shared_inputs()?;
-        let app = LbcClusterApp::new(Box::new(FixedDeploymentProvider::new(self.logos_plan)))
-            .with_on_demand_start();
-
-        Ok(CucumberClusterApp { app, inputs })
+    pub async fn deploy_logos(self) -> Result<LocalDeployment, DynError> {
+        AppDeployer::new()
+            .deploy(CucumberClusterApp::from_logos(self.deployment)?)
+            .await
     }
 }
 
@@ -37,7 +47,7 @@ impl PreparedDeployment {
 pub trait ExternalDeploymentFactory: Debug + Send + Sync {
     fn name(&self) -> &'static str;
 
-    async fn deploy(&self, deployment: PreparedDeployment) -> Result<LocalDeployment, DynError>;
+    async fn deploy(&self, deployment: DeploymentInput) -> Result<LocalDeployment, DynError>;
 }
 
 /// The default Logos deployment or a factory supplied by an integration runner.
@@ -72,15 +82,14 @@ impl LocalImplementation {
         })
     }
 
-    pub async fn deploy(self, deployment: DeploymentPlan) -> Result<LocalDeployment, StepError> {
-        let deployment = PreparedDeployment {
-            logos_plan: deployment,
-        };
+    pub async fn deploy(
+        self,
+        deployment: PreparedDeployment,
+    ) -> Result<LocalDeployment, StepError> {
+        let deployment = DeploymentInput { deployment };
 
         match self {
-            Self::Logos => Ok(AppDeployer::new()
-                .deploy(deployment.into_logos_app()?)
-                .await?),
+            Self::Logos => Ok(deployment.deploy_logos().await?),
             Self::External(factory) => Ok(factory.deploy(deployment).await?),
         }
     }
@@ -196,9 +205,9 @@ mod tests {
         }
     }
 
-    impl NodeRuntimeInfoProvider for NodeRuntimeInfo {
-        fn runtime_info(&self) -> Result<NodeRuntimeInfo, DynError> {
-            Ok(self.clone())
+    impl NodeRuntimeInfoProvider for TestEnv {
+        fn runtime_info(config: &NodeRuntimeInfo) -> Result<NodeRuntimeInfo, DynError> {
+            Ok(config.clone())
         }
     }
 
@@ -211,10 +220,7 @@ mod tests {
             "test"
         }
 
-        async fn deploy(
-            &self,
-            deployment: PreparedDeployment,
-        ) -> Result<LocalDeployment, DynError> {
+        async fn deploy(&self, deployment: DeploymentInput) -> Result<LocalDeployment, DynError> {
             AppDeployer::new()
                 .deploy(CucumberClusterApp {
                     app: TestApp,
@@ -228,9 +234,9 @@ mod tests {
     async fn external_factory_reads_runtime_info_for_nodes_beyond_initial_capacity() {
         let plan =
             DeploymentBuilder::new(TopologyConfig::with_node_numbers(1).with_blend_core_nodes(0))
-                .build()
+                .prepare()
                 .unwrap();
-        let expected = SharedDeployment::from_plan(&plan).unwrap();
+        let expected = plan.shared_inputs().unwrap();
         let implementation = LocalImplementation::External(&TestFactory);
 
         let app = implementation.deploy(plan).await.unwrap();

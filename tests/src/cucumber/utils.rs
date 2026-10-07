@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
     time::Duration,
@@ -21,7 +20,7 @@ use tracing::{info, warn};
 use crate::cucumber::{
     TARGET,
     error::{StepError, StepResult},
-    world::{DeployerKind, NetworkKind, NodeWalletKey, NodeWalletKeyRole, TopologySpec},
+    world::{DeployerKind, NetworkKind, TopologySpec},
 };
 
 type ScenarioBuilderWith = ScenarioBuilder;
@@ -190,80 +189,6 @@ pub(crate) fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, Step
     };
 
     Ok(config)
-}
-
-/// Classifies the node-owned wallet keys in deterministic order.
-///
-/// Every public key is returned once even if more than one configured key id
-/// points to it.
-pub(crate) fn node_wallet_keys_from_config(
-    config: &UserConfig,
-) -> Result<Vec<NodeWalletKey>, StepError> {
-    let cryptarchia_funding_pk = config.cryptarchia.leader.wallet.funding_pk;
-    let sdp_funding_pk = config.sdp.wallet.funding_pk;
-    let voucher_master_key_id = config.wallet.voucher_master_key_id.clone();
-    let blend_zk_key_id = config.blend.core.zk.secret_key_kms_id.clone();
-    let mut keys_by_public_key = BTreeMap::<String, NodeWalletKey>::new();
-
-    for (key_id, public_key) in &config.wallet.known_keys {
-        let wallet_pk = public_key.to_bytes()?.encode_hex::<String>();
-        let role = if *public_key == cryptarchia_funding_pk || *public_key == sdp_funding_pk {
-            NodeWalletKeyRole::Funding
-        } else if key_id == &voucher_master_key_id {
-            NodeWalletKeyRole::VoucherMaster
-        } else if key_id == &blend_zk_key_id {
-            NodeWalletKeyRole::BlendZk
-        } else {
-            NodeWalletKeyRole::General
-        };
-
-        match keys_by_public_key.entry(wallet_pk.clone()) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(NodeWalletKey { wallet_pk, role });
-            }
-            std::collections::btree_map::Entry::Occupied(mut entry) => {
-                let existing = entry.get_mut();
-                if existing.role == role || role == NodeWalletKeyRole::General {
-                    continue;
-                }
-                if existing.role == NodeWalletKeyRole::General {
-                    existing.role = role;
-                    continue;
-                }
-                return Err(StepError::LogicalError {
-                    message: format!(
-                        "Node wallet public key '{}' has conflicting roles {:?} and {role:?}",
-                        existing.wallet_pk, existing.role,
-                    ),
-                });
-            }
-        }
-    }
-
-    let mut node_wallet_keys = keys_by_public_key.into_values().collect::<Vec<_>>();
-    for role in [
-        NodeWalletKeyRole::Funding,
-        NodeWalletKeyRole::VoucherMaster,
-        NodeWalletKeyRole::BlendZk,
-    ] {
-        let count = node_wallet_keys
-            .iter()
-            .filter(|key| key.role == role)
-            .count();
-        if count != 1 {
-            return Err(StepError::LogicalError {
-                message: format!("Expected exactly one {role:?} node wallet key, found {count}"),
-            });
-        }
-    }
-
-    node_wallet_keys.sort_by(|left, right| {
-        left.role
-            .priority()
-            .cmp(&right.role.priority())
-            .then_with(|| left.wallet_pk.cmp(&right.wallet_pk))
-    });
-    Ok(node_wallet_keys)
 }
 
 /// Reads a node YAML user config file and extracts the configured Blend core

@@ -2,6 +2,7 @@
 
 pub mod cucumber;
 mod deployment;
+mod runtime_info;
 
 use std::{
     fs,

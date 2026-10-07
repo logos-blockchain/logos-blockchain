@@ -31,6 +31,7 @@ use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsReque
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, ZkPublicKey};
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
+pub use lb_testing_framework::runtime_info::{NodeWalletKey, NodeWalletKeyRole};
 use lb_testing_framework::{
     LbcClusterBackend, LbcEnv, LbcK8sManualCluster, LbcScenario, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _,
@@ -1752,33 +1753,6 @@ pub struct PreparedPriorityFee {
     pub funded_fee: u64,
     pub initial_execution_price: u64,
     pub initial_storage_price: u64,
-}
-
-/// A scenario wallet is either user-owned or backed by a node wallet key.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum NodeWalletKeyRole {
-    Funding,
-    VoucherMaster,
-    BlendZk,
-    General,
-}
-
-impl NodeWalletKeyRole {
-    #[must_use]
-    pub const fn priority(self) -> u8 {
-        match self {
-            Self::Funding => 0,
-            Self::VoucherMaster => 1,
-            Self::BlendZk => 2,
-            Self::General => 3,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct NodeWalletKey {
-    pub wallet_pk: String,
-    pub role: NodeWalletKeyRole,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

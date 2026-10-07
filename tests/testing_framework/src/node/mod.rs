@@ -1,6 +1,7 @@
 mod cfgsync;
 pub mod configs;
 mod http_client;
+mod runtime_info;
 
 pub use http_client::NodeHttpClient;
 use testing_framework_core::topology::generated::{

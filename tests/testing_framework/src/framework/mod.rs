@@ -365,6 +365,7 @@ pub struct TransactionFlowBuilder {
 }
 
 impl TransactionFlowBuilder {
+    #[must_use]
     pub fn rate(mut self, rate: u64) -> Self {
         if let Some(rate) = NonZeroU64::new(rate) {
             self.rate = rate;
@@ -378,6 +379,7 @@ impl TransactionFlowBuilder {
         self
     }
 
+    #[must_use]
     pub fn users(mut self, users: usize) -> Self {
         if let Some(value) = nonzero_usize(users) {
             self.users = Some(value);
@@ -391,6 +393,7 @@ impl TransactionFlowBuilder {
         self
     }
 
+    #[must_use]
     pub fn apply(self) -> ScenarioBuilderWith {
         let workload = transaction::Workload::new(self.rate).with_user_limit(self.users);
         self.builder.with_workload(workload)
@@ -434,6 +437,7 @@ impl InscriptionFlowBuilder {
         self.inscription_payload_bytes(payload_bytes)
     }
 
+    #[must_use]
     pub fn apply(self) -> ScenarioBuilderWith {
         let workload = inscription::Workload::default()
             .with_channel_count(self.channels)

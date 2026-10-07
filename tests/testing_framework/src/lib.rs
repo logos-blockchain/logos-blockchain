@@ -15,6 +15,7 @@ pub use framework::local::{
     ensure_node_binary_built,
 };
 mod node;
+pub mod runtime_info;
 mod unique_persistent;
 pub mod workloads;
 pub use unique_persistent::{

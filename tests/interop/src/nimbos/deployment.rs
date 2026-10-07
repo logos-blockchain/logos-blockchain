@@ -3,7 +3,7 @@ use testing_framework_core::scenario::DynError;
 
 const SDP_DECLARE_OPCODE: u64 = 0x20;
 
-pub(super) fn from_logos_yaml(source: &str) -> Result<String, DynError> {
+pub fn from_logos_yaml(source: &str) -> Result<String, DynError> {
     let source: Value = serde_yaml::from_str(source)?;
     let genesis = prepare_genesis(&source["cryptarchia"]["genesis_block"])?;
 
