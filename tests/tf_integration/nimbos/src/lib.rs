@@ -102,7 +102,7 @@ impl NimbosDeployment {
     /// Nimbos bootstrap addresses require both a QUIC endpoint and a peer ID.
     ///
     /// A mixed app supplies the live Logos addresses here to connect the two
-    /// child clusters. The mixed example lives in `tests/tf_integration/tests`.
+    /// child clusters. The mixed example lives in `tests/interop/tests`.
     pub fn with_bootstrap_peers(mut self, peers: Vec<Multiaddr>) -> Result<Self, DynError> {
         for peer in &peers {
             validate_peer_address(peer)?;

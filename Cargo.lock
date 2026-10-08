@@ -812,6 +812,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "blockchain-test-interop"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "blockchain-test-logos",
+ "blockchain-test-nimbos",
+ "libp2p",
+ "logos-blockchain-tests",
+ "tempfile",
+ "testing-framework-app",
+ "testing-framework-core",
+ "tokio",
+]
+
+[[package]]
 name = "blockchain-test-logos"
 version = "0.0.0"
 dependencies = [
@@ -889,21 +904,6 @@ dependencies = [
  "serde",
  "testing-framework-core",
  "thiserror 2.0.21",
-]
-
-[[package]]
-name = "blockchain-test-tf-integration"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "blockchain-test-logos",
- "blockchain-test-nimbos",
- "libp2p",
- "logos-blockchain-tests",
- "tempfile",
- "testing-framework-app",
- "testing-framework-core",
- "tokio",
 ]
 
 [[package]]

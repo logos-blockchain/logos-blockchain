@@ -1,7 +1,7 @@
 //! Exercise the public external-runner path with real Logos processes.
 //!
 //! The external factory reuses the existing Logos app. See
-//! `tests/tf_integration/README.md` for the networking scenario used in CI.
+//! `tests/interop/README.md` for the networking scenario used in CI.
 
 use std::process::ExitCode;
 

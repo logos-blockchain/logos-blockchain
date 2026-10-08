@@ -2,7 +2,7 @@
 description          = "Executable integrations and mixed blockchain tests"
 edition.workspace    = true
 license.workspace    = true
-name                 = "blockchain-test-tf-integration"
+name                 = "blockchain-test-interop"
 publish              = false
 repository.workspace = true
 version.workspace    = true
