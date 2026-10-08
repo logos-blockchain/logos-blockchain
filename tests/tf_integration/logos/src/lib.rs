@@ -24,7 +24,6 @@ mod image;
 mod k8s;
 pub mod local;
 mod runtime_info;
-pub mod saved;
 mod scenario;
 mod snapshot;
 pub use blockchain_test_support::{
@@ -56,7 +55,6 @@ pub use diagnostics::{
 };
 pub use http_client::NodeHttpClient;
 pub use preparation::SharedDeployment;
-pub use saved::{PreparedConfigBundle, SavedDeployment, SavedLogosEnv, SavedLogosNodeConfig};
 pub(crate) use scenario::apply_wallet_config_to_deployment;
 pub use scenario::{
     DeploymentPlan, LbcClusterBackend, LbcEnv, LbcK8sManualCluster, LbcManualCluster, LbcScenario,

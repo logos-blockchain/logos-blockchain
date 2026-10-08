@@ -5,8 +5,8 @@ use std::{env, path::PathBuf, time::Duration};
 use async_trait::async_trait;
 use blockchain_test_nimbos::NimbosEnv;
 use lb_testing_framework::{
-    DeploymentBuilder, LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL, LbcEnv, NodeHttpClient, SavedDeployment,
-    SavedLogosEnv, SharedDeployment, TopologyConfig, config::build_plan,
+    DeploymentBuilder, LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL, LbcEnv, NodeHttpClient,
+    SharedDeployment, TopologyConfig, config::build_plan,
 };
 use libp2p::{Multiaddr, PeerId, multiaddr::Protocol};
 use testing_framework_app::{AppDeployer, AppDeployment, AppHostEnv, ClusterApp, DeployContext};
@@ -14,6 +14,10 @@ use testing_framework_core::scenario::{
     Application, ClusterControlRequest, ClusterHandle, ClusterRequest, DynError,
 };
 use tokio::time::{sleep, timeout};
+
+mod saved_logos;
+
+use saved_logos::{SavedDeployment, SavedLogosEnv};
 
 /// Check both Nimbos peers from Logos, then stop one and check the survivor.
 ///
@@ -24,7 +28,7 @@ use tokio::time::{sleep, timeout};
 /// `MIXED_PREPARED_CONFIG` to the bundle's `cluster.yaml`:
 ///
 /// ```text
-/// MIXED_PREPARED_CONFIG="$PWD/tests/cucumber_tests/fixtures/core-0.3.0-rc.5/cluster.yaml" \
+/// MIXED_PREPARED_CONFIG="$PWD/tests/interop/tests/fixtures/logos-0.3.0-rc.5/cluster.yaml" \
 /// cargo test -p blockchain-test-interop \
 ///   --test logos_nimbos_mixed -- --ignored
 /// ```

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::*;
 use crate::cucumber::{
-    deployment::{LocalDeployment, runtime_info::NodeRuntimeInfo, saved},
+    deployment::{LocalDeployment, runtime_info::NodeRuntimeInfo},
     steps::nodes::diagnostics::log_blend_relay_event,
 };
 
@@ -981,7 +981,6 @@ fn compile_wallet_in_map(
 ) -> Result<WalletInfoMap, StepError> {
     let mut wallet_info: WalletInfoMap = HashMap::new();
     for wallet in wallet_start_info {
-        saved::require_wallet_account(world, wallet.account_index)?;
         let wallet_account = match world
             .wallet_registry
             .wallet_accounts

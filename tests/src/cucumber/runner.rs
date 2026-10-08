@@ -25,7 +25,7 @@ use crate::cucumber::{
         create_scenario_output_dir, get_feature_path, get_retries, init_logging_defaults,
         init_tracing,
     },
-    deployment::{LocalImplementation, saved},
+    deployment::LocalImplementation,
     world::{CucumberWorld, DeployerKind},
 };
 
@@ -58,11 +58,6 @@ fn increment_attempts(
 }
 
 /// Run the existing feature suite with the supplied local implementation.
-///
-/// Set `CUCUMBER_PREPARED_CONFIG` to a saved bundle's `cluster.yaml` and select
-/// a matching binary with `LOGOS_BLOCKCHAIN_NODE_BIN` or
-/// `LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL`. Saved bundles require the local
-/// deployer and only allow their listed `supported_scenarios`.
 #[expect(
     clippy::future_not_send,
     reason = "Cucumber uses non-Send futures; entry points await the runner directly"
@@ -191,16 +186,15 @@ fn selected_deployer() -> DeployerKind {
     // or the default local node and cfgsync images built by the runtime
     // docker scripts under
     // `tests/tf_integration/logos/assets/runtime/scripts/docker`.
-    let deployer = if is_truthy_env(CUCUMBER_DEPLOYER_K8S) {
-        DeployerKind::K8s
-    } else if is_truthy_env(CUCUMBER_DEPLOYER_COMPOSE) {
-        DeployerKind::Compose
-    } else {
-        DeployerKind::Local
-    };
+    if is_truthy_env(CUCUMBER_DEPLOYER_K8S) {
+        return DeployerKind::K8s;
+    }
 
-    saved::validate_deployer(deployer);
-    deployer
+    if is_truthy_env(CUCUMBER_DEPLOYER_COMPOSE) {
+        return DeployerKind::Compose;
+    }
+
+    DeployerKind::Local
 }
 
 fn get_feature_path_for_deployer(deployer: DeployerKind) -> PathBuf {
@@ -222,9 +216,10 @@ fn prepare_world_for_scenario(
     scenario_name: &str,
 ) {
     world.set_deployer(deployer);
-    world.cluster.prepared_config = saved::config_for_scenario(scenario_name);
-    if world.cluster.prepared_config.is_none() {
-        world.set_genesis_time(resolve_automatic_genesis_time());
+    world.set_genesis_time(resolve_automatic_genesis_time());
+
+    if let Err(err) = world.preflight(deployer) {
+        println!("Preflight failed for scenario '{scenario_name}': {err}");
     }
 
     let scenario_dir =
@@ -245,11 +240,6 @@ fn prepare_world_for_scenario(
 
     world.set_scenario_base_dir(&scenario_dir, &deployer);
     world.set_scenario_name(scenario_name);
-
-    if let Err(err) = world.preflight(deployer) {
-        println!("Preflight failed for scenario '{scenario_name}': {err}");
-    }
-
     world.apply_deployment_config_override_path();
 
     let started_at_ns = SystemTime::now()

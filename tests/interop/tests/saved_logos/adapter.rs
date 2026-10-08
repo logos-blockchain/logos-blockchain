@@ -7,16 +7,20 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    env,
     net::{Ipv4Addr, SocketAddr},
-    num::NonZeroU64,
     path::{Component, Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
 use anyhow::{Context as _, bail};
 use async_trait::async_trait;
-use blockchain_test_support::runtime_info::{NodeRuntimeInfo, NodeRuntimeInfoProvider};
-use lb_libp2p::PeerId;
+use lb_testing_framework::{
+    LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL, LbcEnv, NodeHttpClient,
+    local::{node_launch_spec, release_binary_provider},
+};
+use libp2p::PeerId;
 use serde_yaml::Value;
 use testing_framework_app::ClusterApp;
 use testing_framework_core::{
@@ -24,24 +28,42 @@ use testing_framework_core::{
     topology::DeploymentDescriptor,
 };
 use testing_framework_runner_local::{
-    LaunchSpec, LocalBuildContext, LocalDeployerEnv, NodeEndpointPort, NodeEndpoints, PreparedNode,
+    BinaryProviderRef, LaunchSpec, LocalBuildContext, LocalDeployerEnv, NodeEndpointPort,
+    NodeEndpoints, PathBinaryProvider, PreparedNode,
 };
 use tokio::{process::Command, time::timeout};
 
-use crate::{
-    LbcEnv, NodeHttpClient, SavedDeployment,
-    configs::deployment::NodeBinaryProfile,
-    local::{ensure_node_binary_built, node_launch_spec},
-};
+use super::SavedDeployment;
 
-impl NodeRuntimeInfoProvider for SavedLogosEnv {
-    fn runtime_info(config: &SavedLogosNodeConfig) -> Result<NodeRuntimeInfo, DynError> {
-        Ok(NodeRuntimeInfo {
-            peer_id: config.peer_id(),
-            slots_per_epoch: config.slots_per_epoch(),
-            wallets: Vec::new(),
-        })
+// A saved deployment must never silently fall back to building this checkout.
+async fn selected_binary() -> Result<PathBuf, DynError> {
+    binary_provider(
+        env::var_os("LOGOS_BLOCKCHAIN_NODE_BIN").map(PathBuf::from),
+        env::var_os(LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL).is_some_and(|url| !url.is_empty()),
+    )?
+    .resolve()
+    .await
+    .map_err(Into::into)
+}
+
+fn binary_provider(path: Option<PathBuf>, download: bool) -> Result<BinaryProviderRef, DynError> {
+    if let Some(path) = path {
+        if !path.is_file() {
+            return Err(format!(
+                "LOGOS_BLOCKCHAIN_NODE_BIN does not point to a file: {}",
+                path.display()
+            )
+            .into());
+        }
+
+        return Ok(Arc::new(PathBinaryProvider::new(path.canonicalize()?)));
     }
+
+    if download {
+        return Ok(Arc::new(release_binary_provider()));
+    }
+
+    Err("set LOGOS_BLOCKCHAIN_NODE_BIN or LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL for saved configuration".into())
 }
 
 async fn read_peer_id(binary: &Path, config: &Path) -> anyhow::Result<PeerId> {
@@ -95,7 +117,7 @@ impl SavedLogosEnv {
     /// Selects the Logos binary, checks the saved configuration and identities,
     /// and returns a TF app ready for deployment.
     pub async fn prepare_app(saved: SavedDeployment) -> Result<ClusterApp<Self>, DynError> {
-        let binary = ensure_node_binary_built(&NodeBinaryProfile::Normal).await?;
+        let binary = selected_binary().await?;
         for (index, node) in saved.nodes.iter().enumerate() {
             validate_runtime_settings(&node.yaml).with_context(|| {
                 format!("unsupported saved Logos config {}", node.path.display())
@@ -129,20 +151,6 @@ pub struct SavedLogosNodeConfig {
     http_port: u16,
     blend_port: u16,
     peers: Vec<String>,
-    peer_id: PeerId,
-    slots_per_epoch: NonZeroU64,
-}
-
-impl SavedLogosNodeConfig {
-    #[must_use]
-    pub const fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
-
-    #[must_use]
-    pub const fn slots_per_epoch(&self) -> NonZeroU64 {
-        self.slots_per_epoch
-    }
 }
 
 #[async_trait]
@@ -219,13 +227,6 @@ impl LocalDeployerEnv for SavedLogosEnv {
                 http_port: context.ports.allocate("http")?,
                 blend_port: context.ports.allocate("blend")?,
                 peers,
-                peer_id: topology
-                    .saved
-                    .shared_deployment()
-                    .network_key(context.index)?
-                    .public()
-                    .to_peer_id(),
-                slots_per_epoch: topology.saved.shared_deployment().slots_per_epoch()?,
             },
         })
     }
@@ -321,10 +322,36 @@ fn validate_runtime_settings(yaml: &str) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_runtime_settings;
+    use std::{fs, path::PathBuf};
 
-    const NODE_CONFIG: &str =
-        include_str!("../../../../cucumber_tests/fixtures/core-0.3.0-rc.5/node-1.yaml");
+    use super::{binary_provider, validate_runtime_settings};
+
+    #[test]
+    fn saved_runs_require_an_explicit_binary() {
+        assert!(binary_provider(None, false).is_err());
+        let dir = tempfile::tempdir().unwrap();
+        for path in [
+            dir.path().join("missing"),
+            dir.path().to_owned(),
+            PathBuf::new(),
+        ] {
+            assert!(binary_provider(Some(path), true).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_binary_takes_precedence_over_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("node");
+        fs::write(&binary, "selected binary").unwrap();
+        let provider = binary_provider(Some(binary.clone()), true).unwrap();
+        assert_eq!(
+            provider.resolve().await.unwrap(),
+            binary.canonicalize().unwrap()
+        );
+    }
+
+    const NODE_CONFIG: &str = include_str!("../fixtures/logos-0.3.0-rc.5/node-1.yaml");
 
     #[test]
     fn saved_core_fixture_satisfies_runtime_requirements() {

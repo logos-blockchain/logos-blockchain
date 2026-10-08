@@ -815,14 +815,19 @@ dependencies = [
 name = "blockchain-test-interop"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "blockchain-test-logos",
  "blockchain-test-nimbos",
+ "hex",
  "libp2p",
  "logos-blockchain-tests",
+ "serde",
+ "serde_yaml",
  "tempfile",
  "testing-framework-app",
  "testing-framework-core",
+ "testing-framework-runner-local",
  "tokio",
 ]
 

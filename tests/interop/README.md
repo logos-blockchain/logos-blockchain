@@ -16,11 +16,10 @@ stay in the existing test suite.
 The Cucumber scenarios and steps remain in `logos-blockchain-tests`. An
 integration selects `LocalImplementation::External` and supplies an
 `ExternalDeploymentFactory`. The factory receives a `DeploymentInput` for
-each scenario, containing either a prepared network or saved configuration.
+each scenario, containing its prepared network.
 Other implementations obtain `SharedDeployment` through
 `shared_inputs()` and prepare their native configuration. Logos callers use
-`deploy_logos()` to render the prepared network or launch the saved
-configuration, retaining its keys and scenario settings.
+`deploy_logos()` to render the prepared network, retaining its keys and scenario settings.
 The factory deploys the resulting TF app. Shared steps use TF node control and
 `NodeRuntimeInfo`; operations that require typed Logos configuration remain
 Logos-specific and fail explicitly on other applications.
@@ -118,3 +117,25 @@ peer connections, stops one Nimbos node and checks the surviving connection.
 It does not yet assert canonical-chain agreement. With the revisions tested so
 far, genesis/protocol differences still prevent a successful mixed run. The
 runner reports those failures rather than changing the scenario's meaning.
+
+## Saved configuration for the mixed test
+
+The mixed test can use native Logos files saved with an older release instead
+of generating configuration from this checkout:
+
+```sh
+export MIXED_PREPARED_CONFIG="$PWD/tests/interop/tests/fixtures/logos-0.3.0-rc.5/cluster.yaml"
+export LOGOS_BLOCKCHAIN_NODE_BIN=/path/to/logos-blockchain-node-0.3.0-rc.5
+cargo test -p blockchain-test-interop --test logos_nimbos_mixed -- --ignored
+```
+
+The release download URL can be used instead of a local binary. Saved runs
+require an explicit binary selection and never fall back to building the current
+checkout. TF supplies runtime ports, peers and state directories through CLI
+arguments; the selected binary reads its native configuration files.
+
+This option applies only to the mixed test. Cucumber continues to generate its
+configuration. The saved adapter and fixture live under `tests/` in this crate,
+so removing them does not change the Cucumber runner or shared preparation.
+Both implementations still need to agree on genesis and protocol behaviour;
+saved configuration does not bypass those checks.

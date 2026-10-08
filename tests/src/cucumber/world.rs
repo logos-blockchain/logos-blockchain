@@ -64,9 +64,7 @@ use crate::{
         defaults::{
             CUCUMBER_NODE_CONFIG_OVERRIDE, LOGOS_BLOCKCHAIN_NODE_BIN, init_node_log_dir_defaults,
         },
-        deployment::{
-            LocalDeployment, LocalImplementation, runtime_info::NodeRuntimeInfoSource, saved,
-        },
+        deployment::{LocalDeployment, LocalImplementation, runtime_info::NodeRuntimeInfoSource},
         error::{StepError, StepResult},
         fee_reserve::{SCENARIO_FEE_ACCOUNT_NAME, ScenarioFeeState},
         logos_sql::LogosSqlState,
@@ -1026,9 +1024,6 @@ pub struct ChainParameters {
 /// node runtime information.
 #[derive(Default)]
 pub struct ClusterState {
-    /// Native configuration bundle, when generated settings are not selected.
-    pub prepared_config: Option<PathBuf>,
-
     /// Implementation selected once by the Cucumber runner.
     pub implementation: LocalImplementation,
 
@@ -2219,7 +2214,6 @@ impl CucumberWorld {
     /// configuration. This performs necessary preflight checks and returns
     /// a built scenario ready for deployment.
     pub fn build_local_scenario(&self) -> Result<LbcScenario, StepError> {
-        saved::require_generated_config(&self.cluster, "workload scenarios")?;
         let builder = self.make_builder_for_deployer(DeployerKind::Local)?;
         self.cluster
             .implementation
@@ -2233,7 +2227,6 @@ impl CucumberWorld {
     /// Build a scenario for k8s deployment based on the current world
     /// configuration.
     pub fn build_k8s_scenario(&self) -> Result<LbcScenario, StepError> {
-        saved::require_generated_config(&self.cluster, "Kubernetes scenarios")?;
         self.cluster
             .implementation
             .require_logos("Kubernetes scenarios")?;
