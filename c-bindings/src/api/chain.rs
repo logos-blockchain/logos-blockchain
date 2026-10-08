@@ -63,3 +63,86 @@ pub unsafe extern "C" fn get_chain_id(node: *const LogosBlockchainNode) -> FfiGe
         )),
     }
 }
+
+pub mod api {
+    use lb_chain_service::{CryptarchiaInfo, State, api::CryptarchiaServiceApi};
+    use lb_core::header::HeaderId;
+    use lb_ledger::LedgerState;
+    use lb_node::{RuntimeServiceId, generic_services::CryptarchiaService};
+    use overwatch::overwatch::OverwatchHandle;
+
+    use crate::{
+        OperationStatus, OperationStatusCode, StatusResult, api::common::overwatch::ensure_ready,
+    };
+
+    type NodeChainApi = CryptarchiaServiceApi<CryptarchiaService<RuntimeServiceId>>;
+
+    pub struct ChainFfiApi {
+        api: NodeChainApi,
+    }
+
+    impl ChainFfiApi {
+        /// Creates a Chain FFI Api from the service api
+        ///
+        /// # Errors
+        ///
+        /// Fails with [`OperationStatusCode::ServiceError`] if the chain
+        /// service isn't ready.
+        pub async fn new(
+            api: NodeChainApi,
+            overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+        ) -> StatusResult<Self> {
+            ensure_ready::<CryptarchiaService<RuntimeServiceId>>(overwatch_handle).await?;
+            Ok(Self { api })
+        }
+
+        /// Creates a Chain FFI Api, including the internal service api
+        ///
+        /// # Errors
+        ///
+        /// Fails with [`OperationStatusCode::ServiceError`] if the chain
+        /// service isn't ready.
+        pub async fn from_overwatch_handle(
+            overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+        ) -> StatusResult<Self> {
+            let api = NodeChainApi::from_overwatch_handle(overwatch_handle).await;
+            Self::new(api, overwatch_handle).await
+        }
+
+        /// Gets the current chain tip, but only once the chain is `Online`.
+        ///
+        /// # Errors
+        ///
+        /// Fails with [`OperationStatusCode::RelayError`] if chain info can't
+        /// be fetched, and with [`OperationStatusCode::ServiceError`]
+        /// while the chain is still bootstrapping.
+        pub async fn get_online_tip(&self) -> StatusResult<HeaderId> {
+            let chain_info = self.api.info().await?;
+            let CryptarchiaInfo { state, tip, .. } = chain_info.cryptarchia_info;
+            if state == State::Online {
+                Ok(tip)
+            } else {
+                Err(OperationStatus::error(
+                    OperationStatusCode::ServiceError,
+                    "The node is not online yet.",
+                ))
+            }
+        }
+
+        /// Gets the ledger state at `tip`.
+        ///
+        /// # Errors
+        ///
+        /// Fails with [`OperationStatusCode::RelayError`] if the chain service
+        /// can't be reached, and with [`OperationStatusCode::NotFound`] if
+        /// there's no ledger state for `tip`.
+        pub async fn get_ledger_state(&self, tip: HeaderId) -> StatusResult<LedgerState> {
+            self.api.get_ledger_state(tip).await?.ok_or_else(|| {
+                OperationStatus::error(
+                    OperationStatusCode::NotFound,
+                    format!("No ledger state for tip {tip:?}."),
+                )
+            })
+        }
+    }
+}

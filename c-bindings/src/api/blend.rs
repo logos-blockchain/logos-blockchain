@@ -5,19 +5,23 @@ use lb_c_macros::panic_to_error;
 use lb_chain_service::Epoch;
 use lb_core::{
     mantle::NoteId,
-    sdp::{self, Locator, SNAPSHOT_FINALIZATION_DELAY, ServiceType},
+    sdp::{self, Locator, SNAPSHOT_FINALIZATION_DELAY, ServiceType, WITHDRAWAL_UNLOCK_DELAY},
 };
 use lb_groth16::fr_from_bytes;
 use lb_node::{
     RuntimeServiceId, config::deployment::era::ruleset::EraRuleset,
     generic_services::blend::BlendService,
 };
-use lb_sdp_service::SdpSubmission;
+use lb_sdp_service::{SdpMessage, SdpSubmission};
 use multiaddr::PeerId;
+use overwatch::overwatch::OverwatchHandle;
 
 use crate::{
     LogosBlockchainNode,
-    api::time::get_time_info_sync,
+    api::{
+        chain::api::ChainFfiApi, cryptarchia::TxHash, sdp::make_sdp_request,
+        time::get_time_info_sync,
+    },
     errors::{OperationStatus, OperationStatusCode},
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
@@ -224,8 +228,7 @@ impl BlendRequirements {
 
         let minimum_stake = era.min_stake().threshold;
         let declaration_activation_delay_epochs = SNAPSHOT_FINALIZATION_DELAY.into();
-        let withdrawal_unlock_delay_epochs =
-            Epoch::new(SNAPSHOT_FINALIZATION_DELAY.into_inner() + 1).into();
+        let withdrawal_unlock_delay_epochs = WITHDRAWAL_UNLOCK_DELAY.into();
         let inactivity_timeout_epochs = inactivity_period.into_inner().into();
         let minimum_network_size_for_rewards = era.blend_reward_params().minimum_network_size.get();
 
@@ -287,4 +290,116 @@ pub unsafe extern "C" fn blend_requirements(
 
     let node = unsafe { &*node };
     blend_requirements_sync(node).into()
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct BlendWithdrawal {
+    pub tx_hash: TxHash,
+    pub unlocks_at_epoch: u32,
+}
+
+async fn post_withdraw(
+    overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+) -> StatusResult<SdpSubmission> {
+    let participation = make_sdp_request(overwatch_handle, |reply_channel| {
+        SdpMessage::GetParticipation { reply_channel }
+    })
+    .await?;
+
+    let live_declaration_id = participation
+        .and_then(|participation| participation.live())
+        .ok_or_else(|| {
+            OperationStatus::error(
+                OperationStatusCode::NotFound,
+                "The node has no live Blend declaration to withdraw.",
+            )
+        })?;
+
+    make_sdp_request(overwatch_handle, |reply_channel| {
+        SdpMessage::PostWithdrawal {
+            declaration_id: live_declaration_id,
+            reply_channel,
+        }
+    })
+    .await?
+    .map_err(|error| {
+        OperationStatus::error(
+            OperationStatusCode::ServiceError,
+            format!("Failed to withdraw: {error}"),
+        )
+    })
+}
+
+/// Withdraws this node's Blend declaration, leaving the core set.
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+///
+/// # Returns
+///
+/// The withdrawal on success, or an [`OperationStatus`] error on failure.
+/// Fails with [`OperationStatusCode::NotFound`] if the node has no
+/// declaration, and right away if the node is not `Online`.
+fn blend_withdraw_sync(node: &LogosBlockchainNode) -> StatusResult<BlendWithdrawal> {
+    let overwatch_handle = node.get_overwatch_handle();
+    let runtime_handle = node.get_runtime_handle()?;
+    runtime_handle.block_on(async {
+        let current_epoch = {
+            let chain_ffi_api = ChainFfiApi::from_overwatch_handle(overwatch_handle).await?;
+            let tip = chain_ffi_api.get_online_tip().await?;
+
+            chain_ffi_api
+                .get_ledger_state(tip)
+                .await?
+                .epoch_state()
+                .epoch
+        };
+
+        let withdraw_tx_hash = {
+            let SdpSubmission { tx_id, .. } = post_withdraw(overwatch_handle).await?;
+
+            let Some(tx_id) = tx_id else {
+                return Err(OperationStatus::error(
+                    OperationStatusCode::ServiceError,
+                    "The withdrawal was not submitted.",
+                ));
+            };
+
+            tx_id
+        };
+
+        let unlocks_at_epoch = current_epoch.strict_add(WITHDRAWAL_UNLOCK_DELAY).into();
+        Ok(BlendWithdrawal {
+            tx_hash: withdraw_tx_hash.0,
+            unlocks_at_epoch,
+        })
+    })
+}
+
+/// Withdraws this node's Blend declaration, leaving the core set.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
+///
+/// # Returns
+///
+/// A [`FfiStatusResult`] containing the [`BlendWithdrawal`] on success, or an
+/// [`OperationStatus`] error on failure.
+/// Fails right away if the node is not `Online`.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+#[must_use]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blend_withdraw(
+    node: *const LogosBlockchainNode,
+) -> FfiStatusResult<BlendWithdrawal> {
+    return_error_if_null_pointer!(node);
+
+    let node = unsafe { &*node };
+    blend_withdraw_sync(node).into()
 }
