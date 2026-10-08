@@ -113,7 +113,7 @@ struct ConfigArgs {
     /// Override to apply on top of the base config. Each occurrence is either
     /// a dot-notation key=value pair, where a number indexes a list or names
     /// an integer key (e.g. the first epoch in
-    /// `eras.0.cryptarchia.security_param=60`), or a path to a YAML file that
+    /// `eras.0.parameters.cryptarchia.security_param=60`), or a path to a YAML file that
     /// is deep-merged into the config.
     /// Repeated flags are applied left-to-right.
     #[arg(long = "override", value_name = "KEY=VALUE|FILE", num_args = 1)]
@@ -232,7 +232,7 @@ const GENESIS_BLOCK_PATH: &str = "genesis_block";
 
 /// Where a deployment config keeps the faucet key of the era starting at
 /// genesis, which is the era a genesis ceremony configures.
-const GENESIS_ERA_FAUCET_PK_PATH: &str = "eras.0.cryptarchia.faucet_pk";
+const GENESIS_ERA_FAUCET_PK_PATH: &str = "eras.0.parameters.cryptarchia.faucet_pk";
 
 // ── ceremony implementation
 // ─────────────────────────────────────────────────────

@@ -4,6 +4,8 @@ use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
+pub(crate) mod codec;
+
 #[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Settings {

@@ -5,20 +5,13 @@ pub mod generic_services;
 pub mod global_allocators;
 pub mod panic;
 
-mod codec;
-
-use std::collections::HashMap;
-
 use color_eyre::eyre::{Result, eyre};
-pub use lb_blend_service::core::backends::libp2p::Libp2pBlendBackend as BlendBackend;
-use lb_core::{
-    block::Proposal,
-    mantle::{ledger::verification_mode::StandardMode, transactions::states::Preverified},
-};
+use lb_core::mantle::{ledger::verification_mode::StandardMode, transactions::states::Preverified};
 pub use lb_core::{
     header::HeaderId,
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };
+use lb_cryptarchia_engine::era::EraSchedule;
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 use lb_storage_service::recovery::load_recovery_data;
 pub use lb_storage_service::{
@@ -28,10 +21,7 @@ pub use lb_storage_service::{
 pub use lb_system_sig_service::SystemSig;
 use lb_time_service::backends::NtpTimeBackend;
 pub use lb_tracing_service::Tracing;
-use lb_tx_service::{
-    network::adapters::libp2p::MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
-    storage::adapters::RocksStorageAdapter,
-};
+use lb_tx_service::storage::adapters::RocksStorageAdapter;
 pub use lb_tx_service::{
     network::adapters::libp2p::{
         Libp2pAdapter as MempoolNetworkAdapter, Settings as MempoolAdapterSettings,
@@ -48,9 +38,8 @@ use tokio::runtime;
 use crate::{
     api::backend::AxumBackend,
     config::{
-        DeploymentSettings, RunConfig, api::ServiceConfig as ApiConfig,
-        blend::ServiceConfig as BlendConfig, cryptarchia::ServiceConfig as CryptarchiaConfig,
-        deployment::EraParameters, kms::ServiceConfig as KmsConfig,
+        RunConfig, api::ServiceConfig as ApiConfig, blend::ServiceConfig as BlendConfig,
+        cryptarchia::ServiceConfig as CryptarchiaConfig, kms::ServiceConfig as KmsConfig,
         mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
         pow::ServiceConfig as PoWConfig, sdp::ServiceConfig as SdpConfig,
         storage::ServiceConfig as StorageConfig, time::ServiceConfig as TimeConfig,
@@ -59,25 +48,16 @@ use crate::{
     generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
 };
 
-fn max_data_size_by_topic(
-    transaction_topic: &str,
-    proposal_topic: &str,
-) -> HashMap<lb_libp2p::gossipsub::TopicHash, usize> {
-    let mut limits: HashMap<lb_libp2p::gossipsub::TopicHash, usize> = HashMap::new();
-    for (topic, required) in [
-        (
-            transaction_topic,
-            MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
-        ),
-        (proposal_topic, Proposal::MAX_ENCODED_SIZE),
-    ] {
-        let topic = lb_libp2p::gossipsub::IdentTopic::new(topic).hash();
-        limits
-            .entry(topic)
-            .and_modify(|existing| *existing = (*existing).max(required))
-            .or_insert(required);
-    }
-    limits
+/// A service's settings in the genesis era, out of its settings in every era.
+///
+/// Services take the settings of one era until they follow the schedule, and
+/// only single-era schedules are supported for now, so the genesis era is the
+/// one in force.
+fn genesis_era_settings<Settings>(settings: &EraSchedule<Settings>) -> Settings
+where
+    Settings: Clone,
+{
+    settings.genesis().entry.parameters.clone()
 }
 pub use crate::{
     cli::Command,
@@ -174,34 +154,7 @@ pub fn run_node_from_config(
     let chain_id = config.deployment.chain_id();
     let genesis_time = config.deployment.genesis_time();
 
-    // Derived from the chain and the fork of the era in force, and handed to
-    // every service that speaks a protocol or a topic. Only single-era
-    // schedules are supported for now, so the genesis era is in force.
-    let protocol_names = config.deployment.genesis_protocol_names();
-
-    let blend_rewards_params = config.deployment.genesis_blend_reward_params();
-
-    // The PoW mining service must use the same acceptance window as consensus;
-    // read it from the cryptarchia parameters before they are moved into the
-    // cryptarchia service settings below.
-    let pow_reward_config = &config
-        .deployment
-        .genesis_era_parameters()
-        .cryptarchia
-        .pow_config
-        .reward;
-    let pow_slot_window = pow_reward_config.slot_window;
-    let pow_rewards_enabled = pow_reward_config.rate_num > 0;
-
-    let DeploymentSettings {
-        eras,
-        genesis_block,
-    } = config.deployment;
-    let EraParameters {
-        blend: blend_deployment,
-        cryptarchia: cryptarchia_deployment,
-        time: time_deployment,
-    } = eras.into_genesis_era_parameters();
+    let eras = config.deployment.era_schedule();
 
     let storage_config = StorageConfig {
         user: config.user.storage,
@@ -210,50 +163,41 @@ pub fn run_node_from_config(
 
     let recovery_data = load_recovery_data(storage_config.clone())?;
 
-    let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
+    let blend_settings = BlendConfig {
         user: config.user.blend,
-        deployment: blend_deployment,
     }
-    .into_blend_services_settings(
-        recovery_data.clone(),
-        &time_deployment,
-        &cryptarchia_deployment,
-        protocol_names.blend.clone(),
-        protocol_names.cryptarchia_topic.clone(),
-    );
+    .into_blend_services_era_schedule(recovery_data.clone(), eras);
+    let (blend_config, blend_core_config, blend_edge_config) =
+        genesis_era_settings(&blend_settings);
 
-    let time_service_config = TimeConfig {
+    let time_settings = TimeConfig {
         user: config.user.time,
-        deployment: time_deployment,
     }
-    .into_time_service_settings(&cryptarchia_deployment, genesis_time);
+    .into_time_service_era_schedule(eras, genesis_time);
+    let time_service_config = genesis_era_settings(&time_settings);
 
-    let (chain_service_config, chain_network_config, chain_leader_config) = CryptarchiaConfig {
+    let cryptarchia_settings = CryptarchiaConfig {
         user: config.user.cryptarchia,
-        deployment: cryptarchia_deployment,
     }
-    .into_cryptarchia_services_settings(
-        genesis_block,
-        blend_rewards_params,
-        protocol_names.cryptarchia_topic.clone(),
+    .into_cryptarchia_services_era_schedule(
+        eras,
+        config.deployment.genesis_block(),
         recovery_data.clone(),
     );
+    let (chain_service_config, chain_network_config, chain_leader_config) =
+        genesis_era_settings(&cryptarchia_settings);
 
-    let mempool_service_config = MempoolConfig {
+    let mempool_settings = MempoolConfig {
         user: config.user.mempool,
     }
-    .into_mempool_service_settings(protocol_names.mempool_topic.clone(), recovery_data.clone());
+    .into_mempool_service_era_schedule(eras, recovery_data.clone());
+    let mempool_service_config = genesis_era_settings(&mempool_settings);
 
-    let network_service_config = NetworkConfig {
+    let network_settings = NetworkConfig {
         user: config.user.network,
     }
-    .into_network_config(
-        &protocol_names,
-        max_data_size_by_topic(
-            &protocol_names.mempool_topic,
-            &protocol_names.cryptarchia_topic,
-        ),
-    );
+    .into_network_service_era_schedule(&chain_id, eras);
+    let network_service_config = genesis_era_settings(&network_settings);
 
     let wallet_config = WalletConfig {
         user: config.user.wallet,
@@ -270,10 +214,11 @@ pub fn run_node_from_config(
     }
     .into_sdp_service_settings(recovery_data.clone());
 
-    let pow_config = PoWConfig {
+    let pow_settings = PoWConfig {
         user: config.user.pow,
     }
-    .into_pow_service_settings(recovery_data, pow_slot_window, pow_rewards_enabled);
+    .into_pow_service_era_schedule(recovery_data, eras);
+    let pow_config = genesis_era_settings(&pow_settings);
 
     let tracing_config = config::tracing::ServiceConfig {
         user: config.user.tracing,
@@ -341,21 +286,4 @@ pub async fn get_services_to_start(
     }
 
     Ok(service_ids)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn shared_application_topics_use_the_largest_data_limit() {
-        let topic = "/shared/application/topic";
-        let limits = max_data_size_by_topic(topic, topic);
-        let topic_hash = lb_libp2p::gossipsub::IdentTopic::new(topic).hash();
-
-        assert_eq!(
-            limits.get(&topic_hash),
-            Some(&MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE.max(Proposal::MAX_ENCODED_SIZE))
-        );
-    }
 }

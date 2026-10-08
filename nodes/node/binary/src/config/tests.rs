@@ -223,20 +223,11 @@ fn service_settings_receive_recovery_data() {
     };
 
     let deployment_settings = DeploymentSettings::default();
-    let protocol_names = deployment_settings.genesis_protocol_names();
-    let genesis_parameters = deployment_settings.eras.into_genesis_era_parameters();
-
-    let (blend_service_settings, _, _) = BlendServiceConfig {
+    let blend_services_settings = BlendServiceConfig {
         user: user_config.blend.clone(),
-        deployment: genesis_parameters.blend,
     }
-    .into_blend_services_settings(
-        recovery_data.clone(),
-        &genesis_parameters.time,
-        &genesis_parameters.cryptarchia,
-        protocol_names.blend,
-        protocol_names.cryptarchia_topic,
-    );
+    .into_blend_services_era_schedule(recovery_data.clone(), deployment_settings.era_schedule());
+    let (blend_service_settings, _, _) = &blend_services_settings.genesis().entry.parameters;
     assert_eq!(
         blend_service_settings
             .common
@@ -261,9 +252,12 @@ fn service_settings_receive_recovery_data() {
     let mempool_service_settings = MempoolServiceConfig {
         user: user_config.mempool.clone(),
     }
-    .into_mempool_service_settings(protocol_names.mempool_topic, recovery_data.clone());
+    .into_mempool_service_era_schedule(deployment_settings.era_schedule(), recovery_data.clone());
     assert_eq!(
         mempool_service_settings
+            .genesis()
+            .entry
+            .parameters
             .recovery_data
             .take(MEMPOOL_RECOVERY_MARKER)
             .unwrap(),

@@ -1,89 +1,91 @@
-blend:
-  common:
-    num_blend_layers: 1
-    minimum_network_size: 2
-    network_absorption_in_rounds: 2
-    data_replication_factor: 0
-  core:
-    scheduler:
-      cover:
-        message_frequency_per_round: 1.0
-      delayer:
-        maximum_release_delay_in_rounds: 1
-    target_peering_degree: 4
-    verification_rate_per_second: 156
-    edge_node_send_deadline_in_rounds: 1
-    core_handshake_deadline_in_rounds: 2
-    activity_threshold_sensitivity: 1
-cryptarchia:
-  epoch_config:
-    epoch_stake_distribution_stabilization: 3
-    epoch_period_nonce_buffer: 3
-    epoch_period_nonce_stabilization: 4
-  security_param: 30
-  slot_activation_coeff:
-    numerator: 1
-    denominator: 20
-  learning_rate: 0.5
-  uncle_reference_window_in_block: 12
-  pow_config:
-    blend:
-      # BLEND_DIFFICULTY_BASE, as the exponent n in p / 2^n: the Blend PoW
-      # threshold at the reference load. Fixed by the EmPoWering
-      # specification from a measurement on the target hardware itself
-      # (Raspberry Pi 5, one core), at which one solution is around fifty
-      # seconds of work.
-      base_difficulty: 19
-      # The reference load the threshold is calibrated at, so it has to be the
-      # load the network actually carries: two transactions per block. A
-      # theoretical capacity here would pin the threshold off its calibrated
-      # point.
-      target_transactions_per_block: 2
-      max_step: 2
-      damping_num: 1
-      damping_den_offset: 1
-    reward:
-      # Token-reward PoW parameters, sized for the target network of ~200
-      # mining nodes over the two-week epoch schedule.
-      #
-      # Pool sized to put 200 nodes over the minimum stake, with margin for
-      # mining being spread unevenly across them.
-      reward_pool_genesis: 300000000000
-      # Forced by the pool and the payout rate:
-      # W0 * rate_num / (rate_den * target_claim_per_block *
-      # expected_blocks_per_epoch) = 3e11 / (10 * 1 * 300).
-      # `expected_blocks_per_epoch` is not a config value: the ledger derives
-      # it from the consensus schedule as `10k`, which is 300 at
-      # `security_param: 30`.
-      epoch_reward_genesis: 100000000
-      # Genesis `d_reward`, as the exponent n in p / 2^n — the same form as
-      # the Blend `base_difficulty` above. Fixed by the specification.
-      # Also the minimum difficulty: the retarget never eases past it.
-      minimum_difficulty: 19
-      ema_smoothing_factor: 9
-      ema_smoothing_precision: 10
-      # One claim per block: claims are transactions, and the per-block
-      # transaction budget is 2. Must track `target_claim_per_block` below.
-      target_claims_per_block: 1
-      # rho = rate_num / rate_den = 1/10 of the pool per epoch, which
-      # distributes 97% of it across the two weeks.
-      rate_num: 1
-      rate_den: 10
-      target_claim_per_block: 1
-      # `pow_share / share_den` of the fees each block collects is
-      # diverted to the pow reward pool at the epoch boundary.
-      pow_share: 10
-      share_den: 100
-      # Acceptance window in slots; must match the mining service. Ten
-      # block-intervals of tolerance for a claim to reach a block.
-      slot_window: 300
-  sdp_config:
-    service_params:
-      BN:
-        inactivity_period: 2
-        epoch: 0
-    min_stake:
-      threshold: 1000000000
-      timestamp: 0
-time:
-  slot_duration: '1.000000000'
+block_version: V1
+parameters: !V1
+  blend:
+    common:
+      num_blend_layers: 1
+      minimum_network_size: 2
+      network_absorption_in_rounds: 2
+      data_replication_factor: 0
+    core:
+      scheduler:
+        cover:
+          message_frequency_per_round: 1.0
+        delayer:
+          maximum_release_delay_in_rounds: 1
+      target_peering_degree: 4
+      verification_rate_per_second: 156
+      edge_node_send_deadline_in_rounds: 1
+      core_handshake_deadline_in_rounds: 2
+      activity_threshold_sensitivity: 1
+  cryptarchia:
+    epoch_config:
+      epoch_stake_distribution_stabilization: 3
+      epoch_period_nonce_buffer: 3
+      epoch_period_nonce_stabilization: 4
+    security_param: 30
+    slot_activation_coeff:
+      numerator: 1
+      denominator: 20
+    learning_rate: 0.5
+    uncle_reference_window_in_block: 12
+    pow_config:
+      blend:
+        # BLEND_DIFFICULTY_BASE, as the exponent n in p / 2^n: the Blend PoW
+        # threshold at the reference load. Fixed by the EmPoWering
+        # specification from a measurement on the target hardware itself
+        # (Raspberry Pi 5, one core), at which one solution is around fifty
+        # seconds of work.
+        base_difficulty: 19
+        # The reference load the threshold is calibrated at, so it has to be the
+        # load the network actually carries: two transactions per block. A
+        # theoretical capacity here would pin the threshold off its calibrated
+        # point.
+        target_transactions_per_block: 2
+        max_step: 2
+        damping_num: 1
+        damping_den_offset: 1
+      reward:
+        # Token-reward PoW parameters, sized for the target network of ~200
+        # mining nodes over the two-week epoch schedule.
+        #
+        # Pool sized to put 200 nodes over the minimum stake, with margin for
+        # mining being spread unevenly across them.
+        reward_pool_genesis: 300000000000
+        # Forced by the pool and the payout rate:
+        # W0 * rate_num / (rate_den * target_claim_per_block *
+        # expected_blocks_per_epoch) = 3e11 / (10 * 1 * 300).
+        # `expected_blocks_per_epoch` is not a config value: the ledger derives
+        # it from the consensus schedule as `10k`, which is 300 at
+        # `security_param: 30`.
+        epoch_reward_genesis: 100000000
+        # Genesis `d_reward`, as the exponent n in p / 2^n — the same form as
+        # the Blend `base_difficulty` above. Fixed by the specification.
+        # Also the minimum difficulty: the retarget never eases past it.
+        minimum_difficulty: 19
+        ema_smoothing_factor: 9
+        ema_smoothing_precision: 10
+        # One claim per block: claims are transactions, and the per-block
+        # transaction budget is 2. Must track `target_claim_per_block` below.
+        target_claims_per_block: 1
+        # rho = rate_num / rate_den = 1/10 of the pool per epoch, which
+        # distributes 97% of it across the two weeks.
+        rate_num: 1
+        rate_den: 10
+        target_claim_per_block: 1
+        # `pow_share / share_den` of the fees each block collects is
+        # diverted to the pow reward pool at the epoch boundary.
+        pow_share: 10
+        share_den: 100
+        # Acceptance window in slots; must match the mining service. Ten
+        # block-intervals of tolerance for a claim to reach a block.
+        slot_window: 300
+    sdp_config:
+      service_params:
+        BN:
+          inactivity_period: 2
+          epoch: 0
+      min_stake:
+        threshold: 1000000000
+        timestamp: 0
+  time:
+    slot_duration: '1.000000000'

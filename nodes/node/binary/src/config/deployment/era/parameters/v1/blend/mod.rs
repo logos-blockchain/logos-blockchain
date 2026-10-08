@@ -9,10 +9,12 @@ use lb_utils::math::PositiveF64;
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{
-    cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
-    time::deployment::Settings as TimeDeploymentSettings,
+use super::{
+    cryptarchia::Settings as CryptarchiaDeploymentSettings,
+    time::Settings as TimeDeploymentSettings,
 };
+
+pub(crate) mod codec;
 
 /// Deployment-specific Blend settings.
 #[derive(Serialize, Deserialize, Debug, Clone)]

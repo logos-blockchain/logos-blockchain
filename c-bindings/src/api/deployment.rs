@@ -1,7 +1,7 @@
 use std::ffi::{CString, c_char};
 
 use lb_c_macros::panic_to_error;
-use lb_node::config::DeploymentSettings;
+use lb_node::config::{DeploymentSettings, deployment::ProtocolScope};
 
 use crate::{
     OperationStatus,
@@ -34,20 +34,20 @@ pub struct DeploymentInfo {
 
 impl DeploymentInfo {
     fn new(deployment: &DeploymentSettings) -> Result<Self, OperationStatus> {
-        // Only single-era schedules are supported for now, so the genesis era
-        // is in force.
-        let protocol_names = deployment.genesis_protocol_names();
+        let deployment_chain_id = deployment.chain_id();
+        let chain = ProtocolScope::Chain(&deployment_chain_id);
+        let fork = ProtocolScope::Fork(deployment.fork_digest_in_force());
 
         // Every string is built before any of them is turned into a raw
         // pointer, so a failure part-way drops the ones already built instead
         // of leaking them.
-        let chain_id = to_c_string(deployment.chain_id().as_ref())?;
-        let blend = to_c_string(protocol_names.blend.as_ref())?;
-        let cryptarchia = to_c_string(&protocol_names.cryptarchia_topic)?;
-        let kademlia = to_c_string(protocol_names.kademlia.as_ref())?;
-        let identify = to_c_string(protocol_names.identify.as_ref())?;
-        let chain_sync = to_c_string(protocol_names.chain_sync.as_ref())?;
-        let mempool = to_c_string(&protocol_names.mempool_topic)?;
+        let chain_id = to_c_string(deployment_chain_id.as_ref())?;
+        let blend = to_c_string(&fork.to_string_with_name("blend"))?;
+        let cryptarchia = to_c_string(&fork.to_string_with_name("cryptarchia"))?;
+        let kademlia = to_c_string(&chain.to_string_with_name("kad"))?;
+        let identify = to_c_string(&chain.to_string_with_name("identify"))?;
+        let chain_sync = to_c_string(&fork.to_string_with_name("chainsync"))?;
+        let mempool = to_c_string(&fork.to_string_with_name("mempool"))?;
         let node_version = to_c_string(&lb_version::build_version_info().version)?;
 
         Ok(Self {
