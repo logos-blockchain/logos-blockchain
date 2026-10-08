@@ -15,7 +15,7 @@ async-trait            = { workspace = true }
 blockchain-test-nimbos = { workspace = true }
 lb-testing-framework   = { workspace = true }
 libp2p                 = { features = ["ed25519"], workspace = true }
-logos-blockchain-tests = { path = ".." }
+logos-blockchain-tests = { workspace = true }
 testing-framework-app  = { workspace = true }
 testing-framework-core = { workspace = true }
 tokio                  = { workspace = true }

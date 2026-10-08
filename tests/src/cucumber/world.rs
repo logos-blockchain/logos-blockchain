@@ -995,8 +995,8 @@ pub struct ClusterState {
     ///
     /// The world stays concrete because the Cucumber step macros do not support
     /// a world generic over the node implementation. Shared steps use
-    /// `local_app` instead; this handle is present only when this checkout
-    /// generates the Logos configuration.
+    /// `local_app` instead; this handle is present only for the normal Logos
+    /// runner, even when an external factory happens to deploy Logos nodes.
     pub logos_cluster: Option<ClusterHandle<LbcEnv>>,
 
     /// Owns the selected local app, including its cleanup guards.
@@ -1067,7 +1067,10 @@ impl ClusterState {
                     message: "Local app does not provide node runtime information".into(),
                 })?,
         );
-        self.logos_cluster = app.runtime().get::<ClusterHandle<LbcEnv>>();
+        self.logos_cluster = match self.implementation {
+            LocalImplementation::Logos => app.runtime().get::<ClusterHandle<LbcEnv>>(),
+            LocalImplementation::External(_) => None,
+        };
         self.local_app = Some(app);
         self.k8s_manual_cluster = None;
         Ok(())

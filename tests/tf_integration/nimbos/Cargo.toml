@@ -13,15 +13,15 @@ workspace = true
 [dependencies]
 async-trait                    = { workspace = true }
 blockchain-test-support        = { workspace = true }
-libp2p                         = { workspace = true, features = ["ed25519"] }
+libp2p                         = { features = ["ed25519"], workspace = true }
 multiaddr                      = { workspace = true }
-serde                          = { workspace = true, features = ["derive"] }
+serde                          = { features = ["derive"], workspace = true }
 serde_yaml                     = { workspace = true }
 testing-framework-core         = { workspace = true }
 testing-framework-runner-local = { workspace = true }
-toml                           = "0.9.12"
+toml                           = { features = ["display", "parse", "serde", "std"], workspace = true }
 url                            = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tokio    = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio    = { features = ["macros", "rt-multi-thread"], workspace = true }

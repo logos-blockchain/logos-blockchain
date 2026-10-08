@@ -105,7 +105,7 @@ mod tests {
 
     use async_trait::async_trait;
     use lb_libp2p::identity::Keypair;
-    use lb_testing_framework::{DeploymentBuilder, TopologyConfig};
+    use lb_testing_framework::{DeploymentBuilder, LbcEnv, TopologyConfig};
     use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
     use testing_framework_core::{
         scenario::{
@@ -230,6 +230,51 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct ExternalLogosFactory;
+
+    #[async_trait]
+    impl ExternalDeploymentFactory for ExternalLogosFactory {
+        fn name(&self) -> &'static str {
+            "external-logos"
+        }
+
+        async fn deploy(&self, deployment: DeploymentInput) -> Result<LocalDeployment, DynError> {
+            deployment.deploy_logos().await
+        }
+    }
+
+    #[tokio::test]
+    async fn external_logos_factory_does_not_expose_typed_logos_control() {
+        for implementation in [
+            LocalImplementation::Logos,
+            LocalImplementation::External(&ExternalLogosFactory),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let deployment = DeploymentBuilder::new(
+                TopologyConfig::with_node_numbers(1).with_blend_core_nodes(0),
+            )
+            .scenario_base_dir(dir.path().to_owned())
+            .prepare()
+            .unwrap();
+            let app = implementation.deploy(deployment).await.unwrap();
+
+            // Both deployments contain a real Logos handle. External selection
+            // must still keep Cucumber on its implementation-independent path.
+            assert!(app.runtime().get::<ClusterHandle<LbcEnv>>().is_some());
+
+            let mut cluster = ClusterState {
+                implementation,
+                ..Default::default()
+            };
+            cluster.install_local(app).unwrap();
+
+            assert_eq!(cluster.logos_cluster().is_some(), implementation.is_logos());
+            assert!(cluster.local_control().is_ok());
+            assert!(cluster.node_runtime_info.is_some());
+        }
+    }
+
     #[tokio::test]
     async fn external_factory_reads_runtime_info_for_nodes_beyond_initial_capacity() {
         let plan =
@@ -251,7 +296,10 @@ mod tests {
             expected.network_key(0).unwrap().public()
         );
 
-        let mut cluster = ClusterState::default();
+        let mut cluster = ClusterState {
+            implementation,
+            ..Default::default()
+        };
         cluster.install_local(app).unwrap();
         assert!(cluster.logos_cluster().is_none());
         let reader = cluster.node_runtime_info.as_ref().unwrap();

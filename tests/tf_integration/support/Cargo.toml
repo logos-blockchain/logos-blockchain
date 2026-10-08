@@ -18,6 +18,6 @@ lb-libp2p                        = { workspace = true }
 lb-utils                         = { workspace = true }
 num-bigint                       = { workspace = true }
 rand                             = { workspace = true }
-serde                            = { workspace = true, features = ["derive"] }
+serde                            = { features = ["derive"], workspace = true }
 testing-framework-core           = { workspace = true }
 thiserror                        = { workspace = true }

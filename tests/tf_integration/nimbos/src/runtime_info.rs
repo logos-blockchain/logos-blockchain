@@ -23,6 +23,7 @@ mod tests {
         path::Path,
     };
 
+    use blockchain_test_support::runtime_info::NodeWalletKey;
     use libp2p::identity::Keypair;
     use tempfile::tempdir;
     use testing_framework_core::scenario::StartNodeOptions;
@@ -84,7 +85,7 @@ cryptarchia:
             assert_eq!(info.peer_id, launched_key.public().to_peer_id());
             assert_eq!(info.peer_id, deployment.peer_id(index).unwrap());
             assert_eq!(info.slots_per_epoch.get(), 18);
-            assert!(info.wallets.is_empty());
+            assert_eq!(info.wallets, Vec::<NodeWalletKey>::new());
             identities.push(info.peer_id);
         }
 

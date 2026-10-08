@@ -106,8 +106,8 @@ resolver = "2"
 
 [workspace.dependencies]
 # Internal
-blockchain-test-nimbos             = { path = "./tests/tf_integration/nimbos" }
-blockchain-test-support            = { path = "./tests/tf_integration/support" }
+blockchain-test-nimbos             = { default-features = false, path = "./tests/tf_integration/nimbos" }
+blockchain-test-support            = { default-features = false, path = "./tests/tf_integration/support" }
 cfgsync-adapter                    = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
 cfgsync-artifacts                  = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
 common-http-client                 = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
@@ -175,6 +175,7 @@ lb-wallet                          = { default-features = false, package = "logo
 lb-wallet-service                  = { default-features = false, package = "logos-blockchain-wallet-service", path = "./services/wallet" }
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
 lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
+logos-blockchain-tests             = { default-features = false, path = "./tests" }
 logos-sql                          = { default-features = false, path = "./logos_sql" }
 # When bumping any lbc-* tag, also update the logos-blockchain-circuits flake input tag in flake.nix
 # and run `nix flake lock --update-input logos-blockchain-circuits`.
@@ -300,6 +301,7 @@ time                  = { default-features = false, version = "0.3" }
 tokio                 = { default-features = false, version = "1" }
 tokio-stream          = { default-features = false, version = "0.1.18" }
 tokio-util            = { default-features = false, version = "0.7" }
+toml                  = { default-features = false, version = "0.9.12" }
 tonic                 = { default-features = false, version = "0.14.5" }
 tower                 = { default-features = false, version = "0.4" }
 tower-http            = { default-features = false, version = "0.6.8" }

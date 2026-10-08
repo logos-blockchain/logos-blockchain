@@ -10,7 +10,7 @@ inputs:
     required: false
     default: ""
   scenario_name:
-    description: Optional scenario-name regular expression for the supplied executable
+    description: Optional scenario-name regular expression for the supplied executable, used instead of suite_tag
     required: false
     default: ""
   suite_name:
@@ -80,9 +80,10 @@ runs:
         SUITE_TAG: ${{ inputs.suite_tag }}
         SCENARIO_NAME: ${{ inputs.scenario_name }}
       run: |
-        args=(--tags "$SUITE_TAG and not (@broken or @undefined_behaviour)")
         if [[ -n "$SCENARIO_NAME" ]]; then
-          args+=(--name "$SCENARIO_NAME")
+          args=(--name "$SCENARIO_NAME")
+        else
+          args=(--tags "$SUITE_TAG and not (@broken or @undefined_behaviour)")
         fi
 
         "$RUNNER_EXECUTABLE" "${args[@]}"
