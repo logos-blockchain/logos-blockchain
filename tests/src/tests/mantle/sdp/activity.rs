@@ -14,7 +14,7 @@ use lb_core::{
     mantle::Value,
     sdp::{Declaration, NumberOfEpochs, ProviderId, ServiceType},
 };
-use lb_era_parameters::cryptarchia::v1::EpochConfig;
+use lb_node::config::deployment::parameters::cryptarchia::v1::EpochConfig;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::RunConfig;
 use lb_testing_framework::{

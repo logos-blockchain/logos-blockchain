@@ -113,7 +113,7 @@ struct ConfigArgs {
     /// Override to apply on top of the base config. Each occurrence is either
     /// a dot-notation key=value pair, where a number indexes a list or names
     /// an integer key (e.g. the first epoch in
-    /// `eras.0.cryptarchia.security_param=60`), or a path to a YAML file that
+    /// `eras.0.parameters.cryptarchia.security_param=60`), or a path to a YAML file that
     /// is deep-merged into the config.
     /// Repeated flags are applied left-to-right.
     #[arg(long = "override", value_name = "KEY=VALUE|FILE", num_args = 1)]
@@ -232,7 +232,7 @@ const GENESIS_BLOCK_PATH: &str = "genesis_block";
 
 /// Where a deployment config keeps the faucet key of the era starting at
 /// genesis, which is the era a genesis ceremony configures.
-const GENESIS_ERA_FAUCET_PK_PATH: &str = "eras.0.cryptarchia.faucet_pk";
+const GENESIS_ERA_FAUCET_PK_PATH: &str = "eras.0.parameters.cryptarchia.faucet_pk";
 
 // ── ceremony implementation
 // ─────────────────────────────────────────────────────
@@ -318,9 +318,9 @@ fn load_base_config(path: Option<&PathBuf>) -> Result<Value> {
 /// Load a genesis template, and assemble from it the deployment config the
 /// ceremony completes: the template's era definition becomes era zero.
 ///
-/// A template is an era's parameters tagged with their version, such as
-/// `!V1`, so the template, not the tool, decides which version the chain
-/// starts at.
+/// A template is an era as a deployment file declares it: its block version
+/// and its parameters, tagged with their version, such as `!V1`. So the
+/// template, not the tool, decides which versions the chain starts with.
 ///
 /// If `path` is `None`, returns the default deployment config, whose genesis
 /// block the ceremony replaces.
@@ -333,9 +333,9 @@ fn load_genesis_template(path: Option<&PathBuf>) -> Result<Value> {
         .with_context(|| format!("cannot read genesis template '{}'", path.display()))?;
     let era: Value = serde_yaml::from_str(&content)
         .with_context(|| format!("cannot parse YAML from '{}'", path.display()))?;
-    if !matches!(era, Value::Tagged(_)) {
+    if !matches!(era, Value::Mapping(_)) {
         bail!(
-            "genesis template '{}' must be tagged with the version of its parameters, such as `!V1`",
+            "genesis template '{}' must declare an era: its `block_version` and its `parameters`",
             path.display()
         );
     }

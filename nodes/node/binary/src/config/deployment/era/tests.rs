@@ -1,17 +1,22 @@
-//! The era parameters of a deployment file are tagged with the version of the
-//! parameter set, and each of their sections with its own version.
+//! An era of a deployment file names its block version next to its parameters,
+//! which are tagged with the version of the parameter set, and each of their
+//! sections with its own version.
 
 use std::collections::BTreeMap;
 
 use lb_cryptarchia_engine::{Epoch, era::MAX_ERAS_AFTER_GENESIS};
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 
-use super::{EraSchedule, EraScheduleError};
+use super::{EraDeclaration, EraSchedule, EraScheduleError};
 use crate::config::DeploymentSettings;
 use crate::config::deployment::parameters::EraParameters;
 
-fn parameters() -> EraParameters {
+fn declaration() -> EraDeclaration {
     DeploymentSettings::default().eras.into_genesis()
+}
+
+fn parameters() -> EraParameters {
+    declaration().parameters
 }
 
 fn yaml(parameters: &EraParameters) -> String {
@@ -22,7 +27,7 @@ fn yaml(parameters: &EraParameters) -> String {
 fn parameters_and_their_sections_are_tagged_with_their_version() {
     let yaml = yaml(&parameters());
     assert!(yaml.starts_with("!V1\nblend: !V1\n"), "{yaml}");
-    for section in ["blocks: V1\n", "cryptarchia: !V1\n", "time: !V1\n"] {
+    for section in ["cryptarchia: !V1\n", "time: !V1\n"] {
         assert!(yaml.contains(section), "{yaml}");
     }
     let json = serde_json::to_string(&parameters()).unwrap();
@@ -73,11 +78,20 @@ fn unknown_keys_are_reported_through_the_tag() {
 }
 
 #[test]
+fn an_era_names_its_block_version_next_to_its_parameters() {
+    let yaml = serde_yaml::to_string(&declaration()).unwrap();
+    assert!(
+        yaml.starts_with("block_version: V1\nparameters: !V1\n"),
+        "{yaml}"
+    );
+}
+
+#[test]
 fn a_schedule_of_more_eras_than_a_chain_can_number_is_rejected() {
-    let parameters = parameters();
+    let declaration = declaration();
     let too_many = MAX_ERAS_AFTER_GENESIS + 1;
     let eras: BTreeMap<_, _> = (0..=u32::try_from(too_many).unwrap())
-        .map(|first_epoch| (Epoch::new(first_epoch), parameters.clone()))
+        .map(|first_epoch| (Epoch::new(first_epoch), declaration.clone()))
         .collect();
 
     assert_eq!(

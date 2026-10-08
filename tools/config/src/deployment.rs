@@ -7,8 +7,11 @@ use lb_core::{
     block::genesis::GenesisBlock,
     sdp::{NumberOfEpochs, ServiceType},
 };
-use lb_cryptarchia_engine::Epoch;
-use lb_era_parameters::{
+use lb_cryptarchia_engine::{Epoch, era::BlockVersion};
+use lb_groth16::ModulusShift;
+use lb_node::config::deployment::{
+    DeploymentSettings, EraDeclaration, EraSchedule,
+    parameters::{
     EraParameters,
     blend::{
         BlendParameters,
@@ -18,7 +21,6 @@ use lb_era_parameters::{
             Settings as BlendDeploymentSettings,
         },
     },
-    blocks::BlocksParameters,
     cryptarchia::{
         CryptarchiaParameters,
         v1::{
@@ -28,9 +30,8 @@ use lb_era_parameters::{
     },
     time::{TimeParameters, v1::Settings as TimeDeploymentSettings},
     v1,
+    },
 };
-use lb_groth16::ModulusShift;
-use lb_node::config::deployment::{DeploymentSettings, EraSchedule};
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
 use crate::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
@@ -99,7 +100,9 @@ pub fn e2e_deployment_settings_with_genesis_block(
 
     DeploymentSettings {
         eras:
-            EraSchedule::new_genesis(EraParameters::V1(v1::Parameters {
+            EraSchedule::new_genesis(EraDeclaration {
+                block_version: BlockVersion::V1,
+                parameters: EraParameters::V1(v1::Parameters {
                     blend: BlendParameters::V1(BlendDeploymentSettings {
                         common: BlendCommonSettings {
                             minimum_network_size: MinimumNetworkSize::try_new(
@@ -145,7 +148,6 @@ pub fn e2e_deployment_settings_with_genesis_block(
                             activity_threshold_sensitivity: ACTIVITY_THRESHOLD_SENSITIVITY,
                         },
                     }),
-                    blocks: BlocksParameters::V1,
                     cryptarchia: CryptarchiaParameters::V1(CryptarchiaDeploymentSettings {
                         security_param: NonZero::new(SECURITY_PARAM).unwrap(),
                         uncle_reference_window_in_block: NonZero::new(
@@ -224,7 +226,8 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     time: TimeParameters::V1(TimeDeploymentSettings {
                         slot_duration: Duration::from_secs(slot_duration_in_secs),
                     }),
-                })),
+                }),
+            }),
         genesis_block: GenesisBlock::genesis(genesis_tx.clone()),
     }
 }
