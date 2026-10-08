@@ -17,7 +17,7 @@ use libp2p::{
         THandlerOutEvent, ToSwarm,
     },
 };
-use rand::RngCore;
+use rand_010::Rng;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
@@ -36,13 +36,13 @@ type Task = BoxFuture<'static, Multiaddr>;
 
 const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::INNER;
 
-pub struct InnerNatBehaviour<Rng, Mapper, Detector>
+pub struct InnerNatBehaviour<R, Mapper, Detector>
 where
-    Rng: RngCore + 'static,
+    R: Rng + 'static,
 {
     /// `AutoNAT` client behaviour which is used to confirm if addresses of our
     /// node are indeed publicly reachable.
-    autonat_client_behaviour: autonat::v2::client::Behaviour<Rng>,
+    autonat_client_behaviour: autonat::v2::client::Behaviour<R>,
     /// The address mapper behaviour is used to map the node's addresses at the
     /// default gateway using one of the protocols: `PCP`, `NAT-PMP`,
     /// `UPNP-IGD`.
@@ -67,10 +67,10 @@ where
     local_address: Option<Multiaddr>,
 }
 
-pub type NatBehaviour<Rng> = InnerNatBehaviour<Rng, ProtocolManager, SystemGatewayDetector>;
+pub type NatBehaviour<R> = InnerNatBehaviour<R, ProtocolManager, SystemGatewayDetector>;
 
-impl<Rng: RngCore + 'static> NatBehaviour<Rng> {
-    pub fn new(rng: Rng, settings: &TraversalSettings) -> Self {
+impl<R: Rng + 'static> NatBehaviour<R> {
+    pub fn new(rng: R, settings: &TraversalSettings) -> Self {
         let address_mapper_behaviour =
             AddressMapperBehaviour::<ProtocolManager>::new(settings.mapping);
 
@@ -81,12 +81,12 @@ impl<Rng: RngCore + 'static> NatBehaviour<Rng> {
     }
 }
 
-impl<Rng, Mapper, Detector> InnerNatBehaviour<Rng, Mapper, Detector>
+impl<R, Mapper, Detector> InnerNatBehaviour<R, Mapper, Detector>
 where
-    Rng: RngCore + 'static,
+    R: Rng + 'static,
 {
     fn create(
-        rng: Rng,
+        rng: R,
         settings: &TraversalSettings,
         address_mapper_behaviour: AddressMapperBehaviour<Mapper>,
         gateway_monitor: GatewayMonitor<Detector>,
@@ -114,9 +114,9 @@ where
     }
 }
 
-impl<Rng, Mapper, Detector> NetworkBehaviour for InnerNatBehaviour<Rng, Mapper, Detector>
+impl<R, Mapper, Detector> NetworkBehaviour for InnerNatBehaviour<R, Mapper, Detector>
 where
-    Rng: RngCore + 'static,
+    R: Rng + 'static,
     Mapper: NatMapper + 'static,
     Detector: GatewayDetector + 'static,
 {

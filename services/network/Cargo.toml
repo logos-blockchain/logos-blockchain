@@ -23,7 +23,7 @@ lb-tracing          = { workspace = true }
 lb-utils            = { features = ["tokio"], workspace = true }
 overwatch           = { workspace = true }
 rand                = { features = ["std"], workspace = true }
-rand_chacha         = { workspace = true }
+rand_010            = { features = ["std", "std_rng", "sys_rng"], workspace = true }
 serde               = { features = ["derive"], workspace = true }
 tokio               = { features = ["macros", "sync"], workspace = true }
 tokio-stream        = { workspace = true }

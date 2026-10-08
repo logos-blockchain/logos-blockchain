@@ -3,6 +3,8 @@ pub mod config;
 pub mod dial_error_ext;
 pub mod protocol_name;
 mod swarm;
+#[cfg(test)]
+mod tls_key_exchange;
 
 pub use config::{
     AutonatClientSettings, ChainSyncSettings, GatewaySettings, IdentifySettings, KademliaSettings,

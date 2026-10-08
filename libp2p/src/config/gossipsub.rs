@@ -64,16 +64,16 @@ pub struct ConfigDef {
     opportunistic_graft_peers: usize,
     #[serde(getter = "gossipsub::Config::gossip_retransimission")]
     gossip_retransimission: u32,
-    #[serde(getter = "gossipsub::Config::max_messages_per_rpc")]
-    max_messages_per_rpc: Option<usize>,
-    #[serde(getter = "gossipsub::Config::max_ihave_length")]
-    max_ihave_length: usize,
-    #[serde(getter = "gossipsub::Config::max_ihave_messages")]
-    max_ihave_messages: usize,
+    #[serde(getter = "gossipsub::Config::max_publish_messages")]
+    max_publish_messages: usize,
+    #[serde(getter = "gossipsub::Config::max_control_messages_sent")]
+    max_control_messages_sent: usize,
+    #[serde(getter = "gossipsub::Config::max_control_message_size")]
+    max_control_message_size: usize,
+    #[serde(getter = "gossipsub::Config::max_ihave_messages_heartbeat")]
+    max_ihave_messages_heartbeat: usize,
     #[serde(getter = "gossipsub::Config::iwant_followup_time")]
     iwant_followup_time: Duration,
-    #[serde(getter = "gossipsub::Config::published_message_ids_cache_time")]
-    published_message_ids_cache_time: Duration,
 }
 
 #[expect(
@@ -101,7 +101,7 @@ impl From<ConfigDef> for gossipsub::Config {
             .allow_self_origin(def.allow_self_origin)
             .prune_peers(def.prune_peers)
             .prune_backoff(def.prune_backoff)
-            .unsubscribe_backoff(def.unsubscribe_backoff.as_secs())
+            .unsubscribe_backoff(def.unsubscribe_backoff)
             .backoff_slack(def.backoff_slack)
             .flood_publish(def.flood_publish)
             .graft_flood_threshold(def.graft_flood_threshold)
@@ -109,11 +109,11 @@ impl From<ConfigDef> for gossipsub::Config {
             .opportunistic_graft_ticks(def.opportunistic_graft_ticks)
             .opportunistic_graft_peers(def.opportunistic_graft_peers)
             .gossip_retransimission(def.gossip_retransimission)
-            .max_messages_per_rpc(def.max_messages_per_rpc)
-            .max_ihave_length(def.max_ihave_length)
-            .max_ihave_messages(def.max_ihave_messages)
-            .iwant_followup_time(def.iwant_followup_time)
-            .published_message_ids_cache_time(def.published_message_ids_cache_time);
+            .max_publish_messages(def.max_publish_messages)
+            .max_control_messages_sent(def.max_control_messages_sent)
+            .max_control_message_size(def.max_control_message_size)
+            .max_ihave_messages_heartbeat(def.max_ihave_messages_heartbeat)
+            .iwant_followup_time(def.iwant_followup_time);
 
         if def.validate_messages {
             builder = builder.validate_messages();

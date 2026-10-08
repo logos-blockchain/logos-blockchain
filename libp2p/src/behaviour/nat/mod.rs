@@ -10,7 +10,7 @@ use libp2p::{
         behaviour::toggle::{Toggle, ToggleConnectionHandler},
     },
 };
-use rand::RngCore;
+use rand_010::Rng;
 
 mod address_mapper;
 mod gateway_monitor;
@@ -24,7 +24,7 @@ use crate::{
 
 /// This behaviour is responsible for confirming that the addresses of the node
 /// are publicly reachable.
-pub struct Behaviour<Rng: RngCore + 'static> {
+pub struct Behaviour<R: Rng + 'static> {
     /// The static public listen address is passed through this variable to
     /// the `poll()` method. Unused if the node is not configured with a static
     /// public IP address.
@@ -32,11 +32,11 @@ pub struct Behaviour<Rng: RngCore + 'static> {
     /// Provides dynamic NAT-status detection, NAT-status improvement (via
     /// address mapping on the NAT-box), and periodic maintenance capabilities.
     /// Disabled if the node is configured with a static public IP address.
-    inner_behaviour: Toggle<NatBehaviour<Rng>>,
+    inner_behaviour: Toggle<NatBehaviour<R>>,
 }
 
-impl<Rng: RngCore + 'static> Behaviour<Rng> {
-    pub fn new(rng: Rng, nat_config: &NatSettings) -> Self {
+impl<R: Rng + 'static> Behaviour<R> {
+    pub fn new(rng: R, nat_config: &NatSettings) -> Self {
         match nat_config {
             NatSettings::Static { external_address } => Self {
                 static_listen_addr: Some(external_address.clone()),
@@ -53,13 +53,13 @@ impl<Rng: RngCore + 'static> Behaviour<Rng> {
     }
 }
 
-impl<Rng: RngCore + 'static> NetworkBehaviour for Behaviour<Rng> {
+impl<R: Rng + 'static> NetworkBehaviour for Behaviour<R> {
     type ConnectionHandler = ToggleConnectionHandler<
-        <autonat::v2::client::Behaviour<Rng> as NetworkBehaviour>::ConnectionHandler,
+        <autonat::v2::client::Behaviour<R> as NetworkBehaviour>::ConnectionHandler,
     >;
 
     type ToSwarm = Either<
-        <autonat::v2::client::Behaviour<Rng> as NetworkBehaviour>::ToSwarm,
+        <autonat::v2::client::Behaviour<R> as NetworkBehaviour>::ToSwarm,
         address_mapper::Event,
     >;
 
@@ -163,7 +163,7 @@ mod tests {
 
     use libp2p::{Swarm, identify, identity, swarm::SwarmEvent};
     use libp2p_swarm_test::SwarmExt as _;
-    use rand::rngs::OsRng;
+    use rand_010::{make_rng, rngs::StdRng};
     use tokio::time::timeout;
     use tracing_subscriber::{EnvFilter, fmt::TestWriter};
 
@@ -172,7 +172,7 @@ mod tests {
 
     #[derive(NetworkBehaviour)]
     pub struct Client {
-        nat: Behaviour<OsRng>,
+        nat: Behaviour<StdRng>,
         identify: identify::Behaviour,
     }
 
@@ -186,7 +186,7 @@ mod tests {
                 ..Default::default()
             });
 
-            let nat = Behaviour::new(OsRng, &settings);
+            let nat = Behaviour::new(make_rng::<StdRng>(), &settings);
             let identify =
                 identify::Behaviour::new(identify::Config::new("/unittest".into(), public_key));
             Self { nat, identify }
@@ -195,13 +195,13 @@ mod tests {
 
     #[derive(NetworkBehaviour)]
     pub struct Server {
-        autonat_server: autonat::v2::server::Behaviour<OsRng>,
+        autonat_server: autonat::v2::server::Behaviour<StdRng>,
         identify: identify::Behaviour,
     }
 
     impl Server {
         pub fn new(public_key: identity::PublicKey) -> Self {
-            let autonat_server = autonat::v2::server::Behaviour::new(OsRng);
+            let autonat_server = autonat::v2::server::Behaviour::new(make_rng::<StdRng>());
             let identify =
                 identify::Behaviour::new(identify::Config::new("/unittest".into(), public_key));
             Self {
@@ -303,7 +303,7 @@ mod tests {
             external_address: addr.clone(),
         };
 
-        let mut behavior = Behaviour::new(OsRng, &settings);
+        let mut behavior = Behaviour::new(make_rng::<StdRng>(), &settings);
 
         let waker = std::task::Waker::noop();
         let mut cx = Context::from_waker(waker);

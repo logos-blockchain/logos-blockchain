@@ -231,12 +231,12 @@ humantime                          = { default-features = false, version = "2.1"
 igd-next                           = { default-features = false, version = "0.16.1" }
 indexmap                           = { default-features = false, version = "2.14.0" }
 itertools                          = { default-features = false, version = "0.14" }
-libp2p                             = { default-features = false, version = "0.56" }
-libp2p-stream                      = { default-features = false, version = "0.4.0-alpha" }
-libp2p-swarm-test                  = { default-features = false, version = "0.6" }
+libp2p                             = { default-features = false, version = "0.57" }
+libp2p-stream                      = { default-features = false, version = "0.5.0-alpha" }
+libp2p-swarm-test                  = { default-features = false, version = "0.7" }
 log                                = { default-features = false, version = "0.4" }
 lru                                = { default-features = false, version = "0.18.2" }
-multiaddr                          = { default-features = false, version = "0.18" }
+multiaddr                          = { default-features = false, version = "0.19" }
 natpmp                             = { default-features = false, version = "0.5" }
 netdev                             = { default-features = false, version = "0.31" }
 num-bigint                         = { default-features = false, version = "0.4" }
@@ -261,6 +261,7 @@ quickcheck                         = { default-features = false, version = "1.0"
 quickcheck_macros                  = { default-features = false, version = "1.0" }
 quote                              = { default-features = false, version = "1" }
 rand                               = { default-features = false, version = "0.8" }
+rand_010                           = { default-features = false, package = "rand", version = "0.10" }
 rand_chacha                        = { default-features = false, version = "0.3" }
 rand_core                          = { default-features = false, version = "0.6.4" }
 rayon                              = { default-features = false, version = "1.12" }
@@ -269,6 +270,7 @@ rocksdb                            = { default-features = false, version = "0.24
 rpds                               = { default-features = false, version = "1" }
 rs-merkle-tree                     = { default-features = false, version = "0.1" }
 rusqlite                           = { default-features = false, version = "0.35" }
+rustls                             = { default-features = false, version = "0.23" }
 tar                                = { default-features = false, version = "0.4.46" }
 # Must stay in sync with the rust-rapidsnark flake input in flake.nix.
 rust-rapidsnark       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git", rev = "e91187f8ccb5bbfc7bb00dac88169112428da78f" } # feat/nixify

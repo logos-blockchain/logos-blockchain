@@ -38,11 +38,11 @@ pub struct Config {
     pub opportunistic_graft_ticks: u64,
     pub opportunistic_graft_peers: usize,
     pub gossip_retransimission: u32,
-    pub max_messages_per_rpc: Option<usize>,
-    pub max_ihave_length: usize,
-    pub max_ihave_messages: usize,
+    pub max_publish_messages: usize,
+    pub max_control_messages_sent: usize,
+    pub max_control_message_size: usize,
+    pub max_ihave_messages_heartbeat: usize,
     pub iwant_followup_time: Duration,
-    pub published_message_ids_cache_time: Duration,
 }
 
 impl Default for Config {
@@ -75,11 +75,11 @@ impl Default for Config {
             opportunistic_graft_ticks: inner_default.opportunistic_graft_ticks(),
             opportunistic_graft_peers: inner_default.opportunistic_graft_peers(),
             gossip_retransimission: inner_default.gossip_retransimission(),
-            max_messages_per_rpc: inner_default.max_messages_per_rpc(),
-            max_ihave_length: inner_default.max_ihave_length(),
-            max_ihave_messages: inner_default.max_ihave_messages(),
+            max_publish_messages: inner_default.max_publish_messages(),
+            max_control_messages_sent: inner_default.max_control_messages_sent(),
+            max_control_message_size: inner_default.max_control_message_size(),
+            max_ihave_messages_heartbeat: inner_default.max_ihave_messages_heartbeat(),
             iwant_followup_time: inner_default.iwant_followup_time(),
-            published_message_ids_cache_time: inner_default.published_message_ids_cache_time(),
         }
     }
 }
@@ -107,9 +107,10 @@ impl From<Config> for gossipsub::Config {
             history_gossip,
             history_length,
             iwant_followup_time,
-            max_ihave_length,
-            max_ihave_messages,
-            max_messages_per_rpc,
+            max_control_message_size,
+            max_control_messages_sent,
+            max_ihave_messages_heartbeat,
+            max_publish_messages,
             mesh_n,
             mesh_n_high,
             mesh_n_low,
@@ -118,7 +119,6 @@ impl From<Config> for gossipsub::Config {
             opportunistic_graft_ticks,
             prune_backoff,
             prune_peers,
-            published_message_ids_cache_time,
             retain_scores,
             unsubscribe_backoff,
             validate_messages,
@@ -143,7 +143,7 @@ impl From<Config> for gossipsub::Config {
             .allow_self_origin(allow_self_origin)
             .prune_peers(prune_peers)
             .prune_backoff(prune_backoff)
-            .unsubscribe_backoff(unsubscribe_backoff.as_secs())
+            .unsubscribe_backoff(unsubscribe_backoff)
             .backoff_slack(backoff_slack)
             .flood_publish(flood_publish)
             .graft_flood_threshold(graft_flood_threshold)
@@ -151,11 +151,11 @@ impl From<Config> for gossipsub::Config {
             .opportunistic_graft_ticks(opportunistic_graft_ticks)
             .opportunistic_graft_peers(opportunistic_graft_peers)
             .gossip_retransimission(gossip_retransimission)
-            .max_messages_per_rpc(max_messages_per_rpc)
-            .max_ihave_length(max_ihave_length)
-            .max_ihave_messages(max_ihave_messages)
-            .iwant_followup_time(iwant_followup_time)
-            .published_message_ids_cache_time(published_message_ids_cache_time);
+            .max_publish_messages(max_publish_messages)
+            .max_control_messages_sent(max_control_messages_sent)
+            .max_control_message_size(max_control_message_size)
+            .max_ihave_messages_heartbeat(max_ihave_messages_heartbeat)
+            .iwant_followup_time(iwant_followup_time);
 
         if validate_messages {
             builder = builder.validate_messages();

@@ -5,7 +5,7 @@ use lb_libp2p::{
     libp2p::kad::{self, PeerInfo, ProgressStep, QueryId},
 };
 use lb_log_targets::network_service;
-use rand::RngCore;
+use rand_010::Rng;
 use tokio::sync::oneshot;
 
 use crate::backends::libp2p::swarm::SwarmHandler;
@@ -33,7 +33,7 @@ pub struct PendingQueryData {
     accumulated_results: Vec<PeerInfo>,
 }
 
-impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
+impl<R: Send + Rng + 'static> SwarmHandler<R> {
     pub(super) fn bootstrap_kad_from_peers(&mut self, initial_peers: &Vec<Multiaddr>) {
         for peer_addr in initial_peers {
             if let Some(Protocol::P2p(peer_id_bytes)) = peer_addr.iter().last() {

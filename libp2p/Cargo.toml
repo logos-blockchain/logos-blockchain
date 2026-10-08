@@ -40,6 +40,7 @@ natpmp = { features = ["tokio"], workspace = true }
 netdev = { workspace = true }
 num_enum = { workspace = true }
 rand = { workspace = true }
+rand_010 = { features = ["std", "std_rng", "sys_rng"], workspace = true }
 serde = { features = ["derive"], workspace = true }
 serde_with = { workspace = true }
 thiserror = { workspace = true }
@@ -48,6 +49,8 @@ tracing = { workspace = true }
 zerocopy = { features = ["derive"], workspace = true }
 
 [dev-dependencies]
+libp2p             = { features = ["tls"], workspace = true }
 libp2p-swarm-test  = { features = ["tokio"], workspace = true }
+rustls             = { features = ["aws-lc-rs"], workspace = true }
 serde_json         = { workspace = true }
 tracing-subscriber = { features = ["env-filter", "fmt"], workspace = true }

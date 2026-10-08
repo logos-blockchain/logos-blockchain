@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use cucumber::World as _;
 use logos_blockchain_tests::cucumber::{
     defaults::{
-        ARTEFACTS, SCENARIO_OUTPUT_DIR_REL, init_logging_defaults, init_node_log_dir_defaults,
-        init_tracing,
+        ARTEFACTS, SCENARIO_OUTPUT_DIR_REL, init_crypto_provider_defaults, init_logging_defaults,
+        init_node_log_dir_defaults, init_tracing,
     },
     world::{CucumberWorld, DeployerKind},
 };
@@ -19,6 +19,7 @@ async fn cucumber_local_idle_smoke() {
         Some(&PathBuf::from(SCENARIO_OUTPUT_DIR_REL).join(ARTEFACTS)),
     );
     init_tracing();
+    init_crypto_provider_defaults();
 
     let _init_result = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())

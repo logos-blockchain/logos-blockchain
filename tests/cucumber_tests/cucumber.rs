@@ -35,8 +35,8 @@ use logos_blockchain_tests::cucumber::{
     defaults::{
         ARTEFACTS, CUCUMBER_DEPLOYER_COMPOSE, CUCUMBER_DEPLOYER_K8S,
         CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL, MAX_CUCUMBER_CONCURRENT_SCENARIOS,
-        create_scenario_output_dir, get_feature_path, get_retries, init_logging_defaults,
-        init_tracing,
+        create_scenario_output_dir, get_feature_path, get_retries, init_crypto_provider_defaults,
+        init_logging_defaults, init_tracing,
     },
     world::{CucumberWorld, DeployerKind},
 };
@@ -78,6 +78,7 @@ async fn main() {
 
     init_logging_defaults();
     init_tracing();
+    init_crypto_provider_defaults();
 
     let scenario_attempts: ScenarioAttempts = Arc::new(Mutex::new(HashMap::new()));
 

@@ -2,14 +2,14 @@ use std::collections::HashSet;
 
 use lb_cryptarchia_sync::{BoxedStream, ChainSyncError, GetTipResponse, HeaderId, SerialisedBlock};
 use libp2p::PeerId;
-use rand::RngCore;
+use rand_010::Rng;
 use tokio::sync::oneshot;
 
 use crate::{Swarm, behaviour::BehaviourError};
 
 type SerialisedBlockStream = BoxedStream<Result<SerialisedBlock, ChainSyncError>>;
 
-impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
+impl<R: Send + Rng + 'static> Swarm<R> {
     pub fn request_tip(
         &self,
         peer_id: PeerId,
