@@ -2,11 +2,8 @@ use core::{iter, num::NonZero};
 use std::collections::BTreeMap;
 
 use ::serde::{Deserialize, Deserializer, Serialize};
-use lb_cryptarchia_engine::{
-    Epoch,
-    era::{ErasError, MAX_ERAS_AFTER_GENESIS},
-};
-use lb_era_parameters::{ChangeError, EraChanges, EraParameters, Incompatible};
+use lb_cryptarchia_engine::{Epoch, era::MAX_ERAS_AFTER_GENESIS};
+use lb_era_parameters::{EraParameters, Incompatible, VersionGoesBack};
 
 mod serde;
 use serde::EraScheduleVisitor;
@@ -18,42 +15,28 @@ pub(super) const GENESIS_EPOCH: Epoch = Epoch::new(0);
 /// The eras of a chain, each keyed by the epoch it starts at. An era's
 /// parameters are in force from that epoch until the next era starts.
 ///
-/// The genesis era declares every section of its parameters, and each era
-/// after it the sections it changes. A schedule is (de)serialized as a map
-/// from first epochs to what each era declares. The first era must start at
-/// genesis, and deserialization also requires the eras to be listed by
-/// strictly increasing first epoch, which rules out a repeated epoch too.
+/// A schedule is (de)serialized as a map from first epochs to era parameters,
+/// and built from a `BTreeMap`, which keeps first epochs unique and ordered.
+/// The first era must start at genesis. Deserialization also requires the eras
+/// to be listed by strictly increasing first epoch, which rules out a repeated
+/// epoch too.
 #[derive(Serialize, Debug, Clone)]
-#[serde(into = "BTreeMap<Epoch, EraChanges>")]
+#[serde(into = "BTreeMap<Epoch, EraParameters>")]
 pub struct EraSchedule {
     /// The era that starts at genesis, which every schedule has.
     genesis: EraParameters,
     /// The eras after it, keyed by the epoch each starts at.
-    after_genesis: BTreeMap<NonZero<u32>, EraChanges>,
+    after_genesis: BTreeMap<NonZero<u32>, EraParameters>,
 }
 
 impl EraSchedule {
-    /// A schedule of the genesis era, then of the eras after it, keyed by
-    /// the epoch each starts at.
-    ///
-    /// # Errors
-    ///
-    /// If there are more eras than a chain can number, if the sections of the
-    /// genesis era cannot run together, or if an era's changes cannot follow
-    /// the era before it.
-    pub fn new(
-        genesis: EraParameters,
-        after_genesis: BTreeMap<NonZero<u32>, EraChanges>,
-    ) -> Result<Self, EraScheduleError> {
-        if after_genesis.len() > MAX_ERAS_AFTER_GENESIS {
-            return Err(EraScheduleError::TooManyEras(after_genesis.len()));
+    /// A schedule made of a single era, starting at genesis.
+    #[must_use]
+    pub const fn new_genesis(parameters: EraParameters) -> Self {
+        Self {
+            genesis: parameters,
+            after_genesis: BTreeMap::new(),
         }
-        let schedule = Self {
-            genesis,
-            after_genesis,
-        };
-        schedule.resolve()?;
-        Ok(schedule)
     }
 
     /// The parameters of the era that starts at genesis.
@@ -71,55 +54,40 @@ impl EraSchedule {
         self.genesis
     }
 
-    /// What the eras after the genesis era change, keyed by the epoch each
-    /// starts at.
+    /// The parameters of the eras after the genesis era, keyed by the epoch
+    /// each starts at.
     #[must_use]
-    pub const fn after_genesis(&self) -> &BTreeMap<NonZero<u32>, EraChanges> {
+    pub const fn after_genesis(&self) -> &BTreeMap<NonZero<u32>, EraParameters> {
         &self.after_genesis
     }
 
-    /// Every era of the schedule, in activation order: the epoch it starts at,
-    /// what it declares and the parameters it runs under.
-    ///
-    /// # Errors
-    ///
-    /// If the sections of the genesis era cannot run together, or if an era's
-    /// changes cannot follow the era before it.
-    pub(super) fn resolve(
-        &self,
-    ) -> Result<Vec<(Epoch, EraChanges, EraParameters)>, EraScheduleError> {
-        self.genesis.check_compatibility()?;
-        let genesis = (
-            GENESIS_EPOCH,
-            EraChanges::from(self.genesis.clone()),
-            self.genesis.clone(),
-        );
-        let mut eras = Vec::with_capacity(self.after_genesis.len() + 1);
-        eras.push(genesis);
-        for (first_epoch, changes) in &self.after_genesis {
-            let epoch = Epoch::new(first_epoch.get());
-            let (_, _, previous) = eras.last().expect("the genesis era is resolved");
-            let parameters = previous
-                .with_changes(changes)
-                .map_err(|source| EraScheduleError::Changes { epoch, source })?;
-            eras.push((epoch, changes.clone(), parameters));
-        }
-        Ok(eras)
+    /// Every era of the schedule with the epoch it starts at, in activation
+    /// order.
+    #[cfg(test)]
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (Epoch, &EraParameters)> {
+        iter::once((GENESIS_EPOCH, &self.genesis))
+            .chain(
+                self.after_genesis
+                    .iter()
+                    .map(|(first_epoch, parameters)| (Epoch::new(first_epoch.get()), parameters)),
+            )
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 }
 
-impl From<EraSchedule> for BTreeMap<Epoch, EraChanges> {
+impl From<EraSchedule> for BTreeMap<Epoch, EraParameters> {
     fn from(
         EraSchedule {
             genesis,
             after_genesis,
         }: EraSchedule,
     ) -> Self {
-        iter::once((GENESIS_EPOCH, EraChanges::from(genesis)))
+        iter::once((GENESIS_EPOCH, genesis))
             .chain(
                 after_genesis
                     .into_iter()
-                    .map(|(first_epoch, changes)| (Epoch::new(first_epoch.get()), changes)),
+                    .map(|(first_epoch, parameters)| (Epoch::new(first_epoch.get()), parameters)),
             )
             .collect()
     }
@@ -143,12 +111,62 @@ pub enum EraScheduleError {
     OutOfOrder { previous: Epoch, next: Epoch },
     #[error("a schedule has at most {MAX_ERAS_AFTER_GENESIS} eras after its genesis era, not {0}")]
     TooManyEras(usize),
-    #[error("the sections of the genesis era cannot run together: {0}")]
-    Incompatible(#[from] Incompatible),
+    #[error("the sections of the era from epoch {} cannot run together: {source}", .epoch.into_inner())]
+    Incompatible { epoch: Epoch, source: Incompatible },
     #[error("the era from epoch {} cannot follow the era before it: {source}", .epoch.into_inner())]
-    Changes { epoch: Epoch, source: ChangeError },
-    #[error(transparent)]
-    Eras(#[from] ErasError),
+    VersionGoesBack {
+        epoch: Epoch,
+        source: VersionGoesBack,
+    },
+}
+
+impl TryFrom<BTreeMap<Epoch, EraParameters>> for EraSchedule {
+    type Error = EraScheduleError;
+
+    /// Builds a schedule from eras keyed by their first epoch. The map keeps
+    /// them unique and ordered, so what remains to check is that the first one
+    /// starts at genesis, that there are no more after it than a chain can
+    /// number, that every era's sections can run together, and that no
+    /// section of an era is of an older version than in the era before it.
+    fn try_from(mut eras: BTreeMap<Epoch, EraParameters>) -> Result<Self, Self::Error> {
+        let Some((first_epoch, genesis)) = eras.pop_first() else {
+            return Err(EraScheduleError::Empty);
+        };
+        if first_epoch != GENESIS_EPOCH {
+            return Err(EraScheduleError::FirstEraAfterGenesis(first_epoch));
+        }
+        if eras.len() > MAX_ERAS_AFTER_GENESIS {
+            return Err(EraScheduleError::TooManyEras(eras.len()));
+        }
+        genesis
+            .check_compatibility()
+            .map_err(|source| EraScheduleError::Incompatible {
+                epoch: GENESIS_EPOCH,
+                source,
+            })?;
+        let mut previous = &genesis;
+        for (&epoch, parameters) in &eras {
+            parameters
+                .check_compatibility()
+                .map_err(|source| EraScheduleError::Incompatible { epoch, source })?;
+            parameters
+                .check_follows(previous)
+                .map_err(|source| EraScheduleError::VersionGoesBack { epoch, source })?;
+            previous = parameters;
+        }
+        let after_genesis = eras
+            .into_iter()
+            .map(|(first_epoch, parameters)| {
+                let first_epoch = NonZero::new(first_epoch.into_inner())
+                    .expect("the eras after the first, which starts at epoch 0, start later");
+                (first_epoch, parameters)
+            })
+            .collect();
+        Ok(Self {
+            genesis,
+            after_genesis,
+        })
+    }
 }
 
 impl<'de> Deserialize<'de> for EraSchedule {

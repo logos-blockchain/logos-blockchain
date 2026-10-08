@@ -2,7 +2,6 @@ use core::{
     num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128},
     time::Duration,
 };
-use std::collections::BTreeMap;
 
 use lb_core::{
     block::genesis::GenesisBlock,
@@ -28,6 +27,7 @@ use lb_era_parameters::{
         },
     },
     time::{TimeParameters, v1::Settings as TimeDeploymentSettings},
+    v1,
 };
 use lb_groth16::ModulusShift;
 use lb_node::config::deployment::{DeploymentSettings, EraSchedule};
@@ -99,8 +99,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
 
     DeploymentSettings {
         eras:
-            EraSchedule::new(
-                EraParameters {
+            EraSchedule::new_genesis(EraParameters::V1(v1::Parameters {
                     blend: BlendParameters::V1(BlendDeploymentSettings {
                         common: BlendCommonSettings {
                             minimum_network_size: MinimumNetworkSize::try_new(
@@ -225,10 +224,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     time: TimeParameters::V1(TimeDeploymentSettings {
                         slot_duration: Duration::from_secs(slot_duration_in_secs),
                     }),
-                },
-                BTreeMap::new(),
-            )
-            .expect("a single era of version 1 of every section is a valid schedule"),
+                })),
         genesis_block: GenesisBlock::genesis(genesis_tx.clone()),
     }
 }

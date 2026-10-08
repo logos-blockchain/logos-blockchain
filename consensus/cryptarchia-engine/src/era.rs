@@ -61,7 +61,7 @@ pub type EraEntriesAfterGenesis<Parameters> =
     UpperBoundedBTreeMap<NonZero<u32>, EraEntry<Parameters>, MAX_ERAS_AFTER_GENESIS>;
 
 /// An era as a schedule lists it: the version of its blocks, the length of its
-/// slots and epochs, its transition period, and what it carries.
+/// slots and epochs, and what it carries.
 ///
 /// The genesis era starts at epoch 0, and every later era at the epoch it is
 /// keyed by in [`EraEntriesAfterGenesis`].
@@ -74,9 +74,6 @@ pub struct EraEntry<Parameters> {
     #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
     pub slot_duration: Duration,
     pub epoch_length_in_slots: NonZero<u64>,
-    /// How many slots, from the era's first, the network keeps accepting the
-    /// identifiers of the era before it: its protocol names and topics.
-    pub transition_slots: u64,
     pub parameters: Parameters,
 }
 
@@ -127,22 +124,6 @@ fn span(slot_duration: Duration, slots: u64) -> Option<time::Duration> {
     // `from_nanos_u128` panics past `Duration::MAX`.
     let span = (nanos <= Duration::MAX.as_nanos()).then(|| Duration::from_nanos_u128(nanos))?;
     time::Duration::try_from(span).ok()
-}
-
-/// The eras the network accepts at a slot: the era in force, and the era
-/// before it while the transition period that opens the era in force lasts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EraInForce {
-    pub era: Era,
-    pub retiring: Option<Era>,
-}
-
-impl EraInForce {
-    /// The eras the network accepts: the era in force, then the retiring era,
-    /// if any.
-    pub fn eras(self) -> impl Iterator<Item = Era> {
-        once(self.era).chain(self.retiring)
-    }
 }
 
 /// Why a schedule's eras cannot be resolved.
@@ -252,26 +233,6 @@ impl<Parameters> EraSchedule<Parameters> {
         let era_scheduled = self.at_slot(slot);
         slot.into_inner()
             .strict_sub(era_scheduled.first_slot.into_inner())
-    }
-
-    /// The eras the network accepts at `slot`: the era of `slot`, and the era
-    /// before it if `slot` is within the transition period of its era.
-    #[must_use]
-    pub fn in_force_at_slot(&self, slot: Slot) -> EraInForce {
-        let era_scheduled = self.at_slot(slot);
-        let elapsed_slots_since_era_start = self.elapsed_slots_since_era_start(slot);
-        let retiring_era = era_scheduled
-            .era
-            .into_inner()
-            .checked_sub(1)
-            // If current is era 0, `checked_sub(1)` will return `None`, so filter will return
-            // `None`. Else, we check the previous era for transition.
-            .filter(|_| elapsed_slots_since_era_start < era_scheduled.entry.transition_slots)
-            .map(Era::new);
-        EraInForce {
-            era: era_scheduled.era,
-            retiring: retiring_era,
-        }
     }
 
     /// The era `epoch` belongs to.
@@ -398,7 +359,6 @@ const fn map_era<Parameters, Mapped>(
                 block_version,
                 epoch_length_in_slots,
                 slot_duration,
-                transition_slots,
                 ..
             },
         era,
@@ -417,7 +377,6 @@ const fn map_era<Parameters, Mapped>(
             block_version: *block_version,
             slot_duration: *slot_duration,
             epoch_length_in_slots: *epoch_length_in_slots,
-            transition_slots: *transition_slots,
             parameters,
         },
     }
@@ -430,7 +389,7 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::{
-        BlockVersion, Era, EraEntriesAfterGenesis, EraEntry, EraInForce, EraSchedule, ErasError,
+        BlockVersion, Era, EraEntriesAfterGenesis, EraEntry, EraSchedule, ErasError,
     };
     use crate::time::{Epoch, Slot};
 
@@ -441,7 +400,6 @@ mod tests {
             block_version: BlockVersion::V1,
             slot_duration,
             epoch_length_in_slots: NonZero::new(epoch_length).unwrap(),
-            transition_slots: 10,
             parameters: (),
         }
     }
@@ -599,36 +557,6 @@ mod tests {
                 Some(slot)
             );
         }
-    }
-
-    #[test]
-    fn the_era_before_is_accepted_during_the_transition_period() {
-        let eras = four_eras();
-        let in_force = [0, 299, 300, 309, 310, 400, 402, 403, 412, 413]
-            .map(|slot| (slot, eras.in_force_at_slot(Slot::new(slot))));
-        let era = |era, retiring: Option<u16>| EraInForce {
-            era: Era::new(era),
-            retiring: retiring.map(Era::new),
-        };
-        assert_eq!(
-            in_force,
-            [
-                // The genesis era has no era before it.
-                (0, era(0, None)),
-                (299, era(0, None)),
-                // Each era's first 10 slots.
-                (300, era(1, Some(0))),
-                (309, era(1, Some(0))),
-                (310, era(1, None)),
-                (400, era(2, Some(1))),
-                // Era 2 ends within its transition period: the next era retires
-                // era 2, never era 1.
-                (402, era(2, Some(1))),
-                (403, era(3, Some(2))),
-                (412, era(3, Some(2))),
-                (413, era(3, None)),
-            ]
-        );
     }
 
     #[test]

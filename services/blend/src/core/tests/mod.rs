@@ -2151,7 +2151,6 @@ async fn test_initialize_runs_the_epoch_under_the_settings_of_its_era() {
         block_version: BlockVersion::V1,
         slot_duration: Duration::from_secs(1),
         epoch_length_in_slots: 100.try_into().unwrap(),
-        transition_slots: 0,
         parameters: settings,
     };
     // Era 1 starts at epoch 1.

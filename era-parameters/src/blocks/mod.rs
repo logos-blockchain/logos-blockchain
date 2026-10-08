@@ -1,9 +1,8 @@
 //! The blocks section of an era's parameters: the layout of the era's blocks.
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
+use lb_cryptarchia_engine::era::BlockVersion;
 use serde::{Deserialize, Serialize};
-
-use crate::{Section, SectionParameters};
 
 /// The blocks section, in the version of the block layout the era runs.
 /// Version 1 has no parameters of its own.
@@ -15,15 +14,24 @@ pub enum BlocksParameters {
     V1,
 }
 
-impl SectionParameters for BlocksParameters {
-    const SECTION: Section = Section::Blocks;
-
-    fn version(&self) -> u16 {
+impl BlocksParameters {
+    /// The section's version, as written ahead of its layout.
+    #[must_use]
+    pub const fn version(&self) -> u16 {
         match self {
             Self::V1 => 1,
         }
     }
+
+    /// The layout of the era's blocks.
+    #[must_use]
+    pub const fn block_version(self) -> BlockVersion {
+        match self {
+            Self::V1 => BlockVersion::V1,
+        }
+    }
 }
+
 
 /// The section's version, then its layout in that version, empty in version 1.
 impl BinaryEncode for BlocksParameters {

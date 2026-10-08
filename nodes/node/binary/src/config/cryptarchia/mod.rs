@@ -6,7 +6,7 @@ use lb_chain_network_service::network::adapters::libp2p::{
 use lb_core::block::genesis::GenesisBlock;
 use lb_cryptarchia_engine::era::EraSchedule;
 use lb_era_parameters::{
-    EraDefinition, EraParameters, blend::BlendParameters, cryptarchia::CryptarchiaParameters,
+    EraDefinition, EraParameters, blend::BlendParameters, cryptarchia::CryptarchiaParameters, v1,
     time::TimeParameters,
 };
 use lb_libp2p::PeerId;
@@ -137,12 +137,13 @@ impl ServiceConfig {
 /// section runs, with the Blend rewards the era's Blend and time sections
 /// imply.
 fn ledger_config(parameters: &EraParameters) -> lb_ledger::Config {
-    match (&parameters.cryptarchia, &parameters.blend, &parameters.time) {
-        (
-            CryptarchiaParameters::V1(cryptarchia),
-            BlendParameters::V1(blend),
-            TimeParameters::V1(time),
-        ) => lb_ledger::Config::V1(
+    match parameters {
+        EraParameters::V1(v1::Parameters {
+            cryptarchia: CryptarchiaParameters::V1(cryptarchia),
+            blend: BlendParameters::V1(blend),
+            time: TimeParameters::V1(time),
+            ..
+        }) => lb_ledger::Config::V1(
             cryptarchia.ledger_config(blend.rewards_params(cryptarchia, time)),
         ),
     }

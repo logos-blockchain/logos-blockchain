@@ -21,10 +21,11 @@ use lb_blend_service::{
 };
 use lb_cryptarchia_engine::era::EraSchedule;
 use lb_era_parameters::{
-    EraDefinition,
+    EraDefinition, EraParameters,
     blend::{BlendParameters, v1 as blend_v1},
     cryptarchia::{CryptarchiaParameters, v1 as cryptarchia_v1},
     time::{TimeParameters, v1 as time_v1},
+    v1,
 };
 use lb_services_utils::overwatch::RecoveryData;
 
@@ -95,20 +96,23 @@ fn era_settings(
     eras: &EraSchedule<EraDefinition>,
     receive_window: u32,
 ) -> Libp2pBlendSettings {
-    let parameters = &era.parameters;
-    match (&parameters.blend, &parameters.cryptarchia, &parameters.time) {
-        (
-            BlendParameters::V1(blend),
-            CryptarchiaParameters::V1(cryptarchia),
-            TimeParameters::V1(time),
-        ) => v1_settings(user, blend, cryptarchia, time, era, eras, receive_window),
+    match &era.parameters {
+        EraParameters::V1(v1::Parameters {
+            blend: BlendParameters::V1(blend),
+            cryptarchia: CryptarchiaParameters::V1(cryptarchia),
+            time: TimeParameters::V1(time),
+            ..
+        }) => v1_settings(user, blend, cryptarchia, time, era, eras, receive_window),
     }
 }
 
 /// The receive window a core connection needs while `era` is in force.
 fn era_receive_window(era: &EraDefinition) -> u32 {
-    match &era.parameters.blend {
-        BlendParameters::V1(blend) => connection_receive_window(
+    match &era.parameters {
+        EraParameters::V1(v1::Parameters {
+            blend: BlendParameters::V1(blend),
+            ..
+        }) => connection_receive_window(
             blend.connection_share_per_round(),
             blend.common.network_absorption_in_rounds,
             blend.common.num_blend_layers,

@@ -318,9 +318,9 @@ fn load_base_config(path: Option<&PathBuf>) -> Result<Value> {
 /// Load a genesis template, and assemble from it the deployment config the
 /// ceremony completes: the template's era definition becomes era zero.
 ///
-/// A template is the sections of an era's parameters, each tagged with its
-/// version, such as `blend: !V1`, so the template, not the tool, decides which
-/// version of each component the chain starts with.
+/// A template is an era's parameters tagged with their version, such as
+/// `!V1`, so the template, not the tool, decides which version the chain
+/// starts at.
 ///
 /// If `path` is `None`, returns the default deployment config, whose genesis
 /// block the ceremony replaces.
@@ -333,9 +333,9 @@ fn load_genesis_template(path: Option<&PathBuf>) -> Result<Value> {
         .with_context(|| format!("cannot read genesis template '{}'", path.display()))?;
     let era: Value = serde_yaml::from_str(&content)
         .with_context(|| format!("cannot parse YAML from '{}'", path.display()))?;
-    if !matches!(era, Value::Mapping(_)) {
+    if !matches!(era, Value::Tagged(_)) {
         bail!(
-            "genesis template '{}' must be the sections of an era's parameters, each tagged with its version, such as `blend: !V1`",
+            "genesis template '{}' must be tagged with the version of its parameters, such as `!V1`",
             path.display()
         );
     }

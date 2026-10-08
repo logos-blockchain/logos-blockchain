@@ -969,7 +969,6 @@ mod tests {
             slot_duration: Duration::from_secs(1),
             epoch_length_in_slots: NonZero::new(config.epoch_length())
                 .expect("an epoch has at least one slot"),
-            transition_slots: 0,
             parameters: config,
         };
         EraSchedule::new(

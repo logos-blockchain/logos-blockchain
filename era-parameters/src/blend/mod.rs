@@ -3,8 +3,6 @@
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 use serde::{Deserialize, Serialize};
 
-use crate::{Section, SectionParameters};
-
 pub mod v1;
 
 /// The Blend section, in the version of Blend the era runs.
@@ -15,15 +13,17 @@ pub enum BlendParameters {
     V1(v1::Settings),
 }
 
-impl SectionParameters for BlendParameters {
-    const SECTION: Section = Section::Blend;
-
-    fn version(&self) -> u16 {
+impl BlendParameters {
+    /// The section's version, as written ahead of its layout.
+    #[must_use]
+    pub const fn version(&self) -> u16 {
         match self {
             Self::V1(_) => 1,
         }
     }
+
 }
+
 
 /// The section's version, then its layout in that version.
 impl BinaryEncode for BlendParameters {

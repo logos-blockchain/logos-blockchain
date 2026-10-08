@@ -1754,7 +1754,6 @@ pub mod tests {
                 block_version: lb_cryptarchia_engine::era::BlockVersion::V1,
                 slot_duration: core::time::Duration::from_secs(1),
                 epoch_length_in_slots: NonZeroU64::new(1_000).unwrap(),
-                transition_slots: 0,
                 parameters: EraSettings {
                     slot_window: SLOT_WINDOW,
                     rewards_enabled: true,
@@ -2328,7 +2327,6 @@ pub mod tests {
             block_version: lb_cryptarchia_engine::era::BlockVersion::V1,
             slot_duration: core::time::Duration::from_secs(1),
             epoch_length_in_slots: NonZeroU64::new(1_000).unwrap(),
-            transition_slots: 0,
             parameters: EraSettings {
                 slot_window,
                 rewards_enabled: true,

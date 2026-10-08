@@ -44,7 +44,6 @@ pub(super) fn single_era() -> EraSchedules {
             block_version: BlockVersion::V1,
             slot_duration: core::time::Duration::from_secs(1),
             epoch_length_in_slots: core::num::NonZero::new(100).expect("an epoch has slots"),
-            transition_slots: 0,
             parameters: (),
         },
         EraEntriesAfterGenesis::empty(),

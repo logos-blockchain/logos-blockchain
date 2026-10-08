@@ -236,7 +236,6 @@ mod tests {
                 block_version: BlockVersion::V1,
                 slot_duration: Duration::from_secs(1),
                 epoch_length_in_slots: NonZero::new(3).unwrap(),
-                transition_slots: 0,
                 parameters: (),
             },
             EraEntriesAfterGenesis::empty(),

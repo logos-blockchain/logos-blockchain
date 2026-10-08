@@ -105,7 +105,6 @@ fn mock_pool_node_settings(
             block_version: BlockVersion::V1,
             slot_duration: Duration::from_secs(1),
             epoch_length_in_slots: 100.try_into().unwrap(),
-            transition_slots: 0,
             parameters: (),
         },
         EraEntriesAfterGenesis::empty(),

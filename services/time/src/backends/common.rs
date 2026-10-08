@@ -173,7 +173,6 @@ mod tests {
             block_version: BlockVersion::V1,
             slot_duration,
             epoch_length_in_slots: NonZero::new(epoch_length).unwrap(),
-            transition_slots: 0,
             parameters: (),
         }
     }

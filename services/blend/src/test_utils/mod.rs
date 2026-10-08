@@ -20,7 +20,6 @@ pub fn single_era<Settings>(settings: Settings) -> EraSchedule<Settings> {
             block_version: BlockVersion::V1,
             slot_duration: Duration::from_secs(1),
             epoch_length_in_slots: NonZero::new(100).expect("an epoch has slots"),
-            transition_slots: 0,
             parameters: settings,
         },
         EraEntriesAfterGenesis::empty(),
