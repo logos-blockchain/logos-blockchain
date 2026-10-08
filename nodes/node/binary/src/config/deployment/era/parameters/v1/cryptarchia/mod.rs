@@ -12,6 +12,8 @@ pub use lb_ledger::ConsensusExcludedKeys;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use serde::{Deserialize, Serialize};
 
+pub(crate) mod codec;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Settings {
     pub epoch_config: EpochConfig,

@@ -11,7 +11,7 @@ use lb_http_api_common::bodies::wallet::{
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::{
     Hashable as _,
-    config::{RunConfig, cryptarchia::deployment::EpochConfig},
+    config::{RunConfig, deployment::parameters::v1::cryptarchia::EpochConfig},
 };
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,

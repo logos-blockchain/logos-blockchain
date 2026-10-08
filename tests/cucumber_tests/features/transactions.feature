@@ -424,9 +424,9 @@ Feature: Transactions
     And I have a cluster with capacity of 3 nodes
     And no nodes are declared as blend providers
     And we use IBD peers
-    And I have deployment config override "eras.0.time.slot_duration" as "seconds(1)"
-    And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
-    And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
+    And I have deployment config override "eras.0.parameters.time.slot_duration" as "seconds(1)"
+    And I have deployment config override "eras.0.parameters.cryptarchia.slot_activation_coeff.numerator" as "1"
+    And I have deployment config override "eras.0.parameters.cryptarchia.slot_activation_coeff.denominator" as "2"
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -449,9 +449,9 @@ Feature: Transactions
     And I have a cluster with capacity of 2 nodes
     And no nodes are declared as blend providers
     And we use IBD peers
-    And I have deployment config override "eras.0.time.slot_duration" as "seconds(1)"
-    And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
-    And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
+    And I have deployment config override "eras.0.parameters.time.slot_duration" as "seconds(1)"
+    And I have deployment config override "eras.0.parameters.cryptarchia.slot_activation_coeff.numerator" as "1"
+    And I have deployment config override "eras.0.parameters.cryptarchia.slot_activation_coeff.denominator" as "2"
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   | NODE_4       |

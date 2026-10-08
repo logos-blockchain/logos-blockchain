@@ -451,7 +451,7 @@ fn get_at_path<'a>(current: &'a YamlValue, path: &[&str]) -> Option<&'a YamlValu
     let mut current = current;
 
     for segment in path {
-        current = match current {
+        current = match untagged(current) {
             YamlValue::Sequence(sequence) => sequence.get(segment.parse::<usize>().ok()?)?,
             YamlValue::Mapping(mapping) => mapping.get(mapping_key(mapping, segment))?,
             _ => return None,
@@ -472,12 +472,15 @@ fn set_at_path(
         return Ok(());
     }
 
+    // A tag, such as the version an era's parameters carry (`eras.0` is
+    // `!V1 {...}`), is stepped through: the segment reads the value it tags.
+    let current = untagged_mut(current);
     let segment = path[0];
     let rest = &path[1..];
     let is_last = rest.is_empty();
 
     // A number indexes a sequence, unless it lands on a mapping, where it can
-    // name an integer key (the first epoch in `eras.0.time`).
+    // name an integer key (the first epoch in `eras.0.parameters.time`).
     if let Ok(index) = segment.parse::<usize>()
         && !current.is_mapping()
     {
@@ -550,6 +553,23 @@ fn set_map(
     }
 
     set_at_path(child, rest, value, full_path)
+}
+
+/// The value `value` tags, through any number of tags, or `value` itself when
+/// it carries none.
+fn untagged(mut value: &YamlValue) -> &YamlValue {
+    while let YamlValue::Tagged(tagged) = value {
+        value = &tagged.value;
+    }
+    value
+}
+
+/// See [`untagged`].
+fn untagged_mut(mut value: &mut YamlValue) -> &mut YamlValue {
+    while let YamlValue::Tagged(tagged) = value {
+        value = &mut tagged.value;
+    }
+    value
 }
 
 /// The key `segment` names in `mapping`: the integer key it spells out when
@@ -762,11 +782,11 @@ mod tests {
             .security_param
             .get();
         let override_4 = ConfigOverride {
-            path: "eras.0.time.slot_duration".to_owned(),
+            path: "eras.0.parameters.time.slot_duration".to_owned(),
             value: serde_yaml::to_value(TimeDuration::new(1, 0)).expect("yaml value"),
         };
         let override_5 = ConfigOverride {
-            path: "eras.0.cryptarchia.security_param".to_owned(),
+            path: "eras.0.parameters.cryptarchia.security_param".to_owned(),
             value: serde_yaml::to_value(security_param + 1).expect("yaml value"),
         };
         assert!(apply_deployment_config_overrides(&mut config, &[override_4, override_5]).is_ok());
@@ -811,7 +831,7 @@ mod tests {
         set_deployment_config_override(
             &mut world,
             "test-step",
-            "eras.0.time.slot_duration",
+            "eras.0.parameters.time.slot_duration",
             "seconds(1)",
         )
         .expect("deployment duration override");

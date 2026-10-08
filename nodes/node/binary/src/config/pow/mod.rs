@@ -1,9 +1,11 @@
-use core::num::NonZeroU64;
-
+use lb_cryptarchia_engine::era::EraSchedule;
 use lb_pow_service::PoWServiceSettings;
 use lb_services_utils::overwatch::RecoveryData;
 
-use crate::config::pow::serde::Config;
+use crate::config::{
+    deployment::{EraDefinition, era::parameters::EraParameters},
+    pow::serde::Config,
+};
 
 pub mod serde;
 
@@ -12,23 +14,27 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
-    /// `slot_window` is the consensus acceptance window and `rewards_enabled`
-    /// whether the consensus distribution rate is non-zero, both sourced from
-    /// the cryptarchia deployment configuration so the mining service and the
-    /// ledger agree on a single value.
+    /// The settings of the PoW service in every era of `eras`. The slot window
+    /// is the era's consensus acceptance window, and rewards are enabled when
+    /// its distribution rate is not zero, so the mining service and the ledger
+    /// agree on both.
     #[must_use]
-    pub fn into_pow_service_settings(
+    pub fn into_pow_service_era_schedule(
         self,
         recovery_data: RecoveryData,
-        slot_window: NonZeroU64,
-        rewards_enabled: bool,
-    ) -> PoWServiceSettings {
-        PoWServiceSettings {
-            mining: self.user.mining,
-            auto_claim: self.user.auto_claim,
-            slot_window,
-            rewards_enabled,
-            recovery_data,
-        }
+        eras: &EraSchedule<EraDefinition>,
+    ) -> EraSchedule<PoWServiceSettings> {
+        eras.map(|era| {
+            let user_config = self.user.clone();
+            let EraParameters::V1(parameters) = &era.entry.parameters.parameters;
+            let reward = &parameters.cryptarchia.pow_config.reward;
+            PoWServiceSettings {
+                mining: user_config.mining,
+                auto_claim: user_config.auto_claim,
+                slot_window: reward.slot_window,
+                rewards_enabled: reward.rate_num > 0,
+                recovery_data: recovery_data.clone(),
+            }
+        })
     }
 }
