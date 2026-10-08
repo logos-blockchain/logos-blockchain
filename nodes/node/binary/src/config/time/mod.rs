@@ -1,11 +1,11 @@
 use lb_cryptarchia_engine::era::EraSchedule;
-use lb_era_parameters::EraDefinition;
 use lb_time_service::{
     TimeServiceSettings,
     backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings},
 };
 
 use crate::config::time::serde::Config;
+use crate::config::deployment::EraDefinition;
 
 pub mod serde;
 

@@ -4,7 +4,7 @@ use core::time::Duration;
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 
-use crate::time::v1::Settings;
+use crate::config::deployment::parameters::time::v1::Settings;
 
 impl BinaryEncode for Settings {
     fn encoded_length(&self) -> usize {

@@ -1,6 +1,6 @@
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 
-use crate::{EraParameters, v1};
+use crate::config::deployment::parameters::{EraParameters, v1};
 
 /// The version of the parameter set, then its layout in that version.
 impl BinaryEncode for EraParameters {

@@ -5,14 +5,17 @@ use lb_chain_network_service::network::adapters::libp2p::{
 };
 use lb_core::block::genesis::GenesisBlock;
 use lb_cryptarchia_engine::era::EraSchedule;
-use lb_era_parameters::{
-    EraDefinition, EraParameters, blend::BlendParameters, cryptarchia::CryptarchiaParameters, v1,
-    time::TimeParameters,
-};
 use lb_libp2p::PeerId;
 use lb_services_utils::overwatch::RecoveryData;
 
 use crate::config::cryptarchia::serde::Config;
+use crate::config::deployment::{
+    EraDefinition,
+    parameters::{
+        EraParameters, blend::BlendParameters, cryptarchia::CryptarchiaParameters,
+        time::TimeParameters, v1,
+    },
+};
 
 pub mod serde;
 

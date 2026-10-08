@@ -20,16 +20,19 @@ use lb_blend_service::{
     settings::{CommonSettings, CoreSettings, EdgeSettings, Settings, TimingSettings},
 };
 use lb_cryptarchia_engine::era::EraSchedule;
-use lb_era_parameters::{
-    EraDefinition, EraParameters,
-    blend::{BlendParameters, v1 as blend_v1},
-    cryptarchia::{CryptarchiaParameters, v1 as cryptarchia_v1},
-    time::{TimeParameters, v1 as time_v1},
-    v1,
-};
 use lb_services_utils::overwatch::RecoveryData;
 
 use crate::config::blend::serde::Config;
+use crate::config::deployment::{
+    EraDefinition,
+    parameters::{
+        EraParameters,
+        blend::{BlendParameters, v1 as blend_v1},
+        cryptarchia::{CryptarchiaParameters, v1 as cryptarchia_v1},
+        time::{TimeParameters, v1 as time_v1},
+        v1,
+    },
+};
 
 pub mod serde;
 

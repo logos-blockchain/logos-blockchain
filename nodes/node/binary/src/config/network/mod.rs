@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use lb_era_parameters::ProtocolNames;
 use lb_libp2p::{ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig};
 use lb_network_service::{backends::libp2p::config::Libp2pConfig, config::NetworkConfig};
 
 use crate::config::network::serde::Config;
+use crate::config::deployment::ProtocolNames;
 
 pub mod serde;
 

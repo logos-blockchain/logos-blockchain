@@ -4,11 +4,11 @@
 use std::collections::BTreeMap;
 
 use lb_cryptarchia_engine::{Epoch, era::MAX_ERAS_AFTER_GENESIS};
-use lb_era_parameters::EraParameters;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 
 use super::{EraSchedule, EraScheduleError};
 use crate::config::DeploymentSettings;
+use crate::config::deployment::parameters::EraParameters;
 
 fn parameters() -> EraParameters {
     DeploymentSettings::default().eras.into_genesis()

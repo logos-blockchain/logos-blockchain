@@ -17,7 +17,6 @@ pub use lb_core::{
     header::HeaderId,
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };
-use lb_era_parameters::ProtocolNames;
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 use lb_storage_service::recovery::load_recovery_data;
 pub use lb_storage_service::{
@@ -56,6 +55,7 @@ use crate::{
     },
     generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
 };
+use crate::config::deployment::ProtocolNames;
 
 /// The data limit of every gossip topic of every era. Gossipsub fixes its
 /// topics' limits when the swarm is built, so the topics of every scheduled

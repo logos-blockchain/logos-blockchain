@@ -9,7 +9,7 @@ use lb_groth16::{Fr, ModulusShift};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
-use crate::cryptarchia::v1::{
+use crate::config::deployment::parameters::cryptarchia::v1::{
     BlendPoWConfig, EpochConfig, PoWConfig, RewardPoWConfig, SdpConfig, ServiceParameters, Settings,
 };
 

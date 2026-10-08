@@ -21,6 +21,7 @@ futures                          = { workspace = true }
 hex                              = { workspace = true }
 http                             = { workspace = true }
 lb-api-service                   = { workspace = true }
+lb-binary-codec                  = { workspace = true }
 lb-blend                         = { workspace = true }
 lb-blend-service                 = { workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
@@ -29,9 +30,9 @@ lb-chain-network-service         = { workspace = true }
 lb-chain-service                 = { features = ["openapi"], workspace = true }
 lb-core                          = { features = ["openapi"], workspace = true }
 lb-cryptarchia-engine            = { features = ["openapi"], workspace = true }
-lb-era-parameters                = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
+lb-key-management-system-keys    = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
 lb-libp2p                        = { workspace = true }
@@ -52,7 +53,9 @@ lb-version                       = { workspace = true }
 lb-wallet-service                = { workspace = true }
 libp2p                           = { features = ["autonat", "gossipsub", "identify", "kad", "macros"], workspace = true }
 num-bigint                       = { workspace = true }
+nutype                           = { features = ["serde"], workspace = true }
 overwatch                        = { workspace = true }
+percent-encoding                 = { workspace = true }
 rand                             = { workspace = true }
 serde                            = { workspace = true }
 serde_json                       = { workspace = true }

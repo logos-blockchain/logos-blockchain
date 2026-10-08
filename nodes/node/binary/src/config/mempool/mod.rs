@@ -5,7 +5,6 @@ use lb_core::mantle::{
     transactions::{hash::TxHash, states::Preverified},
 };
 use lb_cryptarchia_engine::era::EraSchedule;
-use lb_era_parameters::EraDefinition;
 use lb_services_utils::overwatch::RecoveryData;
 use lb_tx_service::{
     TxMempoolSettings, backend::MempoolSettings,
@@ -13,6 +12,7 @@ use lb_tx_service::{
 };
 
 use crate::config::mempool::serde::Config;
+use crate::config::deployment::EraDefinition;
 
 pub mod serde;
 

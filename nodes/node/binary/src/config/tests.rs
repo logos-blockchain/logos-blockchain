@@ -7,7 +7,6 @@ use std::{
 
 use bytes::Bytes;
 use lb_cryptarchia_engine::era::EraSchedule;
-use lb_era_parameters::EraDefinition;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_services_utils::overwatch::RecoveryData;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
@@ -45,6 +44,7 @@ use crate::{
         },
     },
 };
+use crate::config::deployment::EraDefinition;
 
 const BLEND_RECOVERY_MARKER: &[u8] = b"recovery/test/blend";
 const MEMPOOL_RECOVERY_MARKER: &[u8] = b"recovery/test/mempool";

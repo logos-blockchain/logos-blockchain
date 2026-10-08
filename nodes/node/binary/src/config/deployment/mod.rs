@@ -15,19 +15,22 @@ use lb_cryptarchia_engine::{
     Epoch, Slot,
     era::{EraEntriesAfterGenesis, EraEntry, ErasError},
 };
-use lb_era_parameters::{
-    EraDefinition, EraParameters, ProtocolNames,
-    blend::{BlendParameters, v1 as blend_v1},
-    cryptarchia::{CryptarchiaParameters, v1 as cryptarchia_v1},
-    time::{TimeParameters, v1 as time_v1},
-    v1,
-};
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
 
 pub mod era;
 use era::GENESIS_EPOCH;
-pub use era::{EraSchedule, EraScheduleError};
+pub use era::{EraDeclaration, EraSchedule, EraScheduleError};
+pub mod parameters;
+use parameters::{
+    EraParameters,
+    blend::{BlendParameters, v1 as blend_v1},
+    cryptarchia::{CryptarchiaParameters, v1 as cryptarchia_v1},
+    time::{TimeParameters, v1 as time_v1},
+    v1,
+};
+mod protocols;
+pub use protocols::ProtocolNames;
 
 pub const SERIALIZED_DEPLOYMENT: &[u8] = include_bytes!("settings.yaml");
 
@@ -111,8 +114,7 @@ impl DeploymentSettings {
             blend: BlendParameters::V1(blend),
             cryptarchia: CryptarchiaParameters::V1(cryptarchia),
             time: TimeParameters::V1(time),
-            ..
-        }) = self.eras.genesis();
+        }) = &self.eras.genesis().parameters;
         V1Sections {
             blend,
             cryptarchia,
@@ -126,8 +128,7 @@ impl DeploymentSettings {
             blend: BlendParameters::V1(blend),
             cryptarchia: CryptarchiaParameters::V1(cryptarchia),
             time: TimeParameters::V1(time),
-            ..
-        }) = self.eras.genesis_mut();
+        }) = &mut self.eras.genesis_mut().parameters;
         V1SectionsMut {
             blend,
             cryptarchia,
@@ -153,17 +154,17 @@ impl DeploymentSettings {
         let mut era_digests = Vec::with_capacity(self.eras.after_genesis().len() + 1);
         // Called in activation order: the fork digest of an era is over the
         // digests of the eras up to it.
-        let mut entry = |first_epoch: Epoch, parameters: &EraParameters| {
-            let digest = EraDigest::compute(first_epoch, parameters);
+        let mut entry = |first_epoch: Epoch, era: &EraDeclaration| {
+            let digest = EraDigest::compute(first_epoch, era);
             era_digests.push(digest);
             let fork_digest =
                 ForkDigest::compute(genesis_id, &chain_id, era_digests.iter().copied());
             EraEntry {
-                block_version: parameters.block_version(),
-                slot_duration: parameters.slot_duration(),
-                epoch_length_in_slots: parameters.epoch_length(),
+                block_version: era.block_version,
+                slot_duration: era.parameters.slot_duration(),
+                epoch_length_in_slots: era.parameters.epoch_length(),
                 parameters: EraDefinition {
-                    parameters: parameters.clone(),
+                    parameters: era.parameters.clone(),
                     digest,
                     fork_digest,
                     protocol_names: ProtocolNames::derive(&chain_id, fork_digest),
@@ -175,12 +176,7 @@ impl DeploymentSettings {
             .eras
             .after_genesis()
             .iter()
-            .map(|(&first_epoch, parameters)| {
-                (
-                    first_epoch,
-                    entry(Epoch::new(first_epoch.get()), parameters),
-                )
-            });
+            .map(|(&first_epoch, era)| (first_epoch, entry(Epoch::new(first_epoch.get()), era)));
         let after_genesis = EraEntriesAfterGenesis::try_from_iter(after_genesis)
             .expect("a schedule has at most `MAX_ERAS_AFTER_GENESIS` eras after genesis");
         lb_cryptarchia_engine::era::EraSchedule::new(
@@ -189,6 +185,18 @@ impl DeploymentSettings {
             after_genesis,
         )
     }
+}
+
+/// An era as the node runs it: its parameters, its digest, and the fork digest
+/// and protocol names in force while it is. Its block version is in its entry
+/// of the schedule.
+#[derive(Clone, Debug)]
+pub struct EraDefinition {
+    pub parameters: EraParameters,
+    pub digest: EraDigest,
+    /// The digest of the eras up to this one, in activation order.
+    pub fork_digest: ForkDigest,
+    pub protocol_names: ProtocolNames,
 }
 
 /// The sections of an era's parameters, each in its version 1.
@@ -224,7 +232,7 @@ fn fork_digest_at_era<'era, Eras>(
     era: Era,
 ) -> Option<ForkDigest>
 where
-    Eras: ExactSizeIterator<Item = (Epoch, &'era EraParameters)>,
+    Eras: ExactSizeIterator<Item = (Epoch, &'era EraDeclaration)>,
 {
     // Eras count from 0, so era `n` is in force once the first `n + 1` eras
     // have activated.
@@ -234,7 +242,7 @@ where
     }
     let era_digests = eras
         .take(activated_eras)
-        .map(|(first_epoch, parameters)| EraDigest::compute(first_epoch, parameters));
+        .map(|(first_epoch, era)| EraDigest::compute(first_epoch, era));
     Some(ForkDigest::compute(genesis_id, chain_id, era_digests))
 }
 
@@ -244,7 +252,7 @@ mod tests {
 
     use lb_core::era::Era;
     use lb_cryptarchia_engine::Epoch;
-    use lb_era_parameters::EraParameters;
+    use crate::config::deployment::EraDeclaration;
 
     use crate::config::{
         DeploymentSettings,
@@ -311,7 +319,7 @@ mod tests {
         let parameters = settings.eras.genesis();
         let one_era = [(Epoch::new(0), parameters)];
         let two_eras = [(Epoch::new(0), parameters), (Epoch::new(100), parameters)];
-        let fork_digest = |eras: &[(Epoch, &EraParameters)], era| {
+        let fork_digest = |eras: &[(Epoch, &EraDeclaration)], era| {
             fork_digest_at_era(genesis_id, &chain_id, eras.iter().copied(), era)
         };
         let second_era = Era::new(1);

@@ -1,9 +1,12 @@
 use lb_cryptarchia_engine::era::EraSchedule;
-use lb_era_parameters::{EraDefinition, EraParameters, cryptarchia::CryptarchiaParameters, v1};
 use lb_pow_service::{EraSettings, PoWServiceSettings};
 use lb_services_utils::overwatch::RecoveryData;
 
 use crate::config::pow::serde::Config;
+use crate::config::deployment::{
+    EraDefinition,
+    parameters::{EraParameters, cryptarchia::CryptarchiaParameters, v1},
+};
 
 pub mod serde;
 

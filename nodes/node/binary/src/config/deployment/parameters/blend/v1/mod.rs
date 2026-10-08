@@ -8,7 +8,7 @@ use lb_utils::math::PositiveF64;
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
 
-use crate::{
+use crate::config::deployment::parameters::{
     cryptarchia::v1::Settings as CryptarchiaDeploymentSettings,
     time::v1::Settings as TimeDeploymentSettings,
 };
