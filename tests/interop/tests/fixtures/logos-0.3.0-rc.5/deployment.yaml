@@ -1,0 +1,112 @@
+blend:
+  common:
+    num_blend_layers: 3
+    minimum_network_size: 2
+    protocol_name: /blend/integration-tests
+    network_absorption_in_rounds: 2
+    data_replication_factor: 0
+  core:
+    scheduler:
+      cover:
+        message_frequency_per_round: 1.0
+      delayer:
+        maximum_release_delay_in_rounds: 3
+    target_peering_degree: 4
+    verification_rate_per_second: 156
+    edge_node_send_deadline_in_rounds: 1
+    core_handshake_deadline_in_rounds: 2
+    activity_threshold_sensitivity: 1
+network:
+  kademlia_protocol_name: /integration/logos-blockchain/kad/1.0.0
+  identify_protocol_name: /integration/logos-blockchain/identify/1.0.0
+  chain_sync_protocol_name: /integration/logos-blockchain/chainsync/1.0.0
+cryptarchia:
+  epoch_config:
+    epoch_stake_distribution_stabilization: 3
+    epoch_period_nonce_buffer: 3
+    epoch_period_nonce_stabilization: 4
+  security_param: 20
+  slot_activation_coeff:
+    numerator: 1
+    denominator: 10
+  learning_rate: 0.1
+  uncle_reference_window_in_block: 12
+  sdp_config:
+    service_params:
+      BN:
+        inactivity_period: 2
+        epoch: 0
+    min_stake:
+      threshold: 1
+      timestamp: 0
+  gossipsub_protocol: /integration/logos-blockchain/cryptarchia/proto/1.0.0
+  genesis_block:
+    header:
+      version: Bedrock
+      parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
+      slot: 0
+      body_root: 25f306e4c4d367abfb871237c5e6912f4f94a80e5c241dcd909dfabd8c457108
+      proof_of_leadership:
+        proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+        entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
+        leader_key: '0000000000000000000000000000000000000000000000000000000000000000'
+        voucher_cm: '0000000000000000000000000000000000000000000000000000000000000000'
+    signature: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+    uncle_headers: []
+    transactions:
+    - mantle_tx:
+        ops:
+        - opcode: 0
+          payload:
+            inputs: []
+            outputs:
+            - value: 100000
+              pk: b082ee290180aa6bf7ddfa5ddddb7565cabf054274fdb81ed20746e30b53c80a
+            - value: 1
+              pk: 8f186a57113b222811df7c74684f7ae88bea8962a38793094dc46f07b5624c0e
+            - value: 10000
+              pk: 7aac37c889a3961fd257bd3c976114bca7a0b18bc4e3ccae17b14fde5a508522
+            - value: 100000
+              pk: 3114bb5e4d81f2be2984e2f5f565a032d70f660b46c149a7fa736db72505100a
+            - value: 1
+              pk: 89d53ab6b10e0d1eae226777394ae539391eee7f40abb324840e3459e4c1ac07
+            - value: 10000
+              pk: 0be5ea1a27ed7ab94bea054ecc01090f901bb3975b2fd8efbb2a229d47abf822
+        - opcode: 17
+          payload:
+            channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
+            inscription: 4c70726f636573735f73746172745f6e6f6e63653d313864613436363765336638623661382d30303030353161322c20746573745f656e74726f70793d393436373664346239366138343164635ac3bd6a0000000000000000000000000000000000000000000000000000000000000000
+            parent: '0000000000000000000000000000000000000000000000000000000000000000'
+            signer: '0000000000000000000000000000000000000000000000000000000000000000'
+      ops_proofs:
+      - !ZkSig
+        pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+        pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+        pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+      - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+  faucet_pk: null
+  pow_config:
+    blend:
+      base_difficulty: 19
+      target_transactions_per_block: 512
+      max_step: 2
+      damping_num: 1
+      damping_den_offset: 1
+    reward:
+      reward_pool_genesis: 1000000000
+      epoch_reward_genesis: 1000000
+      minimum_difficulty: 19
+      ema_smoothing_factor: 9
+      ema_smoothing_precision: 10
+      target_claims_per_block: 100
+      rate_num: 0
+      rate_den: 1
+      target_claim_per_block: 1
+      pow_share: 10
+      share_den: 100
+      slot_window: 100
+time:
+  slot_duration: '1.000000000'
+mempool:
+  pubsub_topic: mantle_e2e_tests
+  tx_ttl: '86400.000000000'

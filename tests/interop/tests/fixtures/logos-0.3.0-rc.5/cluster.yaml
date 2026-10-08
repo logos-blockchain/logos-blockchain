@@ -1,0 +1,8 @@
+# Native configuration for logos-blockchain-node 0.3.0-rc.5 (2c652646).
+# Two funded leaders, no Blend providers or scenario wallets.
+# Runtime ports, peers and state paths are supplied by TF through the node CLI.
+deployment: deployment.yaml
+nodes:
+  - node-1.yaml
+  - node-2.yaml
+slots_per_epoch: 2000

@@ -15,17 +15,28 @@ use testing_framework_core::scenario::{
 };
 use tokio::time::{sleep, timeout};
 
+mod saved_logos;
+
+use saved_logos::{SavedDeployment, SavedLogosEnv};
+
 /// Check both Nimbos peers from Logos, then stop one and check the survivor.
 ///
 /// Set `NIMBOS_NODE_BIN` and `NIMBOS_CIRCUITS_DIR`. Select Logos using
 /// `LOGOS_BLOCKCHAIN_NODE_BIN` or `LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL`; the
 /// existing binary provider downloads and extracts release archives.
-/// The current checkout generates configuration, so select a compatible Logos
-/// binary. Nimbos preparation rejects settings it cannot represent faithfully.
+/// To use saved configuration with a matching Logos binary, also set
+/// `MIXED_PREPARED_CONFIG` to the bundle's `cluster.yaml`:
 ///
 /// ```text
-/// cargo test -p blockchain-test-interop --test logos_nimbos_mixed -- --ignored
+/// MIXED_PREPARED_CONFIG="$PWD/tests/interop/tests/fixtures/logos-0.3.0-rc.5/cluster.yaml" \
+/// cargo test -p blockchain-test-interop \
+///   --test logos_nimbos_mixed -- --ignored
 /// ```
+///
+/// Without that setting, the current checkout generates the deployment.
+/// Both paths give Nimbos the same network settings as Logos; the Nimbos
+/// adapter must be able to represent them faithfully. Loading a bundle does not
+/// bypass genesis or protocol compatibility checks.
 #[tokio::test]
 #[ignore = "requires a Logos binary path or release URL, NIMBOS_NODE_BIN and NIMBOS_CIRCUITS_DIR"]
 async fn nimbos_nodes_connect_to_logos_nodes() -> Result<(), DynError> {
@@ -39,6 +50,14 @@ async fn nimbos_nodes_connect_to_logos_nodes() -> Result<(), DynError> {
     .any(|name| env::var_os(name).is_some_and(|value| !value.is_empty()));
     if !binary_selected {
         return Err("set LOGOS_BLOCKCHAIN_NODE_BIN or LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL".into());
+    }
+
+    if let Some(path) = env::var_os("MIXED_PREPARED_CONFIG") {
+        let saved = SavedDeployment::load(&PathBuf::from(path), 2)?;
+        let shared = saved.shared_deployment().clone();
+        let logos = SavedLogosEnv::prepare_app(saved).await?;
+
+        return check_mixed_cluster(logos, shared).await;
     }
 
     let dir = tempfile::tempdir()?;
@@ -105,7 +124,7 @@ where
     Ok(())
 }
 
-/// Prepare both child deployments from one generated network
+/// Prepare both child deployments from one generated or saved network
 /// definition.
 ///
 /// Each adapter uses the shared genesis and chain parameters to produce its

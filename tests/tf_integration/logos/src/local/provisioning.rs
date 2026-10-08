@@ -252,31 +252,47 @@ async fn build_node_launch_spec(
     user_yaml: String,
     deployment_yaml: String,
 ) -> Result<LaunchSpec, DynError> {
+    let node_binary_profile =
+        NodeBinaryProfile::from_string(&env::var("NODE_BINARY_PROFILE").unwrap_or_default());
+    let provider = node_binary_provider(&node_binary_profile)?;
+    let current = if node_binary_profile == NodeBinaryProfile::TokioConsole {
+        replace_default_env("RUSTFLAGS", &rustflags_with_tokio_unstable())
+    } else {
+        None
+    };
+    let resolve_result = provider.resolve().await;
+    if node_binary_profile == NodeBinaryProfile::TokioConsole {
+        if let Some(val) = current {
+            let _unused = replace_default_env("RUSTFLAGS", &val);
+        } else {
+            remove_default_env("RUSTFLAGS");
+        }
+    }
+
+    Ok(node_launch_spec(
+        resolve_result?,
+        dir,
+        user_yaml,
+        deployment_yaml,
+    ))
+}
+
+/// Creates a native Logos launch from an already selected binary and config
+/// files.
+#[must_use]
+pub fn node_launch_spec(
+    binary: PathBuf,
+    dir: &Path,
+    user_yaml: String,
+    deployment_yaml: String,
+) -> LaunchSpec {
     let config_path = dir.join(USER_CONFIG_FILE);
     let deployment_path = dir.join(DEPLOYMENT_CONFIG_FILE);
     let time_backend =
         env::var("LOGOS_BLOCKCHAIN_TIME_BACKEND").unwrap_or_else(|_| "monotonic".to_owned());
-    let node_binary_profile =
-        NodeBinaryProfile::from_string(&env::var("NODE_BINARY_PROFILE").unwrap_or_default());
 
-    Ok(LaunchSpec {
-        binary: {
-            let provider = node_binary_provider(&node_binary_profile)?;
-            let current = if node_binary_profile == NodeBinaryProfile::TokioConsole {
-                replace_default_env("RUSTFLAGS", &rustflags_with_tokio_unstable())
-            } else {
-                None
-            };
-            let resolve_result = provider.resolve().await;
-            if node_binary_profile == NodeBinaryProfile::TokioConsole {
-                if let Some(val) = current {
-                    let _unused = replace_default_env("RUSTFLAGS", &val);
-                } else {
-                    remove_default_env("RUSTFLAGS");
-                }
-            }
-            resolve_result?
-        },
+    LaunchSpec {
+        binary,
         files: vec![
             launch_file(USER_CONFIG_FILE, user_yaml.into_bytes()),
             launch_file(DEPLOYMENT_CONFIG_FILE, deployment_yaml.into_bytes()),
@@ -290,7 +306,7 @@ async fn build_node_launch_spec(
             "LOGOS_BLOCKCHAIN_TIME_BACKEND",
             time_backend,
         )],
-    })
+    }
 }
 
 fn rustflags_with_tokio_unstable() -> String {
@@ -362,7 +378,9 @@ fn validate_node_binary_selection(
     Ok(())
 }
 
-fn release_binary_provider() -> DownloadBinaryProvider {
+/// Downloads and extracts the release selected by the Logos download
+/// environment variables.
+pub fn release_binary_provider() -> DownloadBinaryProvider {
     DownloadBinaryProvider {
         url: DownloadUrl::Env(LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL.to_owned()),
         sha256: Some(DownloadChecksum::Env(

@@ -21,7 +21,12 @@ testing-framework-core = { workspace = true }
 tokio                  = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
+anyhow                         = { workspace = true }
+hex                            = { workspace = true }
+serde                          = { features = ["derive"], workspace = true }
+serde_yaml                     = { workspace = true }
+tempfile                       = { workspace = true }
+testing-framework-runner-local = { workspace = true }
 
 [[bin]]
 name = "cucumber_nimbos"
