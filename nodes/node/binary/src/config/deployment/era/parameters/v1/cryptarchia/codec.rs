@@ -176,7 +176,7 @@ impl BinaryEncode for BlendPoWConfig {
     }
 }
 
-pub(crate) fn fixture_settings() -> Settings {
+pub fn fixture_settings() -> Settings {
     Settings {
         epoch_config: fixture_epoch_config(),
         security_param: NonZeroU32::new(15).unwrap(),
@@ -244,7 +244,7 @@ const fn fixture_blend_pow_config() -> BlendPoWConfig {
     }
 }
 
-pub(crate) const SETTINGS_HEX: &str = "
+pub const SETTINGS_HEX: &str = "
     0c 0d 0e 0f000000 10000000 11000000 0000000000003240 13000000 01000000 00 14000000
     15000000 1600000000000000 1700000000000000 01
     1800000000000000000000000000000000000000000000000000000000000000 19000000 1a00000000000000

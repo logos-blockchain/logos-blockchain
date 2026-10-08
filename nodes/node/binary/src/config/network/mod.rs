@@ -23,6 +23,7 @@ pub struct ServiceConfig {
 impl ServiceConfig {
     /// The settings of the network service in every era of `eras`, on the chain
     /// `chain_id`: each with its era's chain sync protocol and topics.
+    #[must_use]
     pub fn into_network_service_era_schedule(
         self,
         chain_id: &ChainId,

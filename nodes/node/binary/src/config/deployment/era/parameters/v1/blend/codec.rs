@@ -148,7 +148,7 @@ impl BinaryEncode for MessageDelayerSettings {
     }
 }
 
-pub(crate) fn fixture_settings() -> Settings {
+pub fn fixture_settings() -> Settings {
     Settings {
         common: fixture_common_settings(),
         core: fixture_core_settings(),
@@ -198,7 +198,7 @@ const fn message_delayer_settings() -> MessageDelayerSettings {
     }
 }
 
-pub(crate) const SETTINGS_HEX: &str = "
+pub const SETTINGS_HEX: &str = "
     0100000000000000 0200000000000000 0300000000000000 0400000000000000 0000000000001440
     0600000000000000 07000000 08000000 0900000000000000 0a000000000000000000000000000000
     0b00000000000000

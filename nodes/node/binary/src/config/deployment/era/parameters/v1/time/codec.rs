@@ -20,7 +20,7 @@ impl BinaryEncode for Settings {
     }
 }
 
-pub(crate) const fn fixture_settings() -> Settings {
+pub const fn fixture_settings() -> Settings {
     Settings {
         slot_duration: Duration::from_secs(42),
     }

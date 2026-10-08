@@ -26,6 +26,7 @@ impl ServiceConfig {
     /// The settings of the mempool in every era of `eras`, each on its era's
     /// transaction topic.
     #[must_use]
+    #[expect(clippy::type_complexity, reason = "TODO: Address this later.")]
     pub fn into_mempool_service_era_schedule(
         self,
         eras: &EraSchedule<EraDefinition>,

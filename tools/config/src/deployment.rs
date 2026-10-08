@@ -9,20 +9,22 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Epoch, era::BlockVersion};
 use lb_groth16::ModulusShift;
-use lb_node::config::{
-    deployment::parameters::v1::blend::{
-        CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
-        CoverTrafficSettings, MessageDelayerSettings, MinimumNetworkSize, SchedulerSettings,
-        Settings as BlendDeploymentSettings,
+use lb_node::config::deployment::{
+    DeploymentSettings, EraDeclaration, EraDeclarations,
+    era::parameters::{
+        EraParameters, v1,
+        v1::{
+            blend::{
+                CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
+                CoverTrafficSettings, MessageDelayerSettings, MinimumNetworkSize,
+                SchedulerSettings, Settings as BlendDeploymentSettings,
+            },
+            cryptarchia::{
+                EpochConfig, ServiceParameters, Settings as CryptarchiaDeploymentSettings,
+            },
+            time::Settings as TimeDeploymentSettings,
+        },
     },
-    deployment::parameters::v1::cryptarchia::{
-        EpochConfig, ServiceParameters, Settings as CryptarchiaDeploymentSettings,
-    },
-    deployment::{
-        DeploymentSettings, EraDeclaration, EraDeclarations,
-        parameters::{EraParameters, v1},
-    },
-    deployment::parameters::v1::time::Settings as TimeDeploymentSettings,
 };
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
@@ -91,7 +93,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
         .map_or(DEFAULT_SLOT_TIME_IN_SECS, |s| s.parse::<u64>().unwrap());
 
     DeploymentSettings::new(
-        EraDeclarations::new_genesis(EraDeclaration {
+        &EraDeclarations::new_genesis(EraDeclaration {
             block_version: BlockVersion::V1,
             parameters: EraParameters::V1(v1::Parameters {
                 blend: BlendDeploymentSettings {
@@ -158,7 +160,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                         )
                         .unwrap(),
                     },
-                    sdp_config: lb_node::config::deployment::parameters::v1::cryptarchia::SdpConfig {
+                    sdp_config: v1::cryptarchia::SdpConfig {
                         service_params: (
                             ServiceType::BlendNetwork,
                             ServiceParameters {
@@ -174,8 +176,8 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     },
                     learning_rate: LEARNING_RATE.try_into().expect("1 > 0"),
                     faucet_pk: None,
-                    pow_config: lb_node::config::deployment::parameters::v1::cryptarchia::PoWConfig {
-                        blend: lb_node::config::deployment::parameters::v1::cryptarchia::BlendPoWConfig {
+                    pow_config: v1::cryptarchia::PoWConfig {
+                        blend: v1::cryptarchia::BlendPoWConfig {
                             base_difficulty: ModulusShift::new::<BLEND_POW_BASE_DIFFICULTY_EXPONENT>(
                             ),
                             target_transactions_per_block: NonZero::new(
@@ -186,7 +188,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                             damping_num: NonZero::new(BLEND_POW_DAMPING_NUM).unwrap(),
                             damping_den_offset: BLEND_POW_DAMPING_DEN_OFFSET,
                         },
-                        reward: lb_node::config::deployment::parameters::v1::cryptarchia::RewardPoWConfig {
+                        reward: v1::cryptarchia::RewardPoWConfig {
                             reward_pool_genesis: REWARD_POW_POOL_GENESIS,
                             epoch_reward_genesis: REWARD_POW_EPOCH_REWARD_GENESIS,
                             minimum_difficulty: ModulusShift::new::<
@@ -215,5 +217,4 @@ pub fn e2e_deployment_settings_with_genesis_block(
         }),
         GenesisBlock::genesis(genesis_tx.clone()),
     )
-    .expect("a schedule of the genesis era alone always resolves")
 }

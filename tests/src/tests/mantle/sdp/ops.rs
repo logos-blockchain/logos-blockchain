@@ -24,7 +24,7 @@ use lb_core::{
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_node::config::{
-    RunConfig, deployment::parameters::v1::blend::MinimumNetworkSize, deployment::parameters::v1::cryptarchia::EpochConfig,
+    RunConfig, deployment::era::parameters::v1::blend::MinimumNetworkSize, deployment::era::parameters::v1::cryptarchia::EpochConfig,
 };
 use lb_testing_framework::{
     DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,
@@ -407,71 +407,40 @@ async fn start_sdp_manual_cluster(
 
 fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
     config
-        .deployment
-        .genesis_era_parameters_mut()
-        .time
-        .slot_duration = Duration::from_secs(1);
-    config
         .user
         .cryptarchia
         .service
         .bootstrap
         .prolonged_bootstrap_period = Duration::ZERO;
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .security_param = NonZero::new(2).unwrap();
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().unwrap());
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .epoch_config = EpochConfig {
-        epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
-        epoch_period_nonce_buffer: 1.try_into().unwrap(),
-        epoch_period_nonce_stabilization: 1.try_into().unwrap(),
-    };
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .learning_rate = 0.5.try_into().unwrap();
+    config.deployment.update_genesis_era_parameters(|parameters| {
+        parameters.time.slot_duration = Duration::from_secs(1);
+        parameters.cryptarchia.security_param = NonZero::new(2).unwrap();
+        parameters.cryptarchia.slot_activation_coeff =
+            NonNegativeRatio::new(1, 2.try_into().unwrap());
+        parameters.cryptarchia.epoch_config = EpochConfig {
+            epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+            epoch_period_nonce_buffer: 1.try_into().unwrap(),
+            epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+        };
+        parameters.cryptarchia.learning_rate = 0.5.try_into().unwrap();
 
-    let service_params = config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .sdp_config
-        .service_params
-        .get_mut(&ServiceType::BlendNetwork)
-        .expect("blend network params should exist");
-    service_params.inactivity_period = 10.try_into().unwrap();
+        let service_params = parameters
+            .cryptarchia
+            .sdp_config
+            .service_params
+            .get_mut(&ServiceType::BlendNetwork)
+            .expect("blend network params should exist");
+        service_params.inactivity_period = 10.try_into().unwrap();
 
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .blend
-        .common
-        .num_blend_layers = 1.try_into().unwrap();
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .blend
-        .common
-        .minimum_network_size = MinimumNetworkSize::try_new(2).unwrap();
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .blend
-        .core
-        .scheduler
-        .delayer
-        .maximum_release_delay_in_rounds = 1.try_into().unwrap();
+        parameters.blend.common.num_blend_layers = 1.try_into().unwrap();
+        parameters.blend.common.minimum_network_size = MinimumNetworkSize::try_new(2).unwrap();
+        parameters
+            .blend
+            .core
+            .scheduler
+            .delayer
+            .maximum_release_delay_in_rounds = 1.try_into().unwrap();
+    });
 
     config
 }

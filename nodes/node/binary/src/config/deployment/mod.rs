@@ -11,7 +11,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{
     Epoch, Slot,
-    era::{EraEntriesAfterGenesis, EraEntry, ErasError},
+    era::{EraEntriesAfterGenesis, EraEntry},
 };
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
@@ -42,7 +42,7 @@ struct EraDefinitions {
 /// block, and the eras are resolved as it is read: a schedule that does not
 /// resolve is refused at load.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(try_from = "EraDefinitions", into = "EraDefinitions")]
+#[serde(from = "EraDefinitions", into = "EraDefinitions")]
 pub struct DeploymentSettings {
     eras: EraSchedule,
     genesis_block: GenesisBlock,
@@ -56,7 +56,7 @@ impl DeploymentSettings {
     /// # Errors
     ///
     /// If an era starts beyond the slots or the time this node can represent.
-    pub fn new(eras: EraDeclarations, genesis_block: GenesisBlock) -> Result<Self, ErasError> {
+    pub fn new(eras: &EraDeclarations, genesis_block: GenesisBlock) -> Self {
         let genesis_inscription = genesis_block.genesis_tx().cryptarchia_parameter();
         let (genesis_id, chain_id, genesis_time) = (
             genesis_block.header().id(),
@@ -88,11 +88,12 @@ impl DeploymentSettings {
             genesis_time.into(),
             genesis,
             EraEntriesAfterGenesis::empty(),
-        )?;
-        Ok(Self {
+        )
+        .unwrap();
+        Self {
             eras,
             genesis_block,
-        })
+        }
     }
 
     /// The eras of this deployment's chain, resolved.
@@ -172,8 +173,7 @@ impl DeploymentSettings {
         } = EraDefinitions::from(self.clone());
         let EraParameters::V1(parameters) = &mut eras.genesis_era_mut().parameters;
         update(parameters);
-        *self = Self::new(eras, genesis_block)
-            .expect("a schedule of the genesis era alone always resolves");
+        *self = Self::new(&eras, genesis_block);
     }
 
     #[must_use]
@@ -182,16 +182,14 @@ impl DeploymentSettings {
     }
 }
 
-impl TryFrom<EraDefinitions> for DeploymentSettings {
-    type Error = ErasError;
-
-    fn try_from(
+impl From<EraDefinitions> for DeploymentSettings {
+    fn from(
         EraDefinitions {
             eras,
             genesis_block,
         }: EraDefinitions,
-    ) -> Result<Self, Self::Error> {
-        Self::new(eras, genesis_block)
+    ) -> Self {
+        Self::new(&eras, genesis_block)
     }
 }
 
