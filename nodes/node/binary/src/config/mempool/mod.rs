@@ -33,7 +33,7 @@ impl ServiceConfig {
     pub fn into_mempool_service_era_schedule(
         self,
         eras: &EraSchedule<EraDefinition>,
-        recovery_data: RecoveryData,
+        recovery_data: &RecoveryData,
     ) -> EraSchedule<
         TxMempoolSettings<
             MempoolSettings,
@@ -59,6 +59,7 @@ impl ServiceConfig {
                     .seen_items_subscription_channel_size
                     .try_into()
                     .unwrap(),
+                // TODO: This will go once we update the mempool service to support era schedules.
                 recovery_data: recovery_data.clone(),
             }
         })

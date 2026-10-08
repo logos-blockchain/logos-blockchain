@@ -162,7 +162,7 @@ pub fn run_node_from_config(
     let blend_settings = BlendConfig {
         user: config.user.blend,
     }
-    .into_blend_services_era_schedule(recovery_data.clone(), eras);
+    .into_blend_services_era_schedule(&recovery_data, eras);
     let (blend_config, blend_core_config, blend_edge_config) =
         genesis_era_settings(&blend_settings);
 
@@ -178,7 +178,7 @@ pub fn run_node_from_config(
     .into_cryptarchia_services_era_schedule(
         eras,
         config.deployment.genesis_block(),
-        recovery_data.clone(),
+        &recovery_data,
     );
     let (chain_service_config, chain_network_config, chain_leader_config) =
         genesis_era_settings(&cryptarchia_settings);
@@ -186,7 +186,7 @@ pub fn run_node_from_config(
     let mempool_settings = MempoolConfig {
         user: config.user.mempool,
     }
-    .into_mempool_service_era_schedule(eras, recovery_data.clone());
+    .into_mempool_service_era_schedule(eras, &recovery_data);
     let mempool_service_config = genesis_era_settings(&mempool_settings);
 
     let network_settings = NetworkConfig {
@@ -213,7 +213,7 @@ pub fn run_node_from_config(
     let pow_settings = PoWConfig {
         user: config.user.pow,
     }
-    .into_pow_service_era_schedule(recovery_data, eras);
+    .into_pow_service_era_schedule(&recovery_data, eras);
     let pow_config = genesis_era_settings(&pow_settings);
 
     let tracing_config = config::tracing::ServiceConfig {

@@ -37,7 +37,7 @@ impl ServiceConfig {
         self,
         eras: &EraSchedule<EraDefinition>,
         genesis_block: &GenesisBlock,
-        recovery_data: RecoveryData,
+        recovery_data: &RecoveryData,
     ) -> EraSchedule<CryptarchiaServicesSettings> {
         eras.map(|era| {
             let user = self.user.clone();
@@ -110,6 +110,8 @@ impl ServiceConfig {
                     },
                 },
                 config: ledger_config.clone(),
+                // TODO: This will go once we update the cryptarchia service group to support era
+                // schedules.
                 recovery_data: recovery_data.clone(),
                 starting_state: genesis_block.clone().into(),
                 sync: lb_chain_service::SyncConfig {

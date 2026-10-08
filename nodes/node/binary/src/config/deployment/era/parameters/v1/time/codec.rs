@@ -26,6 +26,6 @@ pub const fn fixture_settings() -> Settings {
     }
 }
 
-pub(crate) const SETTINGS_HEX: &str = "2a00000000000000 00000000";
+pub const SETTINGS_HEX: &str = "2a00000000000000 00000000";
 
 codec_fixtures!(Settings, encode_only, fixture_settings() => SETTINGS_HEX);
