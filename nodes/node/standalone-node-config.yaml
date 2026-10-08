@@ -45,14 +45,12 @@ network:
         opportunistic_graft_ticks: 60
         opportunistic_graft_peers: 2
         gossip_retransimission: 3
-        max_messages_per_rpc: null
-        max_ihave_length: 5000
-        max_ihave_messages: 10
+        max_publish_messages: 5000
+        max_control_messages_sent: 5000
+        max_control_message_size: 16384
+        max_ihave_messages_heartbeat: 10
         iwant_followup_time:
           secs: 3
-          nanos: 0
-        published_message_ids_cache_time:
-          secs: 10
           nanos: 0
       kademlia:
         query_timeout_secs: null
