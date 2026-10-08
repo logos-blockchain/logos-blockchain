@@ -1,6 +1,6 @@
 eras:
-  0: !V1
-    blend:
+  0:
+    blend: !V1
       common:
         num_blend_layers: 1
         minimum_network_size: 2
@@ -17,7 +17,8 @@ eras:
         edge_node_send_deadline_in_rounds: 1
         core_handshake_deadline_in_rounds: 2
         activity_threshold_sensitivity: 1
-    cryptarchia:
+    blocks: V1
+    cryptarchia: !V1
       epoch_config:
         epoch_stake_distribution_stabilization: 3
         epoch_period_nonce_buffer: 3
@@ -87,7 +88,7 @@ eras:
           threshold: 1
           timestamp: 0
       faucet_pk: d2a1977db29daf6691f7ce897fe7b666ec964b1bf027814cacd1a2c141b12f10
-    time:
+    time: !V1
       slot_duration: '1.000000000'
 genesis_block: !V1
   header:

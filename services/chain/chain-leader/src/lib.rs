@@ -472,7 +472,6 @@ where
 
                         if let Some((proof, signing_key)) = proof {
                             // TODO: spawn as a separate task?
-                            // TODO: Add block versioning based on era schedule, later on.
                             match v1::propose_block(
                                 wallet_tip,
                                 slot,
@@ -486,7 +485,7 @@ where
                             .await
                             {
                                 Ok(block) => {
-                                    Self::apply_and_publish_block_proposal(Block::V1(block), &chain_network_api, &blend_adapter).await;
+                                    Self::apply_and_publish_block_proposal(block, &chain_network_api, &blend_adapter).await;
                                 }
                                 Err(e) => {
                                     metrics::consensus_proposals_create_failed("propose_block");

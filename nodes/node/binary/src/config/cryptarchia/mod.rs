@@ -3,9 +3,12 @@ use std::sync::Arc;
 use lb_chain_network_service::network::adapters::libp2p::{
     LibP2pAdapterSettings, LibP2pEraAdapterSettings,
 };
-use lb_core::block::{BlockVersion, BlockVersions, genesis::GenesisBlock};
-use lb_cryptarchia_engine::era::{EraSchedule, ScheduledEra};
-use lb_era_parameters::{EraDefinition, EraParameters};
+use lb_core::block::genesis::GenesisBlock;
+use lb_cryptarchia_engine::era::EraSchedule;
+use lb_era_parameters::{
+    EraDefinition, EraParameters, blend::BlendParameters, cryptarchia::CryptarchiaParameters,
+    time::TimeParameters,
+};
 use lb_libp2p::PeerId;
 use lb_services_utils::overwatch::RecoveryData;
 
@@ -35,9 +38,7 @@ impl ServiceConfig {
     ) {
         // The ledger config of every era, which the chain service runs and the
         // leader builds proposals under.
-        let ledger_eras = Arc::new(eras.map(|era| match &era.entry.parameters.parameters {
-            EraParameters::V1(parameters) => lb_ledger::Config::V1(parameters.ledger_config()),
-        }));
+        let ledger_eras = Arc::new(eras.map(|era| ledger_config(&era.entry.parameters.parameters)));
         let chain_service_settings = lb_chain_service::CryptarchiaSettings {
             bootstrap: lb_chain_service::BootstrapConfig {
                 force_bootstrap: self.user.service.bootstrap.force_bootstrap,
@@ -82,7 +83,7 @@ impl ServiceConfig {
                 },
             },
             network: LibP2pAdapterSettings {
-                block_versions: block_versions(eras),
+                eras: eras.map(|_| ()),
                 tx_decoding_context: (),
                 max_connected_peers_to_try_download: self
                     .user
@@ -132,15 +133,17 @@ impl ServiceConfig {
     }
 }
 
-/// The version of the blocks of each era, from its first slot on.
-fn block_versions(eras: &EraSchedule<EraDefinition>) -> BlockVersions {
-    let block_version = |era: &ScheduledEra<EraDefinition>| match &era.entry.parameters.parameters {
-        EraParameters::V1(_) => BlockVersion::V1,
-    };
-    BlockVersions::new(
-        block_version(eras.genesis()),
-        eras.iter()
-            .skip(1)
-            .map(|era| (era.first_slot, block_version(era))),
-    )
+/// The ledger config of an era: the version of the ledger the era's cryptarchia
+/// section runs, with the Blend rewards the era's Blend and time sections
+/// imply.
+fn ledger_config(parameters: &EraParameters) -> lb_ledger::Config {
+    match (&parameters.cryptarchia, &parameters.blend, &parameters.time) {
+        (
+            CryptarchiaParameters::V1(cryptarchia),
+            BlendParameters::V1(blend),
+            TimeParameters::V1(time),
+        ) => lb_ledger::Config::V1(
+            cryptarchia.ledger_config(blend.rewards_params(cryptarchia, time)),
+        ),
+    }
 }

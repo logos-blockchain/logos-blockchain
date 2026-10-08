@@ -4,12 +4,7 @@ use lb_key_management_system_service::backend::preload::KeyId;
 
 use crate::settings::TimingSettings;
 
-#[derive(Clone, Debug)]
-pub enum EraSettings<NetworkSettings> {
-    V1(StartingBlendConfig<NetworkSettings>),
-}
-
-/// What a broadcast node needs to run.
+/// What a broadcast node needs to run in an era.
 #[derive(Clone, Debug)]
 pub struct StartingBlendConfig<NetworkSettings> {
     /// Where a payload goes: the same dispatcher settings a core node

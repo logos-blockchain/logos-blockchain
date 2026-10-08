@@ -1,9 +1,12 @@
 use core::time::Duration;
 
 use lb_blend_service::{
-    broadcast::settings::EraSettings as BlendBroadcastSettings,
+    broadcast::settings::StartingBlendConfig as BlendBroadcastSettings,
     core::{
-        backends::libp2p::Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
+        backends::libp2p::{
+            Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
+            settings::connection_receive_window,
+        },
         dispatcher::libp2p::Libp2pBroadcastSettings,
         settings::{
             CoreServiceSettings as BlendCoreSettings, CoverTrafficSettings, MessageDelayerSettings,
@@ -12,15 +15,17 @@ use lb_blend_service::{
     },
     edge::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pEdgeBlendBackendSettings,
-        settings::EraSettings as BlendEdgeSettings,
+        settings::StartingBlendConfig as BlendEdgeSettings,
     },
-    settings::{
-        CommonSettings, CoreSettings, EdgeSettings, EraSettings as BlendSettings, Settings,
-        TimingSettings,
-    },
+    settings::{CommonSettings, CoreSettings, EdgeSettings, Settings, TimingSettings},
 };
 use lb_cryptarchia_engine::era::EraSchedule;
-use lb_era_parameters::{EraDefinition, EraParameters, v1};
+use lb_era_parameters::{
+    EraDefinition,
+    blend::{BlendParameters, v1 as blend_v1},
+    cryptarchia::{CryptarchiaParameters, v1 as cryptarchia_v1},
+    time::{TimeParameters, v1 as time_v1},
+};
 use lb_services_utils::overwatch::RecoveryData;
 
 use crate::config::blend::serde::Config;
@@ -28,7 +33,7 @@ use crate::config::blend::serde::Config;
 pub mod serde;
 
 /// The settings of the Blend services in an era, on the libp2p backends.
-type Libp2pBlendSettings = BlendSettings<
+type Libp2pBlendSettings = Settings<
     Libp2pCoreBlendBackendSettings,
     Libp2pEdgeBlendBackendSettings,
     Libp2pBroadcastSettings,
@@ -56,7 +61,16 @@ impl ServiceConfig {
         eras: &EraSchedule<EraDefinition>,
         recovery_data: RecoveryData,
     ) -> BlendServicesSettings {
-        let blend_settings = eras.map(|era| era_settings(&self.user, &era.entry.parameters, eras));
+        // The core swarm's transport is built once, so its receive window is
+        // sized for the era that needs the most: a later era may carry larger
+        // messages, or more of them.
+        let receive_window = eras
+            .iter()
+            .map(|era| era_receive_window(&era.entry.parameters))
+            .max()
+            .expect("a chain has at least one era");
+        let blend_settings =
+            eras.map(|era| era_settings(&self.user, &era.entry.parameters, eras, receive_window));
         let blend_core_settings = BlendCoreSettings {
             eras: blend_settings.map(|era| era.entry.parameters.clone().into()),
             recovery_data,
@@ -74,33 +88,53 @@ impl ServiceConfig {
 }
 
 /// The settings of the Blend services while `era` is in force, on a chain
-/// whose eras are `eras`, for a node configured with `user`: the version of
-/// Blend each global version runs.
+/// whose eras are `eras`, for a node configured with `user`.
 fn era_settings(
     user: &Config,
     era: &EraDefinition,
     eras: &EraSchedule<EraDefinition>,
+    receive_window: u32,
 ) -> Libp2pBlendSettings {
-    match &era.parameters {
-        EraParameters::V1(parameters) => {
-            BlendSettings::V1(v1_settings(user, parameters, era, eras))
-        }
+    let parameters = &era.parameters;
+    match (&parameters.blend, &parameters.cryptarchia, &parameters.time) {
+        (
+            BlendParameters::V1(blend),
+            CryptarchiaParameters::V1(cryptarchia),
+            TimeParameters::V1(time),
+        ) => v1_settings(user, blend, cryptarchia, time, era, eras, receive_window),
     }
 }
 
-/// Version 1 of the Blend settings, from the parameters of an era of version
-/// 1: Blend's own, and the slot and epoch lengths its timing follows.
+/// The receive window a core connection needs while `era` is in force.
+fn era_receive_window(era: &EraDefinition) -> u32 {
+    match &era.parameters.blend {
+        BlendParameters::V1(blend) => connection_receive_window(
+            blend.connection_share_per_round(),
+            blend.common.network_absorption_in_rounds,
+            blend.common.num_blend_layers,
+        ),
+    }
+}
+
+/// The Blend settings from version 1 of the Blend section, with the slot and
+/// epoch lengths its timing follows, from version 1 of the cryptarchia and time
+/// sections.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the sections and the eras they are of"
+)]
 fn v1_settings(
     user: &Config,
-    parameters: &v1::Parameters,
+    blend: &blend_v1::Settings,
+    cryptarchia: &cryptarchia_v1::Settings,
+    time: &time_v1::Settings,
     era: &EraDefinition,
     eras: &EraSchedule<EraDefinition>,
-) -> Settings<Libp2pCoreBlendBackendSettings, Libp2pEdgeBlendBackendSettings, Libp2pBroadcastSettings>
-{
-    let blend = &parameters.blend;
-    let slots_per_epoch = parameters.cryptarchia.slots_per_epoch();
-    let slots_per_block = parameters.cryptarchia.average_slots_per_block();
-    let slot_duration = parameters.time.slot_duration;
+    receive_window: u32,
+) -> Libp2pBlendSettings {
+    let slots_per_epoch = cryptarchia.slots_per_epoch();
+    let slots_per_block = cryptarchia.average_slots_per_block();
+    let slot_duration = time.slot_duration;
     let protocol_name = era.protocol_names.blend.clone();
 
     Settings {
@@ -134,6 +168,7 @@ fn v1_settings(
                 accepted_edge_connections_per_round: blend.accepted_edge_connections_per_round(),
                 protocol_name: protocol_name.clone(),
                 peering_degree_check_interval: user.core.backend.peering_degree_check_interval,
+                receive_window,
             },
             scheduler: SchedulerSettings {
                 cover: CoverTrafficSettings {
@@ -170,7 +205,7 @@ fn v1_settings(
 }
 
 fn timing_settings(
-    blend: &v1::blend::Settings,
+    blend: &blend_v1::Settings,
     slots_per_epoch: u64,
     slots_per_block: u64,
     slot_duration: &Duration,

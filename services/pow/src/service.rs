@@ -210,35 +210,16 @@ pub struct PoWServiceSettings {
     pub recovery_data: RecoveryData,
 }
 
-/// What the `PoW` service follows of an era, in the service's own versions.
-/// They are the era's consensus values, so the mining service and the ledger
-/// agree on them.
+/// What the `PoW` service follows of an era. They are the era's consensus
+/// values, so the mining service and the ledger agree on them.
 #[derive(Clone, Copy, Debug)]
-pub enum EraSettings {
-    V1 {
-        /// Acceptance window, in slots, a mined ticket stays claimable for: a
-        /// ticket outside it can never be claimed.
-        slot_window: NonZeroU64,
-        /// Whether the era pays `PoW` rewards (i.e., `rate_num` > 0). When it
-        /// does not, no claim can succeed.
-        rewards_enabled: bool,
-    },
-}
-
-impl EraSettings {
-    pub(crate) const fn slot_window(self) -> NonZeroU64 {
-        match self {
-            Self::V1 { slot_window, .. } => slot_window,
-        }
-    }
-
-    const fn rewards_enabled(self) -> bool {
-        match self {
-            Self::V1 {
-                rewards_enabled, ..
-            } => rewards_enabled,
-        }
-    }
+pub struct EraSettings {
+    /// Acceptance window, in slots, a mined ticket stays claimable for: a
+    /// ticket outside it can never be claimed.
+    pub slot_window: NonZeroU64,
+    /// Whether the era pays `PoW` rewards (i.e., `rate_num` > 0). When it does
+    /// not, no claim can succeed.
+    pub rewards_enabled: bool,
 }
 
 /// The settings of the era of `slot`.
@@ -255,7 +236,7 @@ where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
     let current_slot = cryptarchia_api.info().await?.cryptarchia_info.slot;
-    Ok(era_settings_at(eras, current_slot).rewards_enabled())
+    Ok(era_settings_at(eras, current_slot).rewards_enabled)
 }
 
 /// One auto-claim destination: a key and the balance we want it to reach.
@@ -1265,7 +1246,7 @@ fn prune_expired_tickets(
     eras: &EraSchedule<EraSettings>,
 ) {
     // The window of the era a claim made now lands in.
-    let slot_window = era_settings_at(eras, current_slot).slot_window();
+    let slot_window = era_settings_at(eras, current_slot).slot_window;
     let before = state.ready_to_claim.len() + state.pending_to_claim.len();
     state
         .ready_to_claim
@@ -1409,7 +1390,7 @@ fn claimable_rewards_info(
     eras: &EraSchedule<EraSettings>,
 ) -> ClaimableRewardsInfo {
     let current = u64::from(current_slot);
-    let slot_window = era_settings_at(eras, current_slot).slot_window();
+    let slot_window = era_settings_at(eras, current_slot).slot_window;
     let slots_until_expiry: Vec<Slot> = ready_to_claim
         .iter()
         .map(|ticket| Slot::new(u64::from(ticket.block_slot) + slot_window.get() - current))
@@ -1770,10 +1751,11 @@ pub mod tests {
         EraSchedule::new(
             time::OffsetDateTime::UNIX_EPOCH,
             lb_cryptarchia_engine::era::EraEntry {
+                block_version: lb_cryptarchia_engine::era::BlockVersion::V1,
                 slot_duration: core::time::Duration::from_secs(1),
                 epoch_length_in_slots: NonZeroU64::new(1_000).unwrap(),
                 transition_slots: 0,
-                parameters: EraSettings::V1 {
+                parameters: EraSettings {
                     slot_window: SLOT_WINDOW,
                     rewards_enabled: true,
                 },
@@ -2343,10 +2325,11 @@ pub mod tests {
     #[test]
     fn prune_expired_tickets_follows_the_window_of_the_era_in_force() {
         let entry = |slot_window| lb_cryptarchia_engine::era::EraEntry {
+            block_version: lb_cryptarchia_engine::era::BlockVersion::V1,
             slot_duration: core::time::Duration::from_secs(1),
             epoch_length_in_slots: NonZeroU64::new(1_000).unwrap(),
             transition_slots: 0,
-            parameters: EraSettings::V1 {
+            parameters: EraSettings {
                 slot_window,
                 rewards_enabled: true,
             },

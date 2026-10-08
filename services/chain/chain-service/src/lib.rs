@@ -25,7 +25,7 @@ use futures::{Stream, TryStreamExt as _};
 use lb_binary_codec::canonical::BinaryEncode;
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
-    block::{Block, UncleHeaders, genesis::GenesisBlock},
+    block::{Block, BlockVersion, UncleHeaders, genesis::GenesisBlock},
     events::Events,
     header::HeaderId,
     mantle::{
@@ -102,6 +102,14 @@ pub enum Error {
     },
     #[error("Block {0} has already been applied")]
     AlreadyApplied(HeaderId),
+    #[error(
+        "Block at slot {slot:?} is of version {found:?}, but its slot's version is {expected:?}"
+    )]
+    UnexpectedBlockVersion {
+        slot: Slot,
+        expected: BlockVersion,
+        found: BlockVersion,
+    },
     #[error("Ledger error: {0}")]
     Ledger(#[from] lb_ledger::LedgerError<HeaderId>),
     #[error("Consensus error: {0}")]
@@ -470,6 +478,16 @@ impl Cryptarchia {
             return Err(Error::FutureBlock {
                 block_slot: slot,
                 current_slot,
+            });
+        }
+
+        // A block is of the block version of the era of its slot.
+        let expected_version = self.ledger.era_schedule().at_slot(slot).entry.block_version;
+        if block.version() != expected_version {
+            return Err(Error::UnexpectedBlockVersion {
+                slot,
+                expected: expected_version,
+                found: block.version(),
             });
         }
 

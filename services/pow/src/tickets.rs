@@ -347,7 +347,7 @@ impl Stream for TicketGenerator {
                 ))) => {
                     this.tip = tip;
                     // compute which slot is old enough
-                    let slot_window = era_settings_at(&this.eras, tip_slot).slot_window();
+                    let slot_window = era_settings_at(&this.eras, tip_slot).slot_window;
                     let frontier_slot = tip_slot.saturating_sub(Slot::new(slot_window.get()));
                     // trigger new stream if its new enough and the pool can
                     // still pay for what it would find

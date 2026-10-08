@@ -1,4 +1,5 @@
 use core::num::{NonZero, NonZeroU32, NonZeroU64};
+use std::sync::Arc;
 
 use lb_binary_codec::canonical::BTreeMap;
 use lb_core::sdp::{InactivityPeriod, MinStake, ServiceType};
@@ -8,10 +9,11 @@ use lb_cryptarchia_engine::{
 };
 use lb_groth16::ModulusShift;
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use serde::{Deserialize, Serialize};
 
-pub(super) mod codec;
+pub(crate) mod codec;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Settings {
@@ -63,6 +65,58 @@ impl Settings {
             self.learning_rate,
             self.uncle_reference_window_in_block,
         )
+    }
+
+    /// The ledger's configuration in its version 1: the consensus, epoch, SDP
+    /// and `PoW` parameters, with `blend_rewards`, the Blend rewards the era's
+    /// Blend section implies.
+    #[must_use]
+    pub fn ledger_config(&self, blend_rewards: RewardsParameters) -> lb_ledger::config::v1::Config {
+        let epoch_config = &self.epoch_config;
+        let blend_pow_config = &self.pow_config.blend;
+        lb_ledger::config::v1::Config {
+            consensus_config: self.consensus_config(),
+            epoch_config: lb_cryptarchia_engine::EpochConfig {
+                epoch_period_nonce_buffer: epoch_config.epoch_period_nonce_buffer,
+                epoch_period_nonce_stabilization: epoch_config.epoch_period_nonce_stabilization,
+                epoch_stake_distribution_stabilization: epoch_config
+                    .epoch_stake_distribution_stabilization,
+            },
+            faucet_pk: self.faucet_pk,
+            sdp_config: lb_ledger::mantle::sdp::Config {
+                min_stake: self.sdp_config.min_stake,
+                service_params: Arc::new(
+                    self.sdp_config
+                        .service_params
+                        .iter()
+                        .map(|(service_type, service_params)| {
+                            (
+                                *service_type,
+                                lb_core::sdp::ServiceParameters {
+                                    inactivity_period: service_params.inactivity_period,
+                                    epoch: service_params.epoch,
+                                },
+                            )
+                        })
+                        .collect(),
+                ),
+                service_rewards_params: ServiceRewardsParameters {
+                    blend: blend_rewards,
+                },
+            },
+            pow_config: lb_ledger::config::PoWConfig {
+                blend: lb_ledger::config::BlendPoWConfig {
+                    base_difficulty: blend_pow_config.base_difficulty,
+                    damping_den_offset: blend_pow_config.damping_den_offset,
+                    damping_num: blend_pow_config.damping_num,
+                    max_step: blend_pow_config.max_step,
+                    target_transactions_per_block: blend_pow_config.target_transactions_per_block,
+                },
+                // Reused verbatim: the parameters already hold the validated
+                // ledger type.
+                reward: self.pow_config.reward.clone(),
+            },
+        }
     }
 }
 

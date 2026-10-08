@@ -1,7 +1,7 @@
 use std::{num::NonZero, path::PathBuf, time::Duration};
 
 use lb_chain_service::PhaseTag;
-use lb_era_parameters::v1::cryptarchia::EpochConfig;
+use lb_era_parameters::cryptarchia::v1::EpochConfig;
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
     DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,

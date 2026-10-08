@@ -22,7 +22,7 @@ use lb_core::{
         WithdrawMessage,
     },
 };
-use lb_era_parameters::v1::{blend::MinimumNetworkSize, cryptarchia::EpochConfig};
+use lb_era_parameters::{blend::v1::MinimumNetworkSize, cryptarchia::v1::EpochConfig};
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{

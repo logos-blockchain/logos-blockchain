@@ -34,7 +34,7 @@ mod test {
     use futures::StreamExt as _;
     use lb_cryptarchia_engine::{
         Slot,
-        era::{EraEntriesAfterGenesis, EraEntry, EraSchedule},
+        era::{BlockVersion, EraEntriesAfterGenesis, EraEntry, EraSchedule},
     };
     use time::OffsetDateTime;
 
@@ -51,6 +51,7 @@ mod test {
         let eras = EraSchedule::new(
             OffsetDateTime::now_utc(),
             EraEntry {
+                block_version: BlockVersion::V1,
                 slot_duration: Duration::from_secs(1),
                 epoch_length_in_slots: NonZero::new(100).unwrap(),
                 transition_slots: 0,

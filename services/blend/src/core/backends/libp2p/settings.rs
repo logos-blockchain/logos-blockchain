@@ -2,6 +2,7 @@ use core::{num::NonZeroU32, pin::Pin, time::Duration};
 use std::num::NonZeroU64;
 
 use futures::{Stream, StreamExt as _, stream::pending};
+use lb_blend::message::encap::encapsulated_message_encoded_size;
 use lb_libp2p::protocol_name::StreamProtocol;
 use libp2p::{Multiaddr, PeerId, identity::Keypair};
 use serde::{Deserialize, Serialize};
@@ -30,6 +31,37 @@ pub struct Libp2pBlendBackendSettings {
     pub max_dial_attempts_per_peer: NonZeroU64,
     pub protocol_name: StreamProtocol,
     pub peering_degree_check_interval: Option<Duration>,
+    /// The bytes a stream may hold for this node before its sender feels
+    /// backpressure: the QUIC receive window. The transport is built once,
+    /// when the swarm starts, so the window is the same in every era: the
+    /// largest [`connection_receive_window`] of the chain's eras.
+    pub receive_window: u32,
+}
+
+/// The bytes a connection may hold for us before its sender feels backpressure.
+///
+/// One round's share, which a neighbour sending at the rate the protocol
+/// expects may have in flight before this node has read it, plus the `η` rounds
+/// that neighbour waits for a stalled connection before giving up on a message.
+/// Sized this way, a pause in reading shorter than the sender's own patience
+/// costs nothing, and one longer than it is felt within a round or two instead
+/// of being swallowed by buffer.
+#[must_use]
+pub fn connection_receive_window(
+    connection_share_per_round: NonZeroU64,
+    network_absorption_in_rounds: NonZeroU64,
+    num_blend_layers: NonZeroU64,
+) -> u32 {
+    let frame_size = encapsulated_message_encoded_size(num_blend_layers).get();
+
+    let rounds_of_slack = network_absorption_in_rounds.get().saturating_add(1);
+    u32::try_from(
+        connection_share_per_round
+            .get()
+            .saturating_mul(rounds_of_slack)
+            .saturating_mul(u64::try_from(frame_size).unwrap()),
+    )
+    .unwrap_or(u32::MAX)
 }
 
 impl BlendConfig<Libp2pBlendBackendSettings> {

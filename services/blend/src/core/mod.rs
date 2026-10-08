@@ -100,7 +100,7 @@ use crate::{
             ReceiverCryptographicProcessor,
         },
         scheduler::SchedulerWrapper,
-        settings::{CoreServiceSettings, EraSettings, RunningBlendConfig},
+        settings::{CoreServiceSettings, RunningBlendConfig},
         state::{RecoveryServiceState, ServiceState, StateUpdater as ServiceStateUpdater},
     },
     delivery::{broadcast_undelivered_messages, next_undelivered_messages},
@@ -326,11 +326,10 @@ where
             ..
         } = self;
 
-        let CoreServiceSettings { eras, .. } = settings_handle.notifier().get_updated_settings();
-        // Every era runs version 1, the only version of Blend.
-        let blend_configs = eras.map(|era| match &era.entry.parameters {
-            EraSettings::V1(config) => config.clone(),
-        });
+        let CoreServiceSettings {
+            eras: blend_configs,
+            ..
+        } = settings_handle.notifier().get_updated_settings();
         // What the node is configured with, the same in every era.
         let blend_config = &blend_configs.genesis().entry.parameters;
 
@@ -832,8 +831,7 @@ where
     );
 
     let backend = Backend::new(
-        &blend_configs,
-        current_epoch_public_info.era,
+        blend_config.clone(),
         overwatch_handle,
         BackendEpochInfo {
             membership: current_epoch_public_info.membership.clone(),

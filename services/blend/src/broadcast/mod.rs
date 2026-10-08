@@ -22,7 +22,7 @@ use overwatch::{
 use tracing::{debug, info};
 
 use crate::{
-    broadcast::settings::EraSettings,
+    broadcast::settings::StartingBlendConfig,
     core::dispatcher::PayloadDispatcher,
     era::{epoch_transition_period_in_force, settings_in},
     kms::PreloadKmsService,
@@ -58,7 +58,7 @@ impl<NodeId, Dispatcher, TimeBackend, ChainService, RuntimeServiceId> ServiceDat
 where
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
-    type Settings = EraSchedule<EraSettings<Dispatcher::Settings>>;
+    type Settings = EraSchedule<StartingBlendConfig<Dispatcher::Settings>>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = ServiceMessage<NodeId>;
@@ -110,13 +110,7 @@ where
             ..
         } = self;
 
-        // Every era runs version 1, the only version of Blend, so far.
-        let settings_in_every_era = settings_handle
-            .notifier()
-            .get_updated_settings()
-            .map(|era| match &era.entry.parameters {
-                EraSettings::V1(settings) => settings.clone(),
-            });
+        let settings_in_every_era = settings_handle.notifier().get_updated_settings();
         // What the node is configured with, the same in every era.
         let settings = settings_in_every_era.genesis().entry.parameters.clone();
         let minimum_network_sizes =

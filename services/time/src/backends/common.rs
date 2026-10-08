@@ -94,7 +94,7 @@ mod tests {
 
     use lb_cryptarchia_engine::{
         Epoch,
-        era::{Era, EraEntriesAfterGenesis, EraEntry, EraSchedule},
+        era::{BlockVersion, Era, EraEntriesAfterGenesis, EraEntry, EraSchedule},
     };
 
     use super::*;
@@ -170,6 +170,7 @@ mod tests {
 
     fn entry(slot_duration: Duration, epoch_length: u64) -> EraEntry<()> {
         EraEntry {
+            block_version: BlockVersion::V1,
             slot_duration,
             epoch_length_in_slots: NonZero::new(epoch_length).unwrap(),
             transition_slots: 0,

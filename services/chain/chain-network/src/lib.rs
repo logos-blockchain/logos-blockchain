@@ -18,7 +18,8 @@ use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::{StreamExt as _, future::join_all};
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
-    block::{Block, BlockTransactions, Proposal, v1, verify_header_alone, verify_header_signature},
+    block::{Block, BlockTransactions, Proposal, verify_header_alone, verify_header_signature},
+    era::EraSchedules,
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
@@ -324,6 +325,9 @@ where
             .notifier()
             .get_updated_settings();
 
+        // A proposal decodes under the block version of the era of its slot.
+        let proposal_eras = eras.map(|_| ());
+
         // Wait for services (except Chain) to become ready, with timeout
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
@@ -430,7 +434,7 @@ where
         }
 
         // The proposals of the era in force.
-        let mut incoming_proposals = listen_to_proposals(&era_adapter).await?;
+        let mut incoming_proposals = listen_to_proposals(&era_adapter, &proposal_eras).await?;
         let mut chainsync_events = network_adapter.chainsync_events_stream().await?;
 
         // Keep a handle to the adapter for the proactive tip-poll watchdog before
@@ -547,7 +551,7 @@ where
                         if tick.era > era_adapter.0 {
                             let new_era_adapter =
                                 join_era(&eras, tick.era, relays.network_relay()).await;
-                            match listen_to_proposals(&new_era_adapter).await {
+                            match listen_to_proposals(&new_era_adapter, &proposal_eras).await {
                                 Ok(proposals) => {
                                     era_adapter = new_era_adapter;
                                     incoming_proposals = proposals;
@@ -1237,15 +1241,16 @@ where
     (era, EraAdapter::new(settings, network_relay.clone()).await)
 }
 
-/// Listens to the proposals of the era of `era_adapter`.
+/// Listens to the proposals of the era of `era_adapter`, each decoded under
+/// the block version of the era of its slot, one of `eras`.
 async fn listen_to_proposals<EraAdapter, RuntimeServiceId>(
     (_, era_adapter): &(Era, EraAdapter),
+    eras: &EraSchedules,
 ) -> Result<BoxedStream<Proposal>, DynError>
 where
     EraAdapter: EraNetworkAdapter<RuntimeServiceId> + Sync,
 {
-    let proposals = era_adapter.proposals_stream::<v1::Proposal>(()).await?;
-    Ok(Box::new(proposals.map(Proposal::V1)))
+    era_adapter.proposals_stream::<Proposal>(eras.clone()).await
 }
 
 /// The single local transaction a reference means.
@@ -1297,7 +1302,7 @@ mod tests {
     use futures::stream;
     use lb_binary_codec::canonical::BinaryDecodeExt as _;
     use lb_core::{
-        block::UncleHeaders,
+        block::{BlockVersion, UncleHeaders, v1},
         mantle::{
             traits::Hasher,
             transactions::{Ops, hash::REFERENCE_PREFIX_BYTES},
@@ -1491,9 +1496,10 @@ mod tests {
     fn tampered_signature_block_is_not_cached_by_orphan_downloader() {
         let leader_key = Ed25519Key::from_bytes(&[1; 32]);
         let genuine = Block::create(
+            BlockVersion::V1,
             HeaderId::from([0; 32]),
             Slot::new(1),
-            UncleHeaders::empty(),
+            UncleHeaders::empty(BlockVersion::V1),
             leader_proof(&leader_key.public_key()),
             BlockTransactions::<Ops>::empty(),
             &leader_key,

@@ -72,8 +72,8 @@ pub trait EraNetworkAdapter<RuntimeServiceId> {
         >,
     ) -> Self;
 
-    /// The era's proposals, decoded with `decoding_context` as `Proposal`: the
-    /// proposal type of the era's version.
+    /// The era's proposals, decoded as `Proposal` with
+    /// `proposal_decoding_context`.
     async fn proposals_stream<Proposal>(
         &self,
         proposal_decoding_context: Proposal::Context,

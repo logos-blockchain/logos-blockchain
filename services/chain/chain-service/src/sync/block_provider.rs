@@ -551,7 +551,7 @@ mod tests {
 
     use lb_binary_codec::canonical::BinaryDecode as _;
     use lb_core::{
-        block::{BlockTransactions, UncleHeaders, v1},
+        block::{BlockTransactions, BlockVersion, UncleHeaders, v1},
         crypto::ZkHasher,
         events::Events,
         mantle::{
@@ -877,9 +877,10 @@ mod tests {
         ) -> Option<Block<SignedOps<Unverified, StandardMode>>> {
             let dummy_signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
             Block::create(
+                BlockVersion::V1,
                 prev_header,
                 slot,
-                UncleHeaders::empty(),
+                UncleHeaders::empty(BlockVersion::V1),
                 self.proof.clone(),
                 BlockTransactions::empty(),
                 &dummy_signing_key,

@@ -16,14 +16,8 @@ use crate::settings::{TimingSettings, max_data_message_delay_in_rounds};
 /// epoch running under its era's, and the state a previous run left.
 #[derive(Clone, Debug)]
 pub struct CoreServiceSettings<BackendSettings, NetworkSettings> {
-    pub eras: EraSchedule<EraSettings<BackendSettings, NetworkSettings>>,
+    pub eras: EraSchedule<StartingBlendConfig<BackendSettings, NetworkSettings>>,
     pub recovery_data: RecoveryData,
-}
-
-/// The core service's settings in an era, in Blend's own versions.
-#[derive(Clone, Debug)]
-pub enum EraSettings<BackendSettings, NetworkSettings> {
-    V1(StartingBlendConfig<BackendSettings, NetworkSettings>),
 }
 
 /// The core service's settings in an era.

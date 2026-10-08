@@ -40,7 +40,7 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
-use settings::EraSettings;
+use settings::StartingBlendConfig;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
@@ -110,7 +110,7 @@ where
     NodeId: Clone,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
-    type Settings = EraSchedule<EraSettings<Backend::Settings, Dispatcher::Settings>>;
+    type Settings = EraSchedule<StartingBlendConfig<Backend::Settings, Dispatcher::Settings>>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = ServiceMessage<NodeId>;
@@ -187,13 +187,7 @@ where
             ..
         } = self;
 
-        // Every era runs version 1, the only version of Blend.
-        let settings_in_every_era = settings_handle
-            .notifier()
-            .get_updated_settings()
-            .map(|era| match &era.entry.parameters {
-                EraSettings::V1(settings) => settings.clone(),
-            });
+        let settings_in_every_era = settings_handle.notifier().get_updated_settings();
         // What the node is configured with, the same in every era.
         let settings = settings_in_every_era.genesis().entry.parameters.clone();
 

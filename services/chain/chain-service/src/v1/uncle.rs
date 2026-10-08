@@ -154,7 +154,7 @@ impl Cryptarchia {
 #[cfg(test)]
 mod tests {
     use lb_core::{
-        block::{Block, BlockTransactions, UncleHeaders},
+        block::{Block, BlockTransactions, BlockVersion, UncleHeaders},
         header::{ContentId, v1::Header},
         mantle::{
             SignedOps, ledger::verification_mode::StandardMode, transactions::states::Preverified,
@@ -438,6 +438,7 @@ mod tests {
         key: &Ed25519Key,
     ) -> Block<SignedOps<Preverified, StandardMode>> {
         Block::create(
+            BlockVersion::V1,
             parent,
             slot,
             uncle_headers,

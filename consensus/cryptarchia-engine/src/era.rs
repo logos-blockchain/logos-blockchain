@@ -39,6 +39,14 @@ impl Era {
     }
 }
 
+/// A layout of blocks, and of their headers and proposals. Each era's blocks
+/// are of one version, which the chain's schedule names: the same layout may
+/// run in different eras of different chains.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlockVersion {
+    V1,
+}
+
 /// The most eras a chain can have after its genesis era: eras are numbered by
 /// a `u16`, and the genesis era is era 0.
 pub const MAX_ERAS_AFTER_GENESIS: usize = u16::MAX as usize;
@@ -52,14 +60,17 @@ pub const MAX_ERAS_AFTER_GENESIS: usize = u16::MAX as usize;
 pub type EraEntriesAfterGenesis<Parameters> =
     UpperBoundedBTreeMap<NonZero<u32>, EraEntry<Parameters>, MAX_ERAS_AFTER_GENESIS>;
 
-/// An era as a schedule lists it: the length of its slots and epochs, its
-/// transition period, and what it carries.
+/// An era as a schedule lists it: the version of its blocks, the length of its
+/// slots and epochs, its transition period, and what it carries.
 ///
 /// The genesis era starts at epoch 0, and every later era at the epoch it is
 /// keyed by in [`EraEntriesAfterGenesis`].
 #[serde_with::serde_as]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EraEntry<Parameters> {
+    /// The layout of the era's blocks: every block whose slot is in the era
+    /// is of this version.
+    pub block_version: BlockVersion,
     #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
     pub slot_duration: Duration,
     pub epoch_length_in_slots: NonZero<u64>,
@@ -207,7 +218,8 @@ impl<Parameters> EraSchedule<Parameters> {
     }
 
     /// The same schedule, each era carrying what `f` makes of it instead of
-    /// its parameters. Numbers, boundaries and lengths are kept.
+    /// its parameters. Numbers, boundaries, lengths and block versions are
+    /// kept.
     pub fn map<MapFn, Mapped>(&self, mut map_fn: MapFn) -> EraSchedule<Mapped>
     where
         MapFn: FnMut(&ScheduledEra<Parameters>) -> Mapped,
@@ -383,6 +395,7 @@ const fn map_era<Parameters, Mapped>(
     ScheduledEra {
         entry:
             EraEntry {
+                block_version,
                 epoch_length_in_slots,
                 slot_duration,
                 transition_slots,
@@ -401,6 +414,7 @@ const fn map_era<Parameters, Mapped>(
         first_slot: *first_slot,
         start_time: *start_time,
         entry: EraEntry {
+            block_version: *block_version,
             slot_duration: *slot_duration,
             epoch_length_in_slots: *epoch_length_in_slots,
             transition_slots: *transition_slots,
@@ -415,13 +429,16 @@ mod tests {
 
     use time::OffsetDateTime;
 
-    use super::{Era, EraEntriesAfterGenesis, EraEntry, EraInForce, EraSchedule, ErasError};
+    use super::{
+        BlockVersion, Era, EraEntriesAfterGenesis, EraEntry, EraInForce, EraSchedule, ErasError,
+    };
     use crate::time::{Epoch, Slot};
 
     const GENESIS: OffsetDateTime = OffsetDateTime::UNIX_EPOCH;
 
     fn entry(slot_duration: Duration, epoch_length: u64) -> EraEntry<()> {
         EraEntry {
+            block_version: BlockVersion::V1,
             slot_duration,
             epoch_length_in_slots: NonZero::new(epoch_length).unwrap(),
             transition_slots: 10,

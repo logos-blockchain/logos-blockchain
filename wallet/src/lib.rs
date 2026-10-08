@@ -2297,9 +2297,10 @@ mod tests {
         .into();
 
         let source_block = Block::create(
+            lb_core::block::BlockVersion::V1,
             HeaderId::from([0; 32]),
             Slot::from(1),
-            lb_core::block::UncleHeaders::empty(),
+            lb_core::block::UncleHeaders::empty(lb_core::block::BlockVersion::V1),
             test_leader_proof(),
             source_transactions,
             &Ed25519Key::from_bytes(&[0; 32]),

@@ -12,7 +12,7 @@ use std::{
 use futures::{Stream, StreamExt as _, future::OptionFuture, stream::FuturesUnordered};
 use lb_blend::{
     message::encap::{
-        ProofsVerifier as ProofsVerifierTrait, encapsulated_message_encoded_size,
+        ProofsVerifier as ProofsVerifierTrait,
         validated::EncapsulatedMessageWithVerifiedPublicHeader,
     },
     network::core::{
@@ -28,7 +28,6 @@ use lb_blend::{
     },
 };
 use lb_chain_service::Epoch;
-use lb_cryptarchia_engine::era::EraSchedule;
 use lb_libp2p::{DialError, DialErrorExt as _, DialOpts, SwarmEvent};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, swarm::dial_opts::PeerCondition};
@@ -134,31 +133,6 @@ impl DialAttempt {
     }
 }
 
-/// The bytes a connection may hold for us before its sender feels backpressure.
-///
-/// One round's share, which a neighbour sending at the rate the protocol
-/// expects may have in flight before this node has read it, plus the `η` rounds
-/// that neighbour waits for a stalled connection before giving up on a message.
-/// Sized this way, a pause in reading shorter than the sender's own patience
-/// costs nothing, and one longer than it is felt within a round or two instead
-/// of being swallowed by buffer.
-fn connection_receive_window(
-    connection_share_per_round: NonZeroU64,
-    network_absorption_in_rounds: NonZeroU64,
-    num_blend_layers: NonZeroU64,
-) -> u32 {
-    let frame_size = encapsulated_message_encoded_size(num_blend_layers).get();
-
-    let rounds_of_slack = network_absorption_in_rounds.get().saturating_add(1);
-    u32::try_from(
-        connection_share_per_round
-            .get()
-            .saturating_mul(rounds_of_slack)
-            .saturating_mul(u64::try_from(frame_size).unwrap()),
-    )
-    .unwrap_or(u32::MAX)
-}
-
 type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, DialAttempt)> + Send>>>;
 type FullMembershipRetry = Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
 
@@ -188,8 +162,6 @@ where
 pub struct SwarmParams<'config, Rng, ProofsVerifier> {
     /// The settings of the era of the current epoch.
     pub config: &'config BlendConfig<Libp2pBlendBackendSettings>,
-    /// The settings of every era.
-    pub configs: &'config EraSchedule<BlendConfig<Libp2pBlendBackendSettings>>,
     pub current_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
     pub rng: Rng,
     pub swarm_message_receiver: mpsc::Receiver<BlendSwarmMessage<ProofsVerifier>>,
@@ -212,7 +184,6 @@ where
     pub(super) fn new(
         SwarmParams {
             config,
-            configs,
             current_epoch_info,
             rng,
             swarm_message_receiver: swarm_messages_receiver,
@@ -226,24 +197,9 @@ where
         // window is 10 MB per stream, which at Blend's frame size is some five
         // hundred unread messages — twenty-five rounds of share — so a node
         // would go on absorbing at full rate long after it stopped reading. The window
-        // is instead sized to a few rounds of one connection's share: enough
-        // that a neighbour sending at the rate the protocol expects never
-        // stalls, and that the `η` rounds it may hold a message for are not
-        // spent waiting on flow control.
-        // Built once, so sized for the era that needs the most: a later era
-        // may carry larger messages, or more of them.
-        let receive_window = configs
-            .iter()
-            .map(|era| {
-                let config = &era.entry.parameters;
-                connection_receive_window(
-                    config.backend.connection_share_per_round,
-                    config.time.network_absorption_in_rounds,
-                    config.num_blend_layers,
-                )
-            })
-            .max()
-            .expect("a chain has at least one era");
+        // is instead sized to a few rounds of one connection's share (see
+        // [`connection_receive_window`]).
+        let receive_window = config.backend.receive_window;
         let mut swarm = SwarmBuilder::with_existing_identity(config.keypair())
             .with_tokio()
             .with_quic_config(|mut quic| {

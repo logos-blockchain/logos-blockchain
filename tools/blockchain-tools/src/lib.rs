@@ -4,10 +4,10 @@ use serde_yaml::Value;
 /// Deep-merge `overwrite` into `input`. Mappings are merged recursively;
 /// any other type is replaced wholesale by the overwrite value.
 ///
-/// A tagged value, such as an era's parameters tagged with their version
-/// (`!V1`), merges like the mapping it tags: an untagged mapping, or a value
-/// with the same tag, merges into it and keeps its tag, while a value with
-/// another tag replaces it.
+/// A tagged value, such as a section of an era's parameters tagged with its
+/// version (`blend: !V1`), merges like the mapping it tags: an untagged
+/// mapping, or a value with the same tag, merges into it and keeps its tag,
+/// while a value with another tag replaces it.
 #[must_use]
 pub fn overwrite_yaml(input: Value, overwrite: Value) -> Value {
     match (input, overwrite) {
@@ -40,8 +40,9 @@ pub fn overwrite_yaml(input: Value, overwrite: Value) -> Value {
 /// the segment as an index, a mapping as a key. A segment spelling out one of
 /// a mapping's integer keys names that key, as `0` does in `eras.0.time`,
 /// where eras are keyed by first epoch; any other segment is a string key.
-/// A tag, such as the version an era's parameters carry (`eras.0` is
-/// `!V1 {...}`), is stepped through: the next segment reads the value it tags.
+/// A tag, such as the version a section of an era's parameters carries
+/// (`eras.0.time` is `!V1 {...}`), is stepped through: the next segment reads
+/// the value it tags.
 /// Missing mapping keys, and any parents they need, are created.
 ///
 /// # Errors

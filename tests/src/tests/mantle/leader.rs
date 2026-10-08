@@ -4,7 +4,7 @@ use futures::StreamExt as _;
 use lb_api_service::http::consensus::leader::LeaderClaimResponseBody;
 use lb_common_http_client::ProcessedBlockEvent;
 use lb_core::mantle::transactions::hash::TxHash;
-use lb_era_parameters::v1::cryptarchia::EpochConfig;
+use lb_era_parameters::cryptarchia::v1::EpochConfig;
 use lb_groth16::fr_to_bytes;
 use lb_http_api_common::bodies::wallet::{
     balance::WalletBalanceResponseBody, claimable_vouchers::WalletClaimableVouchersResponseBody,

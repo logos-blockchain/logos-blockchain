@@ -24,7 +24,9 @@ use lb_blend::{
 };
 use lb_chain_service::{Epoch, Slot};
 use lb_core::{crypto::ZkHash, header::HeaderId, sdp::ActivityMetadata};
-use lb_cryptarchia_engine::era::{Era, EraEntriesAfterGenesis, EraEntry, EraSchedule};
+use lb_cryptarchia_engine::era::{
+    BlockVersion, Era, EraEntriesAfterGenesis, EraEntry, EraSchedule,
+};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
@@ -584,8 +586,7 @@ async fn test_handle_epoch_transition_expired() {
     // Create backend.
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        &single_era(settings.clone()),
-        Era::GENESIS,
+        settings.clone(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
@@ -679,8 +680,7 @@ async fn test_handle_epoch_event_discards_queued_proposals() {
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        &single_era(settings.clone()),
-        Era::GENESIS,
+        settings.clone(),
         overwatch_handle,
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
@@ -767,8 +767,7 @@ async fn test_handle_epoch_event() {
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        &single_era(settings.clone()),
-        Era::GENESIS,
+        settings.clone(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
@@ -923,8 +922,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        &single_era(settings.clone()),
-        Era::GENESIS,
+        settings.clone(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
@@ -1025,8 +1023,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        &single_era(settings.clone()),
-        Era::GENESIS,
+        settings.clone(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
@@ -1138,8 +1135,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        &single_era(settings.clone()),
-        Era::GENESIS,
+        settings.clone(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
@@ -1219,8 +1215,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        &single_era(settings.clone()),
-        Era::GENESIS,
+        settings.clone(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
@@ -2153,6 +2148,7 @@ async fn test_initialize_runs_the_epoch_under_the_settings_of_its_era() {
     let mut era_1_settings = genesis_settings.clone();
     era_1_settings.num_blend_layers = 3.try_into().unwrap();
     let entry = |settings| EraEntry {
+        block_version: BlockVersion::V1,
         slot_duration: Duration::from_secs(1),
         epoch_length_in_slots: 100.try_into().unwrap(),
         transition_slots: 0,

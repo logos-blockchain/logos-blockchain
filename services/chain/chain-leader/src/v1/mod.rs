@@ -1,5 +1,6 @@
-//! Blocks of version 1: how the leader builds them. The service's main loop
-//! builds a block here for each slot it wins.
+//! The leader's version 1: how it builds a block for each slot it wins. The
+//! leader picks the block's contents, and the block version of the slot's era
+//! its layout.
 
 mod tx_selection;
 
@@ -8,7 +9,7 @@ use std::pin::Pin;
 use futures::{Stream, StreamExt as _, stream};
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
-    block::{BlockTransactions, MAX_BLOCK_TRANSACTIONS_SIZE, UncleHeaders, v1},
+    block::{Block, BlockTransactions, MAX_BLOCK_TRANSACTIONS_SIZE, UncleHeaders},
     header::HeaderId,
     mantle::{
         OpRef, SignedOps,
@@ -33,7 +34,7 @@ use crate::{
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
 };
 
-fn log_sdp_activity_selected_for_proposal<Tx>(block: &v1::Block<Tx>, ledger_state: &LedgerState)
+fn log_sdp_activity_selected_for_proposal<Tx>(block: &Block<Tx>, ledger_state: &LedgerState)
 where
     Tx: MantleTx,
 {
@@ -63,9 +64,10 @@ where
     }
 }
 
-/// Builds and signs a block of version 1 at `slot` on top of `parent`, whose
-/// ledger state is `ledger_state`, with the mempool's transactions that apply
-/// on it. The transactions that never apply are removed from the mempool.
+/// Builds and signs a block at `slot` on top of `parent`, whose ledger state is
+/// `ledger_state`, in the block version of the era of `slot`, with the
+/// mempool's transactions that apply on it. The transactions that never apply
+/// are removed from the mempool.
 #[instrument(
     target = LOG_TARGET,
     level = "debug",
@@ -88,7 +90,7 @@ pub async fn propose_block<CryptarchiaService>(
     mempool: &MempoolAdapter<SignedOps<Preverified, StandardMode>>,
     mut ledger_state: LedgerState,
     ledger_eras: &EraScheduledConfig,
-) -> Result<v1::Block<SignedOps<Preverified, StandardMode>>, Error>
+) -> Result<Block<SignedOps<Preverified, StandardMode>>, Error>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
@@ -98,14 +100,16 @@ where
         .map_err(Error::FetchBlockTransactions)?;
 
     let tx_stream: Pin<Box<_>> = Box::pin(txs_stream);
+    let block_version = ledger_eras.at_slot(slot).entry.block_version;
 
-    // The chain service gathers the uncles of the era of `slot`.
+    // The chain service gathers the uncles of the era of `slot`, in the block
+    // version of `slot`.
     let uncle_headers = match cryptarchia_api.select_uncles(parent, slot).await {
-        Ok(UncleHeaders::V1(uncle_headers)) => uncle_headers,
+        Ok(uncle_headers) => uncle_headers,
         Err(err) => {
             error!(target: LOG_TARGET, ?slot, %err, "failed to select uncles");
             // A proposal without uncles is still valid
-            v1::UncleHeaders::empty()
+            UncleHeaders::empty(block_version)
         }
     };
 
@@ -138,7 +142,15 @@ where
     let valid_tx_stream = stream::iter(selected_txs);
     let txs = txs_for_block(valid_tx_stream).await;
 
-    let block = v1::Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
+    let block = Block::create(
+        block_version,
+        parent,
+        slot,
+        uncle_headers,
+        proof,
+        txs,
+        signing_key,
+    )?;
     if tracing::enabled!(Level::DEBUG) {
         log_sdp_activity_selected_for_proposal(&block, &ledger_state);
     }

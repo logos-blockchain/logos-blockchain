@@ -1,5 +1,5 @@
 use lb_cryptarchia_engine::era::EraSchedule;
-use lb_era_parameters::{EraDefinition, EraParameters};
+use lb_era_parameters::{EraDefinition, cryptarchia::CryptarchiaParameters};
 use lb_pow_service::{EraSettings, PoWServiceSettings};
 use lb_services_utils::overwatch::RecoveryData;
 
@@ -21,18 +21,18 @@ impl ServiceConfig {
         PoWServiceSettings {
             mining: self.user.mining,
             auto_claim: self.user.auto_claim,
-            eras: eras.map(|era| era_settings(&era.entry.parameters.parameters)),
+            eras: eras.map(|era| era_settings(&era.entry.parameters.parameters.cryptarchia)),
             recovery_data,
         }
     }
 }
 
-/// What the `PoW` service follows of an era, in the service's own versions.
-const fn era_settings(parameters: &EraParameters) -> EraSettings {
-    match parameters {
-        EraParameters::V1(parameters) => {
-            let reward = &parameters.cryptarchia.pow_config.reward;
-            EraSettings::V1 {
+/// What the `PoW` service follows of an era, from its cryptarchia section.
+const fn era_settings(cryptarchia: &CryptarchiaParameters) -> EraSettings {
+    match cryptarchia {
+        CryptarchiaParameters::V1(cryptarchia) => {
+            let reward = &cryptarchia.pow_config.reward;
+            EraSettings {
                 slot_window: reward.slot_window,
                 rewards_enabled: reward.rate_num > 0,
             }

@@ -1,5 +1,4 @@
-!V1
-blend:
+blend: !V1
   common:
     num_blend_layers: 1
     minimum_network_size: 2
@@ -16,7 +15,8 @@ blend:
     edge_node_send_deadline_in_rounds: 1
     core_handshake_deadline_in_rounds: 2
     activity_threshold_sensitivity: 1
-cryptarchia:
+blocks: V1
+cryptarchia: !V1
   epoch_config:
     epoch_stake_distribution_stabilization: 3
     epoch_period_nonce_buffer: 3
@@ -86,5 +86,5 @@ cryptarchia:
     min_stake:
       threshold: 1000000000
       timestamp: 0
-time:
+time: !V1
   slot_duration: '1.000000000'

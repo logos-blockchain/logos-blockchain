@@ -8,12 +8,16 @@ use lb_utils::math::PositiveF64;
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
 
-use crate::v1::{
-    cryptarchia::Settings as CryptarchiaDeploymentSettings,
-    time::Settings as TimeDeploymentSettings,
+use crate::{
+    cryptarchia::v1::Settings as CryptarchiaDeploymentSettings,
+    time::v1::Settings as TimeDeploymentSettings,
 };
 
-pub(super) mod codec;
+pub(crate) mod codec;
+
+/// How long, in Blend rounds from the first slot of an era, the network keeps
+/// accepting the identifiers of the era before it.
+const ERA_TRANSITION_ROUNDS: u64 = 30;
 
 /// Deployment-specific Blend settings.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -26,6 +30,13 @@ impl Settings {
     #[must_use]
     pub const fn round_duration(&self, slot_duration: &Duration) -> Duration {
         *slot_duration
+    }
+
+    /// The era's transition period, in slots: [`ERA_TRANSITION_ROUNDS`]
+    /// rounds, each lasting a slot ([`Self::round_duration`]).
+    #[must_use]
+    pub const fn transition_slots(&self) -> u64 {
+        ERA_TRANSITION_ROUNDS
     }
 
     /// Number of rounds per epoch, calculated as the number of slots per

@@ -26,3 +26,4 @@ nutype                        = { features = ["serde"], workspace = true }
 percent-encoding              = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }
 serde_with                    = { features = ["macros"], workspace = true }
+thiserror                     = { workspace = true }

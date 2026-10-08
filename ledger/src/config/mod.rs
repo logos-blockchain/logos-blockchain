@@ -159,9 +159,10 @@ pub(crate) fn schedule(
 ) -> EraScheduledConfig {
     use core::num::NonZero;
 
-    use lb_cryptarchia_engine::era::{EraEntriesAfterGenesis, EraEntry};
+    use lb_cryptarchia_engine::era::{BlockVersion, EraEntriesAfterGenesis, EraEntry};
 
     let entry = |config: Config| EraEntry {
+        block_version: BlockVersion::V1,
         slot_duration: core::time::Duration::from_secs(1),
         epoch_length_in_slots: NonZero::new(config.epoch_length())
             .expect("an epoch has at least one slot"),
