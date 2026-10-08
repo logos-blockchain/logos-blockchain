@@ -128,7 +128,8 @@ unsafe fn initialize_lb_node(
                     format!("Could not start services: {e}"),
                 )
             })?;
-        Ok(())
+
+        Ok::<(), OperationStatus>(())
     })?;
 
     Ok(LogosBlockchainNode::new(app, runtime, deployment))
