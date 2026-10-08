@@ -78,10 +78,10 @@ members = [
   "services/utils",
   "services/wallet",
   "tests",
-  "tests/integration/logos",
-  "tests/integration/nimbos",
-  "tests/integration/support",
-  "tests/tf_integration",
+  "tests/interop",
+  "tests/tf_integration/logos",
+  "tests/tf_integration/nimbos",
+  "tests/tf_integration/support",
   "tools/blockchain-tools",
   "tools/config",
   "tracing",
@@ -105,8 +105,8 @@ resolver = "2"
 
 [workspace.dependencies]
 # Internal
-blockchain-test-nimbos             = { path = "./tests/integration/nimbos" }
-blockchain-test-support            = { path = "./tests/integration/support" }
+blockchain-test-nimbos             = { path = "./tests/tf_integration/nimbos" }
+blockchain-test-support            = { path = "./tests/tf_integration/support" }
 cfgsync-adapter                    = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
 cfgsync-artifacts                  = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
 common-http-client                 = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
@@ -161,7 +161,7 @@ lb-sdp-service                     = { default-features = false, package = "logo
 lb-services-utils                  = { default-features = false, package = "logos-blockchain-services-utils", path = "./services/utils" }
 lb-storage-service                 = { default-features = false, package = "logos-blockchain-storage-service", path = "./services/storage" }
 lb-system-sig-service              = { default-features = false, package = "logos-blockchain-system-sig-service", path = "./services/system-sig" }
-lb-testing-framework               = { default-features = false, package = "blockchain-test-logos", path = "./tests/integration/logos" }
+lb-testing-framework               = { default-features = false, package = "blockchain-test-logos", path = "./tests/tf_integration/logos" }
 lb-time-service                    = { default-features = false, package = "logos-blockchain-time-service", path = "./services/time" }
 lb-tracing                         = { default-features = false, package = "logos-blockchain-tracing", path = "./tracing" }
 lb-tracing-service                 = { default-features = false, package = "logos-blockchain-tracing-service", path = "./services/tracing" }

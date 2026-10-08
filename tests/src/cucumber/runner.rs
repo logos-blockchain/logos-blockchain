@@ -184,7 +184,8 @@ fn selected_deployer() -> DeployerKind {
     // `LOGOS_BLOCKCHAIN_K8S_BOOTSTRAP_IMAGE` for the cfgsync/bootstrap pod.
     // If those are unset, the runner falls back to `LOGOS_BLOCKCHAIN_TESTNET_IMAGE`
     // or the default local node and cfgsync images built by the runtime
-    // docker scripts under `tests/integration/logos/assets/runtime/scripts/docker`.
+    // docker scripts under
+    // `tests/tf_integration/logos/assets/runtime/scripts/docker`.
     if is_truthy_env(CUCUMBER_DEPLOYER_K8S) {
         return DeployerKind::K8s;
     }

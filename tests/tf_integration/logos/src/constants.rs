@@ -1,7 +1,7 @@
 use crate::env as tf_env;
 
 pub const DEFAULT_CFGSYNC_PORT: u16 = 4400;
-pub const DEFAULT_ASSETS_STACK_DIR: &str = "tests/integration/logos/assets/runtime";
+pub const DEFAULT_ASSETS_STACK_DIR: &str = "tests/tf_integration/logos/assets/runtime";
 
 #[must_use]
 pub fn cfgsync_port() -> u16 {

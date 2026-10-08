@@ -24,7 +24,7 @@ use tokio::time::{sleep, timeout};
 /// binary. Nimbos preparation rejects settings it cannot represent faithfully.
 ///
 /// ```text
-/// cargo test -p blockchain-test-tf-integration --test logos_nimbos_mixed -- --ignored
+/// cargo test -p blockchain-test-interop --test logos_nimbos_mixed -- --ignored
 /// ```
 #[tokio::test]
 #[ignore = "requires a Logos binary path or release URL, NIMBOS_NODE_BIN and NIMBOS_CIRCUITS_DIR"]

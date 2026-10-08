@@ -1,13 +1,13 @@
-# Blockchain TF integration
+# Blockchain interoperability tests
 
 This crate connects implementation adapters to the existing Cucumber suite and
 contains the mixed-cluster test. The normal Logos runner does not depend on it.
 
 The integration crates have separate responsibilities:
 
-- `tests/integration/support`: shared deployment inputs, runtime information and utilities.
-- `tests/integration/logos`: native Logos configuration, TF adapters and Logos-dependent workloads.
-- `tests/integration/nimbos`: native Nimbos configuration and its TF adapter.
+- `tests/tf_integration/support`: shared deployment inputs, runtime information and utilities.
+- `tests/tf_integration/logos`: native Logos configuration, TF adapters and Logos-dependent workloads.
+- `tests/tf_integration/nimbos`: native Nimbos configuration and its TF adapter.
 
 Adapters depend on shared support and TF, not on Cucumber or each other.
 Cucumber-specific selection lives here in `src/cucumber`; features and steps
@@ -80,7 +80,7 @@ scenario does not test block production.
 
 ```sh
 export LOGOS_BLOCKCHAIN_NODE_BIN=/path/to/logos-blockchain-node
-cargo run -p blockchain-test-tf-integration --bin cucumber_external_smoke -- \
+cargo run -p blockchain-test-interop --bin cucumber_external_smoke -- \
   --name '^Two nodes connect at runtime$'
 ```
 
@@ -97,7 +97,7 @@ select an existing Cucumber scenario:
 ```sh
 export NIMBOS_NODE_BIN=/path/to/logos_chain_node
 export NIMBOS_CIRCUITS_DIR=/path/to/circuits
-cargo run -p blockchain-test-tf-integration --bin cucumber_nimbos -- \
+cargo run -p blockchain-test-interop --bin cucumber_nimbos -- \
   --name '^Two nodes happy path$'
 ```
 
@@ -105,7 +105,7 @@ For the mixed test, also select a compatible Logos binary:
 
 ```sh
 export LOGOS_BLOCKCHAIN_NODE_BIN=/path/to/logos-blockchain-node
-cargo test -p blockchain-test-tf-integration --test logos_nimbos_mixed -- --ignored
+cargo test -p blockchain-test-interop --test logos_nimbos_mixed -- --ignored
 ```
 
 `LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL` can select a release archive instead of a
