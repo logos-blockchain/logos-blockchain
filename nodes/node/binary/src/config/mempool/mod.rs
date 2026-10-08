@@ -30,7 +30,7 @@ impl ServiceConfig {
     pub fn into_mempool_service_era_schedule(
         self,
         eras: &EraSchedule<EraDefinition>,
-        recovery_data: RecoveryData,
+        recovery_data: &RecoveryData,
     ) -> EraSchedule<
         TxMempoolSettings<
             MempoolSettings,
@@ -46,6 +46,7 @@ impl ServiceConfig {
             pool: MempoolSettings {
                 tx_ttl: self.user.tx_ttl,
             },
+            // TODO: This will go once we update the mempool service to support era schedules.
             recovery_data: recovery_data.clone(),
         })
     }

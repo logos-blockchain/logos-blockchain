@@ -46,7 +46,7 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_blend_services_era_schedule(
         self,
-        recovery_data: RecoveryData,
+        recovery_data: &RecoveryData,
         eras: &EraSchedule<EraDefinition>,
     ) -> EraSchedule<BlendServicesSettings> {
         eras.map(|era| {
@@ -74,6 +74,7 @@ impl ServiceConfig {
                         topic: fork.to_string_with_name("cryptarchia"),
                     },
                     abstain_on_failure: user.abstain_on_failure,
+                    // TODO: This will go once we update the Blend service to support era schedules.
                     recovery_data: recovery_data.clone(),
                     time: deployment.timing_settings(
                         slots_per_epoch,

@@ -56,6 +56,7 @@ impl DeploymentSettings {
     /// # Errors
     ///
     /// If an era starts beyond the slots or the time this node can represent.
+    #[must_use]
     pub fn new(eras: &EraDeclarations, genesis_block: GenesisBlock) -> Self {
         let genesis_inscription = genesis_block.genesis_tx().cryptarchia_parameter();
         let (genesis_id, chain_id, genesis_time) = (
