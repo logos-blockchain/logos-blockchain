@@ -29,17 +29,22 @@ pub struct EraDeclaration {
 }
 
 impl EraDeclaration {
-    /// Checks that the era's block version and the versions of its sections
-    /// can run together. Every combination is listed, so a new block version
-    /// or a new version of a section has to name the versions it runs with: a
-    /// service whose new version needs an operation only a later block layout
-    /// carries runs only with that layout.
+    /// Checks that the era runs one of the combinations of a block version and
+    /// section versions listed here, each a planned and tested step of a
+    /// rollout: a service whose new version needs an operation only a later
+    /// block layout carries is listed only with that layout. Any combination
+    /// not listed is refused.
     ///
     /// # Errors
     ///
-    /// If they cannot.
+    /// If the era's combination is not listed.
+    #[expect(
+        unreachable_patterns,
+        reason = "Every component has a single version, so the listed combination is the only one there is."
+    )]
     pub const fn check_compatibility(&self) -> Result<(), Incompatible> {
         match (self.block_version, &self.parameters) {
+            // Genesis: every component at version 1.
             (
                 BlockVersion::V1,
                 EraParameters::V1(v1::Parameters {
@@ -48,6 +53,23 @@ impl EraDeclaration {
                     time: TimeParameters::V1(_),
                 }),
             ) => Ok(()),
+            _ => Err(self.incompatible()),
+        }
+    }
+
+    /// The versions the era runs, as a combination that is not listed.
+    const fn incompatible(&self) -> Incompatible {
+        match &self.parameters {
+            EraParameters::V1(v1::Parameters {
+                blend,
+                cryptarchia,
+                time,
+            }) => Incompatible {
+                block_version: self.block_version,
+                blend: blend.version(),
+                cryptarchia: cryptarchia.version(),
+                time: time.version(),
+            },
         }
     }
 
@@ -112,8 +134,8 @@ codec_fixtures!(
     fixture_declaration() => &format!("0100 0100{}", v1::codec::parameters_hex())
 );
 
-/// Why the block version and the sections of an era cannot run together: the
-/// versions they are of.
+/// Why an era cannot run: its combination of a block version and section
+/// versions, which is not one of the listed ones.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error(
     "blocks of {block_version:?} cannot run with blend version {blend}, cryptarchia version {cryptarchia} and time version {time}"
