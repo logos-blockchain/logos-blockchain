@@ -7,10 +7,10 @@ use lb_core::{
     block::genesis::GenesisBlock,
     sdp::{NumberOfEpochs, ServiceType},
 };
-use lb_cryptarchia_engine::{Epoch, era::BlockVersion};
+use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
 use lb_node::config::deployment::{
-    DeploymentSettings, EraDeclaration, EraDeclarations,
+    DeploymentSettings, EraDeclarations,
     era::parameters::{
         EraParameters, v1,
         v1::{
@@ -93,9 +93,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
         .map_or(DEFAULT_SLOT_TIME_IN_SECS, |s| s.parse::<u64>().unwrap());
 
     DeploymentSettings::new(
-        &EraDeclarations::new_genesis(EraDeclaration {
-            block_version: BlockVersion::V1,
-            parameters: EraParameters::V1(v1::Parameters {
+        &EraDeclarations::new_genesis(EraParameters::V1(v1::Parameters {
                 blend: BlendDeploymentSettings {
                     common: BlendCommonSettings {
                         minimum_network_size: MinimumNetworkSize::try_new(
@@ -213,8 +211,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 time: TimeDeploymentSettings {
                     slot_duration: Duration::from_secs(slot_duration_in_secs),
                 },
-            }),
-        }),
+            })),
         GenesisBlock::genesis(genesis_tx.clone()),
     )
 }

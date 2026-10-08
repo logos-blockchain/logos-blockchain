@@ -38,7 +38,7 @@ pub fn overwrite_yaml(input: Value, overwrite: Value) -> Value {
 ///
 /// The container a segment lands on decides how it is read: a sequence takes
 /// the segment as an index, a mapping as a key. A segment spelling out one of
-/// a mapping's integer keys names that key, as `0` does in `eras.0.parameters.time`,
+/// a mapping's integer keys names that key, as `0` does in `eras.0.time`,
 /// where eras are keyed by first epoch; any other segment is a string key.
 /// A tag, such as the version an era's parameters carry (`eras.0` is
 /// `!V1 {...}`), is stepped through: the next segment reads the value it tags.

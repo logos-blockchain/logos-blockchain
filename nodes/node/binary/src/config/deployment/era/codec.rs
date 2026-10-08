@@ -1,12 +1,11 @@
 //! The canonical encoding of the types the node binary defines, for the digests
 //! that commit to them.
 //!
-//! An era's declaration is the only such type today. Its encoding is the
+//! An era's parameters are the only such type today. Their encoding is the
 //! preimage of the era's digest, so every node on a chain must produce it byte
-//! for byte: the era's block version as a little-endian `u16`, the version of
-//! its parameters' layout as a little-endian `u16`, then the Blend,
-//! cryptarchia and time parameters, in that order, each writing its fields in
-//! declaration order, depth first. Types from lower
+//! for byte: the version of the parameters' layout as a little-endian `u16`,
+//! then the Blend, cryptarchia and time parameters, in that order, each writing
+//! its fields in declaration order, depth first. Types from lower
 //! crates encode themselves in their own crates: an integer little-endian at
 //! its width, a non-zero or otherwise range-checked integer as the integer it
 //! wraps, a float as its IEEE 754 bits, a ratio as its numerator then its
@@ -15,7 +14,7 @@
 //! map as its length, then each key and value in ascending key order. So the
 //! SDP service parameters list each service in ascending order of service type.
 //!
-//! These encodings are never decoded: the declarations are read from the
+//! These encodings are never decoded: the parameters are read from the
 //! deployment settings and encoded only to be hashed. Changing one changes the
 //! digest of every era, so each is pinned by a fixture. In every fixture, a
 //! field holds its position among the parameters that follow the version, so
@@ -25,34 +24,8 @@
 //! any of them fails to compile until it is given its place in the encoding.
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
-use lb_cryptarchia_engine::era::BlockVersion;
 
-use crate::config::deployment::era::{
-    EraDeclaration,
-    parameters::{EraParameters, v1},
-};
-
-/// The block version, then the parameters.
-impl BinaryEncode for EraDeclaration {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            block_version,
-            parameters,
-        } = self;
-
-        block_version.version().encoded_length() + parameters.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            block_version,
-            parameters,
-        } = self;
-
-        block_version.version().encode_into(out);
-        parameters.encode_into(out);
-    }
-}
+use crate::config::deployment::era::parameters::{EraParameters, v1};
 
 /// The version of the parameters' layout, then the parameters in that layout.
 impl BinaryEncode for EraParameters {
@@ -104,18 +77,6 @@ fn era_parameters_hex() -> String {
     .concat()
 }
 
-fn fixture_declaration() -> EraDeclaration {
-    EraDeclaration {
-        block_version: BlockVersion::V1,
-        parameters: fixture_era_parameters(),
-    }
-}
-
-codec_fixtures!(
-    EraDeclaration,
-    encode_only,
-    fixture_declaration() => &["0100", &era_parameters_hex()].concat()
-);
 codec_fixtures!(
     EraParameters,
     encode_only,

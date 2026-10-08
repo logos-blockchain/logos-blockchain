@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod era;
 use era::GENESIS_EPOCH;
-pub use era::{EraDeclaration, EraDeclarations, EraScheduleError};
+pub use era::{EraDeclarations, EraScheduleError};
 mod protocols;
 pub use protocols::ProtocolScope;
 
@@ -67,17 +67,16 @@ impl DeploymentSettings {
         let mut era_digests = Vec::with_capacity(1);
         // Called in activation order: the fork digest of an era is over the
         // digests of the eras up to it.
-        let mut entry = |first_epoch: Epoch, era: &EraDeclaration| {
-            let digest = EraDigest::compute(first_epoch, era);
+        let mut entry = |first_epoch: Epoch, parameters: &EraParameters| {
+            let digest = EraDigest::compute(first_epoch, parameters);
             era_digests.push(digest);
             let fork_digest =
                 ForkDigest::compute(genesis_id, &chain_id, era_digests.iter().copied());
             EraEntry {
-                block_version: era.block_version,
-                slot_duration: era.parameters.slot_duration(),
-                epoch_length_in_slots: era.parameters.epoch_length(),
+                slot_duration: parameters.slot_duration(),
+                epoch_length_in_slots: parameters.epoch_length(),
                 parameters: EraDefinition {
-                    parameters: era.parameters.clone(),
+                    parameters: parameters.clone(),
                     digest,
                     fork_digest,
                 },
@@ -172,7 +171,7 @@ impl DeploymentSettings {
             mut eras,
             genesis_block,
         } = EraDefinitions::from(self.clone());
-        let EraParameters::V1(parameters) = &mut eras.genesis_era_mut().parameters;
+        let EraParameters::V1(parameters) = eras.genesis_era_mut();
         update(parameters);
         *self = Self::new(&eras, genesis_block);
     }
@@ -206,10 +205,7 @@ impl From<DeploymentSettings> for EraDefinitions {
         // Only single-era schedules are supported for now.
         let genesis = eras.genesis();
         Self {
-            eras: EraDeclarations::new_genesis(EraDeclaration {
-                block_version: genesis.entry.block_version,
-                parameters: genesis.entry.parameters.parameters.clone(),
-            }),
+            eras: EraDeclarations::new_genesis(genesis.entry.parameters.parameters.clone()),
             genesis_block,
         }
     }

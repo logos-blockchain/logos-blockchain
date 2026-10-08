@@ -113,7 +113,7 @@ struct ConfigArgs {
     /// Override to apply on top of the base config. Each occurrence is either
     /// a dot-notation key=value pair, where a number indexes a list or names
     /// an integer key (e.g. the first epoch in
-    /// `eras.0.parameters.cryptarchia.security_param=60`), or a path to a YAML file that
+    /// `eras.0.cryptarchia.security_param=60`), or a path to a YAML file that
     /// is deep-merged into the config.
     /// Repeated flags are applied left-to-right.
     #[arg(long = "override", value_name = "KEY=VALUE|FILE", num_args = 1)]
@@ -232,7 +232,7 @@ const GENESIS_BLOCK_PATH: &str = "genesis_block";
 
 /// Where a deployment config keeps the faucet key of the era starting at
 /// genesis, which is the era a genesis ceremony configures.
-const GENESIS_ERA_FAUCET_PK_PATH: &str = "eras.0.parameters.cryptarchia.faucet_pk";
+const GENESIS_ERA_FAUCET_PK_PATH: &str = "eras.0.cryptarchia.faucet_pk";
 
 // ── ceremony implementation
 // ─────────────────────────────────────────────────────
@@ -316,7 +316,8 @@ fn load_base_config(path: Option<&PathBuf>) -> Result<Value> {
 }
 
 /// Load a genesis template, and assemble from it the deployment config the
-/// ceremony completes: the template's era definition becomes era zero.
+/// ceremony completes: the template's era parameters, tagged with their
+/// version (`!V1`), become era zero.
 ///
 /// If `path` is `None`, returns the default deployment config, whose genesis
 /// block the ceremony replaces.
@@ -329,12 +330,15 @@ fn load_genesis_template(path: Option<&PathBuf>) -> Result<Value> {
         .with_context(|| format!("cannot read genesis template '{}'", path.display()))?;
     let template: Value = serde_yaml::from_str(&content)
         .with_context(|| format!("cannot parse YAML from '{}'", path.display()))?;
-    let Value::Mapping(era) = template else {
-        bail!("genesis template '{}' is not a mapping", path.display());
-    };
+    if !matches!(&template, Value::Tagged(era) if era.value.is_mapping()) {
+        bail!(
+            "genesis template '{}' is not a mapping tagged with its version",
+            path.display()
+        );
+    }
 
     let mut eras = serde_yaml::Mapping::new();
-    eras.insert(Value::from(0u64), Value::Mapping(era));
+    eras.insert(Value::from(0u64), template);
     let mut config = serde_yaml::Mapping::new();
     config.insert(Value::from("eras"), Value::Mapping(eras));
     Ok(Value::Mapping(config))
