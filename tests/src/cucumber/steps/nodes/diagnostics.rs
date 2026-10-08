@@ -359,13 +359,13 @@ pub fn set_blend_diagnostic_parameter_set(
     set_deployment_config_override(
         world,
         step,
-        "eras.0.parameters.time.slot_duration",
+        "eras.0.time.slot_duration",
         &format!("seconds({})", parameter_set.slot_duration_secs),
     )?;
     set_deployment_config_override(
         world,
         step,
-        "eras.0.parameters.cryptarchia.epoch_config.epoch_stake_distribution_stabilization",
+        "eras.0.cryptarchia.epoch_config.epoch_stake_distribution_stabilization",
         &parameter_set
             .epoch_stake_distribution_stabilization
             .to_string(),
@@ -373,13 +373,13 @@ pub fn set_blend_diagnostic_parameter_set(
     set_deployment_config_override(
         world,
         step,
-        "eras.0.parameters.cryptarchia.epoch_config.epoch_period_nonce_buffer",
+        "eras.0.cryptarchia.epoch_config.epoch_period_nonce_buffer",
         &parameter_set.epoch_period_nonce_buffer.to_string(),
     )?;
     set_deployment_config_override(
         world,
         step,
-        "eras.0.parameters.cryptarchia.epoch_config.epoch_period_nonce_stabilization",
+        "eras.0.cryptarchia.epoch_config.epoch_period_nonce_stabilization",
         &parameter_set.epoch_period_nonce_stabilization.to_string(),
     )?;
 

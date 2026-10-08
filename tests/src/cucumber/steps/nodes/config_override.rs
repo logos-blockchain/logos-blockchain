@@ -480,7 +480,7 @@ fn set_at_path(
     let is_last = rest.is_empty();
 
     // A number indexes a sequence, unless it lands on a mapping, where it can
-    // name an integer key (the first epoch in `eras.0.parameters.time`).
+    // name an integer key (the first epoch in `eras.0.time`).
     if let Ok(index) = segment.parse::<usize>()
         && !current.is_mapping()
     {
@@ -782,11 +782,11 @@ mod tests {
             .security_param
             .get();
         let override_4 = ConfigOverride {
-            path: "eras.0.parameters.time.slot_duration".to_owned(),
+            path: "eras.0.time.slot_duration".to_owned(),
             value: serde_yaml::to_value(TimeDuration::new(1, 0)).expect("yaml value"),
         };
         let override_5 = ConfigOverride {
-            path: "eras.0.parameters.cryptarchia.security_param".to_owned(),
+            path: "eras.0.cryptarchia.security_param".to_owned(),
             value: serde_yaml::to_value(security_param + 1).expect("yaml value"),
         };
         assert!(apply_deployment_config_overrides(&mut config, &[override_4, override_5]).is_ok());
@@ -831,7 +831,7 @@ mod tests {
         set_deployment_config_override(
             &mut world,
             "test-step",
-            "eras.0.parameters.time.slot_duration",
+            "eras.0.time.slot_duration",
             "seconds(1)",
         )
         .expect("deployment duration override");

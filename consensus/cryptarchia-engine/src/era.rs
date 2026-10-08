@@ -9,7 +9,6 @@
 
 use core::{iter::once, num::NonZero, time::Duration};
 
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError, codec_fixtures};
 use lb_utils::{
     bounded::UpperBoundedBTreeMap,
     bounded_duration::{MinimalBoundedDuration, SECOND},
@@ -42,63 +41,20 @@ impl EraNumber {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum BlockVersion {
-    V1,
-}
-
-impl BlockVersion {
-    #[must_use]
-    pub const fn version(&self) -> u16 {
-        match self {
-            Self::V1 => 1,
-        }
-    }
-}
-
-impl BinaryEncode for BlockVersion {
-    fn encoded_length(&self) -> usize {
-        self.version().encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.version().encode_into(out);
-    }
-}
-
-impl BinaryDecode for BlockVersion {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        context: &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, version) = u16::decode(input, context)?;
-        let block_version = match version {
-            version if version == Self::V1.version() => Self::V1,
-            _ => return Err(DecodeError::invalid_value::<Self>("unrecognized tag")),
-        };
-        Ok((input, block_version))
-    }
-}
-
-codec_fixtures!(BlockVersion, Self::V1 => "0100");
-
 /// The eras of a chain after its genesis era, as its schedule lists them, each
 /// keyed by the epoch it starts at. The genesis era starts at epoch 0, so no
 /// era after it can.
 pub type EraEntriesAfterGenesis<Parameters> =
     UpperBoundedBTreeMap<NonZero<u32>, EraEntry<Parameters>, { u16::MAX as usize }>;
 
-/// An era as a schedule lists it: the version of its blocks, the length of its
-/// slots and epochs, and what it carries.
+/// An era as a schedule lists it: the length of its slots and epochs, and what
+/// it carries.
 ///
 /// Anything that is not common to all era definitions is included in the
 /// `Parameters` type.
 #[serde_with::serde_as]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EraEntry<Parameters> {
-    pub block_version: BlockVersion,
     #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
     pub slot_duration: Duration,
     pub epoch_length_in_slots: NonZero<u64>,
@@ -223,8 +179,7 @@ impl<Parameters> EraSchedule<Parameters> {
     }
 
     /// The same schedule, each era carrying what `f` makes of it instead of
-    /// its parameters. Numbers, boundaries, lengths and block versions are
-    /// kept.
+    /// its parameters. Numbers, boundaries and lengths are kept.
     pub fn map<MapFn, Mapped>(&self, mut map_fn: MapFn) -> EraSchedule<Mapped>
     where
         MapFn: FnMut(&Era<Parameters>) -> Mapped,
@@ -369,7 +324,6 @@ const fn map_era<Parameters, Mapped>(
     Era {
         entry:
             EraEntry {
-                block_version,
                 epoch_length_in_slots,
                 slot_duration,
                 ..
@@ -387,7 +341,6 @@ const fn map_era<Parameters, Mapped>(
         first_slot: *first_slot,
         start_time: *start_time,
         entry: EraEntry {
-            block_version: *block_version,
             slot_duration: *slot_duration,
             epoch_length_in_slots: *epoch_length_in_slots,
             parameters,
@@ -401,16 +354,13 @@ mod tests {
 
     use time::OffsetDateTime;
 
-    use super::{
-        BlockVersion, EraEntriesAfterGenesis, EraEntry, EraNumber, EraSchedule, ErasError,
-    };
+    use super::{EraEntriesAfterGenesis, EraEntry, EraNumber, EraSchedule, ErasError};
     use crate::time::{Epoch, Slot};
 
     const GENESIS: OffsetDateTime = OffsetDateTime::UNIX_EPOCH;
 
     fn entry(slot_duration: Duration, epoch_length: u64) -> EraEntry<()> {
         EraEntry {
-            block_version: BlockVersion::V1,
             slot_duration,
             epoch_length_in_slots: NonZero::new(epoch_length).unwrap(),
             parameters: (),
