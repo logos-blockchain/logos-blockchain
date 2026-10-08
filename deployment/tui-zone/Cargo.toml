@@ -26,7 +26,6 @@ hex                              = { workspace = true }
 lb-core                          = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-zone-sdk                      = { workspace = true }
-rand                             = { workspace = true }
 reqwest                          = { workspace = true }
 serde                            = { features = ["derive"], workspace = true }
 serde_json                       = { workspace = true }

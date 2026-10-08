@@ -181,7 +181,17 @@ pub enum ChainServiceMode {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ChainServiceInfo {
     pub cryptarchia_info: CryptarchiaInfo,
+    /// Defaults to `Started(Online)` when absent, so clients built from this
+    /// branch can still parse the `/cryptarchia/info` response of a node
+    /// built from a newer `logos-blockchain` release, which replaced this
+    /// field with an unrelated `phase` field. No production code reads the
+    /// fallback value; it only needs to satisfy deserialization.
+    #[serde(default = "default_mode")]
     pub mode: ChainServiceMode,
+}
+
+const fn default_mode() -> ChainServiceMode {
+    ChainServiceMode::Started(State::Online)
 }
 
 #[serde_as]
