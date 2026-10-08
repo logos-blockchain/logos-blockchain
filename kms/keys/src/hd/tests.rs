@@ -1,6 +1,7 @@
 use arbitrary_int::u31;
 use lb_groth16::{Fr, fr_to_bytes};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
+use rand::thread_rng;
 
 use crate::hd::{ExtendedSecretKey, HardenedIndex, MasterKey, MasterSeed, Mnemonic, ZK_KEY_DST};
 
@@ -39,13 +40,13 @@ pub(super) const VOUCHER_MASTER_CHAIN_CODE: &str =
 
 #[test]
 fn seed_from_mnemonic() {
-    let seed = MasterSeed::from_mnemonic(&mnemonic(), "");
+    let seed = MasterSeed::from_mnemonic(&mnemonic(), None);
     assert_eq!(hex::encode(seed.0), SEED);
 }
 
 #[test]
 fn passphrase_changes_seed() {
-    let seed = MasterSeed::from_mnemonic(&mnemonic(), "TREZOR");
+    let seed = MasterSeed::from_mnemonic(&mnemonic(), Some(&"TREZOR".into()));
     assert_ne!(hex::encode(seed.0), SEED);
 }
 
@@ -70,9 +71,9 @@ fn mnemonic_with_24_words_is_accepted() {
 
 #[test]
 fn generated_mnemonic_has_12_words() {
-    let mnemonic = Mnemonic::generate();
+    let mnemonic = Mnemonic::generate(&mut thread_rng());
     assert_eq!(mnemonic.0.word_count(), 12);
-    assert_ne!(mnemonic, Mnemonic::generate());
+    assert_ne!(mnemonic, Mnemonic::generate(&mut thread_rng()));
 }
 
 #[test]
@@ -181,7 +182,7 @@ fn hardened_index_serializes_big_endian() {
 }
 
 pub(super) fn master() -> MasterKey {
-    MasterSeed::from_mnemonic(&mnemonic(), "").to_key()
+    MasterSeed::from_mnemonic(&mnemonic(), None).to_key()
 }
 
 fn mnemonic() -> Mnemonic {

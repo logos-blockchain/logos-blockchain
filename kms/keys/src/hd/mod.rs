@@ -20,6 +20,7 @@ use blake2::{
 };
 use lb_groth16::{Fr, fr_from_bytes_unchecked};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
+use rand_core::{CryptoRng, RngCore};
 use serde::Deserialize;
 #[cfg(feature = "unsafe")]
 use serde::{Serialize, Serializer};
@@ -50,9 +51,12 @@ impl Mnemonic {
 
     /// Generates a new mnemonic of 12 words.
     #[must_use]
-    pub fn generate() -> Self {
+    pub fn generate<R>(rng: &mut R) -> Self
+    where
+        R: RngCore + CryptoRng,
+    {
         Self(
-            bip39::Mnemonic::generate_in(Language::English, Self::DEFAULT_WORD_COUNT)
+            bip39::Mnemonic::generate_in_with(rng, Language::English, Self::DEFAULT_WORD_COUNT)
                 .expect("mnemonic generation should not fail"),
         )
     }
@@ -94,6 +98,35 @@ impl Debug for Mnemonic {
 #[error("invalid mnemonic: {0}")]
 pub struct InvalidMnemonicError(#[from] bip39::Error);
 
+/// A BIP-39 passphrase
+#[derive(Clone, Deserialize, ZeroizeOnDrop)]
+pub struct Passphrase(String);
+
+impl From<String> for Passphrase {
+    fn from(passphrase: String) -> Self {
+        Self(passphrase)
+    }
+}
+
+impl From<&str> for Passphrase {
+    fn from(passphrase: &str) -> Self {
+        Self(passphrase.to_owned())
+    }
+}
+
+#[cfg(feature = "unsafe")]
+impl Serialize for Passphrase {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl Debug for Passphrase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Passphrase(<redacted>)")
+    }
+}
+
 /// A 64-byte master seed from which the master key is derived.
 #[derive(ZeroizeOnDrop)]
 pub struct MasterSeed([u8; 64]);
@@ -102,8 +135,8 @@ impl MasterSeed {
     /// Derives the master seed from a mnemonic and a passphrase, which is
     /// empty if the user set none.
     #[must_use]
-    pub fn from_mnemonic(mnemonic: &Mnemonic, passphrase: &str) -> Self {
-        Self(mnemonic.0.to_seed(passphrase))
+    pub fn from_mnemonic(mnemonic: &Mnemonic, passphrase: Option<&Passphrase>) -> Self {
+        Self(mnemonic.0.to_seed(passphrase.map_or("", |p| p.0.as_str())))
     }
 
     /// Derives the master key.
@@ -174,7 +207,7 @@ impl ExtendedSecretKey {
 /// The index of a hardened child key, in the range `[2^31, 2^32)`.
 ///
 /// It is displayed in the BIP-32 notation, e.g. `3'` for the child number 3.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct HardenedIndex(u32);
 
 impl HardenedIndex {
