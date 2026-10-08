@@ -14,10 +14,6 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
-    /// The settings of the PoW service in every era of `eras`. The slot window
-    /// is the era's consensus acceptance window, and rewards are enabled when
-    /// its distribution rate is not zero, so the mining service and the ledger
-    /// agree on both.
     #[must_use]
     pub fn into_pow_service_era_schedule(
         self,

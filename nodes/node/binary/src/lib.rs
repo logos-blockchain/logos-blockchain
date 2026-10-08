@@ -140,10 +140,6 @@ pub struct LogosBlockchain {
     tracing: TracingService,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "TODO: Address this in a later refactor."
-)]
 pub fn run_node_from_config(
     config: RunConfig,
     handle: Option<runtime::Handle>,

@@ -410,21 +410,12 @@ fn channel_deposit_wallet_config(
 }
 
 fn channel_test_config(mut config: RunConfig) -> RunConfig {
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .time
-        .slot_duration = Duration::from_secs(1);
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .security_param = NonZero::new(3).unwrap();
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().unwrap());
+    config.deployment.update_genesis_era_parameters(|parameters| {
+        parameters.time.slot_duration = Duration::from_secs(1);
+        parameters.cryptarchia.security_param = NonZero::new(3).unwrap();
+        parameters.cryptarchia.slot_activation_coeff =
+            NonNegativeRatio::new(1, 2.try_into().unwrap());
+    });
     config
 }
 

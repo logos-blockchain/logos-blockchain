@@ -29,6 +29,7 @@ impl ServiceConfig {
     /// consensus acceptance window, so the mempool and the ledger agree on when
     /// a claim expires.
     #[must_use]
+    #[expect(clippy::type_complexity, reason = "TODO: Address this later.")]
     pub fn into_mempool_service_era_schedule(
         self,
         eras: &EraSchedule<EraDefinition>,

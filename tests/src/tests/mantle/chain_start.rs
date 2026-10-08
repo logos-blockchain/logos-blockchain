@@ -1,7 +1,7 @@
 use std::{num::NonZero, path::PathBuf, time::Duration};
 
 use lb_chain_service::PhaseTag;
-use lb_node::config::{RunConfig, deployment::parameters::v1::cryptarchia::EpochConfig};
+use lb_node::config::{RunConfig, deployment::era::parameters::v1::cryptarchia::EpochConfig};
 use lb_testing_framework::{
     DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::deployment::NodeBinaryProfile, ensure_node_binary_built,
@@ -96,30 +96,17 @@ where
 }
 
 fn test_config(mut config: RunConfig) -> RunConfig {
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .time
-        .slot_duration = Duration::from_secs(1);
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .epoch_config = EpochConfig {
-        epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
-        epoch_period_nonce_buffer: 1.try_into().unwrap(),
-        epoch_period_nonce_stabilization: 1.try_into().unwrap(),
-    };
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .security_param = NonZero::new(2).unwrap();
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .slot_activation_coeff = NonNegativeRatio::new(1, 10.try_into().unwrap());
+    config.deployment.update_genesis_era_parameters(|parameters| {
+        parameters.time.slot_duration = Duration::from_secs(1);
+        parameters.cryptarchia.epoch_config = EpochConfig {
+            epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+            epoch_period_nonce_buffer: 1.try_into().unwrap(),
+            epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+        };
+        parameters.cryptarchia.security_param = NonZero::new(2).unwrap();
+        parameters.cryptarchia.slot_activation_coeff =
+            NonNegativeRatio::new(1, 10.try_into().unwrap());
+    });
 
     config
 }
