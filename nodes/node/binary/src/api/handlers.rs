@@ -39,7 +39,7 @@ use lb_core::{
     },
 };
 use lb_http_api_common::{
-    TimeInfo,
+    EraTiming, TimeInfo,
     bodies::{
         blend::JoinBlendRequestBody,
         chain::ChainIdResponseBody,
@@ -544,9 +544,22 @@ where
     match receiver.await {
         Ok(service_info) => {
             let api_info = TimeInfo {
-                genesis_time: service_info.genesis_time,
+                genesis_time: service_info.era_schedules.genesis().start_time.to_utc(),
                 current_slot: u64::from(service_info.current_slot),
                 current_epoch: u32::from(service_info.current_epoch),
+                era_timings: service_info
+                    .era_schedules
+                    .iter()
+                    .map(|era| {
+                        (
+                            u32::from(era.first_epoch),
+                            EraTiming {
+                                slot_duration: era.entry.slot_duration,
+                                slots_per_epoch: era.entry.epoch_length_in_slots,
+                            },
+                        )
+                    })
+                    .collect(),
             };
             (StatusCode::OK, Json(api_info)).into_response()
         }

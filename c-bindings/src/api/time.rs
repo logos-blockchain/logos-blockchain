@@ -61,7 +61,11 @@ pub(crate) fn get_time_info_sync(node: &LogosBlockchainNode) -> StatusResult<Tim
             )
         })?;
         Ok(TimeInfo {
-            genesis_time_unix: service_info.genesis_time.unix_timestamp(),
+            genesis_time_unix: service_info
+                .era_schedules
+                .genesis()
+                .start_time
+                .unix_timestamp(),
             current_slot: u64::from(service_info.current_slot),
             current_epoch: u32::from(service_info.current_epoch),
         })

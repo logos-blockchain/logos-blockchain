@@ -3,10 +3,11 @@
     reason = "`ZoneSequencer` impl is split across actor.rs / backfill.rs / zone_sequencer.rs by concern for navigability."
 )]
 
-use std::time::{Duration, SystemTime};
+use std::num::NonZero;
 
-use lb_common_http_client::{ChainServiceInfo, Slot, TimeInfo};
+use lb_common_http_client::{ChainServiceInfo, EraTiming, Slot, TimeInfo};
 use lb_core::mantle::ops::channel::MsgId;
+use lb_time::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraSchedules};
 use tracing::{debug, error, info, warn};
 
 use super::{
@@ -227,28 +228,7 @@ where
         observed_slot: Slot,
         timing_info: &TimeInfo,
     ) -> Result<SlotClock, Error> {
-        let slot_duration = Duration::from_millis(timing_info.slot_duration_ms);
-        if slot_duration.is_zero() {
-            return Err(Error::Network(
-                "node reported slot_duration_ms=0 for time info".to_owned(),
-            ));
-        }
-
-        let genesis_ms = u64::try_from(timing_info.genesis_time_unix_ms).map_err(|_| {
-            Error::Network(format!(
-                "node reported negative genesis_time_unix_ms: {}",
-                timing_info.genesis_time_unix_ms
-            ))
-        })?;
-        let chain_start_time = SystemTime::UNIX_EPOCH
-            .checked_add(Duration::from_millis(genesis_ms))
-            .ok_or_else(|| {
-                Error::Network(format!(
-                    "node reported out-of-range genesis_time_unix_ms: {genesis_ms}"
-                ))
-            })?;
-
-        let mut slot_clock = SlotClock::from_chain_start_time(chain_start_time, slot_duration);
+        let mut slot_clock = SlotClock::from_era_schedule(era_schedule(timing_info)?);
         slot_clock.observe_slot(observed_slot);
         Ok(slot_clock)
     }
@@ -311,4 +291,47 @@ where
         }
         true
     }
+}
+
+/// The chain's eras as the node reports them, resolved as the node resolves
+/// them.
+fn era_schedule(timing_info: &TimeInfo) -> Result<EraSchedules, Error> {
+    let map_invalid_error_with_reason =
+        |reason: &str| Error::Network(format!("node reported invalid eras: {reason}"));
+    let map_era_timing_to_era_entry = |era: &EraTiming| {
+        if era.slot_duration.is_zero() {
+            return Err(map_invalid_error_with_reason("a slot duration of 0"));
+        }
+        Ok(EraEntry {
+            slot_duration: era.slot_duration,
+            epoch_length_in_slots: era.slots_per_epoch,
+            parameters: (),
+        })
+    };
+
+    let mut eras = timing_info.era_timings.iter();
+    let (&genesis_epoch, genesis) = eras
+        .next()
+        .ok_or_else(|| map_invalid_error_with_reason("none"))?;
+    if genesis_epoch != 0 {
+        return Err(map_invalid_error_with_reason(
+            "the first era does not start at genesis",
+        ));
+    }
+    let after_genesis = eras
+        .map(|(&first_epoch, era)| {
+            let first_epoch = NonZero::new(first_epoch)
+                .expect("eras are keyed by unique epochs, and only the first is at epoch 0");
+            Ok((first_epoch, map_era_timing_to_era_entry(era)?))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let after_genesis = EraEntriesAfterGenesis::try_from_iter(after_genesis)
+        .map_err(|error| map_invalid_error_with_reason(&error.to_string()))?;
+
+    EraSchedule::new(
+        timing_info.genesis_time.into(),
+        map_era_timing_to_era_entry(genesis)?,
+        after_genesis,
+    )
+    .map_err(|error| map_invalid_error_with_reason(&error.to_string()))
 }

@@ -4,7 +4,10 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
-use lb_time::{Epoch, Slot, era::EraSchedule};
+use lb_time::{
+    Epoch, Slot,
+    era::{EraSchedule, EraSchedules},
+};
 use lb_log_targets::time as log_targets_time;
 use log::error;
 use overwatch::{
@@ -14,7 +17,6 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
-use time::UtcDateTime;
 use tokio::sync::{oneshot, watch};
 use tokio_stream::wrappers::WatchStream;
 
@@ -30,9 +32,9 @@ const LOG_TARGET: &str = log_targets_time::ROOT;
 /// and is mapped to the API response struct by the API layer
 #[derive(Clone, Debug)]
 pub struct TimeServiceInfo {
-    pub genesis_time: UtcDateTime,
     pub current_slot: Slot,
     pub current_epoch: Epoch,
+    pub era_schedules: EraSchedules,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -168,9 +170,9 @@ fn handle_service_message<BackendSettings>(
     match message {
         TimeServiceMessage::Info { sender } => {
             drop(sender.send(TimeServiceInfo {
-                genesis_time: settings_schedule.genesis().start_time.to_utc(),
                 current_slot: current_slot_tick.slot,
                 current_epoch: current_slot_tick.epoch,
+                era_schedules: settings_schedule.map(|_| ()),
             }));
         }
         TimeServiceMessage::Subscribe { sender } => {

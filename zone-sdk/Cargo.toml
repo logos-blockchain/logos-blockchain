@@ -23,11 +23,13 @@ lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-log-targets                   = { workspace = true }
+lb-time                          = { workspace = true }
 rand                             = { workspace = true }
 reqwest                          = { workspace = true }
 rpds                             = { workspace = true }
 serde                            = { features = ["derive"], workspace = true }
 thiserror                        = { workspace = true }
+time                             = { features = ["std"], workspace = true }
 tokio                            = { features = ["macros", "rt", "sync", "time"], workspace = true }
 tracing                          = { workspace = true }
 

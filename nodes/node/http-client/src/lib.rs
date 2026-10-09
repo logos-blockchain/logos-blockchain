@@ -18,7 +18,7 @@ pub use lb_core::{
     mantle::transactions::genesis_tx::ChainId,
 };
 use lb_groth16::fr_to_bytes;
-pub use lb_http_api_common::TimeInfo;
+pub use lb_http_api_common::{EraTiming, TimeInfo};
 use lb_http_api_common::{
     MAX_BLOCKS_STREAM_BLOCKS, MAX_BLOCKS_STREAM_CHUNK_SIZE,
     bodies::{
