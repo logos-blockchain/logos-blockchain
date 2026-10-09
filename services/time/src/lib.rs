@@ -4,11 +4,11 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
+use lb_log_targets::time as log_targets_time;
 use lb_time::{
     Epoch, Slot,
     era::{EraSchedule, EraSchedules},
 };
-use lb_log_targets::time as log_targets_time;
 use log::error;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
