@@ -8,11 +8,11 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
+use lb_log_targets::time as log_targets_time;
 use lb_time::{
     Slot,
     era::{Era, EraSchedules},
 };
-use lb_log_targets::time as log_targets_time;
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use sntpc::{NtpResult, fraction_to_nanoseconds};
 use time::OffsetDateTime;

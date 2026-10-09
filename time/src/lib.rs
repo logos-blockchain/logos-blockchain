@@ -164,7 +164,6 @@ impl Slot {
         Self(0)
     }
 
-
     /// Strict slot addition, panicking if overflow occurred.
     ///
     /// # Panics
@@ -227,4 +226,3 @@ impl From<Slot> for u64 {
         slot.0
     }
 }
-
