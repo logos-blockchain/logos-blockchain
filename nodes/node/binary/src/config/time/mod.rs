@@ -1,5 +1,8 @@
 use lb_core::mantle::GenesisTime;
-use lb_cryptarchia_engine::{EpochConfig, era::EraSchedule, time::SlotConfig};
+use lb_cryptarchia_engine::{
+    EpochConfig,
+    time::{EraSchedule, SlotConfig},
+};
 use lb_time_service::{
     TimeServiceSettings,
     backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings},

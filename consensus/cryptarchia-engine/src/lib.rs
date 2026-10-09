@@ -1,8 +1,5 @@
 pub mod config;
-pub mod era;
 pub mod time;
-
-mod fixtures;
 
 use core::{fmt::Debug, hash::Hash};
 use std::{
@@ -15,7 +12,7 @@ use lb_log_targets::cryptarchia;
 use lb_utils::bounded::UpperBoundedVec;
 use rpds::{HashTrieMapSync, HashTrieSetSync};
 use thiserror::Error;
-pub use time::{Epoch, EpochConfig, Slot};
+pub use time::{Epoch, EpochConfig, Era, EraEntry, EraEntryView, EraSchedule, Slot};
 
 pub(crate) const LOG_TARGET: &str = cryptarchia::engine::ROOT;
 

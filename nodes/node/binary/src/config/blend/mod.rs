@@ -13,8 +13,8 @@ use lb_blend_service::{
     },
     settings::{CommonSettings, CoreSettings, EdgeSettings, Settings as BlendSettings},
 };
-use lb_cryptarchia_engine::era::EraSchedule;
 use lb_services_utils::overwatch::RecoveryData;
+use lb_time::era::EraSchedule;
 
 use crate::config::{
     blend::serde::Config,

@@ -9,10 +9,8 @@ use lb_core::{
         transactions::genesis_tx::{ChainId, GenesisTime},
     },
 };
-use lb_cryptarchia_engine::{
-    Epoch, Slot,
-    era::{EraEntriesAfterGenesis, EraEntry},
-};
+use lb_cryptarchia_engine::EraEntry;
+use lb_time::{Epoch, Slot, era::EraEntriesAfterGenesis};
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +24,7 @@ use crate::config::deployment::era::ruleset::{EraRuleset, v1};
 
 pub const SERIALIZED_DEPLOYMENT: &[u8] = include_bytes!("settings.yaml");
 
-type EraSchedule = lb_cryptarchia_engine::era::EraSchedule<EraDefinition>;
+type EraSchedule = lb_time::era::EraSchedule<EraDefinition>;
 
 /// An era schedule as its file declares it.
 #[derive(Serialize, Deserialize)]

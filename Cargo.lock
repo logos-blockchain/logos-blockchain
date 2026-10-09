@@ -4582,6 +4582,7 @@ dependencies = [
  "logos-blockchain-poc",
  "logos-blockchain-pol",
  "logos-blockchain-poseidon2",
+ "logos-blockchain-time",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
  "logos-blockchain-zksign",
@@ -4603,13 +4604,12 @@ dependencies = [
 name = "logos-blockchain-cryptarchia-engine"
 version = "0.0.0"
 dependencies = [
- "logos-blockchain-binary-codec",
  "logos-blockchain-log-targets",
  "logos-blockchain-pol",
+ "logos-blockchain-time",
  "logos-blockchain-utils",
  "rpds",
  "serde",
- "serde_with",
  "thiserror 2.0.21",
  "time",
  "tokio",
@@ -4960,6 +4960,7 @@ dependencies = [
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",
  "logos-blockchain-system-sig-service",
+ "logos-blockchain-time",
  "logos-blockchain-time-service",
  "logos-blockchain-tracing",
  "logos-blockchain-tracing-service",
@@ -5236,6 +5237,19 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "logos-blockchain-time"
+version = "0.0.0"
+dependencies = [
+ "logos-blockchain-binary-codec",
+ "logos-blockchain-utils",
+ "serde",
+ "serde_with",
+ "thiserror 2.0.21",
+ "time",
+ "utoipa",
 ]
 
 [[package]]
