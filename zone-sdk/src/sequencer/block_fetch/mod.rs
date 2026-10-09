@@ -1013,10 +1013,6 @@ fn apply_backfilled_block(
     let mut channel_txs = classify_channel_txs(&block.transactions, channel_id);
     demote_non_identity_pin_deposits(&mut channel_txs, &block.transactions, channel_id, state);
 
-    // Mirror inscriptions into pending before the safe-set build, matching
-    // the live-block path in `handle_block_event`.
-    mirror_channel_txs(state, &channel_txs, &block.transactions, channel_id);
-
     let mirrorable = mirrorable_txs(&channel_txs, &block.transactions);
     // Use current state lib to avoid premature finalization
     state.process_block(block_id, parent_id, lib, our_txs, channel_txs, note_ops);

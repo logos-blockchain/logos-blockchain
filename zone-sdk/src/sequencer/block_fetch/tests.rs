@@ -1231,12 +1231,14 @@ async fn fork_block_inscription_is_adopted_on_the_switch() {
     );
 }
 
-/// Pending suffix vs. forks: a bare un-mine keeps it, a fork competitor
-/// changes nothing, the fork winning replaces it in one report.
+/// Pending suffix vs. forks: a fork competitor changes nothing even when
+/// its block is backfilled, a bare un-mine keeps the suffix, the fork
+/// winning replaces it in one report.
 #[tokio::test]
 async fn pending_suffix_survives_forks_until_a_competitor_is_canonical() {
-    // G <- B1(i1, i2) <- B2(i3, i4); B1 <- B3 empty (tip: i3, i4 pending);
-    // B1 <- B4(i3') fork; B4 <- B5(i4') canonical: B4's branch wins.
+    // G <- B1(i1, i2) <- B2(i3, i4) tip; B1 <- B4(i3') never streamed;
+    // B4 <- B6 empty fork (B4 backfilled); B1 <- B3 empty (i3, i4 pending);
+    // B4 <- B5(i4') canonical: B4's branch wins.
     let ch = ChannelId::from([0u8; 32]);
     let (i1_id, i1_tx) = ins(ch, MsgId::root(), b"i1");
     let (i2_id, i2_tx) = ins(ch, i1_id, b"i2");
@@ -1249,17 +1251,23 @@ async fn pending_suffix_survives_forks_until_a_competitor_is_canonical() {
     let b2 = api_block(2, 1, 2, vec![i3_tx, i4_tx]);
     let b3 = api_block(3, 1, 3, Vec::new());
     let b4 = api_block(4, 1, 4, vec![i3a_tx]);
-    let b5 = api_block(5, 4, 5, vec![i4a_tx]);
+    let b6 = api_block(6, 4, 5, Vec::new());
+    let b5 = api_block(5, 4, 6, vec![i4a_tx]);
 
+    let node = MockNode {
+        blocks: vec![b4],
+        ..MockNode::default()
+    };
     let mut state = None;
-    let r = drive(
+    let r = drive_with(
+        &node,
         &mut state,
         ch,
         &[
             live_event(&b1),
             live_event(&b2),
+            fork_event(&b6, &b2),
             live_event(&b3),
-            fork_event(&b4, &b3),
             live_event(&b5),
         ],
     )
@@ -1267,11 +1275,11 @@ async fn pending_suffix_survives_forks_until_a_competitor_is_canonical() {
 
     assert!(
         r[2].result.channel_update.is_none(),
-        "bare un-mine keeps i3, i4"
+        "fork competitor: nothing decided"
     );
     assert!(
         r[3].result.channel_update.is_none(),
-        "fork competitor: nothing decided"
+        "bare un-mine keeps i3, i4"
     );
     let u = r[4].result.channel_update.as_ref().expect("the switch");
     assert_eq!(msg_ids(&u.orphaned), vec![i3_id, i4_id]);
