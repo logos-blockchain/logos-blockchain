@@ -38,7 +38,7 @@ cryptarchia:
       # load the network actually carries: two transactions per block. A
       # theoretical capacity here would pin the threshold off its calibrated
       # point.
-      target_transactions_per_block: 2
+      target_transactions_per_block: 12
       max_step: 2
       damping_num: 1
       damping_den_offset: 1
