@@ -5823,6 +5823,7 @@ dependencies = [
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-log-targets",
+ "logos-blockchain-time",
  "num-bigint",
  "rand 0.8.8",
  "reqwest 0.12.28",
@@ -5830,6 +5831,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tracing",
 ]

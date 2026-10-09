@@ -1,3 +1,6 @@
+use core::{num::NonZero, time::Duration};
+use std::collections::BTreeMap;
+
 use time::UtcDateTime;
 
 pub mod bodies;
@@ -15,12 +18,27 @@ compile_error!(
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct TimeInfo {
-    /// When the chain started, in RFC 3339.
+    /// When the chain started, i.e. the start of its genesis era, in RFC 3339.
     #[serde(with = "rfc3339_utc")]
     #[schema(value_type = String, format = DateTime)]
     pub genesis_time: UtcDateTime,
     pub current_slot: u64,
     pub current_epoch: u32,
+    /// The chain's eras, keyed by the epoch each starts at: the first at
+    /// genesis, epoch 0. The index of each item in iteration order represents
+    /// the era number.
+    pub era_timings: BTreeMap<u32, EraTiming>,
+}
+
+#[serde_with::serde_as]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+pub struct EraTiming {
+    #[serde(rename = "slot_duration_ms")]
+    #[serde_as(as = "serde_with::DurationMilliSeconds<u64>")]
+    #[schema(value_type = u64)]
+    pub slot_duration: Duration,
+    #[schema(value_type = u64)]
+    pub slots_per_epoch: NonZero<u64>,
 }
 
 /// A UTC date-time in RFC 3339, which `time` only provides for an
