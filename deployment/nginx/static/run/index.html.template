@@ -77,9 +77,6 @@
             <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/web/cfgsync/deployment-settings" target="_blank">Deployment Settings</a>
         </li>
         <li>
-            <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/web/faucet/" target="_blank">Faucet</a>
-        </li>
-        <li>
             <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/internal/node-data/" target="_blank">Node Data</a>
         </li>
     </ul>
