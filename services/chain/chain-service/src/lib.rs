@@ -37,8 +37,11 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
+use lb_key_management_system_keys::keys::ZkPublicKey;
 pub use lb_ledger::EpochState;
-use lb_ledger::{LedgerState, config::EraScheduledConfig};
+use lb_ledger::{
+    LedgerState, config::EraScheduledConfig, mantle::sdp::rewards::blend::RewardEstimate,
+};
 use lb_log_targets::chain;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
@@ -207,6 +210,11 @@ pub enum Query {
     GetSdpSnapshot {
         reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
     },
+    /// Returns the Blend rewards at the tip of the declaration `declaration_id`
+    GetBlendRewards {
+        declaration_id: DeclarationId,
+        reply_channel: oneshot::Sender<Option<BlendRewards>>,
+    },
     GetEpochState {
         slot: Slot,
         reply_channel: oneshot::Sender<Result<EpochState, Error>>,
@@ -257,6 +265,15 @@ pub struct CryptarchiaInfo {
     pub slot: Slot,
     pub height: u64,
     pub state: State,
+}
+
+/// The Blend rewards of a declaration.
+#[derive(Debug, Clone)]
+pub struct BlendRewards {
+    /// The key the rewards are minted to.
+    pub reward_key: ZkPublicKey,
+    /// `None` while no epoch is being paid out.
+    pub estimate: Option<RewardEstimate>,
 }
 
 /// The epoch state returned by a chain query together with the exact

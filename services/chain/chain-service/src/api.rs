@@ -21,8 +21,8 @@ use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
 use crate::{
-    AppliedBlock, ChainServiceInfo, ConsensusMsg, CryptarchiaInfo, EpochStateQueryResult,
-    LibUpdate, ProcessedBlockEvent, Query,
+    AppliedBlock, BlendRewards, ChainServiceInfo, ConsensusMsg, CryptarchiaInfo,
+    EpochStateQueryResult, LibUpdate, ProcessedBlockEvent, Query,
 };
 
 pub trait CryptarchiaServiceData:
@@ -323,6 +323,36 @@ where
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetSdpSnapshot"))
+        })
+    }
+
+    /// Fetch the Blend rewards at the tip of the declaration `declaration_id`
+    ///
+    /// # Returns
+    ///
+    /// The [`BlendRewards`] for the epoch being paid out, or `None` if the
+    /// declaration is not in the tip's ledger.
+    pub async fn get_blend_rewards(
+        &self,
+        declaration_id: DeclarationId,
+    ) -> Result<Option<BlendRewards>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(
+                Query::GetBlendRewards {
+                    declaration_id,
+                    reply_channel,
+                }
+                .into(),
+            )
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetBlendRewards"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetBlendRewards"))
         })
     }
 
