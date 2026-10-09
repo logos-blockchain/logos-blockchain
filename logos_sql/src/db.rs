@@ -5,6 +5,10 @@ use std::{
     num::NonZeroUsize,
     ops::Deref,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -14,6 +18,7 @@ use rusqlite::{
     Connection, ErrorCode as SqliteErrorCode, OpenFlags, OptionalExtension as _, Row,
     backup::Backup,
     hooks::{AuthAction, AuthContext, Authorization},
+    limits::Limit,
     params, params_from_iter,
     types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef},
 };
@@ -21,11 +26,26 @@ use rusqlite::{
 use crate::{
     error::Error,
     functions::FunctionOverrides,
-    protocol::{ChannelWrite, EncodedWrite, Transaction, TxId},
+    protocol::{ChannelWrite, EncodedWrite, MAX_BODY_BYTES, Transaction, TxId},
     status::{Displacement, DisplacementReason, WriteStatus},
 };
 
 const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+// One allowance for all statements in an application transaction. Charge 1,000
+// steps per statement plus each progress callback, so many short statements
+// cannot avoid the limit. Count work rather than elapsed time so slower
+// replicas do not reject more writes.
+// This is a replication rule, not a per-node tuning option. Changes to this
+// limit or the SQLite execution engine require coordinated upgrades.
+const MAX_SQL_STEPS: u64 = 10_000_000;
+const SQL_PROGRESS_INTERVAL: i32 = 1_000;
+
+// SQL-generated values and complete rows must fit the same 64 MiB allowance
+// as an uncompressed write. A step budget alone cannot bound a large blob
+// operation. These limits do not cap the total data written by a transaction.
+const MAX_SQL_BYTES: i32 = MAX_BODY_BYTES as i32;
+
 const LIB_DATABASE_FILE: &str = "LIB.db";
 const LIVE_DATABASE_FILE: &str = "LIVE.db";
 const CONTROL_DATABASE_FILE: &str = "control.db";
@@ -86,7 +106,8 @@ const CONTROL_SCHEMA: &str = "
 
     CREATE TABLE IF NOT EXISTS __logos_sql_displaced_writes (
         tx_id BLOB PRIMARY KEY CHECK (length(tx_id) = 32),
-        this_msg BLOB NOT NULL CHECK (length(this_msg) = 32)
+        this_msg BLOB NOT NULL CHECK (length(this_msg) = 32),
+        content_digest BLOB NOT NULL CHECK (length(content_digest) = 32)
     ) STRICT;
 
     CREATE TABLE IF NOT EXISTS __logos_sql_write_statuses (
@@ -225,9 +246,10 @@ const UPSERT_WRITE_STATUS: &str = "
 ";
 
 const INSERT_DISPLACED_WRITE: &str = "
-    INSERT INTO __logos_sql_displaced_writes (tx_id, this_msg)
-    VALUES (?1, ?2)
-    ON CONFLICT (tx_id) DO UPDATE SET this_msg = excluded.this_msg
+    INSERT INTO __logos_sql_displaced_writes (tx_id, this_msg, content_digest)
+    VALUES (?1, ?2, ?3)
+    ON CONFLICT (tx_id) DO UPDATE SET
+        this_msg = excluded.this_msg, content_digest = excluded.content_digest
 ";
 
 const DELETE_DISPLACED_WRITE: &str = "
@@ -268,11 +290,9 @@ const HAS_PENDING_WRITE: &str = "
 const MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
 
 const SELECT_DISPLACED_WRITE_BY_TX: &str = "
-    SELECT EXISTS(
-        SELECT 1
-        FROM __logos_sql_displaced_writes
-        WHERE tx_id = ?1
-    )
+    SELECT content_digest
+    FROM __logos_sql_displaced_writes
+    WHERE tx_id = ?1
 ";
 
 const SELECT_APPLIED_WRITE: &str = "
@@ -966,10 +986,11 @@ fn orphan_write(transaction: &rusqlite::Transaction<'_>, this_msg: &MsgId) -> Re
 
     for (tx_id, payload) in local_writes {
         let tx_id = decode_tx_id(tx_id)?;
+        let content_digest = ChannelWrite::decode(&payload)?.content_digest();
 
         transaction.execute(
             INSERT_DISPLACED_WRITE,
-            params![tx_id.as_ref(), this_msg.as_ref()],
+            params![tx_id.as_ref(), this_msg.as_ref(), content_digest],
         )?;
 
         record_displacement(transaction, tx_id, "orphaned", &payload)?;
@@ -982,11 +1003,21 @@ fn orphan_write(transaction: &rusqlite::Transaction<'_>, this_msg: &MsgId) -> Re
 
 /// Adds a write to the live suffix; marks a displaced local write live again.
 fn adopt_write(transaction: &rusqlite::Transaction<'_>, write: &SuffixWrite) -> Result<(), Error> {
-    let restored_local = transaction.query_row(
-        SELECT_DISPLACED_WRITE_BY_TX,
-        [write.tx_id.as_ref()],
-        |row| row.get::<_, bool>(0),
-    )?;
+    let original_digest = transaction
+        .query_row(
+            SELECT_DISPLACED_WRITE_BY_TX,
+            [write.tx_id.as_ref()],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()?;
+
+    // Another writer can copy our transaction ID. Only matching content means
+    // our write returned; different content stays foreign and leaves it displaced.
+    let restored_local = if let Some(original_digest) = original_digest {
+        original_digest.as_slice() == ChannelWrite::decode(&write.payload)?.content_digest()
+    } else {
+        false
+    };
 
     if restored_local {
         set_write_status(transaction, write.tx_id, WriteStatus::Live)?;
@@ -1241,15 +1272,45 @@ fn apply_statements(
     db_transaction: &rusqlite::Transaction<'_>,
     transaction: &Transaction,
 ) -> Result<(), Error> {
+    let previous_length = db_transaction.set_limit(Limit::SQLITE_LIMIT_LENGTH, MAX_SQL_BYTES)?;
+    let previous_sql_length =
+        db_transaction.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, MAX_SQL_BYTES)?;
+
     db_transaction.authorizer(Some(authorize_application_sql));
 
+    let work = Arc::new(AtomicU64::new(0));
+    let progress_work = Arc::clone(&work);
+
+    db_transaction.progress_handler(
+        SQL_PROGRESS_INTERVAL,
+        Some(move || {
+            progress_work.fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed)
+                >= MAX_SQL_STEPS
+        }),
+    );
+
     let result = transaction.statements().iter().try_for_each(|statement| {
+        if work.fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed) >= MAX_SQL_STEPS {
+            return Err(Error::ExecutionBudgetExceeded);
+        }
+
         db_transaction.execute(statement.sql(), params_from_iter(statement.params()))?;
 
         Ok::<_, Error>(())
     });
 
     db_transaction.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    // Bookkeeping and rollback must not inherit the application's spent budget.
+    db_transaction.progress_handler(0, None::<fn() -> bool>);
+
+    // Internal rows also contain replication metadata and encoded payloads;
+    // they are not application rows and must not inherit these size limits.
+    db_transaction.set_limit(Limit::SQLITE_LIMIT_LENGTH, previous_length)?;
+    db_transaction.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, previous_sql_length)?;
+
+    if work.load(Ordering::Relaxed) > MAX_SQL_STEPS {
+        return Err(Error::ExecutionBudgetExceeded);
+    }
 
     result
 }
@@ -1810,6 +1871,10 @@ pub mod tests {
             crate::DisplacementReason::Orphaned
         );
 
+        db.mark_displacement_handled(&first_displacement).unwrap();
+        drop(db);
+        let mut db = open_databases(dir.path()).unwrap();
+
         db.apply_history_delta(
             &[],
             &[],
@@ -1820,7 +1885,7 @@ pub mod tests {
                 local: false,
             }],
         )
-        .expect("different channel position should be retained as a foreign write");
+        .expect("the same content at a new channel position should restore our write");
 
         assert_eq!(
             db.write_status(tx_id).expect("write status should load"),
@@ -2182,6 +2247,158 @@ pub mod tests {
                 .expect("row count should be readable"),
             0
         );
+    }
+
+    #[test]
+    fn endless_local_sql_rolls_back_and_allows_the_next_write() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = open_databases(dir.path()).expect("databases should open");
+        db.live
+            .execute("CREATE TABLE items(value TEXT)", [])
+            .unwrap();
+
+        let write = Transaction::new(vec![
+            Statement::new(
+                "INSERT INTO items VALUES ('rolled back')".to_owned(),
+                vec![],
+            )
+            .unwrap(),
+            Statement::new(
+                "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c)
+                 SELECT x FROM c WHERE x < 0"
+                    .to_owned(),
+                vec![],
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            db.commit_local_write(TxId::generate(), &write),
+            Err(Error::ExecutionBudgetExceeded)
+        ));
+        assert!(db.pending_publish().unwrap().is_none());
+
+        db.commit_local_write(TxId::generate(), &insert("next write"))
+            .expect("a rejected transaction must not block later writes");
+
+        assert_eq!(
+            row_values(&db.live, "items"),
+            vec![Value::Text("next write".into())]
+        );
+        let count: i64 = db
+            .live
+            .query_row("SELECT count(*) FROM items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn oversized_values_roll_back_and_allow_the_next_write() {
+        for function in ["zeroblob", "randomblob"] {
+            let dir = TempDir::new().expect("temporary directory should be created");
+            let mut db = open_databases(dir.path()).expect("databases should open");
+            db.live
+                .execute("CREATE TABLE items(value TEXT)", [])
+                .unwrap();
+
+            let write = Transaction::new(vec![
+                Statement::new(
+                    "INSERT INTO items VALUES ('rolled back')".to_owned(),
+                    vec![],
+                )
+                .unwrap(),
+                Statement::new(
+                    format!("INSERT INTO items VALUES ({function}(?1))"),
+                    vec![Value::Integer(i64::from(super::MAX_SQL_BYTES) + 1)],
+                )
+                .unwrap(),
+            ])
+            .unwrap();
+
+            let error = db.commit_local_write(TxId::generate(), &write).unwrap_err();
+            assert!(
+                matches!(error, Error::Database(ref error)
+                if super::is_deterministic_sql_error(error)),
+                "{function}: {error:?}"
+            );
+            assert!(db.pending_publish().unwrap().is_none());
+
+            db.commit_local_write(TxId::generate(), &insert("next write"))
+                .expect("oversized values must not block later writes");
+            assert_eq!(
+                row_values(&db.live, "items"),
+                vec![Value::Text("next write".into())]
+            );
+        }
+    }
+
+    #[test]
+    fn short_statements_cannot_bypass_the_execution_budget() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = open_databases(dir.path()).expect("databases should open");
+        db.live
+            .execute("CREATE TABLE items(value INTEGER)", [])
+            .unwrap();
+
+        let count = (super::MAX_SQL_STEPS / super::SQL_PROGRESS_INTERVAL as u64 + 1) as usize;
+        let statement = Statement::new("INSERT INTO items VALUES (1)".to_owned(), vec![]).unwrap();
+        let write = Transaction::new(vec![statement; count]).unwrap();
+
+        assert!(matches!(
+            db.commit_local_write(TxId::generate(), &write),
+            Err(Error::ExecutionBudgetExceeded)
+        ));
+        let count: i64 = db
+            .live
+            .query_row("SELECT count(*) FROM items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+        assert!(db.pending_publish().unwrap().is_none());
+    }
+
+    #[test]
+    fn statements_share_one_execution_budget() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = open_databases(dir.path()).expect("databases should open");
+        db.live
+            .execute("CREATE TABLE items(value INTEGER)", [])
+            .unwrap();
+
+        // One bounded calculation fits, but two in one transaction exceed the
+        // allowance. Splitting expensive work into statements must not evade it.
+        let statement = Statement::new(
+            "WITH RECURSIVE c(x) AS (
+                 SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 300000
+             ) INSERT INTO items SELECT sum(x) FROM c"
+                .to_owned(),
+            vec![],
+        )
+        .unwrap();
+        let write = ChannelWrite {
+            tx_id: TxId::generate(),
+            transaction: Transaction::new(vec![statement.clone()]).unwrap(),
+            captured_function_calls: CapturedFunctionCalls::empty(),
+        };
+
+        db.apply_adopted_write(&write)
+            .expect("one calculation fits");
+
+        let expensive = ChannelWrite {
+            tx_id: TxId::generate(),
+            transaction: Transaction::new(vec![statement.clone(), statement]).unwrap(),
+            captured_function_calls: CapturedFunctionCalls::empty(),
+        };
+        assert!(matches!(
+            db.apply_adopted_write(&expensive),
+            Err(Error::ExecutionBudgetExceeded)
+        ));
+
+        let count: i64 = db
+            .live
+            .query_row("SELECT count(*) FROM items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "neither statement of the rejected write commits");
     }
 
     #[test]

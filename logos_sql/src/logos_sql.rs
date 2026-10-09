@@ -75,7 +75,7 @@ impl Default for PublicationConfig {
 
 /// A running `λSQL` database.
 ///
-/// `LogosSql` owns one background task. That task is the only owner of both the
+/// `LogosSql` owns one background task on a dedicated thread. It owns both the
 /// `ZoneSDK` sequencer and the database writer. Dropping `LogosSql` aborts the
 /// task; call [`Self::shutdown`] to stop it gracefully and observe errors.
 pub struct LogosSql {
@@ -154,7 +154,7 @@ impl LogosSql {
             checkpoint,
             read_only,
             publication.max_transactions,
-        );
+        )?;
 
         let mut logos_sql = Self {
             lib_path,

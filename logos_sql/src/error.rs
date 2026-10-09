@@ -61,6 +61,10 @@ pub enum Error {
     #[error("channel SQL was rejected: {0}")]
     RejectedSql(#[source] rusqlite::Error),
 
+    /// The application transaction exceeded the SQLite execution allowance.
+    #[error("SQL transaction exceeded its execution budget")]
+    ExecutionBudgetExceeded,
+
     /// The encoded payload exceeds the inscription limit.
     #[error("transaction is too large for one inscription")]
     InscriptionTooLarge,
