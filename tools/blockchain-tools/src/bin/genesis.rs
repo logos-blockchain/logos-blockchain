@@ -85,9 +85,9 @@ pub struct CeremonyArgs {
     #[arg(long, value_name = "FILE")]
     pub faucet: PathBuf,
 
-    /// The genesis template: era zero's ruleset and its parameters. The ceremony
-    /// generates the rest of the deployment config from it. Without it, the
-    /// default deployment's era zero is used.
+    /// The genesis template: era zero's ruleset and its parameters. The
+    /// ceremony generates the rest of the deployment config from it.
+    /// Without it, the default deployment's era zero is used.
     #[arg(long, value_name = "FILE")]
     pub template: Option<PathBuf>,
 

@@ -187,12 +187,14 @@ pub async fn start_fast_cluster_with_wallet(
 }
 
 fn fast_chain_config(mut config: RunConfig) -> RunConfig {
-    config.deployment.update_genesis_era_parameters(|parameters| {
-        parameters.time.slot_duration = Duration::from_secs(2);
-        parameters.cryptarchia.security_param = NonZero::new(3).expect("nonzero");
-        parameters.cryptarchia.slot_activation_coeff =
-            NonNegativeRatio::new(1, 2.try_into().expect("nonzero"));
-    });
+    config
+        .deployment
+        .update_genesis_era_parameters(|parameters| {
+            parameters.time.slot_duration = Duration::from_secs(2);
+            parameters.cryptarchia.security_param = NonZero::new(3).expect("nonzero");
+            parameters.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, 2.try_into().expect("nonzero"));
+        });
     config
 }
 
