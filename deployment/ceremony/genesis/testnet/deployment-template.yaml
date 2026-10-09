@@ -43,40 +43,12 @@ cryptarchia:
       damping_num: 1
       damping_den_offset: 1
     reward:
-      # Token-reward PoW parameters, sized for the target network of ~200
-      # mining nodes over the two-week epoch schedule.
-      #
-      # Pool sized to put 200 nodes over the minimum stake, with margin for
-      # mining being spread unevenly across them.
-      reward_pool_genesis: 300000000000
-      # Forced by the pool and the payout rate:
-      # W0 * rate_num / (rate_den * target_claim_per_block *
-      # expected_blocks_per_epoch) = 3e11 / (10 * 1 * 1200).
-      # `expected_blocks_per_epoch` is not a config value: the ledger derives
-      # it from the consensus schedule as `10k`, which is 1200 at
-      # `security_param: 120`.
-      epoch_reward_genesis: 25000000
-      # Genesis `d_reward`, as the exponent n in p / 2^n — the same form as
-      # the Blend `base_difficulty` above. Fixed by the specification.
-      # Also the minimum difficulty: the retarget never eases past it.
-      minimum_difficulty: 19
-      ema_smoothing_factor: 9
-      ema_smoothing_precision: 10
-      # One claim per block: claims are transactions, and the per-block
-      # transaction budget is 2. Must track `target_claim_per_block` below.
-      target_claims_per_block: 1
-      # rho = rate_num / rate_den = 1/10 of the pool per epoch, which
-      # distributes 97% of it across the two weeks.
+      reward_pool_genesis: 1260000000000 # 1.5 × 760 × 10⁹ / 0.90
+      epoch_reward_genesis: 1666666      # ⌊W₀ / (63 · 10 · 1,200)⌋, set by hand
+      target_claims_per_block: 10        # the retarget's T
       rate_num: 1
-      rate_den: 10
-      target_claim_per_block: 1
-      # `pow_share / share_den` of the fees each block collects is
-      # diverted to the pow reward pool at the epoch boundary.
-      pow_share: 10
-      share_den: 100
-      # Acceptance window in slots; must match the mining service. Ten
-      # block-intervals of tolerance for a claim to reach a block.
-      slot_window: 300
+      rate_den: 63                       # ρ = 1/63: 97% paid out at 3 months
+      target_claim_per_block: 10         # the payout's T; must equal the line above
   sdp_config:
     service_params:
       BN:
