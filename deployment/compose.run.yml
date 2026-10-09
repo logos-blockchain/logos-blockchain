@@ -50,7 +50,7 @@ services:
     ports:
       - "3000:3000/udp"
       - "3400:3400/udp"
-      - "18080:18080/tcp"
+      - "127.0.0.1:18080:18080/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_node.sh
 
   logos-blockchain-node-1:
@@ -72,7 +72,7 @@ services:
     ports:
       - "3001:3001/udp"
       - "3401:3401/udp"
-      - "18081:18081/tcp"
+      - "127.0.0.1:18081:18081/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_node.sh
 
   logos-blockchain-node-2:
@@ -94,7 +94,7 @@ services:
     ports:
       - "3002:3002/udp"
       - "3402:3402/udp"
-      - "18082:18082/tcp"
+      - "127.0.0.1:18082:18082/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_node.sh
 
   logos-blockchain-node-3:
@@ -116,7 +116,7 @@ services:
     ports:
       - "${NODE3_NET_PORT}:3003/udp"
       - "${NODE3_BLEND_PORT}:3403/udp"
-      - "${NODE3_API_PORT}:18083/tcp"
+      - "127.0.0.1:${NODE3_API_PORT}:18083/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_node.sh
 
   filebrowser:
