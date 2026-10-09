@@ -20,7 +20,7 @@ use libp2p::{
     swarm::{ConnectionId, DialError, SwarmEvent, dial_opts::DialOpts},
 };
 use multiaddr::multiaddr;
-use rand::RngCore;
+use rand_010::Rng;
 
 use crate::behaviour::BehaviourConfig;
 pub use crate::{
@@ -34,12 +34,12 @@ const IDLE_CONN_TIMEOUT: Duration = Duration::from_mins(5);
 const LOG_TARGET: &str = lb_log_targets_libp2p::ROOT;
 
 /// Wraps [`libp2p::Swarm`], and config it for use within Logos blockchain.
-pub struct Swarm<R: Clone + Send + RngCore + 'static> {
+pub struct Swarm<R: Send + Rng + 'static> {
     // A core libp2p swarm
     pub(crate) swarm: libp2p::Swarm<Behaviour<R>>,
 }
 
-impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
+impl<R: Send + Rng + 'static> Swarm<R> {
     /// Builds a [`Swarm`] configured for use with Logos blockchain on top of a
     /// tokio executor.
     pub fn build(
@@ -127,7 +127,7 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
     }
 }
 
-impl<R: Clone + Send + RngCore + 'static> futures::Stream for Swarm<R> {
+impl<R: Send + Rng + 'static> futures::Stream for Swarm<R> {
     type Item = SwarmEvent<BehaviourEvent<R>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {

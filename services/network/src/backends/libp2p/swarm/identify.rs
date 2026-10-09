@@ -2,13 +2,13 @@ use std::collections::HashSet;
 
 use lb_libp2p::{Multiaddr, PeerId, Protocol, libp2p::identify};
 use lb_log_targets::network_service;
-use rand::RngCore;
+use rand_010::Rng;
 
 use crate::backends::libp2p::swarm::SwarmHandler;
 
 const LOG_TARGET: &str = network_service::backends::libp2p::IDENTIFY;
 
-impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
+impl<R: Send + Rng + 'static> SwarmHandler<R> {
     pub(super) fn handle_identify_event(&mut self, event: identify::Event) {
         match event {
             identify::Event::Received { peer_id, info, .. } => {

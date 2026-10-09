@@ -32,6 +32,22 @@ pub const MAX_CUCUMBER_CONCURRENT_SCENARIOS: &str = "MAX_CUCUMBER_CONCURRENT_SCE
 pub const E2E_TESTS_BASE_DIR_OVERRIDE: &str = "E2E_TESTS_BASE_DIR_OVERRIDE";
 pub const E2E_ARTIFACTS_DIR: &str = ".e2e_artefacts"; // Relative to `tests`
 
+/// Selects the `aws-lc-rs` rustls provider for this test process.
+///
+/// Test binaries compile two rustls providers: `aws-lc-rs` through
+/// `libp2p-tls` and `ring` through `reqwest` and `kube-client`. With both
+/// present, `rustls::ClientConfig::builder()` (used by `kube-client`) panics
+/// unless a process-wide default has been installed. Node binaries carry only
+/// `aws-lc-rs`, so they need nothing. Calling this more than once is a no-op.
+pub fn init_crypto_provider_defaults() {
+    if rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .is_err()
+    {
+        tracing::debug!(target: TARGET, "rustls default crypto provider already installed");
+    }
+}
+
 pub fn init_logging_defaults() {
     env::set_default_env(LOGOS_BLOCKCHAIN_TESTS_TRACING, "false");
     env::set_default_env(TF_KEEP_LOGS, "true");

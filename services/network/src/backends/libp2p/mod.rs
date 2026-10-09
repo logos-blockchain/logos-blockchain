@@ -9,8 +9,7 @@ pub use lb_libp2p::{
 use lb_log_targets::network_service;
 use lb_utils::tokio::task::spawn_on;
 use overwatch::overwatch::handle::OverwatchHandle;
-use rand::SeedableRng as _;
-use rand_chacha::ChaCha20Rng;
+use rand_010::{make_rng, rngs::StdRng};
 use tokio::sync::{broadcast, broadcast::Sender, mpsc};
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -42,7 +41,7 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
     type ChainSyncEvent = ChainSyncEvent;
 
     fn new(config: Self::Settings, overwatch_handle: OverwatchHandle<RuntimeServiceId>) -> Self {
-        let rng = ChaCha20Rng::from_entropy();
+        let rng = make_rng::<StdRng>();
         let (commands_tx, commands_rx) = mpsc::channel(BUFFER_SIZE);
 
         let (pubsub_events_tx, _) = broadcast::channel(BUFFER_SIZE);

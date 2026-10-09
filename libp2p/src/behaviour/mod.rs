@@ -8,7 +8,7 @@ use std::{collections::HashMap, error::Error};
 use lb_cryptarchia_sync::ChainSyncError;
 use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
 use libp2p::{PeerId, StreamProtocol, autonat, identify, identity, kad, swarm::NetworkBehaviour};
-use rand::RngCore;
+use rand_010::Rng;
 use thiserror::Error;
 
 use crate::{
@@ -42,21 +42,21 @@ pub enum BehaviourError {
 }
 
 #[derive(NetworkBehaviour)]
-pub struct Behaviour<Rng: Clone + Send + RngCore + 'static> {
+pub struct Behaviour<R: Send + Rng + 'static> {
     pub(crate) gossipsub: libp2p::gossipsub::Behaviour,
     // todo: support persistent store if needed
     pub(crate) kademlia: kad::Behaviour<kad::store::MemoryStore>,
     pub(crate) identify: identify::Behaviour,
     pub(crate) chain_sync: lb_cryptarchia_sync::Behaviour,
     // The spec makes it mandatory to run an autonat server for a public node.
-    pub(crate) autonat_server: autonat::v2::server::Behaviour<Rng>,
-    pub(crate) nat: nat::Behaviour<Rng>,
+    pub(crate) autonat_server: autonat::v2::server::Behaviour,
+    pub(crate) nat: nat::Behaviour<R>,
 }
 
-impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
+impl<R: Send + Rng + 'static> Behaviour<R> {
     pub(crate) fn new(
         config: BehaviourConfig,
-        rng: Rng,
+        rng: R,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let BehaviourConfig {
             gossipsub_config,
@@ -99,7 +99,7 @@ impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
             kademlia_config.to_libp2p_config(kad_protocol_name),
         );
 
-        let autonat_server = autonat::v2::server::Behaviour::new(rng.clone());
+        let autonat_server = autonat::v2::server::Behaviour::default();
         let nat = nat::Behaviour::new(rng, &nat_config);
 
         let chain_sync =
@@ -122,7 +122,7 @@ mod tests {
 
     use lb_cryptarchia_sync::Config as ChainSyncConfig;
     use libp2p::gossipsub as libp2p_gossipsub;
-    use rand::rngs::OsRng;
+    use rand_010::{make_rng, rngs::StdRng};
 
     use super::*;
     use crate::behaviour::gossipsub::configure_topic_size_limits;
@@ -144,7 +144,7 @@ mod tests {
         .unwrap();
         let topic_limit = gossipsub_config.max_transmit_size_for_topic(&topic_hash);
 
-        let mut behaviour = Behaviour::<OsRng>::new(
+        let mut behaviour = Behaviour::<StdRng>::new(
             BehaviourConfig {
                 gossipsub_config,
                 kademlia_config: KademliaSettings::default(),
@@ -160,7 +160,7 @@ mod tests {
                 },
                 max_data_size_by_topic: HashMap::new(),
             },
-            OsRng,
+            make_rng::<StdRng>(),
         )
         .unwrap();
 

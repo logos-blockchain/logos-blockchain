@@ -33,7 +33,7 @@ use lb_libp2p::{
 };
 use lb_log_targets::network_service;
 use lb_utils::tokio::task::spawn;
-use rand::RngCore;
+use rand_010::Rng;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::StreamExt as _;
 
@@ -71,7 +71,7 @@ impl ProtocolContract {
     }
 }
 
-pub struct SwarmHandler<R: Clone + Send + RngCore + 'static> {
+pub struct SwarmHandler<R: Send + Rng + 'static> {
     pub swarm: Swarm<R>,
     pub pending_dials: HashMap<ConnectionId, Dial>,
     pub commands_tx: mpsc::Sender<Command>,
@@ -90,7 +90,7 @@ const BACKOFF: u64 = 5;
 // TODO: make this configurable
 const MAX_RETRY: usize = 3;
 
-impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
+impl<R: Send + Rng + 'static> SwarmHandler<R> {
     pub fn new(
         config: Libp2pConfig,
         commands_tx: mpsc::Sender<Command>,
@@ -443,7 +443,7 @@ mod tests {
 
     use lb_libp2p::protocol_name::StreamProtocol;
     use lb_utils::net::get_available_udp_port;
-    use rand::rngs::OsRng;
+    use rand_010::{make_rng, rngs::StdRng};
     use tracing_subscriber::EnvFilter;
 
     use super::*;
@@ -500,13 +500,20 @@ mod tests {
         }
     }
 
-    fn create_handler() -> SwarmHandler<OsRng> {
+    fn create_handler() -> SwarmHandler<StdRng> {
         let (tx, rx) = mpsc::channel(10);
         let (pubsub_events_tx, _) = broadcast::channel(10);
         let (chainsync_events_tx, _) = broadcast::channel(10);
         let config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
 
-        SwarmHandler::new(config, tx, rx, pubsub_events_tx, chainsync_events_tx, OsRng)
+        SwarmHandler::new(
+            config,
+            tx,
+            rx,
+            pubsub_events_tx,
+            chainsync_events_tx,
+            make_rng::<StdRng>(),
+        )
     }
 
     fn create_test_address() -> Multiaddr {
@@ -556,7 +563,7 @@ mod tests {
     fn create_gossipsub_handler(
         topic: TopicHash,
         max_data_size: usize,
-    ) -> (SwarmHandler<OsRng>, broadcast::Receiver<Message>) {
+    ) -> (SwarmHandler<StdRng>, broadcast::Receiver<Message>) {
         let (commands_tx, commands_rx) = mpsc::channel(1);
         let (pubsub_events_tx, pubsub_events_rx) = broadcast::channel(1);
         let (chainsync_events_tx, _) = broadcast::channel(1);
@@ -569,7 +576,7 @@ mod tests {
             commands_rx,
             pubsub_events_tx,
             chainsync_events_tx,
-            OsRng,
+            make_rng::<StdRng>(),
         );
 
         (handler, pubsub_events_rx)
@@ -717,7 +724,7 @@ mod tests {
             bootstrap_commands_rx,
             bootstrap_pubsub_events_tx,
             bootstrap_chainsync_events_tx,
-            OsRng,
+            make_rng::<StdRng>(),
         );
         bootstrap.handle_pubsub_command(PubSubCommand::Subscribe(topic.to_owned()));
         let bootstrap_peer_id = *bootstrap.swarm.swarm().local_peer_id();
@@ -749,7 +756,7 @@ mod tests {
             peer_commands_rx,
             peer_pubsub_events_tx,
             peer_chainsync_events_tx,
-            OsRng,
+            make_rng::<StdRng>(),
         );
         peer.handle_pubsub_command(PubSubCommand::Subscribe(topic.to_owned()));
         let peer_task = tokio::spawn(async move {
@@ -925,7 +932,7 @@ mod tests {
             rx1,
             pubsub_events_tx,
             chainsync_events_tx,
-            OsRng,
+            make_rng::<StdRng>(),
         );
 
         let bootstrap_node_peer_id = *bootstrap_node.swarm.swarm().local_peer_id();
@@ -983,7 +990,7 @@ mod tests {
                 rx,
                 pubsub_events_tx,
                 chainsync_events_tx,
-                OsRng,
+                make_rng::<StdRng>(),
             );
 
             let peer_id = *handler.swarm.swarm().local_peer_id();
@@ -1079,8 +1086,14 @@ mod tests {
 
         let config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
 
-        let mut handler =
-            SwarmHandler::new(config, tx, rx, pubsub_events_tx, chainsync_events_tx, OsRng);
+        let mut handler = SwarmHandler::new(
+            config,
+            tx,
+            rx,
+            pubsub_events_tx,
+            chainsync_events_tx,
+            make_rng::<StdRng>(),
+        );
 
         let remote_peer = PeerId::random();
         let remote_addr = format!(
@@ -1155,8 +1168,14 @@ mod tests {
 
         let config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
 
-        let mut handler =
-            SwarmHandler::new(config, tx, rx, pubsub_events_tx, chainsync_events_tx, OsRng);
+        let mut handler = SwarmHandler::new(
+            config,
+            tx,
+            rx,
+            pubsub_events_tx,
+            chainsync_events_tx,
+            make_rng::<StdRng>(),
+        );
 
         // A peer learned via discovery (Kademlia/Identify), i.e. NOT through our
         // own `connect()` call, so there is no `pending_dials` entry for it.
@@ -1213,8 +1232,14 @@ mod tests {
         let (chainsync_events_tx, _) = broadcast::channel(10);
 
         let config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
-        let mut handler =
-            SwarmHandler::new(config, tx, rx, pubsub_events_tx, chainsync_events_tx, OsRng);
+        let mut handler = SwarmHandler::new(
+            config,
+            tx,
+            rx,
+            pubsub_events_tx,
+            chainsync_events_tx,
+            make_rng::<StdRng>(),
+        );
 
         let expected_peers: Vec<(PeerId, Multiaddr)> = std::iter::repeat_with(|| {
             let peer_id = PeerId::random();
@@ -1256,8 +1281,14 @@ mod tests {
         let (chainsync_events_tx, _) = broadcast::channel(10);
 
         let config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
-        let mut handler =
-            SwarmHandler::new(config, tx, rx, pubsub_events_tx, chainsync_events_tx, OsRng);
+        let mut handler = SwarmHandler::new(
+            config,
+            tx,
+            rx,
+            pubsub_events_tx,
+            chainsync_events_tx,
+            make_rng::<StdRng>(),
+        );
 
         handler.bootstrap_kad_from_peers(&vec![]);
 

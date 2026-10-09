@@ -59,6 +59,7 @@ rand_chacha                      = { workspace = true }
 reqwest                          = { features = ["json"], workspace = true }
 rpds                             = { workspace = true }
 rusqlite                         = { workspace = true }
+rustls                           = { features = ["aws-lc-rs"], workspace = true }
 serde                            = { features = ["derive"], workspace = true }
 serde_json                       = { workspace = true }
 serde_yaml                       = { workspace = true }
