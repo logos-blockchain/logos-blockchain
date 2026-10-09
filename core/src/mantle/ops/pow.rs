@@ -699,12 +699,11 @@ mod tests {
     #[test]
     fn execute_issues_reward_utxo_and_registers_nullifier() {
         let op = claim_op(CURRENT_EPOCH);
-        let verified_signed_operation = SignedOperation::new(op, NoOpProof)
+        let signed_operation = SignedOperation::new(op, NoOpProof)
             .into_preverified(&())
             .unwrap()
             .into_verified(&accepting_context(&HashTrieMapSync::new_sync()))
             .unwrap();
-        let (signed_operation, ()) = verified_signed_operation.into_parts();
         let puzzle_ticket = signed_operation.operation().get_puzzle_ticket();
         let operation_op_id = signed_operation.operation().op_id();
         let operation_public_key = signed_operation.operation().public_key;
@@ -766,12 +765,11 @@ mod tests {
         // and aborts loudly rather than minting a reward note the pool
         // cannot back.
         let op = claim_op(CURRENT_EPOCH);
-        let verified_signed_operation = SignedOperation::new(op, NoOpProof)
+        let signed_operation = SignedOperation::new(op, NoOpProof)
             .into_preverified(&())
             .unwrap()
             .into_verified(&accepting_context(&HashTrieMapSync::new_sync()))
             .unwrap();
-        let (signed_operation, ()) = verified_signed_operation.into_parts();
 
         drop(signed_operation.execute(ClaimPoWRewardExecutionContext {
             reward_pool: 5,

@@ -337,10 +337,8 @@ impl SdpLedger {
                 })
                 .map_err(|(_signed_operation, error)| error)?;
 
-            let (signed_operation, ()) = verified_declaration.into_parts();
-
             let (result, events) =
-                sdp.try_apply_genesis_sdp_declaration(utxo_tree, signed_operation, config)?;
+                sdp.try_apply_genesis_sdp_declaration(utxo_tree, verified_declaration, config)?;
             sdp = result;
             all_events.extend(events);
         }
