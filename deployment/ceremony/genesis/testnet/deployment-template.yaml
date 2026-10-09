@@ -49,6 +49,12 @@ cryptarchia:
       rate_num: 1
       rate_den: 63                        # ρ = 1/63: 97% paid out at 3 months
       target_claim_per_block: 10          # the payout's T; must equal the line above
+      minimum_difficulty: 19
+      ema_smoothing_factor: 9
+      ema_smoothing_precision: 10
+      pow_share: 10
+      share_den: 100
+      slot_window: 600
   sdp_config:
     service_params:
       BN:
