@@ -629,7 +629,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
 }
 
 #[test]
-fn ledger_is_not_commited_if_block_contains_invalid_zkp() {
+fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
     let config = ledger_config(NonZero::<u32>::new(1).unwrap());
     let (zk_key, utxo) = utxo();
     let genesis_id: HeaderId = [0; 32].into();
@@ -655,7 +655,10 @@ fn ledger_is_not_commited_if_block_contains_invalid_zkp() {
 
     let block_header = block.header().clone();
     let result = cryptarchia.try_apply_block(block, block_header.slot());
-    assert!(matches!(result, Err(Error::BatchZkpVerification(_))));
+    assert!(matches!(
+        result,
+        Err(Error::BatchDeferredProofVerification(_))
+    ));
     assert!(
         cryptarchia.ledger.state(&block_header.id()).is_none(),
         "ledger state should not be committed"
