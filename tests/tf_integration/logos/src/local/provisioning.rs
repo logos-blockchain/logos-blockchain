@@ -286,10 +286,10 @@ async fn build_node_launch_spec(
             "--deployment".to_owned(),
             deployment_path.to_string_lossy().to_string(),
         ],
-        env: vec![LaunchEnvVar::new(
-            "LOGOS_BLOCKCHAIN_TIME_BACKEND",
-            time_backend,
-        )],
+        env: vec![
+            LaunchEnvVar::new("LOGOS_BLOCKCHAIN_TIME_BACKEND", time_backend),
+            LaunchEnvVar::new("LOG_FORMAT", "text-no-ansi"),
+        ],
     })
 }
 
@@ -409,7 +409,10 @@ fn default_node_binary_provider() -> BinaryProviderRef {
                 "-p",
                 "logos-blockchain-node",
                 "--features",
-                "testing",
+                node_binary_build_features(
+                    &NodeBinaryProfile::Normal,
+                    cfg!(feature = "security-audit"),
+                ),
             ]),
             output_path: release_node_binary_path(),
             working_dir: Some(workspace_root()),
@@ -425,6 +428,18 @@ fn release_node_binary_path() -> PathBuf {
         .join("logos-blockchain-node")
 }
 
+const fn node_binary_build_features(
+    profile: &NodeBinaryProfile,
+    security_audit: bool,
+) -> &'static str {
+    match (profile, security_audit) {
+        (NodeBinaryProfile::Normal, false) => "testing",
+        (NodeBinaryProfile::Normal, true) => "testing,security-audit",
+        (NodeBinaryProfile::TokioConsole, false) => "testing,tokio-console",
+        (NodeBinaryProfile::TokioConsole, true) => "testing,tokio-console,security-audit",
+    }
+}
+
 fn tokio_console_node_binary_provider() -> BinaryProviderRef {
     if running_in_ci() {
         Arc::new(PathBinaryProvider::new(release_node_binary_path()))
@@ -438,7 +453,10 @@ fn tokio_console_node_binary_provider() -> BinaryProviderRef {
                 "-p",
                 "logos-blockchain-node",
                 "--features",
-                "testing,tokio-console",
+                node_binary_build_features(
+                    &NodeBinaryProfile::TokioConsole,
+                    cfg!(feature = "security-audit"),
+                ),
             ]),
             output_path: release_profiling_node_binary_path(),
             working_dir: Some(workspace_root()),
@@ -835,6 +853,8 @@ fn build_cryptarchia_user_config(
                 max_tx_fee: mantle::Value::MAX.into(),
                 funding_pk: consensus.funding_pk,
             },
+            #[cfg(feature = "security-audit")]
+            security_audit: leader::SecurityAuditSettings::default(),
         },
     }
 }
@@ -899,6 +919,30 @@ mod tests {
 
     use super::*;
     use crate::config::deployment::DeploymentBuilder;
+
+    #[test]
+    fn normal_node_build_features_include_audit_only_when_enabled() {
+        assert_eq!(
+            node_binary_build_features(&NodeBinaryProfile::Normal, false),
+            "testing"
+        );
+        assert_eq!(
+            node_binary_build_features(&NodeBinaryProfile::Normal, true),
+            "testing,security-audit"
+        );
+    }
+
+    #[test]
+    fn console_node_build_features_preserve_console_with_optional_audit() {
+        assert_eq!(
+            node_binary_build_features(&NodeBinaryProfile::TokioConsole, false),
+            "testing,tokio-console"
+        );
+        assert_eq!(
+            node_binary_build_features(&NodeBinaryProfile::TokioConsole, true),
+            "testing,tokio-console,security-audit"
+        );
+    }
 
     #[test]
     fn release_download_rejects_tokio_console_profile() {

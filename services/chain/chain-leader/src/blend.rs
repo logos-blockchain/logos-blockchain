@@ -49,21 +49,22 @@ impl<BlendService> BlendAdapter<BlendService>
 where
     BlendService: BlendServiceData<NodeId: Send>,
 {
-    pub async fn publish_proposal(&self, proposal: Proposal) {
+    /// Returns whether the local Blend relay accepted this proposal.
+    /// Acceptance does not establish network transmission or peer reception.
+    pub async fn publish_proposal(&self, proposal: Proposal) -> bool {
         let payload = DataPayload::from_proposal(&proposal);
         let payload_clone = payload.clone();
 
-        // Blend refuses a proposal larger than a payload body of its current
-        // epoch.
         if let Err(error) = BlendServiceApi::<BlendService, ()>::new(self.relay.clone())
             .publish(payload)
             .await
         {
             error!(target: LOG_TARGET, "Failed to publish our block proposal through Blend: {error}");
-            return;
+            return false;
         }
 
         log_proposal_submitted(&proposal, &payload_clone);
+        true
     }
 }
 

@@ -4487,6 +4487,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "futures",
+ "logos-blockchain-binary-codec",
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-network-service",
  "logos-blockchain-chain-service",

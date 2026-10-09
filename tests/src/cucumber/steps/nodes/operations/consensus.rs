@@ -34,18 +34,57 @@ fn tips_aligned_at_min_difference(
     }
 }
 
+fn active_node_names<'a>(
+    names: impl Iterator<Item = &'a str>,
+    stopped: &HashMap<String, Instant>,
+) -> Vec<&'a str> {
+    names.filter(|name| !stopped.contains_key(*name)).collect()
+}
+
+fn convergence_satisfied(
+    status: &AlignmentStatus,
+    height: u64,
+    difference: u64,
+    minimum: Option<u64>,
+    maximum_difference: u64,
+) -> bool {
+    matches!(status, AlignmentStatus::Aligned)
+        && difference <= maximum_difference
+        && height >= minimum.unwrap_or_default()
+}
+
 async fn fetch_and_update_chain_info(
     step: &str,
     nodes_info: &mut HashMap<String, NodeInfo>,
     nodes_chain_info: &mut HashMap<String, ChainInfoMap>,
-) -> Result<(u64, u64, Vec<u64>), StepError> {
-    poll_all_nodes_and_update_consensus_cache(step, nodes_info).await?;
+) -> Result<Option<(u64, u64, Vec<u64>)>, StepError> {
+    // Evaluate convergence from this poll's tips, not cached tips from an
+    // earlier height or a node that did not answer this poll.
+    let mut current_nodes = nodes_info.clone();
+    for node in current_nodes.values_mut() {
+        node.chain_info.clear();
+    }
+    poll_all_nodes_and_update_consensus_cache(step, &mut current_nodes).await?;
+    if current_nodes
+        .values()
+        .any(|node| node.best_height().is_none())
+    {
+        return Ok(None);
+    }
 
     let mut best_node_heights: Vec<u64> = Vec::with_capacity(nodes_info.len());
 
-    for node_info in nodes_info.values() {
+    for node_info in current_nodes.values() {
         let max_height = node_info.best_height().unwrap_or_default();
         best_node_heights.push(max_height);
+        if let Some(original) = nodes_info.get_mut(&node_info.name) {
+            original
+                .chain_info
+                .retain(|height, _| *height <= max_height);
+            for (height, hash) in &node_info.chain_info {
+                original.upsert_tip(*height, hash.clone());
+            }
+        }
 
         let started_node_name = node_info.runtime_name.clone();
         let chain =
@@ -66,7 +105,7 @@ async fn fetch_and_update_chain_info(
     let all_nodes_max = *best_node_heights.iter().max().unwrap_or(&0);
     let diff = all_nodes_max - all_nodes_min;
 
-    Ok((all_nodes_min, diff, best_node_heights))
+    Ok(Some((all_nodes_min, diff, best_node_heights)))
 }
 
 fn log_waiting_status(
@@ -121,7 +160,69 @@ pub async fn nodes_converged(
     max_diff_height: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    let nodes_info = &world.nodes_info.values().collect::<Vec<&NodeInfo>>();
+    #[cfg(feature = "security-audit")]
+    crate::cucumber::steps::security_audit::verify_audit_participants_started(world)?;
+    converge_nodes(
+        &mut world.nodes_info,
+        step,
+        min_height,
+        max_diff_height,
+        time_out_seconds,
+    )
+    .await
+}
+
+pub async fn active_nodes_converged(
+    world: &mut CucumberWorld,
+    step: &str,
+    max_diff_height: u64,
+    time_out_seconds: u64,
+) -> StepResult {
+    #[cfg(feature = "security-audit")]
+    crate::cucumber::steps::security_audit::verify_audit_participants_started(world)?;
+    let selected = active_node_names(
+        world.nodes_info.keys().map(String::as_str),
+        &world.lifecycle.node_stopped_at,
+    );
+    let mut active_nodes = world
+        .nodes_info
+        .iter()
+        .filter(|(name, _)| selected.contains(&name.as_str()))
+        .map(|(name, node)| (name.clone(), node.clone()))
+        .collect::<HashMap<_, _>>();
+    if active_nodes.is_empty() {
+        return Err(StepError::StepFail {
+            message: format!("Step `{step}` error: no active nodes"),
+        });
+    }
+    let result = converge_nodes(
+        &mut active_nodes,
+        step,
+        None,
+        max_diff_height,
+        time_out_seconds,
+    )
+    .await;
+    for (name, node) in active_nodes {
+        if let Some(original) = world.nodes_info.get_mut(&name) {
+            original.chain_info = node.chain_info;
+        }
+    }
+    result
+}
+
+async fn converge_nodes(
+    nodes_info: &mut HashMap<String, NodeInfo>,
+    step: &str,
+    min_height: Option<u64>,
+    max_diff_height: u64,
+    time_out_seconds: u64,
+) -> StepResult {
+    if nodes_info.is_empty() {
+        return Err(StepError::StepFail {
+            message: format!("Step `{step}` error: no nodes"),
+        });
+    }
     let start = Instant::now();
     let time_out = Duration::from_secs(time_out_seconds);
 
@@ -130,7 +231,7 @@ pub async fn nodes_converged(
         HashMap::with_capacity(nodes_info.len());
 
     // Pre-initialize so lookups are deterministic
-    for node_info in nodes_info {
+    for node_info in nodes_info.values() {
         nodes_chain_info
             .entry(node_info.runtime_name.clone())
             .or_default();
@@ -138,42 +239,49 @@ pub async fn nodes_converged(
 
     let mut count = 0usize;
     loop {
-        let (all_nodes_min, diff, peer_heights) =
-            fetch_and_update_chain_info(step, &mut world.nodes_info, &mut nodes_chain_info).await?;
-        let (status, anchor_hashes) =
-            tips_aligned_at_min_difference(&nodes_chain_info, all_nodes_min);
+        let sample = timeout(
+            time_out.saturating_sub(start.elapsed()),
+            fetch_and_update_chain_info(step, nodes_info, &mut nodes_chain_info),
+        )
+        .await;
+        if let Some((all_nodes_min, diff, peer_heights)) = match sample {
+            Ok(result) => result?,
+            Err(_) => None,
+        } {
+            let (status, anchor_hashes) =
+                tips_aligned_at_min_difference(&nodes_chain_info, all_nodes_min);
 
-        if diff <= max_diff_height
-            && matches!(status, AlignmentStatus::Aligned)
-            && all_nodes_min >= min_height.unwrap_or_default()
-        {
-            if let Some(min_height) = min_height {
-                info!(
-                    target: TARGET,
-                    "All nodes have at least {min_height} blocks, converged in {:.2?} - max diff: \
-                    {diff}, heights: {peer_heights:?}",
-                    start.elapsed()
-                );
-            } else {
-                info!(
-                    target: TARGET,
-                    "All nodes converged in {:.2?} - max diff: {diff}, heights: {peer_heights:?}",
-                    start.elapsed()
+            if start.elapsed() <= time_out
+                && convergence_satisfied(&status, all_nodes_min, diff, min_height, max_diff_height)
+            {
+                if let Some(min_height) = min_height {
+                    info!(
+                        target: TARGET,
+                        "All nodes have at least {min_height} blocks, converged in {:.2?} - max diff: \
+                        {diff}, heights: {peer_heights:?}",
+                        start.elapsed()
+                    );
+                } else {
+                    info!(
+                        target: TARGET,
+                        "All nodes converged in {:.2?} - max diff: {diff}, heights: {peer_heights:?}",
+                        start.elapsed()
+                    );
+                }
+                return Ok(());
+            }
+
+            if count.is_multiple_of(50) {
+                log_waiting_status(
+                    &status,
+                    min_height,
+                    diff,
+                    &peer_heights,
+                    all_nodes_min,
+                    &anchor_hashes,
+                    start,
                 );
             }
-            return Ok(());
-        }
-
-        if count.is_multiple_of(50) {
-            log_waiting_status(
-                &status,
-                min_height,
-                diff,
-                &peer_heights,
-                all_nodes_min,
-                &anchor_hashes,
-                start,
-            );
         }
 
         if start.elapsed() >= time_out {
@@ -373,4 +481,40 @@ async fn poll_network_info(
     Err(format!(
         "Node `{node_name}` did not respond to network_info after {time_out_seconds:.2?}"
     ))
+}
+
+#[cfg(test)]
+mod convergence_tests {
+    use super::*;
+
+    #[test]
+    fn active_selection_excludes_only_explicitly_stopped_nodes() {
+        let stopped = HashMap::from([("producer".to_owned(), Instant::now())]);
+        assert_eq!(
+            active_node_names(["producer", "alice", "bob"].into_iter(), &stopped),
+            ["alice", "bob"]
+        );
+        assert_eq!(
+            active_node_names(["producer"].into_iter(), &stopped),
+            [] as [&str; 0]
+        );
+    }
+
+    #[test]
+    fn zero_skew_requires_equal_current_headers_and_minimum_height() {
+        let mut chains = HashMap::from([
+            ("alice".to_owned(), HashMap::from([(40, "same".to_owned())])),
+            ("bob".to_owned(), HashMap::from([(40, "same".to_owned())])),
+        ]);
+        let (status, _) = tips_aligned_at_min_difference(&chains, 40);
+        assert!(convergence_satisfied(&status, 40, 0, Some(40), 0));
+        assert!(!convergence_satisfied(&status, 40, 1, Some(40), 0));
+        assert!(!convergence_satisfied(&status, 40, 0, Some(41), 0));
+        chains.get_mut("bob").unwrap().insert(40, "fork".to_owned());
+        let (status, _) = tips_aligned_at_min_difference(&chains, 40);
+        assert!(!convergence_satisfied(&status, 40, 0, Some(40), 0));
+        chains.get_mut("bob").unwrap().clear();
+        let (status, _) = tips_aligned_at_min_difference(&chains, 40);
+        assert!(!convergence_satisfied(&status, 40, 0, Some(40), 0));
+    }
 }

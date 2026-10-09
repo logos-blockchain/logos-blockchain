@@ -1,10 +1,10 @@
 use super::{
     CucumberWorld, Duration, HashSet, Instant, Multiaddr, PUBLIC_CRYPTARCHIA_ENDPOINT,
     PUBLIC_CRYPTARCHIA_ENDPOINT_PASSWORD, PUBLIC_CRYPTARCHIA_ENDPOINT_USERNAME, PeerId,
-    PublicCryptarchiaEndpointPeer, Step, StepError, StepResult, TARGET, given, info,
-    nodes_converged, parse_url, poll_all_nodes_and_update_consensus_cache, resolve_literal_or_env,
-    sleep, start_node, then, verify_reponsive_and_network_ready_with_timeout,
-    wait_all_nodes_responive, when,
+    PublicCryptarchiaEndpointPeer, Step, StepError, StepResult, TARGET, active_nodes_converged,
+    given, info, nodes_converged, parse_url, poll_all_nodes_and_update_consensus_cache,
+    resolve_literal_or_env, sleep, start_node, then,
+    verify_reponsive_and_network_ready_with_timeout, wait_all_nodes_responive, when,
 };
 
 #[given("I have public cryptarchia endpoint peers:")]
@@ -445,4 +445,14 @@ async fn step_all_nodes_converged(
     time_out_seconds: u64,
 ) -> StepResult {
     nodes_converged(world, &step.value, None, max_diff_height, time_out_seconds).await
+}
+
+#[then(expr = "all active nodes converged to within {int} blocks in {int} seconds")]
+async fn step_all_active_nodes_converged(
+    world: &mut CucumberWorld,
+    step: &Step,
+    max_diff_height: u64,
+    time_out_seconds: u64,
+) -> StepResult {
+    active_nodes_converged(world, &step.value, max_diff_height, time_out_seconds).await
 }

@@ -669,6 +669,40 @@ impl ForkGroups {
     }
 }
 
+/// Scenario-owned participant identities for security-audit observations.
+#[cfg(feature = "security-audit")]
+#[derive(Clone, Debug)]
+pub struct SecurityAuditParticipants {
+    pub producer: String,
+    pub honest_nodes: Vec<String>,
+    pub canonical_reference: String,
+}
+
+/// Transaction settings declared by a security-audit scenario.
+#[cfg(feature = "security-audit")]
+#[derive(Clone, Debug)]
+pub struct SecurityAuditWorkload {
+    pub sender: String,
+    pub receiver: String,
+    pub amount: u64,
+    pub policy: SecurityAuditWorkloadPolicy,
+}
+
+/// Scheduling policy declared by a security-audit scenario.
+#[cfg(feature = "security-audit")]
+#[derive(Clone, Copy, Debug)]
+pub enum SecurityAuditWorkloadPolicy {
+    Nonempty {
+        budget: usize,
+        pending_seconds: u64,
+    },
+    Sustained {
+        budget: usize,
+        initial_pending: usize,
+        interval_seconds: u64,
+    },
+}
+
 #[derive(World, Default)]
 pub struct CucumberWorld {
     /// Scenario identity and lifecycle configuration.
@@ -679,6 +713,15 @@ pub struct CucumberWorld {
     pub cluster: ClusterState,
     /// Manual: List of nodes with their info.
     pub nodes_info: HashMap<String, NodeInfo>,
+    /// Participants declared by the current security-audit scenario.
+    #[cfg(feature = "security-audit")]
+    pub security_audit_participants: Option<SecurityAuditParticipants>,
+    /// Transaction workload declared by the scenario.
+    #[cfg(feature = "security-audit")]
+    pub security_audit_workload: Option<SecurityAuditWorkload>,
+    /// Audit observations shared by successive scenario steps.
+    #[cfg(feature = "security-audit")]
+    pub security_audit_state: Option<crate::cucumber::steps::security_audit::AuditScenarioState>,
     /// Node heights captured for comparisons in later scenario steps.
     pub node_height_snapshots: NodeHeightSnapshots,
     /// Node-startup configuration overrides.
@@ -789,7 +832,17 @@ impl Debug for CucumberWorld {
             .as_ref()
             .map_or(0, |diagnostics| diagnostics.header_height_node_count);
 
-        f.debug_struct("CucumberWorld")
+        let mut debug = f.debug_struct("CucumberWorld");
+        #[cfg(feature = "security-audit")]
+        debug.field(
+            "security_audit_participants",
+            &self.security_audit_participants,
+        );
+        #[cfg(feature = "security-audit")]
+        debug
+            .field("security_audit_workload", &self.security_audit_workload)
+            .field("security_audit_state", &self.security_audit_state.is_some());
+        debug
             .field("deployer", &format!("{:?}", self.lifecycle.deployer))
             .field(
                 "test_context",
@@ -1129,6 +1182,9 @@ pub struct NodeInfo {
     /// Whether this node is only expected to be network ready after startup and
     /// not `Mode::OnLine`
     pub immediate_start: bool,
+    /// User overrides applied when this node was started.
+    #[cfg(feature = "security-audit")]
+    pub startup_user_config_overrides: Vec<ConfigOverride>,
 }
 
 impl NodeInfo {

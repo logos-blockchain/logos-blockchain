@@ -652,6 +652,20 @@ where
         );
     }
 
+    #[cfg_attr(
+        feature = "security-audit",
+        expect(
+            clippy::cognitive_complexity,
+            reason = "Feature-gated audit diagnostics preserve the existing proposal-processing flow"
+        )
+    )]
+    #[cfg_attr(
+        feature = "security-audit",
+        expect(
+            clippy::too_many_lines,
+            reason = "Feature-gated audit diagnostics preserve the existing proposal-processing flow"
+        )
+    )]
     async fn handle_incoming_proposal(
         &self,
         proposal: Proposal,
@@ -669,6 +683,18 @@ where
     {
         let block_id = proposal.header().id();
         let block_slot = proposal.header().slot();
+        #[cfg(feature = "security-audit")]
+        let parent_block_id = proposal.header().parent();
+        #[cfg(feature = "security-audit")]
+        tracing::info!(
+            target: LOG_TARGET,
+            diagnostic = "blend_reachability",
+            event = "security_audit_chain_proposal_received",
+            %block_id,
+            %parent_block_id,
+            slot = u64::from(block_slot),
+            "Chain Network received a block proposal"
+        );
         metrics::consensus_proposals_received_total("network");
 
         match should_process_block(relays.cryptarchia(), block_id, block_slot).await {
@@ -676,10 +702,32 @@ where
             Err(DoNotProcessBlock::OlderThanLib) => {
                 metrics::consensus_proposals_ignored_total("older_than_lib", "network");
                 orphan_downloader.insert_rejected_block(block_id);
+                #[cfg(feature = "security-audit")]
+                tracing::info!(
+                    target: LOG_TARGET,
+                    diagnostic = "blend_reachability",
+                    event = "security_audit_proposal_not_processed",
+                    %block_id,
+                    %parent_block_id,
+                    slot = u64::from(block_slot),
+                    reason = "older_than_lib",
+                    "Consensus did not process the received proposal"
+                );
                 return;
             }
             Err(DoNotProcessBlock::AlreadyApplied) => {
                 metrics::consensus_proposals_ignored_total("already_processed", "network");
+                #[cfg(feature = "security-audit")]
+                tracing::info!(
+                    target: LOG_TARGET,
+                    diagnostic = "blend_reachability",
+                    event = "security_audit_proposal_not_processed",
+                    %block_id,
+                    %parent_block_id,
+                    slot = u64::from(block_slot),
+                    reason = "already_applied",
+                    "Consensus did not process the received proposal"
+                );
                 return;
             }
         }
@@ -687,6 +735,18 @@ where
         // Check the proposal before any mempool scanning.
         if let Err(e) = verify_proposal_and_cache_rejected(&proposal, orphan_downloader) {
             metrics::consensus_observe_proposal_reconstruct_err("network", &e);
+            #[cfg(feature = "security-audit")]
+            tracing::info!(
+                target: LOG_TARGET,
+                diagnostic = "blend_reachability",
+                event = "security_audit_proposal_rejected",
+                %block_id,
+                %parent_block_id,
+                slot = u64::from(block_slot),
+                stage = "proposal_verification",
+                reason = %e,
+                "Consensus rejected the received proposal before reconstruction"
+            );
             return;
         }
 
@@ -702,10 +762,31 @@ where
                 metrics::consensus_observe_proposal_reconstruct_ok(
                     reconstruct_started_at.elapsed(),
                 );
+                #[cfg(feature = "security-audit")]
+                tracing::info!(
+                    target: LOG_TARGET,
+                    diagnostic = "blend_reachability",
+                    event = "security_audit_proposal_reconstructed",
+                    %block_id,
+                    %parent_block_id,
+                    slot = u64::from(block_slot),
+                    "Chain Network reconstructed the block proposal"
+                );
                 block
             }
             Err(e) => {
                 metrics::consensus_observe_proposal_reconstruct_err("network", &e);
+                #[cfg(feature = "security-audit")]
+                tracing::info!(
+                    target: LOG_TARGET,
+                    diagnostic = "blend_reachability",
+                    event = "security_audit_proposal_reconstruction_failed",
+                    %block_id,
+                    %parent_block_id,
+                    slot = u64::from(block_slot),
+                    reason = %e,
+                    "Chain Network could not reconstruct the block proposal"
+                );
                 error!(
                     target: LOG_TARGET,
                     "Failed to reconstruct block from proposal: {:?}",
@@ -771,6 +852,13 @@ where
         }
     }
 
+    #[cfg_attr(
+        feature = "security-audit",
+        expect(
+            clippy::cognitive_complexity,
+            reason = "Feature-gated audit diagnostics preserve the existing proposal-processing flow"
+        )
+    )]
     async fn apply_reconstructed_block(
         &self,
         block: Block<Mempool::Item>,
@@ -788,18 +876,48 @@ where
         Self::log_received_block(&block);
 
         let block_id = block.header().id();
+        #[cfg(feature = "security-audit")]
+        let parent_block_id = block.header().parent();
+        #[cfg(feature = "security-audit")]
+        let block_slot = block.header().slot();
         let started_at = Instant::now();
 
         match Self::apply_block_with_future_block_retry(block, relays).await {
             Ok(()) => {
                 metrics::consensus_observe_apply_block_ok(started_at.elapsed());
                 orphan_downloader.remove_orphan(&block_id);
+                #[cfg(feature = "security-audit")]
+                tracing::info!(
+                    target: LOG_TARGET,
+                    diagnostic = "blend_reachability",
+                    event = "security_audit_proposal_accepted",
+                    %block_id,
+                    %parent_block_id,
+                    slot = u64::from(block_slot),
+                    "Consensus successfully applied the reconstructed proposal"
+                );
                 trace!(target: LOG_TARGET, {
                     counter.consensus_processed_blocks = 1
                 }, "Processed consensus block");
             }
             Err(err) => {
                 metrics::consensus_observe_apply_block_err(&err);
+                #[cfg(feature = "security-audit")]
+                tracing::info!(
+                    target: LOG_TARGET,
+                    diagnostic = "blend_reachability",
+                    event = if is_recoverable_apply_error(&err) {
+                        "security_audit_proposal_apply_failed"
+                    } else {
+                        "security_audit_proposal_rejected"
+                    },
+                    %block_id,
+                    %parent_block_id,
+                    slot = u64::from(block_slot),
+                    stage = "consensus_apply",
+                    reason = %err,
+                    "Consensus did not apply the reconstructed proposal"
+                );
                 Self::handle_proposal_processing_error(err, block_id, orphan_downloader);
             }
         }

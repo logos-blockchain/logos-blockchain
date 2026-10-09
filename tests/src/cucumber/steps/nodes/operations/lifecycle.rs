@@ -193,6 +193,8 @@ pub async fn start_node(
         .with_peers(startup_settings.peer_selection.clone())
         .with_persist_dir(persist_dir);
 
+    #[cfg(feature = "security-audit")]
+    let audit_startup_overrides = startup_settings.user_config_overrides.clone();
     let logos_start_options = startup_settings.logos_start_options(
         scenario_wallet_key_ids,
         blend_relays,
@@ -335,6 +337,8 @@ pub async fn start_node(
             wallet_info,
             runtime_dir: node_runtime_dir,
             immediate_start,
+            #[cfg(feature = "security-audit")]
+            startup_user_config_overrides: audit_startup_overrides,
         },
     );
 
@@ -397,6 +401,9 @@ pub async fn start_node(
     if let Some(tokio_console) = tokio_console_node {
         check_tokio_console_port(node_name, tokio_console.port);
     }
+
+    #[cfg(feature = "security-audit")]
+    crate::cucumber::steps::security_audit::verify_audit_node_start(world, node_name).await?;
 
     Ok(())
 }

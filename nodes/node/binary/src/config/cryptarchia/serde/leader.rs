@@ -1,3 +1,5 @@
+#[cfg(feature = "security-audit")]
+pub use lb_chain_leader_service::SecurityAuditSettings;
 use lb_core::mantle::{Value, gas::GasCost};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
@@ -5,6 +7,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     pub wallet: WalletConfig,
+    #[cfg(feature = "security-audit")]
+    #[serde(default, skip_serializing_if = "SecurityAuditSettings::is_disabled")]
+    pub security_audit: SecurityAuditSettings,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

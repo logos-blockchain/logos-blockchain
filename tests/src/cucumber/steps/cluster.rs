@@ -440,6 +440,8 @@ pub async fn insert_started_node_info<S: BuildHasher>(
             wallet_info,
             runtime_dir: std::path::PathBuf::new(),
             immediate_start: world.network_immediate_start(logical_node_name),
+            #[cfg(feature = "security-audit")]
+            startup_user_config_overrides: Vec::new(),
         },
     );
 

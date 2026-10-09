@@ -79,6 +79,7 @@ tracing-subscriber               = { features = ["env-filter", "fmt"], workspace
 cucumber             = []
 cucumber_stand_alone = []
 mantle_sdp           = []
+security-audit       = ["lb-node/security-audit", "lb-testing-framework/security-audit"]
 testing_framework    = []
 tip_poll_self_heal   = []
 

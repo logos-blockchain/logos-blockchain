@@ -36,7 +36,8 @@ use crate::{
                 install_local_manual_cluster, rebuild_pending_local_manual_cluster,
             },
             nodes::{
-                BlendReachabilityTransition, NodesToStartUnordered, apply_blend_reachability_set,
+                BlendReachabilityTransition, NodesToStartUnordered, active_nodes_converged,
+                apply_blend_reachability_set,
                 config_override::{set_deployment_config_override, set_user_config_override},
                 create_snapshot_all_nodes_with_wallet_state,
                 create_snapshot_node_with_wallet_state,

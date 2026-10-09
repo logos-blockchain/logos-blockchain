@@ -163,6 +163,60 @@ fn minimal_user_config() -> UserConfig {
     })
 }
 
+#[cfg(feature = "security-audit")]
+#[test]
+fn security_audit_config_defaults_to_omitted_and_round_trips_when_enabled() {
+    let mut config = minimal_user_config();
+    let yaml = serde_yaml::to_string(&config).expect("default config should serialize");
+    assert!(!yaml.contains("security_audit"));
+
+    let decoded: UserConfig =
+        serde_yaml::from_str(&yaml).expect("omitted audit settings should use their default");
+    assert_eq!(
+        decoded
+            .cryptarchia
+            .leader
+            .security_audit
+            .sibling_blocks_per_leadership,
+        0
+    );
+
+    config
+        .cryptarchia
+        .leader
+        .security_audit
+        .sibling_blocks_per_leadership = 3;
+    let yaml = serde_yaml::to_string(&config).expect("enabled config should serialize");
+    assert!(yaml.contains("security_audit"));
+    assert!(yaml.contains("sibling_blocks_per_leadership: 3"));
+
+    let decoded: UserConfig =
+        serde_yaml::from_str(&yaml).expect("enabled audit settings should deserialize");
+    assert_eq!(
+        decoded
+            .cryptarchia
+            .leader
+            .security_audit
+            .sibling_blocks_per_leadership,
+        3
+    );
+}
+
+#[cfg(feature = "security-audit")]
+#[test]
+fn security_audit_explicit_zero_is_disabled() {
+    let mut yaml = serde_yaml::to_value(minimal_user_config()).unwrap();
+    yaml["cryptarchia"]["leader"]["security_audit"] =
+        serde_yaml::from_str("sibling_blocks_per_leadership: 0").unwrap();
+    let config: UserConfig = serde_yaml::from_value(yaml).unwrap();
+    assert!(config.cryptarchia.leader.security_audit.is_disabled());
+    assert!(
+        !serde_yaml::to_string(&config)
+            .unwrap()
+            .contains("security_audit")
+    );
+}
+
 /// Environment variables applied on top of the YAML config must reach the
 /// resulting `RunConfig`, matching the standalone binary's behaviour (which the
 /// c-bindings reuse via `build_run_config_from_env`).

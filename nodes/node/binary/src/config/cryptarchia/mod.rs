@@ -136,6 +136,8 @@ impl ServiceConfig {
                 funding_pk: user.leader.wallet.funding_pk,
                 max_tx_fee: user.leader.wallet.max_tx_fee,
             },
+            #[cfg(feature = "security-audit")]
+            security_audit: user.leader.security_audit,
         };
         (chain_service_settings, chain_leader_settings)
     }

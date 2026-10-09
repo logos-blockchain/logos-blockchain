@@ -41,10 +41,14 @@ tracing                          = { workspace = true }
 tracing-futures                  = { workspace = true }
 
 [dev-dependencies]
-lb-time = { workspace = true }
-time    = { workspace = true }
+lb-binary-codec = { workspace = true }
+lb-time         = { workspace = true }
+time            = { workspace = true }
 
 [features]
+default = []
+# Enables runtime-configured adversarial behavior for local security audits.
+security-audit = ["lb-core/security-audit"]
 # Suppresses publishing of locally-proposed blocks over the blend network.
 # The block is still self-applied to this node's chain. Test-only build flag.
 testing-disable-proposal-publish = []

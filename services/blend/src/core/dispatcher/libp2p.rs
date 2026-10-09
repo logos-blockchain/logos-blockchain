@@ -8,6 +8,8 @@ use core::{
 use futures::{Stream, StreamExt as _, stream, stream::BoxStream};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_network_service::Message as ChainNetworkMsg;
+#[cfg(feature = "security-audit")]
+use lb_core::block::{BlockLimits, Proposal};
 use lb_core::{
     header::HeaderId,
     mantle::{traits::Hashable, transactions::hash::PrefixedKey},
@@ -372,6 +374,26 @@ where
     async fn dispatch(&self, payload: DataPayload, era: Era) {
         match payload {
             DataPayload::BlockProposal(proposal) => {
+                #[cfg(feature = "security-audit")]
+                if let Ok(decoded) = Proposal::decode_all(
+                    &proposal,
+                    &BlockLimits {
+                        max_uncles: u8::MAX,
+                        max_transactions: u16::MAX,
+                        max_transactions_size: u32::try_from(proposal.len()).unwrap_or(u32::MAX),
+                    },
+                ) {
+                    tracing::info!(
+                        target: LOG_TARGET,
+                        diagnostic = "blend_reachability",
+                        event = "security_audit_blend_payload_decapsulated",
+                        block_id = %decoded.header().id(),
+                        parent_block_id = %decoded.header().parent(),
+                        slot = u64::from(decoded.header().slot()),
+                        "Blend decapsulated a block proposal for the local node"
+                    );
+                }
+
                 // This node serves the current era, and the previous one during
                 // its transition period.
                 if era != self.current_era && self.previous_era != Some(era) {

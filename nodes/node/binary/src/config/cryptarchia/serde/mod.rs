@@ -27,6 +27,8 @@ impl Config {
                     funding_pk,
                     max_tx_fee: leader::default_max_tx_fee(),
                 },
+                #[cfg(feature = "security-audit")]
+                security_audit: leader::SecurityAuditSettings::default(),
             },
             network: network::Config::default(),
             service: service::Config::default(),

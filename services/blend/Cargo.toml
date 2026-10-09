@@ -58,4 +58,6 @@ time              = { workspace = true }
 tokio             = { features = ["test-util"], workspace = true }
 
 [features]
+default          = []
+security-audit   = []
 tokio-task-names = ["lb-utils/tokio-task-names"]

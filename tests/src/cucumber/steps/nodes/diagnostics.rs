@@ -202,6 +202,15 @@ impl BlendDiagnosticParameterSet {
                 epoch_period_nonce_stabilization: 4,
                 slot_activation_coeff_denominator: 30,
             }),
+            "security_audit_set_01" => Some(Self {
+                name: "security_audit_set_01",
+                security_parameter: 30,
+                slot_duration_secs: 1,
+                epoch_stake_distribution_stabilization: 3,
+                epoch_period_nonce_buffer: 3,
+                epoch_period_nonce_stabilization: 4,
+                slot_activation_coeff_denominator: 30,
+            }),
             // These parameters will invoke undue blend behaviour in a very short time, and are
             // suitable for testing blend diagnostic measurements in a more extreme
             // setting.
@@ -376,7 +385,8 @@ pub fn set_blend_diagnostic_parameter_set(
     let parameter_set = BlendDiagnosticParameterSet::from_name(parameter_set_name).ok_or_else(|| {
         StepError::InvalidArgument {
             message: format!(
-                "unknown diagnostic parameter set `{parameter_set_name}`; expected `clean_control`, `testnet_representative`, or `fast_repro`"
+                "unknown diagnostic parameter set `{parameter_set_name}`; expected `clean_control`, \
+                `testnet_representative`, `security_audit_set_01`, or `fast_repro`"
             ),
         }
     })?;
@@ -1728,6 +1738,14 @@ mod tests {
                 30,
                 (300, 3_000, 1_800, 1_200, 2_400, 2_999),
             ),
+            (
+                "security_audit_set_01",
+                30,
+                12,
+                (3, 3, 4),
+                30,
+                (900, 9_000, 5_400, 3_600, 7_200, 8_999),
+            ),
             ("fast_repro", 3, 1, (1, 1, 1), 10, (30, 90, 60, 30, 75, 89)),
         ] {
             let parameter_set =
@@ -1794,6 +1812,12 @@ mod tests {
                 coefficient_denominator
             );
             let geometry = DiagnosticGeometry::from_settings(&settings);
+            if name == "security_audit_set_01" {
+                assert_eq!(
+                    geometry.slots_per_epoch / u64::from(coefficient_denominator),
+                    300
+                );
+            }
             assert_eq!(
                 (
                     geometry.base_period_length,
@@ -1847,11 +1871,11 @@ mod tests {
     }
 
     #[test]
-    fn uncle_reference_window_is_the_widest_the_set_allows() {
-        // `⌊0.6k⌋`, the widest W that `k` allows.
+    fn uncle_reference_window_uses_the_default_with_the_security_parameter_cap() {
         for (name, expected_window) in [
             ("clean_control", 6),
             ("testnet_representative", 6),
+            ("security_audit_set_01", 12),
             ("fast_repro", 1),
         ] {
             assert_eq!(

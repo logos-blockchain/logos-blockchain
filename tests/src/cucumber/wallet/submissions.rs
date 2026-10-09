@@ -594,7 +594,8 @@ pub(crate) async fn reserve_workload_transaction_intent_with_primary_and_dust(
     Ok(primary_reserved)
 }
 
-const fn is_user_wallet_funds_deficit(error: &StepError) -> bool {
+#[must_use]
+pub const fn is_user_wallet_funds_deficit(error: &StepError) -> bool {
     matches!(
         error,
         StepError::WalletError(WalletError::InsufficientFunds { .. })

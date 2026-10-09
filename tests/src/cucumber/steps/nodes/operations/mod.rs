@@ -107,7 +107,8 @@ pub use blend_relay::{
     restore_all_blend_reachability, set_blend_reachability,
 };
 pub use consensus::{
-    ensure_all_nodes_agree_on_lib, nodes_converged, poll_all_nodes_and_update_consensus_cache,
+    active_nodes_converged, ensure_all_nodes_agree_on_lib, nodes_converged,
+    poll_all_nodes_and_update_consensus_cache,
 };
 pub use lifecycle::{
     restart_node, start_node, start_nodes_order_respecting_dependencies, stop_all_nodes, stop_node,

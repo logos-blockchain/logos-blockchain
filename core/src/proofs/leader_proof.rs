@@ -143,6 +143,14 @@ impl Groth16LeaderProof {
         &self.proof
     }
 
+    /// Reuse a completed `PoL` proof with a fresh audit voucher commitment.
+    #[cfg(feature = "security-audit")]
+    #[must_use]
+    pub const fn with_audit_voucher_cm(mut self, voucher_cm: VoucherCm) -> Self {
+        self.voucher_cm = voucher_cm;
+        self
+    }
+
     /// Construct a proof directly from its parts.
     ///
     /// Crate-internal: the resulting proof is not necessarily valid; it is used
@@ -454,6 +462,33 @@ mod tests {
     fn test_genesis_verification() {
         let genesis_proof = Groth16LeaderProof::genesis();
         assert!(genesis_proof.verify_genesis());
+    }
+
+    #[cfg(feature = "security-audit")]
+    #[test]
+    fn audit_voucher_replacement_preserves_completed_proof() {
+        let original = Groth16LeaderProof::from_parts(
+            lb_pol::PoLProof::from_bytes(&[17; COMPRESSED_PROOF_SIZE]),
+            Fr::from(23u64),
+            lb_key_management_system_keys::keys::Ed25519Key::generate(&mut rand::thread_rng())
+                .public_key(),
+            Fr::from(31u64).into(),
+        );
+        let voucher = Fr::from(37u64).into();
+        let sibling = original.clone().with_audit_voucher_cm(voucher);
+        assert_eq!(sibling.proof().to_bytes(), original.proof().to_bytes());
+        assert_eq!(sibling.entropy(), original.entropy());
+        assert_eq!(sibling.leader_key(), original.leader_key());
+        assert_eq!(sibling.voucher_cm(), &voucher);
+        assert_ne!(sibling.voucher_cm(), original.voucher_cm());
+        // The existing encoding changes only in its final voucher field.
+        let original_bytes = original.encode_to_vec();
+        let sibling_bytes = sibling.encode_to_vec();
+        let voucher_offset = original_bytes.len() - VoucherCm::CANONICAL_ENCODED_SIZE;
+        assert_eq!(
+            &sibling_bytes[..voucher_offset],
+            &original_bytes[..voucher_offset]
+        );
     }
 
     /// Check that ticket is derived correctly with known values.
