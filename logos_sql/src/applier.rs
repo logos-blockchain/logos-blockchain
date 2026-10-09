@@ -9,7 +9,7 @@ use lb_zone_sdk::{
 };
 
 use crate::{
-    db::{Databases, PendingPublish, SuffixWrite},
+    db::{Databases, ObservedWrite, PendingPublish},
     error::Error,
     protocol::{self, ChannelBatch, ChannelWrite, TxId},
 };
@@ -38,6 +38,8 @@ enum RebuildCause {
     PendingWriteInvalidated(Vec<PendingPublish>),
     /// Canonical channel history changed and `LIVE.db` must drop orphaned SQL.
     ChannelFork,
+    /// A previous rebuild stopped before its checkpoint was saved.
+    Interrupted,
 }
 
 /// Selects how one block event is reflected in `LIVE.db`.
@@ -76,13 +78,19 @@ struct SqlChanges {
 /// block.
 /// Finalized writes apply to both finalized and live state, while newly
 /// adopted writes apply only to live state. A branch change reconstructs live
-/// state from finalized history and the retained canonical suffix.
+/// state from finalized history and the SDK's current channel history.
+/// Returns an unfinished rebuild when the event does not contain the history
+/// needed to reconstruct LIVE. The runtime supplies that history from the SDK.
 ///
 /// # Errors
 ///
 /// Returns an error if SQL cannot be applied, a channel payload cannot be
 /// decoded, or the checkpoint cannot be persisted.
-pub fn on_event(db: &mut Databases, event: &Event, channel_id: ChannelId) -> Result<(), Error> {
+pub fn on_event<'a>(
+    db: &mut Databases,
+    event: &'a Event,
+    channel_id: ChannelId,
+) -> Result<Option<PendingRebuild<'a>>, Error> {
     match event {
         Event::BlocksProcessed {
             checkpoint,
@@ -92,9 +100,9 @@ pub fn on_event(db: &mut Databases, event: &Event, channel_id: ChannelId) -> Res
         } => process_blocks(db, checkpoint, channel_update, finalized, channel_id),
         Event::Ready => {
             tracing::info!(target: TARGET, "sequencer ready");
-            Ok(())
+            Ok(None)
         }
-        Event::TurnNotification { .. } => Ok(()),
+        Event::TurnNotification { .. } => Ok(None),
     }
 }
 
@@ -102,13 +110,13 @@ pub fn on_event(db: &mut Databases, event: &Event, channel_id: ChannelId) -> Res
 ///
 /// If any state change fails, the checkpoint remains behind and `ZoneSDK`
 /// delivers the same channel position again after retry or restart.
-fn process_blocks(
+fn process_blocks<'a>(
     db: &mut Databases,
-    checkpoint: &SequencerCheckpoint,
+    checkpoint: &'a SequencerCheckpoint,
     channel_update: &ChannelUpdate,
     finalized: &[FinalizedTx],
     channel_id: ChannelId,
-) -> Result<(), Error> {
+) -> Result<Option<PendingRebuild<'a>>, Error> {
     let changes = SqlChanges::from_block(channel_update, finalized, channel_id);
 
     tracing::debug!(
@@ -122,13 +130,54 @@ fn process_blocks(
     let plan = changes.application_plan(db)?;
 
     match plan {
-        ApplicationPlan::ApplyChanges => changes.apply(db)?,
-        ApplicationPlan::Rebuild(cause) => changes.rebuild(db, &cause)?,
+        ApplicationPlan::ApplyChanges => {
+            changes.apply(db)?;
+            db.persist_checkpoint(checkpoint)?;
+            Ok(None)
+        }
+        ApplicationPlan::Rebuild(cause) => {
+            changes.prepare_rebuild(db, &cause)?;
+
+            // Conflict events already contain the complete surviving history.
+            if let Some(history) = channel_update.canonical_chain() {
+                let history = history.cloned().collect::<Vec<_>>();
+                changes.finish_rebuild(db, &history, channel_id, checkpoint)?;
+                Ok(None)
+            } else {
+                Ok(Some(PendingRebuild {
+                    changes,
+                    checkpoint,
+                    channel_id,
+                }))
+            }
+        }
     }
+}
 
-    db.persist_checkpoint(checkpoint)?;
+/// A rebuild already recorded in the database, waiting for channel history.
+pub struct PendingRebuild<'a> {
+    changes: SqlChanges,
+    checkpoint: &'a SequencerCheckpoint,
+    channel_id: ChannelId,
+}
 
-    Ok(())
+impl PendingRebuild<'_> {
+    /// Finish with the SDK's current history. During finalized backfill it may
+    /// be unavailable; save progress but leave the rebuild flag set for later.
+    pub fn finish(
+        self,
+        db: &mut Databases,
+        history: Option<Vec<ChannelUpdateTx>>,
+    ) -> Result<(), Error> {
+        let Some(history) = history else {
+            self.changes
+                .update_write_statuses(db, &self.changes.adopted)?;
+            return db.persist_checkpoint(self.checkpoint);
+        };
+
+        self.changes
+            .finish_rebuild(db, &history, self.channel_id, self.checkpoint)
+    }
 }
 
 impl SqlChanges {
@@ -190,22 +239,21 @@ impl SqlChanges {
     fn application_plan(&self, db: &Databases) -> Result<ApplicationPlan, Error> {
         let pending = db.pending_writes()?;
 
-        if let Some(first) = pending.first() {
-            // The rebuild records the displacement first, then replaces
-            // `LIVE.db`, which removes its pending-write record. If both records
-            // still exist, the process stopped between those two steps and the
-            // rebuild must resume.
-            if db.pending_write_rebuild_was_interrupted(first.tx_id)? {
-                return Ok(ApplicationPlan::Rebuild(
-                    RebuildCause::PendingWriteInvalidated(pending),
-                ));
-            }
+        if db.rebuild_required()? {
+            // The previous rebuild may have stopped before recording the
+            // pending write's displacement or replacing LIVE.
+            let cause = if pending.is_empty() {
+                RebuildCause::Interrupted
+            } else {
+                RebuildCause::PendingWriteInvalidated(pending)
+            };
+            return Ok(ApplicationPlan::Rebuild(cause));
+        }
 
-            if self.changes_history_before_pending_write(db)? {
-                return Ok(ApplicationPlan::Rebuild(
-                    RebuildCause::PendingWriteInvalidated(pending),
-                ));
-            }
+        if !pending.is_empty() && self.changes_history_before_pending_write(db)? {
+            return Ok(ApplicationPlan::Rebuild(
+                RebuildCause::PendingWriteInvalidated(pending),
+            ));
         }
 
         if !self.orphaned.is_empty() {
@@ -219,15 +267,23 @@ impl SqlChanges {
     /// write.
     ///
     /// Orphans change the base. Adopting or finalizing a write already in the
-    /// live suffix does not: its effects preceded the queued local writes.
+    /// live database does not: its effects preceded the queued local writes.
     fn changes_history_before_pending_write(&self, db: &Databases) -> Result<bool, Error> {
         if !self.orphaned.is_empty() {
             return Ok(true);
         }
 
         for inscription in self.adopted.iter().chain(&self.finalized) {
-            if !db.live_suffix_contains(inscription.this_msg)? {
-                return Ok(true);
+            match ChannelBatch::decode(inscription.payload.as_ref()) {
+                Ok(batch) => {
+                    for write in batch.into_writes() {
+                        if !db.live_processed_write(inscription.this_msg, &write)? {
+                            return Ok(true);
+                        }
+                    }
+                }
+                Err(error) if is_rejected_write(&error) => {}
+                Err(error) => return Err(error),
             }
         }
 
@@ -239,29 +295,40 @@ impl SqlChanges {
     fn apply(&self, db: &mut Databases) -> Result<(), Error> {
         Self::apply_inscriptions(db, &self.finalized, ApplyTarget::LibAndLive)?;
         Self::apply_inscriptions(db, &self.adopted, ApplyTarget::Live)?;
-        self.apply_history_delta(db)
+        self.update_write_statuses(db, &self.adopted)
     }
 
-    /// Records displacement, advances finalized state, and reconstructs LIVE.
+    /// Records displacement and advances finalized state before rebuilding
+    /// LIVE.
     ///
-    /// The displacement, when applicable, and suffix are persisted before
-    /// replacing `LIVE.db` so an interrupted rebuild can be recognized and
-    /// safely repeated.
-    fn rebuild(&self, db: &mut Databases, cause: &RebuildCause) -> Result<(), Error> {
+    /// Mark the rebuild before changing either database. Restart can then
+    /// repeat it using the SDK's history, even if the next event is not a fork.
+    fn prepare_rebuild(&self, db: &mut Databases, cause: &RebuildCause) -> Result<(), Error> {
+        db.require_rebuild()?;
+
         match cause {
             RebuildCause::PendingWriteInvalidated(pending) => {
                 for write in pending {
                     db.record_pending_write_displacement(write)?;
                 }
             }
-            RebuildCause::ChannelFork => {}
+            RebuildCause::ChannelFork | RebuildCause::Interrupted => {}
         }
 
-        Self::apply_inscriptions(db, &self.finalized, ApplyTarget::Lib)?;
-        self.apply_history_delta(db)?;
-        rebuild_live_from_suffix(db)?;
+        Self::apply_inscriptions(db, &self.finalized, ApplyTarget::Lib)
+    }
 
-        Ok(())
+    fn finish_rebuild(
+        &self,
+        db: &mut Databases,
+        history: &[ChannelUpdateTx],
+        channel_id: ChannelId,
+        checkpoint: &SequencerCheckpoint,
+    ) -> Result<(), Error> {
+        let inscriptions = Self::collect_channel_inscriptions(history, channel_id);
+        self.update_write_statuses(db, &inscriptions)?;
+        rebuild_live(db, &inscriptions)?;
+        db.persist_rebuilt_checkpoint(checkpoint)
     }
 
     fn apply_inscriptions(
@@ -276,28 +343,30 @@ impl SqlChanges {
         Ok(())
     }
 
-    /// Applies this event to the replayable suffix and local write statuses.
-    fn apply_history_delta(&self, db: &mut Databases) -> Result<(), Error> {
+    /// Updates our writes' statuses without retaining foreign channel history.
+    fn update_write_statuses(
+        &self,
+        db: &mut Databases,
+        adopted: &[InscriptionInfo],
+    ) -> Result<(), Error> {
         let finalized = self
             .finalized
             .iter()
             .map(|inscription| inscription.this_msg)
             .collect::<Vec<_>>();
-        let orphaned = self
-            .orphaned
-            .iter()
-            .map(|inscription| inscription.this_msg)
-            .collect::<Vec<_>>();
-        let adopted = self.collect_adopted_suffix(db)?;
+        let orphaned = Self::observe_writes(db, &self.orphaned)?;
+        let adopted = Self::observe_writes(db, adopted)?;
 
-        db.apply_history_delta(&finalized, &orphaned, &adopted)
+        db.update_write_statuses(&finalized, &orphaned, &adopted)
     }
 
-    /// Prepares newly adopted writes for durable replay during a later rebuild.
-    fn collect_adopted_suffix(&self, db: &Databases) -> Result<Vec<SuffixWrite>, Error> {
+    fn observe_writes(
+        db: &Databases,
+        inscriptions: &[InscriptionInfo],
+    ) -> Result<Vec<ObservedWrite>, Error> {
         let mut writes = Vec::new();
 
-        for inscription in &self.adopted {
+        for inscription in inscriptions {
             let payload = inscription.payload.as_ref();
             let batch = match ChannelBatch::decode(payload) {
                 Ok(batch) => batch,
@@ -308,11 +377,10 @@ impl SqlChanges {
             };
 
             for write in batch.into_writes() {
-                writes.push(SuffixWrite {
+                writes.push(ObservedWrite {
                     this_msg: inscription.this_msg,
                     tx_id: write.tx_id,
                     payload: write.encode_stored()?,
-                    local: false,
                 });
             }
         }
@@ -321,31 +389,23 @@ impl SqlChanges {
     }
 }
 
-/// Reconstructs `LIVE.db` as finalized state followed by the canonical suffix.
-///
-/// Stored payloads are local durable state: malformed or mismatched records
-/// indicate corruption. Deterministically rejected SQL is recorded and skipped
-/// exactly as it is during normal channel application.
-fn rebuild_live_from_suffix(db: &mut Databases) -> Result<(), Error> {
-    let suffix = db.live_suffix()?;
+/// Copies finalized state, then replays the SDK's surviving channel history.
+fn rebuild_live(db: &mut Databases, history: &[InscriptionInfo]) -> Result<(), Error> {
     let mut rebuild = db.begin_live_rebuild()?;
 
-    for retained in suffix {
-        let write = ChannelWrite::decode(&retained.payload)
-            .map_err(|_| Error::InvalidLocalState("stored live suffix payload is malformed"))?;
-
-        if write.tx_id != retained.tx_id {
-            return Err(Error::InvalidLocalState(
-                "stored live suffix transaction id does not match its payload",
-            ));
-        }
-
-        match rebuild.apply_write(&write) {
-            Ok(()) => {}
-            Err(error) if is_rejected_write(&error) => {
-                db.record_rejected_write(retained.this_msg, Some(write.tx_id), &error.to_string())?;
+    for inscription in history {
+        let batch = match ChannelBatch::decode(inscription.payload.as_ref()) {
+            Ok(write) => write,
+            Err(error) => {
+                handle_write_error(db, inscription, None, error)?;
+                continue;
             }
-            Err(error) => return Err(error),
+        };
+
+        for write in batch.into_writes() {
+            if let Err(error) = rebuild.apply_write(&write) {
+                handle_write_error(db, inscription, Some(write.tx_id), error)?;
+            }
         }
     }
 
@@ -450,10 +510,9 @@ mod tests {
     use rusqlite::types::Value;
     use tempfile::TempDir;
 
-    use super::on_event;
     use crate::{
         PublicationConfig,
-        db::{Databases, SuffixWrite, tests::open_databases},
+        db::{Databases, tests::open_databases},
         protocol::{
             CapturedFunctionCalls, ChannelBatch, ChannelWrite, EncodedWrite, PAYLOAD_MARKER,
             Statement, Transaction, TxId,
@@ -590,7 +649,7 @@ mod tests {
             .query_row("SELECT value FROM items", [], |row| row.get(0))
             .unwrap();
         assert_eq!(restored, original);
-        assert_eq!(db.unhandled_displacements().unwrap(), []);
+        assert_eq!(db.unhandled_displacements().unwrap(), Vec::new());
         assert_eq!(db.write_status(first).unwrap(), Some(WriteStatus::Live));
         assert_eq!(db.write_status(second).unwrap(), Some(WriteStatus::Live));
 
@@ -611,7 +670,7 @@ mod tests {
             db.write_status(second).unwrap(),
             Some(WriteStatus::Finalized)
         );
-        assert!(db.live_suffix().unwrap().is_empty());
+        assert_eq!(db.unhandled_displacements().unwrap(), Vec::new());
     }
 
     #[test]
@@ -656,6 +715,35 @@ mod tests {
             .map(|write| write.tx_id)
             .collect();
         assert_eq!(displaced, vec![first, second]);
+    }
+
+    // Extension fixtures use their adopted writes as the complete SDK history.
+    // Tests with earlier surviving writes supply an explicit history instead.
+    fn on_event(
+        db: &mut Databases,
+        event: &Event,
+        channel_id: ChannelId,
+    ) -> Result<(), crate::Error> {
+        let history = match event {
+            Event::BlocksProcessed { channel_update, .. } => {
+                Some(channel_update.adopted().to_vec())
+            }
+            _ => None,
+        };
+        apply_with_history(db, event, channel_id, history)
+    }
+
+    fn apply_with_history(
+        db: &mut Databases,
+        event: &Event,
+        channel_id: ChannelId,
+        history: Option<Vec<ChannelUpdateTx>>,
+    ) -> Result<(), crate::Error> {
+        if let Some(rebuild) = super::on_event(db, event, channel_id)? {
+            rebuild.finish(db, history)?;
+        }
+
+        Ok(())
     }
 
     fn checkpoint(byte: u8, slot: u64) -> SequencerCheckpoint {
@@ -1043,8 +1131,15 @@ mod tests {
         drop(db);
         let mut db = open_databases(dir.path()).unwrap();
 
-        // A rebuild replays the retained suffix, including rejected SQL.
-        super::rebuild_live_from_suffix(&mut db).unwrap();
+        // A rebuild replays the SDK history, including rejected SQL.
+        super::rebuild_live(
+            &mut db,
+            &[
+                inscription(&rejected.payload, 1),
+                inscription(&create.payload, 2),
+            ],
+        )
+        .unwrap();
         assert!(table_exists(db.live_path(), "items"));
 
         let event = blocks_processed(
@@ -1110,6 +1205,49 @@ mod tests {
             db.rejected_write_count().expect("rejections should load"),
             1
         );
+    }
+
+    #[test]
+    fn finalizing_rejected_sql_preserves_the_pending_local_write() {
+        let dir = TempDir::new().unwrap();
+        let mut db = open_databases(dir.path()).unwrap();
+        let rejected = encoded_write(&transaction(
+            "INSERT INTO missing_table VALUES (1)",
+            Vec::new(),
+        ));
+        let adoption = blocks_processed(
+            checkpoint(1, 1),
+            vec![ChannelUpdateTx::Inscription(inscription(
+                &rejected.payload,
+                1,
+            ))],
+            Vec::new(),
+            Vec::new(),
+        );
+        on_event(&mut db, &adoption, CHANNEL_ID.into()).unwrap();
+
+        let local_id = db
+            .commit_local_write(
+                TxId::generate(),
+                &transaction("CREATE TABLE local_write(value TEXT)", Vec::new()),
+            )
+            .unwrap();
+        let event = blocks_processed(
+            checkpoint(2, 2),
+            Vec::new(),
+            Vec::new(),
+            vec![finalized(&rejected.payload, 1)],
+        );
+        assert!(
+            super::on_event(&mut db, &event, CHANNEL_ID.into())
+                .unwrap()
+                .is_none(),
+            "a previously rejected write must not request rebuild history"
+        );
+
+        assert!(table_exists(db.live_path(), "local_write"));
+        assert_eq!(db.pending_publish().unwrap().unwrap().tx_id, local_id);
+        assert_eq!(db.unhandled_displacements().unwrap(), []);
     }
 
     #[test]
@@ -1453,7 +1591,6 @@ mod tests {
             assert!(table_exists(db.live_path(), "foreign_write"));
             assert_status(&db, tx_id, Some(WriteStatus::Displaced));
             assert_eq!(db.unhandled_displacements().unwrap(), displacements);
-            assert!(!db.live_suffix().unwrap()[0].local);
 
             let next = if finalize_foreign {
                 blocks_processed(
@@ -1487,7 +1624,7 @@ mod tests {
     }
 
     #[test]
-    fn branch_change_preserves_the_unchanged_live_suffix() {
+    fn branch_change_replays_the_common_prefix() {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
@@ -1512,7 +1649,7 @@ mod tests {
         );
 
         on_event(&mut db, &initial, ChannelId::from(CHANNEL_ID))
-            .expect("initial suffix should apply");
+            .expect("initial history should apply");
 
         drop(db);
         let mut db = open_databases(dir.path()).expect("databases should reopen");
@@ -1521,7 +1658,7 @@ mod tests {
             "INSERT INTO items(value) VALUES (?1)",
             vec![Value::Text("new".to_owned())],
         ));
-        let branch_change = blocks_processed(
+        let mut branch_change = blocks_processed(
             checkpoint(2, 2),
             vec![ChannelUpdateTx::Inscription(inscription(
                 &replacement.payload,
@@ -1534,8 +1671,19 @@ mod tests {
             Vec::new(),
         );
 
+        if let Event::BlocksProcessed {
+            channel_update: ChannelUpdate::Conflict { common_prefix, .. },
+            ..
+        } = &mut branch_change
+        {
+            common_prefix.push(ChannelUpdateTx::Inscription(inscription(
+                &create.payload,
+                1,
+            )));
+        }
+
         on_event(&mut db, &branch_change, ChannelId::from(CHANNEL_ID))
-            .expect("replacement suffix should rebuild");
+            .expect("replacement history should rebuild");
         on_event(&mut db, &branch_change, ChannelId::from(CHANNEL_ID))
             .expect("replayed branch update should be idempotent");
 
@@ -1579,6 +1727,101 @@ mod tests {
                 .is_none()
         );
         assert_status(&db, local_tx_id, Some(WriteStatus::Displaced));
+    }
+
+    #[test]
+    fn extension_rebuild_uses_the_sdk_history_before_the_new_write() {
+        let dir = TempDir::new().unwrap();
+        let mut db = open_databases(dir.path()).unwrap();
+        let create = encoded_write(&transaction("CREATE TABLE items(value TEXT)", Vec::new()));
+        let prefix = ChannelUpdateTx::Inscription(inscription(&create.payload, 1));
+        let initial = blocks_processed(
+            checkpoint(1, 1),
+            vec![prefix.clone()],
+            Vec::new(),
+            Vec::new(),
+        );
+        on_event(&mut db, &initial, CHANNEL_ID.into()).unwrap();
+
+        let local_id = db
+            .commit_local_write(
+                TxId::generate(),
+                &transaction("INSERT INTO items VALUES ('local')", Vec::new()),
+            )
+            .unwrap();
+        let foreign = encoded_write(&transaction(
+            "INSERT INTO items VALUES ('foreign')",
+            Vec::new(),
+        ));
+        let adopted = ChannelUpdateTx::Inscription(inscription(&foreign.payload, 2));
+        let event = blocks_processed(
+            checkpoint(2, 2),
+            vec![adopted.clone()],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        apply_with_history(
+            &mut db,
+            &event,
+            CHANNEL_ID.into(),
+            Some(vec![prefix, adopted]),
+        )
+        .unwrap();
+
+        assert_eq!(text_values(db.live_path(), "items"), vec!["foreign"]);
+        assert_status(&db, local_id, Some(WriteStatus::Displaced));
+        assert!(!db.rebuild_required().unwrap());
+    }
+
+    #[test]
+    fn interrupted_fork_rebuild_resumes_without_another_conflict_event() {
+        let dir = TempDir::new().unwrap();
+        let mut db = open_databases(dir.path()).unwrap();
+        let old = encoded_write(&transaction(
+            "CREATE TABLE abandoned(value TEXT)",
+            Vec::new(),
+        ));
+        let initial = blocks_processed(
+            checkpoint(1, 1),
+            vec![ChannelUpdateTx::Inscription(inscription(&old.payload, 1))],
+            Vec::new(),
+            Vec::new(),
+        );
+        on_event(&mut db, &initial, CHANNEL_ID.into()).unwrap();
+
+        // The fork was detected, but the process stopped before replacing LIVE.
+        // On restart the SDK catches up with an extension, not the old conflict.
+        db.require_rebuild().unwrap();
+        drop(db);
+
+        let mut db = open_databases(dir.path()).unwrap();
+        let current = encoded_write(&transaction(
+            "CREATE TABLE surviving(value TEXT)",
+            Vec::new(),
+        ));
+        let event = blocks_processed(checkpoint(2, 2), Vec::new(), Vec::new(), Vec::new());
+        apply_with_history(
+            &mut db,
+            &event,
+            CHANNEL_ID.into(),
+            Some(vec![ChannelUpdateTx::Inscription(inscription(
+                &current.payload,
+                2,
+            ))]),
+        )
+        .unwrap();
+
+        assert!(!table_exists(db.live_path(), "abandoned"));
+        assert!(table_exists(db.live_path(), "surviving"));
+        assert!(!db.rebuild_required().unwrap());
+
+        assert!(
+            super::on_event(&mut db, &event, CHANNEL_ID.into())
+                .unwrap()
+                .is_none(),
+            "completed rebuild must not request history again"
+        );
     }
 
     #[test]
@@ -1626,7 +1869,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_finishes_a_rebuild_after_the_suffix_commit() {
+    fn replay_finishes_an_interrupted_rebuild() {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
@@ -1635,6 +1878,12 @@ mod tests {
         let local_tx_id = db
             .commit_local_write(TxId::generate(), &local)
             .expect("local write should commit");
+        let second_id = db
+            .commit_local_write(
+                TxId::generate(),
+                &transaction("INSERT INTO local_write VALUES (1)", Vec::new()),
+            )
+            .unwrap();
         let pending = db
             .pending_publish()
             .expect("pending write should load")
@@ -1646,23 +1895,11 @@ mod tests {
         ));
         let foreign_inscription = inscription(&foreign.payload, 2);
 
-        // Simulate a crash after the control-state transaction commits but
-        // before the replacement LIVE database is installed.
+        // Stop after recording only the first displacement. Recovery must
+        // also displace the rest of the queue before replacing LIVE.
+        db.require_rebuild().unwrap();
         db.record_pending_write_displacement(&pending)
             .expect("displacement should be recorded");
-        db.apply_history_delta(
-            &[],
-            &[],
-            &[SuffixWrite {
-                this_msg: foreign_inscription.this_msg,
-                tx_id: ChannelWrite::decode(&foreign.payload)
-                    .expect("payload should decode")
-                    .tx_id,
-                payload: foreign.payload.clone(),
-                local: false,
-            }],
-        )
-        .expect("suffix update should commit");
         drop(db);
 
         let mut db = open_databases(dir.path()).expect("databases should reopen");
@@ -1684,10 +1921,12 @@ mod tests {
                 .is_none()
         );
         assert_status(&db, local_tx_id, Some(WriteStatus::Displaced));
+        assert_status(&db, second_id, Some(WriteStatus::Displaced));
+        assert!(db.pending_writes().unwrap().is_empty());
     }
 
     #[test]
-    fn finalized_backfill_finishes_a_rebuild_after_the_suffix_commit() {
+    fn restart_backfill_waits_for_live_history_before_finishing_the_rebuild() {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = open_databases(dir.path()).expect("databases should open");
         let live_path = db.live_path().to_owned();
@@ -1709,21 +1948,9 @@ mod tests {
 
         // Simulate a crash after the control-state transaction commits but
         // before the replacement LIVE database is installed.
+        db.require_rebuild().unwrap();
         db.record_pending_write_displacement(&pending)
             .expect("displacement should be recorded");
-        db.apply_history_delta(
-            &[],
-            &[],
-            &[SuffixWrite {
-                this_msg: foreign_inscription.this_msg,
-                tx_id: ChannelWrite::decode(&foreign.payload)
-                    .expect("payload should decode")
-                    .tx_id,
-                payload: foreign.payload.clone(),
-                local: false,
-            }],
-        )
-        .expect("suffix update should commit");
         drop(db);
 
         let mut db = open_databases(dir.path()).expect("databases should reopen");
@@ -1738,8 +1965,18 @@ mod tests {
             }],
         );
 
-        on_event(&mut db, &backfilled_event, ChannelId::from(CHANNEL_ID))
-            .expect("finalized backfill should finish the rebuild");
+        apply_with_history(&mut db, &backfilled_event, CHANNEL_ID.into(), None)
+            .expect("finalized backfill should advance LIB without a live history yet");
+
+        assert!(table_exists(db.lib_path(), "foreign_write"));
+        assert!(db.rebuild_required().unwrap());
+        drop(db);
+
+        // Even another restart during backfill must not lose the rebuild.
+        let mut db = open_databases(dir.path()).unwrap();
+        let live_event = blocks_processed(checkpoint(3, 3), Vec::new(), Vec::new(), Vec::new());
+        apply_with_history(&mut db, &live_event, CHANNEL_ID.into(), Some(Vec::new()))
+            .expect("the first live block should finish the rebuild");
 
         assert!(!table_exists(&live_path, "local_write"));
         assert!(table_exists(&live_path, "foreign_write"));
@@ -1749,6 +1986,7 @@ mod tests {
                 .is_none()
         );
         assert_status(&db, local_tx_id, Some(WriteStatus::Displaced));
+        assert!(!db.rebuild_required().unwrap());
     }
 
     #[test]

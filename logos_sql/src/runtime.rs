@@ -264,7 +264,7 @@ impl Runtime {
         retry.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         loop {
-            {
+            let event = {
                 // Keep the same SDK event future across commands. Restarting it
                 // for each write can starve channel processing under sustained load.
                 // Leave this scope before publishing to release the sequencer borrow.
@@ -283,8 +283,7 @@ impl Runtime {
 
                     tokio::select! {
                         event = &mut event, if ready_for_events => {
-                            self.handle_event(event);
-                            break;
+                            break Some(event);
                         }
                         command = self.command_rx.recv() => {
                             let Some(command) = command else {
@@ -296,17 +295,23 @@ impl Runtime {
                             }
 
                             if !ready_for_events {
-                                break;
+                                break None;
                             }
                         }
                         _ = retry.tick(), if retry_event => {
-                            self.retry_pending_event()?;
-                            break;
+                            break None;
                         }
                         () = sleep_until(self.next_publish_at),
-                            if save_publication && !retry_event && self.can_publish() => break,
+                            if save_publication && !retry_event && self.can_publish() => break None,
                     }
                 }
+            };
+
+            // Release the event future before accessing SDK history for a rebuild.
+            if let Some(event) = event {
+                self.handle_event(event, &sequencer);
+            } else {
+                self.retry_pending_event(&sequencer)?;
             }
 
             // Publish against fully applied channel history, after the batch
@@ -432,7 +437,7 @@ impl Runtime {
         Ok(tx_id)
     }
 
-    const fn ensure_ready_to_write(&self) -> Result<(), Error> {
+    fn ensure_ready_to_write(&self) -> Result<(), Error> {
         if self.read_only {
             return Err(Error::ReadOnly);
         }
@@ -446,6 +451,12 @@ impl Runtime {
         }
 
         if !self.sequencer_ready || self.ready_checkpoint_pending {
+            return Err(Error::SequencerNotReady);
+        }
+
+        // The SDK is still loading existing unfinalized history.
+        // Block new writes until that history has been used to rebuild LIVE.db.
+        if self.db.rebuild_required()? {
             return Err(Error::SequencerNotReady);
         }
 
@@ -480,8 +491,21 @@ impl Runtime {
         self.next_publish_at = Instant::now() + delay;
     }
 
-    fn handle_event(&mut self, event: Event) {
-        let result = applier::on_event(&mut self.db, &event, self.channel_id);
+    fn apply_event(
+        &mut self,
+        event: &Event,
+        sequencer: &ZoneSequencer<NodeHttpClient>,
+    ) -> Result<(), Error> {
+        if let Some(rebuild) = applier::on_event(&mut self.db, event, self.channel_id)? {
+            let history = sequencer.channel_history();
+            rebuild.finish(&mut self.db, history)?;
+        }
+
+        Ok(())
+    }
+
+    fn handle_event(&mut self, event: Event, sequencer: &ZoneSequencer<NodeHttpClient>) {
+        let result = self.apply_event(&event, sequencer);
 
         match result {
             Ok(()) => {
@@ -494,18 +518,25 @@ impl Runtime {
         }
     }
 
-    fn retry_pending_event(&mut self) -> Result<(), Error> {
+    fn retry_pending_event(
+        &mut self,
+        sequencer: &ZoneSequencer<NodeHttpClient>,
+    ) -> Result<(), Error> {
         if let Some(pending) = self.event_pending_retry.take() {
-            return self.retry_event(pending);
+            return self.retry_event(pending, sequencer);
         }
 
         Ok(())
     }
 
-    fn retry_event(&mut self, pending: PendingEvent) -> Result<(), Error> {
+    fn retry_event(
+        &mut self,
+        pending: PendingEvent,
+        sequencer: &ZoneSequencer<NodeHttpClient>,
+    ) -> Result<(), Error> {
         let event = pending.event;
 
-        match applier::on_event(&mut self.db, &event, self.channel_id) {
+        match self.apply_event(&event, sequencer) {
             Ok(()) => {}
             Err(error) => {
                 if !is_retryable_apply_error(&error) {
@@ -554,6 +585,10 @@ impl Runtime {
         &mut self,
         sequencer: &mut ZoneSequencer<NodeHttpClient>,
     ) -> Result<(), Error> {
+        // Do not publish a pending write that the unfinished rebuild removes.
+        if self.db.rebuild_required()? {
+            return Ok(());
+        }
         self.persist_publish_checkpoint()?;
 
         let Some(pending) =
@@ -716,7 +751,7 @@ mod tests {
                     .send(Command::UnhandledDisplacements { response_tx })
                     .await
                     .unwrap();
-                assert_eq!(response_rx.await.unwrap().unwrap(), []);
+                assert_eq!(response_rx.await.unwrap().unwrap(), Vec::new());
             }
 
             let restarted = timeout(Duration::from_millis(250), listener.accept())
@@ -851,10 +886,10 @@ mod tests {
             .finish()
             .unwrap();
         runtime.execute(tx_id, &transaction).unwrap();
-        runtime.handle_event(event);
+        runtime.handle_event(event, &sequencer());
 
         assert!(runtime.event_pending_retry.is_none());
-        assert_eq!(runtime.db.unhandled_displacements().unwrap(), []);
+        assert_eq!(runtime.db.unhandled_displacements().unwrap(), Vec::new());
         assert_eq!(runtime.db.pending_writes().unwrap()[0].tx_id, tx_id);
         let connection = Databases::open_reader(runtime.db.live_path()).unwrap();
         let count: i64 = connection
@@ -982,7 +1017,7 @@ mod tests {
         reader.read_only = true;
         reader.sequencer_ready = true;
 
-        reader.handle_event(adopt_event(inscription.clone()));
+        reader.handle_event(adopt_event(inscription.clone()), &sequencer());
 
         let connection = Databases::open_reader(reader.db.live_path()).unwrap();
         let count: i64 = connection
@@ -1007,7 +1042,7 @@ mod tests {
                 .is_err()
         );
 
-        writer.handle_event(orphan_event(inscription));
+        writer.handle_event(orphan_event(inscription), &sequencer());
         let displacement = writer.db.unhandled_displacements().unwrap().remove(0);
 
         assert!(matches!(
@@ -1022,8 +1057,8 @@ mod tests {
         let (_dir, mut runtime, _) = runtime();
         let first = published_local_write(&mut runtime, 2);
         let second = published_local_write(&mut runtime, 3);
-        runtime.handle_event(orphan_event(first));
-        runtime.handle_event(orphan_event(second));
+        runtime.handle_event(orphan_event(first), &sequencer());
+        runtime.handle_event(orphan_event(second), &sequencer());
         let displacements = runtime.db.unhandled_displacements().unwrap();
         let displacement = &displacements[0];
 
@@ -1066,10 +1101,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unfinished_rebuild_blocks_writes_and_publication() {
+        let (_dir, mut runtime, _) = runtime();
+        runtime.sequencer_ready = true;
+        let (tx_id, transaction) = prepare_transaction("CREATE TABLE pending(value TEXT)")
+            .finish()
+            .unwrap();
+        runtime.db.commit_local_write(tx_id, &transaction).unwrap();
+        runtime.db.require_rebuild().unwrap();
+
+        runtime
+            .advance_publish(&mut sequencer())
+            .await
+            .expect("publication waits without contacting the node");
+        assert_eq!(runtime.db.pending_publish().unwrap().unwrap().tx_id, tx_id);
+
+        let (next_id, next) = prepare_transaction("CREATE TABLE next(value TEXT)")
+            .finish()
+            .unwrap();
+        assert!(matches!(
+            runtime.execute(next_id, &next),
+            Err(Error::SequencerNotReady)
+        ));
+    }
+
+    #[tokio::test]
     async fn failed_retry_keeps_the_displacement_available_for_review() {
         let (_dir, mut runtime, _) = runtime();
         let original = published_local_write(&mut runtime, 2);
-        runtime.handle_event(orphan_event(original.clone()));
+        runtime.handle_event(orphan_event(original.clone()), &sequencer());
         let displacement = runtime.db.unhandled_displacements().unwrap().remove(0);
 
         // The table now exists, but the original write is still displaced.
@@ -1101,11 +1161,11 @@ mod tests {
         for restored in [false, true] {
             let (_dir, mut runtime, _) = runtime();
             let original = published_local_write(&mut runtime, 2);
-            runtime.handle_event(orphan_event(original.clone()));
+            runtime.handle_event(orphan_event(original.clone()), &sequencer());
             let displacement = runtime.db.unhandled_displacements().unwrap().remove(0);
 
             if restored {
-                runtime.handle_event(adopt_event(original));
+                runtime.handle_event(adopt_event(original), &sequencer());
             } else {
                 runtime.db.mark_displacement_handled(&displacement).unwrap();
             }
@@ -1124,11 +1184,11 @@ mod tests {
     async fn an_old_displacement_cannot_retry_a_new_occurrence() {
         let (_dir, mut runtime, _) = runtime();
         let original = published_local_write(&mut runtime, 2);
-        runtime.handle_event(orphan_event(original.clone()));
+        runtime.handle_event(orphan_event(original.clone()), &sequencer());
         let old = runtime.db.unhandled_displacements().unwrap().remove(0);
 
-        runtime.handle_event(adopt_event(original.clone()));
-        runtime.handle_event(orphan_event(original));
+        runtime.handle_event(adopt_event(original.clone()), &sequencer());
+        runtime.handle_event(orphan_event(original), &sequencer());
         let current = runtime.db.unhandled_displacements().unwrap();
         runtime.sequencer_ready = true;
 
@@ -1146,7 +1206,7 @@ mod tests {
         runtime.sequencer_ready = true;
         let first = published_local_write(&mut runtime, 2);
         let second = published_local_write(&mut runtime, 3);
-        runtime.handle_event(orphan_event(first));
+        runtime.handle_event(orphan_event(first), &sequencer());
         let first = runtime.db.unhandled_displacements().unwrap()[0].clone();
 
         let (tx_id, transaction) = TransactionBuilder::new("CREATE TABLE resumed(value INTEGER)")
@@ -1158,7 +1218,7 @@ mod tests {
         ));
         assert!(runtime.db.pending_publish().unwrap().is_none());
 
-        runtime.handle_event(orphan_event(second));
+        runtime.handle_event(orphan_event(second), &sequencer());
         runtime.db.mark_displacement_handled(&first).unwrap();
         let (tx_id, transaction) = TransactionBuilder::new("CREATE TABLE resumed(value INTEGER)")
             .finish()
@@ -1277,7 +1337,7 @@ mod tests {
             )
             .expect("failure should be installed");
 
-        runtime.handle_event(event);
+        runtime.handle_event(event, &sequencer());
 
         assert!(runtime.event_pending_retry.is_some());
         assert_eq!(
@@ -1288,7 +1348,9 @@ mod tests {
         control
             .execute_batch("DROP TRIGGER fail_checkpoint")
             .expect("failure should be removed");
-        runtime.retry_pending_event().expect("event should recover");
+        runtime
+            .retry_pending_event(&sequencer())
+            .expect("event should recover");
 
         assert!(runtime.event_pending_retry.is_none());
         assert!(runtime.db.has_unhandled_displacements().unwrap());
