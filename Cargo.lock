@@ -4611,8 +4611,6 @@ dependencies = [
  "rpds",
  "serde",
  "thiserror 2.0.21",
- "time",
- "tokio",
  "tracing",
  "utoipa",
 ]
@@ -5259,8 +5257,8 @@ dependencies = [
  "async-trait",
  "futures",
  "log",
- "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-log-targets",
+ "logos-blockchain-time",
  "logos-blockchain-tracing",
  "logos-blockchain-utils",
  "overwatch",
