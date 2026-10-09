@@ -542,17 +542,14 @@ where
         return ApiError::internal(error).into_response();
     }
     match receiver.await {
-        Ok(Ok(service_info)) => {
+        Ok(service_info) => {
             let api_info = TimeInfo {
-                slot_duration_ms: service_info.slot_duration_ms,
-                genesis_time_unix_ms: service_info.genesis_time_unix_ms,
+                genesis_time: service_info.genesis_time,
                 current_slot: u64::from(service_info.current_slot),
                 current_epoch: u32::from(service_info.current_epoch),
-                slots_per_epoch: service_info.slots_per_epoch,
             };
             (StatusCode::OK, Json(api_info)).into_response()
         }
-        Ok(Err(error)) => ApiError::internal_message(error).into_response(),
         Err(error) => ApiError::internal(error).into_response(),
     }
 }

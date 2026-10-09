@@ -111,6 +111,8 @@ pub enum ErasError {
     Overflow(Era),
 }
 
+pub type EraSchedules = EraSchedule<()>;
+
 /// A chain's eras, each resolved against the ones before it.
 ///
 /// Never empty, and the first era starts at genesis: at epoch 0, slot 0 and

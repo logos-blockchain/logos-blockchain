@@ -1,7 +1,7 @@
 use std::num::NonZero;
 
 pub use lb_time::{
-    Epoch, Slot, SlotConfig,
+    Epoch, Slot,
     era::{Era, EraEntry, EraEntryView, EraSchedule},
 };
 
@@ -59,39 +59,4 @@ pub const fn epoch_length(
         .saturating_add(epoch_period_nonce_buffer.get() as u64)
         .saturating_add(epoch_period_nonce_stabilization.get() as u64))
     .saturating_mul(base_period_length.get())
-}
-
-#[cfg(feature = "tokio")]
-#[derive(Clone, Debug)]
-pub struct SlotTimer {
-    config: SlotConfig,
-}
-
-#[cfg(feature = "tokio")]
-impl SlotTimer {
-    #[must_use]
-    pub const fn new(config: SlotConfig) -> Self {
-        Self { config }
-    }
-
-    #[must_use]
-    pub fn current_slot(&self, now: time::OffsetDateTime) -> Slot {
-        Slot::from_offset_and_config(now, self.config)
-    }
-
-    /// Ticks at the start of each slot, starting from the next slot
-    #[must_use]
-    pub fn slot_interval(&self, now: time::OffsetDateTime) -> tokio::time::Interval {
-        let slot_duration = self.config.slot_duration;
-        let next_slot_start = self.config.genesis_time
-            + slot_duration * u64::from(self.current_slot(now).strict_add(1.into())) as u32;
-        let delay = next_slot_start - now;
-        let mut interval = tokio::time::interval_at(
-            tokio::time::Instant::now()
-                + core::time::Duration::try_from(delay).expect("could not set slot timer duration"),
-            slot_duration,
-        );
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        interval
-    }
 }

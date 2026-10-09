@@ -13,22 +13,22 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait           = { workspace = true }
-futures               = { workspace = true }
-lb-cryptarchia-engine = { features = ["tokio"], workspace = true }
-lb-log-targets        = { workspace = true }
-lb-tracing            = { workspace = true }
-lb-utils              = { workspace = true }
-log                   = { workspace = true }
-overwatch             = { workspace = true }
-serde                 = { features = ["derive"], workspace = true }
-serde_with            = { workspace = true }
-sntpc                 = { features = ["std", "tokio-socket"], optional = true, workspace = true }
-thiserror             = { optional = true, workspace = true }
-time                  = { features = ["std"], workspace = true }
-tokio                 = { workspace = true }
-tokio-stream          = { workspace = true }
-tracing               = { workspace = true }
+async-trait    = { workspace = true }
+futures        = { workspace = true }
+lb-log-targets = { workspace = true }
+lb-time        = { workspace = true }
+lb-tracing     = { workspace = true }
+lb-utils       = { workspace = true }
+log            = { workspace = true }
+overwatch      = { workspace = true }
+serde          = { features = ["derive"], workspace = true }
+serde_with     = { workspace = true }
+sntpc          = { features = ["std", "tokio-socket"], optional = true, workspace = true }
+thiserror      = { optional = true, workspace = true }
+time           = { features = ["std"], workspace = true }
+tokio          = { features = ["time"], workspace = true }
+tokio-stream   = { workspace = true }
+tracing        = { workspace = true }
 
 [dev-dependencies]
 tokio = { features = ["macros", "rt", "test-util", "time"], workspace = true }

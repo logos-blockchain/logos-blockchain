@@ -13,11 +13,9 @@ use crate::{
 
 #[repr(C)]
 pub struct TimeInfo {
-    pub slot_duration_ms: u64,
-    pub genesis_time_unix_ms: i64,
+    pub genesis_time_unix: i64,
     pub current_slot: u64,
     pub current_epoch: u32,
-    pub slots_per_epoch: u64,
 }
 
 /// Gets the current time service info.
@@ -56,27 +54,16 @@ pub(crate) fn get_time_info_sync(node: &LogosBlockchainNode) -> StatusResult<Tim
                 )
             })?;
 
-        let service_info = receiver
-            .await
-            .map_err(|e| {
-                OperationStatus::error(
-                    OperationStatusCode::ChannelReceiveError,
-                    format!("Failed to receive time info response: {e}"),
-                )
-            })?
-            .map_err(|e| {
-                OperationStatus::error(
-                    OperationStatusCode::ServiceError,
-                    format!("Failed to get time info: {e}"),
-                )
-            })?;
-
+        let service_info = receiver.await.map_err(|e| {
+            OperationStatus::error(
+                OperationStatusCode::ChannelReceiveError,
+                format!("Failed to receive time info response: {e}"),
+            )
+        })?;
         Ok(TimeInfo {
-            slot_duration_ms: service_info.slot_duration_ms,
-            genesis_time_unix_ms: service_info.genesis_time_unix_ms,
+            genesis_time_unix: service_info.genesis_time.unix_timestamp(),
             current_slot: u64::from(service_info.current_slot),
             current_epoch: u32::from(service_info.current_epoch),
-            slots_per_epoch: service_info.slots_per_epoch,
         })
     })
 }
