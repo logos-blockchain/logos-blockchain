@@ -34,3 +34,4 @@ clap       = { features = ["derive", "env", "help", "std"], workspace = true }
 hex        = { workspace = true }
 lb-groth16 = { workspace = true }
 tempfile   = { workspace = true }
+tokio      = { features = ["io-util", "net"], workspace = true }
