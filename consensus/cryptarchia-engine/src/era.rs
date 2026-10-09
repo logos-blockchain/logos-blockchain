@@ -8,6 +8,7 @@
 //! era's last slot, measured in the previous era's slot duration.
 
 use core::{iter::once, num::NonZero, time::Duration};
+use std::collections::BTreeMap;
 
 use lb_utils::{
     bounded::UpperBoundedBTreeMap,
@@ -64,23 +65,41 @@ pub struct EraEntry<Parameters> {
 /// An era of a schedule, resolved: the era as the schedule lists it, its
 /// number, the epoch it starts at, and where it starts in slots and in time,
 /// which follow from every era before it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Era<Parameters> {
+#[derive(Debug, PartialEq, Eq)]
+// non_exhaustive used to allow consumers to access the struct fields and match them without
+// allowing them to create one directly.
+#[non_exhaustive]
+pub struct EraEntryView<'schedule, Parameters> {
     pub number: EraNumber,
     pub first_epoch: Epoch,
     pub first_slot: Slot,
     pub start_time: OffsetDateTime,
-    pub entry: EraEntry<Parameters>,
+    pub entry: &'schedule EraEntry<Parameters>,
 }
 
-impl<Parameters> Era<Parameters> {
-    pub const fn genesis(start_time: OffsetDateTime, entry: EraEntry<Parameters>) -> Self {
-        Self {
-            number: EraNumber::genesis(),
-            first_epoch: Epoch::genesis(),
-            first_slot: Slot::genesis(),
-            start_time,
-            entry,
+impl<Parameters> Clone for EraEntryView<'_, Parameters> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<Parameters> Copy for EraEntryView<'_, Parameters> {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StoredEntry<Parameters> {
+    first_slot: Slot,
+    start_time: OffsetDateTime,
+    entry: EraEntry<Parameters>,
+}
+
+impl<Parameters> StoredEntry<Parameters> {
+    const fn view(&self, number: EraNumber, first_epoch: Epoch) -> EraEntryView<'_, Parameters> {
+        EraEntryView {
+            number,
+            first_epoch,
+            first_slot: self.first_slot,
+            start_time: self.start_time,
+            entry: &self.entry,
         }
     }
 }
@@ -95,11 +114,11 @@ pub enum ErasError {
 /// A chain's eras, each resolved against the ones before it.
 ///
 /// Never empty, and the first era starts at genesis: at epoch 0, slot 0 and
-/// the genesis time. Era `n` is the `n`-th entry.
+/// the genesis time.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EraSchedule<Parameters> {
-    genesis: Era<Parameters>,
-    after_genesis: Vec<Era<Parameters>>,
+    genesis: StoredEntry<Parameters>,
+    after_genesis: BTreeMap<NonZero<u32>, StoredEntry<Parameters>>,
 }
 
 impl<Parameters> EraSchedule<Parameters> {
@@ -116,7 +135,7 @@ impl<Parameters> EraSchedule<Parameters> {
         /// and slot duration, since every slot before it is `era`'s. `None` on
         /// overflow.
         fn next_era_start<Parameters>(
-            era: &Era<Parameters>,
+            era: EraEntryView<'_, Parameters>,
             next_era_first_epoch: Epoch,
         ) -> Option<(Slot, OffsetDateTime)> {
             let epochs_in_era = u64::from(
@@ -133,62 +152,64 @@ impl<Parameters> EraSchedule<Parameters> {
             Some((next_era_first_slot, next_era_start_time))
         }
 
-        let genesis_era = Era::genesis(genesis_time, genesis);
-        let mut scheduled = Vec::with_capacity(after_genesis.len());
-        for (epoch, entry) in after_genesis {
-            let epoch = Epoch::new(epoch.get());
-            let previous_era = scheduled.last().unwrap_or(&genesis_era);
-            let era = EraNumber::new(
-                previous_era
-                    .number
-                    .into_inner()
-                    .checked_add(1)
-                    .expect("a chain has at most `MAX_ERAS_AFTER_GENESIS` eras after genesis"),
+        let mut schedule = Self {
+            genesis: StoredEntry {
+                first_slot: Slot::genesis(),
+                start_time: genesis_time,
+                entry: genesis,
+            },
+            after_genesis: BTreeMap::new(),
+        };
+        for (first_epoch, entry) in after_genesis {
+            let previous_era = schedule
+                .iter()
+                // Always refers to the last element in the schedule, so the newly added one on each
+                // iteration, or the genesis on the first iteration.
+                .next_back()
+                .expect("a schedule has at least its genesis era");
+            let era_number =
+                EraNumber::new(previous_era.number.into_inner().checked_add(1).unwrap());
+            let (first_slot, start_time) = next_era_start(previous_era, epoch_of_key(first_epoch))
+                .ok_or(ErasError::Overflow(era_number))?;
+            schedule.after_genesis.insert(
+                first_epoch,
+                StoredEntry {
+                    first_slot,
+                    start_time,
+                    entry,
+                },
             );
-            let (first_slot, start_time) =
-                next_era_start(previous_era, epoch).ok_or(ErasError::Overflow(era))?;
-            scheduled.push(Era {
-                number: era,
-                first_epoch: epoch,
-                first_slot,
-                start_time,
-                entry,
-            });
         }
-        Ok(Self {
-            genesis: genesis_era,
-            after_genesis: scheduled,
-        })
+        Ok(schedule)
     }
 
     /// Era 0, the era that starts at genesis.
     #[must_use]
-    pub const fn genesis(&self) -> &Era<Parameters> {
-        &self.genesis
+    pub const fn genesis(&self) -> EraEntryView<'_, Parameters> {
+        self.genesis.view(EraNumber::genesis(), Epoch::genesis())
     }
 
     /// Era `era`, if the schedule has it.
     #[must_use]
-    pub fn get(&self, era: EraNumber) -> Option<&Era<Parameters>> {
+    pub fn get(&self, era: EraNumber) -> Option<EraEntryView<'_, Parameters>> {
         self.iter().nth(usize::from(era.into_inner()))
     }
 
     /// Every era, in schedule order.
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Era<Parameters>> {
-        once(&self.genesis).chain(&self.after_genesis)
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = EraEntryView<'_, Parameters>> {
+        once(self.genesis()).chain(self.eras_after_genesis().map(|(_, era)| era))
     }
 
     /// The same schedule, each era carrying what `f` makes of it instead of
     /// its parameters. Numbers, boundaries and lengths are kept.
     pub fn map<MapFn, Mapped>(&self, mut map_fn: MapFn) -> EraSchedule<Mapped>
     where
-        MapFn: FnMut(&Era<Parameters>) -> Mapped,
+        MapFn: FnMut(EraEntryView<'_, Parameters>) -> Mapped,
     {
-        let genesis = map_era(&self.genesis, map_fn(&self.genesis));
+        let genesis = map_era_values(self.genesis(), map_fn(self.genesis()));
         let after_genesis = self
-            .after_genesis
-            .iter()
-            .map(|era| map_era(era, map_fn(era)))
+            .eras_after_genesis()
+            .map(|(first_epoch, era)| (first_epoch, map_era_values(era, map_fn(era))))
             .collect();
         EraSchedule {
             genesis,
@@ -198,7 +219,7 @@ impl<Parameters> EraSchedule<Parameters> {
 
     /// The era `slot` belongs to.
     #[must_use]
-    pub fn at_slot(&self, slot: Slot) -> &Era<Parameters> {
+    pub fn at_slot(&self, slot: Slot) -> EraEntryView<'_, Parameters> {
         self.last_started(|era| era.first_slot <= slot)
             .expect("At least genesis era fulfils this predicate.")
     }
@@ -211,7 +232,7 @@ impl<Parameters> EraSchedule<Parameters> {
 
     /// The era `epoch` belongs to.
     #[must_use]
-    pub fn at_epoch(&self, epoch: Epoch) -> &Era<Parameters> {
+    pub fn at_epoch(&self, epoch: Epoch) -> EraEntryView<'_, Parameters> {
         self.last_started(|era| era.first_epoch <= epoch)
             .expect("At least genesis era fulfils this predicate.")
     }
@@ -295,20 +316,35 @@ impl<Parameters> EraSchedule<Parameters> {
             .expect("the start of a slot must fit a date and time")
     }
 
-    /// The last era `started` holds for, given that it holds for the eras up
-    /// to some point of the schedule and for none after it.
-    fn last_started<Condition>(&self, mut condition: Condition) -> Option<&Era<Parameters>>
-    where
-        Condition: FnMut(&Era<Parameters>) -> bool,
-    {
-        if !condition(&self.genesis) {
-            return None;
-        }
-        match self.after_genesis.partition_point(condition) {
-            0 => Some(&self.genesis),
-            started_after_genesis => Some(&self.after_genesis[started_after_genesis - 1]),
-        }
+    /// The eras after genesis, in schedule order, each with its key.
+    fn eras_after_genesis(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (NonZero<u32>, EraEntryView<'_, Parameters>)> {
+        self.after_genesis
+            .iter()
+            .enumerate()
+            .map(|(index, (&first_epoch, era_view))| {
+                let number = u16::try_from(index + 1).unwrap();
+                (
+                    first_epoch,
+                    era_view.view(EraNumber::new(number), epoch_of_key(first_epoch)),
+                )
+            })
     }
+
+    /// The last era `condition` holds for, given that it holds for the eras up
+    /// to some point of the schedule and for none after it.
+    fn last_started<Condition>(&self, condition: Condition) -> Option<EraEntryView<'_, Parameters>>
+    where
+        Condition: FnMut(&EraEntryView<'_, Parameters>) -> bool,
+    {
+        self.iter().take_while(condition).last()
+    }
+}
+
+/// The epoch a key of the eras after genesis names.
+const fn epoch_of_key(first_epoch: NonZero<u32>) -> Epoch {
+    Epoch::new(first_epoch.get())
 }
 
 /// `slots` slots of `slot_duration` each, as a span of time. `None` on
@@ -320,26 +356,23 @@ fn span(slot_duration: Duration, slots: u64) -> Option<time::Duration> {
     time::Duration::try_from(span).ok()
 }
 
-const fn map_era<Parameters, Mapped>(
-    Era {
+const fn map_era_values<Parameters, Mapped>(
+    EraEntryView {
         entry:
             EraEntry {
                 epoch_length_in_slots,
                 slot_duration,
                 ..
             },
-        number: era,
-        first_epoch,
         first_slot,
         start_time,
-    }: &Era<Parameters>,
+        ..
+    }: EraEntryView<'_, Parameters>,
     parameters: Mapped,
-) -> Era<Mapped> {
-    Era {
-        number: *era,
-        first_epoch: *first_epoch,
-        first_slot: *first_slot,
-        start_time: *start_time,
+) -> StoredEntry<Mapped> {
+    StoredEntry {
+        first_slot,
+        start_time,
         entry: EraEntry {
             slot_duration: *slot_duration,
             epoch_length_in_slots: *epoch_length_in_slots,
