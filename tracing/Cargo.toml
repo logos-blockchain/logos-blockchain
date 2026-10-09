@@ -33,8 +33,10 @@ opentelemetry-otlp = { features = [
   "metrics",
   "reqwest-blocking-client",
 ], workspace = true }
+opentelemetry-prometheus = { workspace = true }
 opentelemetry-semantic-conventions = { workspace = true }
 opentelemetry_sdk = { features = ["logs", "rt-tokio"], workspace = true }
+prometheus = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
@@ -47,4 +49,5 @@ tracing-subscriber = { features = ["env-filter", "std"], workspace = true }
 url = { features = ["serde"], workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
+serial_test = { workspace = true }
+tempfile    = { workspace = true }

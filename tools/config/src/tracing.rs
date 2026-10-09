@@ -46,12 +46,12 @@ impl GeneralTracingConfig {
                         ("libp2p".to_owned(), tracing::Level::DEBUG),
                     ]),
                 }),
-                metrics: tracing::metrics::Layer::Otlp(tracing::metrics::OtlpConfig {
+                metrics: tracing::metrics::Layer::from_otlp(Some(tracing::metrics::OtlpConfig {
                     endpoint: OTLP_METRICS_ENDPOINT.try_into().unwrap(),
                     service_name: host_identifier,
                     authorization_header: None,
                     protocol: lb_tracing::OtlpProtocol::Grpc,
-                }),
+                })),
                 console: tracing::console::Layer::None,
                 level: tracing::Level::DEBUG,
             },

@@ -58,6 +58,7 @@ use crate::{
         keys::{KeyType, add_key, generate_key, remove_key},
         leader::leader_claim,
         lifecycle::{shutdown_node, start_lb_node},
+        metrics::get_open_metrics,
         network::get_network_info,
         peer::get_peer_id,
         pow::{
@@ -519,6 +520,12 @@ mod no_node {
         let json = unsafe { CStr::from_ptr(result.value) }.to_str().unwrap();
         let _version: serde_json::Value = serde_json::from_str(json).expect("Version info is JSON");
         assert!(unsafe { free_cstring(result.value) }.is_ok());
+    }
+
+    #[test]
+    #[ignore = "Runs under valgrind only: see the module docs."]
+    fn open_metrics_not_found_without_node() {
+        assert_eq!(code(get_open_metrics()), OperationStatusCode::NotFound);
     }
 
     #[test]

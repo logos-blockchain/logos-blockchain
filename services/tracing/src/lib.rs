@@ -15,7 +15,7 @@ use lb_tracing::{
         loki::{LokiConfig, create_loki_layer},
         otlp::{OtlpLoggingConfig, create_otlp_layer},
     },
-    metrics::otlp::{OtlpMetricsConfig, create_otlp_metrics_layer},
+    metrics::{layer::create_metrics_layer, otlp::OtlpMetricsConfig},
     tracing::otlp::{OtlpTracingConfig, create_otlp_tracing_layer},
 };
 use overwatch::{
@@ -112,9 +112,19 @@ pub enum FilterLayerSettings {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum MetricsLayerSettings {
-    Otlp(OtlpMetricsConfig),
-    None,
+pub struct MetricsLayerSettings {
+    pub otlp: Option<OtlpMetricsConfig>,
+    pub enable_open_metrics: bool,
+}
+
+impl MetricsLayerSettings {
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            otlp: None,
+            enable_open_metrics: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -161,7 +171,7 @@ impl Default for TracingSettings {
             },
             tracing: TracingLayerSettings::None,
             filter: FilterLayerSettings::None,
-            metrics: MetricsLayerSettings::None,
+            metrics: MetricsLayerSettings::none(),
             console: ConsoleLayerSettings::None,
             level: Level::INFO,
         }
@@ -202,6 +212,10 @@ impl<RuntimeServiceId> ServiceCore<RuntimeServiceId> for Tracing<RuntimeServiceI
 where
     RuntimeServiceId: AsServiceId<Self> + Display + Send,
 {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "All layers are built here, refactor later."
+    )]
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         _initial_state: Self::State,
@@ -259,8 +273,9 @@ where
             other_layers.push(Box::new(tracing_layer));
         }
 
-        if let MetricsLayerSettings::Otlp(config) = config.metrics {
-            let metrics_layer = create_otlp_metrics_layer(config)?;
+        if let Some(metrics_layer) =
+            create_metrics_layer(config.metrics.otlp, config.metrics.enable_open_metrics)?
+        {
             other_layers.push(Box::new(metrics_layer));
         }
 

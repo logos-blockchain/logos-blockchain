@@ -230,7 +230,9 @@ tracing:
       opentelemetry: WARN
       logos_blockchain: DEBUG
       hyper_util: WARN
-  metrics: None
+  metrics:
+    otlp: null
+    enable_open_metrics: false
   console: None
   level: "INFO"
 state:

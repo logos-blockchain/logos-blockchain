@@ -48,7 +48,7 @@ impl Config {
             },
             tracing: tracing::Layer::None,
             filter: filter::Layer::None,
-            metrics: metrics::Layer::None,
+            metrics: metrics::Layer::none(),
             console: console::Layer::None,
             level: DEFAULT_LOG_LEVEL,
         }

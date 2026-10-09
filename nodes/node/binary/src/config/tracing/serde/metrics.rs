@@ -3,25 +3,44 @@ use lb_tracing_service::MetricsLayerSettings;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub enum Layer {
-    Otlp(OtlpConfig),
-    #[default]
-    None,
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Layer {
+    otlp: Option<OtlpConfig>,
+    enable_open_metrics: bool,
+}
+
+impl Layer {
+    #[must_use]
+    pub const fn from_otlp(otlp: Option<OtlpConfig>) -> Self {
+        Self {
+            otlp,
+            enable_open_metrics: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            otlp: None,
+            enable_open_metrics: false,
+        }
+    }
 }
 
 impl From<Layer> for MetricsLayerSettings {
     fn from(value: Layer) -> Self {
-        match value {
-            Layer::Otlp(config) => Self::Otlp(OtlpMetricsConfig {
-                service: OtlpServiceConfig {
-                    url: config.endpoint,
-                    service_name: config.service_name,
-                    authorization_header: config.authorization_header,
-                    protocol: config.protocol,
-                },
-            }),
-            Layer::None => Self::None,
+        let otlp = value.otlp.map(|otlp| OtlpMetricsConfig {
+            service: OtlpServiceConfig {
+                url: otlp.endpoint,
+                service_name: otlp.service_name,
+                authorization_header: otlp.authorization_header,
+                protocol: otlp.protocol,
+            },
+        });
+        Self {
+            otlp,
+            enable_open_metrics: value.enable_open_metrics,
         }
     }
 }
