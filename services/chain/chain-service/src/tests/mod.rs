@@ -520,10 +520,11 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
 }
 
 /// A fork switch reports the transactions of every block that entered the
-/// canonical chain.
+/// canonical chain, and reorgs only the transactions of the displaced blocks
+/// that the adopted branch does not carry.
 #[tokio::test(flavor = "multi_thread")]
-async fn fork_switch_reports_transactions_of_every_newly_canonical_block() {
-    // G - b1                 (local chain)
+async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
+    // G - b1(tx1, tx3)       (local chain)
     //   \
     //    f1(tx1) - f2(tx2)   (f2 becomes the new tip)
     let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
@@ -543,14 +544,19 @@ async fn fork_switch_reports_transactions_of_every_newly_canonical_block() {
     let (zk_key, leader_utxo) = utxo();
     let (_, funding_utxo_a) = utxo();
     let (_, funding_utxo_b) = utxo();
+    let (_, funding_utxo_c) = utxo();
     let genesis = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_utxos([leader_utxo, funding_utxo_a, funding_utxo_b], &config),
+        LedgerState::from_utxos(
+            [leader_utxo, funding_utxo_a, funding_utxo_b, funding_utxo_c],
+            &config,
+        ),
         config,
         lb_cryptarchia_engine::State::Online,
     );
     let tx1 = burn_tx(funding_utxo_a, &zk_key);
     let tx2 = burn_tx(funding_utxo_b, &zk_key);
+    let tx3 = burn_tx(funding_utxo_c, &zk_key);
 
     // Build the fork on its own view, where each fork block is the tip when
     // its child is built.
@@ -580,13 +586,14 @@ async fn fork_switch_reports_transactions_of_every_newly_canonical_block() {
     .unwrap();
 
     let mut cryptarchia = genesis;
-    let (b1, _) = try_build_block(
+    let (b1, _) = try_build_block_with_transactions(
         &cryptarchia,
         genesis_id,
         leader_utxo,
         &zk_key,
         Slot::new(1),
         UncleHeaders::empty(),
+        BlockTransactions::from([tx1.clone(), tx3.clone()]),
     )
     .unwrap();
 
@@ -603,13 +610,21 @@ async fn fork_switch_reports_transactions_of_every_newly_canonical_block() {
         )
         .await
         .unwrap()
-        .newly_canonical_txs
     };
 
-    assert_eq!(apply(b1.clone()).await, Vec::<TxHash>::new());
+    let outcome = apply(b1).await;
+    assert_eq!(outcome.newly_canonical_txs, vec![tx1.hash(), tx3.hash()]);
+    assert_eq!(outcome.reorged_txs, vec![]);
+
     // f1 only ties b1, so the local chain is kept and nothing enters it.
-    assert_eq!(apply(f1).await, Vec::<TxHash>::new());
-    assert_eq!(apply(f2.clone()).await, vec![tx1.hash(), tx2.hash()]);
+    let outcome = apply(f1).await;
+    assert_eq!(outcome.newly_canonical_txs, Vec::<TxHash>::new());
+    assert_eq!(outcome.reorged_txs, vec![]);
+
+    // tx1 is carried by both branches, so only tx3 leaves the canonical chain.
+    let outcome = apply(f2.clone()).await;
+    assert_eq!(outcome.newly_canonical_txs, vec![tx1.hash(), tx2.hash()]);
+    assert_eq!(outcome.reorged_txs, vec![tx3]);
     assert_eq!(cryptarchia.tip(), f2.header().id());
 }
 

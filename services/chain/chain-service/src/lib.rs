@@ -289,7 +289,8 @@ pub struct AppliedBlock<Tx> {
     /// canonical chain, including blocks applied earlier while their branch
     /// was not canonical.
     pub newly_canonical_txs: Vec<TxHash>,
-    /// Transactions carried by the blocks that left the canonical chain.
+    /// Transactions carried by the blocks that left the canonical chain,
+    /// except those also carried by the blocks that entered it.
     pub reorged_txs: Vec<Tx>,
 }
 
