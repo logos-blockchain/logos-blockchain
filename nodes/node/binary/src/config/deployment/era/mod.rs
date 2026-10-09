@@ -7,9 +7,9 @@ use ::serde::{
 };
 use lb_cryptarchia_engine::Epoch;
 
-use crate::config::deployment::era::parameters::EraParameters;
+use crate::config::deployment::era::ruleset::EraRuleset;
 
-pub mod parameters;
+pub mod ruleset;
 
 mod codec;
 
@@ -19,7 +19,7 @@ pub const GENESIS_EPOCH: Epoch = Epoch::genesis();
 /// force from that epoch until the next era starts.
 ///
 /// A schedule is (de)serialized as a map from first epochs to era
-/// parameters, and built from a `BTreeMap`, which keeps first epochs unique
+/// rulesets, and built from a `BTreeMap`, which keeps first epochs unique
 /// and ordered. The first era must start at genesis. Deserialization also
 /// requires the eras to be listed by strictly increasing first epoch, which
 /// rules out a repeated epoch too.
@@ -27,41 +27,41 @@ pub const GENESIS_EPOCH: Epoch = Epoch::genesis();
 /// Only a single era is supported for now, so a schedule of more than one era
 /// is rejected, and the schedule holds that one era directly.
 #[derive(Serialize, Debug, Clone)]
-#[serde(into = "BTreeMap<Epoch, EraParameters>")]
+#[serde(into = "BTreeMap<Epoch, EraRuleset>")]
 pub struct EraDeclarations {
     // Right now we support a single era starting at genesis, so from the input map we only store
     // the genesis era.
-    genesis_era_parameters: EraParameters,
+    genesis_era_ruleset: EraRuleset,
 }
 
 impl EraDeclarations {
     /// A schedule made of a single era, starting at genesis.
     #[must_use]
-    pub const fn new_genesis(parameters: EraParameters) -> Self {
+    pub const fn new_genesis(ruleset: EraRuleset) -> Self {
         Self {
-            genesis_era_parameters: parameters,
+            genesis_era_ruleset: ruleset,
         }
     }
 
     /// The era in force: the only era of the schedule, for now.
     #[must_use]
-    pub const fn genesis_era(&self) -> &EraParameters {
-        &self.genesis_era_parameters
+    pub const fn genesis_era(&self) -> &EraRuleset {
+        &self.genesis_era_ruleset
     }
 
-    pub const fn genesis_era_mut(&mut self) -> &mut EraParameters {
-        &mut self.genesis_era_parameters
+    pub const fn genesis_era_mut(&mut self) -> &mut EraRuleset {
+        &mut self.genesis_era_ruleset
     }
 
     #[must_use]
-    pub fn into_genesis_era(self) -> EraParameters {
-        self.genesis_era_parameters
+    pub fn into_genesis_era(self) -> EraRuleset {
+        self.genesis_era_ruleset
     }
 }
 
-impl From<EraDeclarations> for BTreeMap<Epoch, EraParameters> {
+impl From<EraDeclarations> for BTreeMap<Epoch, EraRuleset> {
     fn from(schedule: EraDeclarations) -> Self {
-        Self::from([(GENESIS_EPOCH, schedule.genesis_era_parameters)])
+        Self::from([(GENESIS_EPOCH, schedule.genesis_era_ruleset)])
     }
 }
 
@@ -85,14 +85,14 @@ pub enum EraScheduleError {
     MultipleEras(usize),
 }
 
-impl TryFrom<BTreeMap<Epoch, EraParameters>> for EraDeclarations {
+impl TryFrom<BTreeMap<Epoch, EraRuleset>> for EraDeclarations {
     type Error = EraScheduleError;
 
     /// Builds a schedule from eras keyed by their first epoch. The map keeps
     /// them unique and ordered, so only the first one needs checking: it must
     /// start at genesis, and run a listed combination of versions.
     fn try_from(
-        mut era_declarations: BTreeMap<Epoch, EraParameters>,
+        mut era_declarations: BTreeMap<Epoch, EraRuleset>,
     ) -> Result<Self, Self::Error> {
         let Some((first_epoch, genesis_era)) = era_declarations.pop_first() else {
             return Err(EraScheduleError::Empty);
@@ -120,7 +120,7 @@ impl<'de> Deserialize<'de> for EraDeclarations {
 }
 
 /// Reads an era schedule, refusing an era whose first epoch does not strictly
-/// follow the previous era's, before decoding its parameters. Read straight
+/// follow the previous era's, before decoding its ruleset. Read straight
 /// into a map, such eras would instead be sorted, or a repeated epoch would
 /// keep only its last era.
 struct EraScheduleVisitor;
@@ -131,7 +131,7 @@ impl<'de> Visitor<'de> for EraScheduleVisitor {
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "a map from first epochs, strictly increasing from epoch {}, to era parameters",
+            "a map from first epochs, strictly increasing from epoch {}, to era rulesets",
             GENESIS_EPOCH.into_inner()
         )
     }
@@ -164,21 +164,21 @@ mod tests {
     use lb_cryptarchia_engine::Epoch;
 
     use super::{EraDeclarations, EraScheduleError};
-    use crate::config::{DeploymentSettings, deployment::era::parameters::EraParameters};
+    use crate::config::{DeploymentSettings, deployment::era::ruleset::EraRuleset};
 
-    fn parameters() -> EraParameters {
+    fn ruleset() -> EraRuleset {
         DeploymentSettings::default()
             .era_schedule()
             .genesis()
             .entry
             .parameters
-            .parameters
+            .ruleset
             .clone()
     }
 
     /// A YAML schedule with one era per first epoch, in the given order.
     fn yaml(first_epochs: &[u32]) -> String {
-        let era = serde_yaml::to_string(&parameters()).unwrap();
+        let era = serde_yaml::to_string(&ruleset()).unwrap();
         let mut yaml = String::new();
         for first_epoch in first_epochs {
             writeln!(yaml, "{first_epoch}:").unwrap();
@@ -204,7 +204,7 @@ mod tests {
         EraDeclarations::try_from(
             first_epochs
                 .iter()
-                .map(|first_epoch| (Epoch::new(*first_epoch), parameters()))
+                .map(|first_epoch| (Epoch::new(*first_epoch), ruleset()))
                 .collect::<BTreeMap<_, _>>(),
         )
     }
@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn the_schedule_round_trips_as_a_map_keyed_by_first_epoch() {
-        let schedule = EraDeclarations::new_genesis(parameters());
+        let schedule = EraDeclarations::new_genesis(ruleset());
 
         let yaml = serde_yaml::to_string(&schedule).unwrap();
         assert!(yaml.starts_with("0:\n"), "{yaml}");
@@ -275,17 +275,17 @@ mod tests {
     }
 
     #[test]
-    fn an_era_is_its_parameters_tagged_with_their_version() {
-        let yaml = serde_yaml::to_string(&parameters()).unwrap();
+    fn an_era_is_its_ruleset_tagged_with_its_version() {
+        let yaml = serde_yaml::to_string(&ruleset()).unwrap();
         assert!(yaml.starts_with("!V1\nblend:\n"), "{yaml}");
     }
 
     #[test]
-    fn parameters_without_a_known_version_are_rejected() {
-        let yaml = serde_yaml::to_string(&parameters()).unwrap();
+    fn a_ruleset_without_a_known_version_is_rejected() {
+        let yaml = serde_yaml::to_string(&ruleset()).unwrap();
         let untagged = yaml.replacen("!V1\n", "", 1);
-        assert!(serde_yaml::from_str::<EraParameters>(&untagged).is_err());
+        assert!(serde_yaml::from_str::<EraRuleset>(&untagged).is_err());
         let unknown = yaml.replacen("!V1\n", "!V0\n", 1);
-        assert!(serde_yaml::from_str::<EraParameters>(&unknown).is_err());
+        assert!(serde_yaml::from_str::<EraRuleset>(&unknown).is_err());
     }
 }

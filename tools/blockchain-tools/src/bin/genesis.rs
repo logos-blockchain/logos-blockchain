@@ -85,7 +85,7 @@ pub struct CeremonyArgs {
     #[arg(long, value_name = "FILE")]
     pub faucet: PathBuf,
 
-    /// The genesis template: the parameters of era zero. The ceremony
+    /// The genesis template: era zero's ruleset and its parameters. The ceremony
     /// generates the rest of the deployment config from it. Without it, the
     /// default deployment's era zero is used.
     #[arg(long, value_name = "FILE")]
@@ -316,8 +316,8 @@ fn load_base_config(path: Option<&PathBuf>) -> Result<Value> {
 }
 
 /// Load a genesis template, and assemble from it the deployment config the
-/// ceremony completes: the template's era parameters, tagged with their
-/// version (`!V1`), become era zero.
+/// ceremony completes: the template's ruleset (`!V1`), with its parameters,
+/// becomes era zero.
 ///
 /// If `path` is `None`, returns the default deployment config, whose genesis
 /// block the ceremony replaces.
