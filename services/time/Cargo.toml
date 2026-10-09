@@ -18,11 +18,11 @@ futures        = { workspace = true }
 lb-log-targets = { workspace = true }
 lb-time        = { workspace = true }
 lb-tracing     = { workspace = true }
-lb-utils       = { workspace = true }
+lb-utils       = { features = ["time"], workspace = true }
 log            = { workspace = true }
 overwatch      = { workspace = true }
 serde          = { features = ["derive"], workspace = true }
-serde_with     = { workspace = true }
+serde_with     = { features = ["macros"], workspace = true }
 sntpc          = { features = ["std", "tokio-socket"], optional = true, workspace = true }
 thiserror      = { optional = true, workspace = true }
 time           = { features = ["std"], workspace = true }

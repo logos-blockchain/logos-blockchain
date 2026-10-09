@@ -14,9 +14,8 @@ workspace = true
 
 [dependencies]
 lb-binary-codec = { workspace = true }
-lb-utils        = { features = ["time"], workspace = true }
+lb-utils        = { workspace = true }
 serde           = { workspace = true }
-serde_with      = { features = ["macros"], workspace = true }
 thiserror       = { workspace = true }
 time            = { workspace = true }
 utoipa          = { optional = true, workspace = true }

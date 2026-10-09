@@ -32,7 +32,7 @@ impl ServiceConfig {
         let chain = ProtocolScope::Chain(chain_id);
         eras.map(|era| {
             let user = self.user.clone();
-            let fork = ProtocolScope::Fork(era.entry.parameters.fork_digest);
+            let fork = ProtocolScope::Fork(era.parameters.fork_digest);
             NetworkConfig {
                 backend: Libp2pConfig {
                     initial_peers: user.backend.initial_peers,

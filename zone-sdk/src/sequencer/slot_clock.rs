@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant, SystemTime};
 
 use lb_common_http_client::Slot;
-use lb_time::era::EraSchedules;
+use lb_time::era::EraTimingSchedule;
 use time::OffsetDateTime;
 
 /// Slack after a slot boundary so a wake-up lands inside the new slot; tokio
@@ -10,13 +10,13 @@ const BOUNDARY_GRACE: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Debug)]
 pub(super) struct SlotClock {
-    eras: EraSchedules,
+    eras: EraTimingSchedule,
     last_observed_slot: Slot,
     last_observed_at: Instant,
 }
 
 impl SlotClock {
-    pub(super) fn from_era_schedule(eras: EraSchedules) -> Self {
+    pub(super) fn from_era_schedule(eras: EraTimingSchedule) -> Self {
         let current_slot = slot_at(&eras, OffsetDateTime::now_utc());
 
         Self {
@@ -85,7 +85,7 @@ impl SlotClock {
 }
 
 /// The slot in progress at `time`: the genesis slot before genesis.
-fn slot_at(eras: &EraSchedules, time: OffsetDateTime) -> Slot {
+fn slot_at(eras: &EraTimingSchedule, time: OffsetDateTime) -> Slot {
     eras.slot_at(time).unwrap_or(Slot::genesis())
 }
 
@@ -102,7 +102,7 @@ pub(super) const fn slot_to_u64(slot: Slot) -> u64 {
 mod tests {
     use std::num::NonZero;
 
-    use lb_time::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule};
+    use lb_time::era::{EraEntriesAfterGenesis, EraTiming};
 
     use super::*;
 
@@ -112,16 +112,15 @@ mod tests {
         genesis: OffsetDateTime,
         slot_duration: Duration,
         next: Option<(u32, Duration)>,
-    ) -> EraSchedules {
-        let entry = |slot_duration| EraEntry {
+    ) -> EraTimingSchedule {
+        let timing = |slot_duration| EraTiming {
             slot_duration,
-            epoch_length_in_slots: NonZero::new(2).unwrap(),
-            parameters: (),
+            epoch_length: NonZero::new(2).unwrap(),
         };
         let after_genesis = next.map_or_else(EraEntriesAfterGenesis::empty, |(epoch, duration)| {
-            EraEntriesAfterGenesis::from((NonZero::new(epoch).unwrap(), entry(duration)))
+            EraEntriesAfterGenesis::from((NonZero::new(epoch).unwrap(), timing(duration)))
         });
-        EraSchedule::new(genesis, entry(slot_duration), after_genesis).unwrap()
+        EraTimingSchedule::new(genesis, timing(slot_duration), after_genesis).unwrap()
     }
 
     #[test]

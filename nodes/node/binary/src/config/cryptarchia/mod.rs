@@ -41,7 +41,7 @@ impl ServiceConfig {
     ) -> EraSchedule<CryptarchiaServicesSettings> {
         eras.map(|era| {
             let user = self.user.clone();
-            let definition = &era.entry.parameters;
+            let definition = &era.parameters;
             let EraRuleset::V1(parameters) = &definition.ruleset;
             let deployment = &parameters.cryptarchia;
             let blend_rewards_params = parameters.blend_reward_params();
