@@ -430,7 +430,7 @@ where
 
     /// Returns the current unfinalized channel history, including pending
     /// writes. Returns `None` until the live branch is available after
-    /// backfill.
+    /// backfill. The view may lag behind the chain while disconnected.
     ///
     /// To read the history for a processed block, call this before publishing
     /// or polling another event. Ordering follows

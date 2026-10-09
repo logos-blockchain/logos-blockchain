@@ -1108,6 +1108,8 @@ async fn config_only_block_orphans_pending_inscription_but_keeps_message_tip() {
     .await
     .expect("the config-only block must be processed");
 
+    assert_history_matches_update(&sequencer, &update);
+
     // The config changes the channel view, so the pending inscription is
     // shed and reported orphaned (to be resubmitted against the new view).
     assert!(update.orphaned().iter().any(|tx| tx.tx_hash() == p_hash));
@@ -1592,6 +1594,23 @@ async fn update_variant_follows_orphaned() {
     assert_eq!(hashes(&common_prefix), hashes(&[entry(1)]));
     assert_eq!(hashes(&adopted), hashes(&[entry(3)]));
     assert_eq!(hashes(&orphaned), hashes(&[entry(2)]));
+}
+
+fn assert_history_matches_update(sequencer: &ZoneSequencer<MockNode>, update: &ChannelUpdate) {
+    let history = sequencer
+        .channel_history()
+        .expect("live history is available");
+    let expected = update
+        .canonical_chain()
+        .expect("conflict update contains the surviving history");
+
+    assert_eq!(
+        history
+            .iter()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect::<Vec<_>>(),
+        expected.map(ChannelUpdateTx::tx_hash).collect::<Vec<_>>()
+    );
 }
 
 async fn ready_sequencer_with_channel(
