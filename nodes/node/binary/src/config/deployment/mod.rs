@@ -1,4 +1,4 @@
-use core::time::Duration;
+use core::{num::NonZero, time::Duration};
 
 use lb_core::{
     block::genesis::GenesisBlock,
@@ -9,8 +9,10 @@ use lb_core::{
         transactions::genesis_tx::{ChainId, GenesisTime},
     },
 };
-use lb_cryptarchia_engine::EraEntry;
-use lb_time::{Epoch, Slot, era::EraEntriesAfterGenesis};
+use lb_time::{
+    Epoch, Slot,
+    era::{EpochLength, EraEntriesAfterGenesis, SlotDuration},
+};
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
 
@@ -65,23 +67,19 @@ impl DeploymentSettings {
         let mut era_digests = Vec::with_capacity(1);
         // Called in activation order: the fork digest of an era is over the
         // digests of the eras up to it.
-        let mut entry = |first_epoch: Epoch, ruleset: &EraRuleset| {
+        let mut definition = |first_epoch: Epoch, ruleset: &EraRuleset| {
             let digest = EraDigest::compute(first_epoch, ruleset);
             era_digests.push(digest);
             let fork_digest =
                 ForkDigest::compute(genesis_id, &chain_id, era_digests.iter().copied());
-            EraEntry {
-                slot_duration: ruleset.slot_duration(),
-                epoch_length_in_slots: ruleset.epoch_length(),
-                parameters: EraDefinition {
-                    ruleset: ruleset.clone(),
-                    digest,
-                    fork_digest,
-                },
+            EraDefinition {
+                ruleset: ruleset.clone(),
+                digest,
+                fork_digest,
             }
         };
         // Only single-era schedules are supported for now.
-        let genesis = entry(GENESIS_EPOCH, eras.genesis_era());
+        let genesis = definition(GENESIS_EPOCH, eras.genesis_era());
         let eras = EraSchedule::new(
             genesis_time.into(),
             genesis,
@@ -132,7 +130,7 @@ impl DeploymentSettings {
 
     #[must_use]
     pub const fn genesis_fork_digest(&self) -> ForkDigest {
-        self.eras.genesis().entry.parameters.fork_digest
+        self.eras.genesis().parameters.fork_digest
     }
 
     /// The fork digest of the era in force by the wall clock, which names the
@@ -143,14 +141,14 @@ impl DeploymentSettings {
             .eras
             .slot_at(time::OffsetDateTime::now_utc())
             .unwrap_or(Slot::genesis());
-        self.eras.at_slot(now).entry.parameters.fork_digest
+        self.eras.at_slot(now).parameters.fork_digest
     }
 
     /// The parameters of the genesis era, in version 1's layout, the only one
     /// there is.
     #[must_use]
     pub const fn genesis_era_parameters(&self) -> &v1::Parameters {
-        match &self.eras.genesis().entry.parameters.ruleset {
+        match &self.eras.genesis().parameters.ruleset {
             EraRuleset::V1(parameters) => parameters,
         }
     }
@@ -203,7 +201,7 @@ impl From<DeploymentSettings> for EraDefinitions {
         // Only single-era schedules are supported for now.
         let genesis = eras.genesis();
         Self {
-            eras: EraDeclarations::new_genesis(genesis.entry.parameters.ruleset.clone()),
+            eras: EraDeclarations::new_genesis(genesis.parameters.ruleset.clone()),
             genesis_block,
         }
     }
@@ -217,6 +215,18 @@ pub struct EraDefinition {
     pub digest: EraDigest,
     /// The digest of the eras up to this one, in activation order.
     pub fork_digest: ForkDigest,
+}
+
+impl SlotDuration for EraDefinition {
+    fn slot_duration(&self) -> Duration {
+        self.ruleset.slot_duration()
+    }
+}
+
+impl EpochLength for EraDefinition {
+    fn epoch_length(&self) -> NonZero<u64> {
+        self.ruleset.epoch_length()
+    }
 }
 
 impl Default for DeploymentSettings {

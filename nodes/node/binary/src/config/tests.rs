@@ -227,7 +227,7 @@ fn service_settings_receive_recovery_data() {
         user: user_config.blend.clone(),
     }
     .into_blend_services_era_schedule(&recovery_data, deployment_settings.era_schedule());
-    let (blend_service_settings, _, _) = &blend_services_settings.genesis().entry.parameters;
+    let (blend_service_settings, _, _) = &blend_services_settings.genesis().parameters;
     assert_eq!(
         blend_service_settings
             .common
@@ -256,7 +256,6 @@ fn service_settings_receive_recovery_data() {
     assert_eq!(
         mempool_service_settings
             .genesis()
-            .entry
             .parameters
             .recovery_data
             .take(MEMPOOL_RECOVERY_MARKER)

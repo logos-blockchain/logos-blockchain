@@ -57,7 +57,7 @@ fn genesis_era_settings<Settings>(settings: &EraSchedule<Settings>) -> Settings
 where
     Settings: Clone,
 {
-    settings.genesis().entry.parameters.clone()
+    settings.genesis().parameters.clone()
 }
 pub use crate::{
     cli::Command,

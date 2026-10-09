@@ -554,8 +554,8 @@ where
                         (
                             era.first_epoch.into_inner(),
                             EraTiming {
-                                slot_duration: era.entry.slot_duration,
-                                slots_per_epoch: era.entry.epoch_length_in_slots,
+                                slot_duration: era.parameters.slot_duration,
+                                slots_per_epoch: era.parameters.epoch_length,
                             },
                         )
                     })

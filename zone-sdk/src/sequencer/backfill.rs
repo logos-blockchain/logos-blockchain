@@ -5,9 +5,9 @@
 
 use std::num::NonZero;
 
-use lb_common_http_client::{ChainServiceInfo, EraTiming, Slot, TimeInfo};
+use lb_common_http_client::{ChainServiceInfo, EraTiming as ReportedEraTiming, Slot, TimeInfo};
 use lb_core::mantle::ops::channel::MsgId;
-use lb_time::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule, EraSchedules};
+use lb_time::era::{EraEntriesAfterGenesis, EraTiming, EraTimingSchedule};
 use tracing::{debug, error, info, warn};
 
 use super::{
@@ -295,17 +295,16 @@ where
 
 /// The chain's eras as the node reports them, resolved as the node resolves
 /// them.
-fn era_schedule(timing_info: &TimeInfo) -> Result<EraSchedules, Error> {
+fn era_schedule(timing_info: &TimeInfo) -> Result<EraTimingSchedule, Error> {
     let map_invalid_error_with_reason =
         |reason: &str| Error::Network(format!("node reported invalid eras: {reason}"));
-    let map_era_timing_to_era_entry = |era: &EraTiming| {
+    let map_reported_era_timing = |era: &ReportedEraTiming| {
         if era.slot_duration.is_zero() {
             return Err(map_invalid_error_with_reason("a slot duration of 0"));
         }
-        Ok(EraEntry {
+        Ok(EraTiming {
             slot_duration: era.slot_duration,
-            epoch_length_in_slots: era.slots_per_epoch,
-            parameters: (),
+            epoch_length: era.slots_per_epoch,
         })
     };
 
@@ -322,15 +321,15 @@ fn era_schedule(timing_info: &TimeInfo) -> Result<EraSchedules, Error> {
         .map(|(&first_epoch, era)| {
             let first_epoch = NonZero::new(first_epoch)
                 .expect("eras are keyed by unique epochs, and only the first is at epoch 0");
-            Ok((first_epoch, map_era_timing_to_era_entry(era)?))
+            Ok((first_epoch, map_reported_era_timing(era)?))
         })
         .collect::<Result<Vec<_>, Error>>()?;
     let after_genesis = EraEntriesAfterGenesis::try_from_iter(after_genesis)
         .map_err(|error| map_invalid_error_with_reason(&error.to_string()))?;
 
-    EraSchedule::new(
+    EraTimingSchedule::new(
         timing_info.genesis_time.into(),
-        map_era_timing_to_era_entry(genesis)?,
+        map_reported_era_timing(genesis)?,
         after_genesis,
     )
     .map_err(|error| map_invalid_error_with_reason(&error.to_string()))

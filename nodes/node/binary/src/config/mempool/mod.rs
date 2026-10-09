@@ -40,7 +40,7 @@ impl ServiceConfig {
         eras.map(|era| TxMempoolSettings {
             network_adapter: Libp2pNetworkAdapterSettings {
                 id: SignedOps::<Preverified, StandardMode>::hash,
-                topic: ProtocolScope::Fork(era.entry.parameters.fork_digest)
+                topic: ProtocolScope::Fork(era.parameters.fork_digest)
                     .to_string_with_name("mempool"),
             },
             pool: MempoolSettings {

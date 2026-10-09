@@ -1,13 +1,15 @@
+use core::num::NonZero;
 use std::{
     fmt::{Debug, Display, Formatter},
     pin::Pin,
+    time::Duration,
 };
 
 use futures::{Stream, StreamExt as _};
 use lb_log_targets::time as log_targets_time;
 use lb_time::{
     Epoch, Slot,
-    era::{EraSchedule, EraSchedules},
+    era::{EpochLength, EraSchedule, EraTiming, EraTimingSchedule, SlotDuration},
 };
 use log::error;
 use overwatch::{
@@ -35,7 +37,7 @@ const LOG_TARGET: &str = log_targets_time::ROOT;
 pub struct TimeServiceInfo {
     pub current_slot: Slot,
     pub current_epoch: Epoch,
-    pub era_schedules: EraSchedules,
+    pub era_schedules: EraTimingSchedule,
 }
 
 impl TimeServiceInfo {
@@ -75,9 +77,38 @@ impl Debug for TimeServiceMessage {
     }
 }
 
+/// The settings of the time service in one era.
 #[derive(Clone, Debug)]
 pub struct TimeServiceSettings<BackendSettings> {
+    /// How long the era's slots last.
+    pub slot_duration: Duration,
+    /// How many slots the era's epochs hold.
+    pub epoch_length: NonZero<u64>,
     pub backend: BackendSettings,
+}
+
+impl<BackendSettings> TimeServiceSettings<BackendSettings> {
+    /// How long the era's slots and epochs last, without the backend's
+    /// settings.
+    #[must_use]
+    pub const fn timing(&self) -> EraTiming {
+        EraTiming {
+            slot_duration: self.slot_duration,
+            epoch_length: self.epoch_length,
+        }
+    }
+}
+
+impl<BackendSettings> SlotDuration for TimeServiceSettings<BackendSettings> {
+    fn slot_duration(&self) -> Duration {
+        self.slot_duration
+    }
+}
+
+impl<BackendSettings> EpochLength for TimeServiceSettings<BackendSettings> {
+    fn epoch_length(&self) -> NonZero<u64> {
+        self.epoch_length
+    }
 }
 
 pub type TimeServiceSettingsSchedule<BackendSettings> =
@@ -180,7 +211,7 @@ fn handle_service_message<BackendSettings>(
             drop(sender.send(TimeServiceInfo {
                 current_slot: current_slot_tick.slot,
                 current_epoch: current_slot_tick.epoch,
-                era_schedules: settings_schedule.map(|_| ()),
+                era_schedules: settings_schedule.map(|era| era.parameters.timing()),
             }));
         }
         TimeServiceMessage::Subscribe { sender } => {

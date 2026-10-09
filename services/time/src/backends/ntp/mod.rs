@@ -11,7 +11,7 @@ use futures::{Stream, StreamExt as _};
 use lb_log_targets::time as log_targets_time;
 use lb_time::{
     Slot,
-    era::{Era, EraSchedules},
+    era::{Era, EraTimingSchedule},
 };
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use sntpc::{NtpResult, fraction_to_nanoseconds};
@@ -59,7 +59,7 @@ impl TimeBackend for NtpTimeBackend {
         let era = settings_schedule.at_slot(current_slot);
         let (era_number, client) = (
             era.era,
-            AsyncNTPClient::new(era.entry.parameters.backend.ntp_client_settings),
+            AsyncNTPClient::new(era.parameters.backend.ntp_client_settings),
         );
         Self {
             settings_schedule,
@@ -75,7 +75,7 @@ impl TimeBackend for NtpTimeBackend {
             client,
         } = self;
         // compute the initial slot ticking stream
-        let era_schedules = Arc::new(settings.map(|_| ()));
+        let era_schedules = Arc::new(settings.map(|era| era.parameters.timing()));
         let current_time = OffsetDateTime::now_utc();
         let current_slot = era_schedules
             .slot_at(current_time)
@@ -87,7 +87,6 @@ impl TimeBackend for NtpTimeBackend {
             &settings
                 .get(current_era_number)
                 .expect("the era the backend started in is scheduled")
-                .entry
                 .parameters
                 .backend,
         );
@@ -144,7 +143,7 @@ pub struct NtpStream {
     /// The era of the last emitted slot, whose NTP settings `interval` follows.
     era_number: Era,
     /// The chain's eras, which lay slots and epochs out in time.
-    era_schedules: Arc<EraSchedules>,
+    era_schedules: Arc<EraTimingSchedule>,
     /// `SlotTick` interval stream. This stream is replaced when an internal
     /// clock update happens.
     slot_timer: EpochSlotTickStream,
@@ -265,7 +264,7 @@ impl NtpStream {
     fn change_era_if_slot_in_new_era(&mut self, slot: Slot) {
         let era = self.settings.at_slot(slot);
         if era.era > self.era_number {
-            let era_backend_settings = &era.entry.parameters.backend;
+            let era_backend_settings = &era.parameters.backend;
             self.era_number = era.era;
             self.interval = ntp_tick_stream(
                 AsyncNTPClient::new(era_backend_settings.ntp_client_settings),
@@ -279,19 +278,18 @@ impl NtpStream {
 mod tests {
     use std::num::NonZero;
 
-    use lb_time::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule};
+    use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
 
     use super::*;
     use crate::TimeServiceSettings;
 
     /// One era from the Unix epoch, with slots of 1 s in epochs of 3 slots.
-    fn test_eras() -> EraSchedules {
-        EraSchedule::new(
+    fn test_eras() -> EraTimingSchedule {
+        EraTimingSchedule::new(
             OffsetDateTime::UNIX_EPOCH,
-            EraEntry {
+            EraTiming {
                 slot_duration: Duration::from_secs(1),
-                epoch_length_in_slots: NonZero::new(3).unwrap(),
-                parameters: (),
+                epoch_length: NonZero::new(3).unwrap(),
             },
             EraEntriesAfterGenesis::empty(),
         )
@@ -300,8 +298,17 @@ mod tests {
 
     /// The eras of [`test_eras`], each asking a dummy NTP server.
     fn test_settings() -> TimeServiceSettingsSchedule<NtpTimeBackendSettings> {
-        test_eras().map(|_| TimeServiceSettings {
-            backend: backend_settings("dummy.pool.ntp.org"),
+        test_settings_with(&backend_settings("dummy.pool.ntp.org"))
+    }
+
+    /// The eras of [`test_eras`], each with `backend`.
+    fn test_settings_with(
+        backend: &NtpTimeBackendSettings,
+    ) -> TimeServiceSettingsSchedule<NtpTimeBackendSettings> {
+        test_eras().map(|era| TimeServiceSettings {
+            slot_duration: era.parameters.slot_duration,
+            epoch_length: era.parameters.epoch_length,
+            backend: backend.clone(),
         })
     }
 
@@ -705,12 +712,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn the_stream_moves_to_the_ntp_settings_of_each_era() {
         // A second era starts at epoch 1, that is at slot 3, with another server.
-        let era = |ntp_server| EraEntry {
+        let era = |ntp_server| TimeServiceSettings {
             slot_duration: Duration::from_secs(1),
-            epoch_length_in_slots: NonZero::new(3).unwrap(),
-            parameters: TimeServiceSettings {
-                backend: backend_settings(ntp_server),
-            },
+            epoch_length: NonZero::new(3).unwrap(),
+            backend: backend_settings(ntp_server),
         };
         let settings = EraSchedule::new(
             OffsetDateTime::UNIX_EPOCH,
@@ -723,7 +728,7 @@ mod tests {
                 data: vec![],
                 idx: 0,
             }),
-            era_schedules: Arc::new(settings.map(|_| ())),
+            era_schedules: Arc::new(settings.map(|era| era.parameters.timing())),
             settings,
             era_number: Era::genesis(),
             slot_timer: Box::pin(MockSlotTimerSequence {
@@ -914,9 +919,7 @@ mod tests {
             },
             update_interval: Duration::from_millis(1),
         };
-        let settings = test_eras().map(|_| TimeServiceSettings {
-            backend: backend_settings.clone(),
-        });
+        let settings = test_settings_with(&backend_settings);
         poll_ntp_backend_stream(settings, 25).await;
         // If we reach here, tick_stream handled polling and edge cases robustly
     }
@@ -933,9 +936,7 @@ mod tests {
             },
             update_interval: Duration::from_millis(50),
         };
-        let settings = test_eras().map(|_| TimeServiceSettings {
-            backend: backend_settings.clone(),
-        });
+        let settings = test_settings_with(&backend_settings);
         poll_ntp_backend_stream(settings, 25).await;
         // If we reach here, tick_stream handled polling and edge cases robustly
     }
