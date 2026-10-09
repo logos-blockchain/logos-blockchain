@@ -838,7 +838,6 @@ mod with_node {
 
             let result = get_time_info(node);
             assert!(result.is_ok());
-            assert!((*result.value).slot_duration_ms > 0);
             assert!(free_time_info(result.value).is_ok());
 
             let result = get_cryptarchia_info(node);

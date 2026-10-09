@@ -24,11 +24,8 @@ lb-utils       = { workspace = true }
 rpds           = { workspace = true }
 serde          = { workspace = true }
 thiserror      = { workspace = true }
-time           = { workspace = true }
-tokio          = { features = ["time"], optional = true, workspace = true }
 tracing        = { workspace = true }
 utoipa         = { features = ["macros"], optional = true, workspace = true }
 
 [features]
 openapi = ["dep:utoipa", "lb-time/openapi"]
-tokio   = ["dep:tokio"]

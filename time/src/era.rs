@@ -111,6 +111,8 @@ pub enum ErasError {
     Overflow(Era),
 }
 
+pub type EraSchedules = EraSchedule<()>;
+
 /// A chain's eras, each resolved against the ones before it.
 ///
 /// Never empty, and the first era starts at genesis: at epoch 0, slot 0 and
@@ -308,11 +310,18 @@ impl<Parameters> EraSchedule<Parameters> {
     /// If the time does not fit an [`OffsetDateTime`].
     #[must_use]
     pub fn time_of(&self, slot: Slot) -> OffsetDateTime {
+        self.checked_time_of(slot)
+            .expect("the start of a slot must fit a date and time")
+    }
+
+    /// When `slot` starts, counted in the slot duration of its era: `None` if
+    /// the time does not fit an [`OffsetDateTime`].
+    #[must_use]
+    pub fn checked_time_of(&self, slot: Slot) -> Option<OffsetDateTime> {
         let era_at_slot = self.at_slot(slot);
         let slots_into_era = self.elapsed_slots_since_era_start(slot);
-        span(era_at_slot.entry.slot_duration, slots_into_era)
-            .and_then(|span| era_at_slot.start_time.checked_add(span))
-            .expect("the start of a slot must fit a date and time")
+        let span = span(era_at_slot.entry.slot_duration, slots_into_era)?;
+        era_at_slot.start_time.checked_add(span)
     }
 
     /// The eras after genesis, in schedule order, each with its key.

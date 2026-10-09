@@ -851,11 +851,11 @@ async fn assert_turns_alternate_without_blocks(posting_timeframe: u32, posting_t
     channel.posting_timeout = posting_timeout.into();
     let node = MockNode {
         channel_state: Some(channel),
-        slot_duration_ms: 100,
+        slot_duration: core::time::Duration::from_millis(100),
         ..MockNode::default()
     };
     let config = SequencerConfig {
-        resubmit_interval: std::time::Duration::from_secs(600),
+        resubmit_interval: core::time::Duration::from_secs(600),
         ..SequencerConfig::new(funding_config())
     };
     let mut sequencer =
@@ -898,7 +898,7 @@ async fn turn_notification_closes_with_the_publish_margin() {
     channel.posting_timeframe = 4u32.into();
     let node = MockNode {
         channel_state: Some(channel),
-        slot_duration_ms: 300,
+        slot_duration: core::time::Duration::from_millis(300),
         ..MockNode::default()
     };
     let config = SequencerConfig {

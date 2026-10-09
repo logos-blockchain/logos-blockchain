@@ -1,12 +1,14 @@
-use core::num::NonZero;
 use std::{
     fmt::{Debug, Display, Formatter},
     pin::Pin,
 };
 
 use futures::{Stream, StreamExt as _};
-use lb_cryptarchia_engine::{Epoch, EpochConfig, Slot, time::SlotConfig};
 use lb_log_targets::time as log_targets_time;
+use lb_time::{
+    Epoch, Slot,
+    era::{EraSchedule, EraSchedules},
+};
 use log::error;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -15,6 +17,7 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
+use time::OffsetDateTime;
 use tokio::sync::{oneshot, watch};
 use tokio_stream::wrappers::WatchStream;
 
@@ -28,13 +31,18 @@ const LOG_TARGET: &str = log_targets_time::ROOT;
 /// Service-owned struct for time information
 /// This is the internal representation used by the time service
 /// and is mapped to the API response struct by the API layer
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug)]
 pub struct TimeServiceInfo {
-    pub slot_duration_ms: u64,
-    pub genesis_time_unix_ms: i64,
     pub current_slot: Slot,
     pub current_epoch: Epoch,
-    pub slots_per_epoch: u64,
+    pub era_schedules: EraSchedules,
+}
+
+impl TimeServiceInfo {
+    #[must_use]
+    pub const fn genesis_time(&self) -> OffsetDateTime {
+        self.era_schedules.genesis().start_time
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -47,7 +55,7 @@ pub type EpochSlotTickStream = Pin<Box<dyn Stream<Item = SlotTick> + Send + Sync
 
 pub enum TimeServiceMessage {
     Info {
-        sender: oneshot::Sender<Result<TimeServiceInfo, String>>,
+        sender: oneshot::Sender<TimeServiceInfo>,
     },
     Subscribe {
         sender: oneshot::Sender<EpochSlotTickStream>,
@@ -67,16 +75,13 @@ impl Debug for TimeServiceMessage {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug)]
 pub struct TimeServiceSettings<BackendSettings> {
-    /// Slot settings in order to compute proper slot times
-    pub slot_config: SlotConfig,
-    /// Epoch settings in order to compute proper epoch times
-    pub epoch_config: EpochConfig,
-    /// Base period length related to epochs, used to compute epochs as well
-    pub base_period_length: NonZero<u64>,
     pub backend: BackendSettings,
 }
+
+pub type TimeServiceSettingsSchedule<BackendSettings> =
+    EraSchedule<TimeServiceSettings<BackendSettings>>;
 
 pub struct TimeService<Backend, RuntimeServiceId>
 where
@@ -84,14 +89,14 @@ where
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     backend: Backend,
-    settings: TimeServiceSettings<Backend::Settings>,
+    settings_schedule: TimeServiceSettingsSchedule<Backend::Settings>,
 }
 
 impl<Backend, RuntimeServiceId> ServiceData for TimeService<Backend, RuntimeServiceId>
 where
     Backend: TimeBackend,
 {
-    type Settings = TimeServiceSettings<Backend::Settings>;
+    type Settings = TimeServiceSettingsSchedule<Backend::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = TimeServiceMessage;
@@ -109,15 +114,15 @@ where
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         _initial_state: Self::State,
     ) -> Result<Self, DynError> {
-        let settings = service_resources_handle
+        let settings_schedule = service_resources_handle
             .settings_handle
             .notifier()
             .get_updated_settings();
-        let backend = Backend::init(settings.clone());
+        let backend = Backend::init(settings_schedule.clone());
         Ok(Self {
             service_resources_handle,
             backend,
-            settings,
+            settings_schedule,
         })
     }
 
@@ -125,7 +130,7 @@ where
         let Self {
             service_resources_handle,
             backend,
-            settings,
+            settings_schedule,
         } = self;
         let mut inbound_relay = service_resources_handle.inbound_relay;
         let (mut current_slot_tick, mut tick_stream) = backend.tick_stream();
@@ -146,7 +151,7 @@ where
                         service_message,
                         &watch_receiver,
                         &current_slot_tick,
-                        &settings,
+                        &settings_schedule,
                     );
                 }
                 Some(slot_tick) = tick_stream.next() => {
@@ -168,39 +173,15 @@ fn handle_service_message<BackendSettings>(
     message: TimeServiceMessage,
     watch_receiver: &watch::Receiver<SlotTick>,
     current_slot_tick: &SlotTick,
-    settings: &TimeServiceSettings<BackendSettings>,
+    settings_schedule: &TimeServiceSettingsSchedule<BackendSettings>,
 ) {
     match message {
         TimeServiceMessage::Info { sender } => {
-            let Ok(slot_duration_ms) =
-                u64::try_from(settings.slot_config.slot_duration.as_millis())
-            else {
-                drop(sender.send(Err(
-                    "slot duration exceeds u64::MAX milliseconds".to_owned(),
-                )));
-                return;
-            };
-            let Ok(genesis_time_unix_ms) = i64::try_from(
-                settings
-                    .slot_config
-                    .genesis_time
-                    .unix_timestamp_nanos()
-                    .div_euclid(1_000_000),
-            ) else {
-                drop(sender.send(Err("genesis time exceeds i64::MAX milliseconds".to_owned())));
-                return;
-            };
-            drop(
-                sender.send(Ok(TimeServiceInfo {
-                    slot_duration_ms,
-                    genesis_time_unix_ms,
-                    current_slot: current_slot_tick.slot,
-                    current_epoch: current_slot_tick.epoch,
-                    slots_per_epoch: settings
-                        .epoch_config
-                        .epoch_length(settings.base_period_length),
-                })),
-            );
+            drop(sender.send(TimeServiceInfo {
+                current_slot: current_slot_tick.slot,
+                current_epoch: current_slot_tick.epoch,
+                era_schedules: settings_schedule.map(|_| ()),
+            }));
         }
         TimeServiceMessage::Subscribe { sender } => {
             let stream = Pin::new(Box::new(WatchStream::from_changes(watch_receiver.clone())));
