@@ -72,10 +72,12 @@ async fn start_blocks_streaming_cluster(
 }
 
 fn blocks_streaming_config(mut config: RunConfig) -> RunConfig {
-    config.deployment.update_genesis_era_parameters(|parameters| {
-        parameters.time.slot_duration = Duration::from_secs(1);
-        parameters.cryptarchia.security_param = NonZero::new(SECURITY_PARAM).unwrap();
-    });
+    config
+        .deployment
+        .update_genesis_era_parameters(|parameters| {
+            parameters.time.slot_duration = Duration::from_secs(1);
+            parameters.cryptarchia.security_param = NonZero::new(SECURITY_PARAM).unwrap();
+        });
     config
         .user
         .cryptarchia

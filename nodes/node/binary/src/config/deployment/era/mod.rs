@@ -91,9 +91,7 @@ impl TryFrom<BTreeMap<Epoch, EraRuleset>> for EraDeclarations {
     /// Builds a schedule from eras keyed by their first epoch. The map keeps
     /// them unique and ordered, so only the first one needs checking: it must
     /// start at genesis, and run a listed combination of versions.
-    fn try_from(
-        mut era_declarations: BTreeMap<Epoch, EraRuleset>,
-    ) -> Result<Self, Self::Error> {
+    fn try_from(mut era_declarations: BTreeMap<Epoch, EraRuleset>) -> Result<Self, Self::Error> {
         let Some((first_epoch, genesis_era)) = era_declarations.pop_first() else {
             return Err(EraScheduleError::Empty);
         };

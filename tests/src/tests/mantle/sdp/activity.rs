@@ -128,43 +128,45 @@ async fn sdp_blend_activity() {
 const INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(2);
 
 fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig {
-    config.deployment.update_genesis_era_parameters(|parameters| {
-        parameters.time.slot_duration = Duration::from_secs(1);
+    config
+        .deployment
+        .update_genesis_era_parameters(|parameters| {
+            parameters.time.slot_duration = Duration::from_secs(1);
 
-        // Set the epoch length not too long to speed up the test,
-        // but also not too short because we want blend nodes to collect blend
-        // tokens every epoch to keep their declarations alive.
-        parameters.cryptarchia.epoch_config = EpochConfig {
-            epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
-            epoch_period_nonce_buffer: 1.try_into().unwrap(),
-            epoch_period_nonce_stabilization: 1.try_into().unwrap(),
-        };
-        parameters.cryptarchia.security_param = NonZero::new(4).unwrap();
-        parameters.cryptarchia.slot_activation_coeff =
-            NonNegativeRatio::new(1, 2.try_into().unwrap());
+            // Set the epoch length not too long to speed up the test,
+            // but also not too short because we want blend nodes to collect blend
+            // tokens every epoch to keep their declarations alive.
+            parameters.cryptarchia.epoch_config = EpochConfig {
+                epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+                epoch_period_nonce_buffer: 1.try_into().unwrap(),
+                epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+            };
+            parameters.cryptarchia.security_param = NonZero::new(4).unwrap();
+            parameters.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, 2.try_into().unwrap());
 
-        // Set a small inactivity period so the inactivity window is short
-        // enough for the test to observe `active` being refreshed quickly.
-        let blend_params = parameters
-            .cryptarchia
-            .sdp_config
-            .service_params
-            .get_mut(&ServiceType::BlendNetwork)
-            .expect("blend network params should exist");
-        blend_params.inactivity_period = INACTIVITY_PERIOD.try_into().unwrap();
+            // Set a small inactivity period so the inactivity window is short
+            // enough for the test to observe `active` being refreshed quickly.
+            let blend_params = parameters
+                .cryptarchia
+                .sdp_config
+                .service_params
+                .get_mut(&ServiceType::BlendNetwork)
+                .expect("blend network params should exist");
+            blend_params.inactivity_period = INACTIVITY_PERIOD.try_into().unwrap();
 
-        // Shorten Blend delay to speed up the test
-        parameters
-            .blend
-            .core
-            .scheduler
-            .delayer
-            .maximum_release_delay_in_rounds = 1.try_into().unwrap();
-        // Set num_blend_layers to NODE_COUNT (instead of 1) to increase
-        // the probability that all nodes can collect a blend token from
-        // a single blend message.
-        parameters.blend.common.num_blend_layers = (NODE_COUNT as u64).try_into().unwrap();
-    });
+            // Shorten Blend delay to speed up the test
+            parameters
+                .blend
+                .core
+                .scheduler
+                .delayer
+                .maximum_release_delay_in_rounds = 1.try_into().unwrap();
+            // Set num_blend_layers to NODE_COUNT (instead of 1) to increase
+            // the probability that all nodes can collect a blend token from
+            // a single blend message.
+            parameters.blend.common.num_blend_layers = (NODE_COUNT as u64).try_into().unwrap();
+        });
 
     slots_per_epoch.store(
         config
