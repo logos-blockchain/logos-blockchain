@@ -472,8 +472,8 @@ fn set_at_path(
         return Ok(());
     }
 
-    // A tag, such as the version an era's parameters carry (`eras.0` is
-    // `!V1 {...}`), is stepped through: the segment reads the value it tags.
+    // A tag, such as an era's ruleset (`eras.0` is `!V1 {...}`), is stepped
+    // through: the segment reads the value it tags.
     let current = untagged_mut(current);
     let segment = path[0];
     let rest = &path[1..];

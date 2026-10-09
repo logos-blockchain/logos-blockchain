@@ -6,7 +6,7 @@ use lb_time_service::{
 };
 
 use crate::config::{
-    deployment::{EraDefinition, era::parameters::EraParameters},
+    deployment::{EraDefinition, era::ruleset::EraRuleset},
     time::serde::Config,
 };
 
@@ -29,7 +29,7 @@ impl ServiceConfig {
     ) -> EraSchedule<TimeServiceSettings<NtpTimeBackendSettings>> {
         eras.map(|era| {
             let user_config = self.user.clone();
-            let EraParameters::V1(parameters) = &era.entry.parameters.parameters;
+            let EraRuleset::V1(parameters) = &era.entry.parameters.ruleset;
             let (deployment, cryptarchia_deployment) = (&parameters.time, &parameters.cryptarchia);
             TimeServiceSettings {
                 slot_config: SlotConfig {

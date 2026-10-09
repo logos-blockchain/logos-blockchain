@@ -3,7 +3,7 @@ use lb_pow_service::PoWServiceSettings;
 use lb_services_utils::overwatch::RecoveryData;
 
 use crate::config::{
-    deployment::{EraDefinition, era::parameters::EraParameters},
+    deployment::{EraDefinition, era::ruleset::EraRuleset},
     pow::serde::Config,
 };
 
@@ -22,7 +22,7 @@ impl ServiceConfig {
     ) -> EraSchedule<PoWServiceSettings> {
         eras.map(|era| {
             let user_config = self.user.clone();
-            let EraParameters::V1(parameters) = &era.entry.parameters.parameters;
+            let EraRuleset::V1(parameters) = &era.entry.parameters.ruleset;
             let reward = &parameters.cryptarchia.pow_config.reward;
             PoWServiceSettings {
                 mining: user_config.mining,

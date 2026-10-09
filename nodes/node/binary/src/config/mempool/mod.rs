@@ -13,7 +13,7 @@ use lb_tx_service::{
 };
 
 use crate::config::{
-    deployment::{EraDefinition, ProtocolScope, era::parameters::EraParameters},
+    deployment::{EraDefinition, ProtocolScope, era::ruleset::EraRuleset},
     mempool::serde::Config,
 };
 
@@ -41,7 +41,7 @@ impl ServiceConfig {
         >,
     > {
         eras.map(|era| {
-            let EraParameters::V1(parameters) = &era.entry.parameters.parameters;
+            let EraRuleset::V1(parameters) = &era.entry.parameters.ruleset;
             TxMempoolSettings {
                 network_adapter: Libp2pNetworkAdapterSettings {
                     id: SignedOps::<Preverified, StandardMode>::hash,

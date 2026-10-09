@@ -11,8 +11,8 @@ use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
 use lb_node::config::deployment::{
     DeploymentSettings, EraDeclarations,
-    era::parameters::{
-        EraParameters, v1,
+    era::ruleset::{
+        EraRuleset, v1,
         v1::{
             blend::{
                 CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
@@ -93,7 +93,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
         .map_or(DEFAULT_SLOT_TIME_IN_SECS, |s| s.parse::<u64>().unwrap());
 
     DeploymentSettings::new(
-        &EraDeclarations::new_genesis(EraParameters::V1(v1::Parameters {
+        &EraDeclarations::new_genesis(EraRuleset::V1(v1::Parameters {
                 blend: BlendDeploymentSettings {
                     common: BlendCommonSettings {
                         minimum_network_size: MinimumNetworkSize::try_new(

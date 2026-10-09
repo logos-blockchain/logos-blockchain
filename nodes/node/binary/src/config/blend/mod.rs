@@ -18,7 +18,7 @@ use lb_services_utils::overwatch::RecoveryData;
 
 use crate::config::{
     blend::serde::Config,
-    deployment::{EraDefinition, ProtocolScope, era::parameters::EraParameters},
+    deployment::{EraDefinition, ProtocolScope, era::ruleset::EraRuleset},
 };
 
 pub mod serde;
@@ -52,7 +52,7 @@ impl ServiceConfig {
         eras.map(|era| {
             let user = self.user.clone();
             let definition = &era.entry.parameters;
-            let EraParameters::V1(parameters) = &definition.parameters;
+            let EraRuleset::V1(parameters) = &definition.ruleset;
             let fork = ProtocolScope::Fork(definition.fork_digest);
             let protocol_name = fork.to_stream_protocol_with_name("blend");
             let (deployment, cryptarchia_deployment, time_deployment) =

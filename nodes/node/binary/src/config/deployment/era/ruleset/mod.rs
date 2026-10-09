@@ -4,14 +4,21 @@ use serde::{Deserialize, Serialize};
 
 pub mod v1;
 
+/// The rules an era runs under, named by their version, with the values of
+/// their parameters in the layout that version defines.
+///
+/// An era that only changes values keeps its ruleset. A change of behaviour,
+/// parameters or encoding needs a new one.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum EraParameters {
+pub enum EraRuleset {
     V1(v1::Parameters),
 }
 
-impl EraParameters {
+impl EraRuleset {
+    /// The ruleset's number, written ahead of its parameters in the era's
+    /// digest. Only used for encoding the ruleset.
     #[must_use]
-    pub const fn version(&self) -> u16 {
+    pub(super) const fn version(&self) -> u16 {
         match self {
             Self::V1(_) => 1,
         }
