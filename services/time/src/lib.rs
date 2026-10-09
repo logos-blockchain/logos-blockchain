@@ -17,6 +17,7 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
+use time::OffsetDateTime;
 use tokio::sync::{oneshot, watch};
 use tokio_stream::wrappers::WatchStream;
 
@@ -35,6 +36,13 @@ pub struct TimeServiceInfo {
     pub current_slot: Slot,
     pub current_epoch: Epoch,
     pub era_schedules: EraSchedules,
+}
+
+impl TimeServiceInfo {
+    #[must_use]
+    pub const fn genesis_time(&self) -> OffsetDateTime {
+        self.era_schedules.genesis().start_time
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
