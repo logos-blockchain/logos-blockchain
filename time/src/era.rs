@@ -320,8 +320,8 @@ impl<Parameters> EraSchedule<Parameters> {
     pub fn checked_time_of(&self, slot: Slot) -> Option<OffsetDateTime> {
         let era_at_slot = self.at_slot(slot);
         let slots_into_era = self.elapsed_slots_since_era_start(slot);
-        span(era_at_slot.entry.slot_duration, slots_into_era)
-            .and_then(|span| era_at_slot.start_time.checked_add(span))
+        let span = span(era_at_slot.entry.slot_duration, slots_into_era)?;
+        era_at_slot.start_time.checked_add(span)
     }
 
     /// The eras after genesis, in schedule order, each with its key.
