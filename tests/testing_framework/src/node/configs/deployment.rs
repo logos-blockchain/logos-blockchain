@@ -201,10 +201,11 @@ impl TopologyConfig {
         self.node_config_overrides.get(&index)
     }
 
-    pub(crate) const fn apply_deployment_overrides(&self, settings: &mut DeploymentSettings) {
-        let cryptarchia = &mut settings.genesis_era_parameters_mut().cryptarchia;
-        cryptarchia.security_param = self.security_param;
-        cryptarchia.slot_activation_coeff = self.active_slot_coeff;
+    pub(crate) fn apply_deployment_overrides(&self, settings: &mut DeploymentSettings) {
+        settings.update_genesis_era_parameters(|parameters| {
+            parameters.cryptarchia.security_param = self.security_param;
+            parameters.cryptarchia.slot_activation_coeff = self.active_slot_coeff;
+        });
     }
 }
 

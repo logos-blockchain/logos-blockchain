@@ -1,9 +1,11 @@
-use core::num::NonZeroU64;
-
+use lb_cryptarchia_engine::time::EraSchedule;
 use lb_pow_service::PoWServiceSettings;
 use lb_services_utils::overwatch::RecoveryData;
 
-use crate::config::pow::serde::Config;
+use crate::config::{
+    deployment::{EraDefinition, era::ruleset::EraRuleset},
+    pow::serde::Config,
+};
 
 pub mod serde;
 
@@ -12,23 +14,24 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
-    /// `slot_window` is the consensus acceptance window and `rewards_enabled`
-    /// whether the consensus distribution rate is non-zero, both sourced from
-    /// the cryptarchia deployment configuration so the mining service and the
-    /// ledger agree on a single value.
     #[must_use]
-    pub fn into_pow_service_settings(
+    pub fn into_pow_service_era_schedule(
         self,
-        recovery_data: RecoveryData,
-        slot_window: NonZeroU64,
-        rewards_enabled: bool,
-    ) -> PoWServiceSettings {
-        PoWServiceSettings {
-            mining: self.user.mining,
-            auto_claim: self.user.auto_claim,
-            slot_window,
-            rewards_enabled,
-            recovery_data,
-        }
+        recovery_data: &RecoveryData,
+        eras: &EraSchedule<EraDefinition>,
+    ) -> EraSchedule<PoWServiceSettings> {
+        eras.map(|era| {
+            let user_config = self.user.clone();
+            let EraRuleset::V1(parameters) = &era.entry.parameters.ruleset;
+            let reward = &parameters.cryptarchia.pow_config.reward;
+            PoWServiceSettings {
+                mining: user_config.mining,
+                auto_claim: user_config.auto_claim,
+                slot_window: reward.slot_window,
+                rewards_enabled: reward.rate_num > 0,
+                // TODO: This will go once we update the PoW service to support era schedules.
+                recovery_data: recovery_data.clone(),
+            }
+        })
     }
 }

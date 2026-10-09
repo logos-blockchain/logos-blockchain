@@ -85,9 +85,9 @@ pub struct CeremonyArgs {
     #[arg(long, value_name = "FILE")]
     pub faucet: PathBuf,
 
-    /// The genesis template: the parameters of era zero. The ceremony
-    /// generates the rest of the deployment config from it. Without it, the
-    /// default deployment's era zero is used.
+    /// The genesis template: era zero's ruleset and its parameters. The
+    /// ceremony generates the rest of the deployment config from it.
+    /// Without it, the default deployment's era zero is used.
     #[arg(long, value_name = "FILE")]
     pub template: Option<PathBuf>,
 
@@ -316,7 +316,8 @@ fn load_base_config(path: Option<&PathBuf>) -> Result<Value> {
 }
 
 /// Load a genesis template, and assemble from it the deployment config the
-/// ceremony completes: the template's era definition becomes era zero.
+/// ceremony completes: the template's ruleset (`!V1`), with its parameters,
+/// becomes era zero.
 ///
 /// If `path` is `None`, returns the default deployment config, whose genesis
 /// block the ceremony replaces.
@@ -329,12 +330,15 @@ fn load_genesis_template(path: Option<&PathBuf>) -> Result<Value> {
         .with_context(|| format!("cannot read genesis template '{}'", path.display()))?;
     let template: Value = serde_yaml::from_str(&content)
         .with_context(|| format!("cannot parse YAML from '{}'", path.display()))?;
-    let Value::Mapping(era) = template else {
-        bail!("genesis template '{}' is not a mapping", path.display());
-    };
+    if !matches!(&template, Value::Tagged(era) if era.value.is_mapping()) {
+        bail!(
+            "genesis template '{}' is not a mapping tagged with its version",
+            path.display()
+        );
+    }
 
     let mut eras = serde_yaml::Mapping::new();
-    eras.insert(Value::from(0u64), Value::Mapping(era));
+    eras.insert(Value::from(0u64), template);
     let mut config = serde_yaml::Mapping::new();
     config.insert(Value::from("eras"), Value::Mapping(eras));
     Ok(Value::Mapping(config))

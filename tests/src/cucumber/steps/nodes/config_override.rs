@@ -451,7 +451,7 @@ fn get_at_path<'a>(current: &'a YamlValue, path: &[&str]) -> Option<&'a YamlValu
     let mut current = current;
 
     for segment in path {
-        current = match current {
+        current = match untagged(current) {
             YamlValue::Sequence(sequence) => sequence.get(segment.parse::<usize>().ok()?)?,
             YamlValue::Mapping(mapping) => mapping.get(mapping_key(mapping, segment))?,
             _ => return None,
@@ -472,6 +472,9 @@ fn set_at_path(
         return Ok(());
     }
 
+    // A tag, such as an era's ruleset (`eras.0` is `!V1 {...}`), is stepped
+    // through: the segment reads the value it tags.
+    let current = untagged_mut(current);
     let segment = path[0];
     let rest = &path[1..];
     let is_last = rest.is_empty();
@@ -550,6 +553,23 @@ fn set_map(
     }
 
     set_at_path(child, rest, value, full_path)
+}
+
+/// The value `value` tags, through any number of tags, or `value` itself when
+/// it carries none.
+fn untagged(mut value: &YamlValue) -> &YamlValue {
+    while let YamlValue::Tagged(tagged) = value {
+        value = &tagged.value;
+    }
+    value
+}
+
+/// See [`untagged`].
+fn untagged_mut(mut value: &mut YamlValue) -> &mut YamlValue {
+    while let YamlValue::Tagged(tagged) = value {
+        value = &mut tagged.value;
+    }
+    value
 }
 
 /// The key `segment` names in `mapping`: the integer key it spells out when

@@ -212,41 +212,29 @@ impl BlendDiagnosticParameterSet {
         }
     }
 
-    const fn apply_to(&self, settings: &mut DeploymentSettings) {
-        settings
-            .genesis_era_parameters_mut()
-            .cryptarchia
-            .security_param = NonZero::new(self.security_parameter)
-            .expect("named Blend diagnostic security parameter must be non-zero");
-        settings.genesis_era_parameters_mut().time.slot_duration =
-            Duration::from_secs(self.slot_duration_secs);
-        settings
-            .genesis_era_parameters_mut()
-            .cryptarchia
-            .epoch_config
-            .epoch_stake_distribution_stabilization =
-            NonZero::new(self.epoch_stake_distribution_stabilization)
+    fn apply_to(&self, settings: &mut DeploymentSettings) {
+        settings.update_genesis_era_parameters(|parameters| {
+            parameters.cryptarchia.security_param = NonZero::new(self.security_parameter)
+                .expect("named Blend diagnostic security parameter must be non-zero");
+            parameters.time.slot_duration = Duration::from_secs(self.slot_duration_secs);
+            let epoch_config = &mut parameters.cryptarchia.epoch_config;
+            epoch_config.epoch_stake_distribution_stabilization =
+                NonZero::new(self.epoch_stake_distribution_stabilization)
+                    .expect("named Blend diagnostic phase must be non-zero");
+            epoch_config.epoch_period_nonce_buffer = NonZero::new(self.epoch_period_nonce_buffer)
                 .expect("named Blend diagnostic phase must be non-zero");
-        settings
-            .genesis_era_parameters_mut()
-            .cryptarchia
-            .epoch_config
-            .epoch_period_nonce_buffer = NonZero::new(self.epoch_period_nonce_buffer)
-            .expect("named Blend diagnostic phase must be non-zero");
-        settings
-            .genesis_era_parameters_mut()
-            .cryptarchia
-            .epoch_config
-            .epoch_period_nonce_stabilization = NonZero::new(self.epoch_period_nonce_stabilization)
-            .expect("named Blend diagnostic phase must be non-zero");
+            epoch_config.epoch_period_nonce_stabilization =
+                NonZero::new(self.epoch_period_nonce_stabilization)
+                    .expect("named Blend diagnostic phase must be non-zero");
+        });
     }
 
     fn effective_deployment_settings(self) -> DeploymentSettings {
         let mut settings = DeploymentSettings::default();
-        settings
-            .genesis_era_parameters_mut()
-            .cryptarchia
-            .slot_activation_coeff = TopologyConfig::default().active_slot_coeff;
+        settings.update_genesis_era_parameters(|parameters| {
+            parameters.cryptarchia.slot_activation_coeff =
+                TopologyConfig::default().active_slot_coeff;
+        });
         self.apply_to(&mut settings);
         settings
     }
@@ -1203,7 +1191,7 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
         .ok_or_else(|| diagnostic_error("No running nodes are available for identity mapping"))?;
     let deployment = deployment_settings(world, reference_node)?;
     let declared_provider_ids = deployment
-        .genesis_block
+        .genesis_block()
         .genesis_tx()
         .sdp_declarations()
         .filter(|declaration| declaration.operation().service_type == ServiceType::BlendNetwork)
@@ -1575,10 +1563,10 @@ mod tests {
                 3 * expected_geometry.1 + expected_geometry.2
             );
             let mut deployment_settings = DeploymentSettings::default();
-            deployment_settings
-                .genesis_era_parameters_mut()
-                .cryptarchia
-                .slot_activation_coeff = TopologyConfig::default().active_slot_coeff;
+            deployment_settings.update_genesis_era_parameters(|parameters| {
+                parameters.cryptarchia.slot_activation_coeff =
+                    TopologyConfig::default().active_slot_coeff;
+            });
             parameter_set.apply_to(&mut deployment_settings);
             assert_eq!(
                 settings
