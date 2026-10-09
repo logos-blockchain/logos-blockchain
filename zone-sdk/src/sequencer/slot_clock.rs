@@ -10,8 +10,6 @@ const BOUNDARY_GRACE: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Debug)]
 pub(super) struct SlotClock {
-    /// The chain's eras, which lay its slots out in time, each era in its own
-    /// slot duration.
     eras: EraSchedules,
     last_observed_slot: Slot,
     last_observed_at: Instant,

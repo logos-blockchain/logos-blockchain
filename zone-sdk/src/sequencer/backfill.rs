@@ -312,7 +312,7 @@ fn era_schedule(timing_info: &TimeInfo) -> Result<EraSchedules, Error> {
     let mut eras = timing_info.era_timings.iter();
     let (&genesis_epoch, genesis) = eras
         .next()
-        .ok_or_else(|| map_invalid_error_with_reason("none"))?;
+        .ok_or_else(|| map_invalid_error_with_reason("empty"))?;
     if genesis_epoch != 0 {
         return Err(map_invalid_error_with_reason(
             "the first era does not start at genesis",
