@@ -5301,6 +5301,7 @@ dependencies = [
  "opentelemetry_sdk",
  "prometheus",
  "serde",
+ "serial_test",
  "tempfile",
  "tokio",
  "tonic",

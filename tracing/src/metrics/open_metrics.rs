@@ -54,3 +54,48 @@ pub fn read_open_metrics() -> Result<Option<String>, Error> {
 
     Ok(Some(metrics_string))
 }
+
+#[cfg(test)]
+mod tests {
+    use opentelemetry::metrics::MeterProvider as _;
+    use opentelemetry_sdk::metrics::SdkMeterProvider;
+    use serial_test::serial;
+
+    use super::{install, read_open_metrics};
+
+    #[test]
+    #[serial]
+    fn read_open_metrics_is_none_when_disabled() {
+        assert!(install(false).unwrap().is_none());
+        assert!(read_open_metrics().unwrap().is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn read_open_metrics_renders_recorded_counter() {
+        let reader = install(true).unwrap().unwrap();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        provider
+            .meter("test")
+            .u64_counter("requests")
+            .build()
+            .add(3, &[]);
+
+        let text = read_open_metrics().unwrap().unwrap();
+
+        assert!(
+            text.lines()
+                .any(|line| line.starts_with("requests_total{") && line.ends_with(" 3"))
+        );
+        assert!(text.ends_with("# EOF\n"));
+    }
+
+    #[test]
+    #[serial]
+    fn install_disabled_clears_previous_registry() {
+        install(true).unwrap();
+        install(false).unwrap();
+
+        assert!(read_open_metrics().unwrap().is_none());
+    }
+}
