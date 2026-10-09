@@ -20,6 +20,7 @@ pub(super) fn install(enabled: bool) -> Result<Option<PrometheusExporter>, OTelS
     let registry = Registry::new();
     let reader = opentelemetry_prometheus::exporter()
         .with_registry(registry.clone())
+        .without_target_info()
         .build()?;
     set_registry(Some(registry));
     Ok(Some(reader))
