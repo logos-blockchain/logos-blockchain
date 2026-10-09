@@ -40,7 +40,8 @@ impl SlotClock {
             .eras
             .checked_time_of(self.last_observed_slot)
             .and_then(|observed| {
-                observed.checked_add(time::Duration::try_from(self.last_observed_at.elapsed()).ok()?)
+                observed
+                    .checked_add(time::Duration::try_from(self.last_observed_at.elapsed()).ok()?)
             })
             .map_or(self.last_observed_slot, |now| slot_at(&self.eras, now));
 
@@ -128,11 +129,8 @@ mod tests {
     #[test]
     fn instant_of_uses_the_earlier_of_anchor_and_chain_start() {
         let slot_duration = Duration::from_millis(100);
-        let mut clock = SlotClock::from_era_schedule(eras(
-            OffsetDateTime::now_utc(),
-            slot_duration,
-            None,
-        ));
+        let mut clock =
+            SlotClock::from_era_schedule(eras(OffsetDateTime::now_utc(), slot_duration, None));
         clock.observe_slot(Slot::from(10));
         let anchor = clock.last_observed_at;
 
@@ -163,11 +161,8 @@ mod tests {
     #[tokio::test]
     async fn sleep_until_a_reached_slot_does_not_wait() {
         let slot_duration = Duration::from_millis(100);
-        let mut clock = SlotClock::from_era_schedule(eras(
-            OffsetDateTime::now_utc(),
-            slot_duration,
-            None,
-        ));
+        let mut clock =
+            SlotClock::from_era_schedule(eras(OffsetDateTime::now_utc(), slot_duration, None));
         clock.observe_slot(Slot::from(10));
         let anchor = clock.last_observed_at;
 
