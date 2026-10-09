@@ -1,4 +1,4 @@
-use lb_cryptarchia_engine::era::EraSchedule;
+use lb_cryptarchia_engine::time::EraSchedule;
 use lb_pow_service::PoWServiceSettings;
 use lb_services_utils::overwatch::RecoveryData;
 

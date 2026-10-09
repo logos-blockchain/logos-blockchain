@@ -11,8 +11,8 @@ use core::fmt::{self, Debug, Formatter};
 
 use blake2::Digest as _;
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode, codec_fixtures};
-use lb_cryptarchia_engine::Epoch;
-pub use lb_cryptarchia_engine::era::EraNumber;
+use lb_time::Epoch;
+pub use lb_time::Era;
 
 use crate::{
     crypto::Hasher,
@@ -120,7 +120,7 @@ codec_fixtures!(ForkDigest, Self([0x22u8; 32]) => "22222222222222222222222222222
 
 #[cfg(test)]
 mod tests {
-    use lb_cryptarchia_engine::Epoch;
+    use lb_time::Epoch;
 
     use super::{EraDigest, ForkDigest};
     use crate::{header::HeaderId, mantle::transactions::genesis_tx::ChainId};

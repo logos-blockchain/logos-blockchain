@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
 use lb_core::{block::genesis::GenesisBlock, sdp::ServiceParameters};
-use lb_cryptarchia_engine::{EpochConfig, era::EraSchedule};
+use lb_cryptarchia_engine::{EpochConfig, EraSchedule};
 use lb_ledger::mantle::sdp::ServiceRewardsParameters;
 use lb_libp2p::PeerId;
 use lb_services_utils::overwatch::RecoveryData;

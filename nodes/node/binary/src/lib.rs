@@ -11,7 +11,7 @@ pub use lb_core::{
     header::HeaderId,
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };
-use lb_cryptarchia_engine::era::EraSchedule;
+use lb_cryptarchia_engine::time::EraSchedule;
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 use lb_storage_service::recovery::load_recovery_data;
 pub use lb_storage_service::{

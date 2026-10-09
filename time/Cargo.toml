@@ -1,0 +1,25 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-time"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lb-binary-codec = { workspace = true }
+lb-utils        = { features = ["time"], workspace = true }
+serde           = { workspace = true }
+serde_with      = { features = ["macros"], workspace = true }
+thiserror       = { workspace = true }
+time            = { workspace = true }
+utoipa          = { optional = true, workspace = true }
+
+[features]
+openapi = ["dep:utoipa"]

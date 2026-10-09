@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use lb_core::{block::Proposal, mantle::transactions::genesis_tx::ChainId};
-use lb_cryptarchia_engine::era::EraSchedule;
+use lb_cryptarchia_engine::time::EraSchedule;
 use lb_libp2p::{ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig};
 use lb_network_service::{backends::libp2p::config::Libp2pConfig, config::NetworkConfig};
 use lb_tx_service::network::adapters::libp2p::MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE;
