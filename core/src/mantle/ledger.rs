@@ -15,7 +15,6 @@ use crate::{
     crypto::{Hash, ZkHasher},
     events::TxEvent,
     mantle::{
-        batch::DeferredZkpVerification,
         channel::Channels,
         ledger::verification_mode::VerificationMode,
         ops::{OpId, channel::ChannelId},
@@ -64,13 +63,11 @@ pub trait PreverifiableOperation<Mode: VerificationMode> {
 }
 
 pub trait VerifiableOperation<Mode: VerificationMode> {
+    type DeferredProof;
     type Context<'a>;
     type Error;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error>;
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error>;
 }
 
 pub trait ExecutableOperation {

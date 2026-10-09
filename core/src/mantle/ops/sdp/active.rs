@@ -58,13 +58,11 @@ impl PreverifiableOperation<StandardMode>
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverified, StandardMode> {
+    type DeferredProof = DeferredZkpVerification;
     type Context<'a> = SDPActiveValidationContext<'a>;
     type Error = SdpError;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         // Check the declaration exists
@@ -96,10 +94,10 @@ impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverif
         let inputs =
             public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &[declaration.zk_id])
                 .map_err(|_| SdpError::InvalidZkSignature)?;
-        Ok(Some(DeferredZkpVerification::ZkSig(
+        Ok(DeferredZkpVerification::ZkSig(
             *self.proof().as_proof(),
             inputs,
-        )))
+        ))
     }
 }
 
@@ -293,7 +291,7 @@ mod tests {
         ZkKey::from(BigUint::from(7u8))
     }
 
-    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
+    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> DeferredZkpVerification {
         let (message, declaration) = declaration();
         let declaration_id = message.id();
         let declarations = Declarations::new_sync().insert(declaration_id, declaration);
@@ -349,16 +347,13 @@ mod tests {
         let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
         let signed_operation = preverified(operation, &signed_view);
 
-        assert!(
-            signed_operation
-                .verify(&SDPActiveValidationContext {
-                    declarations: &declarations,
-                    tx_hash_view: &signed_view,
-                    epoch: Epoch::from(2),
-                })
-                .unwrap()
-                .is_some()
-        );
+        signed_operation
+            .verify(&SDPActiveValidationContext {
+                declarations: &declarations,
+                tx_hash_view: &signed_view,
+                epoch: Epoch::from(2),
+            })
+            .expect("a withdrawal epoch still ahead keeps the declaration active");
     }
 
     const WITHDRAW_AT: Epoch = Epoch::new(5);
