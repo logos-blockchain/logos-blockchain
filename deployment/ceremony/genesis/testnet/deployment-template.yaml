@@ -43,12 +43,12 @@ cryptarchia:
       damping_num: 1
       damping_den_offset: 1
     reward:
-      reward_pool_genesis: 1260000000000 # 1.5 × 760 × 10⁹ / 0.90
-      epoch_reward_genesis: 1666666      # ⌊W₀ / (63 · 10 · 1,200)⌋, set by hand
-      target_claims_per_block: 10        # the retarget's T
+      reward_pool_genesis: 12600000000000 # 1.5 × 760 × 10⁹ / 0.90
+      epoch_reward_genesis: 2000000       # ⌊W₀ / (63 · 10 · 10,000)⌋, set by hand
+      target_claims_per_block: 10         # the retarget's T
       rate_num: 1
-      rate_den: 63                       # ρ = 1/63: 97% paid out at 3 months
-      target_claim_per_block: 10         # the payout's T; must equal the line above
+      rate_den: 63                        # ρ = 1/63: 97% paid out at 3 months
+      target_claim_per_block: 10          # the payout's T; must equal the line above
   sdp_config:
     service_params:
       BN:
