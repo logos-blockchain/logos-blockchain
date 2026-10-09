@@ -22,7 +22,7 @@ impl ServiceConfig {
     ) -> EraSchedule<PoWServiceSettings> {
         eras.map(|era| {
             let user_config = self.user.clone();
-            let EraRuleset::V1(parameters) = &era.entry.parameters.ruleset;
+            let EraRuleset::V1(parameters) = &era.parameters.ruleset;
             let reward = &parameters.cryptarchia.pow_config.reward;
             PoWServiceSettings {
                 mining: user_config.mining,

@@ -1,7 +1,7 @@
 use std::{pin::Pin, sync::Arc, time::Duration};
 
 use futures::{Stream, StreamExt as _};
-use lb_time::{Slot, era::EraSchedules};
+use lb_time::{Slot, era::EraTimingSchedule};
 use time::OffsetDateTime;
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use tokio_stream::wrappers::IntervalStream;
@@ -11,7 +11,7 @@ use crate::{EpochSlotTickStream, SlotTick};
 /// Returns the current [`SlotTick`] and a stream of future [`SlotTick`]s
 /// that ticks at the start of each slot, starting from the next slot.
 pub fn slot_timer(
-    era_schedules: Arc<EraSchedules>,
+    era_schedules: Arc<EraTimingSchedule>,
     datetime: OffsetDateTime,
     current_slot: Slot,
 ) -> (SlotTick, EpochSlotTickStream) {
@@ -29,7 +29,7 @@ pub fn slot_timer(
     )
 }
 
-fn new_slot_tick(slot: Slot, era_schedules: &EraSchedules) -> SlotTick {
+fn new_slot_tick(slot: Slot, era_schedules: &EraTimingSchedule) -> SlotTick {
     SlotTick {
         epoch: era_schedules.epoch_for_slot(slot),
         slot,
@@ -37,7 +37,7 @@ fn new_slot_tick(slot: Slot, era_schedules: &EraSchedules) -> SlotTick {
 }
 
 fn slot_interval(
-    era_schedules: &EraSchedules,
+    era_schedules: &EraTimingSchedule,
     start_time: OffsetDateTime,
 ) -> impl Stream<Item = Instant> + use<> {
     let now = Instant::now();
@@ -77,7 +77,7 @@ fn slot_interval(
                     let mut interval = interval_at(
                         now + Duration::try_from(tick_delay_from_start)
                             .expect("could not set slot timer duration"),
-                        era.entry.slot_duration,
+                        era.parameters.slot_duration,
                     );
                     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
                     interval
@@ -98,7 +98,7 @@ mod tests {
 
     use lb_time::{
         Epoch,
-        era::{EraEntriesAfterGenesis, EraEntry},
+        era::{EraEntriesAfterGenesis, EraTiming},
     };
 
     use super::*;
@@ -129,12 +129,12 @@ mod tests {
         // 3 s in epochs of 2 slots.
         let genesis = OffsetDateTime::UNIX_EPOCH;
         let eras = Arc::new(
-            EraSchedules::new(
+            EraTimingSchedule::new(
                 genesis,
-                entry(Duration::from_secs(1), 2),
+                timing(Duration::from_secs(1), 2),
                 EraEntriesAfterGenesis::from((
                     NonZero::new(2).unwrap(),
-                    entry(Duration::from_secs(3), 2),
+                    timing(Duration::from_secs(3), 2),
                 )),
             )
             .unwrap(),
@@ -159,12 +159,12 @@ mod tests {
         assert_eq!(timer.next().await, Some(tick(3, 6)));
     }
 
-    fn timer() -> (SlotTick, EpochSlotTickStream, Arc<EraSchedules>) {
+    fn timer() -> (SlotTick, EpochSlotTickStream, Arc<EraTimingSchedule>) {
         let now = OffsetDateTime::now_utc();
         let eras = Arc::new(
-            EraSchedules::new(
+            EraTimingSchedule::new(
                 now,
-                entry(Duration::from_secs(1), 3),
+                timing(Duration::from_secs(1), 3),
                 EraEntriesAfterGenesis::empty(),
             )
             .unwrap(),
@@ -173,11 +173,10 @@ mod tests {
         (current_slot_tick, timer, eras)
     }
 
-    fn entry(slot_duration: Duration, epoch_length: u64) -> EraEntry<()> {
-        EraEntry {
+    fn timing(slot_duration: Duration, epoch_length: u64) -> EraTiming {
+        EraTiming {
             slot_duration,
-            epoch_length_in_slots: NonZero::new(epoch_length).unwrap(),
-            parameters: (),
+            epoch_length: NonZero::new(epoch_length).unwrap(),
         }
     }
 

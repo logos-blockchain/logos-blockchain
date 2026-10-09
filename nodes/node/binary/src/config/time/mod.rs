@@ -1,4 +1,4 @@
-use lb_time::era::EraSchedule;
+use lb_time::era::{EpochLength as _, EraSchedule, EraTiming, SlotDuration as _};
 use lb_time_service::{
     TimeServiceSettings,
     backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings},
@@ -30,7 +30,10 @@ impl ServiceConfig {
                 ntp_server: self.user.backend.server,
                 update_interval: self.user.backend.update_interval,
             },
-            era_schedule: eras.map(|_| ()),
+            era_schedule: eras.map(|era| EraTiming {
+                slot_duration: era.parameters.slot_duration(),
+                epoch_length: era.parameters.epoch_length(),
+            }),
         }
     }
 }

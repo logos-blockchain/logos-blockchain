@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use lb_time::{Slot, era::EraSchedules};
+use lb_time::{Slot, era::EraTimingSchedule};
 use time::OffsetDateTime;
 
 use crate::{
@@ -9,13 +9,13 @@ use crate::{
 };
 
 pub struct SystemTimeBackend {
-    eras: EraSchedules,
+    eras: EraTimingSchedule,
 }
 
 impl TimeBackend for SystemTimeBackend {
     type Settings = ();
 
-    fn init((): Self::Settings, era_schedule: EraSchedules) -> Self {
+    fn init((): Self::Settings, era_schedule: EraTimingSchedule) -> Self {
         Self { eras: era_schedule }
     }
 
@@ -34,7 +34,7 @@ mod test {
     use futures::StreamExt as _;
     use lb_time::{
         Slot,
-        era::{EraEntriesAfterGenesis, EraEntry, EraSchedule},
+        era::{EraEntriesAfterGenesis, EraSchedule, EraTiming},
     };
     use time::OffsetDateTime;
 
@@ -47,10 +47,9 @@ mod test {
         let expected: Vec<_> = (1..=SAMPLE_SIZE).map(Slot::from).collect();
         let era_schedule = EraSchedule::new(
             OffsetDateTime::now_utc(),
-            EraEntry {
+            EraTiming {
                 slot_duration: Duration::from_secs(1),
-                epoch_length_in_slots: NonZero::new(100).unwrap(),
-                parameters: (),
+                epoch_length: NonZero::new(100).unwrap(),
             },
             EraEntriesAfterGenesis::empty(),
         )

@@ -41,11 +41,11 @@ impl ServiceConfig {
         >,
     > {
         eras.map(|era| {
-            let EraRuleset::V1(parameters) = &era.entry.parameters.ruleset;
+            let EraRuleset::V1(parameters) = &era.parameters.ruleset;
             TxMempoolSettings {
                 network_adapter: Libp2pNetworkAdapterSettings {
                     id: SignedOps::<Preverified, StandardMode>::hash,
-                    topic: ProtocolScope::Fork(era.entry.parameters.fork_digest)
+                    topic: ProtocolScope::Fork(era.parameters.fork_digest)
                         .to_string_with_name("mempool"),
                 },
                 pool: MempoolSettings {

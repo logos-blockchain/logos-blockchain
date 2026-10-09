@@ -9,7 +9,7 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_log_targets::time as log_targets_time;
-use lb_time::{Slot, era::EraSchedules};
+use lb_time::{Slot, era::EraTimingSchedule};
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use sntpc::{NtpResult, fraction_to_nanoseconds};
 use time::OffsetDateTime;
@@ -42,14 +42,14 @@ pub struct NtpTimeBackendSettings {
 #[derive(Clone, Debug)]
 pub struct NtpTimeBackend {
     settings: NtpTimeBackendSettings,
-    era_schedule: EraSchedules,
+    era_schedule: EraTimingSchedule,
     client: AsyncNTPClient,
 }
 
 impl TimeBackend for NtpTimeBackend {
     type Settings = NtpTimeBackendSettings;
 
-    fn init(settings: Self::Settings, era_schedule: EraSchedules) -> Self {
+    fn init(settings: Self::Settings, era_schedule: EraTimingSchedule) -> Self {
         let client = AsyncNTPClient::new(settings.ntp_client_settings);
         Self {
             settings,
@@ -120,7 +120,7 @@ pub struct NtpStream {
     /// Update interval stream
     interval: NtpResultStream,
     /// The chain's eras, which lay slots and epochs out in time.
-    era_schedules: Arc<EraSchedules>,
+    era_schedules: Arc<EraTimingSchedule>,
     /// `SlotTick` interval stream. This stream is replaced when an internal
     /// clock update happens.
     slot_timer: EpochSlotTickStream,
@@ -239,19 +239,18 @@ impl NtpStream {
 mod tests {
     use std::num::NonZero;
 
-    use lb_time::era::{EraEntriesAfterGenesis, EraEntry, EraSchedule};
+    use lb_time::era::{EraEntriesAfterGenesis, EraTiming};
 
     use super::*;
     use crate::TimeServiceSettings;
 
     /// One era from the Unix epoch, with slots of 1 s in epochs of 3 slots.
-    fn test_eras() -> EraSchedules {
-        EraSchedule::new(
+    fn test_eras() -> EraTimingSchedule {
+        EraTimingSchedule::new(
             OffsetDateTime::UNIX_EPOCH,
-            EraEntry {
+            EraTiming {
                 slot_duration: Duration::from_secs(1),
-                epoch_length_in_slots: NonZero::new(3).unwrap(),
-                parameters: (),
+                epoch_length: NonZero::new(3).unwrap(),
             },
             EraEntriesAfterGenesis::empty(),
         )

@@ -168,7 +168,6 @@ mod tests {
         DeploymentSettings::default()
             .era_schedule()
             .genesis()
-            .entry
             .parameters
             .ruleset
             .clone()
