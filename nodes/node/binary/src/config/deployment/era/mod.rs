@@ -264,7 +264,7 @@ mod tests {
         let schedule = EraDeclarations::new_genesis(ruleset());
 
         let yaml = serde_yaml::to_string(&schedule).unwrap();
-        assert!(yaml.starts_with("0:\n"), "{yaml}");
+        assert!(yaml.starts_with("0: !V1\n"), "{yaml}");
         let decoded: EraDeclarations = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(first_epochs(&decoded), [Epoch::new(0)]);
 
