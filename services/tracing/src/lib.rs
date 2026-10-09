@@ -15,7 +15,7 @@ use lb_tracing::{
         loki::{LokiConfig, create_loki_layer},
         otlp::{OtlpLoggingConfig, create_otlp_layer},
     },
-    metrics::otlp::{OtlpMetricsConfig, create_metrics_layer},
+    metrics::{layer::create_metrics_layer, otlp::OtlpMetricsConfig},
     tracing::otlp::{OtlpTracingConfig, create_otlp_tracing_layer},
 };
 use overwatch::{
