@@ -7,7 +7,7 @@ use super::{SDPActiveOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        batch::DeferredProof,
+        batch::DeferredZkSig,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
@@ -58,7 +58,7 @@ impl PreverifiableOperation<StandardMode>
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverified, StandardMode> {
-    type DeferredProof = DeferredProof;
+    type DeferredProof = DeferredZkSig;
     type Context<'a> = SDPActiveValidationContext<'a>;
     type Error = SdpError;
 
@@ -94,7 +94,7 @@ impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverif
         let inputs =
             public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &[declaration.zk_id])
                 .map_err(|_| SdpError::InvalidZkSignature)?;
-        Ok(DeferredProof::ZkSig(*self.proof().as_proof(), inputs))
+        Ok(DeferredZkSig::new(*self.proof().as_proof(), inputs))
     }
 }
 
@@ -140,7 +140,7 @@ mod tests {
     use crate::{
         mantle::{
             TxHash,
-            batch::{DeferredProof, Error as BatchError, test_utils::batch_verify},
+            batch::{DeferredZkSig, Error as BatchError, test_utils::batch_verify},
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger::{
                 Declarations, PreverifiableOperation as _, ProvableOperation,
@@ -288,7 +288,7 @@ mod tests {
         ZkKey::from(BigUint::from(7u8))
     }
 
-    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredProof {
+    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredZkSig {
         let (message, declaration) = declaration();
         let declaration_id = message.id();
         let declarations = Declarations::new_sync().insert(declaration_id, declaration);

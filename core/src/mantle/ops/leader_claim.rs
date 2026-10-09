@@ -16,7 +16,7 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, Utxo, Value,
-        batch::DeferredProof,
+        batch::DeferredLeaderClaim,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
@@ -242,7 +242,7 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<LeaderClaimOp, Preverified, StandardMode>
 {
-    type DeferredProof = DeferredProof;
+    type DeferredProof = DeferredLeaderClaim;
     type Context<'a> = LeaderClaimVerificationContext<'a>;
     type Error = LeaderClaimError;
 
@@ -261,7 +261,7 @@ impl VerifiableOperation<StandardMode>
 
         // Defer the proof verification so that the caller can batch it.
         // TODO: Remove. Already checked in preverify.
-        Ok(DeferredProof::LeaderClaim(
+        Ok(DeferredLeaderClaim::new(
             *self.proof().proof(),
             PoCVerifierInput::new(
                 operation.voucher_nullifier.into(),
@@ -539,7 +539,7 @@ mod tests {
         );
     }
 
-    fn deferred_proof_verified_over(tx_hash: TxHash) -> DeferredProof {
+    fn deferred_proof_verified_over(tx_hash: TxHash) -> DeferredLeaderClaim {
         let (rewards_root, _, signed_operation) = preverified_claim(TxHash::from([11u8; 32]));
 
         signed_operation
