@@ -26,6 +26,7 @@ lb-pow-service                = { workspace = true }
 lb-sdp-service                = { workspace = true }
 lb-storage-service            = { workspace = true }
 lb-time-service               = { workspace = true }
+lb-tracing                    = { workspace = true }
 lb-utils                      = { workspace = true }
 lb-version                    = { workspace = true }
 lb-wallet-service             = { workspace = true }

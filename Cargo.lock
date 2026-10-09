@@ -4294,6 +4294,7 @@ dependencies = [
  "logos-blockchain-sdp-service",
  "logos-blockchain-storage-service",
  "logos-blockchain-time-service",
+ "logos-blockchain-tracing",
  "logos-blockchain-utils",
  "logos-blockchain-version",
  "logos-blockchain-wallet-service",
