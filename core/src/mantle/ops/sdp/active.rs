@@ -3,7 +3,7 @@ use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
 use lb_log_targets::mantle;
 use tracing::info;
 
-use super::{SDPActiveOp, SdpError};
+use super::{SDPActiveOp, SdpError, validate_declaration_id, validate_nonce};
 use crate::{
     events::TxEvent,
     mantle::{
@@ -20,12 +20,13 @@ use crate::{
             states::{Preverified, Unverified, Verified},
         },
     },
+    sdp::Declaration,
 };
 
 const LOG_TARGET: &str = mantle::sdp::message::ACTIVE;
 
 pub struct SDPActiveValidationContext<'a> {
-    pub declarations: &'a Declarations,
+    pub declaration: &'a Declaration,
     pub tx_hash_view: &'a TxHashView,
     pub epoch: Epoch,
 }
@@ -67,10 +68,8 @@ impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverif
     ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         let operation = self.operation();
 
-        // Check the declaration exists
-        let Some(declaration) = context.declarations.get(&operation.declaration_id) else {
-            return Err(SdpError::DeclarationNotFound(operation.declaration_id));
-        };
+        let declaration = context.declaration;
+        validate_declaration_id(operation.declaration_id, declaration)?;
 
         // Check the declaration hasn't been withdrawn.
         // The report attesting `withdraw_at - 1` is due during `withdraw_at`,
@@ -84,13 +83,7 @@ impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverif
             });
         }
 
-        // Check the nonce is increasing
-        if operation.nonce <= declaration.nonce {
-            return Err(SdpError::InvalidNonce {
-                message_nonce: operation.nonce,
-                declaration_nonce: declaration.nonce,
-            });
-        }
+        validate_nonce(operation.nonce, declaration)?;
 
         // Defer the proof verification, so that the caller can batch it.
         let inputs =
@@ -162,7 +155,8 @@ mod tests {
             },
         },
         sdp::{
-            ActivityMetadata, Declaration, DeclarationMessage, ServiceType, blend::ActivityProof,
+            ActivityMetadata, Declaration, DeclarationMessage, Nonce, ServiceType,
+            blend::ActivityProof,
         },
     };
 
@@ -184,7 +178,15 @@ mod tests {
         operation: SDPActiveOp,
         tx_hash_view: &TxHashView,
     ) -> SignedOperation<SDPActiveOp, Preverified, StandardMode> {
-        let proof = ZkKey::multi_sign(&[declaration_key()], tx_hash_view.as_fr())
+        preverified_with_key(operation, tx_hash_view, declaration_key())
+    }
+
+    fn preverified_with_key(
+        operation: SDPActiveOp,
+        tx_hash_view: &TxHashView,
+        signing_key: ZkKey,
+    ) -> SignedOperation<SDPActiveOp, Preverified, StandardMode> {
+        let proof = ZkKey::multi_sign(&[signing_key], tx_hash_view.as_fr())
             .expect("signing should succeed");
 
         SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
@@ -200,26 +202,6 @@ mod tests {
         );
 
         assert_eq!(signed_operation.preverify(&()), Ok(()));
-    }
-
-    #[test]
-    fn verify_rejects_an_unknown_declaration() {
-        let operation = SDPActiveOp::sample();
-        let declaration_id = operation.declaration_id;
-
-        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
-        let signed_operation = preverified(operation, &signed_view);
-
-        assert_eq!(
-            signed_operation
-                .verify(&SDPActiveValidationContext {
-                    declarations: &Declarations::new_sync(),
-                    tx_hash_view: &signed_view,
-                    epoch: Epoch::from(0),
-                })
-                .unwrap_err(),
-            SdpError::DeclarationNotFound(declaration_id)
-        );
     }
 
     #[test]
@@ -246,7 +228,7 @@ mod tests {
         assert_eq!(
             signed_operation
                 .verify(&SDPActiveValidationContext {
-                    declarations: &declarations,
+                    declaration: declarations.get(&declaration_id).expect("declaration"),
                     tx_hash_view: &signed_view,
                     epoch: withdraw_at.strict_add(Epoch::from(1)),
                 })
@@ -254,6 +236,42 @@ mod tests {
             SdpError::DeclarationWithdrawn {
                 declaration_id,
                 withdraw_at,
+            }
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_context_declaration_with_a_different_id() {
+        let (message_a, _) = declaration();
+        let declaration_id_a = message_a.id();
+        let declaration_key_b = ZkKey::from(BigUint::from(7u8));
+        let message_b = DeclarationMessage {
+            zk_id: declaration_key_b.to_public_key(),
+            ..message_a
+        };
+        let declaration_b = Declaration::new(Epoch::from(0), &message_b);
+        let declaration_id_b = declaration_b.id();
+        assert_ne!(declaration_id_a, declaration_id_b);
+
+        let operation = SDPActiveOp {
+            declaration_id: declaration_id_a,
+            nonce: Nonce::new(declaration_b.created, 1),
+            ..SDPActiveOp::sample()
+        };
+        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let signed_operation = preverified_with_key(operation, &tx_hash_view, declaration_key_b);
+
+        assert_eq!(
+            signed_operation
+                .verify(&SDPActiveValidationContext {
+                    declaration: &declaration_b,
+                    tx_hash_view: &tx_hash_view,
+                    epoch: declaration_b.created,
+                })
+                .unwrap_err(),
+            SdpError::DeclarationIdMismatch {
+                operation_declaration_id: declaration_id_a,
+                supplied_declaration_id: declaration_id_b,
             }
         );
     }
@@ -277,14 +295,97 @@ mod tests {
         assert_eq!(
             signed_operation
                 .verify(&SDPActiveValidationContext {
-                    declarations: &declarations,
+                    declaration: declarations.get(&declaration_id).expect("declaration"),
                     tx_hash_view: &signed_view,
                     epoch: Epoch::from(0),
                 })
                 .unwrap_err(),
-            SdpError::InvalidNonce {
-                message_nonce: declaration_nonce,
-                declaration_nonce,
+            SdpError::InvalidNonceSequence {
+                nonce_sequence: declaration_nonce.sequence(),
+                declaration_sequence: declaration_nonce.sequence(),
+            }
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_nonce_from_another_declaration_lifecycle() {
+        let (message, declaration_a) = declaration();
+        let declaration_id = message.id();
+        let declaration_b = Declaration::new(Epoch::new(3), &message);
+        let declarations = Declarations::new_sync().insert(declaration_id, declaration_b.clone());
+        let operation = SDPActiveOp {
+            declaration_id,
+            nonce: Nonce::new(declaration_a.created, 1),
+            ..SDPActiveOp::sample()
+        };
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+
+        assert_eq!(
+            preverified(operation, &signed_view)
+                .verify(&SDPActiveValidationContext {
+                    declaration: declarations.get(&declaration_id).expect("declaration"),
+                    tx_hash_view: &signed_view,
+                    epoch: declaration_b.created,
+                })
+                .unwrap_err(),
+            SdpError::InvalidNonceLifecycle {
+                nonce_lifecycle_epoch: declaration_a.created,
+                declaration_created_epoch: declaration_b.created,
+            }
+        );
+    }
+
+    #[test]
+    fn verify_accepts_a_sequence_jump_within_the_same_lifecycle() {
+        let (message, declaration) = declaration();
+        let declaration_id = message.id();
+        let declarations = Declarations::new_sync().insert(declaration_id, declaration.clone());
+        let operation = SDPActiveOp {
+            declaration_id,
+            nonce: Nonce::new(declaration.created, 100),
+            ..SDPActiveOp::sample()
+        };
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+
+        assert!(
+            preverified(operation, &signed_view)
+                .verify(&SDPActiveValidationContext {
+                    declaration: declarations.get(&declaration_id).expect("declaration"),
+                    tx_hash_view: &signed_view,
+                    epoch: declaration.created,
+                })
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_lower_sequence_in_the_same_lifecycle() {
+        let (message, declaration) = declaration();
+        let declaration_id = message.id();
+        let declaration = Declaration {
+            nonce: Nonce::new(declaration.created, 4),
+            ..declaration
+        };
+        let declarations = Declarations::new_sync().insert(declaration_id, declaration.clone());
+        let operation = SDPActiveOp {
+            declaration_id,
+            nonce: Nonce::new(declaration.created, 3),
+            ..SDPActiveOp::sample()
+        };
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+
+        assert_eq!(
+            preverified(operation, &signed_view)
+                .verify(&SDPActiveValidationContext {
+                    declaration: declarations.get(&declaration_id).expect("declaration"),
+                    tx_hash_view: &signed_view,
+                    epoch: declaration.created,
+                })
+                .unwrap_err(),
+            SdpError::InvalidNonceSequence {
+                nonce_sequence: 3,
+                declaration_sequence: 4,
             }
         );
     }
@@ -309,7 +410,7 @@ mod tests {
             .into_preverified(&())
             .expect("preverify accepts every active message")
             .verify(&SDPActiveValidationContext {
-                declarations: &declarations,
+                declaration: declarations.get(&declaration_id).expect("declaration"),
                 tx_hash_view: &tx_hash_view,
                 epoch: Epoch::from(0),
             })
@@ -352,7 +453,7 @@ mod tests {
         assert!(
             signed_operation
                 .verify(&SDPActiveValidationContext {
-                    declarations: &declarations,
+                    declaration: declarations.get(&declaration_id).expect("declaration"),
                     tx_hash_view: &signed_view,
                     epoch: Epoch::from(2),
                 })
@@ -445,7 +546,7 @@ mod tests {
 
         let active_op = SDPActiveOp {
             declaration_id: declare_op.id(),
-            nonce: 1,
+            nonce: Nonce::new(Epoch::new(0), 1),
             metadata: ActivityMetadata::Blend(Box::new(ActivityProof {
                 epoch: Epoch::new(0),
                 signing_key: signing_key.public_key(),
@@ -463,7 +564,7 @@ mod tests {
         let tx_hash_view = TxHashView::from(TxHash::default());
         signed_operation
             .verify(&SDPActiveValidationContext {
-                declarations: &declarations,
+                declaration: declarations.get(&declare_op.id()).expect("declaration"),
                 tx_hash_view: &tx_hash_view,
                 epoch,
             })

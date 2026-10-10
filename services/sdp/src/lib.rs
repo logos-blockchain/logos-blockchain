@@ -21,8 +21,8 @@ use lb_core::{
         transactions::{MantleTxBuilder, TxHash, states::Preverified},
     },
     sdp::{
-        ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locators, ProviderId,
-        ServiceType, WithdrawMessage, declaration_id,
+        ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locators, Nonce,
+        ProviderId, ServiceType, WithdrawMessage, declaration_id,
     },
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -40,7 +40,7 @@ use tokio_stream::{
     StreamExt as _,
     wrappers::{BroadcastStream, errors::BroadcastStreamRecvError},
 };
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 pub use crate::{api::SdpServiceApi, intent::Config as ActiveMessageTrackerConfig};
 use crate::{
@@ -75,12 +75,7 @@ pub struct DeclarationConfig {
 impl DeclarationConfig {
     #[must_use]
     pub fn id(&self) -> DeclarationId {
-        declaration_id(
-            self.service_type,
-            &self.provider_id,
-            &self.zk_id,
-            &self.locators,
-        )
+        declaration_id(self.service_type, self.zk_id)
     }
 }
 
@@ -125,7 +120,7 @@ pub struct RuntimeDeclaration {
     pub id: DeclarationId,
     pub zk_id: ZkPublicKey,
     pub service_note_id: NoteId,
-    pub nonce: u64,
+    pub nonce: Nonce,
     pub tip: HeaderId,
 }
 
@@ -133,6 +128,10 @@ pub struct RuntimeDeclaration {
 struct ActivitySubmission {
     tip: HeaderId,
     tx_id: TxHash,
+}
+
+const fn next_message_nonce(current_ledger_nonce: Nonce) -> Option<Nonce> {
+    current_ledger_nonce.checked_next()
 }
 
 #[derive(Clone, Debug)]
@@ -282,7 +281,7 @@ where
         let mut new_blocks = BroadcastStream::new(chain_api.subscribe_new_blocks().await?);
 
         self.service_resources_handle.status_updater.notify_ready();
-        tracing::info!(
+        info!(
             target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
@@ -483,15 +482,15 @@ where
             .await?
             .map_or_else(
                 || {
-                    tracing::warn!(target: LOG_TARGET, ?declaration_id, "Declaration not found in ledger");
+                    warn!(target: LOG_TARGET, ?declaration_id, "Declaration not found in ledger");
                     Err(SdpError::DeclarationNotFound(declaration_id))
                 },
                 |declaration| {
-                    tracing::info!(
+                    info!(
                         target: LOG_TARGET,
                         {
                             declaration.declaration.id = ?declaration.declaration.id,
-                            declaration.declaration.nonce = declaration.declaration.nonce,
+                            declaration.declaration.nonce = ?declaration.declaration.nonce,
                         },
                         "Loaded declaration from ledger"
                     );
@@ -511,7 +510,7 @@ where
             cryptarchia_info, ..
         } = chain_api.info().await?;
         let tip = cryptarchia_info.tip;
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
             "Fetching declaration state for {declaration_id:?} from ledger tip {tip:?}"
         );
@@ -553,11 +552,11 @@ where
             Ok(_) => Ok(()),
             Err(e) => match e {
                 SdpError::ChainApi(err) => {
-                    tracing::error!(target: LOG_TARGET, "Chain API error during declaration resolution: {err}");
+                    error!(target: LOG_TARGET, "Chain API error during declaration resolution: {err}");
                     Err(err)
                 }
                 SdpError::DeclarationNotFound(id) => {
-                    tracing::warn!(
+                    warn!(
                         target: LOG_TARGET,
                         declaration_id = ?id,
                         "Declaration not found in ledger"
@@ -565,7 +564,7 @@ where
                     Ok(())
                 }
                 SdpError::LedgerStateNotFound(tip) => {
-                    tracing::error!(target: LOG_TARGET, "Could not find ledger state for tip {tip:?}");
+                    error!(target: LOG_TARGET, "Could not find ledger state for tip {tip:?}");
                     Err(format!("Missing ledger state at {tip:?}").into())
                 }
             },
@@ -601,7 +600,7 @@ where
         let provider_id = declaration.provider_id;
         let zk_id = declaration.zk_id;
 
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
             event = "sdp_declaration_submission_requested",
@@ -617,7 +616,7 @@ where
         {
             Ok(tx) => tx,
             Err(e) => {
-                tracing::error!(target: LOG_TARGET, "Failed to create declaration transaction: {:?}", e);
+                error!(target: LOG_TARGET, "Failed to create declaration transaction: {:?}", e);
                 metrics::declaration_tx_failures_total();
                 Self::reply(Some(reply_channel), Err(e.into()), "post declaration");
                 return;
@@ -625,7 +624,7 @@ where
         };
 
         let tx_id = signed_tx.hash();
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
             event = "sdp_declaration_tx_created",
@@ -637,13 +636,13 @@ where
         );
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
-            tracing::error!(target: LOG_TARGET, "Failed to post declaration to mempool: {:?}", e);
+            error!(target: LOG_TARGET, "Failed to post declaration to mempool: {:?}", e);
             metrics::declaration_mempool_failures_total();
             Self::reply(Some(reply_channel), Err(e.into()), "post declaration");
             return;
         }
 
-        tracing::info!(
+        info!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
             event = "sdp_declaration_submitted",
@@ -749,18 +748,18 @@ where
             .try_fetch_runtime_declaration(activity.declaration_id, chain_api)
             .await
         else {
-            tracing::error!(target: LOG_TARGET, "Can't find declaration. Cannot post activity without declaration.");
+            error!(target: LOG_TARGET, "Can't find declaration. Cannot post activity without declaration.");
             return None;
         };
 
-        let Some(nonce) = declaration.nonce.checked_add(1) else {
-            tracing::error!(target: LOG_TARGET, "Can't bump nonce");
+        let Some(nonce) = next_message_nonce(declaration.nonce) else {
+            error!(target: LOG_TARGET, "SDP nonce sequence exhausted; cannot post activity");
             return None;
         };
 
         let proof_epoch = u32::from(activity.metadata.origin_epoch());
 
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
             event = "sdp_activity_submission_requested",
@@ -787,7 +786,7 @@ where
         {
             Ok(tx) => tx,
             Err(e) => {
-                tracing::error!(
+                error!(
                     target: LOG_TARGET,
                     diagnostic = BLEND_REACHABILITY,
                     event = "sdp_activity_tx_failed",
@@ -807,7 +806,7 @@ where
         };
 
         let tx_id = signed_tx.hash();
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
             event = "sdp_activity_tx_created",
@@ -822,7 +821,7 @@ where
         );
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
-            tracing::error!(
+            error!(
                 target: LOG_TARGET,
                 diagnostic = BLEND_REACHABILITY,
                 event = "sdp_activity_tx_failed",
@@ -841,7 +840,7 @@ where
             return None;
         }
 
-        tracing::info!(
+        info!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
             event = "sdp_activity_tx_submitted",
@@ -877,7 +876,7 @@ where
             .try_fetch_runtime_declaration(declaration_id, chain_api)
             .await
         else {
-            tracing::error!(target: LOG_TARGET, "Can't find declaration. Cannot post activity without declaration.");
+            error!(target: LOG_TARGET, "Can't find declaration. Cannot post activity without declaration.");
             metrics::withdrawal_validation_failures_total();
             Self::reply(
                 Some(reply_channel),
@@ -889,8 +888,8 @@ where
             return;
         };
 
-        let Some(nonce) = declaration.nonce.checked_add(1) else {
-            tracing::error!(target: LOG_TARGET, "Can't bump nonce");
+        let Some(nonce) = next_message_nonce(declaration.nonce) else {
+            error!(target: LOG_TARGET, "SDP nonce sequence exhausted; cannot post withdrawal");
             metrics::withdrawal_validation_failures_total();
             Self::reply(
                 Some(reply_channel),
@@ -902,7 +901,6 @@ where
 
         let withdraw_message = WithdrawMessage {
             declaration_id,
-            service_note_id: declaration.service_note_id,
             nonce,
         };
 
@@ -914,7 +912,7 @@ where
         {
             Ok(tx) => tx,
             Err(e) => {
-                tracing::error!(target: LOG_TARGET, "Failed to create withdrawal transaction: {:?}", e);
+                error!(target: LOG_TARGET, "Failed to create withdrawal transaction: {:?}", e);
                 metrics::withdrawal_tx_failures_total();
                 Self::reply(Some(reply_channel), Err(e.into()), "post withdrawal");
                 return;
@@ -924,7 +922,7 @@ where
         let tx_id = signed_tx.hash();
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
-            tracing::error!(target: LOG_TARGET, "Failed to post withdrawal to mempool: {:?}", e);
+            error!(target: LOG_TARGET, "Failed to post withdrawal to mempool: {:?}", e);
             metrics::withdrawal_mempool_failures_total();
             Self::reply(Some(reply_channel), Err(e.into()), "post withdrawal");
             return;
@@ -954,7 +952,7 @@ where
             .await;
 
         if let Err(e) = reply_channel.send(result) {
-            tracing::error!(target: LOG_TARGET, "Failed to send response for set declaration: {e:?}");
+            error!(target: LOG_TARGET, "Failed to send response for set declaration: {e:?}");
         }
     }
 
@@ -1166,6 +1164,14 @@ mod tests {
         activity.validate(Some(DECLARATION_ID), 2.into()).unwrap();
         // the tip epoch lags behind the submission epoch
         activity.validate(Some(DECLARATION_ID), 1.into()).unwrap();
+    }
+
+    #[test]
+    fn next_message_nonce_continues_from_recovered_ledger_declaration() {
+        assert_eq!(
+            next_message_nonce(Nonce::new(Epoch::new(10), 41)),
+            Some(Nonce::new(Epoch::new(10), 42))
+        );
     }
 
     fn activity(proof_epoch: u32) -> Activity {
