@@ -67,7 +67,7 @@ impl ChannelConfigOp {
             .into(),
             posting_timeframe: SlotTimeframe::from(10u32),
             posting_timeout: SlotTimeout::from(11u32),
-            configuration_threshold: 12,
+            configuration_threshold: 2,
             transfer_threshold: 13,
         }
     }
@@ -109,10 +109,13 @@ impl PreverifiableOperation<StandardMode>
     fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
         let operation = self.operation();
 
-        // Check config is well-formed
+        // Check config is well-formed. The configuration threshold must be
+        // reachable with the accredited keys, otherwise the channel would be
+        // locked out of any future reconfiguration.
         if operation.configuration_threshold == 0
             || operation.transfer_threshold == 0
             || operation.keys.is_empty()
+            || usize::from(operation.configuration_threshold) > operation.keys.len()
         {
             return Err(Error::InvalidChannelConfig);
         }
@@ -380,6 +383,39 @@ mod tests {
             signed_operation.preverify(&()),
             Err(Error::InvalidChannelConfig)
         );
+    }
+
+    #[test]
+    fn preverify_rejects_a_configuration_threshold_above_the_key_count() {
+        let operation = ChannelConfigOp::sample();
+        let configuration_threshold = u16::try_from(operation.keys.len() + 1).unwrap();
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            ChannelConfigOp {
+                configuration_threshold,
+                ..operation
+            },
+            ChannelMultiSigProof::sample_with_signatures(1),
+        );
+
+        assert_eq!(
+            signed_operation.preverify(&()),
+            Err(Error::InvalidChannelConfig)
+        );
+    }
+
+    #[test]
+    fn preverify_accepts_a_configuration_threshold_equal_to_the_key_count() {
+        let operation = ChannelConfigOp::sample();
+        let configuration_threshold = u16::try_from(operation.keys.len()).unwrap();
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            ChannelConfigOp {
+                configuration_threshold,
+                ..operation
+            },
+            ChannelMultiSigProof::sample_with_signatures(1),
+        );
+
+        assert_eq!(signed_operation.preverify(&()), Ok(()));
     }
 
     #[test]
