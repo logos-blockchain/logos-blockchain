@@ -49,8 +49,8 @@ fn slot_interval(
 
     // Take the era schedule, reverse it, and keep track of each era's starting slot
     // to be used as the previous era ending slot. The first era in the reversed
-    // order (i.e., the last era of the schedule, will yield a forever interval
-    // since it does not have a scheduled end).
+    // order (i.e., the last era of the schedule) will yield a forever interval
+    // since it does not have a scheduled end.
     let current_and_future_eras_reversed = era_schedules
         .iter()
         .rev()
