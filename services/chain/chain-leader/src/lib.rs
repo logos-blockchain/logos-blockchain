@@ -423,7 +423,7 @@ where
             let (sender, receiver) = oneshot::channel();
             relays
                 .time_relay()
-                .send(TimeServiceMessage::Subscribe { sender })
+                .send(TimeServiceMessage::SubscribeToEpochSlots { sender })
                 .await
                 .expect("Request time subscription to time service should succeed");
             receiver.await?

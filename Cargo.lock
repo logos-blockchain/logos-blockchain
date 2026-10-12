@@ -5375,6 +5375,7 @@ dependencies = [
  "logos-blockchain-log-targets",
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",
+ "logos-blockchain-time",
  "logos-blockchain-time-service",
  "logos-blockchain-utils",
  "logos-blockchain-wallet-service",

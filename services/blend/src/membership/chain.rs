@@ -121,7 +121,7 @@ where
             .expect("Relay with time service should be available.");
         let (sender, receiver) = oneshot::channel();
         time_relay
-            .send(TimeServiceMessage::Subscribe { sender })
+            .send(TimeServiceMessage::SubscribeToEpochSlots { sender })
             .await
             .expect("Failed to subscribe to slot clock.");
         receiver

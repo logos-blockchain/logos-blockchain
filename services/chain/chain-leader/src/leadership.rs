@@ -304,7 +304,7 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
     let Some(mut slot_timer) = async {
         let (sender, receiver) = oneshot::channel();
         time_relay
-            .send(TimeServiceMessage::Subscribe { sender })
+            .send(TimeServiceMessage::SubscribeToEpochSlots { sender })
             .await
             .ok()?;
         receiver.await.ok()

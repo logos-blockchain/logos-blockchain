@@ -5,7 +5,7 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_log_targets::time as log_targets_time;
-use lb_time::{Epoch, Slot, era::EraTimingSchedule};
+use lb_time::{Epoch, Era, Slot, era::EraTimingSchedule};
 use log::error;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -50,12 +50,23 @@ pub struct SlotTick {
 
 pub type EpochSlotTickStream = Pin<Box<dyn Stream<Item = SlotTick> + Send + Sync + Unpin>>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EraTick {
+    pub era: Era,
+    pub slot: Slot,
+}
+
+pub type EraTickStream = Pin<Box<dyn Stream<Item = EraTick> + Send + Sync + Unpin>>;
+
 pub enum TimeServiceMessage {
     Info {
         sender: oneshot::Sender<TimeServiceInfo>,
     },
-    Subscribe {
+    SubscribeToEpochSlots {
         sender: oneshot::Sender<EpochSlotTickStream>,
+    },
+    SubscribeToEras {
+        sender: oneshot::Sender<EraTickStream>,
     },
     CurrentSlot {
         sender: oneshot::Sender<SlotTick>,
@@ -66,7 +77,8 @@ impl Debug for TimeServiceMessage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Info { .. } => f.write_str("Info"),
-            Self::Subscribe { .. } => f.write_str("Subscribe"),
+            Self::SubscribeToEpochSlots { .. } => f.write_str("SubscribeToEpochSlots"),
+            Self::SubscribeToEras { .. } => f.write_str("SubscribeToEras"),
             Self::CurrentSlot { .. } => f.write_str("CurrentSlot"),
         }
     }
@@ -135,6 +147,12 @@ where
 
         let (watch_sender, watch_receiver) = watch::channel(current_slot_tick);
 
+        let mut current_era = era_schedule.at_slot(current_slot_tick.slot).era;
+        let (era_sender, era_receiver) = watch::channel(EraTick {
+            era: current_era,
+            slot: current_slot_tick.slot,
+        });
+
         service_resources_handle.status_updater.notify_ready();
         tracing::info!(
             target: LOG_TARGET,
@@ -148,6 +166,7 @@ where
                     handle_service_message(
                         service_message,
                         &watch_receiver,
+                        &era_receiver,
                         &current_slot_tick,
                         &era_schedule,
                     );
@@ -161,6 +180,18 @@ where
                         error!(target: LOG_TARGET, "Error updating slot tick: {e}");
                         metrics::time_broadcast_errors();
                     }
+
+                    let slot_era = era_schedule.at_slot(slot_tick.slot).era;
+                    if slot_era > current_era {
+                        current_era = slot_era;
+                        if let Err(e) = era_sender.send(EraTick {
+                            era: slot_era,
+                            slot: slot_tick.slot,
+                        }) {
+                            error!(target: LOG_TARGET, "Error updating era tick: {e}");
+                            metrics::time_broadcast_errors();
+                        }
+                    }
                 }
             }
         }
@@ -170,6 +201,7 @@ where
 fn handle_service_message(
     message: TimeServiceMessage,
     watch_receiver: &watch::Receiver<SlotTick>,
+    era_tick_receiver: &watch::Receiver<EraTick>,
     current_slot_tick: &SlotTick,
     era_schedule: &EraTimingSchedule,
 ) {
@@ -181,10 +213,16 @@ fn handle_service_message(
                 era_schedules: era_schedule.clone(),
             }));
         }
-        TimeServiceMessage::Subscribe { sender } => {
+        TimeServiceMessage::SubscribeToEpochSlots { sender } => {
             let stream = Pin::new(Box::new(WatchStream::from_changes(watch_receiver.clone())));
             if sender.send(stream).is_err() {
-                error!(target: LOG_TARGET, "Couldn't send back a Subscribe response");
+                error!(target: LOG_TARGET, "Couldn't send back a SubscribeToEpochSlots response");
+            }
+        }
+        TimeServiceMessage::SubscribeToEras { sender } => {
+            let stream = Pin::new(Box::new(WatchStream::new(era_tick_receiver.clone())));
+            if sender.send(stream).is_err() {
+                error!(target: LOG_TARGET, "Couldn't send back a SubscribeToEras response");
             }
         }
         TimeServiceMessage::CurrentSlot { sender } => {
