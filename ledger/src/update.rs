@@ -48,7 +48,7 @@ pub struct BatchVerifiedUpdate<Id> {
 mod tests {
     use lb_core::{
         events::{Event, HeaderEvent},
-        mantle::batch::DeferredProof,
+        mantle::batch::DeferredZkSig,
         sdp::{DeclarationId, ServiceType},
     };
     use lb_groth16::Fr;
@@ -100,21 +100,21 @@ mod tests {
         .into()
     }
 
-    fn valid_zk_sig() -> DeferredProof {
+    fn valid_zk_sig() -> DeferredZkSig {
         zk_sig(1, 1)
     }
 
-    fn invalid_zk_sig() -> DeferredProof {
+    fn invalid_zk_sig() -> DeferredZkSig {
         zk_sig(1, 2)
     }
 
     /// If `msg == msg_for_input`, a valid sig is produced.
     /// Otherwise, an invalid sig is produced.
-    fn zk_sig(msg: u64, msg_for_input: u64) -> DeferredProof {
+    fn zk_sig(msg: u64, msg_for_input: u64) -> DeferredZkSig {
         let key = ZkKey::from(BigUint::from(1u8));
         let signature = ZkKey::multi_sign(std::slice::from_ref(&key), &Fr::from(msg)).unwrap();
         let inputs =
             public_inputs_from_pks(Fr::from(msg_for_input).into(), &[key.to_public_key()]).unwrap();
-        DeferredProof::ZkSig(*signature.as_proof(), inputs)
+        DeferredZkSig::new(*signature.as_proof(), inputs)
     }
 }

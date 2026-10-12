@@ -6,7 +6,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         Note,
-        batch::DeferredProof,
+        batch::DeferredZkSig,
         channel::Channels,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
@@ -186,7 +186,7 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<SDPDeclareOp, Preverified, StandardMode>
 {
-    type DeferredProof = DeferredProof;
+    type DeferredProof = DeferredZkSig;
     type Context<'a> = SDPDeclareVerificationContext<'a>;
     type Error = SdpError;
 
@@ -217,10 +217,7 @@ impl VerifiableOperation<StandardMode>
             context.min_stake,
         )?;
 
-        Ok(DeferredProof::ZkSig(
-            *self.proof().zk_sig.as_proof(),
-            inputs,
-        ))
+        Ok(DeferredZkSig::new(*self.proof().zk_sig.as_proof(), inputs))
     }
 }
 
@@ -357,7 +354,7 @@ mod tests {
     mod standard_mode {
         use super::*;
         use crate::{
-            mantle::batch::{DeferredProof, Error as BatchError, test_utils::batch_verify},
+            mantle::batch::{DeferredZkSig, Error as BatchError, test_utils::batch_verify},
             sdp::service_notes::ServiceNotes,
         };
 
@@ -634,7 +631,7 @@ mod tests {
             ZkKey::from(BigUint::from(1u64))
         }
 
-        fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredProof {
+        fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredZkSig {
             let utxo = locked_utxo(&note_key());
             let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
             let operation = SDPDeclareOp {

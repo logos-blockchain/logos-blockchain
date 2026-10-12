@@ -216,8 +216,10 @@ fn apply_sequential(
     txs: impl Iterator<Item = SignedOps<Preverified, StandardMode>>,
 ) -> LedgerState {
     let (state, deferred) = apply(state, txs);
-    for (proof, inputs) in deferred.zk_sigs() {
-        assert!(verify(proof, inputs).expect("proof should verify"));
+    for deferred_proof in deferred.zk_sigs() {
+        assert!(
+            verify(deferred_proof.proof(), deferred_proof.inputs()).expect("proof should verify")
+        );
     }
     state
 }

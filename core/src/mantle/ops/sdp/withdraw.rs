@@ -7,7 +7,7 @@ use super::{SDPWithdrawOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        batch::DeferredProof,
+        batch::DeferredZkSig,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
@@ -63,7 +63,7 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<SDPWithdrawOp, Preverified, StandardMode>
 {
-    type DeferredProof = DeferredProof;
+    type DeferredProof = DeferredZkSig;
     type Context<'a> = SDPWithdrawValidationContext<'a>;
     type Error = SdpError;
 
@@ -124,7 +124,7 @@ impl VerifiableOperation<StandardMode>
         )
         .map_err(|_| SdpError::InvalidZkSignature)?;
 
-        Ok(DeferredProof::ZkSig(*self.proof().as_proof(), inputs))
+        Ok(DeferredZkSig::new(*self.proof().as_proof(), inputs))
     }
 }
 
@@ -347,7 +347,7 @@ mod tests {
         );
     }
 
-    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredProof {
+    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredZkSig {
         let operation = SDPWithdrawOp::sample();
         let service_notes = locked_notes(&operation.service_note_id);
         let declarations = declarations(&operation, declaration(operation.service_note_id));
