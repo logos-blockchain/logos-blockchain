@@ -337,9 +337,7 @@ impl SdpLedger {
                 })
                 .map_err(|(_signed_operation, error)| error)?;
 
-            let (signed_operation, None) = verified_declaration.into_parts() else {
-                return Err(Error::InvalidDeferral);
-            };
+            let (signed_operation, ()) = verified_declaration.into_parts();
 
             let (result, events) =
                 sdp.try_apply_genesis_sdp_declaration(utxo_tree, signed_operation, config)?;

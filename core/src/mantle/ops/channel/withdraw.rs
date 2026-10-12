@@ -9,7 +9,6 @@ use crate::{
     events::TxEvent,
     mantle::{
         TxHash, Value,
-        batch::DeferredZkpVerification,
         channel::{Channels, Error},
         gas::{
             Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
@@ -93,13 +92,11 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<ChannelWithdrawOp, Preverified, StandardMode>
 {
+    type DeferredProof = ();
     type Context<'a> = WithdrawValidationContext<'a>;
     type Error = Error;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
         let proof = self.proof();
 
@@ -153,7 +150,7 @@ impl VerifiableOperation<StandardMode>
             }
         }
 
-        Ok(None)
+        Ok(())
     }
 }
 
@@ -305,19 +302,17 @@ mod test {
         let service_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
 
-        assert!(
-            signed_operation
-                .verify(&WithdrawValidationContext {
-                    channels: &channels,
-                    service_notes: &service_notes,
-                    utxos: &utxos,
-                    tx_hash_view: &TxHashView::from(signed_hash),
-                    op_index: 0,
-                    helper: &helper,
-                })
-                .unwrap()
-                .is_none()
-        );
+        let () = signed_operation
+            .verify(&WithdrawValidationContext {
+                channels: &channels,
+                service_notes: &service_notes,
+                utxos: &utxos,
+                tx_hash_view: &TxHashView::from(signed_hash),
+                op_index: 0,
+                helper: &helper,
+            })
+            .expect("signatures over the signed transaction are accepted");
+
         assert_eq!(
             signed_operation
                 .verify(&WithdrawValidationContext {
@@ -478,7 +473,7 @@ mod test {
     }
 
     #[test]
-    fn has_no_deferred_zkp() {
+    fn verify_accepts_a_signature_count_meeting_the_ledger_view_threshold() {
         let signed_hash = TxHash::from([9u8; 32]);
         let signed_operation = preverified(create_channel_multi_sig_proof(
             &signed_hash,
@@ -501,19 +496,16 @@ mod test {
         let service_notes = ServiceNotes::new();
         let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
 
-        assert!(
-            signed_operation
-                .verify(&WithdrawValidationContext {
-                    channels: &channels,
-                    service_notes: &service_notes,
-                    utxos: &utxos,
-                    tx_hash_view: &TxHashView::from(signed_hash),
-                    op_index: 0,
-                    helper: &helper,
-                })
-                .expect("one accredited signature meets a threshold of one")
-                .is_none()
-        );
+        signed_operation
+            .verify(&WithdrawValidationContext {
+                channels: &channels,
+                service_notes: &service_notes,
+                utxos: &utxos,
+                tx_hash_view: &TxHashView::from(signed_hash),
+                op_index: 0,
+                helper: &helper,
+            })
+            .expect("one accredited signature meets a threshold of one");
     }
 
     #[test]

@@ -109,13 +109,11 @@ impl PreverifiableOperation<StandardMode> for SignedOperation<DepositOp, Unverif
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<DepositOp, Preverified, StandardMode> {
+    type DeferredProof = DeferredZkpVerification;
     type Context<'a> = DepositValidationContext<'a>;
     type Error = Error;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         // Check that the channel exists
@@ -140,10 +138,10 @@ impl VerifiableOperation<StandardMode> for SignedOperation<DepositOp, Preverifie
         let public_keys = operation.inputs.get_pk(context.utxos)?;
         let inputs = public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &public_keys)
             .map_err(|_| Error::InvalidSignature)?;
-        Ok(Some(DeferredZkpVerification::ZkSig(
+        Ok(DeferredZkpVerification::ZkSig(
             *self.proof().as_proof(),
             inputs,
-        )))
+        ))
     }
 }
 
@@ -502,7 +500,7 @@ mod test {
         ZkKey::from(BigUint::from(7u8))
     }
 
-    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
+    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> DeferredZkpVerification {
         let input_utxo = Utxo {
             op_id: [1u8; 32],
             output_index: 0,
