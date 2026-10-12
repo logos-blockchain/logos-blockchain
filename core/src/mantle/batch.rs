@@ -1,6 +1,17 @@
 use lb_poc::{PoCProof, PoCVerifierInput};
 use lb_zksign::{ZkSignProof, ZkSignVerifierInputs};
 
+/// A proof that can be handed off to a [`DeferredZkpVerifications`] batch.
+pub trait DeferrableProof {
+    fn defer_into(self, batch: &mut DeferredZkpVerifications);
+}
+
+impl DeferrableProof for DeferredZkpVerification {
+    fn defer_into(self, batch: &mut DeferredZkpVerifications) {
+        batch.push(self);
+    }
+}
+
 /// A ZKP verification deferred while processing an operation.
 #[expect(
     clippy::large_enum_variant,
@@ -15,13 +26,13 @@ pub enum DeferredZkpVerification {
 
 /// ZKP verifications deferred while applying a block.
 #[derive(Default)]
+#[must_use]
 pub struct DeferredZkpVerifications {
     zk_sigs: Vec<(ZkSignProof, ZkSignVerifierInputs)>,
     leader_claims: Vec<(PoCProof, PoCVerifierInput)>,
 }
 
 impl DeferredZkpVerifications {
-    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -73,6 +84,12 @@ impl DeferredZkpVerifications {
     #[must_use]
     pub fn zk_sigs(&self) -> &[(ZkSignProof, ZkSignVerifierInputs)] {
         &self.zk_sigs
+    }
+
+    #[cfg(any(test, feature = "unsafe-test-functions"))]
+    #[must_use]
+    pub fn leader_claims(&self) -> &[(PoCProof, PoCVerifierInput)] {
+        &self.leader_claims
     }
 }
 
