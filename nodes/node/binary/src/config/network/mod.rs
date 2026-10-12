@@ -75,16 +75,8 @@ impl ServiceConfig {
                             .push_listen_addr_updates,
                     },
                     chain_sync_config: ChainSyncSettings {
-                        peer_response_timeout: user
-                            .backend
-                            .swarm
-                            .chain_sync
-                            .peer_response_timeout,
-                        max_inbound_requests: user
-                            .backend
-                            .swarm
-                            .chain_sync
-                            .max_inbound_requests,
+                        peer_response_timeout: user.backend.swarm.chain_sync.peer_response_timeout,
+                        max_inbound_requests: user.backend.swarm.chain_sync.max_inbound_requests,
                     },
                     nat_config: user.backend.swarm.nat.into(),
                 },

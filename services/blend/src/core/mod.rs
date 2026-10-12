@@ -265,9 +265,8 @@ where
             State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
         > + Send
         + Sync,
-    RuntimeServiceId: AsServiceId<
-            NetworkService<Dispatcher::Backend, TimeBackend, RuntimeServiceId>,
-        > + AsServiceId<Dispatcher::MempoolService>
+    RuntimeServiceId: AsServiceId<NetworkService<Dispatcher::Backend, TimeBackend, RuntimeServiceId>>
+        + AsServiceId<Dispatcher::MempoolService>
         + AsServiceId<Dispatcher::ChainNetworkService>
         + AsServiceId<SdpService>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>

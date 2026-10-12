@@ -22,11 +22,11 @@ use libp2p::{
 use multiaddr::multiaddr;
 use rand::RngCore;
 
-use crate::{behaviour::BehaviourConfig, protocol_name::StreamProtocol};
 pub use crate::{
     SwarmConfig,
     behaviour::{Behaviour, BehaviourEvent},
 };
+use crate::{behaviour::BehaviourConfig, protocol_name::StreamProtocol};
 
 /// How long to keep a connection alive once it is idling.
 const IDLE_CONN_TIMEOUT: Duration = Duration::from_mins(5);

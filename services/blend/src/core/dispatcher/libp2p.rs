@@ -54,7 +54,14 @@ pub struct Libp2pPayloadDispatcher<
         clippy::type_complexity,
         reason = "Phantom data stuff to not require Send/Sync on type parameters that are only used as tags"
     )]
-    _phantom: PhantomData<fn() -> (MempoolNetAdapter, ChainNetwork, TimeBackend, RuntimeServiceId)>,
+    _phantom: PhantomData<
+        fn() -> (
+            MempoolNetAdapter,
+            ChainNetwork,
+            TimeBackend,
+            RuntimeServiceId,
+        ),
+    >,
 }
 
 /// Settings used to broadcast messages to the network service that uses libp2p
