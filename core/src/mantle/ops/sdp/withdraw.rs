@@ -7,7 +7,7 @@ use super::{SDPWithdrawOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        batch::DeferredZkpVerification,
+        batch::DeferredProof,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
@@ -63,7 +63,7 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<SDPWithdrawOp, Preverified, StandardMode>
 {
-    type DeferredProof = DeferredZkpVerification;
+    type DeferredProof = DeferredProof;
     type Context<'a> = SDPWithdrawValidationContext<'a>;
     type Error = SdpError;
 
@@ -124,10 +124,7 @@ impl VerifiableOperation<StandardMode>
         )
         .map_err(|_| SdpError::InvalidZkSignature)?;
 
-        Ok(DeferredZkpVerification::ZkSig(
-            *self.proof().as_proof(),
-            inputs,
-        ))
+        Ok(DeferredProof::ZkSig(*self.proof().as_proof(), inputs))
     }
 }
 
@@ -350,7 +347,7 @@ mod tests {
         );
     }
 
-    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> DeferredZkpVerification {
+    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredProof {
         let operation = SDPWithdrawOp::sample();
         let service_notes = locked_notes(&operation.service_note_id);
         let declarations = declarations(&operation, declaration(operation.service_note_id));
@@ -371,14 +368,14 @@ mod tests {
     }
 
     #[test]
-    fn deferred_zkp_is_accepted() {
-        assert!(batch_verify(deferred_zkp_signed_by(&[note_key(), declaration_key()])).is_ok());
+    fn deferred_proof_is_accepted() {
+        assert!(batch_verify(deferred_proof_signed_by(&[note_key(), declaration_key()])).is_ok());
     }
 
     #[test]
-    fn wrong_deferred_zkp_is_rejected() {
+    fn wrong_deferred_proof_is_rejected() {
         assert!(matches!(
-            batch_verify(deferred_zkp_signed_by(&[declaration_key()])),
+            batch_verify(deferred_proof_signed_by(&[declaration_key()])),
             Err(BatchError::InvalidZkSignatures)
         ));
     }

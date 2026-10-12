@@ -1,6 +1,6 @@
 use crate::mantle::{
     VerificationError,
-    batch::DeferredZkpVerifications,
+    batch::DeferredProofs,
     ledger::verification_mode::{StandardMode, VerificationMode},
     ops::{
         OpProofRef, OpRef, SignedOperation,
@@ -194,7 +194,7 @@ impl SignedOp<Preverified, StandardMode> {
         op_index: usize,
         tx_hash_view: &TxHashView,
         helper: &impl OperationVerificationHelper,
-        deferred_proofs: &mut DeferredZkpVerifications,
+        deferred_proofs: &mut DeferredProofs,
     ) -> Result<SignedOp<Verified, StandardMode>, (Self, VerificationError)> {
         match self {
             Self::ChannelInscribe(op) => {

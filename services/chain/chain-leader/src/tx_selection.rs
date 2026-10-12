@@ -2,7 +2,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedOps,
-        batch::DeferredZkpVerifications,
+        batch::DeferredProofs,
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         traits::Hashable,
@@ -40,12 +40,12 @@ impl BlockBuilder {
         self,
         tx: &SignedOps<Preverified, StandardMode>,
         ledger_config: &lb_ledger::Config,
-    ) -> Result<(Self, DeferredZkpVerifications), lb_ledger::LedgerError<HeaderId>> {
+    ) -> Result<(Self, DeferredProofs), lb_ledger::LedgerError<HeaderId>> {
         let Self {
             ledger_state,
             gas_and_fees,
         } = self;
-        let (ledger_state, tx_gas_and_fees, _events, deferred_zkps) =
+        let (ledger_state, tx_gas_and_fees, _events, deferred_proofs) =
             ledger_state
                 .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(ledger_config, tx)?;
         let gas_and_fees = gas_and_fees.checked_add::<HeaderId>(tx_gas_and_fees)?;
@@ -55,7 +55,7 @@ impl BlockBuilder {
                 ledger_state,
                 gas_and_fees,
             },
-            deferred_zkps,
+            deferred_proofs,
         ))
     }
 
@@ -99,7 +99,7 @@ pub fn select_transactions(
                 .clone()
                 .try_add_transaction(&tx, ledger_config)
             {
-                Ok((next_block_builder, deferred_zkps)) => match deferred_zkps.verify() {
+                Ok((next_block_builder, deferred_proofs)) => match deferred_proofs.verify() {
                     Ok(()) => {
                         block_builder = next_block_builder;
                         selected_txs.push(tx);
@@ -110,7 +110,7 @@ pub fn select_transactions(
                             target: LOG_TARGET,
                             tx = ?tx.hash(),
                             %err,
-                            "deferred ZKP verification failed during block assembly",
+                            "deferred proof verification failed during block assembly",
                         );
                         still_pending.push(tx);
                     }

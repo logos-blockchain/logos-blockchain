@@ -2,7 +2,7 @@ use std::{iter::Enumerate, vec::IntoIter};
 
 use crate::mantle::{
     VerificationError,
-    batch::DeferredZkpVerifications,
+    batch::DeferredProofs,
     ledger::verification_mode::StandardMode,
     ops::SignedOp,
     traits::Hashable as _,
@@ -62,7 +62,7 @@ impl VerifiedOperations {
     pub fn next(
         mut self,
         helper: &impl OperationVerificationHelper,
-        deferred_proofs: &mut DeferredZkpVerifications,
+        deferred_proofs: &mut DeferredProofs,
     ) -> Option<Result<VerifiedOperationStep, VerificationError>> {
         let (index, signed_op) = self.signed_ops.next()?;
         let verify_result =
@@ -94,7 +94,7 @@ mod tests {
 
     use crate::mantle::{
         Note, Utxo, VerificationError,
-        batch::DeferredZkpVerifications,
+        batch::DeferredProofs,
         channel::{Channels, Error},
         ledger::{BoundedInputs, verification_mode::StandardMode},
         ops::channel::ChannelId,
@@ -156,10 +156,10 @@ mod tests {
     fn helper_backed_verification_accepts_valid_channel_withdraw() {
         let (signed_tx, helper) = valid_withdraw();
 
-        let mut batch = DeferredZkpVerifications::new();
+        let mut deferred_proofs = DeferredProofs::new();
         signed_tx
             .into_verified()
-            .next(&helper, &mut batch)
+            .next(&helper, &mut deferred_proofs)
             .expect("Cursor should yield the WithdrawOp")
             .expect("WithdrawOp should verify");
     }
@@ -176,8 +176,11 @@ mod tests {
 
         let helper = TestOperationVerificationHelper::new(Channels::new(), []);
 
-        let mut batch = DeferredZkpVerifications::new();
-        let verification_result = signed_tx.into_verified().next(&helper, &mut batch).unwrap();
+        let mut deferred_proofs = DeferredProofs::new();
+        let verification_result = signed_tx
+            .into_verified()
+            .next(&helper, &mut deferred_proofs)
+            .unwrap();
         assert_eq!(
             verification_result.err().unwrap(),
             VerificationError::ChannelVerificationError(Error::InvalidSignature)
@@ -189,13 +192,13 @@ mod tests {
         let (signed_tx, helper) = valid_withdraw();
         let verified_ops = signed_tx.into_verified();
 
-        let mut batch = DeferredZkpVerifications::new();
+        let mut deferred_proofs = DeferredProofs::new();
         let (verified_ops, _) = verified_ops
-            .next(&helper, &mut batch)
+            .next(&helper, &mut deferred_proofs)
             .expect("Cursor should yield the WithdrawOp")
             .expect("WithdrawOp should verify");
 
-        assert!(verified_ops.next(&helper, &mut batch).is_none());
+        assert!(verified_ops.next(&helper, &mut deferred_proofs).is_none());
     }
 
     #[test]

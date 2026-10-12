@@ -6,7 +6,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         Note,
-        batch::DeferredZkpVerification,
+        batch::DeferredProof,
         channel::Channels,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
@@ -186,7 +186,7 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<SDPDeclareOp, Preverified, StandardMode>
 {
-    type DeferredProof = DeferredZkpVerification;
+    type DeferredProof = DeferredProof;
     type Context<'a> = SDPDeclareVerificationContext<'a>;
     type Error = SdpError;
 
@@ -198,7 +198,7 @@ impl VerifiableOperation<StandardMode>
             return Err(SdpError::InexistingNote(operation.service_note_id));
         };
 
-        // Defer the ZKP verification, so that the caller can batch it.
+        // Defer the proof verification, so that the caller can batch it.
         // Ed25519 verification is done by `preverify`.
         // Ensure service note exists and ownership over the service note and `zk_id`.
         let note = utxo.note;
@@ -217,7 +217,7 @@ impl VerifiableOperation<StandardMode>
             context.min_stake,
         )?;
 
-        Ok(DeferredZkpVerification::ZkSig(
+        Ok(DeferredProof::ZkSig(
             *self.proof().zk_sig.as_proof(),
             inputs,
         ))
@@ -357,9 +357,7 @@ mod tests {
     mod standard_mode {
         use super::*;
         use crate::{
-            mantle::batch::{
-                DeferredZkpVerification, Error as BatchError, test_utils::batch_verify,
-            },
+            mantle::batch::{DeferredProof, Error as BatchError, test_utils::batch_verify},
             sdp::service_notes::ServiceNotes,
         };
 
@@ -636,7 +634,7 @@ mod tests {
             ZkKey::from(BigUint::from(1u64))
         }
 
-        fn deferred_zkp_signed_by(signers: &[ZkKey]) -> DeferredZkpVerification {
+        fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredProof {
             let utxo = locked_utxo(&note_key());
             let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
             let operation = SDPDeclareOp {
@@ -663,16 +661,16 @@ mod tests {
         }
 
         #[test]
-        fn deferred_zkp_is_accepted() {
+        fn deferred_proof_is_accepted() {
             assert!(
-                batch_verify(deferred_zkp_signed_by(&[note_key(), declaration_key(),])).is_ok()
+                batch_verify(deferred_proof_signed_by(&[note_key(), declaration_key(),])).is_ok()
             );
         }
 
         #[test]
-        fn wrong_deferred_zkp_is_rejected() {
+        fn wrong_deferred_proof_is_rejected() {
             assert!(matches!(
-                batch_verify(deferred_zkp_signed_by(&[declaration_key()])),
+                batch_verify(deferred_proof_signed_by(&[declaration_key()])),
                 Err(BatchError::InvalidZkSignatures)
             ));
         }

@@ -4,7 +4,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         GasProfile,
-        batch::{DeferrableProof, DeferredZkpVerifications},
+        batch::{DeferrableProof, DeferredProofs},
         gas::{Gas, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
@@ -109,7 +109,7 @@ where
     pub fn into_verified_deferred(
         self,
         context: &<Self as VerifiableOperation<Mode>>::Context<'_>,
-        deferred_proofs: &mut DeferredZkpVerifications,
+        deferred_proofs: &mut DeferredProofs,
     ) -> Result<SignedOperation<T, Verified, Mode>, VerifyError<T, Mode>> {
         let verify_result = self.verify(context);
         match verify_result {
@@ -343,7 +343,7 @@ mod tests {
             tx_hash_view: &tx_hash_view(),
         };
 
-        let mut deferred_proofs = DeferredZkpVerifications::new();
+        let mut deferred_proofs = DeferredProofs::new();
         signed_operation
             .into_verified_deferred(&context, &mut deferred_proofs)
             .expect("the input is a ledger note no channel owns");

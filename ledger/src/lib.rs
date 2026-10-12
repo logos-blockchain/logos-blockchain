@@ -24,7 +24,7 @@ use lb_core::{
     events::{Events, HeaderEvent, TxEvent, TxEventPayload},
     mantle::{
         NoteId, Utxo, Value, VerificationError,
-        batch::DeferredZkpVerifications,
+        batch::DeferredProofs,
         gas::{Gas, GasCost, GasOverflow, GasProfile},
         ledger::verification_mode::StandardMode,
         ops::{
@@ -102,14 +102,9 @@ const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
 pub type Balance = i128;
 
 // What applying one transaction yields: the new state, the transaction balance,
-// the execution gas its operations consumed, the events and the deferred ZKPs.
-type AppliedTxOutcome = (
-    LedgerState,
-    Balance,
-    Gas,
-    Vec<TxEvent>,
-    DeferredZkpVerifications,
-);
+// the execution gas its operations consumed, the events and the deferred
+// proofs.
+type AppliedTxOutcome = (LedgerState, Balance, Gas, Vec<TxEvent>, DeferredProofs);
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum LedgerError<Id> {
@@ -200,11 +195,11 @@ where
             .get(&parent_id)
             .ok_or(LedgerError::ParentNotFound(parent_id))?;
 
-        let (new_state, events, deferred_zkps) = parent_state
+        let (new_state, events, deferred_proofs) = parent_state
             .clone()
             .try_update::<_, _, _, Profile>(id, slot, proof, uncle_slots, txs, &self.config)?;
 
-        Ok(PreparedUpdate::new(id, new_state, events, deferred_zkps))
+        Ok(PreparedUpdate::new(id, new_state, events, deferred_proofs))
     }
 
     /// Commits a new [`LedgerState`] created by [`Self::prepare_update`].
@@ -259,7 +254,7 @@ impl LedgerState {
         uncle_slots: &UncleSlots,
         txs: impl Iterator<Item = Tx>,
         config: &Config,
-    ) -> Result<(Self, Events, DeferredZkpVerifications), LedgerError<Id>>
+    ) -> Result<(Self, Events, DeferredProofs), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
         LeaderProof: leader_proof::LeaderProof,
@@ -278,7 +273,7 @@ impl LedgerState {
         // block that is actually applied, contents included, belongs in the
         // epoch's average.
         let mut txs_in_block = 0u64;
-        let (mut state, tx_events, deferred_zkp) = state
+        let (mut state, tx_events, deferred_proofs) = state
             .try_apply_block_contents::<_, _, Profile>(
                 config,
                 txs.inspect(|_| txs_in_block = txs_in_block.saturating_add(1)),
@@ -299,7 +294,7 @@ impl LedgerState {
             .map(Into::into)
             .chain(tx_events.into_iter().map(Into::into))
             .collect::<Events>();
-        Ok((state, events, deferred_zkp))
+        Ok((state, events, deferred_proofs))
     }
 
     /// Apply header-related changed to the ledger state. These include
@@ -485,11 +480,11 @@ impl LedgerState {
         self,
         config: &Config,
         tx: &Tx,
-    ) -> Result<(Self, GasAndFees, Vec<TxEvent>, DeferredZkpVerifications), LedgerError<Id>>
+    ) -> Result<(Self, GasAndFees, Vec<TxEvent>, DeferredProofs), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
-        let (ledger_state, balance, execution_gas, events, deferred_zkps) =
+        let (ledger_state, balance, execution_gas, events, deferred_proofs) =
             self.try_apply_tx_operations::<_, _, Profile>(config, tx.clone())?;
 
         let gas_prices = ledger_state.get_gas_prices();
@@ -520,7 +515,7 @@ impl LedgerState {
             fee_tip,
         };
 
-        Ok((ledger_state, gas_and_fees, events, deferred_zkps))
+        Ok((ledger_state, gas_and_fees, events, deferred_proofs))
     }
 
     /// Applies all transactions in a block and finalizes block-wide accounting.
@@ -528,13 +523,13 @@ impl LedgerState {
         mut self,
         config: &Config,
         txs: impl Iterator<Item = Tx>,
-    ) -> Result<(Self, Vec<TxEvent>, DeferredZkpVerifications), LedgerError<Id>>
+    ) -> Result<(Self, Vec<TxEvent>, DeferredProofs), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
         let mut gas_and_fees = GasAndFees::default();
         let mut tx_events = Vec::new();
-        let mut deferred_zkps = DeferredZkpVerifications::new();
+        let mut deferred_proofs = DeferredProofs::new();
 
         for tx in txs {
             let (next_state, tx_gas_and_fees, events, deferred) =
@@ -542,7 +537,7 @@ impl LedgerState {
             gas_and_fees = gas_and_fees.checked_add::<Id>(tx_gas_and_fees)?;
             self = next_state;
             tx_events.extend(events);
-            deferred_zkps.extend(deferred);
+            deferred_proofs.extend(deferred);
         }
 
         // Compute Block rewards and give tips
@@ -556,7 +551,7 @@ impl LedgerState {
         // Accumulate storage gas consumed so the storage market can update the
         // price at the next epoch rotation.
         self = self.add_storage_gas_consumed(gas_and_fees.storage_gas)?;
-        Ok((self, tx_events, deferred_zkps))
+        Ok((self, tx_events, deferred_proofs))
     }
 
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config) -> Self {
@@ -938,7 +933,7 @@ impl LedgerState {
         let mut balance: Balance = 0;
         let mut execution_gas = Gas::new(0);
         let mut tx_events = Vec::new();
-        let mut deferred_zkps = DeferredZkpVerifications::new();
+        let mut deferred_proofs = DeferredProofs::new();
 
         loop {
             let helper = MantleOperationVerificationHelper::new(
@@ -948,7 +943,7 @@ impl LedgerState {
             );
 
             let Some((remaining_verified_operations, signed_op)) = verified_operations
-                .next(&helper, &mut deferred_zkps)
+                .next(&helper, &mut deferred_proofs)
                 .transpose()?
             else {
                 // All operations have been processed, exit the loop.
@@ -973,7 +968,7 @@ impl LedgerState {
             )?;
         }
 
-        Ok((self, balance, execution_gas, tx_events, deferred_zkps))
+        Ok((self, balance, execution_gas, tx_events, deferred_proofs))
     }
 
     fn update_pow_reward_difficulty(&mut self, claims_in_block: u64, config: &Config) {
@@ -1334,8 +1329,8 @@ mod tests {
             state.try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&test_config, tx);
         assert!(result.is_ok());
 
-        let (new_state, _, _, events, deferred_zkps) = result.unwrap();
-        deferred_zkps.verify().unwrap();
+        let (new_state, _, _, events, deferred_proofs) = result.unwrap();
+        deferred_proofs.verify().unwrap();
 
         assert!(
             new_state
@@ -1369,8 +1364,8 @@ mod tests {
             state.try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&test_config, tx);
         assert!(result.is_ok());
 
-        let (new_state, _, _, events, deferred_zkps) = result.unwrap();
-        deferred_zkps.verify().unwrap();
+        let (new_state, _, _, events, deferred_proofs) = result.unwrap();
+        deferred_proofs.verify().unwrap();
 
         assert!(
             new_state
@@ -1679,8 +1674,8 @@ mod tests {
         let tx_hash = tx.hash();
         let result = ledger_state
             .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&test_config, tx);
-        let (new_state, balance, _, events, deferred_zkps) = result.unwrap();
-        deferred_zkps.verify().unwrap();
+        let (new_state, balance, _, events, deferred_proofs) = result.unwrap();
+        deferred_proofs.verify().unwrap();
 
         // The deposited note is consumed and re-created as a channel note under
         // a new NoteId.
@@ -1798,8 +1793,8 @@ mod tests {
             .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&test_config, signed_tx);
         assert!(result.is_ok());
 
-        let (new_state, tx_balance, _, events, deferred_zkps) = result.unwrap();
-        deferred_zkps.verify().unwrap();
+        let (new_state, tx_balance, _, events, deferred_proofs) = result.unwrap();
+        deferred_proofs.verify().unwrap();
 
         assert_eq!(tx_balance, 0);
         // The note is released from the channel and remains spendable in the ledger.
@@ -1869,10 +1864,10 @@ mod tests {
             .total_gas_cost::<MainnetGasProfile>(&gas_context)
             .unwrap();
 
-        let (_, tx_balance, execution_gas, _, deferred_zkps) = ledger_state
+        let (_, tx_balance, execution_gas, _, deferred_proofs) = ledger_state
             .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&test_config, tx.clone())
             .unwrap();
-        deferred_zkps.verify().unwrap();
+        deferred_proofs.verify().unwrap();
         assert_eq!(tx_balance, 0);
 
         let storage_gas = Gas::new(tx.storage_size() as u64);
@@ -1930,10 +1925,10 @@ mod tests {
             .total_gas_cost::<MainnetGasProfile>(&gas_context)
             .unwrap();
 
-        let (_, _, execution_gas, _, deferred_zkps) = state
+        let (_, _, execution_gas, _, deferred_proofs) = state
             .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&test_config, tx.clone())
             .unwrap();
-        deferred_zkps.verify().unwrap();
+        deferred_proofs.verify().unwrap();
 
         // The config is priced against the channel the inscription created.
         assert_eq!(execution_gas.into_inner(), 56 + 56);
@@ -1995,10 +1990,10 @@ mod tests {
             .total_gas_cost::<MainnetGasProfile>(&gas_context)
             .unwrap();
 
-        let (_, _, execution_gas, _, deferred_zkps) = ledger_state
+        let (_, _, execution_gas, _, deferred_proofs) = ledger_state
             .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&test_config, tx.clone())
             .unwrap();
-        deferred_zkps.verify().unwrap();
+        deferred_proofs.verify().unwrap();
         assert_eq!(execution_gas.into_inner(), 56 + 590 + 56);
 
         let storage_gas = Gas::new(tx.storage_size() as u64);
@@ -2058,10 +2053,10 @@ mod tests {
             .total_gas_cost::<MainnetGasProfile>(&gas_context)
             .unwrap();
 
-        let (_, _, execution_gas, _, deferred_zkps) = ledger_state
+        let (_, _, execution_gas, _, deferred_proofs) = ledger_state
             .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&test_config, tx.clone())
             .unwrap();
-        deferred_zkps.verify().unwrap();
+        deferred_proofs.verify().unwrap();
         assert_eq!(execution_gas.into_inner(), 56 + 590 + 56);
 
         let storage_gas = Gas::new(tx.storage_size() as u64);
@@ -3051,10 +3046,10 @@ mod tests {
             let pool_before = state.mantle_ledger.pow.reward_pool();
             let epoch_reward = state.mantle_ledger.pow.epoch_reward();
 
-            let (state, _balance, _, events, deferred_zkps) = state
+            let (state, _balance, _, events, deferred_proofs) = state
                 .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&config, claim_tx())
                 .expect("claim should validate and execute");
-            deferred_zkps.verify().unwrap();
+            deferred_proofs.verify().unwrap();
 
             assert_eq!(
                 state.mantle_ledger.pow.reward_pool(),
@@ -3091,10 +3086,10 @@ mod tests {
             // Replaying the same solution is caught by the nullifier check
             // during tx-level validation.
             let (state, config) = claim_accepting_state();
-            let (state, _, _, _, deferred_zkps) = state
+            let (state, _, _, _, deferred_proofs) = state
                 .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&config, claim_tx())
                 .expect("first claim should succeed");
-            deferred_zkps.verify().unwrap();
+            deferred_proofs.verify().unwrap();
 
             let err = state
                 .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&config, claim_tx())
