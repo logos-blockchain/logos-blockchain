@@ -145,6 +145,7 @@ where
         + AsServiceId<
             NetworkService<
                 NetworkBackendOfService<CoreService, RuntimeServiceId>,
+                <EdgeService as EdgeServiceComponents>::TimeBackend,
                 RuntimeServiceId,
             >,
         > + AsServiceId<MempoolOfService<CoreService, RuntimeServiceId>>

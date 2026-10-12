@@ -28,6 +28,7 @@ pub type BlendPayloadDispatcher<RuntimeServiceId> =
         MempoolNetworkAdapter<RuntimeServiceId>,
         MempoolPool<RuntimeServiceId>,
         ChainNetworkService<RuntimeServiceId>,
+        NtpTimeBackend,
         RuntimeServiceId,
     >;
 

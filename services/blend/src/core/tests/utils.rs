@@ -33,9 +33,10 @@ use lb_blend::{
 };
 use lb_chain_service::Epoch;
 use lb_core::crypto::ZkHash;
+use lb_cryptarchia_engine::Era;
 use lb_groth16::{AdditiveGroup as _, Fr, fr_from_bytes_unchecked, fr_to_bytes};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
-use lb_network_service::{NetworkService, backends::NetworkBackend};
+use lb_network_service::{backends::NetworkBackend, message::BackendNetworkMsg};
 use lb_poq::{CorePathAndSelectors, KeyIndex};
 use lb_sdp_service::SdpMessage;
 use overwatch::{
@@ -324,9 +325,7 @@ where
     type Settings = ();
 
     fn new(
-        _network_relay: OutboundRelay<
-            <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        _network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         _mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
         _chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
         _settings: Self::Settings,
@@ -355,7 +354,11 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for TestNetworkBackend {
     type PubSubEvent = ();
     type ChainSyncEvent = ();
 
-    fn new(_config: Self::Settings, _overwatch_handle: OverwatchHandle<RuntimeServiceId>) -> Self {
+    fn new(
+        _config: Self::Settings,
+        _current_era: Era,
+        _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
+    ) -> Self {
         let (pubsub_sender, _) = broadcast::channel(CHANNEL_SIZE);
         let (chainsync_sender, _) = broadcast::channel(CHANNEL_SIZE);
         Self {
@@ -365,6 +368,8 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for TestNetworkBackend {
     }
 
     async fn process(&self, _msg: Self::Message) {}
+
+    async fn enter_era(&self, _era: Era) {}
 
     async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
         BroadcastStream::new(self.pubsub_sender.subscribe())

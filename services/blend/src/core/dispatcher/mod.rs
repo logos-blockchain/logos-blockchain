@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use futures::stream::BoxStream;
-use lb_network_service::{NetworkService, backends::NetworkBackend};
+use lb_network_service::{backends::NetworkBackend, message::BackendNetworkMsg};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -29,9 +29,7 @@ pub trait PayloadDispatcher<RuntimeServiceId> {
     type Settings: Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static;
 
     fn new(
-        network_relay: OutboundRelay<
-            <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
         chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
         settings: Self::Settings,

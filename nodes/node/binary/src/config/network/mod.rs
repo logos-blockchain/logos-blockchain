@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use lb_core::{block::Proposal, mantle::transactions::genesis_tx::ChainId};
 use lb_cryptarchia_engine::time::EraSchedule;
 use lb_libp2p::{ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig};
-use lb_network_service::{backends::libp2p::config::Libp2pConfig, config::NetworkConfig};
+use lb_network_service::{
+    backends::libp2p::config::{Libp2pConfig, Libp2pEraConfig},
+    config::NetworkConfig,
+};
 use lb_tx_service::network::adapters::libp2p::MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE;
 use libp2p::gossipsub::{IdentTopic, TopicHash};
 
@@ -21,80 +24,82 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
-    /// The settings of the network service in every era of `eras`, on the chain
-    /// `chain_id`: each with its era's chain sync protocol and topics.
+    /// The settings of the network service on the chain `chain_id`: the user's,
+    /// and in each era of `eras` the era's chain sync protocol and topics.
     #[must_use]
-    pub fn into_network_service_era_schedule(
+    pub fn into_network_service_settings(
         self,
         chain_id: &ChainId,
         eras: &EraSchedule<EraDefinition>,
-    ) -> EraSchedule<NetworkConfig<Libp2pConfig>> {
+    ) -> NetworkConfig<Libp2pConfig> {
         let chain = ProtocolScope::Chain(chain_id);
-        eras.map(|era| {
-            let user = self.user.clone();
-            let fork = ProtocolScope::Fork(era.parameters.fork_digest);
-            NetworkConfig {
-                backend: Libp2pConfig {
-                    initial_peers: user.backend.initial_peers,
-                    max_data_size_by_topic: max_data_size_by_topic(
-                        &fork.to_string_with_name("mempool"),
-                        &fork.to_string_with_name("cryptarchia"),
-                    ),
-                    inner: SwarmConfig {
-                        host: user.backend.swarm.host,
-                        port: user.backend.swarm.port,
-                        node_key: user.backend.swarm.node_key,
-                        kad_protocol_name: chain.to_stream_protocol_with_name("kad"),
-                        identify_protocol_name: chain.to_stream_protocol_with_name("identify"),
-                        chain_sync_protocol_name: fork.to_stream_protocol_with_name("chainsync"),
-                        gossipsub_config: user.backend.swarm.gossipsub.into(),
-                        kademlia_config: KademliaSettings {
-                            caching: user.backend.swarm.kademlia.caching.map(Into::into),
-                            replication_factor: user.backend.swarm.kademlia.replication_factor,
-                            parallelism: user.backend.swarm.kademlia.parallelism,
-                            disjoint_query_paths: user.backend.swarm.kademlia.disjoint_query_paths,
-                            max_packet_size: user.backend.swarm.kademlia.max_packet_size,
-                            kbucket_inserts: user
-                                .backend
-                                .swarm
-                                .kademlia
-                                .kbucket_inserts
-                                .map(Into::into),
-                            periodic_bootstrap_interval_secs: user
-                                .backend
-                                .swarm
-                                .kademlia
-                                .periodic_bootstrap_interval_secs,
-                            query_timeout_secs: user.backend.swarm.kademlia.query_timeout_secs,
-                        },
-                        identify_config: IdentifySettings {
-                            agent_version: user.backend.swarm.identify.agent_version,
-                            cache_size: user.backend.swarm.identify.cache_size,
-                            hide_listen_addrs: user.backend.swarm.identify.hide_listen_addrs,
-                            interval_secs: user.backend.swarm.identify.interval_secs,
-                            push_listen_addr_updates: user
-                                .backend
-                                .swarm
-                                .identify
-                                .push_listen_addr_updates,
-                        },
-                        chain_sync_config: ChainSyncSettings {
-                            peer_response_timeout: user
-                                .backend
-                                .swarm
-                                .chain_sync
-                                .peer_response_timeout,
-                            max_inbound_requests: user
-                                .backend
-                                .swarm
-                                .chain_sync
-                                .max_inbound_requests,
-                        },
-                        nat_config: user.backend.swarm.nat.into(),
+        let user = self.user;
+        NetworkConfig {
+            backend: Libp2pConfig {
+                initial_peers: user.backend.initial_peers,
+                inner: SwarmConfig {
+                    host: user.backend.swarm.host,
+                    port: user.backend.swarm.port,
+                    node_key: user.backend.swarm.node_key,
+                    kad_protocol_name: chain.to_stream_protocol_with_name("kad"),
+                    identify_protocol_name: chain.to_stream_protocol_with_name("identify"),
+                    gossipsub_config: user.backend.swarm.gossipsub.into(),
+                    kademlia_config: KademliaSettings {
+                        caching: user.backend.swarm.kademlia.caching.map(Into::into),
+                        replication_factor: user.backend.swarm.kademlia.replication_factor,
+                        parallelism: user.backend.swarm.kademlia.parallelism,
+                        disjoint_query_paths: user.backend.swarm.kademlia.disjoint_query_paths,
+                        max_packet_size: user.backend.swarm.kademlia.max_packet_size,
+                        kbucket_inserts: user
+                            .backend
+                            .swarm
+                            .kademlia
+                            .kbucket_inserts
+                            .map(Into::into),
+                        periodic_bootstrap_interval_secs: user
+                            .backend
+                            .swarm
+                            .kademlia
+                            .periodic_bootstrap_interval_secs,
+                        query_timeout_secs: user.backend.swarm.kademlia.query_timeout_secs,
                     },
+                    identify_config: IdentifySettings {
+                        agent_version: user.backend.swarm.identify.agent_version,
+                        cache_size: user.backend.swarm.identify.cache_size,
+                        hide_listen_addrs: user.backend.swarm.identify.hide_listen_addrs,
+                        interval_secs: user.backend.swarm.identify.interval_secs,
+                        push_listen_addr_updates: user
+                            .backend
+                            .swarm
+                            .identify
+                            .push_listen_addr_updates,
+                    },
+                    chain_sync_config: ChainSyncSettings {
+                        peer_response_timeout: user
+                            .backend
+                            .swarm
+                            .chain_sync
+                            .peer_response_timeout,
+                        max_inbound_requests: user
+                            .backend
+                            .swarm
+                            .chain_sync
+                            .max_inbound_requests,
+                    },
+                    nat_config: user.backend.swarm.nat.into(),
                 },
-            }
-        })
+                era_schedule: eras.map(|era| {
+                    let fork = ProtocolScope::Fork(era.parameters.fork_digest);
+                    Libp2pEraConfig {
+                        chain_sync_protocol_name: fork.to_stream_protocol_with_name("chainsync"),
+                        max_data_size_by_topic: max_data_size_by_topic(
+                            &fork.to_string_with_name("mempool"),
+                            &fork.to_string_with_name("cryptarchia"),
+                        ),
+                    }
+                }),
+            },
+        }
     }
 }
 

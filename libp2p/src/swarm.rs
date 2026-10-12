@@ -22,7 +22,7 @@ use libp2p::{
 use multiaddr::multiaddr;
 use rand::RngCore;
 
-use crate::behaviour::BehaviourConfig;
+use crate::{behaviour::BehaviourConfig, protocol_name::StreamProtocol};
 pub use crate::{
     SwarmConfig,
     behaviour::{Behaviour, BehaviourEvent},
@@ -44,6 +44,7 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
     /// tokio executor.
     pub fn build(
         config: SwarmConfig,
+        chain_sync_protocol_name: StreamProtocol,
         max_data_size_by_topic: HashMap<libp2p::gossipsub::TopicHash, usize>,
         rng: R,
     ) -> Result<Self, Box<dyn Error>> {
@@ -60,7 +61,6 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
             nat_config,
             identify_protocol_name,
             kad_protocol_name,
-            chain_sync_protocol_name,
             host,
             port,
             ..

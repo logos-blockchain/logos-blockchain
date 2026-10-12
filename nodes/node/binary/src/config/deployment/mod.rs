@@ -137,11 +137,14 @@ impl DeploymentSettings {
     /// fork-bound protocols of this deployment's chain now.
     #[must_use]
     pub fn fork_digest_in_force(&self) -> ForkDigest {
-        let now = self
-            .eras
-            .slot_at(time::OffsetDateTime::now_utc())
-            .unwrap_or(Slot::genesis());
-        self.eras.at_slot(now).parameters.fork_digest
+        self.eras
+            .at_slot(self.slot_now().unwrap())
+            .parameters
+            .fork_digest
+    }
+
+    fn slot_now(&self) -> Option<Slot> {
+        self.eras.slot_at(time::OffsetDateTime::now_utc())
     }
 
     /// The parameters of the genesis era, in version 1's layout, the only one

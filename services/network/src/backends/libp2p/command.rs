@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use lb_libp2p::{Multiaddr, PeerId};
+use lb_time::Era;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
@@ -25,6 +26,8 @@ pub enum Command {
     Discovery(DiscoveryCommand),
     Network(NetworkCommand),
     ChainSync(ChainSyncCommand),
+    /// The chain entered `Era`: the swarm moves to that era's settings.
+    EnterEra(Era),
 }
 
 #[derive(Debug)]

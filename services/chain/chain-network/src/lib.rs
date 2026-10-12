@@ -259,10 +259,16 @@ where
         + 'static
         + AsServiceId<Self>
         + AsServiceId<Cryptarchia>
-        + AsServiceId<NetworkService<NetAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<NetworkService<NetAdapter::Backend, TimeBackend, RuntimeServiceId>>
         + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<
-            TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
+            TxMempoolService<
+                MempoolNetAdapter,
+                Mempool,
+                Mempool::Storage,
+                TimeBackend,
+                RuntimeServiceId,
+            >,
         >
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
 {
@@ -310,8 +316,8 @@ where
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             Some(Duration::from_mins(1)),
-            NetworkService<_, _>,
-            TxMempoolService<_, _, _, _>,
+            NetworkService<_, _, _>,
+            TxMempoolService<_, _, _, _, _>,
             TimeService<_, _>
         )
         .await?;
@@ -1192,7 +1198,10 @@ mod tests {
     };
     use lb_cryptarchia_sync::GetTipResponse;
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
-    use lb_network_service::{backends::mock::Mock, message::ChainSyncEvent};
+    use lb_network_service::{
+        backends::mock::Mock,
+        message::{BackendNetworkMsg, ChainSyncEvent},
+    };
     use lb_tx_service::TxsWithCommonPrefix;
     use overwatch::services::relay::OutboundRelay;
 
@@ -1436,9 +1445,7 @@ mod tests {
 
         async fn new(
             _settings: Self::Settings,
-            _network_relay: OutboundRelay<
-                <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-            >,
+            _network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         ) -> Self {
             unimplemented!()
         }

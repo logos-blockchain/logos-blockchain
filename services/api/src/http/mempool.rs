@@ -17,6 +17,7 @@ pub async fn add_tx<
     MempoolNetworkAdapter,
     StorageAdapter,
     Item,
+    TimeBackend,
     RuntimeServiceId,
 >(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
@@ -65,6 +66,7 @@ where
                 MempoolNetworkAdapter,
                 Mempool<HeaderId, Item, StorageAdapter, RuntimeServiceId>,
                 StorageAdapter,
+                TimeBackend,
                 RuntimeServiceId,
             >,
         >,
@@ -74,6 +76,7 @@ where
             MempoolNetworkAdapter,
             Mempool<HeaderId, Item, StorageAdapter, RuntimeServiceId>,
             StorageAdapter,
+            TimeBackend,
             RuntimeServiceId,
         >>()
         .await?;

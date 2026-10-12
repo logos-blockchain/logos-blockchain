@@ -72,22 +72,30 @@ type TxMempoolRecoveryBackend<Pool, NetworkAdapter, RuntimeServiceId> = StorageR
 >;
 
 /// A tx mempool service that stores recovery state in its storage backend.
-pub type TxMempoolService<MempoolNetworkAdapter, Pool, StorageAdapter, RuntimeServiceId> =
-    GenericTxMempoolService<
-        Pool,
-        MempoolNetworkAdapter,
-        TxMempoolRecoveryBackend<Pool, MempoolNetworkAdapter, RuntimeServiceId>,
-        StorageAdapter,
-        RuntimeServiceId,
-    >;
+pub type TxMempoolService<
+    MempoolNetworkAdapter,
+    Pool,
+    StorageAdapter,
+    TimeBackend,
+    RuntimeServiceId,
+> = GenericTxMempoolService<
+    Pool,
+    MempoolNetworkAdapter,
+    TxMempoolRecoveryBackend<Pool, MempoolNetworkAdapter, RuntimeServiceId>,
+    StorageAdapter,
+    TimeBackend,
+    RuntimeServiceId,
+>;
 
 /// A generic tx mempool service which wraps around a mempool, a network
-/// adapter, and a recovery backend.
+/// adapter, and a recovery backend. `TimeBackend` is the time backend of the
+/// network service the network adapter talks to.
 pub struct GenericTxMempoolService<
     Pool,
     NetworkAdapter,
     RecoveryBackend,
     StorageAdapter,
+    TimeBackend,
     RuntimeServiceId,
 > where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
@@ -103,8 +111,15 @@ pub struct GenericTxMempoolService<
     _phantom: PhantomData<(Pool, NetworkAdapter, RecoveryBackend, StorageAdapter)>,
 }
 
-impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, RuntimeServiceId>
-    GenericTxMempoolService<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, RuntimeServiceId>
+impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, TimeBackend, RuntimeServiceId>
+    GenericTxMempoolService<
+        Pool,
+        NetworkAdapter,
+        RecoveryBackend,
+        StorageAdapter,
+        TimeBackend,
+        RuntimeServiceId,
+    >
 where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     Pool::Key: PrefixedKey,
@@ -126,12 +141,14 @@ where
     }
 }
 
-impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, RuntimeServiceId> ServiceData
+impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, TimeBackend, RuntimeServiceId>
+    ServiceData
     for GenericTxMempoolService<
         Pool,
         NetworkAdapter,
         RecoveryBackend,
         StorageAdapter,
+        TimeBackend,
         RuntimeServiceId,
     >
 where
@@ -154,13 +171,14 @@ where
 }
 
 #[async_trait::async_trait]
-impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, RuntimeServiceId>
+impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, TimeBackend, RuntimeServiceId>
     ServiceCore<RuntimeServiceId>
     for GenericTxMempoolService<
         Pool,
         NetworkAdapter,
         RecoveryBackend,
         StorageAdapter,
+        TimeBackend,
         RuntimeServiceId,
     >
 where
@@ -180,7 +198,7 @@ where
         + Send
         + 'static
         + AsServiceId<Self>
-        + AsServiceId<NetworkService<NetworkAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<NetworkService<NetworkAdapter::Backend, TimeBackend, RuntimeServiceId>>
         + AsServiceId<StorageService<RuntimeServiceId>>,
 {
     fn init(
@@ -221,7 +239,7 @@ where
         };
 
         let network_service_relay = overwatch_handle
-            .relay::<NetworkService<_, _>>()
+            .relay::<NetworkService<_, _, _>>()
             .await
             .expect("Relay connection with NetworkService should succeed");
 
@@ -247,7 +265,7 @@ where
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
-            NetworkService<_, _>
+            NetworkService<_, _, _>
         )
         .await?;
 
@@ -264,8 +282,15 @@ where
     }
 }
 
-impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, RuntimeServiceId>
-    GenericTxMempoolService<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, RuntimeServiceId>
+impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, TimeBackend, RuntimeServiceId>
+    GenericTxMempoolService<
+        Pool,
+        NetworkAdapter,
+        RecoveryBackend,
+        StorageAdapter,
+        TimeBackend,
+        RuntimeServiceId,
+    >
 where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,

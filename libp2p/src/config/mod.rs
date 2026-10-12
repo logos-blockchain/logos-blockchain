@@ -34,7 +34,6 @@ pub struct SwarmConfig {
 
     pub kad_protocol_name: StreamProtocol,
     pub identify_protocol_name: StreamProtocol,
-    pub chain_sync_protocol_name: StreamProtocol,
 
     /// Kademlia config (required; Identify must be enabled too)
     #[serde(default)]
@@ -90,7 +89,6 @@ mod tests {
                 gossipsub_config: libp2p::gossipsub::Config::default(),
                 identify_protocol_name: StreamProtocol::new("/identify/test"),
                 kad_protocol_name: StreamProtocol::new("/kademlia/test"),
-                chain_sync_protocol_name: StreamProtocol::new("/chainsync/test"),
                 kademlia_config: kademlia::Settings::default(),
                 identify_config: identify::Settings::default(),
                 chain_sync_config: ChainSyncSettings {

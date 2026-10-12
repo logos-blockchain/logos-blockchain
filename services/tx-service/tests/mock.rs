@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    num::NonZeroU64,
+    num::{NonZero, NonZeroU64},
     pin::Pin,
     sync::{Arc, Mutex, atomic::AtomicBool},
     time::Duration,
@@ -41,6 +41,8 @@ use lb_storage_service::{
     recovery::{StorageRecoveryBackend, load_recovery_data},
     rocksdb,
 };
+use lb_time::era::{EraEntriesAfterGenesis, EraSchedule};
+use lb_time_service::{TimeService, TimeServiceSettings, backends::SystemTimeBackend};
 use lb_tracing_service::{Tracing, TracingSettings};
 use lb_utils::noop_service::NoService;
 use logos_blockchain_tx_service::{
@@ -59,6 +61,7 @@ use overwatch::{
 };
 use overwatch_derive::*;
 use tempfile::TempDir;
+use time::OffsetDateTime;
 
 type MockRecoveryBackend = StorageRecoveryBackend<
     TxMempoolState<PoolRecoveryState<TxHash>, MempoolSettings, ()>,
@@ -71,6 +74,7 @@ type MockMempoolService = GenericTxMempoolService<
     MockAdapter<RuntimeServiceId>,
     MockRecoveryBackend,
     RocksStorageAdapter<Ops, TxHash>,
+    SystemTimeBackend,
     RuntimeServiceId,
 >;
 
@@ -81,9 +85,10 @@ type InMemoryPool = Mempool<HeaderId, Ops, InMemoryStorageAdapter, RuntimeServic
 #[derive_services(panic_policy = Shutdown)]
 struct MockPoolNode {
     logging: Tracing<RuntimeServiceId>,
-    network: NetworkService<Mock, RuntimeServiceId>,
+    network: NetworkService<Mock, SystemTimeBackend, RuntimeServiceId>,
     storage: StorageService<RuntimeServiceId>,
     mockpool: MockMempoolService,
+    time: TimeService<SystemTimeBackend, RuntimeServiceId>,
     no_service: NoService,
 }
 
@@ -143,6 +148,17 @@ fn mock_pool_node_settings(
                 recovery_data: RecoveryData::default(),
             },
             logging: TracingSettings::default(),
+            // The network service follows the eras of the clock.
+            time: EraSchedule::new(
+                OffsetDateTime::UNIX_EPOCH,
+                TimeServiceSettings {
+                    slot_duration: Duration::from_secs(1),
+                    epoch_length: NonZero::new(100).unwrap(),
+                    backend: (),
+                },
+                EraEntriesAfterGenesis::empty(),
+            )
+            .unwrap(),
             no_service: (),
         },
         temp_dir,
@@ -842,7 +858,7 @@ fn test_mock_mempool() {
 
         app.spawn(async move {
             let network_outbound = overwatch_handle
-                .relay::<NetworkService<_, _>>()
+                .relay::<NetworkService<_, _, _>>()
                 .await
                 .unwrap();
             let mempool_outbound = overwatch_handle

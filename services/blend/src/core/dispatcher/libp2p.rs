@@ -13,9 +13,8 @@ use lb_core::{
 };
 use lb_log_targets::blend;
 use lb_network_service::{
-    NetworkService,
     backends::libp2p::{Command, Libp2p, Message as PubSubMessage, PubSubCommand},
-    message::{ChainSyncEvent, NetworkMsg},
+    message::{BackendNetworkMsg, ChainSyncEvent, NetworkMsg},
 };
 use lb_storage_service::StorageService;
 use lb_tx_service::{
@@ -38,8 +37,13 @@ type ChainNetworkRelay<Item> = OutboundRelay<ChainNetworkMsg<Item>>;
 
 /// A payload dispatcher for a node whose network service uses the libp2p
 /// backend.
-pub struct Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
-where
+pub struct Libp2pPayloadDispatcher<
+    MempoolNetAdapter,
+    Mempool,
+    ChainNetwork,
+    TimeBackend,
+    RuntimeServiceId,
+> where
     Mempool: RecoverableMempool<BlockId = HeaderId>,
 {
     network_relay: NetworkRelay,
@@ -50,7 +54,7 @@ where
         clippy::type_complexity,
         reason = "Phantom data stuff to not require Send/Sync on type parameters that are only used as tags"
     )]
-    _phantom: PhantomData<fn() -> (MempoolNetAdapter, ChainNetwork, RuntimeServiceId)>,
+    _phantom: PhantomData<fn() -> (MempoolNetAdapter, ChainNetwork, TimeBackend, RuntimeServiceId)>,
 }
 
 /// Settings used to broadcast messages to the network service that uses libp2p
@@ -228,8 +232,15 @@ where
 }
 
 #[async_trait::async_trait]
-impl<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId> PayloadDispatcher<RuntimeServiceId>
-    for Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
+impl<MempoolNetAdapter, Mempool, ChainNetwork, TimeBackend, RuntimeServiceId>
+    PayloadDispatcher<RuntimeServiceId>
+    for Libp2pPayloadDispatcher<
+        MempoolNetAdapter,
+        Mempool,
+        ChainNetwork,
+        TimeBackend,
+        RuntimeServiceId,
+    >
 where
     Mempool: RecoverableMempool<BlockId = HeaderId, RecoveryState: 'static> + Send + Sync + 'static,
     Mempool::Item:
@@ -243,6 +254,7 @@ where
         + 'static,
     MempoolNetAdapter::Settings: Clone + Send + Sync,
     ChainNetwork: ServiceData<Message = ChainNetworkMsg<Mempool::Item>> + Send + Sync + 'static,
+    TimeBackend: 'static,
     RuntimeServiceId: Clone
         + Debug
         + Display
@@ -253,14 +265,17 @@ where
 {
     type Backend = Libp2p;
     type ChainNetworkService = ChainNetwork;
-    type MempoolService =
-        TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>;
+    type MempoolService = TxMempoolService<
+        MempoolNetAdapter,
+        Mempool,
+        Mempool::Storage,
+        TimeBackend,
+        RuntimeServiceId,
+    >;
     type Settings = Libp2pBroadcastSettings;
 
     fn new(
-        network_relay: OutboundRelay<
-            <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
         chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
         settings: Self::Settings,

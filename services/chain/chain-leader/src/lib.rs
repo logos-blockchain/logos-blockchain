@@ -332,7 +332,13 @@ where
         + AsServiceId<BlendService>
         + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<
-            TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
+            TxMempoolService<
+                MempoolNetAdapter,
+                Mempool,
+                Mempool::Storage,
+                TimeBackend,
+                RuntimeServiceId,
+            >,
         >
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<CryptarchiaService>
@@ -403,7 +409,7 @@ where
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             Some(Duration::from_mins(1)),
-            TxMempoolService<_, _, _, _>,
+            TxMempoolService<_, _, _, _, _>,
             TimeService<_, _>,
             Wallet,
             PreloadKmsService<_>

@@ -5,11 +5,20 @@ use libp2p::PeerId;
 use rand::RngCore;
 use tokio::sync::oneshot;
 
-use crate::{Swarm, behaviour::BehaviourError};
+use crate::{Swarm, behaviour::BehaviourError, protocol_name::StreamProtocol};
 
 type SerialisedBlockStream = BoxedStream<Result<SerialisedBlock, ChainSyncError>>;
 
 impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
+    /// Speaks `protocol_name` for chain sync from now on, with a chain sync
+    /// started from scratch over the connections already open.
+    pub fn set_new_chain_sync_protocol(&mut self, protocol_name: StreamProtocol) {
+        self.swarm
+            .behaviour_mut()
+            .chain_sync
+            .switch_to_protocol(protocol_name.into());
+    }
+
     pub fn request_tip(
         &self,
         peer_id: PeerId,

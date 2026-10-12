@@ -3,11 +3,10 @@ use lb_binary_codec::bincode::{self, DeserializeOp as _, SerializeOp as _};
 use lb_core::block::MAX_BLOCK_TRANSACTIONS_SIZE;
 use lb_log_targets::mempool;
 use lb_network_service::{
-    NetworkService,
     backends::libp2p::{Command, Libp2p, Message, PubSubCommand, TopicHash},
-    message::NetworkMsg,
+    message::{BackendNetworkMsg, NetworkMsg},
 };
-use overwatch::services::{ServiceData, relay::OutboundRelay};
+use overwatch::services::relay::OutboundRelay;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio_stream::StreamExt as _;
 
@@ -30,8 +29,7 @@ const fn transaction_gossip_size_is_valid(size: usize) -> bool {
 }
 
 pub struct Libp2pAdapter<Item, Key, RuntimeServiceId> {
-    network_relay:
-        OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
+    network_relay: OutboundRelay<BackendNetworkMsg<Libp2p, RuntimeServiceId>>,
     settings: Settings<Key, Item>,
 }
 
@@ -49,9 +47,7 @@ where
 
     async fn new(
         settings: Self::Settings,
-        network_relay: OutboundRelay<
-            <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
     ) -> Self {
         tracing::debug!(
             target: LOG_TARGET,

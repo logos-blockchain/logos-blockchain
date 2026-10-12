@@ -54,7 +54,7 @@ pub struct BlockWithChainState<Tx> {
     pub lib_slot: Slot,
 }
 
-pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
+pub type MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId> = TxMempoolService<
     MempoolNetworkAdapter<
         SignedOps<Preverified, StandardMode>,
         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
@@ -62,6 +62,7 @@ pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
     >,
     Mempool<HeaderId, SignedOps<Preverified, StandardMode>, StorageAdapter, RuntimeServiceId>,
     StorageAdapter,
+    TimeBackend,
     RuntimeServiceId,
 >;
 
@@ -94,7 +95,7 @@ where
         .ok_or_else(|| "channel not found".into())
 }
 
-pub async fn mantle_mempool_metrics<StorageAdapter, RuntimeServiceId>(
+pub async fn mantle_mempool_metrics<StorageAdapter, TimeBackend, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
 ) -> Result<MempoolMetrics, super::DynError>
 where
@@ -113,10 +114,10 @@ where
         + Display
         + 'static
         + AsServiceId<StorageService<RuntimeServiceId>>
-        + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
+        + AsServiceId<MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId>>,
 {
     let relay = handle
-        .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
+        .relay::<MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId>>()
         .await?;
     let (sender, receiver) = oneshot::channel();
     relay
@@ -128,7 +129,7 @@ where
     receiver.await.map_err(|e| Box::new(e) as super::DynError)
 }
 
-pub async fn mantle_mempool_status<StorageAdapter, RuntimeServiceId>(
+pub async fn mantle_mempool_status<StorageAdapter, TimeBackend, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     items: Vec<<SignedOps<Preverified, StandardMode> as Hashable>::Hash>,
 ) -> Result<Vec<Status>, super::DynError>
@@ -148,10 +149,10 @@ where
         + Display
         + 'static
         + AsServiceId<StorageService<RuntimeServiceId>>
-        + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
+        + AsServiceId<MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId>>,
 {
     let relay = handle
-        .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
+        .relay::<MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId>>()
         .await?;
     let (sender, receiver) = oneshot::channel();
     relay

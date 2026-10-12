@@ -14,17 +14,13 @@ use lb_core::{
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_log_targets::chain;
 use lb_network_service::{
-    NetworkService,
     backends::libp2p::{
         ChainSyncCommand, Command, DiscoveryCommand, Libp2p, NetworkCommand, PeerId,
         PubSubCommand::Subscribe, TopicHash,
     },
-    message::{ChainSyncEvent, NetworkMsg},
+    message::{BackendNetworkMsg, ChainSyncEvent, NetworkMsg},
 };
-use overwatch::{
-    DynError,
-    services::{ServiceData, relay::OutboundRelay},
-};
+use overwatch::{DynError, services::relay::OutboundRelay};
 use rand::{seq::IteratorRandom as _, thread_rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
@@ -35,8 +31,7 @@ use crate::{
     network::{BoxedStream, NetworkAdapter},
 };
 
-type Relay<T, RuntimeServiceId> =
-    OutboundRelay<<NetworkService<T, RuntimeServiceId> as ServiceData>::Message>;
+type Relay<T, RuntimeServiceId> = OutboundRelay<BackendNetworkMsg<T, RuntimeServiceId>>;
 type BlockStreamItem<Tx> = Result<(HeaderId, Block<Tx>), DynError>;
 type FirstBlockResponse<Tx> = Result<Option<BlockStreamItem<Tx>>, DynError>;
 type BlockDownloadStream<Tx> = BoxedStream<BlockStreamItem<Tx>>;
@@ -48,8 +43,7 @@ pub struct LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: Clone + Eq,
 {
-    network_relay:
-        OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
+    network_relay: OutboundRelay<BackendNetworkMsg<Libp2p, RuntimeServiceId>>,
     settings: LibP2pAdapterSettings,
     _phantom_tx: PhantomData<Tx>,
 }

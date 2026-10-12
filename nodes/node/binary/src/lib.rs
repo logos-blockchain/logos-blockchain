@@ -67,7 +67,7 @@ pub use crate::{
 pub type TracingService = Tracing<RuntimeServiceId>;
 
 pub(crate) type NetworkService =
-    lb_network_service::NetworkService<NetworkBackend, RuntimeServiceId>;
+    lb_network_service::NetworkService<NetworkBackend, NtpTimeBackend, RuntimeServiceId>;
 
 pub(crate) type BlendCoreService = generic_services::blend::BlendCoreService<RuntimeServiceId>;
 pub(crate) type BlendEdgeService = generic_services::blend::BlendEdgeService<RuntimeServiceId>;
@@ -187,11 +187,10 @@ pub fn run_node_from_config(
     .into_mempool_service_era_schedule(eras, &recovery_data);
     let mempool_service_config = genesis_era_settings(&mempool_settings);
 
-    let network_settings = NetworkConfig {
+    let network_service_config = NetworkConfig {
         user: config.user.network,
     }
-    .into_network_service_era_schedule(&chain_id, eras);
-    let network_service_config = genesis_era_settings(&network_settings);
+    .into_network_service_settings(&chain_id, eras);
 
     let wallet_config = WalletConfig {
         user: config.user.wallet,

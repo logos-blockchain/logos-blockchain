@@ -44,9 +44,12 @@ utoipa                = { features = ["macros"], optional = true, workspace = tr
 
 [dev-dependencies]
 lb-core            = { features = ["test-utils"], workspace = true }
+lb-time            = { workspace = true }
+lb-time-service    = { workspace = true }
 lb-tracing-service = { workspace = true }
 overwatch-derive   = { workspace = true }
 tempfile           = { workspace = true }
+time               = { workspace = true }
 
 [features]
 default = []
