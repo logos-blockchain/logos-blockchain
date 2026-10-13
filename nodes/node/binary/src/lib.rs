@@ -170,16 +170,16 @@ pub fn run_node_from_config(
     }
     .into_time_service_settings(eras);
 
-    let cryptarchia_settings = CryptarchiaConfig {
+    let cryptarchia_config = CryptarchiaConfig {
         user: config.user.cryptarchia,
-    }
-    .into_cryptarchia_services_era_schedule(
+    };
+    let chain_network_config = cryptarchia_config.into_chain_network_settings(eras);
+    let cryptarchia_settings = cryptarchia_config.into_cryptarchia_services_era_schedule(
         eras,
         config.deployment.genesis_block(),
         &recovery_data,
     );
-    let (chain_service_config, chain_network_config, chain_leader_config) =
-        genesis_era_settings(&cryptarchia_settings);
+    let (chain_service_config, chain_leader_config) = genesis_era_settings(&cryptarchia_settings);
 
     let mempool_service_config = MempoolConfig {
         user: config.user.mempool,

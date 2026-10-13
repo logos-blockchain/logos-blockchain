@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use futures::Stream;
 use lb_core::header::HeaderId;
+use lb_cryptarchia_engine::Era;
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_network_service::{
     backends::NetworkBackend,
@@ -23,8 +24,12 @@ pub trait NetworkAdapter<RuntimeServiceId> {
 
     async fn new(
         settings: Self::Settings,
+        current_era: Era,
         network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
     ) -> Self;
+
+    async fn enter_era(&mut self, era: Era);
+
     async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError>;
 
     async fn chainsync_events_stream(&self) -> Result<BoxedStream<ChainSyncEvent>, DynError>;

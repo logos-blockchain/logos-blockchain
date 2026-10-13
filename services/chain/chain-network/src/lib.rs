@@ -290,7 +290,7 @@ where
 
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn run(mut self) -> Result<(), DynError> {
-        let relays: ChainNetworkRelays<
+        let mut relays: ChainNetworkRelays<
             Cryptarchia,
             Mempool,
             MempoolNetAdapter,
@@ -329,7 +329,30 @@ where
         )
         .await?;
 
-        let network_adapter = NetAdapter::new(network_config, relays.network_relay().clone()).await;
+        // The adapters start in the era the clock is in, and follow the eras
+        // the clock enters after it.
+        let (current_era, mut era_ticks) = {
+            let (sender, receiver) = oneshot::channel();
+            relays
+                .time_relay()
+                .send(TimeServiceMessage::SubscribeToEras { sender })
+                .await
+                .map_err(|error| {
+                    DynError::from(format!("failed to subscribe to era ticks: {error}"))
+                })?;
+            let mut era_ticks = receiver
+                .await
+                .map_err(|e| DynError::from(format!("failed to receive era tick stream: {e}")))?;
+            let current_era = era_ticks
+                .next()
+                .await
+                .expect("The era tick stream ended before its first tick")
+                .era;
+            (current_era, era_ticks)
+        };
+
+        let mut network_adapter =
+            NetAdapter::new(network_config, current_era, relays.network_relay().clone()).await;
 
         let initial_block_download = InitialBlockDownload::new(
             ChainNetworkIbdBlockProcessor::<_, Mempool> {
@@ -374,12 +397,8 @@ where
         let mut incoming_proposals = network_adapter.proposals_stream().await?;
         let mut chainsync_events = network_adapter.chainsync_events_stream().await?;
 
-        // Keep a handle to the adapter for the proactive tip-poll watchdog before
-        // the downloader takes ownership of it.
-        let tip_poll_adapter = network_adapter.clone();
-
         let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
-            network_adapter,
+            network_adapter.clone(),
             sync_config.orphan.max_orphan_cache_size,
             sync_config.orphan.max_rejected_cache_size,
         ));
@@ -512,7 +531,7 @@ where
                         // The task makes `GetTip` requests handled by this event loop in peers' side.
                         // All two nodes make `GetTip` requests simultaneously to each other,
                         // `poll_peer_tips_if_behind` will cause deadlock unless it's spawned off.
-                        let adapter = tip_poll_adapter.clone();
+                        let adapter = network_adapter.clone();
                         let cryptarchia = relays.cryptarchia().clone();
                         let tx = polled_tip_tx.clone();
                         tip_poll_task = Some(spawn("logos/chain/tip-poll", async move {
@@ -530,6 +549,12 @@ where
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
                         Self::handle_message(msg, &self.received_proposals_sender, &relays).await;
+                    }
+
+                    Some(era_tick) = era_ticks.next() => {
+                        network_adapter.enter_era(era_tick.era).await;
+                        orphan_downloader.as_mut().get_mut().enter_era(era_tick.era).await;
+                        relays.mempool_adapter_mut().enter_era(era_tick.era).await;
                     }
                 }
             }
@@ -1196,6 +1221,7 @@ mod tests {
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
+    use lb_cryptarchia_engine::Era;
     use lb_cryptarchia_sync::GetTipResponse;
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
     use lb_network_service::{
@@ -1228,6 +1254,8 @@ mod tests {
 
     #[async_trait::async_trait]
     impl MempoolAdapterTrait<HashOnlyTx> for FixedCandidates {
+        async fn enter_era(&mut self, _era: Era) {}
+
         async fn add_transaction(&self, _tx: HashOnlyTx) -> Result<(), DynError> {
             unimplemented!("resolution never adds")
         }
@@ -1445,10 +1473,13 @@ mod tests {
 
         async fn new(
             _settings: Self::Settings,
+            _current_era: Era,
             _network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         ) -> Self {
             unimplemented!()
         }
+
+        async fn enter_era(&mut self, _era: Era) {}
 
         async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
             unimplemented!()

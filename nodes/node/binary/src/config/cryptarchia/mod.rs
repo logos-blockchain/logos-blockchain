@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
+use lb_chain_network_service::network::adapters::libp2p::{
+    LibP2pAdapterEraSettings, LibP2pAdapterSettings,
+};
 use lb_core::{block::genesis::GenesisBlock, sdp::ServiceParameters};
 use lb_cryptarchia_engine::{EpochConfig, EraSchedule};
 use lb_ledger::mantle::sdp::ServiceRewardsParameters;
@@ -14,11 +16,10 @@ use crate::config::{
 
 pub mod serde;
 
-/// The three settings a cryptarchia deployment produces: the chain service's,
-/// the chain network's and the leader's.
+/// The settings a cryptarchia deployment produces in each era: the chain
+/// service's and the leader's.
 type CryptarchiaServicesSettings = (
     lb_chain_service::CryptarchiaSettings,
-    lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
     lb_chain_leader_service::LeaderSettings,
 );
 
@@ -27,12 +28,57 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
-    /// The settings of the chain services in every era of `eras`.
+    /// The settings of the chain network: the user's, and in each era of `eras`
+    /// the era's block proposal topic.
     #[must_use]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Conversion. Useful to have in a single place."
-    )]
+    pub fn into_chain_network_settings(
+        &self,
+        eras: &EraSchedule<EraDefinition>,
+    ) -> lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings> {
+        let network = self.user.network.clone();
+        lb_chain_network_service::ChainNetworkSettings {
+            bootstrap: lb_chain_network_service::BootstrapConfig {
+                ibd: lb_chain_network_service::IbdConfig {
+                    peers: network.bootstrap.ibd.peers,
+                    tips_fetch_max_attempts: network.bootstrap.ibd.tips_fetch_max_attempts,
+                    tips_fetch_min_delay: network.bootstrap.ibd.tips_fetch_min_delay,
+                    tips_fetch_max_delay: network.bootstrap.ibd.tips_fetch_max_delay,
+                    round_delay: network.bootstrap.ibd.round_delay,
+                },
+            },
+            network: LibP2pAdapterSettings {
+                max_connected_peers_to_try_download: network
+                    .network
+                    .max_connected_peers_to_try_download,
+                max_discovered_peers_to_try_download: network
+                    .network
+                    .max_discovered_peers_to_try_download,
+                era_schedule: eras.map(|era| LibP2pAdapterEraSettings {
+                    topic: ProtocolScope::Fork(era.parameters.fork_digest)
+                        .to_string_with_name("cryptarchia"),
+                }),
+            },
+            sync: lb_chain_network_service::SyncConfig {
+                orphan: lb_chain_network_service::OrphanConfig {
+                    max_orphan_cache_size: network.sync.orphan.max_orphan_cache_size,
+                    max_rejected_cache_size: network.sync.orphan.max_rejected_cache_size,
+                },
+                tip_poll: lb_chain_network_service::TipPollConfig {
+                    enabled: network.sync.tip_poll.enabled,
+                    lag_threshold_blocks: network.sync.tip_poll.lag_threshold_blocks,
+                    max_peers_to_sample: network.sync.tip_poll.max_peers_to_sample,
+                },
+            },
+            seen_items_subscription_channel_size: network
+                .seen_items_subscription_channel_size
+                .try_into()
+                .unwrap(),
+        }
+    }
+
+    /// The settings of the chain service and the leader in every era of
+    /// `eras`.
+    #[must_use]
     pub fn into_cryptarchia_services_era_schedule(
         self,
         eras: &EraSchedule<EraDefinition>,
@@ -120,45 +166,6 @@ impl ServiceConfig {
                     },
                 },
             };
-            let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {
-                bootstrap: lb_chain_network_service::BootstrapConfig {
-                    ibd: lb_chain_network_service::IbdConfig {
-                        peers: user.network.bootstrap.ibd.peers,
-                        tips_fetch_max_attempts: user.network.bootstrap.ibd.tips_fetch_max_attempts,
-                        tips_fetch_min_delay: user.network.bootstrap.ibd.tips_fetch_min_delay,
-                        tips_fetch_max_delay: user.network.bootstrap.ibd.tips_fetch_max_delay,
-                        round_delay: user.network.bootstrap.ibd.round_delay,
-                    },
-                },
-                network: LibP2pAdapterSettings {
-                    topic: ProtocolScope::Fork(definition.fork_digest)
-                        .to_string_with_name("cryptarchia"),
-                    max_connected_peers_to_try_download: user
-                        .network
-                        .network
-                        .max_connected_peers_to_try_download,
-                    max_discovered_peers_to_try_download: user
-                        .network
-                        .network
-                        .max_discovered_peers_to_try_download,
-                },
-                sync: lb_chain_network_service::SyncConfig {
-                    orphan: lb_chain_network_service::OrphanConfig {
-                        max_orphan_cache_size: user.network.sync.orphan.max_orphan_cache_size,
-                        max_rejected_cache_size: user.network.sync.orphan.max_rejected_cache_size,
-                    },
-                    tip_poll: lb_chain_network_service::TipPollConfig {
-                        enabled: user.network.sync.tip_poll.enabled,
-                        lag_threshold_blocks: user.network.sync.tip_poll.lag_threshold_blocks,
-                        max_peers_to_sample: user.network.sync.tip_poll.max_peers_to_sample,
-                    },
-                },
-                seen_items_subscription_channel_size: user
-                    .network
-                    .seen_items_subscription_channel_size
-                    .try_into()
-                    .unwrap(),
-            };
             let chain_leader_settings = lb_chain_leader_service::LeaderSettings {
                 config: ledger_config,
                 wallet_config: lb_chain_leader_service::LeaderWalletConfig {
@@ -166,11 +173,7 @@ impl ServiceConfig {
                     max_tx_fee: user.leader.wallet.max_tx_fee,
                 },
             };
-            (
-                chain_service_settings,
-                chain_network_settings,
-                chain_leader_settings,
-            )
+            (chain_service_settings, chain_leader_settings)
         })
     }
 }

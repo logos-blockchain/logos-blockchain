@@ -1,4 +1,6 @@
-use std::{collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, time::Instant};
+use std::{
+    collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, mem, time::Instant,
+};
 
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
 use lb_binary_codec::canonical::BinaryDecodeExt as _;
@@ -11,18 +13,20 @@ use lb_core::{
         transactions::states::Preverified,
     },
 };
+use lb_cryptarchia_engine::{Era, EraSchedule};
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_log_targets::chain;
 use lb_network_service::{
     backends::libp2p::{
         ChainSyncCommand, Command, DiscoveryCommand, Libp2p, NetworkCommand, PeerId,
-        PubSubCommand::Subscribe, TopicHash,
+        PubSubCommand::{Subscribe, Unsubscribe},
+        TopicHash,
     },
     message::{BackendNetworkMsg, ChainSyncEvent, NetworkMsg},
 };
 use overwatch::{DynError, services::relay::OutboundRelay};
 use rand::{seq::IteratorRandom as _, thread_rng};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 use tokio_stream::{StreamExt as _, wrappers::errors::BroadcastStreamRecvError};
 
@@ -45,18 +49,29 @@ where
 {
     network_relay: OutboundRelay<BackendNetworkMsg<Libp2p, RuntimeServiceId>>,
     settings: LibP2pAdapterSettings,
+    /// The topic of the era the adapter is in.
+    current_topic: String,
     _phantom_tx: PhantomData<Tx>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The settings of the libp2p adapter: those it keeps for the whole run, and
+/// those that change from era to era.
+#[derive(Debug, Clone)]
 pub struct LibP2pAdapterSettings {
-    pub topic: String,
     /// The maximum number of connected peers to attempt downloads from
     /// for each target block.
     pub max_connected_peers_to_try_download: usize,
     /// The maximum number of discovered peers to attempt downloads from
     /// for each target block.
     pub max_discovered_peers_to_try_download: usize,
+    pub era_schedule: EraSchedule<LibP2pAdapterEraSettings>,
+}
+
+/// What the libp2p adapter runs with in an era.
+#[derive(Debug, Clone)]
+pub struct LibP2pAdapterEraSettings {
+    /// The topic block proposals are gossiped on.
+    pub topic: String,
 }
 
 impl<Tx, RuntimeServiceId> LibP2pAdapter<Tx, RuntimeServiceId>
@@ -129,6 +144,17 @@ where
             .await
         {
             tracing::error!(target: LOG_TARGET, "error subscribing to {topic}: {error}");
+        }
+    }
+
+    async fn unsubscribe(relay: &Relay<Libp2p, RuntimeServiceId>, topic: &str) {
+        if let Err(error) = relay
+            .send(NetworkMsg::Process(Command::PubSub(Unsubscribe(
+                topic.into(),
+            ))))
+            .await
+        {
+            tracing::error!(target: LOG_TARGET, "error unsubscribing from {topic}: {error}");
         }
     }
 
@@ -207,14 +233,24 @@ where
     type Block = Block<Tx>;
     type Proposal = Proposal;
 
-    async fn new(settings: Self::Settings, network_relay: Relay<Libp2p, RuntimeServiceId>) -> Self {
+    async fn new(
+        settings: Self::Settings,
+        current_era: Era,
+        network_relay: Relay<Libp2p, RuntimeServiceId>,
+    ) -> Self {
+        let topic = settings
+            .era_schedule
+            .get(current_era)
+            .expect("The era the adapter starts in should be scheduled")
+            .parameters
+            .topic
+            .clone();
         let relay = network_relay.clone();
         tracing::debug!(
             target: LOG_TARGET,
-            "Subscribing chain-network adapter to pubsub topic {}",
-            settings.topic
+            "Subscribing chain-network adapter to pubsub topic {topic}"
         );
-        Self::subscribe(&relay, settings.topic.as_str()).await;
+        Self::subscribe(&relay, topic.as_str()).await;
         tracing::trace!(target: LOG_TARGET, "Starting up...");
         // this wait seems to be helpful in some cases since we give the time
         // to the network to establish connections before we start sending messages
@@ -223,8 +259,32 @@ where
         Self {
             network_relay,
             settings,
+            current_topic: topic,
             _phantom_tx: PhantomData,
         }
+    }
+
+    async fn enter_era(&mut self, era: Era) {
+        let Some(era_settings) = self.settings.era_schedule.get(era) else {
+            tracing::error!(
+                target: LOG_TARGET,
+                "Asked to enter era {}, which is not scheduled",
+                era.into_inner()
+            );
+            return;
+        };
+        let new_era_topic = &era_settings.parameters.topic;
+        if new_era_topic == &self.current_topic {
+            return;
+        }
+        tracing::info!(
+            target: LOG_TARGET,
+            "Entered era {}: block proposals are gossiped on {new_era_topic}",
+            era.into_inner()
+        );
+        let previous_topic = mem::replace(&mut self.current_topic, new_era_topic.clone());
+        Self::subscribe(&self.network_relay, &self.current_topic).await;
+        Self::unsubscribe(&self.network_relay, &previous_topic).await;
     }
 
     async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
@@ -236,10 +296,19 @@ where
         {
             return Err(Box::new(error));
         }
-        let topic_hash = TopicHash::from_raw(self.settings.topic.clone());
+        // Gossipsub only hands over the messages of the topics the node is
+        // subscribed to, and the adapter is subscribed to the topic of its
+        // current era only. So the stream keeps the messages of every era's
+        // topic, and follows the adapter from era to era.
+        let topic_hashes: HashSet<TopicHash> = self
+            .settings
+            .era_schedule
+            .iter()
+            .map(|era| TopicHash::from_raw(era.parameters.topic.clone()))
+            .collect();
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
-            Ok(message) if message.topic == topic_hash => {
+            Ok(message) if topic_hashes.contains(&message.topic) => {
                 match Proposal::decode_all(&message.data) {
                     Ok(proposal) => Some(proposal),
                     Err(e) => {
