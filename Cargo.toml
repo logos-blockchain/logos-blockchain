@@ -263,7 +263,6 @@ opentelemetry_sdk                  = { default-features = false, version = "0.32
 overwatch                          = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "fc71a844886f9fb8f382ecfadcebff455e33474b" }
 overwatch-derive                   = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "fc71a844886f9fb8f382ecfadcebff455e33474b" }
 owo-colors                         = { default-features = false, version = "4.2.3" }
-percent-encoding                   = { default-features = false, version = "2.3.2" }
 pprof                              = { default-features = false, version = "0.15" }
 proc-macro2                        = { default-features = false, version = "1" }
 prometheus                         = { default-features = false, version = "0.14" }

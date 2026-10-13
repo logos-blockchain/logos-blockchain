@@ -189,7 +189,7 @@ pub fn run_node_from_config(
     let network_service_config = NetworkConfig {
         user: config.user.network,
     }
-    .into_network_service_settings(&chain_id, eras);
+    .into_network_service_settings(config.deployment.genesis_id(), eras);
 
     let wallet_config = WalletConfig {
         user: config.user.wallet,
