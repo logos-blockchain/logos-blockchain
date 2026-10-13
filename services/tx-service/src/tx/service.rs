@@ -227,32 +227,8 @@ where
 
         let overwatch_handle = &self.service_resources_handle.overwatch_handle;
 
-        let storage_relay = overwatch_handle
-            .relay::<StorageService<RuntimeServiceId>>()
-            .await
-            .expect("Storage service relay should be available");
-
-        let storage_adapter =
-            <StorageAdapter as MempoolStorageAdapter<RuntimeServiceId>>::new(storage_relay);
-
-        let pool_state = self.initial_state.pool.take();
-
-        let mut pool = match pool_state {
-            None => <Pool as MemPoolTrait>::new(settings.pool.clone(), storage_adapter),
-            Some(recovered_pool_state) => <Pool as RecoverableMempool>::recover(
-                settings.pool.clone(),
-                recovered_pool_state,
-                storage_adapter,
-            ),
-        };
-
-        let network_service_relay = overwatch_handle
-            .relay::<NetworkService<_, _, _>>()
-            .await
-            .expect("Relay connection with NetworkService should succeed");
-
-        // The network adapter starts in the era the clock is in, and follows
-        // the eras the clock enters after it.
+        // The pool, its storage and the network adapter start in the era the
+        // clock is in, and follow the eras the clock enters after it.
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
@@ -276,6 +252,35 @@ where
                 .era;
             (current_era, era_ticks)
         };
+
+        let storage_relay = overwatch_handle
+            .relay::<StorageService<RuntimeServiceId>>()
+            .await
+            .expect("Storage service relay should be available");
+
+        let storage_adapter = <StorageAdapter as MempoolStorageAdapter<RuntimeServiceId>>::new(
+            current_era,
+            storage_relay,
+        );
+
+        let pool_state = self.initial_state.pool.take();
+
+        let mut pool = match pool_state {
+            None => {
+                <Pool as MemPoolTrait>::new(settings.pool.clone(), current_era, storage_adapter)
+            }
+            Some(recovered_pool_state) => <Pool as RecoverableMempool>::recover(
+                settings.pool.clone(),
+                current_era,
+                recovered_pool_state,
+                storage_adapter,
+            ),
+        };
+
+        let network_service_relay = overwatch_handle
+            .relay::<NetworkService<_, _, _>>()
+            .await
+            .expect("Relay connection with NetworkService should succeed");
 
         let mut network_adapter = NetworkAdapter::new(
             settings_handle
@@ -361,6 +366,7 @@ where
                     Self::handle_network_item(pool, key, item, &self.service_resources_handle.state_updater, accepted_items_channel_sender).await;
                 }
                 Some(era_tick) = era_ticks.next() => {
+                    pool.enter_era(era_tick.era).await;
                     network_adapter.enter_era(era_tick.era).await;
                 }
             }
