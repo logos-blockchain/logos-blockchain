@@ -371,13 +371,14 @@ mod tests {
     use lb_cryptarchia_engine::{EpochConfig, Era, Slot, UncleSlots};
     use lb_ledger::{
         LedgerState,
-        config::{BlendPoWConfig, ConsensusExcludedKeys, ModulusShift, PoWConfig, RewardPoWConfig},
+        config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_network_service::{
         backends::NetworkBackend,
         message::{BackendNetworkMsg, ChainSyncEvent},
     };
+    use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use overwatch::{overwatch::OverwatchHandle, services::relay::OutboundRelay};
     use tokio_stream::wrappers::BroadcastStream;
@@ -946,8 +947,24 @@ mod tests {
         lb_chain_service::Cryptarchia::from_genesis(
             [GENESIS_ID; 32].into(),
             LedgerState::from_utxos(empty(), &ledger_config),
-            ledger_config,
+            single_era(ledger_config),
             lb_cryptarchia_engine::State::Bootstrapping,
+        )
+    }
+
+    /// `config` as the only era, from genesis.
+    fn single_era(config: lb_ledger::Config) -> Arc<EraScheduledConfig> {
+        Arc::new(
+            EraSchedule::new(
+                time::OffsetDateTime::UNIX_EPOCH,
+                EraTiming {
+                    slot_duration: Duration::from_secs(1),
+                    epoch_length: EpochLength::epoch_length(&config),
+                },
+                EraEntriesAfterGenesis::empty(),
+            )
+            .expect("a single era resolves")
+            .map(move |_| config.clone()),
         )
     }
 
@@ -1014,7 +1031,6 @@ mod tests {
                     timestamp: 0,
                 },
             },
-            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),

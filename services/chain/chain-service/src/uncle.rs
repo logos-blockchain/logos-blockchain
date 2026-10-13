@@ -7,6 +7,7 @@ use lb_core::{
     header::HeaderId,
 };
 use lb_cryptarchia_engine::Branch;
+use lb_ledger::config::config_for_slot;
 
 use crate::{Cryptarchia, Error};
 
@@ -52,9 +53,7 @@ impl Cryptarchia {
 
         // Each uncle's parent must be on the chain the block extends, within the
         // uncle reference window.
-        let uncle_reference_window = self
-            .ledger
-            .config()
+        let uncle_reference_window = config_for_slot(self.ledger.era_schedule(), slot)
             .consensus_config
             .uncle_reference_window_in_slot()
             .get();
@@ -136,7 +135,7 @@ impl Cryptarchia {
             .verify_proof_of_leadership::<_, HeaderId>(
                 uncle.header().slot(),
                 uncle.header().leader_proof(),
-                self.ledger.config(),
+                self.ledger.era_schedule(),
             )
             .map_err(|_| UncleError::InvalidProof)
     }
@@ -254,7 +253,9 @@ mod tests {
         // parent, which puts the uncle's parent outside the window.
         let uncle_reference_window = cryptarchia
             .ledger
-            .config()
+            .era_schedule()
+            .genesis()
+            .parameters
             .consensus_config
             .uncle_reference_window_in_slot()
             .get();

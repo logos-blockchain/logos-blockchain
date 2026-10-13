@@ -497,9 +497,7 @@ mod tests {
         use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
         use lb_cryptarchia_engine::EpochConfig;
         use lb_ledger::{
-            config::{
-                BlendPoWConfig, ConsensusExcludedKeys, ModulusShift, PoWConfig, RewardPoWConfig,
-            },
+            config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
             mantle::sdp::{ServiceRewardsParameters, rewards},
         };
         use lb_utils::math::{NonNegativeRatio, PositiveF64};
@@ -546,7 +544,6 @@ mod tests {
                     timestamp: 0,
                 },
             },
-            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),

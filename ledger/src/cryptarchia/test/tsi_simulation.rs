@@ -47,10 +47,10 @@ use crate::{
     cryptarchia::{
         EpochState, LedgerState, UtxoTree,
         block_density::BlockDensity,
-        stake::StakeInference,
         tests::{config, generate_proof},
     },
     mantle::sdp::SdpLedger,
+    test_utils::single_era,
 };
 
 type HeaderId = [u8; 32];
@@ -226,12 +226,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
             epoch: 1.into(),
             ..epoch_state.clone()
         },
-        stake_inference: Arc::new(StakeInference::new(
-            config.consensus_config.stake_inference_learning_rate(),
-            config.consensus_config.slot_activation_coeff().as_f64(),
-            config.total_stake_inference_period(),
-        )),
-        block_density: BlockDensity::new(config.epoch(0.into()), config),
+        block_density: BlockDensity::from_genesis_config(config),
         epoch_state,
         fee_window: [0.into(); WINDOW_SIZE],
         average_execution_gas: 0.into(),
@@ -245,7 +240,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
         mantle_ledger: crate::mantle::LedgerState::new(config, cryptarchia_ledger.epoch_state()),
         cryptarchia_ledger,
     };
-    Ledger::new(GENESIS, state, config.clone())
+    Ledger::new(GENESIS, state, Arc::new(single_era(config.clone())))
 }
 
 fn block_id(parent: HeaderId, slot: Slot) -> HeaderId {
@@ -368,7 +363,7 @@ fn apply_block_to_ledger(
             slot,
             &SdpLedger::new(0.into()),
             &crate::cryptarchia::tests::pow_state(),
-            ledger.config(),
+            ledger.era_schedule(),
         )
         .expect("epoch state update");
     let id = block_id(parent, slot);

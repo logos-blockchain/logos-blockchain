@@ -1,9 +1,12 @@
-use std::ops::RangeInclusive;
+use std::{num::NonZeroU32, ops::RangeInclusive};
 
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use rpds::HashTrieSetSync;
 
-use crate::Config;
+use crate::{
+    Config,
+    config::{EraScheduledConfig, config_for_epoch, total_stake_snapshot},
+};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockDensity {
@@ -14,9 +17,17 @@ pub struct BlockDensity {
 }
 
 impl BlockDensity {
-    pub fn new(epoch: Epoch, config: &Config) -> Self {
+    pub fn new(epoch: Epoch, eras: &EraScheduledConfig) -> Self {
         Self {
-            period_range: Self::compute_period_range(epoch, config),
+            period_range: Self::compute_period_range(epoch, eras),
+            occupied_slots: HashTrieSetSync::new_sync(),
+        }
+    }
+
+    pub fn from_genesis_config(config: &Config) -> Self {
+        let end = config.total_stake_inference_period().strict_sub(1);
+        Self {
+            period_range: Slot::genesis()..=Slot::new(end),
             occupied_slots: HashTrieSetSync::new_sync(),
         }
     }
@@ -26,10 +37,15 @@ impl BlockDensity {
     /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
     /// the block density for epoch 2 will be computed during [200, 259],
     /// which is the Stake Distribution Snapshot + Buffer phases of epoch 2.
-    fn compute_period_range(epoch: Epoch, config: &Config) -> RangeInclusive<Slot> {
-        let snapshot_slot_for_next_epoch = config.total_stake_snapshot(epoch.strict_add(1.into()));
-        let start = snapshot_slot_for_next_epoch
-            .saturating_sub(config.total_stake_inference_period().into());
+    fn compute_period_range(epoch: Epoch, eras: &EraScheduledConfig) -> RangeInclusive<Slot> {
+        let next_epoch = NonZeroU32::new(epoch.into_inner().strict_add(1))
+            .expect("the epoch after another is not the genesis epoch");
+        let snapshot_slot_for_next_epoch = total_stake_snapshot(eras, next_epoch);
+        let start = snapshot_slot_for_next_epoch.saturating_sub(
+            config_for_epoch(eras, epoch)
+                .total_stake_inference_period()
+                .into(),
+        );
         let end = snapshot_slot_for_next_epoch.saturating_sub(1.into());
         start..=end
     }
@@ -72,18 +88,21 @@ mod tests {
     use lb_utils::math::NonNegativeRatio;
 
     use super::*;
-    use crate::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
+    use crate::{
+        mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
+        test_utils::single_era,
+    };
 
     #[test]
     fn test_initial_block_density_is_zero() {
-        let density = BlockDensity::new(0.into(), &config());
+        let density = BlockDensity::new(0.into(), &single_era(config()));
         assert_eq!(density.period_range(), &(0.into()..=59.into()));
         assert_eq!(density.current_block_density(), 0);
     }
 
     #[test]
     fn test_mark_occupied_slots() {
-        let mut density = BlockDensity::new(1.into(), &config());
+        let mut density = BlockDensity::new(1.into(), &single_era(config()));
         assert_eq!(density.period_range(), &(100.into()..=159.into()));
         density.mark_occupied_slots(Slot::from(100), &UncleSlots::default());
         assert_eq!(density.current_block_density(), 1);
@@ -101,7 +120,7 @@ mod tests {
 
     #[test]
     fn test_mark_occupied_slots_with_uncles() {
-        let mut density = BlockDensity::new(1.into(), &config());
+        let mut density = BlockDensity::new(1.into(), &single_era(config()));
         assert_eq!(density.period_range(), &(100.into()..=159.into()));
 
         // A block and its uncles are marked together.
@@ -154,7 +173,6 @@ mod tests {
                     timestamp: 0,
                 },
             },
-            consensus_excluded_keys: crate::config::ConsensusExcludedKeys::empty(),
             pow_config: crate::config::PoWConfig {
                 blend: crate::config::BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),

@@ -9,7 +9,10 @@ mod intent;
 pub mod mantle;
 mod update;
 
-use std::hash::Hash;
+#[cfg(test)]
+mod test_utils;
+
+use std::{hash::Hash, sync::Arc};
 
 pub use config::{Config, ConsensusExcludedKeys};
 use cryptarchia::LedgerState as CryptarchiaLedger;
@@ -55,7 +58,7 @@ use rpds::HashTrieMapSync;
 use thiserror::Error;
 
 use crate::{
-    config::RewardPoWConfig,
+    config::{EraScheduledConfig, RewardPoWConfig, config_for_slot},
     mantle::helpers::MantleOperationVerificationHelper,
     update::{BatchVerifiedUpdate, PreparedUpdate},
 };
@@ -147,26 +150,29 @@ pub enum LedgerError<Id> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ledger<Id: Eq + Hash> {
     states: HashTrieMapSync<Id, LedgerState>,
-    config: Config,
+    /// The config of every era: each block is applied under the config of the
+    /// era of its slot, and each epoch is settled under the config of its era.
+    era_schedule: Arc<EraScheduledConfig>,
 }
 
 impl<Id> Ledger<Id>
 where
     Id: Eq + Hash + Copy,
 {
-    pub fn new(id: Id, mut state: LedgerState, config: Config) -> Self
+    pub fn new(id: Id, mut state: LedgerState, era_schedule: Arc<EraScheduledConfig>) -> Self
     where
         Id: Into<BlockHash>,
     {
         // Record the root block among the recently seen blocks, so early
         // `PoW` reward claims can anchor to it. Later blocks are recorded
         // as they are applied in `try_update`.
+        let slot = state.slot();
         state
             .mantle_ledger
-            .add_seen_block(id.into(), state.slot(), &config);
+            .add_seen_block(id.into(), slot, config_for_slot(&era_schedule, slot));
         Self {
             states: HashTrieMapSync::new_sync().insert(id, state),
-            config,
+            era_schedule,
         }
     }
 
@@ -195,9 +201,15 @@ where
             .get(&parent_id)
             .ok_or(LedgerError::ParentNotFound(parent_id))?;
 
-        let (new_state, events, deferred_proofs) = parent_state
-            .clone()
-            .try_update::<_, _, _, Profile>(id, slot, proof, uncle_slots, txs, &self.config)?;
+        let (new_state, events, deferred_proofs) =
+            parent_state.clone().try_update::<_, _, _, Profile>(
+                id,
+                slot,
+                proof,
+                uncle_slots,
+                txs,
+                &self.era_schedule,
+            )?;
 
         Ok(PreparedUpdate::new(id, new_state, events, deferred_proofs))
     }
@@ -213,8 +225,8 @@ where
     }
 
     #[must_use]
-    pub const fn config(&self) -> &Config {
-        &self.config
+    pub const fn era_schedule(&self) -> &Arc<EraScheduledConfig> {
+        &self.era_schedule
     }
 
     /// Removes the state stored for the given block id.
@@ -253,7 +265,7 @@ impl LedgerState {
         proof: &LeaderProof,
         uncle_slots: &UncleSlots,
         txs: impl Iterator<Item = Tx>,
-        config: &Config,
+        eras: &EraScheduledConfig,
     ) -> Result<(Self, Events, DeferredProofs), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
@@ -261,7 +273,9 @@ impl LedgerState {
         Profile: GasProfile,
         Id: Into<BlockHash>,
     {
-        let (mut state, header_events) = self.try_apply_header(slot, proof, uncle_slots, config)?;
+        let (mut state, header_events) = self.try_apply_header(slot, proof, uncle_slots, eras)?;
+        // The block's contents follow the config of the era of its slot.
+        let config = config_for_slot(eras, slot);
         // Record the applied block among the recently seen blocks `PoW`
         // claims may anchor to. This is the canonical apply path, where the
         // block's id is known — unlike a proposer's direct
@@ -307,7 +321,7 @@ impl LedgerState {
         slot: Slot,
         proof: &LeaderProof,
         uncle_slots: &UncleSlots,
-        config: &Config,
+        eras: &EraScheduledConfig,
     ) -> Result<(Self, Vec<HeaderEvent>), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -324,13 +338,13 @@ impl LedgerState {
                 // In the future, we will pull EpochState up into LedgerState.
                 &self.mantle_ledger.sdp,
                 &self.mantle_ledger.pow,
-                config,
+                eras,
             )?;
         let (mantle_ledger, effect) = self.mantle_ledger.try_apply_header(
             &last_epoch_state,
             cryptarchia_ledger.epoch_state(),
             *proof.voucher_cm(),
-            config,
+            eras,
         )?;
 
         // Insert reward UTXOs into the cryptarchia ledger
@@ -357,7 +371,7 @@ impl LedgerState {
         &self,
         slot: Slot,
         proof: &LeaderProof,
-        config: &Config,
+        eras: &EraScheduledConfig,
     ) -> Result<(), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -367,7 +381,7 @@ impl LedgerState {
             proof,
             &self.mantle_ledger.sdp,
             &self.mantle_ledger.pow,
-            config,
+            eras,
         )
     }
 
@@ -555,7 +569,8 @@ impl LedgerState {
     }
 
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config) -> Self {
-        let cryptarchia_ledger = CryptarchiaLedger::from_utxos(utxos, config, Fr::ZERO);
+        let cryptarchia_ledger =
+            CryptarchiaLedger::from_utxos(utxos, config, &ConsensusExcludedKeys::empty(), Fr::ZERO);
         let mantle_ledger = MantleLedger::new(config, cryptarchia_ledger.epoch_state());
         // Seed the genesis epoch-state membership snapshots from the genesis SDP
         // ledger, which only exists after the mantle ledger is built.
@@ -570,6 +585,7 @@ impl LedgerState {
     pub fn from_genesis_tx<Id>(
         tx: impl GenesisTx,
         config: &Config,
+        consensus_excluded_keys: &ConsensusExcludedKeys,
         epoch_nonce: Fr,
     ) -> Result<(Self, Vec<TxEvent>), LedgerError<Id>> {
         let GenesisOps {
@@ -577,8 +593,12 @@ impl LedgerState {
             inscription,
             declarations,
         } = tx.into_genesis_ops();
-        let cryptarchia_ledger =
-            CryptarchiaLedger::from_genesis_tx(&transfer, config, epoch_nonce)?;
+        let cryptarchia_ledger = CryptarchiaLedger::from_genesis_tx(
+            &transfer,
+            config,
+            consensus_excluded_keys,
+            epoch_nonce,
+        )?;
         let (mantle_ledger, events) = MantleLedger::from_genesis_tx(
             inscription,
             declarations,
@@ -624,13 +644,13 @@ impl LedgerState {
     pub fn epoch_state_for_slot<Id>(
         &self,
         slot: Slot,
-        config: &Config,
+        eras: &EraScheduledConfig,
     ) -> Result<EpochState, LedgerError<Id>> {
         self.cryptarchia_ledger.epoch_state_for_slot(
             slot,
             &self.mantle_ledger.sdp,
             &self.mantle_ledger.pow,
-            config,
+            eras,
         )
     }
 
@@ -1029,6 +1049,7 @@ mod tests {
             ledger, update_ledger, utxo_with_sk,
         },
         mantle::{leader::LeaderState, sdp::test_utils::generate_activity_proof},
+        test_utils::single_era,
     };
 
     fn create_test_keys() -> (Ed25519Key, Ed25519PublicKey) {
@@ -1057,7 +1078,7 @@ mod tests {
         let config = config();
         let utxo = utxo();
         let genesis_state = LedgerState::from_utxos([utxo], &config);
-        let ledger = Ledger::new([0; 32], genesis_state, config);
+        let ledger = Ledger::new([0; 32], genesis_state, Arc::new(single_era(config)));
         (ledger, [0; 32], utxo)
     }
 
@@ -1215,7 +1236,7 @@ mod tests {
             .epoch_state
             .clone();
 
-        let config = ledger.config().clone();
+        let config = ledger.era_schedule().genesis().parameters.clone();
         let active_op = SDPActiveOp {
             declaration_id,
             nonce,

@@ -315,7 +315,7 @@ where
         let (reply_channel, rx) = oneshot::channel();
 
         self.relay
-            .send(Query::GetEpochConfig { reply_channel }.into())
+            .send(Query::GetTipEpochConfig { reply_channel }.into())
             .await
             .map_err(|error| {
                 ApiError::CommsFailure(format!("{error} while sending GetEpochConfig"))

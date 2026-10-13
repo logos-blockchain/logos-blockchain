@@ -1,10 +1,12 @@
 use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 
+use crate::Config;
+
 const LOG_TARGET: &str = ledger::cryptarchia::STAKE;
 
 pub const PRECISION: u64 = 1000;
 
-#[derive(Copy, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Copy, Clone)]
 pub struct StakeInference {
     learning_rate: f64,
     slot_activation_coefficient: f64,
@@ -12,11 +14,11 @@ pub struct StakeInference {
 }
 
 impl StakeInference {
-    pub const fn new(learning_rate: f64, slot_activation_coefficient: f64, period: u64) -> Self {
+    pub fn from_config(config: &Config) -> Self {
         Self {
-            learning_rate,
-            slot_activation_coefficient,
-            period,
+            learning_rate: config.consensus_config.stake_inference_learning_rate(),
+            slot_activation_coefficient: config.consensus_config.slot_activation_coeff().as_f64(),
+            period: config.total_stake_inference_period(),
         }
     }
 
@@ -79,10 +81,7 @@ mod tests {
     use lb_utils::math::NonNegativeRatio;
 
     use super::*;
-    use crate::{
-        Config,
-        mantle::sdp::{ServiceRewardsParameters, rewards::blend},
-    };
+    use crate::mantle::sdp::{ServiceRewardsParameters, rewards::blend};
 
     const SECURITY_PARAM: u32 = 10;
     const LEARNING_RATE: f64 = 1f64;
@@ -90,7 +89,7 @@ mod tests {
     #[test]
     fn test_total_stake_inference_zero_block_density() {
         let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
-        let inference = stake_inference_from(&config);
+        let inference = StakeInference::from_config(&config);
         let total_stake_estimate = 1000u64;
         let period_block_density = 0u64;
 
@@ -104,7 +103,7 @@ mod tests {
     #[test]
     fn test_total_stake_inference_high_block_density() {
         let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
-        let inference = stake_inference_from(&config);
+        let inference = StakeInference::from_config(&config);
         let total_stake_estimate = 1000u64;
         let measured_block_density = expected_density(&inference) * 2;
 
@@ -121,7 +120,7 @@ mod tests {
     #[test]
     fn test_total_stake_inference_exact_block_density() {
         let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
-        let inference = stake_inference_from(&config);
+        let inference = StakeInference::from_config(&config);
         let total_stake_estimate = 1000u64;
         let measured_block_density = expected_density(&inference);
 
@@ -136,7 +135,7 @@ mod tests {
     #[test]
     fn test_total_stake_inference_intermediate_block_density() {
         let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
-        let inference = stake_inference_from(&config);
+        let inference = StakeInference::from_config(&config);
         let total_stake_estimate = 1000u64;
         let measured_block_density = expected_density(&inference) / 2;
 
@@ -154,7 +153,7 @@ mod tests {
     #[test]
     fn test_total_stake_inference_very_high_stake() {
         let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
-        let inference = stake_inference_from(&config);
+        let inference = StakeInference::from_config(&config);
         let total_stake_estimate = u64::MAX; //maximum stake supported is half
         let measured_block_density = expected_density(&inference) / 2;
 
@@ -166,14 +165,6 @@ mod tests {
             result <= total_stake_estimate,
             "result({result}) must be <= total_stake_estimate({total_stake_estimate})"
         );
-    }
-
-    fn stake_inference_from(config: &Config) -> StakeInference {
-        StakeInference::new(
-            config.consensus_config.stake_inference_learning_rate(),
-            config.consensus_config.slot_activation_coeff().as_f64(),
-            config.total_stake_inference_period(),
-        )
     }
 
     fn config(slot_activation_coeff: NonNegativeRatio) -> Config {
@@ -207,7 +198,6 @@ mod tests {
                     timestamp: 0,
                 },
             },
-            consensus_excluded_keys: crate::config::ConsensusExcludedKeys::empty(),
             pow_config: crate::config::PoWConfig {
                 blend: crate::config::BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
