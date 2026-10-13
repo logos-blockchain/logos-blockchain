@@ -17,12 +17,11 @@ services:
       - ./tracing/grafana/dashboards:/var/lib/grafana/dashboards/:z
       - grafana-data:/var/lib/grafana
     ports:
-      - 9091:3000
+      - 127.0.0.1:9091:3000
     restart: on-failure
     depends_on:
       - prometheus
       - loki
-      - tempo
 
   otel:
     image: otel/opentelemetry-collector-contrib:latest
@@ -30,36 +29,15 @@ services:
     volumes:
       - ./tracing/otel.yaml:/etc/otel-collector-config.yaml
     ports:
-      - "0.0.0.0:3100:4317"
-      - "14318:4318"
-
-  tempo-init:
-    image: grafana/tempo:latest
-    user: root
-    entrypoint: ["chown", "10001:10001", "/var/tempo"]
-    volumes:
-      - tempo-data:/var/tempo
-
-  tempo:
-    container_name: tempo
-    image: grafana/tempo:latest
-    command: ["-config.file=/etc/tempo.yaml"]
-    volumes:
-      - ./tracing/tempo.yaml:/etc/tempo.yaml:z
-      - tempo-data:/var/tempo
-    ports:
-      - "3200:3200"
-    depends_on:
-      tempo-init:
-        condition: service_completed_successfully
-    restart: on-failure
+      - "127.0.0.1:3100:4317"
+      - "127.0.0.1:14318:4318"
 
   loki:
     image: grafana/loki:latest
     ports:
-      - "23100:3100"
-      - "24317:4317"
-      - "24318:4318"
+      - "127.0.0.1:23100:3100"
+      - "127.0.0.1:24317:4317"
+      - "127.0.0.1:24318:4318"
     volumes:
       - ./tracing/loki.yaml:/etc/loki/local-config.yaml
     command: -config.file=/etc/loki/local-config.yaml
@@ -75,7 +53,7 @@ services:
       - --web.enable-otlp-receiver
       - --web.enable-remote-write-receiver
     ports:
-      - "0.0.0.0:9090:9090"
+      - "127.0.0.1:9090:9090"
     restart: on-failure
 
 volumes:

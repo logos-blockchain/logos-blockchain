@@ -135,8 +135,8 @@ services:
     container_name: nginx
     image: docker.io/library/nginx:stable-trixie-perl
     ports:
-      - "13000:13000"
-      - "13001:13001"
+      - "127.0.0.1:13000:13000"
+      - "127.0.0.1:13001:13001"
     depends_on:
       - explorer
       - faucet
