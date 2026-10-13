@@ -309,6 +309,7 @@ fn op_to_zone_message(
             Some(ZoneMessage::Block(ZoneBlock {
                 id: inscribe.id(),
                 data: inscribe.inscription.clone(),
+                signer: inscribe.signer,
             }))
         }
         OpRef::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
