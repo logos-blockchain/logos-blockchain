@@ -2,6 +2,7 @@ pub mod adapters;
 
 use futures::Stream;
 use lb_network_service::{backends::NetworkBackend, message::BackendNetworkMsg};
+use lb_time::Era;
 use overwatch::services::relay::OutboundRelay;
 
 #[async_trait::async_trait]
@@ -13,8 +14,11 @@ pub trait NetworkAdapter<RuntimeServiceId> {
 
     async fn new(
         settings: Self::Settings,
+        current_era: Era,
         network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
     ) -> Self;
+
+    async fn enter_era(&mut self, era: Era);
 
     async fn payload_stream(
         &self,

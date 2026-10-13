@@ -148,7 +148,7 @@ fn mock_pool_node_settings(
                 recovery_data: RecoveryData::default(),
             },
             logging: TracingSettings::default(),
-            // The network service follows the eras of the clock.
+            // The network service and the mempool follow the eras of the clock.
             time: TimeServiceSettings {
                 backend: (),
                 era_schedule: EraSchedule::new(

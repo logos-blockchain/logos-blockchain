@@ -181,11 +181,10 @@ pub fn run_node_from_config(
     let (chain_service_config, chain_network_config, chain_leader_config) =
         genesis_era_settings(&cryptarchia_settings);
 
-    let mempool_settings = MempoolConfig {
+    let mempool_service_config = MempoolConfig {
         user: config.user.mempool,
     }
-    .into_mempool_service_era_schedule(eras, &recovery_data);
-    let mempool_service_config = genesis_era_settings(&mempool_settings);
+    .into_mempool_service_settings(eras, &recovery_data);
 
     let network_service_config = NetworkConfig {
         user: config.user.network,

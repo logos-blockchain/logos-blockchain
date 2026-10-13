@@ -9,6 +9,7 @@ use lb_network_service::{
     backends::mock::{Mock, MockBackendMessage, MockContentTopic, MockMessage, NetworkEvent},
     message::{BackendNetworkMsg, NetworkMsg},
 };
+use lb_time::Era;
 use overwatch::services::relay::OutboundRelay;
 
 use crate::network::NetworkAdapter;
@@ -41,6 +42,7 @@ pub fn tx_from_mock_message(message: &MockMessage) -> Option<Ops> {
     rest.is_empty().then_some(tx)
 }
 
+#[derive(Clone)]
 pub struct MockAdapter<RuntimeServiceId> {
     network_relay: OutboundRelay<BackendNetworkMsg<Mock, RuntimeServiceId>>,
 }
@@ -54,6 +56,7 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
 
     async fn new(
         _settings: Self::Settings,
+        _current_era: Era,
         network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
     ) -> Self {
         // send message to boot the network producer
@@ -79,6 +82,8 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
         }
         Self { network_relay }
     }
+
+    async fn enter_era(&mut self, _era: Era) {}
 
     async fn payload_stream(
         &self,
