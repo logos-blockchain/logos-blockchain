@@ -1058,6 +1058,7 @@ mod tests {
     /// message, and the declaration persists across epochs regardless of how
     /// long it has been inactive.
     #[test]
+    #[expect(clippy::too_many_lines, reason = "Test.")]
     fn active_message_refreshes_declaration() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
