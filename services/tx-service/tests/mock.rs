@@ -41,7 +41,7 @@ use lb_storage_service::{
     recovery::{StorageRecoveryBackend, load_recovery_data},
     rocksdb,
 };
-use lb_time::era::{EraEntriesAfterGenesis, EraSchedule};
+use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use lb_time_service::{TimeService, TimeServiceSettings, backends::SystemTimeBackend};
 use lb_tracing_service::{Tracing, TracingSettings};
 use lb_utils::noop_service::NoService;
@@ -149,16 +149,18 @@ fn mock_pool_node_settings(
             },
             logging: TracingSettings::default(),
             // The network service follows the eras of the clock.
-            time: EraSchedule::new(
-                OffsetDateTime::UNIX_EPOCH,
-                TimeServiceSettings {
-                    slot_duration: Duration::from_secs(1),
-                    epoch_length: NonZero::new(100).unwrap(),
-                    backend: (),
-                },
-                EraEntriesAfterGenesis::empty(),
-            )
-            .unwrap(),
+            time: TimeServiceSettings {
+                backend: (),
+                era_schedule: EraSchedule::new(
+                    OffsetDateTime::UNIX_EPOCH,
+                    EraTiming {
+                        slot_duration: Duration::from_secs(1),
+                        epoch_length: NonZero::new(100).unwrap(),
+                    },
+                    EraEntriesAfterGenesis::empty(),
+                )
+                .unwrap(),
+            },
             no_service: (),
         },
         temp_dir,
