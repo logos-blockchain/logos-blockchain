@@ -5,10 +5,7 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_log_targets::time as log_targets_time;
-use lb_time::{
-    Epoch, Slot,
-    era::{EraSchedule, EraSchedules},
-};
+use lb_time::{Epoch, Slot, era::EraSchedules};
 use log::error;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -78,10 +75,8 @@ impl Debug for TimeServiceMessage {
 #[derive(Clone, Debug)]
 pub struct TimeServiceSettings<BackendSettings> {
     pub backend: BackendSettings,
+    pub era_schedule: EraSchedules,
 }
-
-pub type TimeServiceSettingsSchedule<BackendSettings> =
-    EraSchedule<TimeServiceSettings<BackendSettings>>;
 
 pub struct TimeService<Backend, RuntimeServiceId>
 where
@@ -89,14 +84,14 @@ where
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     backend: Backend,
-    settings_schedule: TimeServiceSettingsSchedule<Backend::Settings>,
+    era_schedule: EraSchedules,
 }
 
 impl<Backend, RuntimeServiceId> ServiceData for TimeService<Backend, RuntimeServiceId>
 where
     Backend: TimeBackend,
 {
-    type Settings = TimeServiceSettingsSchedule<Backend::Settings>;
+    type Settings = TimeServiceSettings<Backend::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = TimeServiceMessage;
@@ -114,15 +109,18 @@ where
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         _initial_state: Self::State,
     ) -> Result<Self, DynError> {
-        let settings_schedule = service_resources_handle
+        let TimeServiceSettings {
+            backend: backend_settings,
+            era_schedule,
+        } = service_resources_handle
             .settings_handle
             .notifier()
             .get_updated_settings();
-        let backend = Backend::init(settings_schedule.clone());
+        let backend = Backend::init(backend_settings, era_schedule.clone());
         Ok(Self {
             service_resources_handle,
             backend,
-            settings_schedule,
+            era_schedule,
         })
     }
 
@@ -130,7 +128,7 @@ where
         let Self {
             service_resources_handle,
             backend,
-            settings_schedule,
+            era_schedule,
         } = self;
         let mut inbound_relay = service_resources_handle.inbound_relay;
         let (mut current_slot_tick, mut tick_stream) = backend.tick_stream();
@@ -151,7 +149,7 @@ where
                         service_message,
                         &watch_receiver,
                         &current_slot_tick,
-                        &settings_schedule,
+                        &era_schedule,
                     );
                 }
                 Some(slot_tick) = tick_stream.next() => {
@@ -169,18 +167,18 @@ where
     }
 }
 
-fn handle_service_message<BackendSettings>(
+fn handle_service_message(
     message: TimeServiceMessage,
     watch_receiver: &watch::Receiver<SlotTick>,
     current_slot_tick: &SlotTick,
-    settings_schedule: &TimeServiceSettingsSchedule<BackendSettings>,
+    era_schedule: &EraSchedules,
 ) {
     match message {
         TimeServiceMessage::Info { sender } => {
             drop(sender.send(TimeServiceInfo {
                 current_slot: current_slot_tick.slot,
                 current_epoch: current_slot_tick.epoch,
-                era_schedules: settings_schedule.map(|_| ()),
+                era_schedules: era_schedule.clone(),
             }));
         }
         TimeServiceMessage::Subscribe { sender } => {

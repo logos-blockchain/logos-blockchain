@@ -165,10 +165,10 @@ pub fn run_node_from_config(
     let (blend_config, blend_core_config, blend_edge_config) =
         genesis_era_settings(&blend_settings);
 
-    let time_service_config_schedule = TimeConfig {
+    let time_service_config = TimeConfig {
         user: config.user.time,
     }
-    .into_time_service_era_schedule(eras);
+    .into_time_service_settings(eras);
 
     let cryptarchia_settings = CryptarchiaConfig {
         user: config.user.cryptarchia,
@@ -238,7 +238,7 @@ pub fn run_node_from_config(
             cryptarchia: chain_service_config,
             chain_network: chain_network_config,
             cryptarchia_leader: chain_leader_config,
-            time: time_service_config_schedule,
+            time: time_service_config,
             http: http_config,
             storage: storage_config,
             system_sig: (),
