@@ -18,7 +18,8 @@ use lb_core::{
         GenesisTime, SignedOps, Utxo, Value,
         ledger::verification_mode::StandardMode,
         ops::channel::{
-            ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
+            ChannelId, MsgId, deposit::DepositOp, inscribe::Inscription,
+            withdraw::ChannelWithdrawOp,
         },
         transactions::{
             hash::TxHash,
@@ -184,6 +185,8 @@ impl ManualNodeConfigOverrides {
 pub struct ZonePublishedMessage {
     pub payload: Inscription,
     pub inscription_id: Option<InscriptionId>,
+    /// The channel message id, stable across a stale-refund rebuild.
+    pub msg_id: Option<MsgId>,
 }
 
 pub type ZoneDiscardedPayloads = Arc<tokio::sync::Mutex<HashSet<Inscription>>>;
@@ -402,6 +405,7 @@ impl ZoneState {
         alias: String,
         payload: Inscription,
         inscription_id: Option<InscriptionId>,
+        msg_id: Option<MsgId>,
         sequencer_alias: Option<&str>,
         checkpoint: Option<SequencerCheckpoint>,
     ) {
@@ -411,6 +415,7 @@ impl ZoneState {
             ZonePublishedMessage {
                 payload,
                 inscription_id,
+                msg_id,
             },
         );
 

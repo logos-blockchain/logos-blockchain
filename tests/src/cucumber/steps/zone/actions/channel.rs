@@ -265,6 +265,7 @@ pub(in super::super) fn remember_published_zone_message(
         message_alias,
         payload,
         Some(result.inscription_id()),
+        Some(result.tx.inscription().this_msg),
         Some(sequencer_alias),
         checkpoint,
     );

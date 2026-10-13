@@ -35,11 +35,12 @@ use tracing::{debug, info, warn};
 use super::{
     TARGET,
     block_fetch::classify_channel_tx,
+    block_states::BlockChannelTx,
     channel_wallet::select_channel_notes,
     client::SequencerClient,
     handle::SequencerHandle,
     slot_clock::SlotClock,
-    state::{BlockChannelTx, ParentTaken, TxState},
+    state::{ParentTaken, TxState},
     tx_builder::{
         assemble_atomic_bundle_tx, assemble_channel_config_tx, build_and_fund_config,
         create_channel_config_tx, create_inscribe_tx, find_own_key_index, fund_ops,

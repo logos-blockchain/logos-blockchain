@@ -26,8 +26,9 @@ use tracing::{debug, error};
 
 use super::{
     TARGET,
+    block_states::BlockChannelTx,
     channel_wallet::{NoteOp, note_ops_from_txs},
-    state::{BlockChannelTx, ChannelUpdateInfo, PendingBundle, TxState},
+    state::{ChannelUpdateInfo, PendingBundle, TxState},
     types::{
         AtomicWithdrawInfo, ChannelTransferInfo, ChannelUpdateTx, DepositInfo, Error, FinalizedOp,
         FinalizedTx, InscriptionInfo, PendingTx, PinDepositInfo, WithdrawInfo,

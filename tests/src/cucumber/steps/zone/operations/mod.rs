@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use lb_common_http_client::{CommonHttpClient, Slot};
+use lb_common_http_client::{ApiBlock, CommonHttpClient, Slot};
 use lb_core::{
     crypto::Hash,
     mantle::{
@@ -103,7 +103,8 @@ fn contributed(update: &ChannelUpdate) -> impl Iterator<Item = &ChannelUpdateTx>
 }
 use crate::{
     common::{
-        chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
+        chain::{scan_chain_until, wait_for_transactions_inclusion},
+        mantle_inscription::make_inscription,
         wallet::build_wallet_funded_transfer,
     },
     cucumber::world::ZoneReaderConfig,
@@ -282,11 +283,11 @@ pub(super) use deposit_policy::{
 };
 pub(super) use observation::{
     balance_update_payload, collect_indexed_messages, collect_indexed_messages_exactly_once,
-    ensure_zone_transactions_included, keygen, parse_balance_payload, publish_message_with_retry,
-    replay_finalized_history, replayed_inscription_payloads, sequencer_config,
-    sequencer_config_with_pending_submit_depth, wait_for_channel_transfer_input_count,
-    wait_for_channel_view, wait_for_channel_wallet_counts, wait_for_channel_wallet_note,
-    wait_for_deposit, wait_for_exact_indexed_payload_count,
+    ensure_zone_message_included, ensure_zone_transactions_included, keygen, parse_balance_payload,
+    publish_message_with_retry, replay_finalized_history, replayed_inscription_payloads,
+    sequencer_config, sequencer_config_with_pending_submit_depth,
+    wait_for_channel_transfer_input_count, wait_for_channel_view, wait_for_channel_wallet_counts,
+    wait_for_channel_wallet_note, wait_for_deposit, wait_for_exact_indexed_payload_count,
     wait_for_finalized_deposit_via_sequencer, wait_for_finalized_withdraw_via_sequencer,
     wait_for_lib_advance, wait_for_transactions_finalized, wait_for_turn_to_write,
     wait_for_withdraw,
