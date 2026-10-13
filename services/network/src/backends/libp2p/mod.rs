@@ -89,7 +89,7 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
         }
     }
 
-    async fn enter_era(&self, era: Era) {
+    async fn enter_era(&mut self, era: Era) {
         if let Err(e) = self.commands_tx.send(Command::EnterEra(era)).await {
             tracing::error!(
                 target: LOG_TARGET,

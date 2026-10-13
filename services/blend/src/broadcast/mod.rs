@@ -344,7 +344,7 @@ mod tests {
             Self
         }
         async fn process(&self, _: Self::Message) {}
-        async fn enter_era(&self, _: Era) {}
+        async fn enter_era(&mut self, _: Era) {}
         async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
             unimplemented!()
         }

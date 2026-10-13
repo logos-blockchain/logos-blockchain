@@ -925,7 +925,7 @@ mod tests {
             unimplemented!()
         }
 
-        async fn enter_era(&self, _era: Era) {
+        async fn enter_era(&mut self, _era: Era) {
             unimplemented!()
         }
 
