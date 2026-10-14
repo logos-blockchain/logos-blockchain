@@ -106,7 +106,7 @@ where
         self.relay
             .send(PoWServiceMessage::Claim {
                 claim_address,
-                response: resp_tx,
+                reply_channel: resp_tx,
             })
             .await
             .map_err(|error| ApiError::CommsFailure(format!("{error} while sending Claim")))?;
@@ -123,7 +123,7 @@ where
     pub async fn claimable_rewards(&self) -> Result<ClaimableRewardsInfo, ApiError> {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.relay
-            .send(PoWServiceMessage::ClaimableRewardsInfo { response: resp_tx })
+            .send(PoWServiceMessage::ClaimableRewardsInfo { reply_channel: resp_tx })
             .await
             .map_err(|error| {
                 ApiError::CommsFailure(format!("{error} while sending ClaimableRewardsInfo"))
@@ -141,7 +141,7 @@ where
     pub async fn status(&self) -> Result<PoWStatus, ApiError> {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.relay
-            .send(PoWServiceMessage::Status { response: resp_tx })
+            .send(PoWServiceMessage::Status { reply_channel: resp_tx })
             .await
             .map_err(|error| ApiError::CommsFailure(format!("{error} while sending Status")))?;
 
@@ -158,7 +158,7 @@ where
         self.relay
             .send(PoWServiceMessage::SetMiningSettings {
                 settings,
-                response: resp_tx,
+                reply_channel: resp_tx,
             })
             .await
             .map_err(|error| {
@@ -188,7 +188,7 @@ where
         self.relay
             .send(PoWServiceMessage::SetAutoClaimSettings {
                 settings,
-                response: resp_tx,
+                reply_channel: resp_tx,
             })
             .await
             .map_err(|error| {

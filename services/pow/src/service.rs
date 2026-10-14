@@ -185,21 +185,21 @@ pub enum PoWServiceMessage {
         /// Key the claimed rewards are paid to. `None` falls back to the key
         /// auto-claim would pick right now (see [`select_claim_target`]).
         claim_address: Option<ZkPublicKey>,
-        response: oneshot::Sender<Result<Option<TxHash>, PoWError>>,
+        reply_channel: oneshot::Sender<Result<Option<TxHash>, PoWError>>,
     },
     ClaimableRewardsInfo {
-        response: oneshot::Sender<ClaimableRewardsInfo>,
+        reply_channel: oneshot::Sender<ClaimableRewardsInfo>,
     },
     Status {
-        response: oneshot::Sender<PoWStatus>,
+        reply_channel: oneshot::Sender<PoWStatus>,
     },
     SetMiningSettings {
         settings: PoWMiningSettings,
-        response: oneshot::Sender<Result<(), PoWError>>,
+        reply_channel: oneshot::Sender<Result<(), PoWError>>,
     },
     SetAutoClaimSettings {
         settings: AutoClaimSettings,
-        response: oneshot::Sender<Result<(), PoWError>>,
+        reply_channel: oneshot::Sender<Result<(), PoWError>>,
     },
 }
 
@@ -619,7 +619,7 @@ where
                             }
                             is_auto_claiming = false;
                         }
-                        PoWServiceMessage::Claim { claim_address, response } => {
+                        PoWServiceMessage::Claim { claim_address, reply_channel } => {
                             let result = manual_claim(
                                 &cryptarchia_api,
                                 &blend_api,
@@ -634,60 +634,33 @@ where
                                 error!(target: LOG_TARGET, "Failed to claim PoW rewards: {e}");
                             });
                             state_updater.update(Some(state.clone()));
-                            if response.send(result).is_err() {
-                                error!(target: LOG_TARGET, "Claim response receiver was dropped");
+                            if reply_channel.send(result).is_err() {
+                                error!(target: LOG_TARGET, "Claim reply receiver was dropped");
                             }
                         }
-                        PoWServiceMessage::ClaimableRewardsInfo { response } => {
-                            respond_claimable_rewards(&cryptarchia_api, &mut state, &state_updater, response, settings.slot_window).await;
+                        PoWServiceMessage::ClaimableRewardsInfo { reply_channel } => {
+                            respond_claimable_rewards(&cryptarchia_api, &mut state, &state_updater, reply_channel, settings.slot_window).await;
                         }
-                        PoWServiceMessage::Status { response } => {
+                        PoWServiceMessage::Status { reply_channel } => {
                             let status = PoWStatus {
                                 is_mining,
                                 are_rewards_enabled: settings.rewards_enabled,
                                 auto_claim: auto_claim_status(&wallet_api, &auto_claim_settings, is_auto_claiming).await,
                             };
-                            if response.send(status).is_err() {
-                                error!(target: LOG_TARGET, "Status response receiver was dropped");
+                            if reply_channel.send(status).is_err() {
+                                error!(target: LOG_TARGET, "Status reply receiver was dropped");
                             }
                         }
-                        PoWServiceMessage::SetMiningSettings { settings: new_settings, response } => {
-                            if new_settings.max_threads != mining_settings.max_threads {
-                                debug!(
-                                    target: LOG_TARGET,
-                                    "Rebuilding the ticket search pool: max_threads {:?} -> {:?}",
-                                    mining_settings.max_threads,
-                                    new_settings.max_threads
-                                );
-
-                                match build_search_pool(new_settings.max_threads) {
-                                    Ok(pool) => search_pool = pool,
-                                    Err(error) => {
-                                        error!(target: LOG_TARGET, "Refusing the new PoW mining settings: {error}");
-                                        if response.send(Err(error)).is_err() {
-                                            error!(target: LOG_TARGET, "SetMiningSettings response receiver was dropped");
-                                        }
-                                        continue;
-                                    }
-                                }
-                            }
-
-                            if new_settings != mining_settings {
-                                winning_tickets.reconfigure(Arc::clone(&search_pool), new_settings.max_tickets_per_block);
-                                mining_settings = new_settings;
-                                info!(
-                                    target: LOG_TARGET,
-                                    "PoW mining settings updated: max_threads={:?}, max_tickets_per_block={}",
-                                    mining_settings.max_threads,
-                                    mining_settings.max_tickets_per_block
-                                );
-                            }
-
-                            if response.send(Ok(())).is_err() {
-                                error!(target: LOG_TARGET, "SetMiningSettings response receiver was dropped");
-                            }
+                        PoWServiceMessage::SetMiningSettings { settings: new_mining_settings, reply_channel } => {
+                            handle_set_mining_settings(
+                                new_mining_settings,
+                                reply_channel,
+                                &mut mining_settings,
+                                &mut search_pool,
+                                &mut winning_tickets,
+                            );
                         }
-                        PoWServiceMessage::SetAutoClaimSettings { settings: new_settings, response } => {
+                        PoWServiceMessage::SetAutoClaimSettings { settings: new_settings, reply_channel } => {
                             let result = apply_auto_claim_settings::<TimeBackendType, _, _>(
                                 new_settings,
                                 &wallet_api,
@@ -714,8 +687,8 @@ where
                                 );
                             }
 
-                            if response.send(result).is_err() {
-                                error!(target: LOG_TARGET, "SetAutoClaimSettings response receiver was dropped");
+                            if reply_channel.send(result).is_err() {
+                                error!(target: LOG_TARGET, "SetAutoClaimSettings reply receiver was dropped");
                             }
                         }
                     }
@@ -762,6 +735,80 @@ where
             }
         }
     }
+}
+
+/// Applies new mining settings and reports the outcome to the requester.
+fn handle_set_mining_settings(
+    new_mining_settings: PoWMiningSettings,
+    reply_channel: oneshot::Sender<Result<(), PoWError>>,
+    mining_settings: &mut PoWMiningSettings,
+    search_pool: &mut Arc<rayon::ThreadPool>,
+    winning_tickets: &mut TicketGenerator,
+) {
+    let result = apply_mining_settings(new_mining_settings, mining_settings, search_pool, winning_tickets).inspect_err(
+        |error| error!(target: LOG_TARGET, "Refusing the new PoW mining settings: {error}")
+    );
+
+    if reply_channel.send(result).is_err() {
+        error!(target: LOG_TARGET, "SetMiningSettings reply receiver was dropped");
+    }
+}
+
+/// Applies new mining settings to a running service.
+fn apply_mining_settings(
+    new_mining_settings: PoWMiningSettings,
+    mining_settings: &mut PoWMiningSettings,
+    search_pool: &mut Arc<rayon::ThreadPool>,
+    winning_tickets: &mut TicketGenerator,
+) -> Result<(), PoWError> {
+    if new_mining_settings == *mining_settings {
+        return Ok(());
+    }
+
+    reconfigure_mining(new_mining_settings, mining_settings, search_pool, winning_tickets)?;
+
+    info!(
+        target: LOG_TARGET,
+        "PoW mining settings updated: max_threads={:?}, max_tickets_per_block={}",
+        mining_settings.max_threads,
+        mining_settings.max_tickets_per_block
+    );
+
+    Ok(())
+}
+
+/// Switches the search pool, ticket generator and stored settings over to new
+/// mining settings.
+fn reconfigure_mining(
+    new_mining_settings: PoWMiningSettings,
+    mining_settings: &mut PoWMiningSettings,
+    search_pool: &mut Arc<rayon::ThreadPool>,
+    winning_tickets: &mut TicketGenerator,
+) -> Result<(), PoWError> {
+    replace_search_pool_if_resized(new_mining_settings.max_threads, mining_settings.max_threads, search_pool)?;
+    winning_tickets.reconfigure(Arc::clone(search_pool), new_mining_settings.max_tickets_per_block);
+    *mining_settings = new_mining_settings;
+
+    Ok(())
+}
+
+/// Replaces the ticket search pool when its thread count changes.
+fn replace_search_pool_if_resized(
+    new_max_threads: Option<NonZeroUsize>,
+    current_max_threads: Option<NonZeroUsize>,
+    search_pool: &mut Arc<rayon::ThreadPool>,
+) -> Result<(), PoWError> {
+    if new_max_threads == current_max_threads {
+        return Ok(());
+    }
+
+    debug!(
+        target: LOG_TARGET,
+        "Rebuilding the ticket search pool: max_threads {current_max_threads:?} -> {new_max_threads:?}"
+    );
+    *search_pool = build_search_pool(new_max_threads)?;
+
+    Ok(())
 }
 
 /// Applies new auto-claim settings to a running service.
@@ -1342,7 +1389,7 @@ async fn respond_claimable_rewards<CryptarchiaService>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
-    response: oneshot::Sender<ClaimableRewardsInfo>,
+    reply_channel: oneshot::Sender<ClaimableRewardsInfo>,
     slot_window: NonZeroU64,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1359,8 +1406,8 @@ async fn respond_claimable_rewards<CryptarchiaService>(
     prune_expired_tickets(state, current_slot, slot_window);
     state_updater.update(Some(state.clone()));
     let claimable = claimable_rewards_info(&state.ready_to_claim, current_slot, slot_window);
-    if response.send(claimable).is_err() {
-        error!(target: LOG_TARGET, "ClaimableRewardsInfo response receiver was dropped");
+    if reply_channel.send(claimable).is_err() {
+        error!(target: LOG_TARGET, "ClaimableRewardsInfo reply receiver was dropped");
     }
 }
 
@@ -1393,13 +1440,10 @@ async fn retire_settled_claims<CryptarchiaService>(
     let before = state.outstanding_tickets();
     prune_expired_tickets(state, tip_slot, slot_window);
     let expired = before - state.outstanding_tickets();
-    let settled = match prune_settled_pending(cryptarchia_api, state, block_id).await {
-        Ok(settled) => settled,
-        Err(e) => {
-            error!(target: LOG_TARGET, "Failed to check settled PoW claims: {e}");
-            0
-        }
-    };
+    let settled = prune_settled_pending(cryptarchia_api, state, block_id).await.unwrap_or_else(|error| {
+        error!(target: LOG_TARGET, "Failed to check settled PoW claims: {error}");
+        0
+    });
     if settled > 0 {
         info!(
             target: LOG_TARGET,
@@ -1782,7 +1826,11 @@ fn estimate_reward_claim_fee(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, num::NonZeroU64};
+    use std::{
+        collections::HashMap,
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Arc,
+    };
 
     use lb_binary_codec::bincode::SerializeOp as _;
     use lb_chain_service::Slot;
@@ -1805,9 +1853,9 @@ mod tests {
     use super::{
         AutoClaimSettings, AutoClaimTick, ClaimTarget, MAX_CLAIMS_BY_PAYLOAD_SIZE,
         MAX_PAYLOAD_BODY_SIZE, MAX_TRANSFER_INPUTS, PoWError, PoWServiceState,
-        build_reward_claim_tx_inner, change_outputs, claim_tx_size, claimable_rewards_info,
+        build_reward_claim_tx_inner, build_search_pool, change_outputs, claim_tx_size, claimable_rewards_info,
         estimate_reward_claim_fee, max_claims_by_ops, neediest_target, prune_expired_tickets,
-        push_reward_claim_ops, slot_period_elapsed, transfer_ops,
+        push_reward_claim_ops, replace_search_pool_if_resized, slot_period_elapsed, transfer_ops,
     };
     use crate::tickets::WinningTicket;
 
@@ -2393,5 +2441,36 @@ mod tests {
         assert_eq!(state.outstanding_tickets(), 3);
         prune_expired_tickets(&mut state, Slot::new(200), SLOT_WINDOW);
         assert_eq!(state.outstanding_tickets(), 1);
+    }
+
+    #[test]
+    fn build_search_pool_uses_max_threads() {
+        let pool = build_search_pool(NonZeroUsize::new(2)).unwrap();
+        assert_eq!(pool.current_num_threads(), 2);
+    }
+
+    #[test]
+    fn replace_search_pool_if_resized_keeps_pool_when_max_threads_unchanged() {
+        let max_threads = NonZeroUsize::new(1);
+        let mut search_pool = build_search_pool(max_threads).unwrap();
+        let original_pool = Arc::clone(&search_pool);
+
+        replace_search_pool_if_resized(max_threads, max_threads, &mut search_pool).unwrap();
+
+        assert!(Arc::ptr_eq(&search_pool, &original_pool));
+    }
+
+    #[test]
+    fn replace_search_pool_if_resized_replaces_pool_when_max_threads_changed() {
+        let current_max_threads = NonZeroUsize::new(1);
+        let new_max_threads = NonZeroUsize::new(2);
+        let mut search_pool = build_search_pool(current_max_threads).unwrap();
+        let original_pool = Arc::clone(&search_pool);
+
+        replace_search_pool_if_resized(new_max_threads, current_max_threads, &mut search_pool)
+            .unwrap();
+
+        assert!(!Arc::ptr_eq(&search_pool, &original_pool));
+        assert_eq!(search_pool.current_num_threads(), 2);
     }
 }
