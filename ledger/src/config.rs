@@ -85,6 +85,21 @@ impl Config {
     pub fn total_stake_inference_period(&self) -> u64 {
         self.nonce_contribution_period()
     }
+
+    /// The slot at which an epoch that starts at `first_slot` under this config
+    /// snapshots the nonce and the total stake of the next epoch: the first
+    /// slot of its last phase.
+    ///
+    /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots, the
+    /// epoch that starts at slot 100 snapshots them at slot 160.
+    #[must_use]
+    pub fn next_epoch_snapshot(&self, first_slot: Slot) -> Slot {
+        Slot::new(
+            first_slot
+                .into_inner()
+                .strict_add(self.nonce_contribution_period()),
+        )
+    }
 }
 
 impl EpochLength for Config {
@@ -114,22 +129,8 @@ pub fn config_for_epoch(eras: &EraScheduledConfig, epoch: Epoch) -> &Config {
 #[must_use]
 pub fn nonce_snapshot(eras: &EraScheduledConfig, non_genesis_epoch: NonZeroU32) -> Slot {
     let previous_epoch = Epoch::new(non_genesis_epoch.get() - 1);
-    let offset = config_for_epoch(eras, previous_epoch).nonce_contribution_period();
-    Slot::new(
-        eras.starting_slot_for_epoch(previous_epoch)
-            .into_inner()
-            .strict_add(offset),
-    )
-}
-
-/// The slot at which the total stake for a given epoch is snapshotted
-///
-/// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
-/// the total stake for epoch 1 will be snapshotted at slot 60, which is the
-/// 1st slot of the last phase of epoch 0.
-#[must_use]
-pub fn total_stake_snapshot(eras: &EraScheduledConfig, non_genesis_epoch: NonZeroU32) -> Slot {
-    nonce_snapshot(eras, non_genesis_epoch)
+    config_for_epoch(eras, previous_epoch)
+        .next_epoch_snapshot(eras.starting_slot_for_epoch(previous_epoch))
 }
 
 /// The slot at which the stake distribution for a given epoch is
@@ -517,7 +518,7 @@ mod tests {
     use crate::{
         config::{
             BlendPoWConfig, PoWConfig, RewardPoWConfig, RewardPoWConfigError, nonce_snapshot,
-            stake_distribution_snapshot, total_stake_snapshot,
+            stake_distribution_snapshot,
         },
         mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
         test_utils::single_era,
@@ -713,8 +714,6 @@ mod tests {
         let epoch_2 = NonZeroU32::new(2).unwrap();
         assert_eq!(nonce_snapshot(&eras, epoch_1), 60.into());
         assert_eq!(nonce_snapshot(&eras, epoch_2), 160.into());
-        assert_eq!(total_stake_snapshot(&eras, epoch_1), 60.into());
-        assert_eq!(total_stake_snapshot(&eras, epoch_2), 160.into());
         assert_eq!(
             stake_distribution_snapshot(&eras, 1.try_into().unwrap()),
             0.into()

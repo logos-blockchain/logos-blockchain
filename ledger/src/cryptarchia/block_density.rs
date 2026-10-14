@@ -1,11 +1,11 @@
-use std::{num::NonZeroU32, ops::RangeInclusive};
+use std::ops::RangeInclusive;
 
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use rpds::HashTrieSetSync;
 
 use crate::{
     Config,
-    config::{EraScheduledConfig, config_for_epoch, total_stake_snapshot},
+    config::{EraScheduledConfig, config_for_epoch},
 };
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -18,34 +18,34 @@ pub struct BlockDensity {
 
 impl BlockDensity {
     pub fn new(epoch: Epoch, eras: &EraScheduledConfig) -> Self {
-        Self {
-            period_range: Self::compute_period_range(epoch, eras),
-            occupied_slots: HashTrieSetSync::new_sync(),
-        }
+        Self::of_epoch_starting_at(
+            eras.starting_slot_for_epoch(epoch),
+            config_for_epoch(eras, epoch),
+        )
     }
 
     pub fn from_genesis_config(config: &Config) -> Self {
-        let end = config.total_stake_inference_period().strict_sub(1);
+        Self::of_epoch_starting_at(Slot::genesis(), config)
+    }
+
+    fn of_epoch_starting_at(first_slot: Slot, config: &Config) -> Self {
         Self {
-            period_range: Slot::genesis()..=Slot::new(end),
+            period_range: Self::compute_period_range(first_slot, config),
             occupied_slots: HashTrieSetSync::new_sync(),
         }
     }
 
-    /// The range of slots used to compute the block density for a given epoch
+    /// The range of slots used to compute the block density of the epoch that
+    /// starts at `first_slot` under `config`: the slots before the epoch
+    /// snapshots the total stake of the next epoch.
     ///
     /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
     /// the block density for epoch 2 will be computed during [200, 259],
     /// which is the Stake Distribution Snapshot + Buffer phases of epoch 2.
-    fn compute_period_range(epoch: Epoch, eras: &EraScheduledConfig) -> RangeInclusive<Slot> {
-        let next_epoch = NonZeroU32::new(epoch.into_inner().strict_add(1))
-            .expect("the epoch after another is not the genesis epoch");
-        let snapshot_slot_for_next_epoch = total_stake_snapshot(eras, next_epoch);
-        let start = snapshot_slot_for_next_epoch.saturating_sub(
-            config_for_epoch(eras, epoch)
-                .total_stake_inference_period()
-                .into(),
-        );
+    fn compute_period_range(first_slot: Slot, config: &Config) -> RangeInclusive<Slot> {
+        let snapshot_slot_for_next_epoch = config.next_epoch_snapshot(first_slot);
+        let start = snapshot_slot_for_next_epoch
+            .saturating_sub(config.total_stake_inference_period().into());
         let end = snapshot_slot_for_next_epoch.saturating_sub(1.into());
         start..=end
     }
