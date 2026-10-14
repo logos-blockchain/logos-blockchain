@@ -1,13 +1,26 @@
 use std::{marker::PhantomData, pin::Pin};
 
 use async_trait::async_trait;
-use futures::Stream;
-use lb_core::mantle::{traits::Hashable, transactions::hash::TxHash};
+use futures::{Stream, StreamExt as _};
+use lb_core::{
+    header::HeaderId,
+    mantle::{
+        traits::{Hashable, StorageSize},
+        transactions::hash::TxHash,
+    },
+};
 use lb_storage_service::{StorageService, api::StorageApi};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
 
-use crate::{backend::MempoolError, storage::MempoolStorageAdapter};
+use crate::{
+    backend::MempoolError,
+    storage::{BlockSlotLookup, MempoolStorageAdapter},
+};
+
+/// How many block lookups [`RocksStorageAdapter::get_block_slots`] keeps in
+/// flight at once.
+const MAX_CONCURRENT_BLOCK_LOOKUPS: usize = 16;
 
 /// Maps the mempool's item/key interface to the shared storage API.
 #[derive(Clone)]
@@ -21,16 +34,19 @@ impl<Item, Key, RuntimeServiceId> MempoolStorageAdapter<RuntimeServiceId>
     for RocksStorageAdapter<Item, Key>
 where
     Item: Clone
+        + Eq
         + Send
         + Sync
         + 'static
         + Serialize
         + for<'de> Deserialize<'de>
-        + Hashable<Hash = Key>,
+        + Hashable<Hash = TxHash>
+        + StorageSize,
     Key: Clone + Send + Sync + 'static + Into<TxHash>,
 {
     type Item = Item;
     type Key = Key;
+    type BlockId = HeaderId;
     type Error = MempoolError;
 
     fn new(
@@ -71,5 +87,31 @@ where
             .remove_transactions(&hashes)
             .await
             .map_err(MempoolError::DynamicPoolError)
+    }
+
+    async fn get_block_slots(
+        &self,
+        block_ids: &[Self::BlockId],
+    ) -> BlockSlotLookup<Self::BlockId, Self::Error> {
+        let storage = &self.storage;
+        futures::stream::iter(block_ids.iter().copied())
+            .map(async |block_id| (block_id, storage.try_get_block(&block_id).await))
+            .buffer_unordered(MAX_CONCURRENT_BLOCK_LOOKUPS)
+            .fold(
+                BlockSlotLookup::default(),
+                async |mut lookup, (block_id, result)| {
+                    match result {
+                        Ok(Some(block)) => {
+                            lookup.slots.insert(block_id, block.header().slot());
+                        }
+                        Ok(None) => {}
+                        Err(error) => lookup
+                            .failed
+                            .push((block_id, MempoolError::DynamicPoolError(error))),
+                    }
+                    lookup
+                },
+            )
+            .await
     }
 }

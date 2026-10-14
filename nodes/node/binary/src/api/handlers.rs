@@ -377,6 +377,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -399,7 +400,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -431,6 +431,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -453,7 +454,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -763,6 +763,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -785,7 +786,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -803,7 +803,6 @@ where
         >,
         StorageAdapter,
         SignedOps<Preverified, StandardMode>,
-        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
         RuntimeServiceId,
     >(&handle, tx, Hashable::hash))
 }
@@ -824,6 +823,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -847,7 +847,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -869,6 +868,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -892,7 +892,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -916,6 +915,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -938,7 +938,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -957,7 +956,6 @@ where
             Mempool<
                 HeaderId,
                 SignedOps<Preverified, StandardMode>,
-                <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                 StorageAdapter,
                 RuntimeServiceId,
             >,
@@ -1029,6 +1027,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -1052,7 +1051,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -1097,7 +1095,6 @@ where
             >,
             StorageAdapter,
             SignedOps<Preverified, StandardMode>,
-            <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
             RuntimeServiceId,
         >(&handle, signed_tx, Hashable::hash)
         .await?;
@@ -1964,6 +1961,7 @@ pub mod wallet {
                 RuntimeServiceId,
                 Item = SignedOps<Preverified, StandardMode>,
                 Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                BlockId = HeaderId,
             > + Send
             + Sync
             + Clone
@@ -1987,7 +1985,6 @@ pub mod wallet {
                     Mempool<
                         HeaderId,
                         SignedOps<Preverified, StandardMode>,
-                        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,
@@ -2029,7 +2026,6 @@ pub mod wallet {
                     >,
                     StorageAdapter,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     RuntimeServiceId,
                 >(&handle, transaction.clone(), Hashable::hash)
                 .await
@@ -2061,6 +2057,7 @@ pub mod wallet {
                 RuntimeServiceId,
                 Item = SignedOps<Preverified, StandardMode>,
                 Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                BlockId = HeaderId,
             > + Send
             + Sync
             + Clone
@@ -2084,7 +2081,6 @@ pub mod wallet {
                     Mempool<
                         HeaderId,
                         SignedOps<Preverified, StandardMode>,
-                        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,
@@ -2121,6 +2117,7 @@ pub mod wallet {
                 RuntimeServiceId,
                 Item = SignedOps<Preverified, StandardMode>,
                 Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                BlockId = HeaderId,
             > + Send
             + Sync
             + Clone
@@ -2144,7 +2141,6 @@ pub mod wallet {
                     Mempool<
                         HeaderId,
                         SignedOps<Preverified, StandardMode>,
-                        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,
@@ -2181,6 +2177,7 @@ pub mod wallet {
                 RuntimeServiceId,
                 Item = SignedOps<Preverified, StandardMode>,
                 Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                BlockId = HeaderId,
             > + Send
             + Sync
             + Clone
@@ -2204,7 +2201,6 @@ pub mod wallet {
                     Mempool<
                         HeaderId,
                         SignedOps<Preverified, StandardMode>,
-                        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,

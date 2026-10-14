@@ -1061,6 +1061,7 @@ where
     trace!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
 
     let block_id = block.header().id();
+    let block_slot = block.header().slot();
     let AppliedBlock {
         tip,
         newly_canonical_txs,
@@ -1077,6 +1078,12 @@ where
     // TTL eviction.
     if let Err(err) = mempool.remove_transactions(&newly_canonical_txs).await {
         error!(target: LOG_TARGET, err, "could not remove transactions from mempool");
+    }
+
+    // Every applied block advances the mempool's clock, canonical or not: a
+    // block's slot does not depend on the chain it ends up on.
+    if let Err(err) = mempool.notify_processed_block(block_id, block_slot).await {
+        error!(target: LOG_TARGET, err, "could not notify mempool of processed block");
     }
 
     // Re-insert reorged txs back into the mempool.
@@ -1218,6 +1225,14 @@ mod tests {
 
         async fn remove_transactions(&self, _ids: &[TxHash]) -> Result<(), DynError> {
             unimplemented!("resolution never removes")
+        }
+
+        async fn notify_processed_block(
+            &self,
+            _block_id: HeaderId,
+            _slot: Slot,
+        ) -> Result<(), DynError> {
+            unimplemented!("resolution never processes blocks")
         }
 
         async fn get_transactions_by_prefix(

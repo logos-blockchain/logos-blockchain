@@ -60,13 +60,7 @@ pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
         RuntimeServiceId,
     >,
-    Mempool<
-        HeaderId,
-        SignedOps<Preverified, StandardMode>,
-        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-        StorageAdapter,
-        RuntimeServiceId,
-    >,
+    Mempool<HeaderId, SignedOps<Preverified, StandardMode>, StorageAdapter, RuntimeServiceId>,
     StorageAdapter,
     RuntimeServiceId,
 >;
@@ -108,6 +102,7 @@ where
             RuntimeServiceId,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
             Item = SignedOps<Preverified, StandardMode>,
+            BlockId = HeaderId,
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,
@@ -142,6 +137,7 @@ where
             RuntimeServiceId,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
             Item = SignedOps<Preverified, StandardMode>,
+            BlockId = HeaderId,
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,

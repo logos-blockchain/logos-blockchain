@@ -1,6 +1,9 @@
 use std::{hash::Hash, time::Duration};
 
 use indexmap::IndexMap;
+use lb_core::mantle::traits::Hashable;
+
+use crate::backend::policy::{BlockSlots, EvictionPolicy, PolicyClock, PolicySnapshot};
 
 /// Evicts transactions that stayed in the pool longer than the configured
 /// TTL, regardless of pool fill.
@@ -18,9 +21,9 @@ where
     Key: Hash + Eq + Clone,
 {
     #[must_use]
-    pub fn new(tx_ttl: Option<Duration>) -> Self {
+    pub fn new(tx_ttl: impl Into<Option<Duration>>) -> Self {
         Self {
-            tx_ttl,
+            tx_ttl: tx_ttl.into(),
             inserted: IndexMap::new(),
         }
     }
@@ -63,5 +66,33 @@ where
             tx_ttl,
             inserted: state,
         }
+    }
+}
+
+impl<Tx, BlockId> EvictionPolicy<Tx, BlockId> for TtlPolicy<Tx::Hash>
+where
+    Tx: Hashable,
+    Tx::Hash: Send + Sync,
+{
+    fn on_add(
+        &mut self,
+        key: &Tx::Hash,
+        _tx: &Tx,
+        clock: &PolicyClock,
+        _block_slots: &BlockSlots<BlockId>,
+    ) {
+        self.on_add(key.clone(), clock.now_millis);
+    }
+
+    fn on_remove(&mut self, key: &Tx::Hash) {
+        self.on_remove(key);
+    }
+
+    fn select(&self, clock: &PolicyClock) -> Vec<Tx::Hash> {
+        self.expired(clock.now_millis)
+    }
+
+    fn save(&self) -> PolicySnapshot<Tx::Hash> {
+        PolicySnapshot::Ttl(self.save())
     }
 }

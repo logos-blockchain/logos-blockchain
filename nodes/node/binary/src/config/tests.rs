@@ -272,7 +272,11 @@ fn service_settings_receive_recovery_data() {
     let mempool_service_settings = MempoolServiceConfig {
         user: user_config.mempool.clone(),
     }
-    .into_mempool_service_settings(protocol_names.mempool_topic, recovery_data.clone());
+    .into_mempool_service_settings(
+        protocol_names.mempool_topic,
+        recovery_data.clone(),
+        core::num::NonZeroU64::new(1).expect("non-zero"),
+    );
     assert_eq!(
         mempool_service_settings
             .recovery_data

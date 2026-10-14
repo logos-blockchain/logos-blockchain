@@ -125,6 +125,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -161,7 +162,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     MempoolStorageAdapter,
                     RuntimeServiceId,
                 >,
