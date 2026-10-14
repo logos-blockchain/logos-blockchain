@@ -194,7 +194,7 @@ pub fn run_node_from_config(
     let wallet_config = WalletConfig {
         user: config.user.wallet,
     }
-    .into_wallet_service_settings(recovery_data.clone());
+    .into_wallet_service_settings(recovery_data.clone(), eras);
 
     let kms_config = KmsConfig {
         user: config.user.kms,
