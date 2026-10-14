@@ -308,11 +308,11 @@ impl LedgerState {
             // case 2)
 
             // infer new total stake
-            let total_stake = StakeInference::from_config(config_for_epoch(eras, current_epoch))
+            let total_stake = StakeInference::after_epoch(eras, current_epoch)
                 .total_stake_inference::<PRECISION>(
-                self.epoch_state.total_stake,
-                self.block_density.current_block_density(),
-            );
+                    self.epoch_state.total_stake,
+                    self.block_density.current_block_density(),
+                );
             let (lottery_0, lottery_1) = config_for_epoch(eras, new_epoch)
                 .lottery_constants()
                 .compute_lottery_values(total_stake);
@@ -380,18 +380,16 @@ impl LedgerState {
             // case 3)
 
             // First, infer total stake using block density of the current epoch
-            let mut total_stake =
-                StakeInference::from_config(config_for_epoch(eras, current_epoch))
-                    .total_stake_inference::<PRECISION>(
-                        self.epoch_state.total_stake,
-                        self.block_density.current_block_density(),
-                    );
+            let mut total_stake = StakeInference::after_epoch(eras, current_epoch)
+                .total_stake_inference::<PRECISION>(
+                    self.epoch_state.total_stake,
+                    self.block_density.current_block_density(),
+                );
             // Adjust total stake with zero block density for skipped epochs,
-            // each under the config of its era
+            // each measured under its era
             for skipped_epoch in u32::from(next_epoch_state.epoch())..u32::from(new_epoch) {
-                total_stake =
-                    StakeInference::from_config(config_for_epoch(eras, Epoch::new(skipped_epoch)))
-                        .total_stake_inference::<PRECISION>(total_stake, 0);
+                total_stake = StakeInference::after_epoch(eras, Epoch::new(skipped_epoch))
+                    .total_stake_inference::<PRECISION>(total_stake, 0);
             }
             let new_config = config_for_epoch(eras, new_epoch);
             let (lottery_0, lottery_1) = new_config
@@ -1854,7 +1852,7 @@ pub mod tests {
         let config = config();
         assert_eq!(config.epoch_length(), 100);
         let (mut ledger, genesis) = ledger(&[utxo], config.clone());
-        let inference = StakeInference::from_config(&config);
+        let inference = StakeInference::after_epoch(&single_era(config), Epoch::genesis());
 
         let ts_genesis = ledger.states[&genesis]
             .cryptarchia_ledger
@@ -2256,8 +2254,8 @@ pub mod tests {
     /// slots whose block density is measured over the first 60, and a learning
     /// rate of 1. Era 1, from epoch 2: k = 4, f = 1/5 and a learning rate of
     /// 1/2, so epochs of 200 slots whose density is measured over the first
-    /// 120.
-    fn two_eras() -> (Config, Config, EraScheduledConfig) {
+    /// 120. Returns the config of era 1 and the schedule.
+    fn two_eras() -> (Config, EraScheduledConfig) {
         let era_0 = config();
         let era_1 = Config {
             consensus_config: lb_cryptarchia_engine::Config::new(
@@ -2268,8 +2266,8 @@ pub mod tests {
             ),
             ..era_0.clone()
         };
-        let eras = schedule(era_0.clone(), [(2, era_1.clone())]);
-        (era_0, era_1, eras)
+        let eras = schedule(era_0, [(2, era_1.clone())]);
+        (era_1, eras)
     }
 
     /// The state in epoch 1, the last of era 0, at its first slot, with a
@@ -2295,7 +2293,7 @@ pub mod tests {
 
     #[test]
     fn an_era_boundary_settles_the_epoch_under_its_era_and_sets_up_the_next_under_its_own() {
-        let (era_0, era_1, eras) = two_eras();
+        let (era_1, eras) = two_eras();
         let state = state_in_last_epoch_of_era_0(&eras);
 
         let state = state
@@ -2308,21 +2306,17 @@ pub mod tests {
             .unwrap();
         assert_eq!(state.epoch_state.epoch, 2);
 
-        // The total stake is inferred from the density of epoch 1 under era 0.
-        let total_stake =
-            StakeInference::from_config(&era_0).total_stake_inference::<PRECISION>(10_000, 3);
-        assert_eq!(total_stake, 5_000);
-        assert_ne!(
-            StakeInference::from_config(&era_1).total_stake_inference::<PRECISION>(10_000, 3),
-            total_stake
-        );
-        assert_eq!(state.epoch_state.total_stake, total_stake);
+        // The density of epoch 1 is measured under era 0, against the 6 blocks
+        // its 60 slots are expected to hold at f = 1/10, and the stake of epoch
+        // 2 corrected with the learning rate of 1/2 of era 1:
+        // 10000 - 1/2 * 10000 * (6 - 3) / 6.
+        assert_eq!(state.epoch_state.total_stake, 7_500);
         // The lottery values of epoch 2 follow f of era 1.
         assert_eq!(
             (state.epoch_state.lottery_0, state.epoch_state.lottery_1),
             era_1
                 .lottery_constants()
-                .compute_lottery_values(total_stake)
+                .compute_lottery_values(state.epoch_state.total_stake)
         );
         // The density of epoch 2 is measured over the first 120 of its 200
         // slots.
@@ -2337,7 +2331,7 @@ pub mod tests {
 
     #[test]
     fn a_jump_over_an_era_boundary_settles_each_skipped_epoch_under_its_era() {
-        let (era_0, era_1, eras) = two_eras();
+        let (era_1, eras) = two_eras();
         let state = state_in_last_epoch_of_era_0(&eras);
 
         // From epoch 1 straight to epoch 3, skipping epoch 2 of era 1.
@@ -2351,20 +2345,16 @@ pub mod tests {
             .unwrap();
         assert_eq!(state.epoch_state.epoch, 3);
 
-        // Epoch 1 is settled under era 0, then epoch 2, without a block, under
-        // era 1, whose learning rate of 1/2 halves the stake instead of
-        // dropping it to the minimum.
-        let total_stake = StakeInference::from_config(&era_1).total_stake_inference::<PRECISION>(
-            StakeInference::from_config(&era_0).total_stake_inference::<PRECISION>(10_000, 3),
-            0,
-        );
-        assert_eq!(total_stake, 2_500);
-        assert_eq!(state.epoch_state.total_stake, total_stake);
+        // The stake of epoch 2 is inferred from epoch 1 as when no epoch is
+        // skipped, 7500. Epoch 2, without a block, is measured under era 1, and
+        // the stake of epoch 3 corrected with the learning rate of 1/2 of era
+        // 1, which halves it instead of dropping it to the minimum.
+        assert_eq!(state.epoch_state.total_stake, 3_750);
         assert_eq!(
             (state.epoch_state.lottery_0, state.epoch_state.lottery_1),
             era_1
                 .lottery_constants()
-                .compute_lottery_values(total_stake)
+                .compute_lottery_values(state.epoch_state.total_stake)
         );
         assert_eq!(
             state.block_density.period_range(),

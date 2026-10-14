@@ -35,7 +35,7 @@ use lb_wallet_service::{
 };
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 #[cfg(test)]
-pub use pol_tests::test_config;
+pub use pol_tests::{single_era, test_config};
 use rand::rngs::OsRng;
 use tokio::{
     sync::{mpsc, oneshot},
@@ -691,7 +691,7 @@ mod pol_tests {
     }
 
     /// `config` as the only era, from genesis.
-    fn single_era(config: lb_ledger::Config) -> EraScheduledConfig {
+    pub fn single_era(config: lb_ledger::Config) -> EraScheduledConfig {
         EraSchedule::new(
             time::OffsetDateTime::UNIX_EPOCH,
             EraTiming {
