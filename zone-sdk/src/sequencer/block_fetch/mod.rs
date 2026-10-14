@@ -26,8 +26,8 @@ use tracing::{debug, error};
 
 use super::{
     TARGET,
-    block_states::BlockChannelTx,
-    channel_wallet::{NoteOp, note_ops_from_txs},
+    block_states::{BlockChannelTx, NoteOp},
+    channel_wallet::note_ops_from_txs,
     state::{ChannelUpdateInfo, PendingBundle, TxState},
     types::{
         AtomicWithdrawInfo, ChannelTransferInfo, ChannelUpdateTx, DepositInfo, Error, FinalizedOp,
@@ -623,8 +623,7 @@ struct PreparedFinalizedBlock {
     our_txs: Vec<TxHash>,
     channel_txs: Vec<BlockChannelTx>,
     items: Vec<FinalizedTx>,
-    /// Wallet note ops for this finalized block, applied straight to the
-    /// finalized base (never the per-block overlay).
+    /// Channel-note ops of this finalized block.
     note_ops: Vec<NoteOp>,
 }
 
@@ -715,18 +714,17 @@ fn apply_finalized_blocks(
         result.our_tx_hashes.extend(block.our_txs.iter().copied());
         result.items.extend(block.items);
 
-        // Immutable blocks: note ops go straight to the wallet's finalized
-        // base, never through the per-block overlay.
-        state.apply_finalized_note_ops(block.note_ops);
-
         state.process_block(
             block.block_id,
             block.parent_id,
             state.lib(),
             block.our_txs,
             block.channel_txs,
-            Vec::new(),
+            block.note_ops,
         );
+        // Immutable blocks are inserted without moving LIB; their notes are
+        // finalized all the same.
+        state.set_finalized_notes_at(block.block_id);
     }
 
     result

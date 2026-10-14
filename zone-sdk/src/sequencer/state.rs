@@ -30,8 +30,7 @@ fn inscription_signer(
 
 use super::{
     block_fetch::{channel_configs, channel_inscriptions, channel_transfers, is_pure_config},
-    block_states::{BlockChannelTx, BlockStates},
-    channel_wallet::{ChannelWallet, NoteOp},
+    block_states::{BlockChannelTx, BlockStates, NoteOp},
     types::{
         AtomicWithdrawInfo, ChannelNote, ChannelUpdateTx, ChannelWalletView, Error,
         InscriptionInfo, PendingFunding, PendingTx, PinDepositInfo, WithdrawInfo,
@@ -235,13 +234,12 @@ pub struct TxState {
     pending_other: HashMap<TxHash, PendingOtherTx>,
     /// Monotonic submission counter for [`Self::pending_other`] entries.
     next_other_seq: u64,
-    /// The unfinalized L1 window: blocks, safe sets and channel content.
+    /// The unfinalized L1 window: blocks, safe sets, note sets and channel
+    /// content.
     blocks: BlockStates,
     /// Config tip last seen by the config-driven inscription shed; a change
     /// means a config landed (or the branch's config lineage diverged).
     observed_config_tip: MsgId,
-    /// The channel's note set: finalized base + per-block overlay.
-    wallet: ChannelWallet,
 }
 
 impl TxState {
@@ -255,7 +253,6 @@ impl TxState {
             displaced_other: Vec::new(),
             pending_other: HashMap::new(),
             observed_config_tip: MsgId::root(),
-            wallet: ChannelWallet::default(),
             next_other_seq: 0,
         }
     }
@@ -851,8 +848,7 @@ impl TxState {
         note_ops: Vec<NoteOp>,
     ) {
         self.blocks
-            .insert(block_id, parent_id, our_txs, channel_txs);
-        self.wallet.store_overlay(block_id, note_ops);
+            .insert(block_id, parent_id, our_txs, channel_txs, note_ops);
 
         // When lib advances: update finalized_msg and prune.
         // NOTE: we do NOT remove pending txs here. Pending txs are only
@@ -862,12 +858,9 @@ impl TxState {
         // as proof of canonical finalization — it can include blocks
         // from orphaned branches in concurrent scenarios.
         if lib != self.blocks.lib() {
-            let pruned = self.blocks.advance_lib(lib, |hash| {
+            self.blocks.advance_lib(lib, |hash| {
                 self.pending.contains_key(hash) || self.pending_other.contains_key(hash)
             });
-            for block in pruned {
-                self.wallet.prune_block(&block);
-            }
         }
     }
 
@@ -1560,38 +1553,34 @@ impl TxState {
         }
     }
 
-    /// Apply channel-note ops from finalized blocks to the wallet base set.
-    pub fn apply_finalized_note_ops(&mut self, ops: Vec<NoteOp>) {
-        self.wallet.apply_finalized(ops);
+    /// Make a backfilled finalized block's note set the finalized one (see
+    /// [`BlockStates::set_finalized_notes_at`]).
+    pub fn set_finalized_notes_at(&mut self, block: HeaderId) {
+        self.blocks.set_finalized_notes_at(block);
     }
 
-    /// The channel's note set at `tip` (or the finalized base only when no
-    /// tip is known yet). The overlay walk excludes the LIB block: blocks at
-    /// and below LIB reach the base via the finalized-backfill path.
+    /// The channel's note set at `tip` (or the finalized set only when no
+    /// tip is known yet).
     #[must_use]
     pub fn channel_wallet_view(&self, tip: Option<HeaderId>) -> ChannelWalletView {
-        let blocks = tip
-            .map(|tip| self.blocks.branch_blocks_above_lib(tip))
-            .unwrap_or_default();
-        self.wallet.view(blocks.iter())
+        self.blocks.notes_at(tip)
     }
 
-    /// Look up a tracked channel note by id (see
-    /// [`ChannelWallet::find_note`](super::channel_wallet::ChannelWallet::find_note)).
+    /// Look up a tracked channel note by id (see [`BlockStates::find_note`]).
     #[must_use]
     pub fn find_channel_note(&self, id: &NoteId) -> Option<&ChannelNote> {
-        self.wallet.find_note(id)
+        self.blocks.find_note(id)
     }
 
-    /// Export the finalized channel-note base for checkpointing.
+    /// Export the finalized channel-note set for checkpointing.
     #[must_use]
     pub fn channel_notes_base(&self) -> Vec<ChannelNote> {
-        self.wallet.export_base()
+        self.blocks.finalized_notes()
     }
 
-    /// Restore the finalized channel-note base from a checkpoint.
+    /// Restore the finalized channel-note set from a checkpoint.
     pub fn restore_channel_notes(&mut self, notes: Vec<ChannelNote>) {
-        self.wallet.restore_base(notes);
+        self.blocks.restore_finalized_notes(notes);
     }
 
     /// Signed channel txs on `tip`'s branch strictly above LIB (finalized never
@@ -1875,10 +1864,9 @@ mod tests {
     }
 
     #[test]
-    fn wallet_lib_advance_excludes_folded_overlay() {
-        // G <- a1 (adds n1) <- a2; LIB advances to a1. The finalized-backfill
-        // path applies a1's ops to the base; the branch walk from a2 must
-        // exclude a1's overlay entry so the note is not double-counted.
+    fn wallet_lib_advance_finalizes_the_lib_block_notes() {
+        // G <- a1 (adds n1) <- a2; LIB advances to a1, so n1 moves from the
+        // unfinalized to the finalized part of the view, counted once.
         let genesis = header_id(0);
         let a1 = header_id(1);
         let a2 = header_id(2);
@@ -1892,8 +1880,10 @@ mod tests {
             vec![],
             vec![wallet_note(1, 10)],
         );
-        // What `fetch_and_process_blocks` does when a1's range finalizes:
-        state.apply_finalized_note_ops(vec![wallet_note(1, 10)]);
+        let view = state.channel_wallet_view(Some(a1));
+        assert_eq!(view.finalized, []);
+        assert_eq!(view.unfinalized.len(), 1);
+
         state.process_block(a2, a1, a1, vec![], vec![], Vec::new());
 
         let view = state.channel_wallet_view(Some(a2));
@@ -1901,7 +1891,7 @@ mod tests {
         assert_eq!(view.finalized[0].note_id, wallet_note_id(1));
         assert!(
             view.unfinalized.is_empty(),
-            "a1's overlay entry must not double-count the finalized note"
+            "the finalized note must not be counted again as unfinalized"
         );
     }
 
@@ -2000,8 +1990,16 @@ mod tests {
     #[test]
     fn wallet_checkpoint_roundtrip() {
         let genesis = header_id(0);
+        let a1 = header_id(1);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.apply_finalized_note_ops(vec![wallet_note(1, 10), wallet_note(2, 20)]);
+        state.process_block(
+            a1,
+            genesis,
+            a1,
+            vec![],
+            vec![],
+            vec![wallet_note(1, 10), wallet_note(2, 20)],
+        );
 
         let mut exported = state.channel_notes_base();
         exported.sort_by_key(|n| n.note_id);
