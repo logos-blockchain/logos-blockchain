@@ -475,16 +475,16 @@ impl Cryptarchia {
             return Err(Error::AlreadyApplied(id));
         }
 
-        // Reject blocks from future slots
-        if slot > current_slot {
-            return Err(Error::FutureBlock {
-                block_slot: slot,
-                current_slot,
-            });
-        }
-
-        // A block is valid only if every uncle it carries is valid.
         if origin == BlockOrigin::Network {
+            // Reject blocks from future slots
+            if slot > current_slot {
+                return Err(Error::FutureBlock {
+                    block_slot: slot,
+                    current_slot,
+                });
+            }
+
+            // A block is valid only if every uncle it carries is valid.
             self.verify_uncles(&block)?;
         }
 
@@ -1149,5 +1149,9 @@ pub enum BlockOrigin {
     /// The uncle validity rules are skipped for it, since the parent of an
     /// uncle may be older than LIB, and blocks older than LIB are not
     /// recovered.
+    ///
+    /// The future-slot check is also skipped, since the current slot returned
+    /// from the time service may be behind the slot at which the block was
+    /// accepted (e.g., before the time service calibrates the clock with NTP).
     Storage,
 }

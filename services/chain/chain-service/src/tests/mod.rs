@@ -376,6 +376,122 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
     assert_eq!(initialized.cryptarchia.tip(), b2_id);
 }
 
+/// The chain must be recovered successfully from storage even if the current
+/// slot sampled at startup is behind the slot of the stored tip.
+///
+/// Build a chain `G -- B1 -- B2`, and recover it with `LIB = B1`, `tip = B2`
+/// and `current_slot = B2.slot - 1`.
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_chain_with_tip_ahead_of_current_slot() {
+    type Tx = SignedOps<Preverified, StandardMode>;
+
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    let _storage_svc = spawn_storage_service(storage_rx);
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays = CryptarchiaConsensusRelays::<Tx>::new(
+        OutboundRelay::new(broadcast_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
+        OutboundRelay::new(time_tx),
+    );
+    let (new_block_tx, _new_block_rx) = broadcast::channel(10);
+    let (lib_tx, _lib_rx) = broadcast::channel(10);
+
+    // Before the restart: `B1` and `B2` are verified and stored.
+    let (zk_key, utxo) = utxo();
+    let mut stored = genesis_cryptarchia(utxo);
+    let mut blocks = Vec::new();
+    let mut slot = Slot::genesis().strict_add(1.into());
+    for _ in 0..2 {
+        let (block, _) = try_build_block(
+            &stored,
+            stored.tip(),
+            utxo,
+            &zk_key,
+            slot,
+            UncleHeaders::empty(),
+        )
+        .unwrap();
+        slot = block.header().slot().strict_add(1.into());
+        process_block(
+            &mut stored,
+            block.clone(),
+            block.header().slot(),
+            BlockOrigin::Network,
+            &relays,
+            &new_block_tx,
+            &lib_tx,
+        )
+        .await
+        .unwrap();
+        blocks.push(block);
+    }
+    let (b1, b2) = (&blocks[0], &blocks[1]);
+    let (b1_id, b2_id) = (b1.header().id(), b2.header().id());
+    let current_slot = b2.header().slot().checked_sub(1.into()).unwrap();
+
+    let recovery_state = CryptarchiaConsensusState {
+        tip: b2_id,
+        lib: b1_id,
+        lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
+        lib_block_length: 1,
+        lib_block_slot: b1.header().slot(),
+        lib_block_uncle_slots: UncleSlots::default(),
+        genesis_id: GENESIS_ID.into(),
+        storage_blocks_to_remove: HashSet::new(),
+        last_engine_state: None,
+    };
+    let bootstrap_config = BootstrapConfig {
+        prolonged_bootstrap_period: std::time::Duration::ZERO,
+        force_bootstrap: true,
+        offline_grace_period: OfflineGracePeriodConfig::default(),
+    };
+    let initialized = CryptarchiaConsensus::<
+        Tx,
+        SystemTimeBackend,
+        TestRuntimeServiceId,
+    >::initialize_cryptarchia(
+        &recovery_state,
+        &bootstrap_config,
+        stored.ledger.config().clone(),
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+        current_slot,
+    )
+    .await
+    .expect("the chain should be recovered");
+    assert!(!initialized.fell_back_to_lib);
+    assert_eq!(initialized.cryptarchia.lib(), b1_id);
+    assert_eq!(initialized.cryptarchia.tip(), b2_id);
+}
+
+/// A block from the network must still be rejected if its slot is ahead of the
+/// current slot, while the same block replayed from storage is accepted.
+#[test]
+fn future_block_is_rejected_only_from_network() {
+    let (cryptarchia, block) = test_chain_with_next_block();
+    let block_slot = block.header().slot();
+    let current_slot = block_slot.checked_sub(1.into()).unwrap();
+
+    let result = cryptarchia.clone().try_apply_block_with_state_retention(
+        block.clone(),
+        current_slot,
+        BlockOrigin::Network,
+    );
+    assert!(matches!(
+        result,
+        Err(Error::FutureBlock { block_slot: s, current_slot: c })
+            if s == block_slot && c == current_slot
+    ));
+
+    let mut cryptarchia = cryptarchia;
+    cryptarchia
+        .try_apply_block_with_state_retention(block.clone(), current_slot, BlockOrigin::Storage)
+        .expect("a stored block should be replayed regardless of the current slot");
+    assert_eq!(cryptarchia.tip(), block.header().id());
+}
+
 /// Header traversal must continue from storage past a recovered LIB, instead of
 /// treating the LIB as genesis.
 ///
