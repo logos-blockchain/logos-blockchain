@@ -134,11 +134,12 @@ impl DeploymentSettings {
     }
 
     /// The fork digest of the era in force by the wall clock, which names the
-    /// fork-bound protocols of this deployment's chain now.
+    /// fork-bound protocols of this deployment's chain now: the genesis era's
+    /// before genesis.
     #[must_use]
     pub fn fork_digest_in_force(&self) -> ForkDigest {
         self.eras
-            .at_slot(self.slot_now().unwrap())
+            .at_slot(self.slot_now().unwrap_or(Slot::genesis()))
             .parameters
             .fork_digest
     }
