@@ -119,9 +119,24 @@
               '';
             }
           );
+
+          logosSqlArgs = commonArgs // {
+            pname = "logos-sql-c";
+            cargoExtraArgs = "-p logos-sql-c";
+          };
+          logosSqlC = craneLib.buildPackage (logosSqlArgs // {
+            cargoArtifacts = craneLib.buildDepsOnly logosSqlArgs;
+            postInstall = ''
+              mkdir -p $out/include
+              cp logos_sql/c-bindings/logos_sql.h $out/include/
+            '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+              install_name_tool -id @rpath/liblogos_sql.dylib $out/lib/liblogos_sql.dylib
+            '';
+          });
         in
         {
           logos-blockchain-c = logosBlockChainC;
+          logos-sql-c = logosSqlC;
           default = logosBlockChainC;
         }
       );

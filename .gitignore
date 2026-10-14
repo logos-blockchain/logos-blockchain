@@ -26,6 +26,7 @@ tests/.run_*
 
 # C headers
 c-bindings/logos_blockchain.h
+logos_sql/c-bindings/logos_sql.h
 
 # Demo sequencer related ignores
 node_modules
