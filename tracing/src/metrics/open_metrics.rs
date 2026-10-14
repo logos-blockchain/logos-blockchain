@@ -1,6 +1,19 @@
 use opentelemetry_prometheus::PrometheusExporter;
 use opentelemetry_sdk::error::OTelSdkError;
 use prometheus::{Error, Registry, TextEncoder};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OpenMetricsConfig {
+    pub enabled: bool,
+}
+
+impl OpenMetricsConfig {
+    #[must_use]
+    pub const fn disabled() -> Self {
+        Self { enabled: false }
+    }
+}
 
 /// On-demand `OpenMetrics` source, backed by the registry its paired reader
 /// feeds.

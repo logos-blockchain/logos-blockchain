@@ -1,4 +1,7 @@
-use lb_tracing::{OtlpProtocol, OtlpServiceConfig, metrics::otlp::OtlpMetricsConfig};
+use lb_tracing::{
+    OtlpProtocol, OtlpServiceConfig,
+    metrics::{open_metrics, otlp::OtlpMetricsConfig},
+};
 use lb_tracing_service::MetricsLayerSettings;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -7,7 +10,7 @@ use url::Url;
 #[serde(default)]
 pub struct Layer {
     otlp: Option<OtlpConfig>,
-    enable_open_metrics: bool,
+    open_metrics: Option<OpenMetricsConfig>,
 }
 
 impl Layer {
@@ -15,7 +18,7 @@ impl Layer {
     pub const fn from_otlp(otlp: Option<OtlpConfig>) -> Self {
         Self {
             otlp,
-            enable_open_metrics: false,
+            open_metrics: None,
         }
     }
 
@@ -23,7 +26,7 @@ impl Layer {
     pub const fn none() -> Self {
         Self {
             otlp: None,
-            enable_open_metrics: false,
+            open_metrics: None,
         }
     }
 }
@@ -38,10 +41,13 @@ impl From<Layer> for MetricsLayerSettings {
                 protocol: otlp.protocol,
             },
         });
-        Self {
-            otlp,
-            enable_open_metrics: value.enable_open_metrics,
-        }
+        let open_metrics = open_metrics::OpenMetricsConfig {
+            enabled: value
+                .open_metrics
+                .is_some_and(|open_metrics_config| open_metrics_config.enabled),
+        };
+
+        Self { otlp, open_metrics }
     }
 }
 
@@ -52,4 +58,11 @@ pub struct OtlpConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorization_header: Option<String>,
     pub protocol: OtlpProtocol,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OpenMetricsConfig {
+    /// Explicit flag, since an empty block is ambiguous as an on switch.
+    /// Can be removed if and when more attributes are added.
+    pub enabled: bool,
 }

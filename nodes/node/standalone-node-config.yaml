@@ -233,7 +233,8 @@ tracing:
       hyper_util: WARN
   metrics:
     otlp: null
-    enable_open_metrics: false
+    open_metrics:
+      enabled: false
   console: None
   level: "INFO"
 state:

@@ -16,7 +16,11 @@ use lb_tracing::{
         loki::{LokiConfig, create_loki_layer},
         otlp::{OtlpLoggingConfig, create_otlp_layer},
     },
-    metrics::{layer::create_metrics_layer, open_metrics::OpenMetrics, otlp::OtlpMetricsConfig},
+    metrics::{
+        layer::create_metrics_layer,
+        open_metrics::{OpenMetrics, OpenMetricsConfig},
+        otlp::OtlpMetricsConfig,
+    },
     tracing::otlp::{OtlpTracingConfig, create_otlp_tracing_layer},
 };
 use overwatch::{
@@ -132,7 +136,7 @@ pub enum FilterLayerSettings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MetricsLayerSettings {
     pub otlp: Option<OtlpMetricsConfig>,
-    pub enable_open_metrics: bool,
+    pub open_metrics: OpenMetricsConfig,
 }
 
 impl MetricsLayerSettings {
@@ -140,7 +144,7 @@ impl MetricsLayerSettings {
     pub const fn none() -> Self {
         Self {
             otlp: None,
-            enable_open_metrics: false,
+            open_metrics: OpenMetricsConfig::disabled(),
         }
     }
 }
@@ -315,7 +319,7 @@ where
         }
 
         let open_metrics =
-            match create_metrics_layer(config.metrics.otlp, config.metrics.enable_open_metrics)? {
+            match create_metrics_layer(config.metrics.otlp, &config.metrics.open_metrics)? {
                 Some((metrics_layer, open_metrics)) => {
                     other_layers.push(Box::new(metrics_layer));
                     open_metrics
