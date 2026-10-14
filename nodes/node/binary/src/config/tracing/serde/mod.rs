@@ -1,4 +1,5 @@
 pub use ::tracing::Level;
+use lb_tracing::logging::local::TextKind;
 use serde::{Deserialize, Serialize};
 
 pub mod console;
@@ -43,6 +44,7 @@ impl Config {
                 loki: None,
                 gelf: None,
                 otlp: None,
+                format: logger::LogFormat::Text(TextKind::Ansi),
                 stdout: false,
                 stderr: false,
             },

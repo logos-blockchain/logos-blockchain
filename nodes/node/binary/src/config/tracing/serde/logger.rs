@@ -1,7 +1,7 @@
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 
-pub use lb_tracing::logging::local::AppenderType;
+pub use lb_tracing::logging::local::{AppenderType, LogFormat};
 use lb_tracing::logging::local::{CompressionType, RetentionType, RollingConfig, RotationType};
 use lb_tracing_service::LoggerLayerSettings;
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,8 @@ pub struct Layers {
     pub loki: Option<LokiConfig>,
     pub gelf: Option<GelfConfig>,
     pub otlp: Option<OtlpConfig>,
+    #[serde(default)]
+    pub format: LogFormat,
     pub stdout: bool,
     pub stderr: bool,
 }
@@ -37,6 +39,7 @@ impl Default for Layers {
             loki: None,
             gelf: None,
             otlp: None,
+            format: LogFormat::default(),
         }
     }
 }
@@ -66,6 +69,7 @@ impl From<Layers> for LoggerLayerSettings {
                         protocol: o.protocol,
                     },
                 }),
+            format: value.format,
             stdout: value.stdout,
             stderr: value.stderr,
         }

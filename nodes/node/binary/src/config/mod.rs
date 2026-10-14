@@ -15,7 +15,10 @@ use lb_key_management_system_service::{
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::{
     filter::envfilter::{default_envfilter_config, parse_filter_directives},
-    logging::local::{AppenderType, CompressionType, RetentionType, RollingConfig, RotationType},
+    logging::local::{
+        AppenderType, CompressionType, LogFormat, RetentionType, RollingConfig, RotationType,
+        TextKind,
+    },
 };
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
@@ -225,6 +228,26 @@ pub struct LogArgs {
         required_if_eq("file_appender", LogFileAppenderType::RollingMaxFiles)
     )]
     pub max_files: Option<usize>,
+
+    #[clap(long = "log-format", env = "LOG_FORMAT")]
+    pub format: Option<CliLogFormat>,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum CliLogFormat {
+    Text,
+    TextNoAnsi,
+    Json,
+}
+
+impl From<CliLogFormat> for LogFormat {
+    fn from(cli_format: CliLogFormat) -> Self {
+        match cli_format {
+            CliLogFormat::Text => Self::Text(TextKind::Ansi),
+            CliLogFormat::TextNoAnsi => Self::Text(TextKind::NoAnsi),
+            CliLogFormat::Json => Self::Json,
+        }
+    }
 }
 
 #[derive(Parser, Debug, Default, Clone)]
@@ -329,7 +352,12 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
         filter,
         file_appender,
         max_files,
+        format,
     } = tracing_args;
+
+    if let Some(cli_format) = format {
+        tracing.logger.format = cli_format.into();
+    }
 
     if let Some(backend_type) = backend {
         match backend_type {
