@@ -347,27 +347,6 @@ fn build_search_pool(max_threads: Option<NonZeroUsize>) -> Arc<rayon::ThreadPool
     )
 }
 
-/// The ticket search of an era: on a thread pool of its own, with the era's
-/// per-block concurrency and reward window.
-async fn new_era_ticket_generator<Tx, CryptarchiaService>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
-    pool: &Arc<rayon::ThreadPool>,
-    mining_settings: &PoWMiningSettings,
-    era_settings: &PoWEraSettings,
-) -> Result<TicketGenerator, ChainApiError>
-where
-    Tx: Send + 'static,
-    CryptarchiaService: CryptarchiaServiceData<Tx = Tx> + Sync + 'static,
-{
-    TicketGenerator::new::<Tx, _>(
-        cryptarchia_api.clone(),
-        Arc::clone(pool),
-        mining_settings.max_tickets_per_block,
-        era_settings.slot_window,
-    )
-    .await
-}
-
 impl StorageRecoverySettings for PoWServiceSettings {
     const RECOVERY_KEY_SUFFIX: &'static [u8] = b"pow";
 
@@ -560,9 +539,9 @@ where
         // every claim forever. Refuse to start rather than mis-pay.
         validate_claim_targets(&wallet_api, &settings.auto_claim.targets).await?;
 
-        // The service runs with the settings of the era the clock is in, and
-        // builds the ticket search again when the clock enters an era with
-        // another reward window.
+        // Whether claims pay follows the era the clock is in. A ticket keeps
+        // the reward window of the era of the epoch it was mined for, which
+        // its claim is verified under.
         let (current_era_tick, mut era_ticks) =
             get_era_clock::<TimeBackendType, _>(&service_resources_handle.overwatch_handle).await?;
         let mut current_era_settings = settings.era_schedule.at_slot(current_era_tick.slot);
@@ -571,12 +550,12 @@ where
         // Tokio's runtime threads.
         let pool = build_search_pool(settings.mining.max_threads);
 
-        // Stream of winning PoW tickets for the current era, one per solved puzzle.
-        let mut winning_tickets = new_era_ticket_generator(
-            &cryptarchia_api,
-            &pool,
-            &settings.mining,
-            current_era_settings.parameters,
+        // Stream of winning PoW tickets, one per solved puzzle.
+        let mut winning_tickets = TicketGenerator::new::<Tx, _>(
+            cryptarchia_api.clone(),
+            pool,
+            settings.mining.max_tickets_per_block,
+            settings.era_schedule.clone(),
         )
         .await?;
 
@@ -658,7 +637,7 @@ where
                                 claim_address,
                                 &settings.auto_claim.targets,
                                 &mut state,
-                                current_era_settings.parameters.slot_window,
+                                &settings.era_schedule,
                             )
                             .await
                             .inspect_err(|e| {
@@ -670,7 +649,7 @@ where
                             }
                         }
                         PoWServiceMessage::ClaimableRewardsInfo { response } => {
-                            respond_claimable_rewards(&cryptarchia_api, &mut state, &state_updater, response, current_era_settings.parameters.slot_window).await;
+                            respond_claimable_rewards(&cryptarchia_api, &mut state, &state_updater, response, &settings.era_schedule).await;
                         }
                         PoWServiceMessage::Status { response } => {
                             let status = PoWStatus {
@@ -691,7 +670,7 @@ where
                     // previously stored tickets whose window has since closed.
                     let current_slot = winning_ticket.block_slot;
                     state.ready_to_claim.push(winning_ticket);
-                    prune_expired_tickets(&mut state, current_slot, current_era_settings.parameters.slot_window);
+                    prune_expired_tickets(&mut state, current_slot, &settings.era_schedule);
                     info!(
                         target: LOG_TARGET,
                         "Mined a winning ticket 💲; total claimable tickets {}",
@@ -702,21 +681,13 @@ where
                 // A block was processed: retire any pending claim whose reward
                 // note it minted (i.e. the claim has settled on chain).
                 Some(processed_block) = processed_blocks.next() => {
-                    retire_settled_claims(&cryptarchia_api, &mut state, &state_updater, processed_block, current_era_settings.parameters.slot_window).await;
+                    retire_settled_claims(&cryptarchia_api, &mut state, &state_updater, processed_block, &settings.era_schedule).await;
                 }
-                // The clock entered another era: the ticket search is built
-                // again if the era has another reward window.
+                // The clock entered another era: whether claims pay follows it.
                 Some(era_tick) = era_ticks.next() => {
                     if era_tick.era > current_era_settings.era {
                         info!(target: LOG_TARGET, "PoW follows era {} from slot {}", era_tick.era.into_inner(), u64::from(era_tick.slot));
-                        let previous_slot_window = current_era_settings.parameters.slot_window;
                         current_era_settings = settings.era_schedule.at_slot(era_tick.slot);
-                        if current_era_settings.parameters.slot_window != previous_slot_window {
-                            match new_era_ticket_generator(&cryptarchia_api, &pool, &settings.mining, current_era_settings.parameters).await {
-                                Ok(generator) => winning_tickets = generator,
-                                Err(e) => error!(target: LOG_TARGET, "Failed to rebuild the PoW ticket search for the new era, keeping the previous one: {e}"),
-                            }
-                        }
                     }
                 }
                 // Auto-claim tick: drain the ready tickets into the neediest
@@ -733,7 +704,7 @@ where
                             &settings.auto_claim.targets,
                             &mut state,
                             &state_updater,
-                            current_era_settings.parameters.slot_window,
+                            &settings.era_schedule,
                         )
                         .await;
                         if !auto_claiming && is_mining {
@@ -992,7 +963,7 @@ async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, Runtime
     targets: &[ClaimTarget],
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
-    slot_window: NonZeroU64,
+    era_schedule: &ServiceEraSchedule,
 ) -> bool
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1026,7 +997,7 @@ where
         claim_address,
         state,
         state_updater,
-        slot_window,
+        era_schedule,
     )
     .await;
     true
@@ -1050,7 +1021,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
-    slot_window: NonZeroU64,
+    era_schedule: &ServiceEraSchedule,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     BlendService: BlendServiceData,
@@ -1072,7 +1043,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
             blend_api,
             claim_address,
             state,
-            slot_window,
+            era_schedule,
             available_pool,
         )
         .await
@@ -1116,7 +1087,7 @@ async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeSe
     claim_address: Option<ZkPublicKey>,
     targets: &[ClaimTarget],
     state: &mut PoWServiceState,
-    slot_window: NonZeroU64,
+    era_schedule: &ServiceEraSchedule,
 ) -> Result<Option<TxHash>, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1143,7 +1114,7 @@ where
         blend_api,
         claim_address,
         state,
-        slot_window,
+        era_schedule,
         available_pool,
     )
     .await?
@@ -1190,7 +1161,7 @@ async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
-    slot_window: NonZeroU64,
+    era_schedule: &ServiceEraSchedule,
     available_pool: Value,
 ) -> Result<Option<PublishedClaim>, PoWError>
 where
@@ -1205,7 +1176,7 @@ where
 
     // Drop any tickets whose window has closed before building the batch, so an
     // expired ticket never poisons the tx.
-    prune_expired_tickets(state, info.slot, slot_window);
+    prune_expired_tickets(state, info.slot, era_schedule);
     if state.ready_to_claim.is_empty() {
         return Ok(None);
     }
@@ -1277,6 +1248,16 @@ where
     }))
 }
 
+/// The reward window of a ticket anchored to a block at `block_slot`: the
+/// window of the era of the block's epoch.
+///
+/// A ticket is mined against the nonce of that epoch, and a claim is verified
+/// under the era of the epoch whose nonce it carries, whatever the era of the
+/// block that includes it.
+pub fn reward_window(era_schedule: &ServiceEraSchedule, block_slot: Slot) -> NonZeroU64 {
+    era_schedule.at_slot(block_slot).parameters.slot_window
+}
+
 /// Whether a ticket anchored to a block at `block_slot` is still within its
 /// reward window at `current_slot`: claimable while
 /// `current_slot - block_slot <= slot_window`.
@@ -1286,19 +1267,27 @@ fn is_within_reward_window(block_slot: Slot, current_slot: Slot, slot_window: No
         .is_some_and(|last_claimable_slot| last_claimable_slot >= u64::from(current_slot))
 }
 
-/// Drops tickets whose reward window has closed at `current_slot`.
+/// Drops tickets whose reward window has closed at `current_slot`, each by the
+/// window of its era.
 ///
 /// Once a ticket falls out of the window it can never be claimed, so keeping it
 /// only bloats the state and would poison a claim tx built from the batch. Both
 /// the ready and pending sets are pruned in place.
-fn prune_expired_tickets(state: &mut PoWServiceState, current_slot: Slot, slot_window: NonZeroU64) {
+fn prune_expired_tickets(
+    state: &mut PoWServiceState,
+    current_slot: Slot,
+    era_schedule: &ServiceEraSchedule,
+) {
+    let is_claimable = |ticket: &WinningTicket| {
+        is_within_reward_window(
+            ticket.block_slot,
+            current_slot,
+            reward_window(era_schedule, ticket.block_slot),
+        )
+    };
     let before = state.ready_to_claim.len() + state.pending_to_claim.len();
-    state
-        .ready_to_claim
-        .retain(|ticket| is_within_reward_window(ticket.block_slot, current_slot, slot_window));
-    state
-        .pending_to_claim
-        .retain(|ticket| is_within_reward_window(ticket.block_slot, current_slot, slot_window));
+    state.ready_to_claim.retain(is_claimable);
+    state.pending_to_claim.retain(is_claimable);
     let pruned = before - (state.ready_to_claim.len() + state.pending_to_claim.len());
     if pruned > 0 {
         info!(target: LOG_TARGET, "Pruned {pruned} expired PoW ticket(s)");
@@ -1313,7 +1302,7 @@ async fn respond_claimable_rewards<CryptarchiaService>(
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     response: oneshot::Sender<ClaimableRewardsInfo>,
-    slot_window: NonZeroU64,
+    era_schedule: &ServiceEraSchedule,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
@@ -1326,9 +1315,9 @@ async fn respond_claimable_rewards<CryptarchiaService>(
     };
     // Drop expired tickets first, so the report covers only what is still
     // claimable.
-    prune_expired_tickets(state, current_slot, slot_window);
+    prune_expired_tickets(state, current_slot, era_schedule);
     state_updater.update(Some(state.clone()));
-    let claimable = claimable_rewards_info(&state.ready_to_claim, current_slot, slot_window);
+    let claimable = claimable_rewards_info(&state.ready_to_claim, current_slot, era_schedule);
     if response.send(claimable).is_err() {
         error!(target: LOG_TARGET, "ClaimableRewardsInfo response receiver was dropped");
     }
@@ -1349,7 +1338,7 @@ async fn retire_settled_claims<CryptarchiaService>(
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     processed_block: Result<ProcessedBlockEvent, BroadcastStreamRecvError>,
-    slot_window: NonZeroU64,
+    era_schedule: &ServiceEraSchedule,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
@@ -1361,7 +1350,7 @@ async fn retire_settled_claims<CryptarchiaService>(
         }
     };
     let before = state.outstanding_tickets();
-    prune_expired_tickets(state, tip_slot, slot_window);
+    prune_expired_tickets(state, tip_slot, era_schedule);
     let expired = before - state.outstanding_tickets();
     let settled = match prune_settled_pending(cryptarchia_api, state, block_id).await {
         Ok(settled) => settled,
@@ -1423,21 +1412,25 @@ where
     Ok(before - state.pending_to_claim.len())
 }
 
-/// Summarizes how long each ready ticket remains within the reward window.
+/// Summarizes how long each ready ticket remains within its reward window.
 ///
 /// Callers prune expired tickets first (see [`prune_expired_tickets`]), so
-/// every ticket here is assumed to still be within the window: a ticket
+/// every ticket here is assumed to still be within its window: a ticket
 /// anchored to a block at `block_slot` has `block_slot + slot_window -
-/// current_slot` slots of remaining lifetime.
+/// current_slot` slots of remaining lifetime, `slot_window` being the window
+/// of its era.
 fn claimable_rewards_info(
     ready_to_claim: &[WinningTicket],
     current_slot: Slot,
-    slot_window: NonZeroU64,
+    era_schedule: &ServiceEraSchedule,
 ) -> ClaimableRewardsInfo {
     let current = u64::from(current_slot);
     let slots_until_expiry: Vec<Slot> = ready_to_claim
         .iter()
-        .map(|ticket| Slot::new(u64::from(ticket.block_slot) + slot_window.get() - current))
+        .map(|ticket| {
+            let slot_window = reward_window(era_schedule, ticket.block_slot);
+            Slot::new(u64::from(ticket.block_slot) + slot_window.get() - current)
+        })
         .collect();
     ClaimableRewardsInfo {
         claimable_tickets: slots_until_expiry.len(),
@@ -1779,12 +1772,12 @@ mod tests {
         estimate_reward_claim_fee, max_claims_by_ops, neediest_target, prune_expired_tickets,
         push_reward_claim_ops, slot_period_elapsed, transfer_ops,
     };
-    use crate::tickets::WinningTicket;
+    use crate::{test_utils::era_schedule, tickets::WinningTicket};
 
     const REWARD: u64 = 1_000_000;
     const POOL: u64 = 1_000_000_000;
 
-    const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
+    const SLOT_WINDOW: u64 = 100;
     /// A distinct dummy note id, derived like the ones the builder
     /// reconstructs.
     fn note_id(seed: u8) -> NoteId {
@@ -2291,7 +2284,7 @@ mod tests {
 
     #[test]
     fn claimable_rewards_info_is_empty_without_tickets() {
-        let info = claimable_rewards_info(&[], Slot::new(100), SLOT_WINDOW);
+        let info = claimable_rewards_info(&[], Slot::new(100), &era_schedule(&[SLOT_WINDOW]));
         assert_eq!(info.claimable_tickets, 0);
         assert_eq!(info.slots_until_expiry, []);
     }
@@ -2301,7 +2294,7 @@ mod tests {
         // SLOT_WINDOW is 100, so a block at slot S is claimable up to slot S +
         // 100.
         let tickets = [winning_ticket(50), winning_ticket(90)];
-        let info = claimable_rewards_info(&tickets, Slot::new(100), SLOT_WINDOW);
+        let info = claimable_rewards_info(&tickets, Slot::new(100), &era_schedule(&[SLOT_WINDOW]));
         assert_eq!(info.claimable_tickets, 2);
         // (50 + 100) - 100 = 50, (90 + 100) - 100 = 90
         assert_eq!(info.slots_until_expiry, vec![Slot::new(50), Slot::new(90)]);
@@ -2311,7 +2304,11 @@ mod tests {
     fn claimable_rewards_info_includes_the_last_valid_slot() {
         // A block at slot 50 is still claimable at exactly slot 150 (gap ==
         // window).
-        let info = claimable_rewards_info(&[winning_ticket(50)], Slot::new(150), SLOT_WINDOW);
+        let info = claimable_rewards_info(
+            &[winning_ticket(50)],
+            Slot::new(150),
+            &era_schedule(&[SLOT_WINDOW]),
+        );
         assert_eq!(info.claimable_tickets, 1);
         assert_eq!(info.slots_until_expiry, vec![Slot::new(0)]);
     }
@@ -2324,7 +2321,7 @@ mod tests {
             ready_to_claim: vec![winning_ticket(10), winning_ticket(150)],
             pending_to_claim: vec![winning_ticket(20), winning_ticket(180)],
         };
-        prune_expired_tickets(&mut state, Slot::new(200), SLOT_WINDOW);
+        prune_expired_tickets(&mut state, Slot::new(200), &era_schedule(&[SLOT_WINDOW]));
 
         let ready_slots: Vec<u64> = state
             .ready_to_claim
@@ -2348,8 +2345,28 @@ mod tests {
             ready_to_claim: vec![winning_ticket(50)],
             pending_to_claim: vec![],
         };
-        prune_expired_tickets(&mut state, Slot::new(150), SLOT_WINDOW);
+        prune_expired_tickets(&mut state, Slot::new(150), &era_schedule(&[SLOT_WINDOW]));
         assert_eq!(state.ready_to_claim.len(), 1);
+    }
+
+    #[test]
+    fn a_ticket_keeps_the_reward_window_of_its_era() {
+        // Era 0 has a window of 100 slots, and era 1, from slot 100, a window of
+        // 10. At slot 150, a ticket anchored at slot 60, in era 0, is claimable
+        // until slot 160, while one anchored at slot 120, in era 1, expired at
+        // slot 130.
+        let mut state = PoWServiceState {
+            ready_to_claim: vec![winning_ticket(60), winning_ticket(120)],
+            pending_to_claim: vec![],
+        };
+        prune_expired_tickets(&mut state, Slot::new(150), &era_schedule(&[100, 10]));
+
+        let ready_slots: Vec<u64> = state
+            .ready_to_claim
+            .iter()
+            .map(|t| u64::from(t.block_slot))
+            .collect();
+        assert_eq!(ready_slots, vec![60]);
     }
 
     #[test]
@@ -2361,7 +2378,7 @@ mod tests {
             pending_to_claim: vec![winning_ticket(20)],
         };
         assert_eq!(state.outstanding_tickets(), 3);
-        prune_expired_tickets(&mut state, Slot::new(200), SLOT_WINDOW);
+        prune_expired_tickets(&mut state, Slot::new(200), &era_schedule(&[SLOT_WINDOW]));
         assert_eq!(state.outstanding_tickets(), 1);
     }
 }

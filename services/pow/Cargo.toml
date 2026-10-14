@@ -39,6 +39,7 @@ overwatch                     = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+time       = { workspace = true }
 tokio      = { features = ["macros", "rt"], workspace = true }
 
 [lints]
