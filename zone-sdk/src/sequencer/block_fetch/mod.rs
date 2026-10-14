@@ -354,13 +354,20 @@ fn apply_prepared_block_event(
 }
 
 /// (Re-)mirror stored blocks now on the canonical path: arrived as a fork,
-/// or shed on an earlier switch.
+/// backfilled, or shed on an earlier switch.
 fn mirror_branch_from_store(s: &mut TxState, tip: HeaderId, channel_id: ChannelId) {
     let untracked = s.untracked_signed_txs_on_branch(tip);
     if untracked.is_empty() {
         return;
     }
-    let mut classified = classify_channel_txs(&untracked, channel_id);
+    // Classified one tx at a time: the untracked txs span blocks and skip
+    // the tracked ones (e.g. a re-funded publish's original landing next to
+    // entries pending still holds), so they need not chain off each other
+    // and the in-block order check of `classify_channel_txs` does not apply.
+    let mut classified: Vec<BlockChannelTx> = untracked
+        .iter()
+        .filter_map(|tx| classify_channel_tx(tx, channel_id, &mut None))
+        .collect();
     demote_non_identity_pin_deposits(&mut classified, &untracked, channel_id, s);
     mirror_channel_txs(s, &classified, &untracked, channel_id);
 }

@@ -1747,6 +1747,83 @@ async fn restored_pending_mined_under_another_hash_is_neither_adopted_nor_droppe
     assert!(landed.is_some_and(|p| p.this_msg == m_id));
 }
 
+/// Re-funded publishes whose originals land around an entry pending still
+/// tracks: the untracked txs re-mirrored from the store are not one
+/// block's chain, so the gap the tracked entry leaves in them is not an
+/// execution-order violation.
+#[tokio::test]
+async fn originals_landing_around_a_tracked_entry_are_re_mirrored() {
+    use lb_core::mantle::{
+        ledger::{BoundedInputs, Outputs},
+        ops::transfer::TransferOp,
+    };
+    // Pending: A' <- B <- C' (A', C' re-funded). G(0) <- B1 <- B2: B1 mines
+    // A <- B <- C, the originals of A' and C' around the tracked B, and is
+    // backfilled (as after a restart) when the empty B2 arrives live.
+    let ch = ChannelId::from([0u8; 32]);
+    let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
+    let original = |op: &InscriptionOp, seed: u64| {
+        unverified_tx_with_ops(vec![
+            Op::ChannelInscribe(op.clone()),
+            Op::Transfer(TransferOp::new(
+                BoundedInputs::from(NoteId::from(Fr::from(seed))).into(),
+                Outputs::new([Note::new(50, pk)]),
+            )),
+        ])
+    };
+    let rebuilt =
+        |op: &InscriptionOp| unverified_tx_with_ops(vec![Op::ChannelInscribe(op.clone())]);
+    let op_a = inscribe_op(ch, MsgId::root(), b"a");
+    let op_b = inscribe_op(ch, op_a.id(), b"b");
+    let op_c = inscribe_op(ch, op_b.id(), b"c");
+    let b_tx = rebuilt(&op_b);
+    let (a_orig, c_orig) = (original(&op_a, 1), original(&op_c, 2));
+    let (a_hash, c_hash) = (a_orig.hash(), c_orig.hash());
+    let (a_rebuilt, c_rebuilt) = (rebuilt(&op_a), rebuilt(&op_c));
+    let rebuilt_hashes = [a_rebuilt.hash(), c_rebuilt.hash()];
+    let mut restored = TxState::new(header_id(0), MsgId::root());
+    for (tx, op) in [
+        (a_rebuilt, &op_a),
+        (b_tx.clone(), &op_b),
+        (c_rebuilt, &op_c),
+    ] {
+        restored
+            .submit_inscription(tx, op.parent, op.id(), op.inscription.clone())
+            .unwrap();
+    }
+    let b1 = api_block(1, 0, 1, vec![a_orig, b_tx, c_orig]);
+    let b2 = api_block(2, 1, 2, Vec::new());
+    let node = MockNode {
+        blocks: vec![b1],
+        ..MockNode::default()
+    };
+
+    let mut state = Some(restored);
+    let r = drive_with(&node, &mut state, ch, &[live_event(&b2)]).await;
+
+    assert!(r[0].shed.is_empty());
+    assert!(
+        r[0].result.channel_update.is_none(),
+        "our own messages landing is not a view change"
+    );
+    let s = state.as_ref().unwrap();
+    for (hash, id) in [(a_hash, op_a.id()), (c_hash, op_c.id())] {
+        assert!(
+            s.pending_inscription(&hash)
+                .is_some_and(|p| p.this_msg == id),
+            "original re-mirrored under its mined hash"
+        );
+    }
+    // The landed originals retire A' and C': with them gone, nothing is left
+    // off-branch to shed.
+    for hash in rebuilt_hashes {
+        assert!(
+            !s.is_tracked(&hash),
+            "rebuilt entry retired by its original"
+        );
+    }
+}
+
 /// After a restore, a pending P whose unfinalized parent M is rediscovered
 /// on the first event: P proves M was the view before the restart, so
 /// nothing is adopted, shed or orphaned; the view is M <- P, and P lands
