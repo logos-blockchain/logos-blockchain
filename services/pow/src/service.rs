@@ -745,8 +745,14 @@ fn handle_set_mining_settings(
     search_pool: &mut Arc<rayon::ThreadPool>,
     winning_tickets: &mut TicketGenerator,
 ) {
-    let result = apply_mining_settings(new_mining_settings, mining_settings, search_pool, winning_tickets).inspect_err(
-        |error| error!(target: LOG_TARGET, "Refusing the new PoW mining settings: {error}")
+    let result = apply_mining_settings(
+        new_mining_settings,
+        mining_settings,
+        search_pool,
+        winning_tickets,
+    )
+    .inspect_err(
+        |error| error!(target: LOG_TARGET, "Refusing the new PoW mining settings: {error}"),
     );
 
     if reply_channel.send(result).is_err() {
@@ -765,7 +771,12 @@ fn apply_mining_settings(
         return Ok(());
     }
 
-    reconfigure_mining(new_mining_settings, mining_settings, search_pool, winning_tickets)?;
+    reconfigure_mining(
+        new_mining_settings,
+        mining_settings,
+        search_pool,
+        winning_tickets,
+    )?;
 
     info!(
         target: LOG_TARGET,
@@ -785,8 +796,15 @@ fn reconfigure_mining(
     search_pool: &mut Arc<rayon::ThreadPool>,
     winning_tickets: &mut TicketGenerator,
 ) -> Result<(), PoWError> {
-    replace_search_pool_if_resized(new_mining_settings.max_threads, mining_settings.max_threads, search_pool)?;
-    winning_tickets.reconfigure(Arc::clone(search_pool), new_mining_settings.max_tickets_per_block);
+    replace_search_pool_if_resized(
+        new_mining_settings.max_threads,
+        mining_settings.max_threads,
+        search_pool,
+    )?;
+    winning_tickets.reconfigure(
+        Arc::clone(search_pool),
+        new_mining_settings.max_tickets_per_block,
+    );
     *mining_settings = new_mining_settings;
 
     Ok(())
@@ -1440,10 +1458,12 @@ async fn retire_settled_claims<CryptarchiaService>(
     let before = state.outstanding_tickets();
     prune_expired_tickets(state, tip_slot, slot_window);
     let expired = before - state.outstanding_tickets();
-    let settled = prune_settled_pending(cryptarchia_api, state, block_id).await.unwrap_or_else(|error| {
-        error!(target: LOG_TARGET, "Failed to check settled PoW claims: {error}");
-        0
-    });
+    let settled = prune_settled_pending(cryptarchia_api, state, block_id)
+        .await
+        .unwrap_or_else(|error| {
+            error!(target: LOG_TARGET, "Failed to check settled PoW claims: {error}");
+            0
+        });
     if settled > 0 {
         info!(
             target: LOG_TARGET,
@@ -1853,9 +1873,10 @@ mod tests {
     use super::{
         AutoClaimSettings, AutoClaimTick, ClaimTarget, MAX_CLAIMS_BY_PAYLOAD_SIZE,
         MAX_PAYLOAD_BODY_SIZE, MAX_TRANSFER_INPUTS, PoWError, PoWServiceState,
-        build_reward_claim_tx_inner, build_search_pool, change_outputs, claim_tx_size, claimable_rewards_info,
-        estimate_reward_claim_fee, max_claims_by_ops, neediest_target, prune_expired_tickets,
-        push_reward_claim_ops, replace_search_pool_if_resized, slot_period_elapsed, transfer_ops,
+        build_reward_claim_tx_inner, build_search_pool, change_outputs, claim_tx_size,
+        claimable_rewards_info, estimate_reward_claim_fee, max_claims_by_ops, neediest_target,
+        prune_expired_tickets, push_reward_claim_ops, replace_search_pool_if_resized,
+        slot_period_elapsed, transfer_ops,
     };
     use crate::tickets::WinningTicket;
 

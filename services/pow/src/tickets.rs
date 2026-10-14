@@ -164,8 +164,8 @@ impl TicketGenerator {
         self.outstanding_tickets = outstanding;
     }
 
-    /// Cancels every active search and restarts it on `pool` with the new settings, keeping each
-    /// block's remaining winner count.
+    /// Cancels every active search and restarts it on `pool` with the new
+    /// settings, keeping each block's remaining winner count.
     ///
     /// # Cancellation
     ///
@@ -174,8 +174,8 @@ impl TicketGenerator {
     /// - Running attempts can't be interrupted: each finishes its current
     ///   ticket and the result is discarded.
     ///
-    /// Until those finish, up to one attempt per old-pool thread runs alongside the new pool, so
-    /// CPU use may briefly exceed the new `max_threads`.
+    /// Until those finish, up to one attempt per old-pool thread runs alongside
+    /// the new pool, so CPU use may briefly exceed the new `max_threads`.
     ///
     /// The old pool's threads then exit.
     pub fn reconfigure(&mut self, pool: Arc<ThreadPool>, max_tickets_per_block: NonZeroUsize) {

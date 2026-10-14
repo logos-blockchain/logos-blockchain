@@ -123,7 +123,9 @@ where
     pub async fn claimable_rewards(&self) -> Result<ClaimableRewardsInfo, ApiError> {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.relay
-            .send(PoWServiceMessage::ClaimableRewardsInfo { reply_channel: resp_tx })
+            .send(PoWServiceMessage::ClaimableRewardsInfo {
+                reply_channel: resp_tx,
+            })
             .await
             .map_err(|error| {
                 ApiError::CommsFailure(format!("{error} while sending ClaimableRewardsInfo"))
@@ -141,7 +143,9 @@ where
     pub async fn status(&self) -> Result<PoWStatus, ApiError> {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.relay
-            .send(PoWServiceMessage::Status { reply_channel: resp_tx })
+            .send(PoWServiceMessage::Status {
+                reply_channel: resp_tx,
+            })
             .await
             .map_err(|error| ApiError::CommsFailure(format!("{error} while sending Status")))?;
 
