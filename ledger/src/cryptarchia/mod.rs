@@ -152,13 +152,7 @@ impl EpochState {
         // The active-declarations snapshot is frozen at the same slot as the
         // stake distribution, so the two halves of the epoch's public info
         // stay consistent.
-        let stake_snapshot_slot = stake_distribution_snapshot(
-            eras,
-            self.epoch
-                .into_inner()
-                .try_into()
-                .expect("Epoch state is never read on genesis epoch."),
-        );
+        let stake_snapshot_slot = stake_distribution_snapshot(eras, non_genesis_epoch);
         let (utxos, active_declarations) = if ledger.slot < stake_snapshot_slot {
             (
                 ledger.utxos.clone(),
