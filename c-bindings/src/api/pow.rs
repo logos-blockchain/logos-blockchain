@@ -687,7 +687,7 @@ pub(crate) fn pow_set_mining_settings_sync(
     node: &LogosBlockchainNode,
     settings: PoWMiningSettings,
 ) -> StatusResult<()> {
-    node.get_runtime_handle().block_on(async {
+    node.get_runtime_handle()?.block_on(async {
         lb_api_service::http::pow::set_mining_settings::<PoWService, RuntimeServiceId>(
             node.get_overwatch_handle(),
             settings,
@@ -755,7 +755,7 @@ pub(crate) fn pow_set_auto_claim_settings_sync(
     node: &LogosBlockchainNode,
     settings: AutoClaimSettings,
 ) -> StatusResult<()> {
-    node.get_runtime_handle().block_on(async {
+    node.get_runtime_handle()?.block_on(async {
         lb_api_service::http::pow::set_auto_claim_settings::<PoWService, RuntimeServiceId>(
             node.get_overwatch_handle(),
             settings,
