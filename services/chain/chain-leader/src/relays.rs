@@ -144,6 +144,10 @@ where
         &self.mempool_adapter
     }
 
+    pub const fn mempool_adapter_mut(&mut self) -> &mut adapter::MempoolAdapter<Mempool::Item> {
+        &mut self.mempool_adapter
+    }
+
     pub const fn time_relay(&self) -> &TimeRelay {
         &self.time_relay
     }

@@ -359,7 +359,7 @@ where
 
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn run(mut self) -> Result<(), DynError> {
-        let relays = CryptarchiaConsensusRelays::from_service_resources_handle::<
+        let mut relays = CryptarchiaConsensusRelays::from_service_resources_handle::<
             Self,
             TimeBackend,
             CryptarchiaService,
@@ -436,6 +436,24 @@ where
                 .await
                 .expect("Request time subscription to time service should succeed");
             receiver.await?
+        };
+
+        // The mempool adapter starts in the era the clock is in, and follows
+        // the eras the clock enters after it.
+        let mut era_ticks = {
+            let (sender, receiver) = oneshot::channel();
+            relays
+                .time_relay()
+                .send(TimeServiceMessage::SubscribeToEras { sender })
+                .await
+                .expect("Request era subscription to time service should succeed");
+            let mut era_ticks = receiver.await?;
+            // The first tick is the era the clock is in.
+            era_ticks
+                .next()
+                .await
+                .expect("The era tick stream ended before its first tick");
+            era_ticks
         };
 
         // Wait until the chain becomes Online mode.
@@ -533,6 +551,10 @@ where
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
                         Self::handle_inbound_message(msg, &cryptarchia_api, &wallet_api, &kms_api, relays.time_relay(), &era_schedule, &consensus_excluded_keys, &wallet_config, relays.mempool_adapter()).await;
+                    }
+
+                    Some(era_tick) = era_ticks.next() => {
+                        relays.mempool_adapter_mut().enter_era(era_tick.era).await;
                     }
                 }
             }
