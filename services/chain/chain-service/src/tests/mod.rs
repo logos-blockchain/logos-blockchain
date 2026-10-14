@@ -869,12 +869,54 @@ fn disabled_reward_config() -> RewardPoWConfig {
     }
 }
 
+/// `genesis` from genesis, then each config of `after_genesis` from the epoch
+/// it is paired with.
+#[must_use]
+pub fn schedule(
+    genesis: lb_ledger::Config,
+    after_genesis: impl IntoIterator<Item = (u32, lb_ledger::Config)>,
+) -> Arc<EraScheduledConfig> {
+    let timing = |config: &lb_ledger::Config| EraTiming {
+        slot_duration: std::time::Duration::from_secs(1),
+        epoch_length: EpochLength::epoch_length(config),
+    };
+    let after_genesis = after_genesis.into_iter().collect::<Vec<_>>();
+    let timings_after_genesis =
+        EraEntriesAfterGenesis::try_from_iter(after_genesis.iter().map(|(first_epoch, config)| {
+            (
+                NonZero::new(*first_epoch).expect("an era after genesis starts after epoch 0"),
+                timing(config),
+            )
+        }))
+        .expect("each epoch starts one era at most");
+    let configs = std::iter::once(genesis)
+        .chain(after_genesis.into_iter().map(|(_, config)| config))
+        .collect::<Vec<_>>();
+    Arc::new(
+        EraSchedule::new(
+            time::OffsetDateTime::UNIX_EPOCH,
+            timing(&configs[0]),
+            timings_after_genesis,
+        )
+        .expect("the eras resolve")
+        .map(|era| configs[usize::from(era.era.into_inner())].clone()),
+    )
+}
+
 /// `config` as the only era, from genesis.
 #[must_use]
 pub fn single_era(config: lb_ledger::Config) -> Arc<EraScheduledConfig> {
+    schedule(config, [])
+}
+
+/// `config` as the consensus config of the only era, from genesis.
+#[must_use]
+pub fn single_consensus_era(
+    config: lb_cryptarchia_engine::Config,
+) -> Arc<EraSchedule<lb_cryptarchia_engine::Config>> {
     let timing = EraTiming {
         slot_duration: std::time::Duration::from_secs(1),
-        epoch_length: EpochLength::epoch_length(&config),
+        epoch_length: NonZero::<u64>::MIN,
     };
     Arc::new(
         EraSchedule::new(
@@ -1031,9 +1073,24 @@ pub fn chain_with_fork() -> (
     ZkKey,
     Utxo,
 ) {
+    chain_with_fork_on(single_era(ledger_config(3.try_into().unwrap())))
+}
+
+/// The chain of [`chain_with_fork`], over the eras of `era_schedule`.
+#[expect(clippy::type_complexity, reason = "a test helper")]
+pub fn chain_with_fork_on(
+    era_schedule: Arc<EraScheduledConfig>,
+) -> (
+    Cryptarchia,
+    Block<SignedOps<Preverified, StandardMode>>,
+    Block<SignedOps<Preverified, StandardMode>>,
+    Ed25519Key,
+    ZkKey,
+    Utxo,
+) {
     let genesis_id = GENESIS_ID.into();
     let (zk_key, utxo) = utxo();
-    let mut cryptarchia = genesis_cryptarchia(utxo);
+    let mut cryptarchia = genesis_cryptarchia_on(utxo, era_schedule);
 
     // Both extend the genesis, and the same key wins the same slot, so the
     // two blocks differ only in their (randomly generated) block leaders.
@@ -1067,11 +1124,17 @@ pub const GENESIS_ID: [u8; 32] = [0; 32];
 
 /// A chain with only the genesis block, holding `utxo`.
 pub fn genesis_cryptarchia(utxo: Utxo) -> Cryptarchia {
-    let config = ledger_config(3.try_into().unwrap());
+    genesis_cryptarchia_on(utxo, single_era(ledger_config(3.try_into().unwrap())))
+}
+
+/// A chain with only the genesis block, holding `utxo`, over the eras of
+/// `era_schedule`.
+pub fn genesis_cryptarchia_on(utxo: Utxo, era_schedule: Arc<EraScheduledConfig>) -> Cryptarchia {
+    let genesis_config = era_schedule.genesis().parameters.clone();
     Cryptarchia::from_genesis(
         GENESIS_ID.into(),
-        LedgerState::from_utxos([utxo], &config),
-        single_era(config),
+        LedgerState::from_utxos([utxo], &genesis_config),
+        era_schedule,
         lb_cryptarchia_engine::State::Bootstrapping,
     )
 }

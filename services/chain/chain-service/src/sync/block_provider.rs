@@ -859,7 +859,11 @@ mod tests {
                 if i == 0 {
                     self.cryptarchia = Self::new_cryptarchia(
                         *header_id,
-                        self.cryptarchia.config().slot_activation_coeff(),
+                        self.cryptarchia
+                            .era_schedule()
+                            .genesis()
+                            .parameters
+                            .slot_activation_coeff(),
                     );
                 }
 
@@ -1053,7 +1057,9 @@ mod tests {
             let utxo_tree_root = utxo_tree.root();
             let utxo_merkle_path = utxo_tree.path(&utxo.id()).expect("note must exist in tree");
             let (lottery_0, lottery_1) = cryptarchia
-                .config()
+                .era_schedule()
+                .genesis()
+                .parameters
                 .lottery_constants()
                 .compute_lottery_values(1000);
 
@@ -1110,12 +1116,12 @@ mod tests {
             <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib,
                 lib,
-                Config::new(
+                crate::tests::single_consensus_era(Config::new(
                     NonZero::new(1).unwrap(),
                     slot_activation_coeff,
                     1f64.try_into().expect("1 > 0"),
                     12.try_into().unwrap(),
-                ),
+                )),
                 lb_cryptarchia_engine::State::Bootstrapping,
                 0.into(),
                 0,
