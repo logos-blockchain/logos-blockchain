@@ -687,6 +687,33 @@ async fn readmitted_removed_tx_is_indexed_once() {
     );
 }
 
+/// Removing a hash the pool does not hold, such as a transaction of a
+/// downloaded block, records nothing: there is no body to keep or prune.
+#[tokio::test]
+async fn removing_a_tx_the_pool_never_held_records_nothing() {
+    let mut pool = InMemoryPool::new(
+        MempoolSettings::default(),
+        InMemoryStorageAdapter::default(),
+    );
+
+    let held = tx("held");
+    let held_id = held.hash();
+    pool.add_item(held_id, held)
+        .await
+        .expect("tx should be added");
+    let unknown_id = tx("unknown").hash();
+
+    pool.remove(&[unknown_id]).await;
+
+    assert_eq!(pool.status(&[held_id]), vec![Status::Pending]);
+    assert!(!pool.save().removed_items.contains_key(&unknown_id));
+    assert!(
+        pool.keys_by_prefix(&unknown_id.key_prefix())
+            .next()
+            .is_none()
+    );
+}
+
 #[test]
 fn local_submission_rejects_oversized_tx() {
     run_with_mock_pool_node(Vec::new(), |settings, _temp_dir| {

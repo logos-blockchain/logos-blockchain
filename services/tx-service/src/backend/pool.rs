@@ -406,10 +406,15 @@ where
     ///
     /// A retired item keeps its prefix index entry, and its body, until
     /// [`Self::prune_removed_items`] drops both after the grace period.
+    ///
+    /// Items not in `pending_items` are ignored, such as ones the mempool
+    /// doesn't hold (e.g. from a downloaded block).
     fn retire(&mut self, keys: impl IntoIterator<Item = ItemKey<Item>>, at: u64, cause: &str) {
         let mut count = 0usize;
         for key in keys {
-            self.pending_items.shift_remove(&key);
+            if !self.pending_items.shift_remove(&key) {
+                continue;
+            }
             self.evictor.on_remove(&key);
             self.removed_items.insert(key, at);
             count += 1;
