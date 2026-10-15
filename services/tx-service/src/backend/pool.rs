@@ -83,8 +83,11 @@ where
     Item: Hashable<Hash: PrefixedKey>,
 {
     pending_items: IndexSet<ItemKey<Item>>,
-    /// Secondary index over [`Self::pending_items`], keyed by the hash prefix a
-    /// block proposal would use to refer to a transaction.
+    /// Secondary index over [`Self::pending_items`] and
+    /// [`Self::removed_items`], keyed by the hash prefix a block proposal
+    /// would use to refer to a transaction. Retired transactions stay
+    /// indexed until their bodies are pruned, so a competing proposal that
+    /// references one still resolves.
     ///
     /// Buckets are plain vectors: a 128-bit prefix cannot be made to collide at
     /// any feasible cost, so every one holds a single key in practice. A set
@@ -324,9 +327,12 @@ where
     ) -> Self {
         // `by_prefix` is derived, so it is rebuilt rather than restored.
         let mut by_prefix: HashMap<<ItemKey<Item> as PrefixedKey>::Prefix, Vec<ItemKey<Item>>> =
-            HashMap::with_capacity(state.pending_items.len());
-        for key in state.pending_items.keys() {
-            by_prefix.entry(key.key_prefix()).or_default().push(*key);
+            HashMap::with_capacity(state.pending_items.len() + state.removed_items.len());
+        for key in state.pending_items.keys().chain(state.removed_items.keys()) {
+            let bucket = by_prefix.entry(key.key_prefix()).or_default();
+            if !bucket.contains(key) {
+                bucket.push(*key);
+            }
         }
 
         Self {
@@ -363,12 +369,17 @@ where
     RuntimeServiceId: Send + Sync,
 {
     /// Record `key` in the prefix index, under the prefix a block proposal
-    /// would use to refer to it.
+    /// would use to refer to it, unless it is already there.
+    ///
+    /// A retired transaction stays indexed during its grace period, so it is
+    /// still there if it is admitted again within that period. Indexing it a
+    /// second time would make the lookup return two keys, and resolution
+    /// treats that as a non-unique reference.
     fn index_by_prefix(&mut self, key: &ItemKey<Item>) {
-        self.by_prefix
-            .entry(key.key_prefix())
-            .or_default()
-            .push(*key);
+        let bucket = self.by_prefix.entry(key.key_prefix()).or_default();
+        if !bucket.contains(key) {
+            bucket.push(*key);
+        }
     }
 
     /// Drop `key` from the prefix index, dropping the bucket with it once it
@@ -392,11 +403,13 @@ where
 
     /// The single exit for pending items: every removal — included in a
     /// block or evicted — goes through here so the evictor stays in sync.
+    ///
+    /// A retired item keeps its prefix index entry, and its body, until
+    /// [`Self::prune_removed_items`] drops both after the grace period.
     fn retire(&mut self, keys: impl IntoIterator<Item = ItemKey<Item>>, at: u64, cause: &str) {
         let mut count = 0usize;
         for key in keys {
             self.pending_items.shift_remove(&key);
-            self.unindex_by_prefix(&key);
             self.evictor.on_remove(&key);
             self.removed_items.insert(key, at);
             count += 1;
@@ -455,6 +468,7 @@ where
 
         for key in expired_keys {
             self.removed_items.remove(&key);
+            self.unindex_by_prefix(&key);
         }
     }
 }

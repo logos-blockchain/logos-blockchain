@@ -470,7 +470,13 @@ async fn expired_tx_is_evicted_on_next_sweep() {
     assert_eq!(pool.pending_item_count(), 1);
     assert_eq!(pool.status(&[old_tx_id]), vec![Status::Unknown]);
     assert_eq!(pool.status(&[fresh_tx_id]), vec![Status::Pending]);
-    assert!(pool.keys_by_prefix(&old_tx_prefix).next().is_none());
+    // An evicted tx still resolves during its grace period.
+    assert_eq!(
+        pool.keys_by_prefix(&old_tx_prefix)
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![old_tx_id]
+    );
 
     let pending_after_eviction = pool
         .view([0; 32].into())
@@ -594,6 +600,14 @@ async fn removed_items_remain_fetchable_after_recovery() {
 
     assert_eq!(recovered_pool.pending_item_count(), 0);
     assert_eq!(recovered_pool.status(&[tx_id]), vec![Status::Unknown]);
+    assert_eq!(
+        recovered_pool
+            .keys_by_prefix(&tx_id.key_prefix())
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![tx_id],
+        "a removed tx must still resolve after recovery"
+    );
 
     let fetched_after_recovery = recovered_pool
         .get_items_by_keys([tx_id])
@@ -602,6 +616,75 @@ async fn removed_items_remain_fetchable_after_recovery() {
         .collect::<Vec<_>>()
         .await;
     assert_eq!(fetched_after_recovery, vec![tx]);
+}
+
+/// A removed tx keeps resolving until its grace period ends, so a competing
+/// proposal that references it can still be reconstructed.
+#[tokio::test]
+async fn removed_tx_resolves_until_its_grace_period_ends() {
+    let storage = InMemoryStorageAdapter::default();
+    let mut pool = InMemoryPool::new(MempoolSettings::default(), storage.clone());
+
+    let tx = sample_removed_tx();
+    let tx_id = tx.hash();
+    pool.add_item(tx_id, tx.clone())
+        .await
+        .expect("tx should be added");
+    pool.remove(&[tx_id]).await;
+
+    assert_eq!(
+        pool.keys_by_prefix(&tx_id.key_prefix())
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![tx_id]
+    );
+
+    // Backdate the removal past the grace period, and trigger the pruning.
+    let mut saved_state = pool.save();
+    saved_state.removed_items.insert(tx_id, 0); // set the retirement time to 0 (1970)
+    let mut pool = InMemoryPool::recover(MempoolSettings::default(), saved_state, storage);
+    // Trigger pruning removed items by calling `remove`
+    pool.remove(&[]).await;
+
+    // Check that the tx item (including prefix) has been pruned
+    assert!(pool.keys_by_prefix(&tx_id.key_prefix()).next().is_none());
+    assert!(!pool.save().removed_items.contains_key(&tx_id));
+    assert_eq!(
+        pool.get_items_by_keys([tx_id])
+            .await
+            .expect("storage lookup should succeed")
+            .collect::<Vec<_>>()
+            .await,
+        vec![]
+    );
+}
+
+/// A removed tx admitted again within its grace period is indexed once, so
+/// its references stay unique.
+#[tokio::test]
+async fn readmitted_removed_tx_is_indexed_once() {
+    let mut pool = InMemoryPool::new(
+        MempoolSettings::default(),
+        InMemoryStorageAdapter::default(),
+    );
+
+    let tx = sample_removed_tx();
+    let tx_id = tx.hash();
+    pool.add_item(tx_id, tx.clone())
+        .await
+        .expect("tx should be added");
+    pool.remove(&[tx_id]).await;
+    pool.add_item(tx_id, tx)
+        .await
+        .expect("a removed tx should be admitted again");
+
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Pending]);
+    assert_eq!(
+        pool.keys_by_prefix(&tx_id.key_prefix())
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![tx_id]
+    );
 }
 
 #[test]
@@ -805,7 +888,7 @@ fn test_mock_mempool() {
 /// sync with the pending set. These drive the real service message end to end:
 /// index lookup, storage fetch, stream.
 #[test]
-fn prefix_lookup_tracks_the_pending_set() {
+fn prefix_lookup_tracks_pending_and_removed_txs() {
     run_with_mock_pool_node(Vec::new(), |settings, _temp_dir| {
         let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
             .map_err(|e| eprintln!("Error encountered: {e}"))
@@ -868,13 +951,14 @@ fn prefix_lookup_tracks_the_pending_set() {
                 .unwrap();
         });
 
-        // Removal must evict from the index, not just the pending set.
-        assert!(
+        // A removed transaction stays reachable during its grace period, so a
+        // competing proposal that references it can still be reconstructed.
+        assert_eq!(
             app.runtime()
                 .handle()
-                .block_on(txs_by_prefix(&mempool_outbound, prefix))
-                .is_empty(),
-            "a removed transaction must no longer be reachable through its prefix"
+                .block_on(txs_by_prefix(&mempool_outbound, prefix)),
+            vec![tx],
+            "a removed transaction must stay reachable through its prefix during its grace period"
         );
 
         drop(app.runtime().handle().block_on(app.handle().shutdown()));
@@ -914,7 +998,13 @@ async fn expired_claim_is_evicted_after_its_window_and_grace() {
     processed_block(&mut pool, 131).await;
     assert_eq!(pool.status(&[claim_id]), vec![Status::Unknown]);
     assert_eq!(pool.status(&[plain_id]), vec![Status::Pending]);
-    assert!(pool.keys_by_prefix(&claim_id.key_prefix()).next().is_none());
+    // An evicted claim still resolves during its grace period.
+    assert_eq!(
+        pool.keys_by_prefix(&claim_id.key_prefix())
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![claim_id]
+    );
 
     let fetched_after_eviction = pool
         .get_items_by_keys([claim_id])
