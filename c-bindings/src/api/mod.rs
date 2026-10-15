@@ -5,6 +5,7 @@ pub mod config;
 pub mod cryptarchia;
 pub mod deployment;
 pub mod keys;
+pub mod kms;
 pub mod leader;
 pub mod lifecycle;
 pub(crate) mod memory;

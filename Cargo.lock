@@ -4522,8 +4522,10 @@ dependencies = [
 name = "logos-blockchain-c"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "cbindgen",
  "futures",
+ "hex",
  "logos-blockchain-api-service",
  "logos-blockchain-blend-service",
  "logos-blockchain-c-macros",
@@ -4533,6 +4535,7 @@ dependencies = [
  "logos-blockchain-groth16",
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
+ "logos-blockchain-key-management-system-service",
  "logos-blockchain-network-service",
  "logos-blockchain-node",
  "logos-blockchain-pow-service",
