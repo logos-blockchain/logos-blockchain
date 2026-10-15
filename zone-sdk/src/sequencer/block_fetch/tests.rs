@@ -1824,6 +1824,66 @@ async fn originals_landing_around_a_tracked_entry_are_re_mirrored() {
     }
 }
 
+/// The node's stream drops events for a lagging subscriber, so the next event
+/// can name a canonical tip that was never delivered. That tip is backfilled
+/// before it is adopted: otherwise it has no safe set, every mined publish
+/// reads as unmined at it, and the next re-fund pass rebuilds them all.
+#[tokio::test]
+async fn dropped_tip_event_is_backfilled_before_the_tip_is_adopted() {
+    use lb_core::mantle::transactions::MantleTxBuilder;
+    let ch = ChannelId::from([0u8; 32]);
+    let (a_id, a_tx) = ins(ch, MsgId::root(), b"a");
+    let (b_id, b_tx) = ins(ch, a_id, b"b");
+    let (c_id, c_tx) = ins(ch, b_id, b"c");
+    let mut own = TxState::new(header_id(0), MsgId::root());
+    for (tx, parent, id, payload) in [
+        (&a_tx, MsgId::root(), a_id, b"a"),
+        (&b_tx, a_id, b_id, b"b"),
+        (&c_tx, b_id, c_id, b"c"),
+    ] {
+        own.submit_inscription(
+            tx.clone(),
+            parent,
+            id,
+            Inscription::new_unchecked(payload.to_vec()),
+        )
+        .unwrap();
+        own.stamp_funding(&tx.hash(), Slot::genesis(), Some(MantleTxBuilder::new()));
+    }
+    // G(0) <- B1(a) <- B2(b) <- B3(c) canonical; B2 <- F empty fork. The
+    // stream drops B3's event; F's event arrives naming B3 as the tip.
+    let b1 = api_block(1, 0, 1, vec![a_tx]);
+    let b2 = api_block(2, 1, 2, vec![b_tx]);
+    let b3 = api_block(3, 2, 3, vec![c_tx]);
+    let fork = api_block(4, 2, 3, Vec::new());
+    let node = MockNode {
+        blocks: vec![b3.clone()],
+        ..MockNode::default()
+    };
+
+    let mut state = Some(own);
+    let r = drive_with(
+        &node,
+        &mut state,
+        ch,
+        &[live_event(&b1), live_event(&b2), fork_event(&fork, &b3)],
+    )
+    .await;
+
+    assert!(r[2].shed.is_empty());
+    let s = state.as_ref().unwrap();
+    let tip = b3.header.id;
+    assert!(s.has_block(&tip), "the reported tip is processed");
+    assert!(
+        s.pending_txs(tip).is_empty(),
+        "a, b and c are mined: nothing to resubmit"
+    );
+    assert!(
+        s.refund_candidates(tip, Slot::from(100), 0).is_empty(),
+        "mined publishes are not re-funded"
+    );
+}
+
 /// After a restore, a pending P whose unfinalized parent M is rediscovered
 /// on the first event: P proves M was the view before the restart, so
 /// nothing is adopted, shed or orphaned; the view is M <- P, and P lands

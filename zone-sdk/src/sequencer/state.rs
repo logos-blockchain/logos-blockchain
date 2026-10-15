@@ -500,6 +500,10 @@ impl TxState {
         lib_slot: Slot,
         window: u64,
     ) -> Vec<RefundCandidate> {
+        // An unprocessed tip has no safe set: everything would read as unmined.
+        if !self.blocks.has_block(&tip) {
+            return Vec::new();
+        }
         let safe = self.blocks.safe_at(tip);
         let mut candidates: Vec<RefundCandidate> = self
             .pending
@@ -530,6 +534,10 @@ impl TxState {
         lib_slot: Slot,
         window: u64,
     ) -> (Vec<PendingTx>, Vec<SignedOps<Unverified, StandardMode>>) {
+        // An unprocessed tip has no safe set: everything would read as unmined.
+        if !self.blocks.has_block(&tip) {
+            return (Vec::new(), Vec::new());
+        }
         let safe = self.blocks.safe_at(tip);
         let expired: Vec<(TxHash, Option<MsgId>, Option<MsgId>)> = self
             .pending
@@ -2226,6 +2234,29 @@ mod tests {
             1,
             "not mined on this branch"
         );
+    }
+
+    /// An unprocessed tip has no safe set, which says nothing about what is
+    /// mined: neither re-fund nor shed against it.
+    #[test]
+    fn nothing_expires_at_an_unprocessed_tip() {
+        let genesis = header_id(0);
+        let a1 = header_id(1);
+        let unseen = header_id(2);
+        let mut state = TxState::new(genesis, MsgId::root());
+        let (funded, funded_msg) = submit_own(&mut state, MsgId::root(), 1);
+        state.stamp_funding(&funded, Slot::from(1), Some(MantleTxBuilder::new()));
+        state.process_block(a1, genesis, genesis, vec![funded], vec![], Vec::new());
+        let (unfunded, _) = submit_own(&mut state, funded_msg, 2);
+        state.stamp_funding(&unfunded, Slot::from(1), None);
+
+        assert!(
+            state
+                .refund_candidates(unseen, Slot::from(100), 3)
+                .is_empty(),
+            "the mined entry is not re-funded at an unseen tip"
+        );
+        assert!(state.shed_expired(unseen, Slot::from(100), 3).0.is_empty());
     }
 
     /// Re-funding swaps the entry in under its new hash with the lineage

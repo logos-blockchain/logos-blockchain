@@ -67,6 +67,9 @@ struct PreparedBlockEvent<'a> {
     /// Each canonical-backfill block paired with its (pre-computed, pure)
     /// channel-note ops so the apply phase stays free of node fetches.
     canonical_backfill: Vec<(ApiBlock, Vec<NoteOp>)>,
+    /// The reported tip's unknown branch, oldest first, prepared like
+    /// `canonical_backfill` and applied after the event block.
+    tip_backfill: Vec<(ApiBlock, Vec<NoteOp>)>,
     our_txs: Vec<TxHash>,
     channel_txs: Vec<BlockChannelTx>,
     /// Channel-note ops of the live block, computed in the prepare phase.
@@ -170,6 +173,29 @@ where
         &deposit_events,
     ));
 
+    // The reported tip can be a block whose own event never reached us: the
+    // node's stream drops events for a lagging subscriber, and the next one
+    // delivered (a fork block's, say) still names the new canonical tip.
+    // Adopting a tip that was never processed leaves it without a safe set,
+    // so every mined pending tx reads as unmined there. Backfill its branch
+    // too; it is applied after the event block, which it may build on.
+    let tip_backfill = if event.tip == event.block.header.id {
+        Vec::new()
+    } else {
+        let mut known = finalized_block_ids;
+        known.extend(canonical_backfill.iter().map(|(block, _)| block.header.id));
+        known.insert(event.block.header.id);
+        if block_is_known(state, &known, state_lib, event.tip) {
+            Vec::new()
+        } else {
+            let blocks = walk_back_to_known(state, &known, state_lib, event.tip, node).await?;
+            let (prepared, tip_deposits) =
+                prepare_backfill_blocks(blocks, channel_id, node).await?;
+            deposits.extend(tip_deposits);
+            prepared
+        }
+    };
+
     Ok(PreparedBlockEvent {
         block: &event.block,
         tip: event.tip,
@@ -178,6 +204,7 @@ where
         lib_advanced,
         finalized,
         canonical_backfill,
+        tip_backfill,
         our_txs,
         channel_txs,
         note_ops,
@@ -219,6 +246,7 @@ fn apply_prepared_block_event(
         lib_advanced,
         finalized,
         canonical_backfill,
+        tip_backfill,
         our_txs,
         mut channel_txs,
         note_ops,
@@ -280,6 +308,13 @@ fn apply_prepared_block_event(
         channel_txs,
         note_ops,
     );
+
+    // Then the reported tip's branch, which may build on the event block.
+    // Like canonical backfill it is mirrored from the store below.
+    let tip_lib = s.lib();
+    for (block, note_ops) in tip_backfill {
+        apply_backfilled_block(s, &block, channel_id, tip_lib, note_ops);
+    }
 
     // Remove our pending txs that were finalized in the backfilled LIB blocks,
     // by tx hash and by message id. `finalized_items` already carries the
