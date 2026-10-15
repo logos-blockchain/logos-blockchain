@@ -319,15 +319,7 @@ fn apply_prepared_block_event(
     // Remove our pending txs that were finalized in the backfilled LIB blocks,
     // by tx hash and by message id. `finalized_items` already carries the
     // typed payloads (built before pending was mutated).
-    let finalized_now: HashSet<MsgId> = finalized_batch
-        .items
-        .iter()
-        .flat_map(|tx| tx.ops.iter())
-        .filter_map(|op| match op {
-            FinalizedOp::Inscription(i) | FinalizedOp::Config(i) => Some(i.this_msg),
-            _ => None,
-        })
-        .collect();
+    let finalized_now = landed_msg_ids(&finalized_batch.items);
     for tx_hash in &finalized_batch.our_tx_hashes {
         s.remove_pending(tx_hash);
     }
@@ -738,6 +730,19 @@ fn apply_finalized_blocks(
     }
 
     result
+}
+
+/// The message and config ids `items` put on chain: what retires a pending
+/// entry carrying them, whatever tx hash mined them.
+pub(super) fn landed_msg_ids(items: &[FinalizedTx]) -> HashSet<MsgId> {
+    items
+        .iter()
+        .flat_map(|tx| tx.ops.iter())
+        .filter_map(|op| match op {
+            FinalizedOp::Inscription(i) | FinalizedOp::Config(i) => Some(i.this_msg),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Fetch a finalized slot range, then apply it without another suspension

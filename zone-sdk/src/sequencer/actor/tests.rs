@@ -1433,6 +1433,81 @@ async fn resume_backfill_refines_finalized_config_from_a_replayed_config() {
     );
 }
 
+/// A pending publish re-funded under a new hash whose original finalized
+/// during downtime: the resume backfill retires it by message id, as the
+/// live path does, or it is re-funded every window from then on.
+#[tokio::test]
+async fn resume_backfill_retires_a_pending_entry_finalized_under_another_hash() {
+    use lb_core::mantle::{NoteId, ledger::Outputs, ops::transfer::TransferOp};
+    use lb_groth16::Fr;
+
+    use crate::test_support::inscribe_op;
+    let channel_id = ChannelId::from([0; 32]);
+    let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+
+    let m = inscribe_op(channel_id, MsgId::root(), b"m");
+    let m_id = m.id();
+    let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
+    let original = unverified_tx_with_ops(vec![
+        Op::ChannelInscribe(m.clone()),
+        Op::Transfer(TransferOp::new(
+            BoundedInputs::from(NoteId::from(Fr::from(1u64))).into(),
+            Outputs::new([Note::new(50, pk)]),
+        )),
+    ]);
+    let rebuilt = unverified_tx_with_ops(vec![Op::ChannelInscribe(m)]);
+    assert_ne!(original.hash(), rebuilt.hash());
+    // The original finalized at slot 1, above the checkpoint LIB (genesis).
+    let block = api_block(1, 0, 1, vec![original]);
+
+    let mut state = TxState::new(header_id(0), MsgId::root());
+    state
+        .submit_inscription(
+            rebuilt,
+            MsgId::root(),
+            m_id,
+            Inscription::new_unchecked(b"m".to_vec()),
+        )
+        .unwrap();
+    let cp = build_checkpoint(&state, MsgId::root(), Slot::genesis());
+    assert_eq!(cp.pending_txs.len(), 1);
+
+    let live_block = api_block(2, 1, 2, Vec::new());
+    let event = ProcessedBlockEvent {
+        block: live_block.clone(),
+        tip: live_block.header.id,
+        tip_slot: live_block.header.slot,
+        lib: header_id(1),
+        lib_slot: Slot::from(1),
+    };
+    // The network LIB is past the checkpoint's, so the resume backfill runs
+    // over slot 1 before the stream opens.
+    let node = MockNode {
+        lib: header_id(1),
+        tip: header_id(1),
+        lib_slot: Slot::from(1),
+        immutable: vec![block],
+        scripts: scripts(vec![StreamScript {
+            events: vec![event],
+            then: StreamEnd::Hang,
+        }]),
+        ..MockNode::default()
+    };
+    let mut sequencer =
+        ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), Some(cp));
+
+    let checkpoint = loop {
+        match sequencer.next_event().await {
+            Event::BlocksProcessed { checkpoint, .. } => break checkpoint,
+            Event::Ready | Event::TurnNotification { .. } => {}
+        }
+    };
+    assert!(
+        checkpoint.pending_txs.is_empty(),
+        "the entry landed under another hash and is retired"
+    );
+}
+
 /// Realistic stream-gap scenario, driven end-to-end through the public
 /// `ZoneSequencer` event loop.
 ///

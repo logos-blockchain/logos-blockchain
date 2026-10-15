@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn};
 
 use super::{
     TARGET,
-    block_fetch::fetch_and_process_blocks,
+    block_fetch::{fetch_and_process_blocks, landed_msg_ids},
     slot_clock::SlotClock,
     state::TxState,
     types::{ChannelUpdate, Error, Event, FinalizedOp},
@@ -112,15 +112,18 @@ where
             s.set_finalized_config(last_config.this_msg);
         }
 
-        // Clean up our pending set for txs that finalized in this batch.
-        // Mirrors the cleanup in `handle_block_event`. Without this, restored
-        // pending txs whose blocks were already finalized during downtime
-        // would leak in `state.pending` and risk being mis-classified as
-        // orphaned by `shed_off_branch_pending` once a live block arrives.
+        // Clean up our pending set for txs that finalized in this batch, by
+        // tx hash and by message id. Mirrors the cleanup in
+        // `handle_block_event`. Without this, restored pending txs whose
+        // blocks were already finalized during downtime would leak in
+        // `state.pending` and risk being mis-classified as orphaned by
+        // `shed_off_branch_pending` once a live block arrives; one re-funded
+        // under another hash would be re-funded every window.
         if let Some(s) = self.state.as_mut() {
             for tx_hash in &batch.our_tx_hashes {
                 s.remove_pending(tx_hash);
             }
+            s.take_landed(&landed_msg_ids(&batch.items));
         }
 
         self.lib_slot = Slot::from(batch_end);
