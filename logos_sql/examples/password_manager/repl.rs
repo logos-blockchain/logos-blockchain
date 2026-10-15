@@ -4,14 +4,18 @@
 //! [`PasswordManager`] operations while leaving SQL and `λSQL` concerns in the
 //! domain module.
 
-use std::io::{self, Write as _};
+use std::{
+    io::{self, Write as _},
+    iter::once,
+};
 
 use clap::{Parser, Subcommand};
-use logos_sql::TxId;
+use logos_sql::{Error as LogosSqlError, TxId};
+use tokio::task::spawn_blocking;
 
 use crate::{
-    AppResult,
-    passwords::{Credential, CredentialSummary, PasswordManager},
+    AppError, AppResult,
+    passwords::{Credential, CredentialSummary, DisplacementForReview, PasswordManager},
 };
 
 #[derive(Debug, Parser)]
@@ -37,6 +41,19 @@ enum Command {
         #[arg(required = true, num_args = 1..)]
         password: Vec<String>,
     },
+    /// Updates notes independently of the password.
+    Notes {
+        label: String,
+        #[arg(required = true, num_args = 1..)]
+        notes: Vec<String>,
+    },
+    /// Lists displaced writes awaiting review.
+    Displacements,
+    /// Retries a reviewed write using its original SQL conditions.
+    Retry { tx_id: String },
+    /// Marks a displacement handled after reviewing it. Does not retry the
+    /// write.
+    Handle { tx_id: String },
     /// Shows one credential from the local database.
     Show { label: String },
     /// Removes one credential.
@@ -51,7 +68,7 @@ enum Command {
 impl Command {
     /// Parses one line entered at the password-manager prompt.
     fn parse(input: &str) -> Result<Self, clap::Error> {
-        let args = std::iter::once("password-manager").chain(input.split_whitespace());
+        let args = once("password-manager").chain(input.split_whitespace());
         Input::try_parse_from(args).map(|input| input.command)
     }
 }
@@ -61,7 +78,13 @@ pub async fn run(manager: &PasswordManager) -> AppResult<()> {
     println!("Password manager is running. Enter `help` to list commands.");
     println!("WARNING: passwords are replicated in plaintext; do not enter real credentials.");
 
-    while let Some(input) = read_input().await? {
+    let mut reported = Vec::new();
+
+    loop {
+        let Some(input) = read_input().await? else {
+            break;
+        };
+
         if input.trim().is_empty() {
             continue;
         }
@@ -78,11 +101,19 @@ pub async fn run(manager: &PasswordManager) -> AppResult<()> {
             break;
         }
 
-        match handle_command(manager, command).await {
-            Ok(Some(tx_id)) => {
-                println!("committed locally as {tx_id}");
-            }
+        match handle_command(manager, command, &mut reported).await {
+            Ok(Some(tx_id)) => println!("committed locally as {tx_id}; not final"),
             Ok(None) => {}
+            Err(error @ AppError::LogosSql(LogosSqlError::UnhandledDisplacements)) => {
+                eprintln!("error: {error}");
+
+                println!(
+                    "Use `displacements` to list displacements, then `show` or `list` to inspect the data."
+                );
+                println!(
+                    "After review, use `retry <tx-id>` to try the original write or `handle <tx-id>` to leave it alone."
+                );
+            }
             Err(error) => eprintln!("error: {error}"),
         }
     }
@@ -90,7 +121,11 @@ pub async fn run(manager: &PasswordManager) -> AppResult<()> {
     Ok(())
 }
 
-async fn handle_command(manager: &PasswordManager, command: Command) -> AppResult<Option<TxId>> {
+async fn handle_command(
+    manager: &PasswordManager,
+    command: Command,
+    reported: &mut Vec<DisplacementForReview>,
+) -> AppResult<Option<TxId>> {
     let tx_id = match command {
         Command::Add {
             label,
@@ -99,6 +134,52 @@ async fn handle_command(manager: &PasswordManager, command: Command) -> AppResul
         } => manager.add(label, account, password.join(" ")).await?,
         Command::Update { label, password } => {
             manager.update_password(label, password.join(" ")).await?
+        }
+        Command::Notes { label, notes } => manager.update_notes(label, notes.join(" ")).await?,
+        Command::Displacements => {
+            let displacements = manager.displacements().await?;
+
+            if displacements.is_empty() {
+                println!("no displacements awaiting review");
+            } else {
+                for write in &displacements {
+                    println!("{}", write.description);
+                }
+            }
+
+            *reported = displacements;
+
+            return Ok(None);
+        }
+        Command::Retry { tx_id } => {
+            let index = reported
+                .iter()
+                .position(|write| write.displacement.tx_id.to_string() == tx_id)
+                .ok_or(AppError::DisplacementNotListed)?;
+            let displacement = reported[index].displacement.clone();
+
+            let retry_id = manager.retry_displacement(&displacement).await?;
+            println!("retry committed locally as {retry_id}; not final");
+            println!("The original SQL conditions still apply. Use `show` to check the data.");
+
+            reported.remove(index);
+
+            return Ok(None);
+        }
+        Command::Handle { tx_id } => {
+            let index = reported
+                .iter()
+                .position(|write| write.displacement.tx_id.to_string() == tx_id)
+                .ok_or(AppError::DisplacementNotListed)?;
+
+            manager
+                .handle_displacement(reported[index].displacement.clone())
+                .await?;
+            reported.remove(index);
+
+            println!("marked handled; the write can still return after a reorg");
+
+            return Ok(None);
         }
         Command::Show { label } => {
             print_credential(manager.credential(&label)?);
@@ -117,7 +198,7 @@ async fn handle_command(manager: &PasswordManager, command: Command) -> AppResul
 
 /// Reads terminal input without blocking the runtime that drives `λSQL`.
 async fn read_input() -> AppResult<Option<String>> {
-    let input = tokio::task::spawn_blocking(|| -> io::Result<Option<String>> {
+    let input = spawn_blocking(|| -> io::Result<Option<String>> {
         print!("password-manager> ");
         io::stdout().flush()?;
 
@@ -140,10 +221,37 @@ fn print_credential(credential: Option<Credential>) {
     println!("{}", credential.label);
     println!("  account: {}", credential.account);
     println!("  password: {}", credential.password);
+    println!("  notes: {}", credential.notes);
 }
 
 fn print_credentials(credentials: Vec<CredentialSummary>) {
     for credential in credentials {
         println!("{} ({})", credential.label, credential.account);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Command;
+
+    #[test]
+    fn handling_a_displacement_is_separate_from_editing_a_password() {
+        assert!(
+            matches!(Command::parse("handle abc123").unwrap(), Command::Handle { tx_id } if tx_id == "abc123")
+        );
+        assert!(Command::parse("handle").is_err());
+        assert!(
+            matches!(Command::parse("update email fake password").unwrap(), Command::Update { label, password } if label == "email" && password == ["fake", "password"])
+        );
+    }
+
+    #[test]
+    fn retry_uses_a_transaction_id_not_a_new_password() {
+        assert!(
+            matches!(Command::parse("retry abc123").unwrap(), Command::Retry { tx_id } if tx_id == "abc123")
+        );
+
+        assert!(Command::parse("retry").is_err());
+        assert!(Command::parse("retry abc123 new-password").is_err());
     }
 }
