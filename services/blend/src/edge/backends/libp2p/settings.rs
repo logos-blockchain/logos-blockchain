@@ -1,26 +1,19 @@
 use core::num::NonZeroU64;
 
 use lb_libp2p::protocol_name::StreamProtocol;
-use libp2p::identity::Keypair;
-use serde::{Deserialize, Serialize};
 
-use crate::edge::settings::RunningBlendConfig as BlendConfig;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde_with::serde_as]
+/// The libp2p edge backend's settings that are the same in every era.
+#[derive(Clone, Debug)]
 pub struct Libp2pBlendBackendSettings {
     pub max_dial_attempts_per_peer_per_message: NonZeroU64,
-    pub protocol_name: StreamProtocol,
     // $\Phi_{EC}$: the minimum number of connections that the edge node establishes with
     // core nodes to send a single message that needs to be blended.
     pub replication_factor: NonZeroU64,
 }
 
-impl BlendConfig<Libp2pBlendBackendSettings> {
-    #[must_use]
-    pub fn keypair(&self) -> Keypair {
-        let mut secret_key_bytes = *self.non_ephemeral_signing_key.as_bytes();
-        Keypair::ed25519_from_bytes(&mut secret_key_bytes)
-            .expect("Cryptographic secret key should be a valid Ed25519 private key.")
-    }
+/// The libp2p edge backend's settings in an era.
+#[derive(Clone, Debug)]
+pub struct Libp2pBlendBackendEraSettings {
+    /// The protocol core nodes speak in the era.
+    pub protocol_name: StreamProtocol,
 }

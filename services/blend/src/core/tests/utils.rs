@@ -59,15 +59,15 @@ use crate::{
         kms::KmsPoQAdapter,
         processor::CoreCryptographicProcessor,
         settings::{
-            CoverTrafficSettings, MessageDelayerSettings, RunningBlendConfig as BlendConfig,
-            SchedulerSettings, ZkSettings,
+            CoreServiceEraSettings as BlendConfig, EraCoverTrafficSettings,
+            EraMessageDelayerSettings, EraSchedulerSettings,
         },
         state::RecoveryServiceState,
         tests::RuntimeServiceId,
     },
     epoch::CoreEpochPublicInfo,
     message::{DataPayload, NetworkInfo},
-    settings::TimingSettings,
+    settings::{EraTimingSettings, RuntimeComponents},
     test_utils,
     test_utils::mocks::{TestChainNetworkService, TestMempoolService},
 };
@@ -85,36 +85,38 @@ pub fn new_membership(size: u8) -> (Membership<NodeId>, UnsecuredEd25519Key) {
     )
 }
 
+/// The key ID the tests' ZK identity is stored under.
+pub const ZK_KEY_ID: &str = "test-key";
+
 /// Creates a [`BlendConfig`] with the given parameters and reasonable defaults
-/// for the rest.
-pub fn settings<BackendSettings>(
+/// for the rest, and the [`LocalNode`] of the node holding
+/// `local_private_key`.
+pub fn settings(
     local_private_key: UnsecuredEd25519Key,
     minimum_network_size: NonZeroU64,
-    backend_settings: BackendSettings,
     data_replication_factor: u64,
-) -> BlendConfig<BackendSettings> {
-    BlendConfig {
-        backend: backend_settings,
-        scheduler: SchedulerSettings {
-            cover: CoverTrafficSettings {
-                message_frequency_per_round: 1.0.try_into().unwrap(),
+) -> (BlendConfig, RuntimeComponents) {
+    (
+        BlendConfig {
+            scheduler: EraSchedulerSettings {
+                cover: EraCoverTrafficSettings {
+                    message_frequency_per_round: 1.0.try_into().unwrap(),
+                },
+                delayer: EraMessageDelayerSettings {
+                    maximum_release_delay_in_rounds: 1.try_into().unwrap(),
+                },
             },
-            delayer: MessageDelayerSettings {
-                maximum_release_delay_in_rounds: 1.try_into().unwrap(),
-            },
+            time: timing_settings(),
+            num_blend_layers: NonZeroU64::try_from(1).unwrap(),
+            minimum_network_size,
+            data_replication_factor,
+            activity_threshold_sensitivity: 1,
         },
-        time: timing_settings(),
-        zk: ZkSettings {
-            secret_key_kms_id: "test-key".to_owned(),
+        RuntimeComponents {
+            non_ephemeral_signing_key: local_private_key,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
-        non_ephemeral_signing_key: local_private_key,
-        num_blend_layers: NonZeroU64::try_from(1).unwrap(),
-        minimum_network_size,
-        data_replication_factor,
-        activity_threshold_sensitivity: 1,
-        pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
-        abstain_on_failure: false,
-    }
+    )
 }
 
 /// The seed every test's release delayer is built from.
@@ -133,8 +135,8 @@ pub fn seeded_release_delay_rng() -> ChaCha20Rng {
     ChaCha20Rng::seed_from_u64(RELEASE_DELAY_SEED)
 }
 
-pub fn timing_settings() -> TimingSettings {
-    TimingSettings {
+pub fn timing_settings() -> EraTimingSettings {
+    EraTimingSettings {
         core_handshake_deadline_in_rounds: NonZeroU128::new(2).unwrap(),
         network_absorption_in_rounds: NonZeroU64::new(2).unwrap(),
         rounds_per_epoch: 10.try_into().unwrap(),
@@ -145,7 +147,7 @@ pub fn timing_settings() -> TimingSettings {
 }
 
 pub fn scheduler_settings(
-    timing_settings: &TimingSettings,
+    timing_settings: &EraTimingSettings,
     num_blend_layers: NonZeroU64,
 ) -> message_scheduler::Settings {
     message_scheduler::Settings {
@@ -178,10 +180,12 @@ where
     type Settings = ();
 
     fn new(
-        _service_config: BlendConfig<Self::Settings>,
+        (): Self::Settings,
+        _current_era: Era,
         _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         _current_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>,
         _rng: Rng,
+        _non_ephemeral_signing_key: UnsecuredEd25519Key,
     ) -> Self {
         let (event_sender, _) = broadcast::channel(CHANNEL_SIZE);
         Self { event_sender }
@@ -197,7 +201,11 @@ where
         note_published_epoch(intended_epoch);
     }
 
-    async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>) {
+    async fn rotate_epoch(
+        &mut self,
+        new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>,
+        _new_era: Option<Era>,
+    ) {
         // Notify tests that the backend rotated to a new epoch, carrying the new
         // epoch and membership size so tests can assert the new membership was
         // propagated to the backend.
@@ -328,10 +336,13 @@ where
         _network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         _mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
         _chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
-        _settings: Self::Settings,
+        (): Self::Settings,
+        _current_era: Era,
     ) -> Self {
         Self
     }
+
+    async fn enter_era(&mut self, _era: Era) {}
 
     async fn dispatch(&self, _payload: DataPayload) {
         note_outgoing_message();
@@ -437,10 +448,10 @@ pub fn backend_epoch_info(
     }
 }
 
-pub fn new_epoch_info<BackendSettings>(
+pub fn new_epoch_info(
     epoch: Epoch,
     membership: Membership<NodeId>,
-    settings: &BlendConfig<BackendSettings>,
+    settings: &BlendConfig,
 ) -> CoreEpochPublicInfo<NodeId> {
     let core_quota = settings.epoch_core_quota(membership.size());
     CoreEpochPublicInfo {

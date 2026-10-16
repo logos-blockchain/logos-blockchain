@@ -11,6 +11,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{traits::Hashable, transactions::hash::PrefixedKey},
 };
+use lb_cryptarchia_engine::{Era, EraSchedule};
 use lb_log_targets::blend;
 use lb_network_service::{
     backends::libp2p::{Command, Libp2p, Message as PubSubMessage, PubSubCommand},
@@ -49,7 +50,8 @@ pub struct Libp2pPayloadDispatcher<
     network_relay: NetworkRelay,
     mempool_relay: MempoolRelay<Mempool::Item, Mempool::Key>,
     chain_network_relay: ChainNetworkRelay<Mempool::Item>,
-    settings: Libp2pBroadcastSettings,
+    current_era_settings: Libp2pBroadcastSettings,
+    era_schedule: EraSchedule<Libp2pBroadcastSettings>,
     #[expect(
         clippy::type_complexity,
         reason = "Phantom data stuff to not require Send/Sync on type parameters that are only used as tags"
@@ -65,7 +67,7 @@ pub struct Libp2pPayloadDispatcher<
 }
 
 /// Settings used to broadcast messages to the network service that uses libp2p
-/// backend.
+/// backend, in an era.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Libp2pBroadcastSettings {
     pub topic: String,
@@ -279,21 +281,49 @@ where
         TimeBackend,
         RuntimeServiceId,
     >;
-    type Settings = Libp2pBroadcastSettings;
+    type Settings = EraSchedule<Libp2pBroadcastSettings>;
 
     fn new(
         network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
         chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
-        settings: Self::Settings,
+        era_schedule: Self::Settings,
+        current_era: Era,
     ) -> Self {
+        let current_era_settings = era_schedule
+            .get(current_era)
+            .expect("The current era is scheduled.")
+            .parameters
+            .clone();
         Self {
             network_relay,
             mempool_relay,
             chain_network_relay,
-            settings,
+            current_era_settings,
+            era_schedule,
             _phantom: PhantomData,
         }
+    }
+
+    async fn enter_era(&mut self, era: Era) {
+        let Some(era_settings) = self.era_schedule.get(era) else {
+            tracing::error!(
+                target: LOG_TARGET,
+                "Asked to enter era {}, which is not scheduled",
+                era.into_inner()
+            );
+            return;
+        };
+        if era_settings.parameters == &self.current_era_settings {
+            return;
+        }
+        self.current_era_settings = era_settings.parameters.clone();
+        tracing::info!(
+            target: LOG_TARGET,
+            "Entered era {}: block proposals are broadcast on {}",
+            era.into_inner(),
+            self.current_era_settings.topic
+        );
     }
 
     async fn dispatch(&self, payload: DataPayload) {
@@ -301,7 +331,7 @@ where
             DataPayload::BlockProposal(proposal) => {
                 broadcast_block_proposal(
                     &self.network_relay,
-                    self.settings.topic.clone(),
+                    self.current_era_settings.topic.clone(),
                     proposal,
                 )
                 .await;

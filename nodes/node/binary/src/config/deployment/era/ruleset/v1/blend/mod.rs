@@ -3,7 +3,7 @@ use core::{
     time::Duration,
 };
 
-use lb_blend_service::settings::TimingSettings;
+use lb_blend_service::settings::EraTimingSettings;
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::math::PositiveF64;
 use nutype::nutype;
@@ -111,8 +111,8 @@ impl Settings {
         slots_per_epoch: u64,
         slots_per_block: u64,
         slot_duration: &Duration,
-    ) -> TimingSettings {
-        TimingSettings {
+    ) -> EraTimingSettings {
+        EraTimingSettings {
             epoch_transition_period: self.epoch_transition(slots_per_block, slot_duration),
             round_duration_in_seconds: self
                 .round_duration(slot_duration)

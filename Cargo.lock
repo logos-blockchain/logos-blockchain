@@ -4534,7 +4534,6 @@ name = "logos-blockchain-blend-service"
 version = "0.0.0"
 dependencies = [
  "async-trait",
- "fork_stream",
  "futures",
  "hex",
  "libp2p",
@@ -4556,6 +4555,7 @@ dependencies = [
  "logos-blockchain-sdp-service",
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",
+ "logos-blockchain-time",
  "logos-blockchain-time-service",
  "logos-blockchain-tracing",
  "logos-blockchain-tx-service",
@@ -4565,9 +4565,9 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rayon",
  "serde",
- "serde_with",
  "test-log",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tokio-stream",
  "tracing",

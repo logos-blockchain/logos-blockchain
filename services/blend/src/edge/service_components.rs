@@ -7,7 +7,6 @@ use crate::{
 /// [`BlendService`], without requiring them to specify its generic parameters.
 pub trait ServiceComponents {
     type ProofsGenerator;
-    type BackendSettings;
     type PayloadDispatcher;
     /// Chain service, used by the proxy to derive membership from the chain.
     type ChainService;
@@ -40,7 +39,6 @@ where
     NodeId: Clone,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
-    type BackendSettings = Backend::Settings;
     type PayloadDispatcher = Dispatcher;
     type ProofsGenerator = ProofsGenerator;
     type ChainService = ChainService;

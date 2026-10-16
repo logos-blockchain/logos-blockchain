@@ -11,7 +11,6 @@ pub use lb_core::{
     header::HeaderId,
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };
-use lb_cryptarchia_engine::time::EraSchedule;
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 use lb_storage_service::recovery::load_recovery_data;
 pub use lb_storage_service::{
@@ -47,18 +46,6 @@ use crate::{
     },
     generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
 };
-
-/// A service's settings in the genesis era, out of its settings in every era.
-///
-/// Services take the settings of one era until they follow the schedule, and
-/// only single-era schedules are supported for now, so the genesis era is the
-/// one in force.
-fn genesis_era_settings<Settings>(settings: &EraSchedule<Settings>) -> Settings
-where
-    Settings: Clone,
-{
-    settings.genesis().parameters.clone()
-}
 pub use crate::{
     cli::Command,
     config::{ApiArgs, LogArgs, NetworkArgs, UserConfig},
@@ -158,12 +145,11 @@ pub fn run_node_from_config(
 
     let recovery_data = load_recovery_data(storage_config.clone())?;
 
-    let blend_settings = BlendConfig {
-        user: config.user.blend,
-    }
-    .into_blend_services_era_schedule(&recovery_data, eras);
-    let (blend_config, blend_core_config, blend_edge_config) =
-        genesis_era_settings(&blend_settings);
+    let (blend_config, blend_core_config, blend_edge_config, blend_broadcast_config) =
+        BlendConfig {
+            user: config.user.blend,
+        }
+        .into_blend_services_settings(recovery_data.clone(), eras);
 
     let time_service_config = TimeConfig {
         user: config.user.time,
@@ -226,10 +212,10 @@ pub fn run_node_from_config(
     let app = OverwatchRunner::<LogosBlockchain>::run(
         LogosBlockchainServiceSettings {
             network: network_service_config,
-            blend: blend_config.clone(),
+            blend: blend_config,
             blend_core: blend_core_config,
             blend_edge: blend_edge_config,
-            blend_broadcast: blend_config.into(),
+            blend_broadcast: blend_broadcast_config,
             block_broadcast: (),
             mempool: mempool_service_config,
             cryptarchia: chain_service_config,
