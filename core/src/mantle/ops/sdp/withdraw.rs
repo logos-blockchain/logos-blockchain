@@ -1,3 +1,4 @@
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
 use lb_log_targets::mantle;
@@ -14,7 +15,7 @@ use crate::{
             VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        ops::SignedOperation,
+        ops::{OpId, SignedOperation},
         transactions::{
             hash::TxHashView,
             states::{Preverified, Unverified, Verified},
@@ -41,6 +42,12 @@ pub struct SDPWithdrawExecutionContext {
 impl ProvableOperation for SDPWithdrawOp {
     type Proof = ZkSignature;
     const CODE: u8 = 0x21;
+}
+
+impl OpId for SDPWithdrawOp {
+    fn op_bytes(&self) -> Vec<u8> {
+        self.encode_to_vec()
+    }
 }
 
 impl OperationGas<MainnetGasProfile> for SDPWithdrawOp {
@@ -82,13 +89,6 @@ impl VerifiableOperation<StandardMode>
         }
 
         let service_note_id = declaration.service_note_id;
-
-        if operation.service_note_id != service_note_id {
-            return Err(SdpError::InvalidServiceNote {
-                note_id: operation.service_note_id,
-                expected: service_note_id,
-            });
-        }
 
         // The note is obtained from the stored declaration and must still be
         // bound to this exact declaration in the service-note index.
@@ -217,7 +217,6 @@ mod tests {
         SDPWithdrawOp {
             declaration_id: declaration.id(),
             nonce,
-            service_note_id: declaration.service_note_id,
         }
     }
 
@@ -319,7 +318,6 @@ mod tests {
         let operation = SDPWithdrawOp {
             declaration_id: declaration_id_a,
             nonce: Nonce::new(declaration_b.created, 1),
-            service_note_id,
         };
         let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
         let signed_operation = preverified_with_keys(

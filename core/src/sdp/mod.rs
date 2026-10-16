@@ -643,7 +643,6 @@ impl DeclarationMessage {
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
-    pub service_note_id: NoteId,
 }
 
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
@@ -962,11 +961,10 @@ mod nonce_tests {
 #[cfg(any(test, feature = "test-utils"))]
 impl WithdrawMessage {
     #[must_use]
-    pub fn sample() -> Self {
+    pub const fn sample() -> Self {
         Self {
             declaration_id: DeclarationId([27u8; 32]),
             nonce: Nonce::new(Epoch::new(0), 29),
-            service_note_id: NoteId(Fr::from(28u64)),
         }
     }
 }

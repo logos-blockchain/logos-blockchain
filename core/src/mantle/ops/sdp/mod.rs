@@ -84,8 +84,6 @@ pub enum SdpError {
         note_id: NoteId,
         service_type: ServiceType,
     },
-    #[error("Note {note_id:?} is not corresponding to the one in the declaration {expected:?}")]
-    InvalidServiceNote { note_id: NoteId, expected: NoteId },
 }
 
 /// Ensures a caller-supplied declaration is the one named by the operation.
