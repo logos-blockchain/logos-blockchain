@@ -11,7 +11,7 @@ use lb_http_api_common::bodies::wallet::{
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::{
     Hashable as _,
-    config::{RunConfig, cryptarchia::deployment::EpochConfig},
+    config::{RunConfig, deployment::era::ruleset::v1::cryptarchia::EpochConfig},
 };
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
@@ -59,28 +59,17 @@ async fn leader_claim() {
 fn test_config(mut config: RunConfig, leader_funding_pk: ZkPublicKey) -> RunConfig {
     config
         .deployment
-        .genesis_era_parameters_mut()
-        .time
-        .slot_duration = Duration::from_secs(1);
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .epoch_config = EpochConfig {
-        epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
-        epoch_period_nonce_buffer: 1.try_into().unwrap(),
-        epoch_period_nonce_stabilization: 1.try_into().unwrap(),
-    };
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .security_param = NonZero::new(2).unwrap();
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().unwrap());
+        .update_genesis_era_parameters(|parameters| {
+            parameters.time.slot_duration = Duration::from_secs(1);
+            parameters.cryptarchia.epoch_config = EpochConfig {
+                epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+                epoch_period_nonce_buffer: 1.try_into().unwrap(),
+                epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+            };
+            parameters.cryptarchia.security_param = NonZero::new(2).unwrap();
+            parameters.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, 2.try_into().unwrap());
+        });
     config.user.cryptarchia.leader.wallet.funding_pk = leader_funding_pk;
 
     config
