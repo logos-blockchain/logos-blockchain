@@ -121,6 +121,7 @@ mod tests {
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
     use lb_ledger::{
+        ConsensusExcludedKeys,
         config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
@@ -304,7 +305,7 @@ mod tests {
         // Empty ledger state.
         let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
-            LedgerState::from_utxos([], &ledger_config),
+            LedgerState::from_utxos([], &ledger_config, &ConsensusExcludedKeys::empty()),
             single_era(ledger_config),
         );
 
@@ -427,7 +428,7 @@ mod tests {
             consensus: engine.clone(),
             ledger: lb_ledger::Ledger::new(
                 lib_id,
-                LedgerState::from_utxos([], &ledger_config),
+                LedgerState::from_utxos([], &ledger_config, &ConsensusExcludedKeys::empty()),
                 single_era(ledger_config.clone()),
             ),
             genesis_id: genesis_header_id,

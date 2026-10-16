@@ -28,7 +28,7 @@ impl SlotClock {
 
     /// Moves the clock onto `eras`, keeping the slot it last observed and when.
     pub(super) fn set_era_schedule(&mut self, eras: EraTimingSchedule) {
-       self.eras = eras; 
+        self.eras = eras;
     }
 
     pub(super) fn observe_slot(&mut self, observed_slot: Slot) {

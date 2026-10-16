@@ -171,7 +171,7 @@ mod tests {
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_ledger::{
-        Intent,
+        ConsensusExcludedKeys, Intent,
         config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
@@ -560,6 +560,7 @@ mod tests {
                     },
                 },
             },
+            &ConsensusExcludedKeys::empty(),
         )
     }
 }
