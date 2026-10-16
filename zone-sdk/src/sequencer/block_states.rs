@@ -18,9 +18,11 @@ use lb_core::{
     },
 };
 use rpds::{HashTrieMapSync, HashTrieSetSync, ListSync};
+use tracing::debug;
 
-use super::types::{
-    AtomicWithdrawInfo, ChannelNote, ChannelWalletView, InscriptionInfo, PinDepositInfo,
+use super::{
+    TARGET,
+    types::{AtomicWithdrawInfo, ChannelNote, ChannelWalletView, InscriptionInfo, PinDepositInfo},
 };
 
 type NoteSet = HashTrieMapSync<NoteId, ChannelNote>;
@@ -434,6 +436,7 @@ impl BlockStates {
     /// LIB move) and leaves the set alone.
     pub fn set_finalized_notes_at(&mut self, block: HeaderId) {
         if !self.descends_from_lib(block) {
+            debug!(target: TARGET, ?block, "Stale finalized block, notes left as they are");
             return;
         }
         if let Some(state) = self.block_states.get(&block) {

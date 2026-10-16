@@ -25,6 +25,7 @@ use tokio::sync::{mpsc, watch};
 use super::{
     super::{
         block_fetch::ViewBefore,
+        block_states::BlockChannelTx,
         state::PendingBundle,
         types::{FinalizedOp, InscriptionInfo, SequencerConfig},
         zone_sequencer::track_pending_tx,
@@ -32,8 +33,8 @@ use super::{
     *,
 };
 use crate::test_support::{
-    MockNode, StreamEnd, StreamScript, api_block, funding_config, header_id, live_event, scripts,
-    single_key_channel_state, unverified_tx_with_ops,
+    MockNode, StreamEnd, StreamScript, api_block, funding_config, header_id, inscribe_op,
+    live_event, scripts, single_key_channel_state, unverified_tx_with_ops,
 };
 
 #[must_use]
@@ -1620,56 +1621,92 @@ async fn stream_gap_surfaces_backfilled_inscriptions_as_adopted() {
 }
 
 /// The variant follows `orphaned`: nothing orphaned is an extension,
-/// otherwise a conflict, whose prefix is read from the state at the tip.
+/// otherwise a conflict whose prefix is the view at the tip after the shed
+/// passes, so it excludes what they orphaned.
 #[tokio::test]
 async fn update_variant_follows_orphaned() {
     let channel_id = ChannelId::from([0; 32]);
     let key = Ed25519Key::from_bytes(&[0; 32]);
-    let mut sequencer = ready_sequencer_with_channel(None, key.clone()).await;
-    let entry = |n: u8| {
-        let op = InscriptionOp {
-            channel_id,
-            inscription: Inscription::new_unchecked(vec![n]),
-            parent: MsgId::root(),
-            signer: key.public_key().into_unverified(),
-        };
-        let tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(op.clone())]);
-        ChannelUpdateTx::Inscription(InscriptionInfo {
-            tx_hash: tx.hash(),
-            parent_msg: MsgId::root(),
-            this_msg: MsgId::root(),
-            payload: op.inscription,
-            signer: Some(op.signer),
-        })
+    let mut sequencer = ready_sequencer_with_channel(None, key).await;
+    let info_of = |op: &InscriptionOp| InscriptionInfo {
+        tx_hash: unverified_tx_with_ops(vec![Op::ChannelInscribe(op.clone())]).hash(),
+        parent_msg: op.parent,
+        this_msg: op.id(),
+        payload: op.inscription.clone(),
+        signer: Some(op.signer),
     };
-    let result = |adopted: Vec<ChannelUpdateTx>, orphaned: Vec<ChannelUpdateTx>| BlockEventResult {
+    let result = |adopted: Vec<ChannelUpdateTx>,
+                  orphaned: Vec<ChannelUpdateTx>,
+                  view_before: ViewBefore| BlockEventResult {
         finalized_items: Vec::new(),
         channel_update: Some(ChannelUpdateInfo {
             orphaned,
             adopted,
             new_channel_tip: MsgId::root(),
         }),
-        view_before: ViewBefore::default(),
+        view_before,
         deposits: Vec::new(),
     };
+    let hashes =
+        |txs: &[ChannelUpdateTx]| txs.iter().map(ChannelUpdateTx::tx_hash).collect::<Vec<_>>();
 
-    let (update, ..) = sequencer.apply_block_result(result(vec![entry(3)], Vec::new()));
+    // Block 1 on LIB mines entry 1; the view at the tip is that entry.
+    let mined = inscribe_op(channel_id, MsgId::root(), b"1");
+    let lib = sequencer.state.as_ref().unwrap().lib();
+    sequencer.state.as_mut().unwrap().process_block(
+        header_id(1),
+        lib,
+        lib,
+        std::iter::empty(),
+        vec![BlockChannelTx::Inscription(info_of(&mined))],
+        Vec::new(),
+    );
+    sequencer.current_tip = Some(header_id(1));
+    let adopted = ChannelUpdateTx::Inscription(info_of(&inscribe_op(channel_id, mined.id(), b"3")));
+
+    let (update, ..) = sequencer.apply_block_result(result(
+        vec![adopted.clone()],
+        Vec::new(),
+        ViewBefore::new(&[], HashSet::new()),
+    ));
     assert!(matches!(update, ChannelUpdate::Extension { adopted } if adopted.len() == 1));
 
-    let (update, ..) = sequencer.apply_block_result(result(vec![entry(3)], vec![entry(2)]));
+    // A pending entry chaining off the mined tip is shed by the passes.
+    let stale = inscribe_op(channel_id, MsgId::root(), b"2");
+    let stale_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(stale.clone())]);
+    sequencer
+        .state
+        .as_mut()
+        .unwrap()
+        .submit_inscription(
+            stale_tx,
+            MsgId::root(),
+            stale.id(),
+            stale.inscription.clone(),
+        )
+        .unwrap();
+    let orphaned_entry = ChannelUpdateTx::Inscription(info_of(&stale));
+
+    let (update, ..) = sequencer.apply_block_result(result(
+        vec![adopted.clone()],
+        vec![orphaned_entry.clone()],
+        ViewBefore::new(&[info_of(&mined), info_of(&stale)], HashSet::new()),
+    ));
     let ChannelUpdate::Conflict {
         common_prefix,
-        adopted,
+        adopted: got,
         orphaned,
     } = update
     else {
         panic!("an orphaned entry makes a conflict")
     };
-    let hashes =
-        |txs: &[ChannelUpdateTx]| txs.iter().map(ChannelUpdateTx::tx_hash).collect::<Vec<_>>();
-    assert!(common_prefix.is_empty(), "no view at a tip yet");
-    assert_eq!(hashes(&adopted), hashes(&[entry(3)]));
-    assert_eq!(hashes(&orphaned), hashes(&[entry(2)]));
+    assert_eq!(
+        hashes(&common_prefix),
+        hashes(&[ChannelUpdateTx::Inscription(info_of(&mined))]),
+        "the view at the tip, without the shed entry"
+    );
+    assert_eq!(hashes(&got), hashes(&[adopted]));
+    assert_eq!(hashes(&orphaned), hashes(&[orphaned_entry]));
 }
 
 fn assert_history_matches_update(sequencer: &ZoneSequencer<MockNode>, update: &ChannelUpdate) {

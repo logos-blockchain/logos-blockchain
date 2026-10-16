@@ -62,11 +62,21 @@ pub(super) struct BlockEventResult {
 
 /// The ids of the view before a block event: its lineage entries by tx hash
 /// and message id, and the message ids the event finalized.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct ViewBefore {
     old_txs: HashSet<TxHash>,
     old_msgs: HashSet<MsgId>,
     finalized_now: HashSet<MsgId>,
+}
+
+impl ViewBefore {
+    pub(super) fn new(old_lineage: &[InscriptionInfo], finalized_now: HashSet<MsgId>) -> Self {
+        Self {
+            old_txs: old_lineage.iter().map(|info| info.tx_hash).collect(),
+            old_msgs: old_lineage.iter().map(|info| info.this_msg).collect(),
+            finalized_now,
+        }
+    }
 }
 
 /// The part of the view at `tip` that was already in the view before the
@@ -393,11 +403,7 @@ fn apply_prepared_block_event(
         update
     });
 
-    let view_before = ViewBefore {
-        old_txs: old_lineage.iter().map(|info| info.tx_hash).collect(),
-        old_msgs: old_lineage.iter().map(|info| info.this_msg).collect(),
-        finalized_now,
-    };
+    let view_before = ViewBefore::new(&old_lineage, finalized_now);
 
     BlockEventResult {
         finalized_items: finalized_batch.items,
