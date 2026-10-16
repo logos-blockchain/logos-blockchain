@@ -252,6 +252,8 @@ jobs:
             --library-path $glibc/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
           nix shell 'nixpkgs#valgrind' --command \
             cargo test --locked -p logos-blockchain-c -- --ignored --test-threads=1 ffi_safety_tests
+          nix shell 'nixpkgs#valgrind' --command \
+            cargo test --locked -p logos-blockchain-c-common --test consumer -- --test-threads=1
 
       - name: Clean up build artifacts
         if: success() || failure()

@@ -1,8 +1,6 @@
-use std::{
-    any::Any,
-    ffi::{CStr, CString, c_char},
-};
+use std::ffi::{CStr, c_char};
 
+use lb_c_common::{FfiError, FfiReturn, memory};
 use lb_c_macros::panic_to_error;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -49,27 +47,8 @@ impl OperationStatus {
     };
 
     pub(crate) fn error(code: OperationStatusCode, message: impl Into<String>) -> Self {
-        // A C string cannot hold a NUL byte, but an error message is free to
-        // carry one: many of them echo input the caller or a file supplied.
-        // Escaping keeps the message readable and this function infallible.
-        let message = CString::new(message.into().replace('\0', "\\0"))
-            .unwrap_or_default()
-            .into_raw();
+        let message = memory::error_message(message);
         Self { code, message }
-    }
-
-    /// The status an exported function returns when its body panicked: see
-    /// [`panic_to_error`](lb_c_macros::panic_to_error).
-    pub(crate) fn from_panic(payload: &(dyn Any + Send)) -> Self {
-        let message = payload
-            .downcast_ref::<&str>()
-            .copied()
-            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-            .unwrap_or("no message");
-        Self::error(
-            OperationStatusCode::RuntimeError,
-            format!("Internal panic: {message}"),
-        )
     }
 
     /// Whether the status reports success.
@@ -112,8 +91,37 @@ impl OperationStatus {
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_operation_status(status: OperationStatus) {
-    if !status.message.is_null() {
-        drop(unsafe { CString::from_raw(status.message) });
+    unsafe { memory::free_cstring(status.message) };
+}
+
+// SAFETY: Both constructors allocate a new message owned by the returned
+// status.
+unsafe impl FfiError for OperationStatus {
+    fn is_ok(&self) -> bool {
+        self.code == OperationStatusCode::Ok
+    }
+
+    fn null_pointer(name: &str) -> Self {
+        Self::error(
+            OperationStatusCode::NullPointer,
+            format!("Received a null `{name}` pointer."),
+        )
+    }
+
+    /// The status an exported function returns when its body panicked: see
+    /// [`panic_to_error`](lb_c_macros::panic_to_error).
+    fn from_panic(message: impl Into<String>) -> Self {
+        Self::error(OperationStatusCode::RuntimeError, message)
+    }
+
+    unsafe fn release(self) {
+        unsafe { memory::free_cstring(self.message) };
+    }
+}
+
+impl FfiReturn<Self> for OperationStatus {
+    unsafe fn from_error(status: Self) -> Self {
+        status
     }
 }
 

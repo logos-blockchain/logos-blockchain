@@ -1,0 +1,16 @@
+[package]
+categories  = { workspace = true }
+description = "Shared Rust support for Logos C bindings"
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-c-common"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[dev-dependencies]
+lb-c-macros = { workspace = true }
+
+[lints]
+workspace = true
