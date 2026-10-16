@@ -146,7 +146,6 @@ pub async fn execute_mempool_diagnostic_coin_splits(
     world: &mut CucumberWorld,
     step: &str,
     outputs_per_wallet: usize,
-    epochs_headroom: u32,
 ) -> Result<(), StepError> {
     if outputs_per_wallet == 0 {
         return Err(StepError::InvalidArgument {
@@ -161,7 +160,7 @@ pub async fn execute_mempool_diagnostic_coin_splits(
     }
     wallets.sort();
 
-    let policy = super::build_cycle_fee_policy(world, step, &wallets[0], epochs_headroom).await?;
+    let policy = super::build_cycle_fee_policy(world, step, &wallets[0], 0).await?;
     let mut available_utxos = super::current_available_utxos_for_user_wallets(world, step).await?;
     let mut requests = Vec::with_capacity(wallets.len());
 

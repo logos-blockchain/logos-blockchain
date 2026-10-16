@@ -683,6 +683,14 @@ where
         let txs = txs_for_block(valid_tx_stream).await;
 
         let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
+        info!(
+            target: LOG_TARGET,
+            event = "leader_proposal_created",
+            timestamp_unix_ms = lb_blend_service::message::proposal_diagnostic_timestamp_unix_ms(),
+            block_id = %block.header().id(),
+            slot = u64::from(block.header().slot()),
+            "Created local block proposal"
+        );
         if tracing::enabled!(Level::DEBUG) {
             log_sdp_activity_selected_for_proposal(&block, &ledger_state);
         }

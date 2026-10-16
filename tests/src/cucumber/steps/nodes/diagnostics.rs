@@ -3,7 +3,7 @@ use std::{
     fs,
     io::Write as _,
     net::SocketAddr,
-    num::{NonZero, NonZeroU64},
+    num::{NonZero, NonZeroU32, NonZeroU64},
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
@@ -17,7 +17,8 @@ use lb_core::sdp::{ProviderId, ServiceType};
 use lb_http_api_common::TimeInfo;
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_node::config::DeploymentSettings;
-use lb_testing_framework::{NodeHttpClient, USER_CONFIG_FILE, configs::deployment::TopologyConfig};
+use lb_testing_framework::{NodeHttpClient, USER_CONFIG_FILE};
+use lb_utils::math::NonNegativeRatio;
 use time::OffsetDateTime;
 use tokio::time::{Instant, sleep, timeout};
 use tracing::{info, warn};
@@ -171,6 +172,7 @@ struct BlendDiagnosticParameterSet {
     epoch_stake_distribution_stabilization: u8,
     epoch_period_nonce_buffer: u8,
     epoch_period_nonce_stabilization: u8,
+    slot_activation_coeff_denominator: u32,
 }
 
 impl BlendDiagnosticParameterSet {
@@ -186,16 +188,19 @@ impl BlendDiagnosticParameterSet {
                 epoch_stake_distribution_stabilization: 1,
                 epoch_period_nonce_buffer: 1,
                 epoch_period_nonce_stabilization: 1,
+                slot_activation_coeff_denominator: 10,
             }),
-            // These parameters are representative of the testnet, and are suitable for testing
-            // blend behaviour in a more realistic setting.
+            // An accelerated approximation of the rebooted testnet: 1-second slots,
+            // phases 3/3/4, and f=1/30, but k=10 and 3,000-slot epochs rather than the
+            // deployment's k=1000 and 300,000-slot epochs.
             "testnet_representative" => Some(Self {
                 name: "testnet_representative",
-                security_parameter: 5,
+                security_parameter: 10,
                 slot_duration_secs: 1,
                 epoch_stake_distribution_stabilization: 3,
                 epoch_period_nonce_buffer: 3,
                 epoch_period_nonce_stabilization: 4,
+                slot_activation_coeff_denominator: 30,
             }),
             // These parameters will invoke undue blend behaviour in a very short time, and are
             // suitable for testing blend diagnostic measurements in a more extreme
@@ -207,17 +212,35 @@ impl BlendDiagnosticParameterSet {
                 epoch_stake_distribution_stabilization: 1,
                 epoch_period_nonce_buffer: 1,
                 epoch_period_nonce_stabilization: 1,
+                slot_activation_coeff_denominator: 10,
             }),
             _ => None,
         }
     }
 
-    const fn apply_to(&self, settings: &mut DeploymentSettings) {
+    /// Cap W at k - 1 (floor 1) to limit pruning-related instability while
+    /// retaining a nonzero window for meaningful uncle references.
+    fn uncle_reference_window_in_block(self) -> u32 {
+        let default_window = DeploymentSettings::default()
+            .genesis_era_parameters()
+            .cryptarchia
+            .uncle_reference_window_in_block
+            .get();
+        diagnostic_uncle_reference_window(default_window, self.security_parameter)
+    }
+
+    fn apply_to(&self, settings: &mut DeploymentSettings) {
         settings
             .genesis_era_parameters_mut()
             .cryptarchia
             .security_param = NonZero::new(self.security_parameter)
             .expect("named Blend diagnostic security parameter must be non-zero");
+        settings
+            .genesis_era_parameters_mut()
+            .cryptarchia
+            .uncle_reference_window_in_block =
+            NonZeroU32::new(self.uncle_reference_window_in_block())
+                .expect("named Blend diagnostic uncle reference window must be non-zero");
         settings.genesis_era_parameters_mut().time.slot_duration =
             Duration::from_secs(self.slot_duration_secs);
         settings
@@ -239,17 +262,25 @@ impl BlendDiagnosticParameterSet {
             .epoch_config
             .epoch_period_nonce_stabilization = NonZero::new(self.epoch_period_nonce_stabilization)
             .expect("named Blend diagnostic phase must be non-zero");
+        settings
+            .genesis_era_parameters_mut()
+            .cryptarchia
+            .slot_activation_coeff = NonNegativeRatio::new(
+            1,
+            NonZeroU32::new(self.slot_activation_coeff_denominator)
+                .expect("named Blend diagnostic slot coefficient denominator must be non-zero"),
+        );
     }
 
     fn effective_deployment_settings(self) -> DeploymentSettings {
         let mut settings = DeploymentSettings::default();
-        settings
-            .genesis_era_parameters_mut()
-            .cryptarchia
-            .slot_activation_coeff = TopologyConfig::default().active_slot_coeff;
         self.apply_to(&mut settings);
         settings
     }
+}
+
+fn diagnostic_uncle_reference_window(default_window: u32, security_parameter: u32) -> u32 {
+    default_window.min(security_parameter.saturating_sub(1).max(1))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -371,6 +402,12 @@ pub fn set_blend_diagnostic_parameter_set(
     set_deployment_config_override(
         world,
         step,
+        "eras.0.cryptarchia.uncle_reference_window_in_block",
+        &parameter_set.uncle_reference_window_in_block().to_string(),
+    )?;
+    set_deployment_config_override(
+        world,
+        step,
         "eras.0.time.slot_duration",
         &format!("seconds({})", parameter_set.slot_duration_secs),
     )?;
@@ -394,6 +431,18 @@ pub fn set_blend_diagnostic_parameter_set(
         "eras.0.cryptarchia.epoch_config.epoch_period_nonce_stabilization",
         &parameter_set.epoch_period_nonce_stabilization.to_string(),
     )?;
+    set_deployment_config_override(
+        world,
+        step,
+        "eras.0.cryptarchia.slot_activation_coeff.numerator",
+        "1",
+    )?;
+    set_deployment_config_override(
+        world,
+        step,
+        "eras.0.cryptarchia.slot_activation_coeff.denominator",
+        &parameter_set.slot_activation_coeff_denominator.to_string(),
+    )?;
 
     let settings = parameter_set.effective_deployment_settings();
     let geometry = DiagnosticGeometry::from_settings(&settings);
@@ -404,6 +453,11 @@ pub fn set_blend_diagnostic_parameter_set(
         event = "blend_diagnostic_parameter_set",
         parameter_set = parameter_set.name,
         security_parameter = settings.genesis_era_parameters().cryptarchia.security_param.get(),
+        uncle_reference_window_in_block = settings
+            .genesis_era_parameters()
+            .cryptarchia
+            .uncle_reference_window_in_block
+            .get(),
         slot_duration_secs = settings.genesis_era_parameters().time.slot_duration.as_secs(),
         epoch_stake_distribution_stabilization = settings
             .genesis_era_parameters().cryptarchia
@@ -432,9 +486,14 @@ pub fn set_blend_diagnostic_parameter_set(
             .slot_activation_coeff
             .denominator
             .get(),
-        "Blend diagnostic parameters: {}: k={}, phases={}/{}/{}, slots_per_epoch={}",
+        "Blend diagnostic parameters: {}: k={}, W={}, phases={}/{}/{}, f=1/{}, slots_per_epoch={}",
         parameter_set.name,
         settings.genesis_era_parameters().cryptarchia.security_param.get(),
+        settings
+            .genesis_era_parameters()
+            .cryptarchia
+            .uncle_reference_window_in_block
+            .get(),
         settings
             .genesis_era_parameters().cryptarchia
             .epoch_config
@@ -450,6 +509,12 @@ pub fn set_blend_diagnostic_parameter_set(
             .epoch_config
             .epoch_period_nonce_stabilization
             .get(),
+        settings
+            .genesis_era_parameters()
+            .cryptarchia
+            .slot_activation_coeff
+            .denominator
+            .get(),
         slots_per_epoch,
     );
 
@@ -460,6 +525,11 @@ pub fn set_blend_diagnostic_parameter_set(
             "timestamp": OffsetDateTime::now_utc().to_string(),
             "parameter_set": parameter_set.name,
             "security_parameter": settings.genesis_era_parameters().cryptarchia.security_param.get(),
+            "uncle_reference_window_in_block": settings
+                .genesis_era_parameters()
+                .cryptarchia
+                .uncle_reference_window_in_block
+                .get(),
             "slot_duration_secs": settings.genesis_era_parameters().time.slot_duration.as_secs(),
             "slot_duration_ms": settings.genesis_era_parameters().time.slot_duration.as_millis(),
             "epoch_stake_distribution_stabilization": settings
@@ -1191,6 +1261,10 @@ fn log_diagnostic_identities_step(world: &mut CucumberWorld) -> StepResult {
     log_diagnostic_identities(world)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Effective deployment evidence and node identity mapping are emitted together"
+)]
 fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
     let mut node_names: Vec<_> = world.nodes_info.keys().cloned().collect();
     node_names.sort();
@@ -1202,6 +1276,164 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
         .first()
         .ok_or_else(|| diagnostic_error("No running nodes are available for identity mapping"))?;
     let deployment = deployment_settings(world, reference_node)?;
+    let parameters = deployment.genesis_era_parameters();
+    let epoch_config = parameters.cryptarchia.epoch_config;
+    let geometry = DiagnosticGeometry::from_settings(&deployment);
+    append_timeline_record(
+        world,
+        &serde_json::json!({
+            "event": "blend_diagnostic_effective_configuration",
+            "timestamp": OffsetDateTime::now_utc().to_string(),
+            "node": reference_node,
+            "source": "runtime_deployment",
+            "security_parameter": parameters.cryptarchia.security_param.get(),
+            "uncle_reference_window_in_block": parameters
+                .cryptarchia
+                .uncle_reference_window_in_block
+                .get(),
+            "slot_duration_secs": parameters.time.slot_duration.as_secs(),
+            "slot_duration_ms": parameters.time.slot_duration.as_millis(),
+            "slot_activation_coeff_numerator": parameters
+                .cryptarchia
+                .slot_activation_coeff
+                .numerator,
+            "slot_activation_coeff_denominator": parameters
+                .cryptarchia
+                .slot_activation_coeff
+                .denominator
+                .get(),
+            "blend_num_layers": parameters.blend.common.num_blend_layers.get(),
+            "blend_maximum_release_delay_in_rounds": parameters
+                .blend
+                .core
+                .scheduler
+                .delayer
+                .maximum_release_delay_in_rounds
+                .get(),
+            "blend_network_absorption_in_rounds": parameters
+                .blend
+                .common
+                .network_absorption_in_rounds
+                .get(),
+            "blend_data_replication_factor": parameters.blend.common.data_replication_factor,
+            "epoch_stake_distribution_stabilization": epoch_config
+                .epoch_stake_distribution_stabilization
+                .get(),
+            "epoch_period_nonce_buffer": epoch_config.epoch_period_nonce_buffer.get(),
+            "epoch_period_nonce_stabilization": epoch_config
+                .epoch_period_nonce_stabilization
+                .get(),
+            "slots_per_epoch": geometry.slots_per_epoch,
+            "base_period_length": geometry.base_period_length,
+        }),
+    );
+    let reference_configuration = serde_json::json!({
+        "security_parameter": parameters.cryptarchia.security_param.get(),
+        "uncle_reference_window_in_block": parameters
+            .cryptarchia
+            .uncle_reference_window_in_block
+            .get(),
+        "slot_duration_secs": parameters.time.slot_duration.as_secs(),
+        "slot_duration_ms": parameters.time.slot_duration.as_millis(),
+        "slot_activation_coeff_numerator": parameters
+            .cryptarchia
+            .slot_activation_coeff
+            .numerator,
+        "slot_activation_coeff_denominator": parameters
+            .cryptarchia
+            .slot_activation_coeff
+            .denominator
+            .get(),
+        "blend_num_layers": parameters.blend.common.num_blend_layers.get(),
+        "blend_maximum_release_delay_in_rounds": parameters
+            .blend
+            .core
+            .scheduler
+            .delayer
+            .maximum_release_delay_in_rounds
+            .get(),
+        "blend_network_absorption_in_rounds": parameters
+            .blend
+            .common
+            .network_absorption_in_rounds
+            .get(),
+        "blend_data_replication_factor": parameters.blend.common.data_replication_factor,
+        "epoch_stake_distribution_stabilization": epoch_config
+            .epoch_stake_distribution_stabilization
+            .get(),
+        "epoch_period_nonce_buffer": epoch_config.epoch_period_nonce_buffer.get(),
+        "epoch_period_nonce_stabilization": epoch_config
+            .epoch_period_nonce_stabilization
+            .get(),
+        "slots_per_epoch": geometry.slots_per_epoch,
+        "base_period_length": geometry.base_period_length,
+    });
+    for node_name in node_names.iter().skip(1) {
+        let node_deployment = deployment_settings(world, node_name)?;
+        let node_parameters = node_deployment.genesis_era_parameters();
+        let node_epoch_config = node_parameters.cryptarchia.epoch_config;
+        let node_geometry = DiagnosticGeometry::from_settings(&node_deployment);
+        let mut record = serde_json::json!({
+            "security_parameter": node_parameters.cryptarchia.security_param.get(),
+            "uncle_reference_window_in_block": node_parameters
+                .cryptarchia
+                .uncle_reference_window_in_block
+                .get(),
+            "slot_duration_secs": node_parameters.time.slot_duration.as_secs(),
+            "slot_duration_ms": node_parameters.time.slot_duration.as_millis(),
+            "slot_activation_coeff_numerator": node_parameters
+                .cryptarchia
+                .slot_activation_coeff
+                .numerator,
+            "slot_activation_coeff_denominator": node_parameters
+                .cryptarchia
+                .slot_activation_coeff
+                .denominator
+                .get(),
+            "blend_num_layers": node_parameters.blend.common.num_blend_layers.get(),
+            "blend_maximum_release_delay_in_rounds": node_parameters
+                .blend
+                .core
+                .scheduler
+                .delayer
+                .maximum_release_delay_in_rounds
+                .get(),
+            "blend_network_absorption_in_rounds": node_parameters
+                .blend
+                .common
+                .network_absorption_in_rounds
+                .get(),
+            "blend_data_replication_factor": node_parameters.blend.common.data_replication_factor,
+            "epoch_stake_distribution_stabilization": node_epoch_config
+                .epoch_stake_distribution_stabilization
+                .get(),
+            "epoch_period_nonce_buffer": node_epoch_config.epoch_period_nonce_buffer.get(),
+            "epoch_period_nonce_stabilization": node_epoch_config
+                .epoch_period_nonce_stabilization
+                .get(),
+            "slots_per_epoch": node_geometry.slots_per_epoch,
+            "base_period_length": node_geometry.base_period_length,
+        });
+        if record != reference_configuration {
+            return Err(diagnostic_error(format!(
+                "Generated diagnostic deployment settings for `{node_name}` differ from `{reference_node}`: {record}"
+            )));
+        }
+        let record_fields = record
+            .as_object_mut()
+            .expect("effective deployment settings are a JSON object");
+        record_fields.insert(
+            "event".to_owned(),
+            serde_json::json!("blend_diagnostic_effective_configuration"),
+        );
+        record_fields.insert(
+            "timestamp".to_owned(),
+            serde_json::json!(OffsetDateTime::now_utc().to_string()),
+        );
+        record_fields.insert("node".to_owned(), serde_json::json!(node_name));
+        record_fields.insert("source".to_owned(), serde_json::json!("runtime_deployment"));
+        append_timeline_record(world, &record);
+    }
     let declared_provider_ids = deployment
         .genesis_block
         .genesis_tx()
@@ -1488,20 +1720,31 @@ mod tests {
     #[expect(clippy::too_many_lines, reason = "Test function.")]
     #[test]
     fn named_parameter_sets_apply_expected_values_and_derive_epoch_length() {
-        for (name, security_parameter, phases, expected_geometry) in [
+        for (
+            name,
+            security_parameter,
+            uncle_reference_window,
+            phases,
+            coefficient_denominator,
+            expected_geometry,
+        ) in [
             (
                 "clean_control",
                 10,
+                9,
                 (1, 1, 1),
+                10,
                 (100, 300, 200, 100, 250, 299),
             ),
             (
                 "testnet_representative",
-                5,
+                10,
+                9,
                 (3, 3, 4),
-                (50, 500, 300, 200, 400, 499),
+                30,
+                (300, 3_000, 1_800, 1_200, 2_400, 2_999),
             ),
-            ("fast_repro", 3, (1, 1, 1), (30, 90, 60, 30, 75, 89)),
+            ("fast_repro", 3, 2, (1, 1, 1), 10, (30, 90, 60, 30, 75, 89)),
         ] {
             let parameter_set =
                 BlendDiagnosticParameterSet::from_name(name).expect("profile should be known");
@@ -1514,6 +1757,14 @@ mod tests {
                     .security_param
                     .get(),
                 security_parameter
+            );
+            assert_eq!(
+                settings
+                    .genesis_era_parameters()
+                    .cryptarchia
+                    .uncle_reference_window_in_block
+                    .get(),
+                uncle_reference_window
             );
             assert_eq!(
                 settings.genesis_era_parameters().time.slot_duration,
@@ -1541,6 +1792,23 @@ mod tests {
                         .get(),
                 ),
                 phases
+            );
+            assert_eq!(
+                settings
+                    .genesis_era_parameters()
+                    .cryptarchia
+                    .slot_activation_coeff
+                    .numerator,
+                1
+            );
+            assert_eq!(
+                settings
+                    .genesis_era_parameters()
+                    .cryptarchia
+                    .slot_activation_coeff
+                    .denominator
+                    .get(),
+                coefficient_denominator
             );
             let geometry = DiagnosticGeometry::from_settings(&settings);
             assert_eq!(
@@ -1575,10 +1843,6 @@ mod tests {
                 3 * expected_geometry.1 + expected_geometry.2
             );
             let mut deployment_settings = DeploymentSettings::default();
-            deployment_settings
-                .genesis_era_parameters_mut()
-                .cryptarchia
-                .slot_activation_coeff = TopologyConfig::default().active_slot_coeff;
             parameter_set.apply_to(&mut deployment_settings);
             assert_eq!(
                 settings
@@ -1597,6 +1861,19 @@ mod tests {
     fn unknown_named_parameter_set_is_rejected() {
         assert!(BlendDiagnosticParameterSet::from_name("accelerated").is_none());
         assert!(BlendDiagnosticParameterSet::from_name("unknown").is_none());
+    }
+
+    #[test]
+    fn uncle_reference_window_keeps_the_k_one_boundary_nonzero() {
+        for (security_parameter, expected_window) in
+            [(1, 1), (3, 2), (5, 4), (10, 9), (15, 12), (35, 12)]
+        {
+            assert_eq!(
+                diagnostic_uncle_reference_window(12, security_parameter),
+                expected_window
+            );
+        }
+        assert_eq!(diagnostic_uncle_reference_window(8, 20), 8);
     }
 
     #[test]
