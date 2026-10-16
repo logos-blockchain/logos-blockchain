@@ -251,7 +251,7 @@ fn service_settings_receive_recovery_data() {
     let wallet_service_settings = WalletServiceConfig {
         user: user_config.wallet.clone(),
     }
-    .into_wallet_service_settings(recovery_data.clone());
+    .into_wallet_service_settings(recovery_data.clone(), deployment_settings.era_schedule());
     assert_eq!(
         wallet_service_settings
             .recovery_data

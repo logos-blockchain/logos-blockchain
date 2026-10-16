@@ -30,9 +30,13 @@ lb-log-targets                   = { workspace = true }
 lb-mmr                           = { workspace = true }
 lb-services-utils                = { workspace = true }
 lb-storage-service               = { workspace = true }
+lb-time                          = { workspace = true }
 lb-utils                         = { features = ["tokio"], workspace = true }
 lb-wallet                        = { workspace = true }
 overwatch                        = { workspace = true }
+
+[dev-dependencies]
+time = { workspace = true }
 
 [lints]
 workspace = true
