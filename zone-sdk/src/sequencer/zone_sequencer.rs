@@ -35,7 +35,7 @@ use tracing::{debug, info, warn};
 use super::{
     TARGET,
     block_fetch::classify_channel_tx,
-    block_states::BlockChannelTx,
+    block_states::{BlockChannelTx, SharedTx},
     channel_wallet::select_channel_notes,
     client::SequencerClient,
     handle::SequencerHandle,
@@ -1685,7 +1685,7 @@ where
         self.posting.insert(tx_hash);
         self.in_flight.push(Box::pin(post_batch(
             self.node.clone(),
-            vec![(tx_hash, signed_tx)],
+            vec![(tx_hash, signed_tx.into())],
         )));
     }
 
@@ -1693,10 +1693,7 @@ where
     /// before pushing; the future clears it on completion. Caller must
     /// check `resubmit_active` first to avoid duplicate sweeps —
     /// `resubmit_pending` does this gate.
-    pub(super) fn queue_resubmit_batch(
-        &mut self,
-        batch: Vec<(TxHash, SignedOps<Unverified, StandardMode>)>,
-    ) {
+    pub(super) fn queue_resubmit_batch(&mut self, batch: Vec<(TxHash, SharedTx)>) {
         if batch.is_empty() {
             return;
         }
@@ -1714,17 +1711,14 @@ where
     }
 }
 
-async fn post_batch<Node>(
-    node: Node,
-    batch: Vec<(TxHash, SignedOps<Unverified, StandardMode>)>,
-) -> Vec<(TxHash, bool)>
+async fn post_batch<Node>(node: Node, batch: Vec<(TxHash, SharedTx)>) -> Vec<(TxHash, bool)>
 where
     Node: adapter::Node + Clone + Send + Sync + 'static,
 {
     let mut results = Vec::with_capacity(batch.len());
     let mut iter = batch.into_iter();
     while let Some((tx_hash, signed_tx)) = iter.next() {
-        match node.post_transaction(signed_tx).await {
+        match node.post_transaction((*signed_tx).clone()).await {
             Ok(()) => results.push((tx_hash, true)),
             Err(e) => {
                 // TODO: We need to distinguish node rejection (invalid tx) from node
@@ -1761,7 +1755,11 @@ pub(super) fn build_checkpoint(
 ) -> SequencerCheckpoint {
     SequencerCheckpoint {
         last_msg_id,
-        pending_txs: state.all_pending_txs(),
+        pending_txs: state
+            .all_pending_txs()
+            .into_iter()
+            .map(|(hash, tx)| (hash, (*tx).clone()))
+            .collect(),
         lib: state.lib(),
         lib_slot,
         channel_notes: state.channel_notes_base(),
@@ -1802,6 +1800,7 @@ pub(super) fn track_pending_tx(
     tx: SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
 ) -> Result<Option<MsgId>, ParentTaken> {
+    let tx: SharedTx = tx.into();
     match classify_channel_tx(&tx, channel_id, &mut None) {
         Some(BlockChannelTx::Inscription(i)) => {
             let this_msg = i.this_msg;

@@ -3,7 +3,10 @@
 //! lineage, and its classified channel content, plus the finalized tips and
 //! note set the branch reads fall back to.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::{
+    collections::{BTreeMap, HashMap, VecDeque},
+    sync::Arc,
+};
 
 use lb_core::{
     header::HeaderId,
@@ -15,13 +18,18 @@ use lb_core::{
     },
 };
 use rpds::{HashTrieMapSync, HashTrieSetSync, ListSync};
+use tracing::debug;
 
-use super::types::{
-    AtomicWithdrawInfo, ChannelNote, ChannelWalletView, InscriptionInfo, PinDepositInfo,
+use super::{
+    TARGET,
+    types::{AtomicWithdrawInfo, ChannelNote, ChannelWalletView, InscriptionInfo, PinDepositInfo},
 };
 
 type NoteSet = HashTrieMapSync<NoteId, ChannelNote>;
 pub type SafeSet = HashTrieSetSync<TxHash>;
+/// A channel tx's bytes, owned once and shared between the block store, the
+/// pending set and the lineage.
+pub type SharedTx = Arc<SignedOps<Unverified, StandardMode>>;
 
 /// One channel-note mutation, in on-chain execution order.
 #[derive(Debug, Clone)]
@@ -49,6 +57,25 @@ struct MsgTip {
     parent_msg: MsgId,
 }
 
+/// One lineage entry: a stored channel tx and the position of the entry
+/// among its message or config entries.
+#[derive(Debug, Clone)]
+struct LineageEntry {
+    tx: Arc<BlockChannelTx>,
+    index: usize,
+    config: bool,
+}
+
+impl LineageEntry {
+    fn info(&self) -> &InscriptionInfo {
+        if self.config {
+            &self.tx.config_entries()[self.index]
+        } else {
+            &self.tx.infos()[self.index]
+        }
+    }
+}
+
 /// The channel lineage at a block, above the LIB block's parent: the tips
 /// of both lineages and every entry, shared with the parent block.
 #[derive(Debug, Clone, Default)]
@@ -58,25 +85,33 @@ struct Lineage {
     /// The newest config entry, `None` when the window has none.
     config_tip: Option<MsgId>,
     /// Message and config entries in op order, newest first.
-    entries: ListSync<InscriptionInfo>,
+    entries: ListSync<LineageEntry>,
 }
 
 impl Lineage {
     /// The lineage after `channel_txs` on top of `parent`, or on top of an
     /// empty window when the parent is unknown.
-    fn extend(parent: Option<&Self>, channel_txs: &[BlockChannelTx]) -> Self {
+    fn extend(parent: Option<&Self>, channel_txs: &[Arc<BlockChannelTx>]) -> Self {
         let mut lineage = parent.cloned().unwrap_or_default();
         for tx in channel_txs {
-            for info in tx.infos() {
+            for (index, info) in tx.infos().iter().enumerate() {
                 lineage.msg_tip = Some(MsgTip {
                     this_msg: info.this_msg,
                     parent_msg: info.parent_msg,
                 });
-                lineage.entries = lineage.entries.push_front(info.clone());
+                lineage.entries = lineage.entries.push_front(LineageEntry {
+                    tx: Arc::clone(tx),
+                    index,
+                    config: false,
+                });
             }
-            for info in tx.config_entries() {
+            for (index, info) in tx.config_entries().iter().enumerate() {
                 lineage.config_tip = Some(info.this_msg);
-                lineage.entries = lineage.entries.push_front(info.clone());
+                lineage.entries = lineage.entries.push_front(LineageEntry {
+                    tx: Arc::clone(tx),
+                    index,
+                    config: true,
+                });
             }
         }
         lineage
@@ -125,15 +160,13 @@ pub struct BlockStates {
 /// One stored L1 block's channel content.
 #[derive(Debug, Default)]
 struct StoredBlock {
-    /// Channel-touching txs, classified at block scan.
-    channel_txs: Vec<BlockChannelTx>,
+    /// Channel-touching txs, classified at block scan; the lineage entries
+    /// point into them.
+    channel_txs: Vec<Arc<BlockChannelTx>>,
     /// Mirrorable channel txs, the source for (re-)mirroring into pending
-    /// whenever the block is on the canonical path.
-    ///
-    /// TODO(zone-sdk): a canonical block's bytes are duplicated here and in
-    /// pending; share them (`Arc`) between the store and the pending entries
-    /// so the store is the single owner. Tracked as a follow-up refactor.
-    signed_txs: Vec<SignedOps<Unverified, StandardMode>>,
+    /// whenever the block is on the canonical path; pending entries share
+    /// the same bytes.
+    signed_txs: Vec<SharedTx>,
 }
 
 /// A channel-touching tx's tip-advancing content, classified once at block
@@ -158,7 +191,7 @@ pub enum BlockChannelTx {
     /// (`config_entries`), which sit on the separate config lineage and never
     /// advance the message tip.
     Custom {
-        tx: SignedOps<Unverified, StandardMode>,
+        tx: SharedTx,
         message_entries: Vec<InscriptionInfo>,
         config_entries: Vec<InscriptionInfo>,
     },
@@ -294,6 +327,7 @@ impl BlockStates {
         let parent = self.block_states.get(&parent_id);
         let mut safe_set = parent.map(|p| p.safe_set.clone()).unwrap_or_default();
         let mut notes = parent.map_or_else(|| self.finalized.notes.clone(), |p| p.notes.clone());
+        let channel_txs: Vec<Arc<BlockChannelTx>> = channel_txs.into_iter().map(Arc::new).collect();
         let lineage = Lineage::extend(parent.map(|p| &p.lineage), &channel_txs);
 
         for tx in our_txs {
@@ -402,6 +436,7 @@ impl BlockStates {
     /// LIB move) and leaves the set alone.
     pub fn set_finalized_notes_at(&mut self, block: HeaderId) {
         if !self.descends_from_lib(block) {
+            debug!(target: TARGET, ?block, "Stale finalized block, notes left as they are");
             return;
         }
         if let Some(state) = self.block_states.get(&block) {
@@ -548,18 +583,18 @@ impl BlockStates {
     /// message entries and config entries, in op order.
     pub fn infos_on_branch(&self, tip: HeaderId) -> Vec<InscriptionInfo> {
         self.lineage_at(tip).map_or_else(Vec::new, |lineage| {
-            let mut entries: Vec<_> = lineage.entries.iter().cloned().collect();
+            let mut entries: Vec<_> = lineage
+                .entries
+                .iter()
+                .map(|entry| entry.info().clone())
+                .collect();
             entries.reverse();
             entries
         })
     }
 
     /// Keep a block's mirrorable signed channel txs.
-    pub fn store_signed_txs(
-        &mut self,
-        block: HeaderId,
-        txs: Vec<SignedOps<Unverified, StandardMode>>,
-    ) {
+    pub fn store_signed_txs(&mut self, block: HeaderId, txs: Vec<SharedTx>) {
         if !txs.is_empty() {
             self.block_txs.entry(block).or_default().signed_txs = txs;
         }
@@ -567,10 +602,7 @@ impl BlockStates {
 
     /// Signed channel txs on `tip`'s branch strictly above LIB, oldest block
     /// first.
-    pub fn signed_txs_on_branch(
-        &self,
-        tip: HeaderId,
-    ) -> impl Iterator<Item = &SignedOps<Unverified, StandardMode>> {
+    pub fn signed_txs_on_branch(&self, tip: HeaderId) -> impl Iterator<Item = &SharedTx> {
         self.branch_blocks_above_lib(tip)
             .into_iter()
             .filter_map(|id| self.block_txs.get(&id))
@@ -578,16 +610,13 @@ impl BlockStates {
     }
 
     /// A mined channel tx by hash, with the signed txs of its block.
-    pub fn channel_tx(
-        &self,
-        tx_hash: TxHash,
-    ) -> Option<(&[SignedOps<Unverified, StandardMode>], &BlockChannelTx)> {
+    pub fn channel_tx(&self, tx_hash: TxHash) -> Option<(&[SharedTx], &BlockChannelTx)> {
         self.block_txs.values().find_map(|block| {
             block
                 .channel_txs
                 .iter()
                 .find(|tx| tx.tx_hash() == Some(tx_hash))
-                .map(|tx| (block.signed_txs.as_slice(), tx))
+                .map(|tx| (block.signed_txs.as_slice(), &**tx))
         })
     }
 }

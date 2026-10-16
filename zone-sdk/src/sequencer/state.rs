@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::Arc,
+};
 
 use lb_common_http_client::Slot;
 use lb_core::{
@@ -30,7 +33,7 @@ fn inscription_signer(
 
 use super::{
     block_fetch::{channel_configs, channel_inscriptions, channel_transfers, is_pure_config},
-    block_states::{BlockChannelTx, BlockStates, NoteOp},
+    block_states::{BlockChannelTx, BlockStates, NoteOp, SharedTx},
     types::{
         AtomicWithdrawInfo, ChannelNote, ChannelUpdateTx, ChannelWalletView, Error,
         InscriptionInfo, PendingFunding, PendingTx, PinDepositInfo, WithdrawInfo,
@@ -61,7 +64,7 @@ pub struct ChannelUpdateInfo {
 /// never shed.
 #[derive(Debug, Clone)]
 struct PendingOtherTx {
-    signed_tx: SignedOps<Unverified, StandardMode>,
+    signed_tx: SharedTx,
     /// The tx's channel inscriptions in op order.
     infos: Vec<InscriptionInfo>,
     /// The tx's channel configs in op order, on the config lineage.
@@ -176,7 +179,7 @@ pub enum PendingBundle {
 #[derive(Debug, Clone)]
 pub struct PendingInscription {
     pub tx_hash: TxHash,
-    pub signed_tx: SignedOps<Unverified, StandardMode>,
+    pub signed_tx: SharedTx,
     pub parent_msg: MsgId,
     pub this_msg: MsgId,
     pub payload: Inscription,
@@ -228,7 +231,7 @@ pub struct TxState {
     /// Pending entries displaced by a mined sibling, awaiting the shed pass
     /// that reports them orphaned.
     displaced: Vec<PendingTx>,
-    displaced_other: Vec<SignedOps<Unverified, StandardMode>>,
+    displaced_other: Vec<SharedTx>,
     /// Opaque pending txs, ours or mirrored: retried byte-identically until
     /// finalized or shed.
     pending_other: HashMap<TxHash, PendingOtherTx>,
@@ -288,7 +291,7 @@ impl TxState {
     /// [`Self::submit_atomic_withdraw`] for inscription+withdraw bundles.
     pub fn submit_inscription(
         &mut self,
-        signed_tx: SignedOps<Unverified, StandardMode>,
+        signed_tx: impl Into<SharedTx>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
@@ -307,7 +310,7 @@ impl TxState {
     /// `outputs` are the recipient notes it releases (for orphan re-issue).
     pub fn submit_atomic_withdraw(
         &mut self,
-        signed_tx: SignedOps<Unverified, StandardMode>,
+        signed_tx: impl Into<SharedTx>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
@@ -328,7 +331,7 @@ impl TxState {
     /// deposited notes being pinned).
     pub fn submit_pin_deposit(
         &mut self,
-        signed_tx: SignedOps<Unverified, StandardMode>,
+        signed_tx: impl Into<SharedTx>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
@@ -345,12 +348,13 @@ impl TxState {
 
     fn insert_pending(
         &mut self,
-        signed_tx: SignedOps<Unverified, StandardMode>,
+        signed_tx: impl Into<SharedTx>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
         bundle: PendingBundle,
     ) -> Result<(), ParentTaken> {
+        let signed_tx: SharedTx = signed_tx.into();
         let tx_hash = signed_tx.hash();
         if let Some(by) = self.pending_child(parent_msg)
             && by != tx_hash
@@ -530,7 +534,7 @@ impl TxState {
         tip: HeaderId,
         lib_slot: Slot,
         window: u64,
-    ) -> (Vec<PendingTx>, Vec<SignedOps<Unverified, StandardMode>>) {
+    ) -> (Vec<PendingTx>, Vec<SharedTx>) {
         // An unprocessed tip has no safe set: everything would read as unmined.
         if !self.blocks.has_block(&tip) {
             return (Vec::new(), Vec::new());
@@ -588,7 +592,7 @@ impl TxState {
     pub fn replace_pending(
         &mut self,
         old: &TxHash,
-        signed_tx: SignedOps<Unverified, StandardMode>,
+        signed_tx: impl Into<SharedTx>,
         pre_fund: MantleTxBuilder,
         funded_at: Slot,
     ) -> Option<TxHash> {
@@ -596,6 +600,7 @@ impl TxState {
         if self.pending_by_parent.get(&entry.parent_msg) == Some(old) {
             self.pending_by_parent.remove(&entry.parent_msg);
         }
+        let signed_tx: SharedTx = signed_tx.into();
         let new_hash = signed_tx.hash();
         entry.tx_hash = new_hash;
         entry.signed_tx = signed_tx;
@@ -629,12 +634,13 @@ impl TxState {
     /// count as first-time publishes.
     pub fn observe_channel_inscription(
         &mut self,
-        signed_tx: SignedOps<Unverified, StandardMode>,
+        signed_tx: impl Into<SharedTx>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
         bundle: PendingBundle,
     ) {
+        let signed_tx: SharedTx = signed_tx.into();
         let tx_hash = signed_tx.hash();
         if self.is_tracked(&tx_hash) {
             return;
@@ -743,9 +749,10 @@ impl TxState {
     /// tip-advancing op), or `None` when it carries none for this channel.
     pub fn submit_other(
         &mut self,
-        signed_tx: SignedOps<Unverified, StandardMode>,
+        signed_tx: impl Into<SharedTx>,
         channel_id: ChannelId,
     ) -> Result<Option<MsgId>, ParentTaken> {
+        let signed_tx: SharedTx = signed_tx.into();
         let tx_hash = signed_tx.hash();
         let lineage = opaque_lineage(&signed_tx, channel_id);
         if let Some(parent) = lineage.first_parent
@@ -766,11 +773,8 @@ impl TxState {
     /// Track an opaque tx observed on the canonical channel, the counterpart
     /// of [`Self::observe_channel_inscription`]: no-op when already tracked,
     /// displaces a pending continuation on its message parent.
-    pub fn observe_other_tx(
-        &mut self,
-        signed_tx: SignedOps<Unverified, StandardMode>,
-        channel_id: ChannelId,
-    ) {
+    pub fn observe_other_tx(&mut self, signed_tx: impl Into<SharedTx>, channel_id: ChannelId) {
+        let signed_tx: SharedTx = signed_tx.into();
         let tx_hash = signed_tx.hash();
         if self.is_tracked(&tx_hash) {
             return;
@@ -799,10 +803,11 @@ impl TxState {
 
     fn insert_other(
         &mut self,
-        signed_tx: SignedOps<Unverified, StandardMode>,
+        signed_tx: impl Into<SharedTx>,
         channel_id: ChannelId,
         lineage: OpaqueLineage,
     ) -> Option<MsgId> {
+        let signed_tx: SharedTx = signed_tx.into();
         let tx_hash = signed_tx.hash();
         let OpaqueLineage {
             first_parent,
@@ -887,11 +892,7 @@ impl TxState {
         self.blocks.config_tip_at(block_id)
     }
 
-    pub fn store_block_signed_txs(
-        &mut self,
-        block: HeaderId,
-        txs: Vec<SignedOps<Unverified, StandardMode>>,
-    ) {
+    pub fn store_block_signed_txs(&mut self, block: HeaderId, txs: Vec<SharedTx>) {
         self.blocks.store_signed_txs(block, txs);
     }
 
@@ -903,7 +904,7 @@ impl TxState {
     /// the channel tip, opaque txs by submission order (`seq`) — a
     /// locally chained bundle can only be built after the bundle that
     /// establishes its parent tip, so submission order is dependency order.
-    pub fn pending_txs(&self, tip: HeaderId) -> Vec<(TxHash, SignedOps<Unverified, StandardMode>)> {
+    pub fn pending_txs(&self, tip: HeaderId) -> Vec<(TxHash, SharedTx)> {
         let safe = self.blocks.safe_at(tip);
 
         let channel_tip = self.channel_tip_at(tip);
@@ -914,7 +915,7 @@ impl TxState {
             .filter_map(|info| {
                 self.pending
                     .get(&info.tx_hash)
-                    .map(|p| (info.tx_hash, p.signed_tx.clone()))
+                    .map(|p| (info.tx_hash, Arc::clone(&p.signed_tx)))
             });
         let mut others: Vec<_> = self
             .pending_other
@@ -926,7 +927,7 @@ impl TxState {
             .chain(
                 others
                     .into_iter()
-                    .map(|(hash, entry)| (*hash, entry.signed_tx.clone())),
+                    .map(|(hash, entry)| (*hash, Arc::clone(&entry.signed_tx))),
             )
             .collect()
     }
@@ -1141,10 +1142,7 @@ impl TxState {
     /// Shed pending opaque txs whose first inscription's parent slot was
     /// consumed by a conflicting entry: removed from retry and returned
     /// whole for orphan reporting.
-    pub fn shed_off_branch_pending_other(
-        &mut self,
-        tip: HeaderId,
-    ) -> Vec<SignedOps<Unverified, StandardMode>> {
+    pub fn shed_off_branch_pending_other(&mut self, tip: HeaderId) -> Vec<SharedTx> {
         let mut displaced = std::mem::take(&mut self.displaced_other);
         if self.pending_other.is_empty() {
             return displaced;
@@ -1197,10 +1195,7 @@ impl TxState {
     /// Shed pending config-carrying txs whose config parent can no longer
     /// reach the mined config tip: removed from retry and returned whole for
     /// orphan reporting.
-    pub fn shed_stale_pending_configs(
-        &mut self,
-        tip: HeaderId,
-    ) -> Vec<SignedOps<Unverified, StandardMode>> {
+    pub fn shed_stale_pending_configs(&mut self, tip: HeaderId) -> Vec<SharedTx> {
         if self.pending_other.is_empty() {
             return Vec::new();
         }
@@ -1265,27 +1260,24 @@ impl TxState {
 
     /// All pending transactions (for checkpoint serialization).
     #[must_use]
-    pub fn all_pending_txs(&self) -> Vec<(TxHash, SignedOps<Unverified, StandardMode>)> {
+    pub fn all_pending_txs(&self) -> Vec<(TxHash, SharedTx)> {
         let inscriptions = self
             .pending
             .iter()
-            .map(|(hash, p)| (*hash, p.signed_tx.clone()));
+            .map(|(hash, p)| (*hash, Arc::clone(&p.signed_tx)));
         let mut others: Vec<_> = self.pending_other.iter().collect();
         others.sort_unstable_by_key(|(_, entry)| entry.seq);
         inscriptions
             .chain(
                 others
                     .into_iter()
-                    .map(|(hash, entry)| (*hash, entry.signed_tx.clone())),
+                    .map(|(hash, entry)| (*hash, Arc::clone(&entry.signed_tx))),
             )
             .collect()
     }
 
     /// Remove a pending inscription and return its signed tx.
-    pub fn remove_pending(
-        &mut self,
-        tx_hash: &TxHash,
-    ) -> Option<SignedOps<Unverified, StandardMode>> {
+    pub fn remove_pending(&mut self, tx_hash: &TxHash) -> Option<SharedTx> {
         let (parent, signed_tx) = if let Some(removed) = self.pending.remove(tx_hash) {
             (Some(removed.parent_msg), removed.signed_tx)
         } else {
@@ -1512,7 +1504,7 @@ impl TxState {
                 BlockChannelTx::Config(_) => signed_txs
                     .iter()
                     .find(|tx| tx.hash() == info.tx_hash)
-                    .map(|tx| ChannelUpdateTx::Config(tx.clone())),
+                    .map(|tx| ChannelUpdateTx::Config((**tx).clone())),
                 BlockChannelTx::Custom {
                     tx,
                     message_entries,
@@ -1521,12 +1513,12 @@ impl TxState {
                     .iter()
                     .any(|entry| !entry.payload.is_empty())
                     || !config_entries.is_empty())
-                .then(|| ChannelUpdateTx::Custom(tx.clone())),
+                .then(|| ChannelUpdateTx::Custom((**tx).clone())),
             };
         }
         // Not in any held block — the lineage bridged through a pending link.
         if let Some(other) = self.pending_other.get(&info.tx_hash) {
-            let tx = other.signed_tx.clone();
+            let tx = (*other.signed_tx).clone();
             return Some(if other.pure_config {
                 ChannelUpdateTx::Config(tx)
             } else {
@@ -1586,10 +1578,7 @@ impl TxState {
     /// Signed channel txs on `tip`'s branch strictly above LIB (finalized never
     /// returns to pending) that pending lacks; empty in steady state.
     #[must_use]
-    pub fn untracked_signed_txs_on_branch(
-        &self,
-        tip: HeaderId,
-    ) -> Vec<SignedOps<Unverified, StandardMode>> {
+    pub fn untracked_signed_txs_on_branch(&self, tip: HeaderId) -> Vec<SharedTx> {
         self.blocks
             .signed_txs_on_branch(tip)
             .filter(|tx| !self.is_tracked(&tx.hash()))
@@ -2350,7 +2339,7 @@ mod tests {
             "head first, then the child chained on it"
         );
         assert_eq!(
-            shed_other.iter().map(SignedOps::hash).collect::<Vec<_>>(),
+            shed_other.iter().map(|tx| tx.hash()).collect::<Vec<_>>(),
             vec![grandchild_hash]
         );
         assert_eq!(state.pending_publish_count(), 0);
@@ -2399,7 +2388,7 @@ mod tests {
 
         assert!(shed.is_empty());
         assert_eq!(
-            shed_other.iter().map(SignedOps::hash).collect::<Vec<_>>(),
+            shed_other.iter().map(|tx| tx.hash()).collect::<Vec<_>>(),
             vec![a_hash, b_hash],
             "the config chained on the expired one is orphaned with it"
         );
@@ -2494,7 +2483,7 @@ mod tests {
         let shed = state.shed_off_branch_pending_other(tip);
 
         assert_eq!(
-            shed.iter().map(SignedOps::hash).collect::<Vec<_>>(),
+            shed.iter().map(|tx| tx.hash()).collect::<Vec<_>>(),
             vec![ours_hash, child_hash],
             "the losing config and the one chained on it, parent first"
         );
@@ -2604,7 +2593,7 @@ mod tests {
 
         assert!(shed.is_empty());
         assert_eq!(
-            shed_other.iter().map(SignedOps::hash).collect::<Vec<_>>(),
+            shed_other.iter().map(|tx| tx.hash()).collect::<Vec<_>>(),
             vec![local_hash]
         );
         assert!(state.is_tracked(&mirrored_hash));
@@ -2789,7 +2778,7 @@ mod tests {
             signer: None,
         };
         let custom = BlockChannelTx::Custom {
-            tx: tx.clone(),
+            tx: tx.clone().into(),
             message_entries: Vec::new(),
             config_entries: vec![
                 config_entry(MsgId::root(), msg_id(1)),
