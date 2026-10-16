@@ -688,8 +688,16 @@ mod tests {
 
     use lb_core::{
         mantle::{
+            Op,
+            batch::DeferredProofs,
             ledger::Utxos,
-            ops::{ZkAndEd25519Proof, op_proof::samples::SampleProof as _},
+            ops::{
+                ZkAndEd25519Proof,
+                op_proof::samples::SampleProof as _,
+                sdp::{SDPWithdrawValidationContext, SdpError},
+            },
+            traits::Hashable as _,
+            transactions::{hash::TxHashView, states::Unverified, tx_list::Ops},
         },
         sdp::{Locator, SNAPSHOT_FINALIZATION_DELAY},
     };
@@ -731,6 +739,26 @@ mod tests {
 
     fn create_signing_key() -> Ed25519Key {
         Ed25519Key::from_bytes(&[0; 32])
+    }
+
+    fn signed_withdraw(
+        operation: SDPWithdrawOp,
+        note_key: &ZkKey,
+        declaration_key: &ZkKey,
+        tx_hash_view: &TxHashView,
+    ) -> SignedOperation<SDPWithdrawOp, Preverified, StandardMode> {
+        let proof = ZkKey::multi_sign(
+            &[note_key.clone(), declaration_key.clone()],
+            tx_hash_view.as_fr(),
+        )
+        .expect("withdraw authorization signing should succeed");
+        SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+            .into_preverified(&())
+            .expect("withdraw preverification is context-free")
+    }
+
+    fn withdraw_tx_hash_view(operation: SDPWithdrawOp) -> TxHashView {
+        TxHashView::from(Ops::from([Op::SDPWithdraw(operation)]).hash())
     }
 
     fn utxo_tree(utxos: Vec<Utxo>) -> Utxos {
@@ -826,7 +854,7 @@ mod tests {
         let original = ledger.clone();
         let active_op = SDPActiveOp {
             declaration_id: operation_id,
-            nonce: 1,
+            nonce: Nonce::new(Epoch::new(0), 1),
             metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
                 &zk_key,
                 &epoch0,
@@ -1016,7 +1044,7 @@ mod tests {
         // Withdraw at epoch 1: `withdrawn = 1 + SNAPSHOT_FINALIZATION_DELAY = 3`.
         let withdraw_op = SDPWithdrawOp {
             declaration_id,
-            nonce: 1,
+            nonce: Nonce::new(Epoch::new(0), 1),
             service_note_id: note_id,
         };
         let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
@@ -1123,7 +1151,7 @@ mod tests {
         // Submit an activity message at epoch 4
         let active_op = SDPActiveOp {
             declaration_id,
-            nonce: 1,
+            nonce: Nonce::new(Epoch::new(0), 1),
             metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
                 &zk_key,
                 &epoch3, // proving activity from epoch 3
@@ -1230,7 +1258,7 @@ mod tests {
         // Submit an activity proof at epoch 4
         let active_op = SDPActiveOp {
             declaration_id,
-            nonce: 1,
+            nonce: Nonce::new(Epoch::new(0), 1),
             metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
                 &zk_key,
                 &epoch3,
@@ -1329,7 +1357,7 @@ mod tests {
         // Withdraw A.
         let withdraw_op = SDPWithdrawOp {
             declaration_id: declaration_id_a,
-            nonce: 1,
+            nonce: Nonce::new(Epoch::new(0), 1),
             service_note_id: utxo_a.id(),
         };
         let proof_withdraw = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
@@ -1428,7 +1456,7 @@ mod tests {
         // Withdraw the declaration
         let withdraw_op = SDPWithdrawOp {
             declaration_id,
-            nonce: 1,
+            nonce: Nonce::new(Epoch::new(0), 1),
             service_note_id: note_id,
         };
         let proof_withdraw = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
@@ -1549,7 +1577,7 @@ mod tests {
         (ledger, _) = ledger.try_apply_header(&config, &epoch1, &epoch2).unwrap();
         let withdraw_op = SDPWithdrawOp {
             declaration_id,
-            nonce: 1,
+            nonce: Nonce::new(Epoch::new(0), 1),
             service_note_id: note_id,
         };
         let proof_withdraw = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
@@ -1598,7 +1626,7 @@ mod tests {
 
         let active_op = SDPActiveOp {
             declaration_id,
-            nonce: 2,
+            nonce: Nonce::new(Epoch::new(0), 2),
             metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
                 &zk_key,
                 &epoch3,
@@ -1654,6 +1682,164 @@ mod tests {
             !ledger
                 .service_notes()
                 .is_used_for_service(&note_id, &ServiceType::BlendNetwork)
+        );
+    }
+
+    /// A valid but unmined authorization from one declaration lifecycle cannot
+    /// control a later lifecycle with the same stable declaration ID.
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "This characterization follows a signed operation across two declaration lifecycles"
+    )]
+    fn rejects_unmined_withdraw_from_previous_declaration_lifecycle() {
+        let config = setup(ServiceParameters {
+            inactivity_period: 20.try_into().unwrap(),
+            epoch: 0.into(),
+        });
+        let signing_key = create_signing_key();
+        let declaration_key = create_zk_key(1);
+        let (note_key, service_note) = utxo_with_sk();
+        let declaration_a = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            service_note_id: service_note.id(),
+            zk_id: declaration_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declaration_id = declaration_a.id();
+        let epoch0 = dummy_epoch_state(0.into());
+        let utxos = utxo_tree(vec![service_note]);
+        let declaration_proof = ZkAndEd25519Proof {
+            zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+            ed25519_sig: Ed25519Signature::zero(),
+        };
+        let (sdp_ledger, _) = dummy_sdp_ledger(0.into(), &config)
+            .try_apply_sdp_declaration(
+                &utxos,
+                SignedOperation::new(declaration_a.clone(), declaration_proof).into_state_trusted(),
+                &config,
+            )
+            .expect("lifecycle A declaration is registered");
+        let created_a = sdp_ledger
+            .get_declaration(&declaration_id)
+            .expect("lifecycle A declaration exists")
+            .created;
+
+        // Sign nonce 2 for lifecycle A, verify it, and leave it unmined.
+        let stale_operation = SDPWithdrawOp {
+            declaration_id,
+            nonce: Nonce::new(created_a, 2),
+            service_note_id: declaration_a.service_note_id,
+        };
+        let stale_tx_hash = withdraw_tx_hash_view(stale_operation);
+        let stale_withdraw =
+            signed_withdraw(stale_operation, &note_key, &declaration_key, &stale_tx_hash);
+        let mut deferred_proofs = DeferredProofs::new();
+        stale_withdraw
+            .clone()
+            .into_verified_deferred(
+                &SDPWithdrawValidationContext {
+                    declaration: sdp_ledger
+                        .get_declaration(&declaration_id)
+                        .expect("lifecycle A declaration exists"),
+                    epoch: sdp_ledger.epoch,
+                    service_notes: sdp_ledger.service_notes(),
+                    tx_hash_view: &stale_tx_hash,
+                },
+                &mut deferred_proofs,
+            )
+            .unwrap_or_else(|(_, error)| panic!("nonce 2 is valid in lifecycle A: {error:?}"));
+        deferred_proofs
+            .verify()
+            .expect("the lifecycle A withdrawal signature is cryptographically valid");
+
+        // Accept the lower nonce 1 and finish that declaration lifecycle.
+        let accepted_operation = SDPWithdrawOp {
+            nonce: Nonce::new(created_a, 1),
+            ..stale_operation
+        };
+        let accepted_tx_hash = withdraw_tx_hash_view(accepted_operation);
+        let accepted_withdraw = signed_withdraw(
+            accepted_operation,
+            &note_key,
+            &declaration_key,
+            &accepted_tx_hash,
+        );
+        let mut deferred_proofs = DeferredProofs::new();
+        let accepted_verified = accepted_withdraw
+            .into_verified_deferred(
+                &SDPWithdrawValidationContext {
+                    declaration: sdp_ledger
+                        .get_declaration(&declaration_id)
+                        .expect("lifecycle A declaration exists"),
+                    epoch: sdp_ledger.epoch,
+                    service_notes: sdp_ledger.service_notes(),
+                    tx_hash_view: &accepted_tx_hash,
+                },
+                &mut deferred_proofs,
+            )
+            .unwrap_or_else(|(_, error)| panic!("nonce 1 should verify: {error:?}"));
+        deferred_proofs
+            .verify()
+            .expect("the accepted lifecycle A signature is valid");
+        let (mut sdp_ledger, _) = sdp_ledger
+            .apply_withdrawn_msg(accepted_verified, &config)
+            .expect("nonce 1 withdrawal is accepted");
+
+        let mut previous_epoch_state = epoch0;
+        for epoch in 1..=3 {
+            let epoch_state = next_epoch_state(epoch.into(), &sdp_ledger, &config);
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &previous_epoch_state, &epoch_state)
+                .expect("epoch transition succeeds");
+            previous_epoch_state = epoch_state;
+        }
+        assert!(sdp_ledger.get_declaration(&declaration_id).is_none());
+
+        // Reuse the same service, zk_id, note and authorization keys at a later epoch.
+        let declaration_b = SDPDeclareOp {
+            locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
+            ..declaration_a
+        };
+        assert_eq!(declaration_b.id(), declaration_id);
+        let declaration_proof = ZkAndEd25519Proof {
+            zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+            ed25519_sig: Ed25519Signature::zero(),
+        };
+        let (sdp_ledger, _) = sdp_ledger
+            .try_apply_sdp_declaration(
+                &utxos,
+                SignedOperation::new(declaration_b, declaration_proof).into_state_trusted(),
+                &config,
+            )
+            .expect("the stable identity can be declared after final removal");
+        let redeclared = sdp_ledger
+            .get_declaration(&declaration_id)
+            .expect("lifecycle B declaration exists");
+        assert!(redeclared.created > created_a);
+        assert_eq!(redeclared.nonce, Nonce::new(redeclared.created, 0));
+
+        // Replay the unchanged signed operation and its original transaction hash.
+        let mut deferred_proofs = DeferredProofs::new();
+        let stale_result = stale_withdraw.into_verified_deferred(
+            &SDPWithdrawValidationContext {
+                declaration: redeclared,
+                epoch: sdp_ledger.epoch,
+                service_notes: sdp_ledger.service_notes(),
+                tx_hash_view: &stale_tx_hash,
+            },
+            &mut deferred_proofs,
+        );
+        let Err((_, stale_error)) = stale_result else {
+            panic!("the lifecycle A operation must be rejected by lifecycle B");
+        };
+        assert_eq!(
+            stale_error,
+            SdpError::InvalidNonceLifecycle {
+                nonce_lifecycle_epoch: created_a,
+                declaration_created_epoch: redeclared.created,
+            }
         );
     }
 

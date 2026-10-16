@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use lb_core::{
     crypto::ZkHash,
     sdp::{
-        Declaration, DeclarationId, Declarations, Locator, ProviderId, ServiceParameters,
+        Declaration, DeclarationId, Declarations, Locator, Nonce, ProviderId, ServiceParameters,
         ServiceType,
     },
 };
@@ -34,7 +34,7 @@ pub fn create_epoch_state(
                 created: 0.into(),
                 active: 2.into(),
                 withdraw_at: None,
-                nonce: 0,
+                nonce: Nonce::new(Epoch::new(0), 0),
             };
             (DeclarationId([i as u8; 32]), declaration)
         })

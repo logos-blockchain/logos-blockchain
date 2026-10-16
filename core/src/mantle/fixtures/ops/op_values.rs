@@ -26,7 +26,8 @@ use crate::{
         },
     },
     sdp::{
-        ActivityMetadata, DeclarationId, Locator, ProviderId, ServiceType, blend::ActivityProof,
+        ActivityMetadata, DeclarationId, Locator, Nonce, ProviderId, ServiceType,
+        blend::ActivityProof,
     },
 };
 
@@ -91,12 +92,12 @@ pub static SDP_DECLARE: LazyLock<SDPDeclareOp> = LazyLock::new(|| SDPDeclareOp {
 pub static SDP_WITHDRAW: LazyLock<SDPWithdrawOp> = LazyLock::new(|| SDPWithdrawOp {
     declaration_id: DeclarationId([0x70u8; 32]),
     service_note_id: NoteId(Fr::from(0x71u64)),
-    nonce: 0x72u64,
+    nonce: Nonce::new(Epoch::new(0), 0x72),
 });
 
 pub static SDP_ACTIVE: LazyLock<SDPActiveOp> = LazyLock::new(|| SDPActiveOp {
     declaration_id: DeclarationId([0x80u8; 32]),
-    nonce: 0x81u64,
+    nonce: Nonce::new(Epoch::new(0), 0x81),
     metadata: ActivityMetadata::Blend(Box::new(ActivityProof {
         epoch: Epoch::new(0x82),
         signing_key: Ed25519Key::from_bytes(&[0x83u8; 32]).public_key(),

@@ -155,7 +155,7 @@ async fn sdp_ops_e2e() {
     let withdraw_message = WithdrawMessage {
         declaration_id,
         service_note_id,
-        nonce: declaration_created.nonce + 1,
+        nonce: declaration_created.nonce.checked_next().unwrap(),
     };
 
     let (withdraw_tx, _withdraw_fee) = funded_signed_tx(

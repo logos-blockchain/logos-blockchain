@@ -78,6 +78,7 @@ mod tests {
         quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
         selection::VerifiedProofOfSelection,
     };
+    use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{CompressedGroth16Proof, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey};
     use lb_utils::bounded::BoundedError;
@@ -111,7 +112,7 @@ mod tests {
             leader_claim_proof::Groth16LeaderClaimProof,
         },
         sdp::{
-            ActivityMetadata, DeclarationId, Locator, MAX_LOCATOR_BYTE_SIZE, ProviderId,
+            ActivityMetadata, DeclarationId, Locator, MAX_LOCATOR_BYTE_SIZE, Nonce, ProviderId,
             ServiceType, blend::ActivityProof,
         },
     };
@@ -452,7 +453,7 @@ mod tests {
 
         let sdp_withdraw_op = SDPWithdrawOp {
             declaration_id: DeclarationId([0x11; 32]),
-            nonce: 42,
+            nonce: Nonce::new(Epoch::new(0), 42),
             service_note_id,
         };
 
@@ -490,7 +491,7 @@ mod tests {
 
         let sdp_active_op = SDPActiveOp {
             declaration_id: DeclarationId([0x22; 32]),
-            nonce: 99,
+            nonce: Nonce::new(Epoch::new(0), 99),
             metadata,
         };
 
@@ -542,7 +543,7 @@ mod tests {
 
         let sdp_active_op = SDPActiveOp {
             declaration_id: DeclarationId([0x33; 32]),
-            nonce: 55,
+            nonce: Nonce::new(Epoch::new(0), 55),
             metadata: ActivityMetadata::Blend(Box::new(blend_proof)),
         };
 

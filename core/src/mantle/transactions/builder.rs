@@ -331,6 +331,7 @@ impl MantleTxBuilder {
 
 #[cfg(test)]
 mod tests {
+    use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::Ed25519Key;
 
@@ -350,7 +351,7 @@ mod tests {
             },
             transactions::{GasPrices, tx_list::ops::OpsGasContext},
         },
-        sdp::{DeclarationId, Locator, ProviderId, ServiceType},
+        sdp::{DeclarationId, Locator, Nonce, ProviderId, ServiceType},
     };
 
     #[test]
@@ -655,7 +656,7 @@ mod tests {
             .push_op(Op::SDPWithdraw(SDPWithdrawOp {
                 declaration_id: DeclarationId([0; 32]),
                 service_note_id: withdraw_service_note,
-                nonce: 1,
+                nonce: Nonce::new(Epoch::new(0), 1),
             }))
             .unwrap()
             .add_ledger_input(transfer_input)

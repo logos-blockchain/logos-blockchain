@@ -16,7 +16,7 @@ use crate::{
             pow::{PowNullifier, PowReward, PowTarget},
         },
     },
-    sdp::{DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
+    sdp::{Declaration, DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
 };
 
 pub trait OperationVerificationHelper {
@@ -35,6 +35,14 @@ pub trait OperationVerificationHelper {
         &self,
         id: &DeclarationId,
     ) -> Result<&Declarations, VerificationError>;
+
+    fn get_declaration_by_id(&self, id: &DeclarationId) -> Result<&Declaration, VerificationError> {
+        self.get_declarations_by_id(id)?
+            .get(id)
+            .ok_or(VerificationError::SDPVerificationError(
+                crate::mantle::ops::sdp::SdpError::DeclarationNotFound(*id),
+            ))
+    }
 
     fn get_min_stake(&self) -> &MinStake;
 

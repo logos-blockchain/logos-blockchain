@@ -218,6 +218,7 @@ impl ScannerAccounting {
 
 #[cfg(test)]
 mod tests {
+    use lb_chain_service::Epoch;
     use lb_common_http_client::{ApiBlock, ApiHeader, Slot};
     use lb_core::{
         header::{ContentId, HeaderId},
@@ -233,7 +234,7 @@ mod tests {
             transactions::{Ops, states::Unverified},
         },
         proofs::leader_proof::Groth16LeaderProof,
-        sdp::{DeclarationMessage, Locator, ProviderId, ServiceType, WithdrawMessage},
+        sdp::{DeclarationMessage, Locator, Nonce, ProviderId, ServiceType, WithdrawMessage},
     };
     use lb_key_management_system_service::keys::Ed25519Key;
 
@@ -377,7 +378,7 @@ mod tests {
         let withdraw_ops = Ops::from([Op::SDPWithdraw(WithdrawMessage {
             declaration_id: declaration.id(),
             service_note_id: locked.id(),
-            nonce: 0,
+            nonce: Nonce::new(Epoch::new(0), 0),
         })]);
         let withdraw_tx = SignedOps::from_ops_with_sample_proofs(withdraw_ops);
         let mut accounting =
