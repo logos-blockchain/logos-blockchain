@@ -215,7 +215,7 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          if git diff --quiet "origin/$BASE_REF...HEAD" -- c-bindings .github/workflows/code-check.yml; then
+          if git diff --quiet "origin/$BASE_REF...HEAD" -- c-bindings logos_sql .github/workflows/code-check.yml; then
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -254,6 +254,21 @@ jobs:
             cargo test --locked -p logos-blockchain-c -- --ignored --test-threads=1 ffi_safety_tests
           nix shell 'nixpkgs#valgrind' --command \
             cargo test --locked -p logos-blockchain-c-common --test consumer -- --test-threads=1
+          nix shell 'nixpkgs#valgrind' --command \
+            cargo test --locked -p logos-sql-c -- --test-threads=1
+
+      - name: Check the SQL C and C++ interface
+        if: steps.changes.outputs.run == 'true'
+        run: |
+          cargo build --locked -p logos-sql-c
+          cc -Wall -Wextra -Werror logos_sql/c-bindings/tests/smoke.c \
+            -I logos_sql/c-bindings -L target/debug -llogos_sql \
+            -Wl,-rpath,"$GITHUB_WORKSPACE/target/debug" -o target/sql-c-smoke
+          target/sql-c-smoke
+          c++ -x c++ -Wall -Wextra -Werror logos_sql/c-bindings/tests/smoke.c \
+            -I logos_sql/c-bindings -L target/debug -llogos_sql \
+            -Wl,-rpath,"$GITHUB_WORKSPACE/target/debug" -o target/sql-cpp-smoke
+          target/sql-cpp-smoke
 
       - name: Clean up build artifacts
         if: success() || failure()

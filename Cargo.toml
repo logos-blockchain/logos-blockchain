@@ -53,6 +53,7 @@ members = [
   "ledger",
   "libp2p",
   "logos_sql",
+  "logos_sql/c-bindings",
   "merkle/blake2btree",
   "merkle/dynamic-merkle",
   "merkle/tree",

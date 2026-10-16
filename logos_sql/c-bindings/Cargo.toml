@@ -1,0 +1,34 @@
+[package]
+categories  = { workspace = true }
+description = "C bindings for Logos SQL"
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-sql-c"
+publish     = false
+readme      = "README.md"
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lib]
+crate-type = ["cdylib"]
+name       = "logos_sql"
+
+[dependencies]
+hex         = { workspace = true }
+lb-c-common = { workspace = true }
+lb-c-macros = { workspace = true }
+logos-sql   = { workspace = true }
+rusqlite    = { features = ["hooks", "limits"], workspace = true }
+serde       = { features = ["derive"], workspace = true }
+serde_json  = { workspace = true }
+tokio       = { features = ["rt-multi-thread", "time"], workspace = true }
+
+[build-dependencies]
+cbindgen = { workspace = true }
+
+[lints]
+workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["cbindgen"]
