@@ -490,7 +490,6 @@ mod tests {
         let operation = SDPWithdrawOp {
             declaration_id,
             nonce: Nonce::new(Epoch::from(0), 1),
-            ..SDPWithdrawOp::sample()
         };
         let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
         let signed_operation =

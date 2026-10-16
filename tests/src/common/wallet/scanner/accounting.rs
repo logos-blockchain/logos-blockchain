@@ -167,13 +167,13 @@ impl ScannerAccounting {
                 OpRef::SDPDeclare(declaration) => {
                     self.lock_note(declaration.service_note_id);
                 }
-                OpRef::SDPWithdraw(withdrawal) => {
-                    self.unlock_note(withdrawal.service_note_id);
-                }
-                // `ChannelWithdraw` and `ChannelTransfer` only move notes in and
-                // out of a channel's ownership, which the wallet doesn't track.
+                // A withdrawal does not release service collateral. The final
+                // unlock is reported separately by the ledger. Channel
+                // operations only move notes in and out of channel ownership,
+                // which the wallet doesn't track.
                 // TODO: observe released notes once channel notes are tracked.
-                OpRef::ChannelWithdraw(_)
+                OpRef::SDPWithdraw(_)
+                | OpRef::ChannelWithdraw(_)
                 | OpRef::ChannelTransfer(_)
                 | OpRef::ChannelConfig(_)
                 | OpRef::ChannelInscribe(_)
@@ -209,10 +209,6 @@ impl ScannerAccounting {
         {
             self.service_note_ids.insert(note_id);
         }
-    }
-
-    fn unlock_note(&mut self, note_id: NoteId) {
-        self.service_note_ids.remove(&note_id);
     }
 }
 
@@ -370,14 +366,13 @@ mod tests {
     }
 
     #[test]
-    fn sdp_declare_hides_and_withdraw_restores_locked_utxo() {
+    fn sdp_declare_and_withdraw_keep_collateral_locked() {
         let locked = utxo(10, 0, pk(1));
         let declaration = sdp_declaration(locked.id());
         let declare_ops = Ops::from([Op::SDPDeclare(declaration.clone())]);
         let declare_tx = SignedOps::from_ops_with_sample_proofs(declare_ops);
         let withdraw_ops = Ops::from([Op::SDPWithdraw(WithdrawMessage {
             declaration_id: declaration.id(),
-            service_note_id: locked.id(),
             nonce: Nonce::new(Epoch::new(0), 0),
         })]);
         let withdraw_tx = SignedOps::from_ops_with_sample_proofs(withdraw_ops);
@@ -389,7 +384,7 @@ mod tests {
         assert_eq!(accounting.wallet_utxos()["alice"], []);
 
         accounting.apply_block(&block(2, vec![withdraw_tx]));
-        assert_eq!(accounting.wallet_utxos()["alice"][0].note.value, 10);
+        assert_eq!(accounting.wallet_utxos()["alice"], []);
     }
 
     #[test]

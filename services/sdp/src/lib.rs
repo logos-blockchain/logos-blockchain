@@ -901,7 +901,6 @@ where
 
         let withdraw_message = WithdrawMessage {
             declaration_id,
-            service_note_id: declaration.service_note_id,
             nonce,
         };
 

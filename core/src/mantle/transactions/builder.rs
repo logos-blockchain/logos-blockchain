@@ -298,7 +298,6 @@ impl MantleTxBuilder {
                 };
                 let locked = match op {
                     Op::SDPDeclare(declare) => Some(declare.service_note_id),
-                    Op::SDPWithdraw(withdraw) => Some(withdraw.service_note_id),
                     _ => None,
                 };
                 inputs.into_iter().flatten().copied().chain(locked)
@@ -331,7 +330,6 @@ impl MantleTxBuilder {
 
 #[cfg(test)]
 mod tests {
-    use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::Ed25519Key;
 
@@ -635,7 +633,6 @@ mod tests {
     fn notes_consumed_or_used_in_service() {
         let deposit_input = NoteId(Fr::from(1u64));
         let declare_service_note = NoteId(Fr::from(2u64));
-        let withdraw_service_note = NoteId(Fr::from(3u64));
         let transfer_input = Utxo::new([0u8; 32], 0, Note::new(50, ZkPublicKey::zero()));
 
         let builder = MantleTxBuilder::new()
@@ -655,8 +652,7 @@ mod tests {
             .unwrap()
             .push_op(Op::SDPWithdraw(SDPWithdrawOp {
                 declaration_id: DeclarationId([0; 32]),
-                service_note_id: withdraw_service_note,
-                nonce: Nonce::new(Epoch::new(0), 1),
+                nonce: Nonce::new(0.into(), 1),
             }))
             .unwrap()
             .add_ledger_input(transfer_input)
@@ -672,14 +668,12 @@ mod tests {
             "should contain declare service note"
         );
         assert!(
-            consumed_or_used.contains(&withdraw_service_note),
-            "should contain withdraw service note"
-        );
-        assert!(
             consumed_or_used.contains(&transfer_input.id()),
             "should contain transfer input"
         );
-        assert_eq!(consumed_or_used.len(), 4);
+        // SDP Withdraw no longer carries the service-note ID; it is resolved
+        // from the declaration by validation and wallet signing.
+        assert_eq!(consumed_or_used.len(), 3);
     }
 
     #[test]
