@@ -1,7 +1,8 @@
 //! Configurable [`adapter::Node`] mock and shared builders for unit tests.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
+    num::NonZero,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -11,7 +12,7 @@ use std::{
 use async_trait::async_trait;
 use futures::StreamExt as _;
 use lb_common_http_client::{
-    ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, CryptarchiaInfo, Events, PhaseTag,
+    ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, CryptarchiaInfo, EraTiming, Events, PhaseTag,
     ProcessedBlockEvent, Slot, State, TimeInfo,
 };
 use lb_core::{
@@ -108,10 +109,11 @@ pub struct MockNode {
     pub events: HashMap<HeaderId, Events>,
     /// Receives the priority-fee percentages from funding requests.
     pub funding_priority_fees: Option<mpsc::Sender<u64>>,
-    /// Served by `time_info()`.
-    pub slot_duration_ms: u64,
-    pub slots_per_epoch: u64,
-    pub genesis_time_unix_ms: i64,
+    /// Served by `time_info()`: a single era from `genesis_time`, with slots
+    /// of `slot_duration` in epochs of `slots_per_epoch` slots.
+    pub slot_duration: core::time::Duration,
+    pub slots_per_epoch: NonZero<u64>,
+    pub genesis_time: time::UtcDateTime,
 }
 
 impl Default for MockNode {
@@ -137,9 +139,9 @@ impl Default for MockNode {
             posted: None,
             events: HashMap::new(),
             funding_priority_fees: None,
-            slot_duration_ms: 1_000,
-            slots_per_epoch: 1_000,
-            genesis_time_unix_ms: 0,
+            slot_duration: core::time::Duration::from_secs(1),
+            slots_per_epoch: NonZero::new(1_000).unwrap(),
+            genesis_time: time::UtcDateTime::UNIX_EPOCH,
         }
     }
 }
@@ -188,11 +190,16 @@ impl adapter::Node for MockNode {
 
     async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
         Ok(TimeInfo {
-            slot_duration_ms: self.slot_duration_ms,
-            genesis_time_unix_ms: self.genesis_time_unix_ms,
+            genesis_time: self.genesis_time,
             current_slot: 0,
             current_epoch: 0,
-            slots_per_epoch: self.slots_per_epoch,
+            era_timings: BTreeMap::from([(
+                0,
+                EraTiming {
+                    slot_duration: self.slot_duration,
+                    slots_per_epoch: self.slots_per_epoch,
+                },
+            )]),
         })
     }
 

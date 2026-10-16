@@ -148,7 +148,6 @@ pub fn run_node_from_config(
     // chain ID is fixed by the deployment, so the API backend is handed it up
     // front rather than querying a service for a value that cannot change.
     let chain_id = config.deployment.chain_id();
-    let genesis_time = config.deployment.genesis_time();
 
     let eras = config.deployment.era_schedule();
 
@@ -166,11 +165,10 @@ pub fn run_node_from_config(
     let (blend_config, blend_core_config, blend_edge_config) =
         genesis_era_settings(&blend_settings);
 
-    let time_settings = TimeConfig {
+    let time_service_config = TimeConfig {
         user: config.user.time,
     }
-    .into_time_service_era_schedule(eras, genesis_time);
-    let time_service_config = genesis_era_settings(&time_settings);
+    .into_time_service_settings(eras);
 
     let cryptarchia_settings = CryptarchiaConfig {
         user: config.user.cryptarchia,
