@@ -28,7 +28,7 @@ impl EraRuleset {
     #[must_use]
     pub const fn slot_duration(&self) -> Duration {
         match self {
-            Self::V1(parameters) => parameters.time.slot_duration,
+            Self::V1(parameters) => parameters.time.slot_duration(),
         }
     }
 

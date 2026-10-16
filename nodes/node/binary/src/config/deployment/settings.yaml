@@ -90,7 +90,7 @@ eras:
       consensus_excluded_keys:
         - '0000000000000000000000000000000000000000000000000000000000000000'
     time:
-      slot_duration: '1.000000000'
+      slot_duration_in_seconds: 1
 genesis_block:
   header:
     slot: 0

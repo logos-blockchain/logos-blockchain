@@ -30,7 +30,7 @@ Feature: PoW mining
     And I have a cluster with capacity of 3 nodes
     And the first 2 nodes are declared as blend providers
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
-    And I have deployment config override "eras.0.time.slot_duration" as "seconds(1)"
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "1"
@@ -90,7 +90,7 @@ Feature: PoW mining
     And I have a cluster with capacity of 3 nodes
     And the first 2 nodes are declared as blend providers
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
-    And I have deployment config override "eras.0.time.slot_duration" as "seconds(1)"
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "1"
@@ -136,7 +136,7 @@ Feature: PoW mining
     And I have a cluster with capacity of 3 nodes
     And the first 2 nodes are declared as blend providers
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
-    And I have deployment config override "eras.0.time.slot_duration" as "seconds(1)"
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "1"

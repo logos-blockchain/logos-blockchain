@@ -23,7 +23,7 @@ pub struct Parameters {
 impl Parameters {
     #[must_use]
     pub const fn blend_round_duration(&self) -> Duration {
-        self.blend.round_duration(&self.time.slot_duration)
+        self.blend.round_duration(&self.time.slot_duration())
     }
 
     #[must_use]

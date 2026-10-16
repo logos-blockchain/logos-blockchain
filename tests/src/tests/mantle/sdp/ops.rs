@@ -416,7 +416,7 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
     config
         .deployment
         .update_genesis_era_parameters(|parameters| {
-            parameters.time.slot_duration = Duration::from_secs(1);
+            parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
             parameters.cryptarchia.security_param = NonZero::new(2).unwrap();
             parameters.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());

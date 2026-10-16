@@ -712,7 +712,7 @@ mod tests {
             era_schedules: Arc::new(
                 EraTimingSchedule::new(
                     OffsetDateTime::UNIX_EPOCH,
-                    timing.clone(),
+                    timing,
                     EraEntriesAfterGenesis::from((NonZero::new(34).unwrap(), timing)),
                 )
                 .unwrap(),

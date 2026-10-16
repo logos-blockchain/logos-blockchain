@@ -153,7 +153,7 @@ impl Settings {
             num_blend_layers: self.common.num_blend_layers,
             rounds_per_epoch: self.rounds_per_epoch(
                 cryptarchia_deployment.slots_per_epoch(),
-                &time_deployment.slot_duration,
+                &time_deployment.slot_duration(),
             ),
         }
     }

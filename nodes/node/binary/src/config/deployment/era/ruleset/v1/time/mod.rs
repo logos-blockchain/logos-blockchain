@@ -1,14 +1,17 @@
-use core::time::Duration;
+use core::{num::NonZero, time::Duration};
 
-use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
-use serde_with::serde_as;
 
 pub(crate) mod codec;
 
-#[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Settings {
-    #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
-    pub slot_duration: Duration,
+    pub slot_duration_in_seconds: NonZero<u64>,
+}
+
+impl Settings {
+    #[must_use]
+    pub const fn slot_duration(&self) -> Duration {
+        Duration::from_secs(self.slot_duration_in_seconds.get())
+    }
 }

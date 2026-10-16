@@ -782,8 +782,8 @@ mod tests {
             .security_param
             .get();
         let override_4 = ConfigOverride {
-            path: "eras.0.time.slot_duration".to_owned(),
-            value: serde_yaml::to_value(TimeDuration::new(1, 0)).expect("yaml value"),
+            path: "eras.0.time.slot_duration_in_seconds".to_owned(),
+            value: serde_yaml::to_value(1u64).expect("yaml value"),
         };
         let override_5 = ConfigOverride {
             path: "eras.0.cryptarchia.security_param".to_owned(),
@@ -795,7 +795,7 @@ mod tests {
                 .deployment
                 .genesis_era_parameters()
                 .time
-                .slot_duration,
+                .slot_duration(),
             Duration::from_secs(1)
         );
         assert_eq!(
@@ -831,10 +831,10 @@ mod tests {
         set_deployment_config_override(
             &mut world,
             "test-step",
-            "eras.0.time.slot_duration",
-            "seconds(1)",
+            "eras.0.time.slot_duration_in_seconds",
+            "1",
         )
-        .expect("deployment duration override");
+        .expect("deployment slot duration override");
         set_deployment_config_override(
             &mut world,
             "test-step",
@@ -872,7 +872,7 @@ mod tests {
                 .deployment
                 .genesis_era_parameters()
                 .time
-                .slot_duration,
+                .slot_duration(),
             Duration::from_secs(1)
         );
     }
