@@ -8,49 +8,6 @@ use std::{
 use futures::StreamExt as _;
 use tokio::time::{Sleep, sleep};
 
-use crate::stream::{FirstReadyStreamError, UninitializedFirstReadyStream};
-
-/// A staging type that initializes a [`EpochEventStream`] by consuming
-/// the first [`Event`] from the underlying stream, expected to be yielded
-/// within a short timeout.
-pub struct UninitializedEpochEventStream<EventStream> {
-    stream: UninitializedFirstReadyStream<EventStream>,
-    transition_period: Duration,
-}
-
-impl<EventStream> UninitializedEpochEventStream<EventStream> {
-    #[must_use]
-    pub const fn new(event_stream: EventStream, transition_period: Duration) -> Self {
-        Self {
-            stream: UninitializedFirstReadyStream::new(event_stream),
-            transition_period,
-        }
-    }
-}
-
-impl<EventStream> UninitializedEpochEventStream<EventStream>
-where
-    EventStream: futures::Stream + Unpin,
-{
-    /// Initializes a [`EpochEventStream`] by consuming the first [`Epoch`]
-    /// from the underlying stream.
-    ///
-    /// It returns the first [`Epoch`] and the initialized
-    /// [`EpochEventStream`], awaiting the first epoch for as long as
-    /// necessary.
-    /// It returns an error only if the underlying stream closes before yielding
-    /// an epoch.
-    pub async fn await_first_ready(
-        self,
-    ) -> Result<(EventStream::Item, EpochEventStream<EventStream>), FirstReadyStreamError> {
-        let (first_epoch, remaining_stream) = self.stream.first().await?;
-        Ok((
-            first_epoch,
-            EpochEventStream::new(remaining_stream, self.transition_period),
-        ))
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum EpochEvent<Event> {
     NewEpoch(Event),
@@ -80,7 +37,7 @@ pub struct EpochEventStream<EventStream> {
 
 impl<EventStream> EpochEventStream<EventStream> {
     #[must_use]
-    const fn new(event_stream: EventStream, transition_period: Duration) -> Self {
+    pub const fn new(event_stream: EventStream, transition_period: Duration) -> Self {
         Self {
             event_stream,
             transition_period,
@@ -207,21 +164,5 @@ mod tests {
             elapsed.abs_diff(epoch_duration) <= time_tolerance,
             "elapsed:{elapsed:?}, expected:{epoch_duration:?}",
         );
-    }
-
-    #[tokio::test]
-    async fn first_ready_stream_yields_first_item_immediately() {
-        // Use an underlying stream that yields the first item nearly immediately.
-        let stream = UninitializedFirstReadyStream::new(
-            IntervalStream::new(interval(Duration::from_secs(1)))
-                .enumerate()
-                .map(|(i, _)| i),
-        );
-
-        let (first, mut stream) = stream.first().await.expect("first item should be yielded");
-        assert_eq!(first, 0);
-        // Next items are yielded normally.
-        assert_eq!(stream.next().await, Some(1));
-        assert_eq!(stream.next().await, Some(2));
     }
 }

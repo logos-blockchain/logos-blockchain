@@ -11,14 +11,16 @@ use lb_blend::{
     scheduling::message_blend::provers::leader_and_pow::LeaderAndPowProofsGenerator,
 };
 use lb_chain_service::Epoch;
+use lb_cryptarchia_engine::Era;
 use overwatch::overwatch::OverwatchHandle;
 use tracing::debug;
 
 use crate::{
     edge::{
-        LOG_TARGET, RunningSettings,
+        LOG_TARGET,
         backends::BlendBackend,
         handlers::{Error, MessageHandler},
+        settings::EdgeServiceEraSettings,
     },
     epoch_info::PolEpochInfo,
     membership::chain::{BlendEpoch, BlendEpochState},
@@ -27,6 +29,7 @@ use crate::{
         EncapsulationResult, MessageKind, NextLocalMessage, PendingProposals, PendingTransactions,
         next_local_message, resolve_encapsulation,
     },
+    settings::RuntimeComponents,
 };
 
 /// Which of the two this node is in for the epoch it is on.
@@ -93,7 +96,8 @@ impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
         }
     }
 
-    const fn awaiting_epoch(&self) -> Epoch {
+    /// The epoch it blends in.
+    pub const fn epoch(&self) -> Epoch {
         self.awaiting().info.epoch
     }
 
@@ -124,7 +128,7 @@ where
     /// accepted, so nothing downstream has to ask again.
     pub fn try_new(
         (info, membership_info): BlendEpoch<NodeId>,
-        settings: &RunningSettings<Backend, NodeId, RuntimeServiceId>,
+        settings: &EdgeServiceEraSettings,
     ) -> Result<Self, Error> {
         let size = membership_info.membership.size();
         let membership =
@@ -151,14 +155,24 @@ where
     pub fn with_available_secret_info(
         self,
         stashed_secret_info: &mut Option<PolEpochInfo>,
-        settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
+        era: Era,
+        settings: &EdgeServiceEraSettings,
+        backend_settings: &Backend::Settings,
+        runtime_components: &RuntimeComponents,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     ) -> Self {
-        let epoch = self.awaiting_epoch();
+        let epoch = self.epoch();
         if let Some(secret_epoch_info) =
             stashed_secret_info.take_if(|stashed| stashed.epoch == epoch)
         {
-            return self.with_secret_info(secret_epoch_info, settings, overwatch_handle);
+            return self.with_secret_info(
+                secret_epoch_info,
+                era,
+                settings,
+                backend_settings,
+                runtime_components,
+                overwatch_handle,
+            );
         }
 
         // Nothing to do, and nothing to undo: an epoch this node has not
@@ -183,7 +197,10 @@ where
     pub fn with_secret_info(
         self,
         secret_epoch_info: PolEpochInfo,
-        settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
+        era: Era,
+        settings: &EdgeServiceEraSettings,
+        backend_settings: &Backend::Settings,
+        runtime_components: &RuntimeComponents,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     ) -> Self {
         let awaiting = match self {
@@ -220,7 +237,10 @@ where
 
         debug!(target: LOG_TARGET, "Creating new handler for epoch {:?}", awaiting.info.epoch);
         let handler = MessageHandler::new(
+            era,
             settings,
+            backend_settings.clone(),
+            runtime_components,
             awaiting.membership.membership.clone(),
             new_public_inputs,
             secret_epoch_info.winning_pol_info_stream,

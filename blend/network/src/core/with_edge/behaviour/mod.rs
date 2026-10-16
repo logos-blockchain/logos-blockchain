@@ -139,6 +139,9 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         &mut self,
         new_epoch_info: (Membership<PeerId>, Epoch),
         new_proofs_verifier: ProofsVerifier,
+        // TODO: Group into a component generic over `Config` so it can be shared by core and edge
+        // behaviours.
+        new_era: Option<((&CommonConfig, &Config), Option<RoundClock>, StreamProtocol)>,
     ) {
         self.current_membership = new_epoch_info.0;
         self.current_epoch = new_epoch_info.1;
@@ -149,6 +152,26 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         for conn in &peers {
             self.close_substream(*conn);
         }
+        let Some((
+            (new_era_common_config, new_era_edge_config),
+            new_era_round_clock,
+            new_era_protocol_name,
+        )) = new_era
+        else {
+            return;
+        };
+        if let Some(new_era_round_clock) = new_era_round_clock {
+            self.round_clock = new_era_round_clock;
+        }
+        self.connection_timeout = new_era_edge_config.connection_timeout;
+        self.max_incoming_connections = new_era_edge_config.max_incoming_connections;
+        self.accept_share = RoundShare::new(
+            new_era_edge_config.accepted_connections_per_round,
+            self.round_clock.current_round(),
+        );
+        self.protocol_name = new_era_protocol_name;
+        self.minimum_network_size = new_era_common_config.minimum_network_size;
+        self.num_blend_layers = new_era_common_config.num_blend_layers;
     }
 
     fn try_wake(&mut self) {

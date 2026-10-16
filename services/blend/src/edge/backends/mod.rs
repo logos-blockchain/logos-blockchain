@@ -2,6 +2,7 @@ use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     scheduling::membership::Membership,
 };
+use lb_cryptarchia_engine::Era;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use overwatch::overwatch::handle::OverwatchHandle;
 use rand::RngCore;
@@ -18,6 +19,7 @@ where
 
     fn new<Rng>(
         settings: Self::Settings,
+        era: Era,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         membership: Membership<NodeId>,
         rng: Rng,
@@ -27,6 +29,7 @@ where
     where
         Rng: RngCore + Send + 'static;
     fn shutdown(self);
+    async fn enter_era(&mut self, era: Era);
     /// Send a message to the blend network.
     async fn send(&self, msg: EncapsulatedMessageWithVerifiedPublicHeader);
 }

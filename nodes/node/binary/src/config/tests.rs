@@ -234,14 +234,12 @@ fn service_settings_receive_recovery_data() {
     };
 
     let deployment_settings = DeploymentSettings::default();
-    let blend_services_settings = BlendServiceConfig {
+    let (_, blend_core_service_settings, _, _) = BlendServiceConfig {
         user: user_config.blend.clone(),
     }
-    .into_blend_services_era_schedule(&recovery_data, deployment_settings.era_schedule());
-    let (blend_service_settings, _, _) = &blend_services_settings.genesis().parameters;
+    .into_blend_services_settings(recovery_data.clone(), deployment_settings.era_schedule());
     assert_eq!(
-        blend_service_settings
-            .common
+        blend_core_service_settings
             .recovery_data
             .take(BLEND_RECOVERY_MARKER)
             .unwrap(),

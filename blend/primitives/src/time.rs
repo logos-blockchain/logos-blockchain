@@ -68,13 +68,18 @@ pub struct RoundClock {
     // which involves dividing by the round duration.
     round_duration_in_seconds: NonZeroU64,
     start_time: Instant,
+    first_round: Round,
     interval: Interval,
 }
 
 // Manual impl because `Interval` does not implement `Clone`.
 impl Clone for RoundClock {
     fn clone(&self) -> Self {
-        Self::starting_at(self.start_time, self.round_duration_in_seconds)
+        Self::new_starting_at(
+            self.start_time,
+            self.first_round,
+            self.round_duration_in_seconds,
+        )
     }
 }
 
@@ -82,11 +87,24 @@ impl RoundClock {
     /// Starts a clock whose round `0` begins now.
     #[must_use]
     pub fn new(round_duration_in_seconds: NonZeroU64) -> Self {
-        Self::starting_at(Instant::now(), round_duration_in_seconds)
+        Self::new_starting_at(Instant::now(), Round(0), round_duration_in_seconds)
     }
 
-    /// Starts a clock whose round `0` begins at `origin`.
-    fn starting_at(start_time: Instant, round_duration_in_seconds: NonZeroU64) -> Self {
+    #[must_use]
+    pub fn new_with_updated_round_duration(&self, round_duration_in_seconds: NonZeroU64) -> Self {
+        Self::new_starting_at(
+            Instant::now(),
+            Round(self.current_round().0.saturating_add(1)),
+            round_duration_in_seconds,
+        )
+    }
+
+    /// Starts a clock whose round `first_round` begins at `start_time`.
+    fn new_starting_at(
+        start_time: Instant,
+        first_round: Round,
+        round_duration_in_seconds: NonZeroU64,
+    ) -> Self {
         let round_duration = Duration::from_secs(round_duration_in_seconds.get());
         let mut interval = interval_at(
             start_time
@@ -98,17 +116,24 @@ impl RoundClock {
         Self {
             round_duration_in_seconds,
             start_time,
+            first_round,
             interval,
         }
+    }
+
+    /// How long each round of this clock lasts.
+    #[must_use]
+    pub const fn round_duration_in_seconds(&self) -> NonZeroU64 {
+        self.round_duration_in_seconds
     }
 
     /// The round that now falls in.
     #[must_use]
     pub fn current_round(&self) -> Round {
         let elapsed = Instant::now().saturating_duration_since(self.start_time);
-        Round(u128::from(
+        Round(self.first_round.0.saturating_add(u128::from(
             elapsed.as_secs() / self.round_duration_in_seconds.get(),
-        ))
+        )))
     }
 
     /// The round that now falls in, registering `cx` to be woken at the next
@@ -178,12 +203,43 @@ mod tests {
     async fn a_shared_origin_gives_two_clocks_the_same_rounds() {
         pause();
         let origin = Instant::now();
-        let first = RoundClock::starting_at(origin, ROUND_DURATION.as_secs().try_into().unwrap());
+        let first = RoundClock::new_starting_at(
+            origin,
+            Round::from(0),
+            ROUND_DURATION.as_secs().try_into().unwrap(),
+        );
         advance(ROUND_DURATION / 3).await;
-        let second = RoundClock::starting_at(origin, ROUND_DURATION.as_secs().try_into().unwrap());
+        let second = RoundClock::new_starting_at(
+            origin,
+            Round::from(0),
+            ROUND_DURATION.as_secs().try_into().unwrap(),
+        );
 
         advance(ROUND_DURATION * 3).await;
 
         assert_eq!(first.current_round(), second.current_round());
+    }
+
+    /// A clock continued with another round duration counts on from where the
+    /// first one is, in rounds of its own duration.
+    #[tokio::test]
+    async fn a_continued_clock_carries_on_the_count_in_its_own_rounds() {
+        pause();
+        let clock = RoundClock::new(ROUND_DURATION.as_secs().try_into().unwrap());
+        // Half way through round 3.
+        advance(ROUND_DURATION * 3 + ROUND_DURATION / 2).await;
+
+        let continued = clock
+            .new_with_updated_round_duration((ROUND_DURATION.as_secs() * 2).try_into().unwrap());
+        assert_eq!(
+            continued.current_round(),
+            Round::from(4),
+            "the round after the current one begins at the switch"
+        );
+
+        advance(ROUND_DURATION).await;
+        assert_eq!(continued.current_round(), Round::from(4));
+        advance(ROUND_DURATION).await;
+        assert_eq!(continued.current_round(), Round::from(5));
     }
 }

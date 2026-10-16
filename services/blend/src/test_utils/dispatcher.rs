@@ -65,9 +65,12 @@ where
         _mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
         _chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
         (): Self::Settings,
+        _current_era: Era,
     ) -> Self {
         Self::new().0
     }
+
+    async fn enter_era(&mut self, _era: Era) {}
 
     async fn dispatch(&self, payload: DataPayload) {
         drop(self.dispatched.send(payload));

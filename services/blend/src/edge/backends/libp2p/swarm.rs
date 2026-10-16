@@ -23,7 +23,6 @@ use rand::RngCore;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 
-use super::settings::Libp2pBlendBackendSettings;
 use crate::edge::backends::libp2p::LOG_TARGET;
 
 #[derive(Debug)]
@@ -116,7 +115,9 @@ where
     Rng: RngCore + 'static,
 {
     pub(super) fn new(
-        settings: Libp2pBlendBackendSettings,
+        max_dial_attempts_per_connection: NonZeroU64,
+        replication_factor: NonZeroU64,
+        protocol_name: StreamProtocol,
         membership: Membership<PeerId>,
         rng: Rng,
         command_receiver: mpsc::Receiver<Command>,
@@ -140,7 +141,7 @@ where
 
         let stream_control = swarm.behaviour().new_control();
 
-        let replication_factor: NonZeroUsize = settings.replication_factor.try_into().unwrap();
+        let replication_factor: NonZeroUsize = replication_factor.try_into().unwrap();
         let membership_size = membership.size();
 
         if membership_size < replication_factor.get() {
@@ -155,8 +156,8 @@ where
             rng,
             pending_dials: HashMap::new(),
             pending_events: FuturesUnordered::new(),
-            max_dial_attempts_per_connection: settings.max_dial_attempts_per_peer_per_message,
-            protocol_name: settings.protocol_name.into_inner(),
+            max_dial_attempts_per_connection,
+            protocol_name,
             replication_factor,
             unrecoverable_peers: HashSet::new(),
         }
