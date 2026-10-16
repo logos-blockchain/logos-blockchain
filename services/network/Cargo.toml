@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 async-trait         = { workspace = true }
+educe               = { features = ["Debug"], workspace = true }
 futures             = { workspace = true }
 lb-core             = { workspace = true }
 lb-cryptarchia-sync = { workspace = true }

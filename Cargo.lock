@@ -4869,6 +4869,7 @@ name = "logos-blockchain-cryptarchia-sync"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "educe 0.7.6",
  "futures",
  "libp2p",
  "libp2p-stream",
@@ -5149,6 +5150,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "educe 0.7.6",
  "futures",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-sync",

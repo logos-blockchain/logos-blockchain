@@ -6,7 +6,7 @@ use lb_libp2p::{
 };
 use lb_log_targets::network_service;
 use rand::RngCore;
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast::error::SendError, oneshot};
 
 use crate::{backends::libp2p::swarm::SwarmHandler, message::ChainSyncEvent};
 
@@ -100,8 +100,12 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
 
     pub(super) fn handle_chainsync_event(&self, event: lb_cryptarchia_sync::Event) {
         let event = ChainSyncEvent::from(event);
-        if let Err(e) = self.chainsync_events_tx.send(event) {
-            tracing::error!(target: LOG_TARGET, "failed to send chainsync event: {e:?}");
+        if let Err(SendError(event)) = self.chainsync_events_tx.send(event) {
+            tracing::debug!(
+                target: LOG_TARGET,
+                ?event,
+                "no chainsync event subscriber yet; dropping the event"
+            );
         }
     }
 }

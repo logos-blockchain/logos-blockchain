@@ -4,6 +4,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use educe::Educe;
 use futures::{AsyncWriteExt as _, FutureExt as _, StreamExt as _, future::BoxFuture};
 use lb_core::header::HeaderId;
 use lb_log_targets::cryptarchia;
@@ -95,7 +96,8 @@ impl TipRequestStream {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Educe)]
+#[educe(Debug)]
 pub enum Event {
     ProvideBlocksRequest {
         /// Return blocks up to `target_block`.
@@ -107,10 +109,12 @@ pub enum Event {
         /// The list of additional blocks that the requester has.
         additional_blocks: HashSet<HeaderId>,
         /// Channel to send blocks to the service.
+        #[educe(Debug(ignore))]
         reply_sender: Sender<BlocksResponse>,
     },
     ProvideTipsRequest {
         /// Channel to send the latest tip to the service.
+        #[educe(Debug(ignore))]
         reply_sender: Sender<TipResponse>,
     },
 }
