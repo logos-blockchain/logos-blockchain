@@ -59,7 +59,7 @@ fn apply_zone_timing_defaults(world: &mut CucumberWorld, step: &str) -> StepResu
     );
     world.set_prolonged_bootstrap_period(Duration::ZERO);
 
-    set_deployment_config_override(world, step, "eras.0.time.slot_duration", "seconds(1)")?;
+    set_deployment_config_override(world, step, "eras.0.time.slot_duration_in_seconds", "1")?;
     set_deployment_config_override(
         world,
         step,

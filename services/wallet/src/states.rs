@@ -35,9 +35,8 @@ pub struct ClaimableVouchers {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PendingClaim {
     immutable_blocks_since_reservation: u64,
-    /// How many immutable blocks the reservation survives: as many as the LIB
-    /// lay below the tip its claim was built on, so the claim had the time to
-    /// become immutable.
+    /// The number of new immutable blocks after which the pending claim is
+    /// released, so the voucher can be claimed again.
     max_immutable_blocks_since_reservation: u64,
 }
 
@@ -431,13 +430,15 @@ impl<'u> ServiceState<'u> {
 #[cfg(test)]
 mod tests {
     use lb_groth16::{Field as _, Fr};
+    use lb_ledger::ConsensusExcludedKeys;
 
     use super::*;
+    use crate::ServiceEraSchedule;
 
     const EXPIRY_BLOCKS: u64 = 4;
 
     /// A schedule of one era, with epochs of 100 slots and a `k` of 5.
-    fn era_schedule() -> crate::ServiceEraSchedule {
+    fn era_schedule() -> ServiceEraSchedule {
         use std::time::Duration;
 
         use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
@@ -654,7 +655,7 @@ mod tests {
         };
 
         let genesis = HeaderId::from([0; 32]);
-        let ledger = LedgerState::from_utxos([], &ledger_config());
+        let ledger = LedgerState::from_utxos([], &ledger_config(), &ConsensusExcludedKeys::empty());
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
 

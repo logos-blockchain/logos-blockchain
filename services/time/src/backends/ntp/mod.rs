@@ -147,8 +147,13 @@ impl NtpStream {
     /// - Backward NTP corrections never move `last_emitted_slot` backwards. We
     ///   replace the synthetic timer and pause emission until corrected time
     ///   reaches a slot strictly greater than the last emitted one.
-    /// - Forward NTP corrections replace the synthetic timer immediately. This
+    /// - Forward NTP corrections replace the synthetic timer and publish the
+    ///   corrected slot at once, rather than at the next slot boundary. This
     ///   can skip intermediate slot numbers if NTP jumps ahead.
+    ///
+    /// The corrected slot leads the new timer either way:
+    /// [`Self::poll_slot_timer`] emits only slots past the last emitted one,
+    /// which is what tells the cases apart.
     #[expect(
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
@@ -190,7 +195,10 @@ impl NtpStream {
         };
 
         let current_slot = this.era_schedules.slot_at(date).unwrap_or(Slot::genesis());
-        let (_, new_slot_timer) = slot_timer(Arc::clone(&this.era_schedules), date, current_slot);
+        let (current_slot_tick, new_slot_timer) =
+            slot_timer(Arc::clone(&this.era_schedules), date, current_slot);
+        let rebased_slot_timer =
+            Box::pin(futures::stream::iter([current_slot_tick]).chain(new_slot_timer));
 
         if current_slot < this.last_emitted_slot {
             tracing::warn!(
@@ -199,7 +207,7 @@ impl NtpStream {
                 last_emitted_slot={:?}; pausing until NTP catches up",
                 this.last_emitted_slot
             );
-            this.slot_timer = new_slot_timer;
+            this.slot_timer = rebased_slot_timer;
             return;
         }
 
@@ -209,14 +217,13 @@ impl NtpStream {
             roundtrip.as_micros()
         );
 
-        this.slot_timer = new_slot_timer;
-        this.last_emitted_slot = current_slot;
+        this.slot_timer = rebased_slot_timer;
     }
 
     // Emit only strictly increasing slots. After a backward NTP correction this
     // keeps the rebased timer paused until corrected time catches up; after a
-    // forward correction it allows the rebased stream to resume from the new
-    // NTP-derived timeline, potentially skipping slots.
+    // forward correction it emits the corrected slot at once and resumes from
+    // the new NTP-derived timeline, potentially skipping slots.
     fn poll_slot_timer(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<SlotTick>> {
         let this = self.as_mut().get_mut();
         loop {
@@ -665,16 +672,62 @@ mod tests {
         };
 
         // Step 1: consume a forward NTP correction to slot 20.
-        // Expected: the stale synthetic `11` is discarded and nothing is emitted
-        // immediately.
-        assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
+        // Expected: the stale synthetic `11` is discarded and the corrected slot
+        // 20 is emitted at once, skipping 11..19.
+        assert!(matches!(
+            futures::poll!(stream.next()),
+            Poll::Ready(Some(SlotTick { slot, .. })) if slot == Slot::new(20)
+        ));
 
         // Step 2: one slot later, the rebased timer reaches slot 21.
-        // Expected: emission resumes on the rebased timeline, skipping 11..20.
+        // Expected: emission goes on along the rebased timeline.
         tokio::time::advance(Duration::from_secs(1)).await;
         assert!(matches!(
             futures::poll!(stream.next()),
             Poll::Ready(Some(SlotTick { slot, .. })) if slot == Slot::new(21)
+        ));
+    }
+
+    /// A forward correction into a new era publishes the corrected slot at
+    /// once, in the new era, so the era is not entered a slot late.
+    #[tokio::test(start_paused = true)]
+    async fn a_forward_correction_into_a_new_era_publishes_it_at_once() {
+        // Era 1 starts at epoch 34, which is slot 102 with epochs of 3 slots.
+        let timing = EraTiming {
+            slot_duration: Duration::from_secs(1),
+            epoch_length: NonZero::new(3).unwrap(),
+        };
+        let mut stream = NtpStream {
+            interval: Box::pin(MockNtpResultStream {
+                data: vec![NtpTestData {
+                    sec: 104,
+                    sec_fraction: 0,
+                    offset: 0,
+                    roundtrip: 0,
+                    stratum: 1,
+                    leap: 0,
+                }],
+                idx: 0,
+            }),
+            era_schedules: Arc::new(
+                EraTimingSchedule::new(
+                    OffsetDateTime::UNIX_EPOCH,
+                    timing,
+                    EraEntriesAfterGenesis::from((NonZero::new(34).unwrap(), timing)),
+                )
+                .unwrap(),
+            ),
+            slot_timer: Box::pin(MockSlotTimerSequence {
+                slots: vec![],
+                idx: 0,
+            }),
+            last_emitted_slot: Slot::new(99),
+        };
+
+        assert!(matches!(
+            futures::poll!(stream.next()),
+            Poll::Ready(Some(SlotTick { era, slot, .. }))
+                if slot == Slot::new(104) && era == Era::new(1)
         ));
     }
 
@@ -738,9 +791,12 @@ mod tests {
         assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
 
         // Step 2: consume a forward NTP update to slot 20.
-        // Expected: the old synthetic `11` is discarded and nothing is emitted
-        // immediately.
-        assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
+        // Expected: the old synthetic `11` is discarded and the corrected slot 20
+        // is emitted at once.
+        assert!(matches!(
+            futures::poll!(stream.next()),
+            Poll::Ready(Some(SlotTick { slot, .. })) if slot == Slot::new(20)
+        ));
 
         // Step 3: no NTP update on this poll; one second of simulated time passes.
         // Expected: the rebased forward timer now emits slot 21.

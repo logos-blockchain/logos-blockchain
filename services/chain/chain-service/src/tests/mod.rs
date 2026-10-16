@@ -32,7 +32,7 @@ use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 use lb_ledger::{
-    LedgerState,
+    ConsensusExcludedKeys, LedgerState,
     config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
@@ -69,7 +69,7 @@ fn cryptarchia_switch_to_online() {
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_utxos([utxo], &config),
+        LedgerState::from_utxos([utxo], &config, &ConsensusExcludedKeys::empty()),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     );
@@ -147,7 +147,7 @@ async fn get_block_ids_from_memory_and_storage() {
     let (zk_key, utxo) = utxo();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_utxos([utxo], &config),
+        LedgerState::from_utxos([utxo], &config, &ConsensusExcludedKeys::empty()),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
     );
@@ -667,6 +667,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         LedgerState::from_utxos(
             [leader_utxo, funding_utxo_a, funding_utxo_b, funding_utxo_c],
             &config,
+            &ConsensusExcludedKeys::empty(),
         ),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
@@ -752,7 +753,7 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_utxos([utxo], &config),
+        LedgerState::from_utxos([utxo], &config, &ConsensusExcludedKeys::empty()),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     );
@@ -833,7 +834,7 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, St
     let (zk_key, utxo) = utxo();
     let cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_utxos([utxo], &config),
+        LedgerState::from_utxos([utxo], &config, &ConsensusExcludedKeys::empty()),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
     );
@@ -1133,7 +1134,7 @@ pub fn genesis_cryptarchia_on(utxo: Utxo, era_schedule: Arc<EraScheduledConfig>)
     let genesis_config = era_schedule.genesis().parameters.clone();
     Cryptarchia::from_genesis(
         GENESIS_ID.into(),
-        LedgerState::from_utxos([utxo], &genesis_config),
+        LedgerState::from_utxos([utxo], &genesis_config, &ConsensusExcludedKeys::empty()),
         era_schedule,
         lb_cryptarchia_engine::State::Bootstrapping,
     )

@@ -172,15 +172,16 @@ where
     /// sequencer is considered connected.
     ///
     /// `current_tip` stays None so the first live block event emits everything
-    /// from LIB up to the new tip as `adopted`. On reconnect this is a no-op
-    /// once both `state` and `slot_clock` are initialized.
+    /// from LIB up to the new tip as `adopted`. On reconnect, once both `state`
+    /// and `slot_clock` are initialized, only the era schedule is taken again
+    /// (see [`Self::refresh_era_schedule`]).
     #[expect(
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
     )]
     async fn init_state_if_needed(&mut self) -> bool {
         if self.state.is_some() && self.slot_clock.is_some() {
-            return true;
+            return self.refresh_era_schedule().await;
         }
         let timing_info = match self.node.time_info().await {
             Ok(info) => info,
@@ -221,6 +222,30 @@ where
             }
             Err(e) => {
                 warn!(target: TARGET, "Failed to fetch consensus info: {e}");
+                self.wait_reconnect_delay().await;
+                false
+            }
+        }
+    }
+
+    /// Takes the node's era schedule again into the slot clock, which keeps the
+    /// slot it last observed. The node may have been upgraded with another
+    /// schedule while the sequencer was disconnected, an era postponed for
+    /// example.
+    async fn refresh_era_schedule(&mut self) -> bool {
+        let eras = match self.node.time_info().await {
+            Ok(timing_info) => era_schedule(&timing_info),
+            Err(err) => Err(Error::Network(format!("failed to fetch time info: {err}"))),
+        };
+        match eras {
+            Ok(eras) => {
+                if let Some(slot_clock) = self.slot_clock.as_mut() {
+                    slot_clock.set_era_schedule(eras);
+                }
+                true
+            }
+            Err(err) => {
+                warn!(target: TARGET, "Failed to refresh the era schedule: {err}");
                 self.wait_reconnect_delay().await;
                 false
             }

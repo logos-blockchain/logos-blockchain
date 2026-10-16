@@ -43,7 +43,7 @@ use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 use lb_zksign::verify;
 use logos_blockchain_ledger::{
-    Config, LedgerState,
+    Config, ConsensusExcludedKeys, LedgerState,
     config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
@@ -199,7 +199,7 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
         .collect();
 
     TxPool {
-        genesis: LedgerState::from_utxos(utxos, &config),
+        genesis: LedgerState::from_utxos(utxos, &config, &ConsensusExcludedKeys::empty()),
         eras: single_era(config),
         txs,
     }

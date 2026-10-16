@@ -37,7 +37,7 @@ use lb_log_targets::chain;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
-use lb_time_service::{TimeService, TimeServiceMessage};
+use lb_time_service::{TimeService, api::TimeServiceApi};
 use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
@@ -329,27 +329,16 @@ where
         )
         .await?;
 
-        // The adapters start in the era the clock is in, and follow the eras
-        // the clock enters after it.
-        let (current_era, mut era_ticks) = {
-            let (sender, receiver) = oneshot::channel();
-            relays
-                .time_relay()
-                .send(TimeServiceMessage::SubscribeToEras { sender })
-                .await
-                .map_err(|error| {
-                    DynError::from(format!("failed to subscribe to era ticks: {error}"))
-                })?;
-            let mut era_ticks = receiver
-                .await
-                .map_err(|e| DynError::from(format!("failed to receive era tick stream: {e}")))?;
-            let current_era = era_ticks
-                .next()
-                .await
-                .expect("The era tick stream ended before its first tick")
-                .era;
-            (current_era, era_ticks)
-        };
+        // The adapters start in the era of the slot the clock is in, and
+        // follow the eras its slot ticks enter after it.
+        let (current_slot_tick, mut slot_ticks) =
+            TimeServiceApi::<TimeService<TimeBackend, RuntimeServiceId>>::new(
+                &self.service_resources_handle.overwatch_handle,
+            )
+            .await?
+            .subscribe_to_epoch_slots()
+            .await?;
+        let mut current_era = current_slot_tick.era;
 
         let mut network_adapter =
             NetAdapter::new(network_config, current_era, relays.network_relay().clone()).await;
@@ -403,23 +392,10 @@ where
             sync_config.orphan.max_rejected_cache_size,
         ));
 
-        // Set up the proactive tip-poll lag watchdog: subscribe to slot ticks and
-        // derive the polling cadence / lag threshold from the active slot
-        // coefficient `f`. If it can't be derived (or polling is disabled), the
-        // watchdog stays inert and the slot-tick arm is gated off.
-        let mut slot_ticks = {
-            let (sender, receiver) = oneshot::channel();
-            relays
-                .time_relay()
-                .send(TimeServiceMessage::SubscribeToEpochSlots { sender })
-                .await
-                .map_err(|error| {
-                    DynError::from(format!("failed to subscribe to slot ticks: {error}"))
-                })?;
-            receiver
-                .await
-                .map_err(|e| DynError::from(format!("failed to receive slot tick stream: {e}")))?
-        };
+        // Set up the proactive tip-poll lag watchdog: derive the polling cadence
+        // / lag threshold from the active slot coefficient `f`. If it can't be
+        // derived (or polling is disabled), the watchdog stays inert and slot
+        // ticks only drive the eras.
         let tip_poll_params = if sync_config.tip_poll.enabled {
             match TipPollParams::derive(&sync_config.tip_poll, relays.cryptarchia()).await {
                 Ok(params) => {
@@ -517,15 +493,21 @@ where
                         }
                     }
 
-                    Some(tick) = slot_ticks.next(), if tip_poll_params.is_some() => {
+                    Some(tick) = slot_ticks.next() => {
+                        if tick.era > current_era {
+                            current_era = tick.era;
+                            network_adapter.enter_era(current_era).await;
+                            orphan_downloader.as_mut().get_mut().enter_era(current_era).await;
+                            relays.mempool_adapter_mut().enter_era(current_era).await;
+                        }
+
+                        let Some(params) = tip_poll_params else {
+                            continue;
+                        };
                         // Don't start a new poll if the previous one is still running.
                         if tip_poll_task.as_ref().is_some_and(|handle| !handle.is_finished()) {
                             continue;
                         }
-
-                        let params = *tip_poll_params
-                            .as_ref()
-                            .expect("tip_poll_params is Some, guaranteed by the select arm condition");
 
                         // Spawn a task to not block this event loop.
                         // The task makes `GetTip` requests handled by this event loop in peers' side.
@@ -549,12 +531,6 @@ where
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
                         Self::handle_message(msg, &self.received_proposals_sender, &relays).await;
-                    }
-
-                    Some(era_tick) = era_ticks.next() => {
-                        network_adapter.enter_era(era_tick.era).await;
-                        orphan_downloader.as_mut().get_mut().enter_era(era_tick.era).await;
-                        relays.mempool_adapter_mut().enter_era(era_tick.era).await;
                     }
                 }
             }

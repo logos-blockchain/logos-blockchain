@@ -1,7 +1,4 @@
-use core::{
-    num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128},
-    time::Duration,
-};
+use core::num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128};
 
 use lb_core::{
     block::genesis::GenesisBlock,
@@ -202,7 +199,8 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 },
             },
             time: TimeDeploymentSettings {
-                slot_duration: Duration::from_secs(slot_duration_in_secs),
+                slot_duration_in_seconds: NonZero::new(slot_duration_in_secs)
+                    .expect("The slot duration cannot be zero seconds."),
             },
         })),
         GenesisBlock::genesis(genesis_tx.clone()),

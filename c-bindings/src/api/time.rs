@@ -1,3 +1,5 @@
+use std::ptr;
+
 use lb_c_macros::panic_to_error;
 use lb_node::TimeService;
 use lb_time_service::TimeServiceMessage;
@@ -5,7 +7,6 @@ use tokio::sync::oneshot;
 
 use crate::{
     LogosBlockchainNode,
-    api::free,
     errors::{OperationStatus, OperationStatusCode},
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
@@ -16,6 +17,21 @@ pub struct TimeInfo {
     pub genesis_time_unix: i64,
     pub current_slot: u64,
     pub current_epoch: u32,
+    /// The chain's eras, in order: the first starts at genesis, at epoch 0,
+    /// and an era's position in the list is its number. Points to
+    /// `era_timings_len` contiguous [`EraTiming`] values, at least one.
+    pub era_timings: *mut EraTiming,
+    /// Number of entries in `era_timings`.
+    pub era_timings_len: usize,
+}
+
+/// The timing of one era.
+#[repr(C)]
+pub struct EraTiming {
+    /// The epoch the era starts at.
+    pub first_epoch: u32,
+    pub slot_duration_ms: u64,
+    pub slots_per_epoch: u64,
 }
 
 /// Gets the current time service info.
@@ -60,6 +76,27 @@ pub(crate) fn get_time_info_sync(node: &LogosBlockchainNode) -> StatusResult<Tim
                 format!("Failed to receive time info response: {e}"),
             )
         })?;
+        let era_timings = service_info
+            .era_schedules
+            .iter()
+            .map(|era| {
+                let first_epoch = era.first_epoch.into_inner();
+                Ok(EraTiming {
+                    first_epoch,
+                    slot_duration_ms: u64::try_from(era.parameters.slot_duration.as_millis())
+                        .map_err(|error| {
+                            OperationStatus::error(
+                                OperationStatusCode::ConfigurationError,
+                                format!(
+                                    "The slot duration of the era starting at epoch {first_epoch} does not fit in u64 milliseconds: {error}"
+                                ),
+                            )
+                        })?,
+                    slots_per_epoch: era.parameters.epoch_length.get(),
+                })
+            })
+            .collect::<StatusResult<Box<[EraTiming]>>>()?;
+        let era_timings_len = era_timings.len();
         Ok(TimeInfo {
             genesis_time_unix: service_info
                 .era_schedules
@@ -68,6 +105,8 @@ pub(crate) fn get_time_info_sync(node: &LogosBlockchainNode) -> StatusResult<Tim
                 .unix_timestamp(),
             current_slot: u64::from(service_info.current_slot),
             current_epoch: u32::from(service_info.current_epoch),
+            era_timings: Box::leak(era_timings).as_mut_ptr(),
+            era_timings_len,
         })
     })
 }
@@ -105,7 +144,8 @@ pub unsafe extern "C" fn get_time_info(node: *const LogosBlockchainNode) -> FfiT
     FfiTimeInfoResult::from_value(time_info)
 }
 
-/// Frees the memory allocated for a [`TimeInfo`] struct.
+/// Frees the memory allocated for a [`TimeInfo`] struct, its era timings
+/// included.
 ///
 /// # Arguments
 ///
@@ -114,9 +154,18 @@ pub unsafe extern "C" fn get_time_info(node: *const LogosBlockchainNode) -> FfiT
 /// # Safety
 ///
 /// A non-null `pointer` must come from [`get_time_info`] and must not have
-/// been freed already.
+/// been freed already. Its `era_timings` and `era_timings_len` must be as they
+/// were returned: they decide what is freed.
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_time_info(pointer: *mut TimeInfo) -> OperationStatus {
-    unsafe { free::<TimeInfo>(pointer) }
+    return_error_if_null_pointer!(pointer);
+    let time_info = unsafe { Box::from_raw(pointer) };
+    drop(unsafe {
+        Box::from_raw(ptr::slice_from_raw_parts_mut(
+            time_info.era_timings,
+            time_info.era_timings_len,
+        ))
+    });
+    OperationStatus::OK
 }

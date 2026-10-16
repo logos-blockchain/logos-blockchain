@@ -99,7 +99,7 @@ fn test_config(mut config: RunConfig) -> RunConfig {
     config
         .deployment
         .update_genesis_era_parameters(|parameters| {
-            parameters.time.slot_duration = Duration::from_secs(1);
+            parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
             parameters.cryptarchia.epoch_config = EpochConfig {
                 epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
                 epoch_period_nonce_buffer: 1.try_into().unwrap(),

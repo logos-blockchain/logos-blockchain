@@ -131,7 +131,7 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
     config
         .deployment
         .update_genesis_era_parameters(|parameters| {
-            parameters.time.slot_duration = Duration::from_secs(1);
+            parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
 
             // Set the epoch length not too long to speed up the test,
             // but also not too short because we want blend nodes to collect blend

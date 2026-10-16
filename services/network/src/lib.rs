@@ -8,7 +8,7 @@ use backends::NetworkBackend;
 use futures::StreamExt as _;
 use lb_log_targets::network_service;
 use lb_services_utils::wait_until_services_are_ready;
-use lb_time_service::{TimeService, TimeServiceMessage};
+use lb_time_service::{TimeService, api::TimeServiceApi};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -17,7 +17,6 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
-use tokio::sync::oneshot;
 
 use crate::{config::NetworkConfig, message::BackendNetworkMsg};
 
@@ -82,22 +81,11 @@ where
         )
         .await?;
 
-        let (current_era, mut era_ticks) = {
-            let time_relay = overwatch_handle
-                .relay::<TimeService<TimeBackend, RuntimeServiceId>>()
+        let (current_era, mut era_ticks) =
+            TimeServiceApi::<TimeService<TimeBackend, RuntimeServiceId>>::new(&overwatch_handle)
+                .await?
+                .subscribe_to_eras()
                 .await?;
-            let (sender, receiver) = oneshot::channel();
-            time_relay
-                .send(TimeServiceMessage::SubscribeToEras { sender })
-                .await?;
-            let mut era_ticks = receiver.await?;
-            let current_era = era_ticks
-                .next()
-                .await
-                .expect("The era tick stream ended before its first tick")
-                .era;
-            (current_era, era_ticks)
-        };
 
         let mut backend = Backend::new(
             self.service_resources_handle

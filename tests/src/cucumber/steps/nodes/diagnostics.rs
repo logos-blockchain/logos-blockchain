@@ -216,7 +216,8 @@ impl BlendDiagnosticParameterSet {
         settings.update_genesis_era_parameters(|parameters| {
             parameters.cryptarchia.security_param = NonZero::new(self.security_parameter)
                 .expect("named Blend diagnostic security parameter must be non-zero");
-            parameters.time.slot_duration = Duration::from_secs(self.slot_duration_secs);
+            parameters.time.slot_duration_in_seconds = NonZero::new(self.slot_duration_secs)
+                .expect("named Blend diagnostic slot duration must be non-zero");
             let epoch_config = &mut parameters.cryptarchia.epoch_config;
             epoch_config.epoch_stake_distribution_stabilization =
                 NonZero::new(self.epoch_stake_distribution_stabilization)
@@ -359,8 +360,8 @@ pub fn set_blend_diagnostic_parameter_set(
     set_deployment_config_override(
         world,
         step,
-        "eras.0.time.slot_duration",
-        &format!("seconds({})", parameter_set.slot_duration_secs),
+        "eras.0.time.slot_duration_in_seconds",
+        &parameter_set.slot_duration_secs.to_string(),
     )?;
     set_deployment_config_override(
         world,
@@ -392,7 +393,7 @@ pub fn set_blend_diagnostic_parameter_set(
         event = "blend_diagnostic_parameter_set",
         parameter_set = parameter_set.name,
         security_parameter = settings.genesis_era_parameters().cryptarchia.security_param.get(),
-        slot_duration_secs = settings.genesis_era_parameters().time.slot_duration.as_secs(),
+        slot_duration_secs = settings.genesis_era_parameters().time.slot_duration().as_secs(),
         epoch_stake_distribution_stabilization = settings
             .genesis_era_parameters().cryptarchia
             .epoch_config
@@ -448,8 +449,8 @@ pub fn set_blend_diagnostic_parameter_set(
             "timestamp": OffsetDateTime::now_utc().to_string(),
             "parameter_set": parameter_set.name,
             "security_parameter": settings.genesis_era_parameters().cryptarchia.security_param.get(),
-            "slot_duration_secs": settings.genesis_era_parameters().time.slot_duration.as_secs(),
-            "slot_duration_ms": settings.genesis_era_parameters().time.slot_duration.as_millis(),
+            "slot_duration_secs": settings.genesis_era_parameters().time.slot_duration().as_secs(),
+            "slot_duration_ms": settings.genesis_era_parameters().time.slot_duration().as_millis(),
             "epoch_stake_distribution_stabilization": settings
                 .genesis_era_parameters().cryptarchia
                 .epoch_config
@@ -694,7 +695,7 @@ fn observation_timeout_secs(settings: &DeploymentSettings, transition_count: usi
     settings
         .genesis_era_parameters()
         .time
-        .slot_duration
+        .slot_duration()
         .as_secs()
         .saturating_mul(
             settings
@@ -716,7 +717,7 @@ fn observation_poll_interval(settings: &DeploymentSettings) -> Duration {
             (settings
                 .genesis_era_parameters()
                 .time
-                .slot_duration
+                .slot_duration()
                 .as_millis()
                 / 4)
             .clamp(100, 1_000),
@@ -1504,7 +1505,7 @@ mod tests {
                 security_parameter
             );
             assert_eq!(
-                settings.genesis_era_parameters().time.slot_duration,
+                settings.genesis_era_parameters().time.slot_duration(),
                 Duration::from_secs(1)
             );
             assert_eq!(
