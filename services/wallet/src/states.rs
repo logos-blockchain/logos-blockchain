@@ -35,9 +35,8 @@ pub struct ClaimableVouchers {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PendingClaim {
     immutable_blocks_since_reservation: u64,
-    /// How many immutable blocks the reservation survives: as many as the LIB
-    /// lay below the tip its claim was built on, so the claim had the time to
-    /// become immutable.
+    /// The number of new immutable blocks after which the pending claim is
+    /// released, so the voucher can be claimed again.
     max_immutable_blocks_since_reservation: u64,
 }
 
