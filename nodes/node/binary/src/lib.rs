@@ -208,11 +208,10 @@ pub fn run_node_from_config(
     }
     .into_sdp_service_settings(recovery_data.clone());
 
-    let pow_settings = PoWConfig {
+    let pow_config = PoWConfig {
         user: config.user.pow,
     }
-    .into_pow_service_era_schedule(&recovery_data, eras);
-    let pow_config = genesis_era_settings(&pow_settings);
+    .into_pow_service_settings(recovery_data, eras);
 
     let tracing_config = config::tracing::ServiceConfig {
         user: config.user.tracing,

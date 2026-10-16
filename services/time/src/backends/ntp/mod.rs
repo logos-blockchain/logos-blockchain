@@ -239,7 +239,10 @@ impl NtpStream {
 mod tests {
     use std::num::NonZero;
 
-    use lb_time::era::{EraEntriesAfterGenesis, EraTiming};
+    use lb_time::{
+        Era,
+        era::{EraEntriesAfterGenesis, EraTiming},
+    };
 
     use super::*;
     use crate::TimeServiceSettings;
@@ -332,6 +335,7 @@ mod tests {
         type Item = SlotTick;
         fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             Poll::Ready(Some(SlotTick {
+                era: Era::genesis(),
                 epoch: 0.into(),
                 slot: self.slot,
             }))
@@ -349,6 +353,7 @@ mod tests {
                 let slot = self.slots[self.idx];
                 self.idx += 1;
                 Poll::Ready(Some(SlotTick {
+                    era: Era::genesis(),
                     epoch: 0.into(),
                     slot,
                 }))

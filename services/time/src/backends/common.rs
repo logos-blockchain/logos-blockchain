@@ -31,6 +31,7 @@ pub fn slot_timer(
 
 fn new_slot_tick(slot: Slot, era_schedules: &EraTimingSchedule) -> SlotTick {
     SlotTick {
+        era: era_schedules.at_slot(slot).era,
         epoch: era_schedules.epoch_for_slot(slot),
         slot,
     }
@@ -97,7 +98,7 @@ mod tests {
     use std::num::NonZero;
 
     use lb_time::{
-        Epoch,
+        Epoch, Era,
         era::{EraEntriesAfterGenesis, EraTiming},
     };
 
@@ -141,22 +142,22 @@ mod tests {
         );
         let now = genesis + Duration::from_millis(2500);
         let (current, mut timer) = slot_timer(Arc::clone(&eras), now, eras.slot_at(now).unwrap());
-        assert_eq!(current, tick(1, 2));
+        assert_eq!(current, tick(0, 1, 2));
 
         // Slot 3 starts after 0.5 s, and slot 4, the first of the second era,
         // 1 s later.
         tokio::time::advance(Duration::from_millis(500)).await;
-        assert_eq!(timer.next().await, Some(tick(1, 3)));
+        assert_eq!(timer.next().await, Some(tick(0, 1, 3)));
         tokio::time::advance(Duration::from_secs(1)).await;
-        assert_eq!(timer.next().await, Some(tick(2, 4)));
+        assert_eq!(timer.next().await, Some(tick(1, 2, 4)));
 
         // Slots of the second era last 3 s.
         tokio::time::advance(Duration::from_millis(2999)).await;
         assert!(futures::poll!(timer.next()).is_pending());
         tokio::time::advance(Duration::from_millis(1)).await;
-        assert_eq!(timer.next().await, Some(tick(2, 5)));
+        assert_eq!(timer.next().await, Some(tick(1, 2, 5)));
         tokio::time::advance(Duration::from_secs(3)).await;
-        assert_eq!(timer.next().await, Some(tick(3, 6)));
+        assert_eq!(timer.next().await, Some(tick(1, 3, 6)));
     }
 
     fn timer() -> (SlotTick, EpochSlotTickStream, Arc<EraTimingSchedule>) {
@@ -180,8 +181,9 @@ mod tests {
         }
     }
 
-    fn tick(epoch: u32, slot: u64) -> SlotTick {
+    fn tick(era: u16, epoch: u32, slot: u64) -> SlotTick {
         SlotTick {
+            era: Era::new(era),
             epoch: Epoch::new(epoch),
             slot: Slot::new(slot),
         }

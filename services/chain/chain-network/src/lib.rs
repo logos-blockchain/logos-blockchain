@@ -386,7 +386,7 @@ where
             let (sender, receiver) = oneshot::channel();
             relays
                 .time_relay()
-                .send(TimeServiceMessage::Subscribe { sender })
+                .send(TimeServiceMessage::SubscribeToEpochSlots { sender })
                 .await
                 .map_err(|error| {
                     DynError::from(format!("failed to subscribe to slot ticks: {error}"))

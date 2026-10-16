@@ -883,7 +883,7 @@ where
             let (sender, receiver) = oneshot::channel();
             relays
                 .time_relay()
-                .send(lb_time_service::TimeServiceMessage::Subscribe { sender })
+                .send(lb_time_service::TimeServiceMessage::SubscribeToEpochSlots { sender })
                 .await
                 .expect("Request time subscription to time service should succeed");
             receiver.await?

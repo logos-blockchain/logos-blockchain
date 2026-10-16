@@ -423,7 +423,7 @@ where
             let (sender, receiver) = oneshot::channel();
             relays
                 .time_relay()
-                .send(TimeServiceMessage::Subscribe { sender })
+                .send(TimeServiceMessage::SubscribeToEpochSlots { sender })
                 .await
                 .expect("Request time subscription to time service should succeed");
             receiver.await?
@@ -448,7 +448,7 @@ where
         let async_loop = async {
             loop {
                 tokio::select! {
-                    Some(SlotTick { slot, epoch }) = slot_timer.next() => {
+                    Some(SlotTick { slot, epoch, .. }) = slot_timer.next() => {
                         trace!(target: LOG_TARGET, "Received SlotTick for slot {}, ep {}", u64::from(slot), u32::from(epoch));
                         let Some(SlotContext { wallet_tip, epoch_state, eligible_aged, .. }) =
                             fetch_slot_context(&cryptarchia_api, &wallet_api, &ledger_config, slot).await

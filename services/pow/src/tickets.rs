@@ -13,7 +13,7 @@
 use std::{
     collections::{HashMap, HashSet},
     iter,
-    num::{NonZeroU64, NonZeroUsize},
+    num::NonZeroUsize,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -42,6 +42,8 @@ use tokio_stream::{
     wrappers::{BroadcastStream, errors::BroadcastStreamRecvError},
 };
 use tracing::{error, log::warn};
+
+use crate::service::{ServiceEraSchedule, reward_window};
 
 const LOG_TARGET: &str = pow::ROOT;
 
@@ -102,9 +104,10 @@ pub struct TicketGenerator {
     /// is a concurrency degree, not a cap on the winners a search yields: that
     /// is set by [`block_ticket_limit`].
     max_tickets_per_block: NonZeroUsize,
-    /// Acceptance window, in slots: a block older than this leaves the reward
-    /// window and its search is pruned. Matches the consensus `slot_window`.
-    slot_window: NonZeroU64,
+    /// The settings of every era: a block leaves the reward window of its
+    /// era's epoch and its search is pruned. Matches the consensus
+    /// `slot_window` of each era.
+    era_schedule: ServiceEraSchedule,
     /// Winning tickets the node already holds but whose reward has not been
     /// paid out of the pool yet (ready plus pending claims). They count against
     /// the pool when sizing a new block's search. Kept current by the consumer
@@ -127,7 +130,7 @@ impl TicketGenerator {
         cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData>,
         pool: Arc<ThreadPool>,
         max_tickets_per_block: NonZeroUsize,
-        slot_window: NonZeroU64,
+        era_schedule: ServiceEraSchedule,
     ) -> Result<Self, lb_chain_service::api::ApiError>
     where
         CryptarchiaServiceData:
@@ -148,7 +151,7 @@ impl TicketGenerator {
             tip: HeaderId::from([0u8; 32]),
             pool,
             max_tickets_per_block,
-            slot_window,
+            era_schedule,
             outstanding_tickets: 0,
         })
     }
@@ -286,16 +289,25 @@ async fn search_winner_ticket(
     response_receiver.await.ok().flatten()
 }
 
-/// Drops the ticket searches for every block whose slot is older than
-/// `frontier_slot`, i.e. blocks that have fallen out of the reward window and
-/// can no longer produce claimable tickets.
+/// The oldest slot a block can be at to still be searched at `tip_slot`, under
+/// the reward window of the era of `block_slot`.
+fn frontier_slot(era_schedule: &ServiceEraSchedule, tip_slot: Slot, block_slot: Slot) -> Slot {
+    tip_slot.saturating_sub(Slot::new(reward_window(era_schedule, block_slot).get()))
+}
+
+/// Drops the ticket searches for every block whose slot is older than its
+/// frontier at `tip_slot`, i.e. blocks that have fallen out of the reward
+/// window of their era and can no longer produce claimable tickets.
 fn prune_out_of_window_streams(
     tickets_search: &mut StreamMap<HeaderId, WinnerTicketStream>,
     tickets_search_by_slot: &mut HashMap<Slot, HashSet<HeaderId>>,
-    frontier_slot: Slot,
+    tip_slot: Slot,
+    era_schedule: &ServiceEraSchedule,
 ) {
     let to_remove = tickets_search_by_slot
-        .extract_if(|k, _| k < &frontier_slot)
+        .extract_if(|block_slot, _| {
+            *block_slot < frontier_slot(era_schedule, tip_slot, *block_slot)
+        })
         .flat_map(|(_, headers)| headers);
     for header in to_remove {
         tickets_search.remove(&header);
@@ -342,8 +354,6 @@ impl Stream for TicketGenerator {
                     },
                 ))) => {
                     this.tip = tip;
-                    // compute which slot is old enough
-                    let frontier_slot = tip_slot.saturating_sub(Slot::new(this.slot_window.get()));
                     // trigger new stream if its new enough and the pool can
                     // still pay for what it would find
                     let pow = &ledger_state.mantle_ledger().pow;
@@ -353,7 +363,7 @@ impl Stream for TicketGenerator {
                         this.outstanding_tickets,
                     ));
                     if let Some(max_winners) = max_winners
-                        && frontier_slot < block_slot
+                        && frontier_slot(&this.era_schedule, tip_slot, block_slot) < block_slot
                     {
                         let stream = new_block_search_stream(
                             block_id,
@@ -374,7 +384,8 @@ impl Stream for TicketGenerator {
                     prune_out_of_window_streams(
                         &mut this.tickets_search,
                         &mut this.tickets_search_by_slot,
-                        frontier_slot,
+                        tip_slot,
+                        &this.era_schedule,
                     );
                     // Fall through to the next loop iteration so the freshly
                     // inserted search is polled now: this starts its work and
@@ -398,7 +409,7 @@ impl Stream for TicketGenerator {
 mod tests {
     use std::{
         collections::{HashMap, HashSet},
-        num::{NonZeroU64, NonZeroUsize},
+        num::NonZeroUsize,
         pin::Pin,
         sync::Arc,
         task::{Context, Poll},
@@ -417,8 +428,9 @@ mod tests {
         TicketGenerator, WinnerTicketStream, WinningTicket, block_ticket_limit,
         new_block_search_stream, prune_out_of_window_streams, search_winner_ticket,
     };
+    use crate::test_utils::era_schedule;
 
-    const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
+    const SLOT_WINDOW: u64 = 100;
 
     /// A never-resolving search stream, used to populate the map under test.
     fn pending_stream() -> WinnerTicketStream {
@@ -459,10 +471,12 @@ mod tests {
             .or_default()
             .insert(recent_block);
 
+        // At slot 108, a window of 100 slots puts the frontier at slot 8.
         prune_out_of_window_streams(
             &mut tickets_search,
             &mut tickets_search_by_slot,
-            Slot::new(8),
+            Slot::new(108),
+            &era_schedule(&[SLOT_WINDOW]),
         );
 
         // The slot-5 search aged out; the slot-10 one is still within the window.
@@ -484,14 +498,49 @@ mod tests {
             .or_default()
             .insert(block);
 
+        // At slot 110, a window of 100 slots puts the frontier at slot 10,
+        // the block's own slot, which is not below it.
         prune_out_of_window_streams(
             &mut tickets_search,
             &mut tickets_search_by_slot,
-            Slot::new(10), // frontier == slot, so it is not "below"
+            Slot::new(110),
+            &era_schedule(&[SLOT_WINDOW]),
         );
 
         assert!(tickets_search.contains_key(&block));
         assert!(tickets_search_by_slot.contains_key(&Slot::new(10)));
+    }
+
+    #[test]
+    fn prune_judges_each_search_by_the_window_of_its_era() {
+        // Era 0 has a window of 100 slots, and era 1, from slot 100, a window of
+        // 10. At slot 150, the search for a block at slot 60, in era 0, is
+        // still within its window, while the one for a block at slot 120, in
+        // era 1, aged out at slot 130.
+        let era_0_block = HeaderId::from([4u8; 32]);
+        let era_1_block = HeaderId::from([5u8; 32]);
+        let mut tickets_search: StreamMap<HeaderId, WinnerTicketStream> = StreamMap::new();
+        tickets_search.insert(era_0_block, pending_stream());
+        tickets_search.insert(era_1_block, pending_stream());
+        let mut tickets_search_by_slot: HashMap<Slot, HashSet<HeaderId>> = HashMap::new();
+        tickets_search_by_slot
+            .entry(Slot::new(60))
+            .or_default()
+            .insert(era_0_block);
+        tickets_search_by_slot
+            .entry(Slot::new(120))
+            .or_default()
+            .insert(era_1_block);
+
+        prune_out_of_window_streams(
+            &mut tickets_search,
+            &mut tickets_search_by_slot,
+            Slot::new(150),
+            &era_schedule(&[100, 10]),
+        );
+
+        assert!(tickets_search.contains_key(&era_0_block));
+        assert!(!tickets_search.contains_key(&era_1_block));
     }
 
     #[tokio::test]
@@ -616,7 +665,7 @@ mod tests {
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
-            slot_window: SLOT_WINDOW,
+            era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
@@ -638,7 +687,7 @@ mod tests {
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
-            slot_window: SLOT_WINDOW,
+            era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
@@ -655,7 +704,7 @@ mod tests {
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
-            slot_window: SLOT_WINDOW,
+            era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Pending));
@@ -679,7 +728,7 @@ mod tests {
             tip,
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
-            slot_window: SLOT_WINDOW,
+            era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
         };
 
@@ -705,7 +754,7 @@ mod tests {
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
-            slot_window: SLOT_WINDOW,
+            era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
         };
 

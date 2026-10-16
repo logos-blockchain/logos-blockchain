@@ -5,7 +5,7 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_log_targets::time as log_targets_time;
-use lb_time::{Epoch, Slot, era::EraTimingSchedule};
+use lb_time::{Epoch, Era, Slot, era::EraTimingSchedule};
 use log::error;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -44,6 +44,7 @@ impl TimeServiceInfo {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SlotTick {
+    pub era: Era,
     pub epoch: Epoch,
     pub slot: Slot,
 }
@@ -54,7 +55,7 @@ pub enum TimeServiceMessage {
     Info {
         sender: oneshot::Sender<TimeServiceInfo>,
     },
-    Subscribe {
+    SubscribeToEpochSlots {
         sender: oneshot::Sender<EpochSlotTickStream>,
     },
     CurrentSlot {
@@ -66,7 +67,7 @@ impl Debug for TimeServiceMessage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Info { .. } => f.write_str("Info"),
-            Self::Subscribe { .. } => f.write_str("Subscribe"),
+            Self::SubscribeToEpochSlots { .. } => f.write_str("SubscribeToEpochSlots"),
             Self::CurrentSlot { .. } => f.write_str("CurrentSlot"),
         }
     }
@@ -181,10 +182,10 @@ fn handle_service_message(
                 era_schedules: era_schedule.clone(),
             }));
         }
-        TimeServiceMessage::Subscribe { sender } => {
+        TimeServiceMessage::SubscribeToEpochSlots { sender } => {
             let stream = Pin::new(Box::new(WatchStream::from_changes(watch_receiver.clone())));
             if sender.send(stream).is_err() {
-                error!(target: LOG_TARGET, "Couldn't send back a Subscribe response");
+                error!(target: LOG_TARGET, "Couldn't send back a SubscribeToEpochSlots response");
             }
         }
         TimeServiceMessage::CurrentSlot { sender } => {
