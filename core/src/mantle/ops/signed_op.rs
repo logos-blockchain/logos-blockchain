@@ -258,12 +258,18 @@ impl SignedOp<Preverified, StandardMode> {
                         Ok(declarations) => declarations,
                         Err(error) => return Err(map_verify_failure((op, error))),
                     };
+                let provider_index =
+                    match helper.get_provider_index_by_service(op.operation().service_type) {
+                        Ok(provider_index) => provider_index,
+                        Err(error) => return Err(map_verify_failure((op, error))),
+                    };
                 let context = SDPDeclareVerificationContext {
                     utxo_tree: helper.get_utxos(),
                     channels: helper.get_channels(),
                     service_notes: helper.get_service_notes(),
                     tx_hash_view,
                     declarations,
+                    provider_index,
                     min_stake: helper.get_min_stake(),
                 };
                 op.into_verified_deferred(&context, deferred_proofs)

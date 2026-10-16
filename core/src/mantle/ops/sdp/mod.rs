@@ -5,7 +5,6 @@ pub mod withdraw;
 pub use active::{SDPActiveExecutionContext, SDPActiveValidationContext};
 pub use declare::{SDPDeclareExecutionContext, SDPDeclareVerificationContext};
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use thiserror::Error;
 pub use withdraw::{SDPWithdrawExecutionContext, SDPWithdrawValidationContext};
 
@@ -34,11 +33,6 @@ pub enum SdpError {
     DuplicateProviderId {
         service_type: ServiceType,
         provider_id: Box<ProviderId>,
-    },
-    #[error("Duplicate zk_id within service {service_type:?}: {zk_id:?}")]
-    DuplicateZkId {
-        service_type: ServiceType,
-        zk_id: ZkPublicKey,
     },
     #[error("Note {note_id:?} insufficient value: {value}")]
     NoteInsufficientValue { note_id: NoteId, value: u64 },

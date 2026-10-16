@@ -1,11 +1,11 @@
-use std::collections::HashSet;
-
 use serde::{Deserialize, Serialize};
 
 use crate::{
     mantle::{Note, NoteId},
-    sdp::{MinStake, ServiceType},
+    sdp::{DeclarationId, MinStake, ServiceType},
 };
+
+type ServiceBindings = rpds::RedBlackTreeMapSync<ServiceType, DeclarationId>;
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -35,7 +35,7 @@ pub struct ServiceNotes {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ServiceNote {
     note: Note,
-    services: HashSet<ServiceType>,
+    services: ServiceBindings,
 }
 
 impl ServiceNotes {
@@ -60,6 +60,7 @@ impl ServiceNotes {
         mut self,
         min_stake: &MinStake,
         service_type: ServiceType,
+        declaration_id: DeclarationId,
         note: Note,
         note_id: &NoteId,
     ) -> Result<Self, Error> {
@@ -71,15 +72,17 @@ impl ServiceNotes {
         }
 
         if let Some(service_note) = self.service_notes.get_mut(note_id) {
-            if service_note.services.contains(&service_type) {
+            if service_note.services.contains_key(&service_type) {
                 return Err(Error::NoteAlreadyUsedForService {
                     note_id: *note_id,
                     service_type,
                 });
             }
-            service_note.services.insert(service_type);
+            service_note
+                .services
+                .insert_mut(service_type, declaration_id);
         } else {
-            let services = [service_type].into();
+            let services = ServiceBindings::new_sync().insert(service_type, declaration_id);
             self.service_notes = self
                 .service_notes
                 .insert(*note_id, ServiceNote { note, services });
@@ -90,23 +93,38 @@ impl ServiceNotes {
 
     #[must_use]
     pub fn is_used_for_service(&self, note_id: &NoteId, service_type: &ServiceType) -> bool {
-        if let Some(service_note) = self.service_notes.get(note_id) {
-            if service_note.services.contains(service_type) {
-                return true;
-            }
-            return false;
-        }
-        false
+        self.service_notes
+            .get(note_id)
+            .is_some_and(|service_note| service_note.services.contains_key(service_type))
     }
 
-    pub fn unlock(&mut self, service_type: ServiceType, note_id: &NoteId) -> Result<Note, Error> {
+    #[must_use]
+    pub fn is_used_by_declaration(
+        &self,
+        note_id: &NoteId,
+        service_type: &ServiceType,
+        declaration_id: &DeclarationId,
+    ) -> bool {
+        self.service_notes
+            .get(note_id)
+            .and_then(|service_note| service_note.services.get(service_type))
+            == Some(declaration_id)
+    }
+
+    pub fn unlock(
+        &mut self,
+        service_type: ServiceType,
+        declaration_id: DeclarationId,
+        note_id: &NoteId,
+    ) -> Result<Note, Error> {
         if let Some(note) = self.service_notes.get_mut(note_id) {
-            if !note.services.remove(&service_type) {
+            if note.services.get(&service_type) != Some(&declaration_id) {
                 return Err(Error::NoteNotUsedForService {
                     note_id: *note_id,
                     service_type,
                 });
             }
+            note.services.remove_mut(&service_type);
             let res = note.note;
             if note.services.is_empty() {
                 self.service_notes = self.service_notes.remove(note_id);
@@ -150,7 +168,13 @@ mod tests {
         };
 
         let service_notes_bn = service_notes
-            .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id)
+            .lock(
+                &min_stake,
+                ServiceType::BlendNetwork,
+                DeclarationId([1; 32]),
+                utxo.note,
+                &note_id,
+            )
             .expect("Should be able to lock for BN service");
 
         assert!(service_notes_bn.contains(&note_id));
@@ -158,8 +182,8 @@ mod tests {
             service_notes_bn
                 .service_notes
                 .get(&note_id)
-                .map(|ln| &ln.services),
-            Some(&HashSet::from([ServiceType::BlendNetwork]))
+                .and_then(|ln| ln.services.get(&ServiceType::BlendNetwork)),
+            Some(&DeclarationId([1; 32]))
         );
     }
 
@@ -174,11 +198,22 @@ mod tests {
         };
 
         let service_notes_once = service_notes
-            .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id)
+            .lock(
+                &min_stake,
+                ServiceType::BlendNetwork,
+                DeclarationId([1; 32]),
+                utxo.note,
+                &note_id,
+            )
             .unwrap();
 
-        let result =
-            service_notes_once.lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id);
+        let result = service_notes_once.lock(
+            &min_stake,
+            ServiceType::BlendNetwork,
+            DeclarationId([2; 32]),
+            utxo.note,
+            &note_id,
+        );
 
         assert!(result.is_err());
         assert_eq!(
@@ -200,7 +235,13 @@ mod tests {
             timestamp: 0,
         };
 
-        let result = service_notes.lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id);
+        let result = service_notes.lock(
+            &min_stake,
+            ServiceType::BlendNetwork,
+            DeclarationId([1; 32]),
+            utxo.note,
+            &note_id,
+        );
 
         assert!(result.is_err());
         assert_eq!(
@@ -222,7 +263,13 @@ mod tests {
             timestamp: 0,
         };
 
-        let result = service_notes.lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id);
+        let result = service_notes.lock(
+            &min_stake,
+            ServiceType::BlendNetwork,
+            DeclarationId([1; 32]),
+            utxo.note,
+            &note_id,
+        );
 
         assert!(result.is_ok());
     }
@@ -235,11 +282,17 @@ mod tests {
             timestamp: 0,
         };
         let mut locked = ServiceNotes::new()
-            .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id)
+            .lock(
+                &min_stake,
+                ServiceType::BlendNetwork,
+                DeclarationId([1; 32]),
+                utxo.note,
+                &note_id,
+            )
             .unwrap();
 
         locked
-            .unlock(ServiceType::BlendNetwork, &note_id)
+            .unlock(ServiceType::BlendNetwork, DeclarationId([1; 32]), &note_id)
             .expect("Should unlock the last service");
 
         assert!(!locked.contains(&note_id));
@@ -250,9 +303,52 @@ mod tests {
     fn test_unlock_note_not_a_service_note() {
         let note_id = utxo().id();
         let mut empty_notes = ServiceNotes::new();
-        let result = empty_notes.unlock(ServiceType::BlendNetwork, &note_id);
+        let result =
+            empty_notes.unlock(ServiceType::BlendNetwork, DeclarationId([1; 32]), &note_id);
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), Error::NotAServiceNote(note_id));
+    }
+
+    /// The same note remains locked until its final service binding is removed.
+    #[test]
+    fn shared_note_stays_locked_until_last_service_releases_it() {
+        let utxo = utxo();
+        let note_id = utxo.id();
+        let min_stake = MinStake {
+            threshold: 1,
+            timestamp: 0,
+        };
+        let declaration_a = DeclarationId([1; 32]);
+        let declaration_b = DeclarationId([2; 32]);
+        let mut notes = ServiceNotes::new()
+            .lock(
+                &min_stake,
+                ServiceType::BlendNetwork,
+                declaration_a,
+                utxo.note,
+                &note_id,
+            )
+            .unwrap()
+            .lock(
+                &min_stake,
+                ServiceType::Test,
+                declaration_b,
+                utxo.note,
+                &note_id,
+            )
+            .unwrap();
+
+        notes
+            .unlock(ServiceType::BlendNetwork, declaration_a, &note_id)
+            .unwrap();
+        assert!(notes.contains(&note_id));
+        assert!(!notes.is_used_for_service(&note_id, &ServiceType::BlendNetwork));
+        assert!(notes.is_used_by_declaration(&note_id, &ServiceType::Test, &declaration_b));
+
+        notes
+            .unlock(ServiceType::Test, declaration_b, &note_id)
+            .unwrap();
+        assert!(!notes.contains(&note_id));
     }
 }
