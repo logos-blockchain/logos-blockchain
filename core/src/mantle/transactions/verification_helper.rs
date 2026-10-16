@@ -9,14 +9,14 @@ use crate::{
     mantle::{
         VerificationError,
         channel::Channels,
-        ledger::{Declarations, Utxos},
+        ledger::{Declarations, ProviderIndex, Utxos},
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
             leader_claim::{RewardsRoot, VoucherNullifier},
             pow::{PowNullifier, PowReward, PowTarget},
         },
     },
-    sdp::{DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
+    sdp::{Declaration, DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
 };
 
 pub trait OperationVerificationHelper {
@@ -31,10 +31,12 @@ pub trait OperationVerificationHelper {
         service: ServiceType,
     ) -> Result<&Declarations, VerificationError>;
 
-    fn get_declarations_by_id(
+    fn get_provider_index_by_service(
         &self,
-        id: &DeclarationId,
-    ) -> Result<&Declarations, VerificationError>;
+        service: ServiceType,
+    ) -> Result<&ProviderIndex, VerificationError>;
+
+    fn get_declaration_by_id(&self, id: &DeclarationId) -> Result<&Declaration, VerificationError>;
 
     fn get_min_stake(&self) -> &MinStake;
 
@@ -106,7 +108,7 @@ pub mod test_utils {
         mantle::{
             Utxo, VerificationError,
             channel::Channels,
-            ledger::{Declarations, Utxos},
+            ledger::{Declarations, ProviderIndex, Utxos},
             ops::{
                 channel::{ChannelId, ChannelKeyIndex},
                 leader_claim::{RewardsRoot, VoucherNullifier},
@@ -123,6 +125,7 @@ pub mod test_utils {
         service_notes: ServiceNotes,
         utxos: Utxos,
         declarations: Declarations,
+        provider_index: ProviderIndex,
         min_stake: MinStake,
         epoch: Epoch,
         block_slot: Slot,
@@ -150,6 +153,7 @@ pub mod test_utils {
                 service_notes: ServiceNotes::new(),
                 utxos: Utxos::new(),
                 declarations: Declarations::new_sync(),
+                provider_index: ProviderIndex::new_sync(),
                 min_stake: MinStake {
                     threshold: 0,
                     timestamp: 0,
@@ -258,11 +262,22 @@ pub mod test_utils {
             Ok(&self.declarations)
         }
 
-        fn get_declarations_by_id(
+        fn get_provider_index_by_service(
             &self,
-            _id: &DeclarationId,
-        ) -> Result<&Declarations, VerificationError> {
-            Ok(&self.declarations)
+            _service: ServiceType,
+        ) -> Result<&ProviderIndex, VerificationError> {
+            Ok(&self.provider_index)
+        }
+
+        fn get_declaration_by_id(
+            &self,
+            id: &DeclarationId,
+        ) -> Result<&crate::sdp::Declaration, VerificationError> {
+            self.declarations
+                .get(id)
+                .ok_or(VerificationError::SDPVerificationError(
+                    crate::mantle::ops::sdp::SdpError::DeclarationNotFound(*id),
+                ))
         }
 
         fn get_min_stake(&self) -> &MinStake {
