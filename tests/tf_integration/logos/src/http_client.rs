@@ -1,7 +1,7 @@
 use std::{collections::HashMap, net::SocketAddr, pin::Pin, time::Duration};
 
 use common_http_client::{
-    ApiBlock, BasicAuthCredentials, CommonHttpClient, Error, ProcessedBlockEvent,
+    ApiBlock, BasicAuthCredentials, CommonHttpClient, Error, Events, ProcessedBlockEvent,
 };
 use futures::Stream;
 use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
@@ -13,7 +13,7 @@ use lb_core::{
         ledger::verification_mode::StandardMode,
         transactions::{genesis_tx::ChainId, hash::TxHash, states::VerificationState},
     },
-    sdp::{Declaration, DeclarationId, Locator, ServiceType},
+    sdp::{Declaration, DeclarationId, Locator},
 };
 use lb_http_api_common::{
     TimeInfo,
@@ -132,6 +132,15 @@ impl NodeHttpClient {
         self.with_timeout(
             "Get block by ID request",
             self.http_client.get_block_by_id(self.base_url.clone(), *id),
+        )
+        .await
+    }
+
+    pub async fn block_events(&self, id: &HeaderId) -> Result<Option<Events>, Error> {
+        self.with_timeout(
+            "Block events request",
+            self.http_client
+                .get_block_events(self.base_url.clone(), *id),
         )
         .await
     }
@@ -281,7 +290,7 @@ impl NodeHttpClient {
 
     pub async fn get_finalized_sdp_declarations(
         &self,
-        service_type: ServiceType,
+        service_type: lb_core::sdp::ServiceType,
     ) -> Result<Option<HashMap<DeclarationId, Declaration>>, Error> {
         self.with_timeout(
             "Finalized SDP declarations request",

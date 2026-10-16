@@ -223,7 +223,7 @@ fn initialize_scanner_from_seed(
             })
         }
         ScannerSeed::Snapshot {
-            wallet_utxos,
+            accounting,
             tip,
             height,
             slot,
@@ -231,9 +231,9 @@ fn initialize_scanner_from_seed(
             fallback_checkpoints,
             ..
         } => {
-            let accounting = ScannerAccounting::from_wallet_utxos(
+            let accounting = ScannerAccounting::from_snapshot(
                 config.wallet_keys.clone(),
-                wallet_utxos.clone(),
+                accounting.as_ref().clone(),
             )
             .map_err(|error| StepError::LogicalError {
                 message: format!("wallet scanner accounting initialization failed: {error}"),
@@ -528,9 +528,9 @@ fn reseed_from_fallback_checkpoint(
         checkpoint.slot,
     );
 
-    *accounting = ScannerAccounting::from_wallet_utxos(
+    *accounting = ScannerAccounting::from_snapshot(
         config.wallet_keys.clone(),
-        checkpoint.wallet_utxos,
+        checkpoint.accounting,
     )
     .map_err(|error| StepError::LogicalError {
         message: format!(
@@ -687,69 +687,70 @@ async fn scan_group_once(
     let mut connected_to_tip = applied_tip.is_none();
     let initial_applied_tip = *applied_tip;
 
-    let streamed_block_count = stream_blocks_range(client, from_slot, best_node.slot, |block| {
-        if continuity_error.is_some() {
-            return Ok(());
-        }
-
-        if let Some(expected_parent) = *applied_tip
-            && block.header.parent_block != expected_parent
-        {
-            if !connected_to_tip {
-                skipped_unconnected_block_count += 1;
+    let streamed_block_count =
+        stream_blocks_range(client, from_slot, best_node.slot, |block, block_events| {
+            if continuity_error.is_some() {
                 return Ok(());
             }
 
-            continuity_error = Some(wallet_scanner_continuity_error(
-                config,
-                block.header.parent_block,
-                expected_parent,
-                skipped_unconnected_block_count,
-            ));
-            return Ok(());
-        }
+            if let Some(expected_parent) = *applied_tip
+                && block.header.parent_block != expected_parent
+            {
+                if !connected_to_tip {
+                    skipped_unconnected_block_count += 1;
+                    return Ok(());
+                }
 
-        connected_to_tip = true;
-        accounting.apply_block(&block);
-        *applied_height = applied_height.saturating_add(1);
-        *applied_tip = Some(block.header.id);
-        *applied_slot = Some(u64::from(block.header.slot));
-        applied_block_count += 1;
+                continuity_error = Some(wallet_scanner_continuity_error(
+                    config,
+                    block.header.parent_block,
+                    expected_parent,
+                    skipped_unconnected_block_count,
+                ));
+                return Ok(());
+            }
 
-        push_checkpoint(
-            checkpoints,
-            ScannerCheckpoint::new(
-                accounting,
-                *applied_height,
-                *applied_tip,
-                *applied_slot,
-                best_node.same_tip_nodes.clone(),
-            ),
-        );
+            connected_to_tip = true;
+            accounting.apply_block_with_events(&block, &block_events);
+            *applied_height = applied_height.saturating_add(1);
+            *applied_tip = Some(block.header.id);
+            *applied_slot = Some(u64::from(block.header.slot));
+            applied_block_count += 1;
 
-        let wallet_utxos = accounting.wallet_utxos();
-        if *applied_height >= best_node.height
-            || (*applied_height).saturating_sub(last_publish_height) >= config.range_batch_size
-        {
-            publish_wallet_state(
-                &config.wallets,
-                &best_node.same_tip_nodes,
-                *applied_height,
-                block.header.id.to_string(),
-                wallet_utxos,
-            )
-            .map_err(|error| ScannerError::Logical(error.to_string()))?;
-            last_publish_height = *applied_height;
-        }
+            push_checkpoint(
+                checkpoints,
+                ScannerCheckpoint::new(
+                    accounting,
+                    *applied_height,
+                    *applied_tip,
+                    *applied_slot,
+                    best_node.same_tip_nodes.clone(),
+                ),
+            );
 
-        Ok(())
-    })
-    .await
-    .map_err(|error| {
-        ScannerIterationError::Step(StepError::LogicalError {
-            message: format!("wallet scanner block stream failed: {error}"),
+            let wallet_utxos = accounting.wallet_utxos();
+            if *applied_height >= best_node.height
+                || (*applied_height).saturating_sub(last_publish_height) >= config.range_batch_size
+            {
+                publish_wallet_state(
+                    &config.wallets,
+                    &best_node.same_tip_nodes,
+                    *applied_height,
+                    block.header.id.to_string(),
+                    wallet_utxos,
+                )
+                .map_err(|error| ScannerError::Logical(error.to_string()))?;
+                last_publish_height = *applied_height;
+            }
+
+            Ok(())
         })
-    })?;
+        .await
+        .map_err(|error| {
+            ScannerIterationError::Step(StepError::LogicalError {
+                message: format!("wallet scanner block stream failed: {error}"),
+            })
+        })?;
 
     if let Some(error) = continuity_error {
         return Err(ScannerIterationError::Continuity(error));
@@ -908,7 +909,7 @@ async fn verify_snapshot_rescan(
 
     let slot_from = rescan.slot.saturating_sub(rescan.blocks);
     let mut found_seed_tip = rescan.slot == 0;
-    let streamed_block_count = stream_blocks_range(client, slot_from, rescan.slot, |block| {
+    let streamed_block_count = stream_blocks_range(client, slot_from, rescan.slot, |block, _| {
         accounting.observe_block_transactions(&block);
         found_seed_tip |= block.header.id == rescan.tip;
         Ok(())
@@ -967,6 +968,7 @@ fn recent_state_checkpoints(
                 height: checkpoint.applied_height,
                 slot,
                 wallet_utxos: checkpoint.accounting.wallet_utxos(),
+                accounting: checkpoint.accounting.snapshot(),
             })
         })
         .take(PUBLISHED_SCANNER_CHECKPOINTS)
