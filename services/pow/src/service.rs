@@ -1,7 +1,6 @@
 use core::fmt::{Debug, Display};
 use std::{
     collections::{HashMap, HashSet},
-    future::ready,
     marker::PhantomData,
     num::{NonZeroU64, NonZeroUsize},
     pin::Pin,
@@ -9,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use futures::{Stream, StreamExt as _};
+use futures::{Stream, StreamExt as _, stream};
 use lb_binary_codec::bincode::{Error as CodecError, SerializeOp};
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
@@ -53,7 +52,7 @@ use lb_services_utils::{
 use lb_storage_service::{StorageService, recovery::StorageRecoveryBackend};
 use lb_time::era::EraSchedule;
 use lb_time_service::{
-    EraTick, EraTickStream, TimeService, TimeServiceMessage, backends::TimeBackend,
+    EpochSlotTickStream, SlotTick, TimeService, TimeServiceMessage, backends::TimeBackend,
 };
 use lb_utils::bounded::BoundedError;
 use lb_wallet_service::api::{WalletApi, WalletApiError, WalletServiceData};
@@ -120,10 +119,8 @@ pub enum PoWError {
     Overwatch(#[from] overwatch::overwatch::Error),
     #[error("failed to reach the time service: {0}")]
     TimeRelay(#[from] OutboundRelayError<TimeServiceMessage>),
-    #[error("the time service dropped the slot-tick subscription response: {0}")]
+    #[error("the time service dropped its response about the slot clock: {0}")]
     SlotTickSubscription(#[from] RecvError),
-    #[error("the time service's era ticks ended before telling the current era")]
-    EraTicksEnded,
     #[error(
         "PoW auto-claim targets are not tracked by the wallet (add them to `wallet.known_keys`): \
          {0:?}"
@@ -490,7 +487,7 @@ where
         // connects — it does not guarantee the peer is serving its inbound
         // queue, so a message sent too early is simply never answered. Startup
         // itself sends two: the auto-claim targets are validated against the
-        // wallet's known keys, and slot pacing subscribes to the time service's
+        // wallet's known keys, and the service subscribes to the time service's
         // slot clock. Blend is awaited on the same grounds, though it is only
         // used later, to publish claim transactions.
         wait_until_services_are_ready!(
@@ -539,12 +536,15 @@ where
         // every claim forever. Refuse to start rather than mis-pay.
         validate_claim_targets(&wallet_api, &settings.auto_claim.targets).await?;
 
-        // Whether claims pay follows the era the clock is in. A ticket keeps
-        // the reward window of the era of the epoch it was mined for, which
-        // its claim is verified under.
-        let (current_era_tick, mut era_ticks) =
-            get_era_clock::<TimeBackendType, _>(&service_resources_handle.overwatch_handle).await?;
-        let mut current_era_settings = settings.era_schedule.at_slot(current_era_tick.slot);
+        // Whether claims pay follows the era of the slot the clock is in. The
+        // same slot ticks pace slot-paced auto-claims, so such a claim is
+        // decided under the era of the slot it falls due on. A ticket keeps the
+        // reward window of the era of the epoch it was mined for, which its
+        // claim is verified under.
+        let (current_slot_tick, mut slot_ticks) =
+            get_slot_clock::<TimeBackendType, _>(&service_resources_handle.overwatch_handle)
+                .await?;
+        let mut current_era_settings = settings.era_schedule.at_slot(current_slot_tick.slot);
 
         // Dedicated thread pool for the CPU-heavy ticket search, keeping it off
         // Tokio's runtime threads.
@@ -580,15 +580,11 @@ where
         let mut auto_claiming = current_era_settings.parameters.rewards_enabled
             && !settings.auto_claim.targets.is_empty();
 
-        // One stream for either pacing, so the run loop has a single arm and
-        // neither kind needs a guard. Slot pacing rides the time service's own
-        // slot clock rather than block arrivals, so it keeps ticking through a
-        // gap in block production.
-        let mut claim_ticks = auto_claim_tick_stream::<TimeBackendType, _>(
-            settings.auto_claim.tick,
-            &service_resources_handle.overwatch_handle,
-        )
-        .await?;
+        // Second pacing runs on its own timer. Slot pacing counts the slot
+        // clock's ticks from the slot it last claimed at, `None` until its
+        // first claim, which falls due on the first slot it sees.
+        let mut claim_ticks = auto_claim_tick_stream(settings.auto_claim.tick);
+        let mut last_slot_paced_claim: Option<Slot> = None;
 
         service_resources_handle.status_updater.notify_ready();
 
@@ -596,6 +592,7 @@ where
             // Every state change happens in this loop, so refreshing here keeps
             // the generator sizing new searches against the current holdings.
             winning_tickets.set_outstanding_tickets(state.outstanding_tickets());
+            let mut claim_due = false;
             tokio::select! {
                 Some(message) = inbound_relay.recv() => {
                     match message {
@@ -683,110 +680,73 @@ where
                 Some(processed_block) = processed_blocks.next() => {
                     retire_settled_claims(&cryptarchia_api, &mut state, &state_updater, processed_block, &settings.era_schedule).await;
                 }
-                // The clock entered another era: whether claims pay follows it.
-                Some(era_tick) = era_ticks.next() => {
-                    if era_tick.era > current_era_settings.era {
-                        info!(target: LOG_TARGET, "PoW follows era {} from slot {}", era_tick.era.into_inner(), u64::from(era_tick.slot));
-                        current_era_settings = settings.era_schedule.at_slot(era_tick.slot);
+                // The clock entered a new slot: whether claims pay follows the
+                // slot's era, and a slot-paced claim falls due once a whole
+                // period has passed since the last one.
+                Some(SlotTick { era, slot, .. }) = slot_ticks.next() => {
+                    if era > current_era_settings.era {
+                        info!(target: LOG_TARGET, "PoW follows era {} from slot {}", era.into_inner(), u64::from(slot));
+                        current_era_settings = settings.era_schedule.at_slot(slot);
+                    }
+                    if let AutoClaimTick::Slots(period) = settings.auto_claim.tick
+                        && auto_claiming
+                        && last_slot_paced_claim.is_none_or(|last_claim| slot_period_elapsed(last_claim, slot, period))
+                    {
+                        last_slot_paced_claim = Some(slot);
+                        claim_due = true;
                     }
                 }
-                // Auto-claim tick: drain the ready tickets into the neediest
-                // target. Once every target is funded, stop both auto-claim
-                // and mining. An era without rewards pays no claim, so its
-                // ticks do nothing; they are still consumed, so an interval
-                // does not save them up for a later era.
                 Some(()) = claim_ticks.next(), if auto_claiming => {
-                    if current_era_settings.parameters.rewards_enabled {
-                        auto_claiming = run_auto_claim(
-                            &cryptarchia_api,
-                            &blend_api,
-                            &wallet_api,
-                            &settings.auto_claim.targets,
-                            &mut state,
-                            &state_updater,
-                            &settings.era_schedule,
-                        )
-                        .await;
-                        if !auto_claiming && is_mining {
-                            info!(target: LOG_TARGET, "Every PoW auto-claim target reached its threshold; stopping mining");
-                            is_mining = false;
-                        }
-                    }
+                    claim_due = true;
+                }
+            }
+            // Auto-claim: drain the ready tickets into the neediest target.
+            // Once every target is funded, stop both auto-claim and mining. An
+            // era without rewards pays no claim, so a claim falling due in it
+            // does nothing; its tick is still consumed, so it is not saved up
+            // for a later era.
+            if claim_due && current_era_settings.parameters.rewards_enabled {
+                auto_claiming = run_auto_claim(
+                    &cryptarchia_api,
+                    &blend_api,
+                    &wallet_api,
+                    &settings.auto_claim.targets,
+                    &mut state,
+                    &state_updater,
+                    &settings.era_schedule,
+                )
+                .await;
+                if !auto_claiming && is_mining {
+                    info!(target: LOG_TARGET, "Every PoW auto-claim target reached its threshold; stopping mining");
+                    is_mining = false;
                 }
             }
         }
     }
 }
 
-/// Builds the auto-claim ticker for the configured pacing.
+/// The ticker of second-paced auto-claims, which never ticks under slot
+/// pacing.
 ///
-/// Both kinds collapse to the same `Stream<Item = ()>` so the run loop needs a
-/// single `select!` arm. Slot pacing subscribes to the time service's slot
-/// clock rather than counting block arrivals: the two agree while the chain is
+/// Slot pacing counts the time service's slot ticks, which the run loop follows
+/// anyway, rather than block arrivals: the two agree while the chain is
 /// producing, but only the clock keeps ticking through a lull, which is when a
 /// backlog of unclaimed tickets is most likely to be sitting around.
-async fn auto_claim_tick_stream<TimeBackendType, RuntimeServiceId>(
-    tick: AutoClaimTick,
-    overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-) -> Result<Pin<Box<dyn Stream<Item = ()> + Send>>, PoWError>
-where
-    TimeBackendType: TimeBackend + Send + Sync + 'static,
-    TimeBackendType::Settings: Send + Sync,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<TimeService<TimeBackendType, RuntimeServiceId>>,
-{
+fn auto_claim_tick_stream(tick: AutoClaimTick) -> Pin<Box<dyn Stream<Item = ()> + Send>> {
     match tick {
-        AutoClaimTick::Seconds(seconds) => Ok(Box::pin(
+        AutoClaimTick::Seconds(seconds) => Box::pin(
             IntervalStream::new(tokio::time::interval(Duration::from_secs(seconds.get())))
                 .map(|_| ()),
-        )),
-        AutoClaimTick::Slots(period) => {
-            let time_relay = overwatch_handle
-                .relay::<TimeService<TimeBackendType, RuntimeServiceId>>()
-                .await?;
-            let (sender, receiver) = oneshot::channel();
-            time_relay
-                .send(TimeServiceMessage::SubscribeToEpochSlots { sender })
-                .await?;
-            let slot_ticks = receiver.await?;
-
-            // The stream emits every slot, so thin it down to one item per
-            // period. `None` fires on the first slot seen rather than waiting
-            // out a full period from an arbitrary starting point.
-            //
-            // The item is a nested `Option` on purpose: `scan` ends the stream
-            // once its closure resolves to `None`, so a skipped slot has to
-            // yield `Some(None)` to keep the ticker alive. `filter_map` then
-            // drops those inner `None`s, leaving one item per elapsed period.
-            Ok(Box::pin(
-                slot_ticks
-                    .scan(None, move |state, slot_tick| match state {
-                        Some(last_claim)
-                            if slot_period_elapsed(*last_claim, slot_tick.slot, period) =>
-                        {
-                            *state = Some(slot_tick.slot);
-                            ready(Some(Some(())))
-                        }
-                        None => {
-                            *state = Some(slot_tick.slot);
-                            ready(Some(Some(())))
-                        }
-                        _ => {
-                            // non-elapsed periods
-                            ready(Some(None))
-                        }
-                    })
-                    .filter_map(ready),
-            ))
-        }
+        ),
+        AutoClaimTick::Slots(_) => Box::pin(stream::pending()),
     }
 }
 
-/// The era the time service's clock is in, and the eras it enters from then
+/// The slot the time service's clock is in, and the slots it enters from then
 /// on.
-async fn get_era_clock<TimeBackendType, RuntimeServiceId>(
+async fn get_slot_clock<TimeBackendType, RuntimeServiceId>(
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-) -> Result<(EraTick, EraTickStream), PoWError>
+) -> Result<(SlotTick, EpochSlotTickStream), PoWError>
 where
     TimeBackendType: TimeBackend + Send + Sync + 'static,
     TimeBackendType::Settings: Send + Sync,
@@ -796,14 +756,19 @@ where
     let time_relay = overwatch_handle
         .relay::<TimeService<TimeBackendType, RuntimeServiceId>>()
         .await?;
+    // The stream only yields the ticks after it, so it is subscribed to first:
+    // a tick between the two requests is then seen twice rather than missed.
     let (sender, receiver) = oneshot::channel();
     time_relay
-        .send(TimeServiceMessage::SubscribeToEras { sender })
+        .send(TimeServiceMessage::SubscribeToEpochSlots { sender })
         .await?;
-    let mut era_ticks = receiver.await?;
-    // The stream opens with the era the clock is in.
-    let current_era = era_ticks.next().await.ok_or(PoWError::EraTicksEnded)?;
-    Ok((current_era, era_ticks))
+    let slot_ticks = receiver.await?;
+    let (sender, receiver) = oneshot::channel();
+    time_relay
+        .send(TimeServiceMessage::CurrentSlot { sender })
+        .await?;
+    let current_slot_tick = receiver.await?;
+    Ok((current_slot_tick, slot_ticks))
 }
 
 /// Whether `period` slots have passed since the last slot-paced auto-claim.
