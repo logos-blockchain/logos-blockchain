@@ -27,5 +27,8 @@ thiserror      = { workspace = true }
 tracing        = { workspace = true }
 utoipa         = { features = ["macros"], optional = true, workspace = true }
 
+[dev-dependencies]
+time = { workspace = true }
+
 [features]
 openapi = ["dep:utoipa", "lb-time/openapi"]

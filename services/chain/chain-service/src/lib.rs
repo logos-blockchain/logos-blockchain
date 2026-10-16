@@ -38,10 +38,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 pub use lb_ledger::EpochState;
-use lb_ledger::{
-    ConsensusExcludedKeys, LedgerState,
-    config::{EraScheduledConfig, config_for_slot},
-};
+use lb_ledger::{ConsensusExcludedKeys, LedgerState, config::EraScheduledConfig};
 use lb_log_targets::chain;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
@@ -393,9 +390,7 @@ impl Cryptarchia {
             consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib_id,
                 lib_parent,
-                config_for_slot(&era_schedule, lib_slot)
-                    .consensus_config
-                    .clone(),
+                Arc::new(era_schedule.map(|era| era.parameters.consensus_config.clone())),
                 state,
                 lib_slot,
                 lib_length,

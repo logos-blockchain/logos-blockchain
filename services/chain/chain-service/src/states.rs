@@ -170,7 +170,7 @@ mod tests {
 
         let ledger_config = lb_ledger::Config {
             epoch_config,
-            consensus_config: cryptarchia_engine_config.clone(),
+            consensus_config: cryptarchia_engine_config,
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
@@ -214,7 +214,10 @@ mod tests {
             // recovery mechanism.
             let mut cryptarchia = lb_cryptarchia_engine::Cryptarchia::<_>::from_genesis(
                 genesis_header_id,
-                cryptarchia_engine_config,
+                Arc::new(
+                    single_era(ledger_config.clone())
+                        .map(|era| era.parameters.consensus_config.clone()),
+                ),
                 Bootstrapping,
             );
 
@@ -350,7 +353,7 @@ mod tests {
 
         let ledger_config = lb_ledger::Config {
             epoch_config,
-            consensus_config: cryptarchia_engine_config.clone(),
+            consensus_config: cryptarchia_engine_config,
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
@@ -393,7 +396,10 @@ mod tests {
         // With security_param=2, going online will advance LIB.
         let mut engine = lb_cryptarchia_engine::Cryptarchia::<HeaderId>::from_genesis(
             genesis_header_id,
-            cryptarchia_engine_config,
+            Arc::new(
+                single_era(ledger_config.clone())
+                    .map(|era| era.parameters.consensus_config.clone()),
+            ),
             Bootstrapping,
         );
         let block_ids: Vec<HeaderId> = (1..=5u8).map(|i| [i; 32].into()).collect();
