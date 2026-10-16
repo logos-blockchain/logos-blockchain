@@ -432,11 +432,12 @@ mod tests {
     use lb_groth16::{Field as _, Fr};
 
     use super::*;
+    use crate::ServiceEraSchedule;
 
     const EXPIRY_BLOCKS: u64 = 4;
 
     /// A schedule of one era, with epochs of 100 slots and a `k` of 5.
-    fn era_schedule() -> crate::ServiceEraSchedule {
+    fn era_schedule() -> ServiceEraSchedule {
         use std::time::Duration;
 
         use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
