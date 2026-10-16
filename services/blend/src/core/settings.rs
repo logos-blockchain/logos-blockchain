@@ -33,12 +33,14 @@ pub struct CoreServiceEraSettings {
 }
 
 impl CoreServiceEraSettings {
+    #[must_use]
     pub fn epoch_core_quota(&self, membership_size: usize) -> Quota {
         self.scheduler
             .cover
             .epoch_core_quota(self.num_blend_layers, &self.time, membership_size)
     }
 
+    #[must_use]
     pub fn epoch_pow_quota(&self) -> Quota {
         self.num_blend_layers
             .get()
@@ -46,6 +48,7 @@ impl CoreServiceEraSettings {
             .expect("PoW Quota must fit within the width the `PoQ` circuit allows.")
     }
 
+    #[must_use]
     pub const fn epoch_leadership_quota(&self) -> Quota {
         let num_blend_layers = self.num_blend_layers.get();
         let additional_encapsulations = num_blend_layers

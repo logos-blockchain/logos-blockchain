@@ -66,6 +66,10 @@ pub struct ServiceConfig {
 impl ServiceConfig {
     /// The settings of the Blend services in every era of `eras`.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Era -> service config conversion function. Better to have all the logic in a single place."
+    )]
     pub fn into_blend_services_settings(
         self,
         recovery_data: RecoveryData,

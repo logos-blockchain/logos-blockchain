@@ -2413,6 +2413,7 @@ async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
 /// most visibly at startup, when the node wins the very first slot it is asked
 /// to lead. The proposal used to be encapsulated where it arrived, fail, and be
 /// dropped with an error, silently losing a block this node had just produced.
+#[expect(clippy::too_many_lines, reason = "Test function")]
 #[test_log::test(tokio::test)]
 async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
     let minimal_network_size = 2;
@@ -2703,6 +2704,7 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
 /// most visibly at startup, when the node wins the very first slot it is asked
 /// to lead. The proposal used to be encapsulated where it arrived, fail, and be
 /// dropped with an error, silently losing a block this node had just produced.
+#[expect(clippy::too_many_lines, reason = "Test function")]
 #[test_log::test(tokio::test)]
 async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     let minimal_network_size = 2;

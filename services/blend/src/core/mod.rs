@@ -1428,6 +1428,10 @@ fn apply_or_hold_secret_pol_info<NodeId, CorePoQGenerator, ProofsGenerator, Proo
 
 /// Turns an epoch event into the stage that follows, which is the only thing
 /// either stage ends on.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The rotate function inherently requires many arguments due to the complexity of epoch rotation."
+)]
 async fn rotate<
     NodeId,
     Backend,
@@ -1736,7 +1740,11 @@ async fn retire<
 /// available, leadership-proof generation is enabled on the new processor right
 /// away. It ignores the transition period expiration event and returns the
 /// previous cryptographic processor as is.
-#[expect(clippy::too_many_lines, reason = "necessary for epoch handling")]
+#[expect(
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    reason = "necessary for epoch handling"
+)]
 async fn handle_epoch_event<
     NodeId,
     ProofsGenerator,
