@@ -359,7 +359,7 @@ where
 
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn run(mut self) -> Result<(), DynError> {
-        let relays = CryptarchiaConsensusRelays::from_service_resources_handle::<
+        let mut relays = CryptarchiaConsensusRelays::from_service_resources_handle::<
             Self,
             TimeBackend,
             CryptarchiaService,
@@ -438,6 +438,19 @@ where
             receiver.await?
         };
 
+        // The mempool adapter starts in the era the clock is in, and follows
+        // the era of every slot the clock enters after it. The slot ticks are
+        // subscribed to first, so a slot that starts in between is not missed.
+        let mut current_era = {
+            let (sender, receiver) = oneshot::channel();
+            relays
+                .time_relay()
+                .send(TimeServiceMessage::CurrentSlot { sender })
+                .await
+                .expect("Request current slot to time service should succeed");
+            receiver.await?.era
+        };
+
         // Wait until the chain becomes Online mode.
         // We should not propose blocks while the chain is in Bootstrapping mode.
         info!(target: LOG_TARGET, "Waiting for chain to become online");
@@ -457,8 +470,12 @@ where
         let async_loop = async {
             loop {
                 tokio::select! {
-                    Some(SlotTick { slot, epoch, .. }) = slot_timer.next() => {
+                    Some(SlotTick { era, slot, epoch }) = slot_timer.next() => {
                         trace!(target: LOG_TARGET, "Received SlotTick for slot {}, ep {}", u64::from(slot), u32::from(epoch));
+                        if era > current_era {
+                            relays.mempool_adapter_mut().enter_era(era).await;
+                            current_era = era;
+                        }
                         let Some(SlotContext { wallet_tip, epoch_state, eligible_aged, .. }) =
                             fetch_slot_context(&cryptarchia_api, &wallet_api, &consensus_excluded_keys, slot).await
                         else {
