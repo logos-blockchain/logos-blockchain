@@ -5,7 +5,7 @@ use lb_core::{
         transactions::hash::{TxHash, TxHashPrefix},
     },
 };
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Era, Slot};
 use lb_tx_service::{MempoolMsg, TxsWithCommonPrefix};
 use overwatch::services::relay::OutboundRelay;
 use tokio::sync::oneshot;
@@ -29,6 +29,8 @@ impl<Tx> MempoolAdapterTrait<Tx> for MempoolAdapter<Tx>
 where
     Tx: Hashable<Hash = TxHash> + Send + 'static,
 {
+    async fn enter_era(&mut self, _era: Era) {}
+
     async fn add_transaction(&self, tx: Tx) -> Result<(), overwatch::DynError> {
         let (reply_sender, reply_receiver) = oneshot::channel();
         self.mempool_relay

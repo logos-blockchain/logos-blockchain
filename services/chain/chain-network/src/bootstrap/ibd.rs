@@ -829,10 +829,13 @@ mod tests {
 
         async fn new(
             _settings: Self::Settings,
+            _current_era: Era,
             _network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         ) -> Self {
             unimplemented!()
         }
+
+        async fn enter_era(&mut self, _era: Era) {}
 
         async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
             unimplemented!()
