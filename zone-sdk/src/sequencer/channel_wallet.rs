@@ -1,12 +1,7 @@
-//! Tracks the channel's note set (the ledger's `channel_notes` entries for
-//! our channel) from block data.
-//!
-//! Two layers, mirroring how [`super::state::TxState`] tracks the channel
-//! lineage: a `base` set derived from finalized blocks only (reorg-immune)
-//! and a per-block `overlay` for blocks above LIB on the tracked branch. The
-//! view at a tip is the base plus the overlay deltas of the tip's ancestor
-//! blocks, so branch changes need no revert logic — a different tip simply
-//! walks different blocks.
+//! The channel's notes (the ledger's `channel_notes` entries for our
+//! channel): extracting a block's note changes for
+//! [`super::block_states::BlockStates`] to track, and selecting notes to
+//! spend from the tracked set.
 
 use std::{
     cmp::Reverse,
@@ -14,116 +9,20 @@ use std::{
 };
 
 use lb_common_http_client::Slot;
-use lb_core::{
-    header::HeaderId,
-    mantle::{
-        SignedOps, Value,
-        ledger::{MAX_TRANSACTION_INPUTS, NoteId, verification_mode::StandardMode},
-        ops::{OpId as _, OpRef, channel::ChannelId},
-        traits::Hashable as _,
-        transactions::states::Unverified,
-    },
+use lb_core::mantle::{
+    SignedOps, Value,
+    ledger::{MAX_TRANSACTION_INPUTS, NoteId, verification_mode::StandardMode},
+    ops::{OpId as _, OpRef, channel::ChannelId},
+    traits::Hashable as _,
+    transactions::states::Unverified,
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 
-use super::types::{ChannelNote, ChannelWalletView, Error, WithdrawInputs};
+use super::{
+    block_states::NoteOp,
+    types::{ChannelNote, ChannelWalletView, Error, WithdrawInputs},
+};
 use crate::adapter::{DepositEvents, DepositOpKey};
-
-/// One channel-note mutation, in on-chain execution order.
-#[derive(Debug, Clone)]
-pub(super) enum NoteOp {
-    Add(ChannelNote),
-    Remove(NoteId),
-}
-
-/// Channel-note set tracker owned by [`super::state::TxState`].
-#[derive(Default)]
-pub(super) struct ChannelWallet {
-    /// Notes created below LIB and not spent below LIB.
-    base: HashMap<NoteId, ChannelNote>,
-    /// Note ops per unfinalized block, applied on top of `base` when viewing
-    /// a branch. Pruned alongside the block store.
-    overlay: HashMap<HeaderId, Vec<NoteOp>>,
-}
-
-impl ChannelWallet {
-    /// Apply ops from a finalized block directly to the base set.
-    pub fn apply_finalized(&mut self, ops: impl IntoIterator<Item = NoteOp>) {
-        for op in ops {
-            match op {
-                NoteOp::Add(note) => {
-                    self.base.insert(note.note_id, note);
-                }
-                NoteOp::Remove(id) => {
-                    self.base.remove(&id);
-                }
-            }
-        }
-    }
-
-    /// Record the note ops of an unfinalized block.
-    pub fn store_overlay(&mut self, block_id: HeaderId, ops: Vec<NoteOp>) {
-        if !ops.is_empty() {
-            self.overlay.insert(block_id, ops);
-        }
-    }
-
-    /// Drop a block's overlay entry (block pruned from the store).
-    pub fn prune_block(&mut self, block_id: &HeaderId) {
-        self.overlay.remove(block_id);
-    }
-
-    /// The note set at a branch tip: base plus the overlay ops of
-    /// `branch_blocks` (oldest first, LIB excluded — the base already covers
-    /// blocks at and below LIB).
-    pub fn view<'a>(&self, branch_blocks: impl Iterator<Item = &'a HeaderId>) -> ChannelWalletView {
-        let mut finalized = self.base.clone();
-        let mut unfinalized: HashMap<NoteId, ChannelNote> = HashMap::new();
-        for block_id in branch_blocks {
-            let Some(ops) = self.overlay.get(block_id) else {
-                continue;
-            };
-            for op in ops {
-                match op {
-                    NoteOp::Add(note) => {
-                        unfinalized.insert(note.note_id, note.clone());
-                    }
-                    NoteOp::Remove(id) => {
-                        finalized.remove(id);
-                        unfinalized.remove(id);
-                    }
-                }
-            }
-        }
-        ChannelWalletView {
-            finalized: finalized.into_values().collect(),
-            unfinalized: unfinalized.into_values().collect(),
-        }
-    }
-
-    /// Export the base set for checkpointing.
-    pub fn export_base(&self) -> Vec<ChannelNote> {
-        self.base.values().cloned().collect()
-    }
-
-    /// Restore the base set from a checkpoint.
-    pub fn restore_base(&mut self, notes: Vec<ChannelNote>) {
-        self.base = notes.into_iter().map(|n| (n.note_id, n)).collect();
-    }
-
-    /// Find a tracked note by id, anywhere in the wallet (the finalized base
-    /// or any unfinalized overlay). A `NoteId` is a content commitment, so
-    /// `id → (value, pk)` is a function and any tracked copy is authoritative
-    /// regardless of branch — enough to recover a consumed note's value/key.
-    pub(super) fn find_note(&self, id: &NoteId) -> Option<&ChannelNote> {
-        self.base.get(id).or_else(|| {
-            self.overlay.values().flatten().find_map(|op| match op {
-                NoteOp::Add(note) if note.note_id == *id => Some(note),
-                NoteOp::Add(_) | NoteOp::Remove(_) => None,
-            })
-        })
-    }
-}
 
 /// Extract the channel-note ops of a block's transactions for `channel_id`,
 /// in tx-then-op (execution) order.
@@ -354,7 +253,6 @@ mod tests {
     use lb_groth16::Fr;
 
     use super::*;
-    use crate::test_support::header_id;
 
     fn note_id(seed: u64) -> NoteId {
         NoteId::from(Fr::from(seed))
@@ -525,61 +423,6 @@ mod tests {
 
         assert_eq!(removed(&ops), vec![note_id(10)]);
         assert_eq!(added(&ops), Vec::<&ChannelNote>::new());
-    }
-
-    fn add(seed: u64, value: Value) -> NoteOp {
-        NoteOp::Add(ChannelNote {
-            note_id: note_id(seed),
-            value,
-            pk: zk_pk(seed),
-            slot: Slot::from(1),
-        })
-    }
-
-    #[test]
-    fn view_layers_overlay_over_base_per_branch() {
-        let mut wallet = ChannelWallet::default();
-        wallet.apply_finalized(vec![add(1, 10)]);
-        // Branch A spends the base note and adds a new one; branch B adds a
-        // different note and leaves the base untouched.
-        wallet.store_overlay(header_id(1), vec![NoteOp::Remove(note_id(1)), add(2, 20)]);
-        wallet.store_overlay(header_id(2), vec![add(3, 30)]);
-
-        let at_a = wallet.view(std::iter::once(&header_id(1)));
-        assert!(at_a.finalized.is_empty(), "base note spent on branch A");
-        assert_eq!(at_a.unfinalized.len(), 1);
-        assert_eq!(at_a.unfinalized[0].note_id, note_id(2));
-
-        let at_b = wallet.view(std::iter::once(&header_id(2)));
-        assert_eq!(at_b.finalized.len(), 1);
-        assert_eq!(at_b.finalized[0].note_id, note_id(1));
-        assert_eq!(at_b.unfinalized.len(), 1);
-        assert_eq!(at_b.unfinalized[0].note_id, note_id(3));
-    }
-
-    #[test]
-    fn unfinalized_note_spent_within_the_branch_never_surfaces() {
-        let mut wallet = ChannelWallet::default();
-        wallet.store_overlay(header_id(1), vec![add(1, 10)]);
-        wallet.store_overlay(header_id(2), vec![NoteOp::Remove(note_id(1))]);
-
-        let view = wallet.view([header_id(1), header_id(2)].iter());
-        assert_eq!(view.finalized, []);
-        assert_eq!(view.unfinalized, []);
-    }
-
-    #[test]
-    fn export_restore_roundtrip() {
-        let mut wallet = ChannelWallet::default();
-        wallet.apply_finalized(vec![add(1, 10), add(2, 20)]);
-        let mut exported = wallet.export_base();
-        exported.sort_by_key(|n| n.note_id);
-
-        let mut restored = ChannelWallet::default();
-        restored.restore_base(exported.clone());
-        let mut roundtripped = restored.export_base();
-        roundtripped.sort_by_key(|n| n.note_id);
-        assert_eq!(exported, roundtripped);
     }
 
     fn note(seed: u64, value: Value, pk: ZkPublicKey) -> ChannelNote {
