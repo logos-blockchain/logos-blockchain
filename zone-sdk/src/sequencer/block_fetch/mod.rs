@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use lb_common_http_client::{ApiBlock, ProcessedBlockEvent, Slot};
 use lb_core::{
@@ -26,7 +29,7 @@ use tracing::{debug, error};
 
 use super::{
     TARGET,
-    block_states::{BlockChannelTx, NoteOp},
+    block_states::{BlockChannelTx, NoteOp, SharedTx},
     channel_wallet::note_ops_from_txs,
     state::{ChannelUpdateInfo, PendingBundle, TxState},
     types::{
@@ -48,13 +51,50 @@ pub(super) struct BlockEventResult {
     /// inscription+withdraw bundle).
     pub(super) finalized_items: Vec<FinalizedTx>,
     pub(super) channel_update: Option<ChannelUpdateInfo>,
-    /// The view above LIB minus `adopted`, in lineage order.
-    pub(super) common_prefix: Vec<ChannelUpdateTx>,
+    /// What the view held before this event, for [`common_prefix`].
+    pub(super) view_before: ViewBefore,
     /// Channel deposits observed in the blocks this event covers (canonical
     /// backfill first, then the live block), in block and op order. Surfaced
     /// non-finalized on `Event::BlocksProcessed` so a consumer can pin a
     /// deposit without waiting for finalization.
     pub(super) deposits: Vec<DepositInfo>,
+}
+
+/// The ids of the view before a block event: its lineage entries by tx hash
+/// and message id, and the message ids the event finalized.
+#[derive(Debug, Default)]
+pub(super) struct ViewBefore {
+    old_txs: HashSet<TxHash>,
+    old_msgs: HashSet<MsgId>,
+    finalized_now: HashSet<MsgId>,
+}
+
+/// The part of the view at `tip` that was already in the view before the
+/// event, in lineage order: LIB to the fork point, then the pending tail
+/// still chaining on it. A pending entry survives a branch change only by
+/// chaining on the fork point, since anything adopted above it takes its
+/// slot and sheds it. Matched by message or config id; by tx hash for an
+/// entry carrying neither. Built only for a [`ChannelUpdate::Conflict`].
+///
+/// [`ChannelUpdate::Conflict`]: super::types::ChannelUpdate::Conflict
+pub(super) fn common_prefix(
+    state: &TxState,
+    tip: HeaderId,
+    channel_id: ChannelId,
+    before: &ViewBefore,
+) -> Vec<ChannelUpdateTx> {
+    state
+        .channel_view_txs(tip, &before.finalized_now)
+        .into_iter()
+        .filter(|tx| {
+            let mut ids = update_tx_msg_ids(tx, channel_id).peekable();
+            if ids.peek().is_some() {
+                ids.any(|id| before.old_msgs.contains(&id))
+            } else {
+                before.old_txs.contains(&tx.tx_hash())
+            }
+        })
+        .collect()
 }
 
 struct PreparedBlockEvent<'a> {
@@ -71,6 +111,8 @@ struct PreparedBlockEvent<'a> {
     /// `canonical_backfill` and applied after the event block.
     tip_backfill: Vec<(ApiBlock, Vec<NoteOp>)>,
     our_txs: Vec<TxHash>,
+    /// The live block's channel txs, shared with the store and pending.
+    signed_txs: Vec<SharedTx>,
     channel_txs: Vec<BlockChannelTx>,
     /// Channel-note ops of the live block, computed in the prepare phase.
     note_ops: Vec<NoteOp>,
@@ -149,7 +191,8 @@ where
         .filter(|tx| touches_channel_tip(tx, channel_id))
         .map(|tx| tx.op_refs().hash())
         .collect();
-    let channel_txs = classify_channel_txs(&event.block.transactions, channel_id);
+    let signed_txs = shared_channel_txs(&event.block.transactions, channel_id);
+    let channel_txs = classify_channel_txs(&signed_txs, channel_id);
 
     // Deposit events + wallet note ops for the live block: fetched here (the
     // prepare phase) so the apply phase mutates state without any `.await`.
@@ -206,6 +249,7 @@ where
         canonical_backfill,
         tip_backfill,
         our_txs,
+        signed_txs,
         channel_txs,
         note_ops,
         deposits,
@@ -248,6 +292,7 @@ fn apply_prepared_block_event(
         canonical_backfill,
         tip_backfill,
         our_txs,
+        signed_txs,
         mut channel_txs,
         note_ops,
         deposits,
@@ -286,18 +331,15 @@ fn apply_prepared_block_event(
 
     // Re-type unsound pin-deposits to `Custom` before they are stored
     // or mirrored, so both the `adopted` surface and the pending set agree.
-    demote_non_identity_pin_deposits(&mut channel_txs, &block.transactions, channel_id, s);
+    demote_non_identity_pin_deposits(&mut channel_txs, &signed_txs, channel_id, s);
 
     // Pending = canonical channel txs above LIB + our own unmined publishes:
     // mirror only the canonical tip; a fork's content joins from the store if
     // its branch wins.
     if block.header.id == tip {
-        mirror_channel_txs(s, &channel_txs, &block.transactions, channel_id);
+        mirror_channel_txs(s, &channel_txs, &signed_txs, channel_id);
     }
-    s.store_block_signed_txs(
-        block.header.id,
-        mirrorable_txs(&channel_txs, &block.transactions),
-    );
+    s.store_block_signed_txs(block.header.id, signed_txs);
 
     // Process the actual event block
     s.process_block(
@@ -351,31 +393,16 @@ fn apply_prepared_block_event(
         update
     });
 
-    // LIB to the fork point, then the pending tail still chaining on it: what
-    // the view had before this event. A pending entry survives a branch
-    // change only by chaining on the fork point, since anything adopted
-    // above it takes its slot and sheds it.
-    // Matched by message or config id; by tx hash for an entry carrying
-    // neither.
-    let old_txs: HashSet<TxHash> = old_lineage.iter().map(|info| info.tx_hash).collect();
-    let old_msgs: HashSet<MsgId> = old_lineage.iter().map(|info| info.this_msg).collect();
-    let common_prefix = s
-        .channel_view_txs(tip, &finalized_now)
-        .into_iter()
-        .filter(|tx| {
-            let mut ids = update_tx_msg_ids(tx, channel_id).peekable();
-            if ids.peek().is_some() {
-                ids.any(|id| old_msgs.contains(&id))
-            } else {
-                old_txs.contains(&tx.tx_hash())
-            }
-        })
-        .collect();
+    let view_before = ViewBefore {
+        old_txs: old_lineage.iter().map(|info| info.tx_hash).collect(),
+        old_msgs: old_lineage.iter().map(|info| info.this_msg).collect(),
+        finalized_now,
+    };
 
     BlockEventResult {
         finalized_items: finalized_batch.items,
         channel_update,
-        common_prefix,
+        view_before,
         deposits,
     }
 }
@@ -404,10 +431,10 @@ fn mirror_branch_from_store(s: &mut TxState, tip: HeaderId, channel_id: ChannelI
 fn mirror_channel_txs(
     state: &mut TxState,
     classified: &[BlockChannelTx],
-    transactions: &[SignedOps<Unverified, StandardMode>],
+    transactions: &[SharedTx],
     channel_id: ChannelId,
 ) {
-    let by_hash: HashMap<TxHash, &SignedOps<Unverified, StandardMode>> =
+    let by_hash: HashMap<TxHash, &SharedTx> =
         transactions.iter().map(|tx| (tx.hash(), tx)).collect();
     for block_tx in classified {
         let (info, bundle) = match block_tx {
@@ -430,7 +457,7 @@ fn mirror_channel_txs(
                 let tx = by_hash
                     .get(&tx_hash)
                     .expect("classified entries come from these transactions");
-                state.observe_other_tx((*tx).clone(), channel_id);
+                state.observe_other_tx(Arc::clone(tx), channel_id);
                 continue;
             }
         };
@@ -438,7 +465,7 @@ fn mirror_channel_txs(
             .get(&info.tx_hash)
             .expect("classified entries come from these transactions");
         state.observe_channel_inscription(
-            (*tx).clone(),
+            Arc::clone(tx),
             info.parent_msg,
             info.this_msg,
             info.payload.clone(),
@@ -453,11 +480,11 @@ fn mirror_channel_txs(
 /// deposit. Runs before the classification is stored or mirrored.
 fn demote_non_identity_pin_deposits(
     channel_txs: &mut [BlockChannelTx],
-    transactions: &[SignedOps<Unverified, StandardMode>],
+    transactions: &[SharedTx],
     channel_id: ChannelId,
     state: &TxState,
 ) {
-    let by_hash: HashMap<TxHash, &SignedOps<Unverified, StandardMode>> =
+    let by_hash: HashMap<TxHash, &SharedTx> =
         transactions.iter().map(|tx| (tx.hash(), tx)).collect();
     for block_tx in channel_txs.iter_mut() {
         let BlockChannelTx::PinDeposit(a) = block_tx else {
@@ -468,7 +495,7 @@ fn demote_non_identity_pin_deposits(
             .expect("classified entries come from these transactions");
         if !is_identity_deposit_transfer(state, tx, channel_id) {
             *block_tx = BlockChannelTx::Custom {
-                tx: (*tx).clone(),
+                tx: Arc::clone(tx),
                 message_entries: vec![a.inscription.clone()],
                 config_entries: Vec::new(),
             };
@@ -656,18 +683,14 @@ where
             .map(|tx| tx.op_refs().hash())
             .collect();
 
-        let mut channel_txs = classify_channel_txs(&block.transactions, channel_id);
+        let signed_txs = shared_channel_txs(&block.transactions, channel_id);
+        let mut channel_txs = classify_channel_txs(&signed_txs, channel_id);
         // Below-LIB blocks feed the lineage walk too, so on first sync (empty
         // old lineage) they surface as `adopted` — demote here as well. A
         // same-batch deposit isn't applied yet, so its inscription can only
         // under-label to `Custom`, which is safe.
         if let Some(state) = state {
-            demote_non_identity_pin_deposits(
-                &mut channel_txs,
-                &block.transactions,
-                channel_id,
-                state,
-            );
+            demote_non_identity_pin_deposits(&mut channel_txs, &signed_txs, channel_id, state);
         }
 
         // Fetch + validate deposit events for this block BEFORE mutating
@@ -1056,28 +1079,25 @@ fn apply_backfilled_block(
         .map(|tx| tx.op_refs().hash())
         .collect();
 
-    let mut channel_txs = classify_channel_txs(&block.transactions, channel_id);
-    demote_non_identity_pin_deposits(&mut channel_txs, &block.transactions, channel_id, state);
+    let signed_txs = shared_channel_txs(&block.transactions, channel_id);
+    let mut channel_txs = classify_channel_txs(&signed_txs, channel_id);
+    demote_non_identity_pin_deposits(&mut channel_txs, &signed_txs, channel_id, state);
 
-    let mirrorable = mirrorable_txs(&channel_txs, &block.transactions);
     // Use current state lib to avoid premature finalization
     state.process_block(block_id, parent_id, lib, our_txs, channel_txs, note_ops);
-    state.store_block_signed_txs(block_id, mirrorable);
+    state.store_block_signed_txs(block_id, signed_txs);
 }
 
-/// The block's txs the mirror re-posts: every classified channel tx.
-fn mirrorable_txs(
-    classified: &[BlockChannelTx],
+/// The block's channel txs (any tip-advancing op for the channel), each
+/// owned once: the store, the pending set and a `Custom` entry share them.
+fn shared_channel_txs(
     transactions: &[SignedOps<Unverified, StandardMode>],
-) -> Vec<SignedOps<Unverified, StandardMode>> {
-    let mirrorable: HashSet<TxHash> = classified
-        .iter()
-        .filter_map(BlockChannelTx::tx_hash)
-        .collect();
+    channel_id: ChannelId,
+) -> Vec<SharedTx> {
     transactions
         .iter()
-        .filter(|tx| mirrorable.contains(&tx.hash()))
-        .cloned()
+        .filter(|tx| touches_channel_tip(tx, channel_id))
+        .map(|tx| Arc::new(tx.clone()))
         .collect()
 }
 
@@ -1095,10 +1115,7 @@ fn mirrorable_txs(
 /// must equal the running in-block tip. A mismatch panics rather than
 /// silently re-deriving order, because the same node bug could produce an
 /// undetectable mis-ordering elsewhere.
-fn classify_channel_txs(
-    txs: &[SignedOps<Unverified, StandardMode>],
-    channel_id: ChannelId,
-) -> Vec<BlockChannelTx> {
+fn classify_channel_txs(txs: &[SharedTx], channel_id: ChannelId) -> Vec<BlockChannelTx> {
     // Running in-block channel tip, for the chain-order assertion.
     let mut block_tip: Option<MsgId> = None;
     txs.iter()
@@ -1108,7 +1125,7 @@ fn classify_channel_txs(
 
 /// Classify one tx's channel ops; `None` when the tx has no tip-advancing op.
 pub(super) fn classify_channel_tx(
-    tx: &SignedOps<Unverified, StandardMode>,
+    tx: &SharedTx,
     channel_id: ChannelId,
     block_tip: &mut Option<MsgId>,
 ) -> Option<BlockChannelTx> {
@@ -1213,7 +1230,7 @@ pub(super) fn classify_channel_tx(
             BlockChannelTx::Config(config_entries.pop().expect("exactly one config entry"))
         } else {
             BlockChannelTx::Custom {
-                tx: tx.clone(),
+                tx: Arc::clone(tx),
                 message_entries: entries,
                 config_entries,
             }
@@ -1245,10 +1262,8 @@ pub(super) fn is_pure_config<Mode: VerificationMode>(
 
 /// Type a shed pending tx for orphan reporting: a config-only tx as
 /// [`ChannelUpdateTx::Config`], anything else as [`ChannelUpdateTx::Custom`].
-pub(super) fn classify_shed_other(
-    tx: SignedOps<Unverified, StandardMode>,
-    channel_id: ChannelId,
-) -> ChannelUpdateTx {
+pub(super) fn classify_shed_other(tx: SharedTx, channel_id: ChannelId) -> ChannelUpdateTx {
+    let tx = Arc::unwrap_or_clone(tx);
     if is_pure_config(&tx, channel_id) {
         ChannelUpdateTx::Config(tx)
     } else {

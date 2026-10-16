@@ -24,6 +24,7 @@ use tokio::sync::{mpsc, watch};
 
 use super::{
     super::{
+        block_fetch::ViewBefore,
         state::PendingBundle,
         types::{FinalizedOp, InscriptionInfo, SequencerConfig},
         zone_sequencer::track_pending_tx,
@@ -1619,7 +1620,7 @@ async fn stream_gap_surfaces_backfilled_inscriptions_as_adopted() {
 }
 
 /// The variant follows `orphaned`: nothing orphaned is an extension,
-/// otherwise a conflict whose prefix excludes the orphaned entries.
+/// otherwise a conflict, whose prefix is read from the state at the tip.
 #[tokio::test]
 async fn update_variant_follows_orphaned() {
     let channel_id = ChannelId::from([0; 32]);
@@ -1648,7 +1649,7 @@ async fn update_variant_follows_orphaned() {
             adopted,
             new_channel_tip: MsgId::root(),
         }),
-        common_prefix: vec![entry(1), entry(2)],
+        view_before: ViewBefore::default(),
         deposits: Vec::new(),
     };
 
@@ -1666,7 +1667,7 @@ async fn update_variant_follows_orphaned() {
     };
     let hashes =
         |txs: &[ChannelUpdateTx]| txs.iter().map(ChannelUpdateTx::tx_hash).collect::<Vec<_>>();
-    assert_eq!(hashes(&common_prefix), hashes(&[entry(1)]));
+    assert!(common_prefix.is_empty(), "no view at a tip yet");
     assert_eq!(hashes(&adopted), hashes(&[entry(3)]));
     assert_eq!(hashes(&orphaned), hashes(&[entry(2)]));
 }
