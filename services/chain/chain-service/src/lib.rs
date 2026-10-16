@@ -15,6 +15,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
     pin::Pin,
+    sync::Arc,
     time::Duration,
 };
 
@@ -37,7 +38,10 @@ use lb_core::{
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 pub use lb_ledger::EpochState;
-use lb_ledger::LedgerState;
+use lb_ledger::{
+    ConsensusExcludedKeys, LedgerState,
+    config::{EraScheduledConfig, config_for_slot},
+};
 use lb_log_targets::chain;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
@@ -201,7 +205,7 @@ pub enum Query {
         slot: Slot,
         reply_channel: oneshot::Sender<Result<EpochStateQueryResult, Error>>,
     },
-    GetEpochConfig {
+    GetTipEpochConfig {
         reply_channel: oneshot::Sender<(
             lb_cryptarchia_engine::EpochConfig,
             lb_cryptarchia_engine::Config,
@@ -352,7 +356,7 @@ impl Cryptarchia {
     pub fn from_genesis(
         genesis_id: HeaderId,
         genesis_ledger_state: LedgerState,
-        ledger_config: lb_ledger::Config,
+        era_schedule: Arc<EraScheduledConfig>,
         state: State,
     ) -> Self {
         Self::from_lib(
@@ -360,7 +364,7 @@ impl Cryptarchia {
             genesis_id,
             genesis_ledger_state,
             genesis_id,
-            ledger_config,
+            era_schedule,
             state,
             Slot::genesis(),
             0,
@@ -379,7 +383,7 @@ impl Cryptarchia {
         lib_parent: HeaderId,
         lib_ledger_state: LedgerState,
         genesis_id: HeaderId,
-        ledger_config: lb_ledger::Config,
+        era_schedule: Arc<EraScheduledConfig>,
         state: State,
         lib_slot: Slot,
         lib_length: u64,
@@ -389,13 +393,15 @@ impl Cryptarchia {
             consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib_id,
                 lib_parent,
-                ledger_config.consensus_config.clone(),
+                config_for_slot(&era_schedule, lib_slot)
+                    .consensus_config
+                    .clone(),
                 state,
                 lib_slot,
                 lib_length,
                 lib_uncle_slots,
             ),
-            ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, ledger_config),
+            ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, era_schedule),
             genesis_id,
         }
     }
@@ -546,11 +552,9 @@ impl Cryptarchia {
         let tip = self.tip_branch();
         let lib = self.lib_branch();
         let state = self.ledger.state(&tip.id()).expect("no state for tip");
-        let config = self.ledger.config();
-        let epoch_state = state.epoch_state_for_slot(slot, config)?;
-        let requested_epoch = config
-            .epoch_config
-            .epoch(slot, config.consensus_config.base_period_length());
+        let eras = self.ledger.era_schedule();
+        let epoch_state = state.epoch_state_for_slot(slot, eras)?;
+        let requested_epoch = eras.epoch_for_slot(slot);
 
         Ok(EpochStateQueryResult {
             requested_slot: slot,
@@ -616,13 +620,13 @@ impl Cryptarchia {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct CryptarchiaSettings {
-    pub config: lb_ledger::Config,
+    pub era_schedule: Arc<EraScheduledConfig>,
+    pub consensus_excluded_keys: ConsensusExcludedKeys,
     pub starting_state: StartingState,
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
-    #[serde(skip)]
     pub recovery_data: RecoveryData,
 }
 
@@ -725,7 +729,7 @@ where
             .await;
 
         let CryptarchiaSettings {
-            config: ledger_config,
+            era_schedule,
             bootstrap: bootstrap_config,
             starting_state,
             sync: sync_config,
@@ -754,7 +758,7 @@ where
         } = Self::initialize_cryptarchia(
             &self.state,
             &bootstrap_config,
-            ledger_config.clone(),
+            era_schedule,
             &relays,
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,
@@ -995,7 +999,7 @@ where
     async fn initialize_cryptarchia(
         recovery_state: &CryptarchiaConsensusState,
         bootstrap_config: &BootstrapConfig,
-        ledger_config: lb_ledger::Config,
+        era_schedule: Arc<EraScheduledConfig>,
         relays: &CryptarchiaConsensusRelays<Tx>,
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,
@@ -1017,7 +1021,7 @@ where
 
         let mut cryptarchia = Self::cryptarchia_from_recovered_lib(
             recovery_state,
-            ledger_config,
+            era_schedule,
             state,
             relays.storage(),
         )
@@ -1105,7 +1109,7 @@ where
     /// storage.
     async fn cryptarchia_from_recovered_lib(
         recovery_state: &CryptarchiaConsensusState,
-        ledger_config: lb_ledger::Config,
+        era_schedule: Arc<EraScheduledConfig>,
         state: State,
         storage: &StorageApi<Tx>,
     ) -> Result<Cryptarchia, Error> {
@@ -1115,7 +1119,7 @@ where
             return Ok(Cryptarchia::from_genesis(
                 genesis_id,
                 recovery_state.lib_ledger_state.clone(),
-                ledger_config,
+                era_schedule,
                 state,
             ));
         }
@@ -1129,7 +1133,7 @@ where
             lib_parent,
             recovery_state.lib_ledger_state.clone(),
             genesis_id,
-            ledger_config,
+            era_schedule,
             state,
             recovery_state.lib_block_slot,
             recovery_state.lib_block_length,

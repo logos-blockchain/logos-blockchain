@@ -83,8 +83,12 @@ impl ServiceState for CryptarchiaConsensusState {
         let genesis_id = genesis_block.header().id();
         let genesis_tx = genesis_block.genesis_tx();
         let epoch_nonce = genesis_tx.cryptarchia_parameter().epoch_nonce;
-        let (lib_ledger_state, _events) =
-            LedgerState::from_genesis_tx(genesis_tx.clone(), &settings.config, epoch_nonce)?;
+        let (lib_ledger_state, _events) = LedgerState::from_genesis_tx(
+            genesis_tx.clone(),
+            settings.era_schedule.genesis().parameters,
+            &settings.consensus_excluded_keys,
+            epoch_nonce,
+        )?;
 
         Ok(Self {
             tip: genesis_id,
@@ -117,12 +121,13 @@ mod tests {
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
     use lb_ledger::{
-        config::{BlendPoWConfig, ConsensusExcludedKeys, ModulusShift, PoWConfig, RewardPoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
     use super::*;
+    use crate::tests::single_era;
 
     /// A reward config with claiming disabled, standing in for a real
     /// deployment config in tests.
@@ -192,7 +197,6 @@ mod tests {
                     timestamp: 0,
                 },
             },
-            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -298,7 +302,7 @@ mod tests {
         let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
             LedgerState::from_utxos([], &ledger_config),
-            ledger_config,
+            single_era(ledger_config),
         );
 
         // Build [`CryptarchiaConsensusState`] with the pruned blocks.
@@ -373,7 +377,6 @@ mod tests {
                     timestamp: 0,
                 },
             },
-            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -419,7 +422,7 @@ mod tests {
             ledger: lb_ledger::Ledger::new(
                 lib_id,
                 LedgerState::from_utxos([], &ledger_config),
-                ledger_config.clone(),
+                single_era(ledger_config.clone()),
             ),
             genesis_id: genesis_header_id,
         };
@@ -441,7 +444,7 @@ mod tests {
             engine.lib_branch().parent(),
             saved_state.lib_ledger_state.clone(),
             saved_state.genesis_id,
-            ledger_config,
+            single_era(ledger_config),
             *engine.state(),
             saved_state.lib_block_slot,
             saved_state.lib_block_length,

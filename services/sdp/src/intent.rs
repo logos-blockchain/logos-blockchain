@@ -172,7 +172,7 @@ mod tests {
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_ledger::{
         Intent,
-        config::{BlendPoWConfig, ConsensusExcludedKeys, ModulusShift, PoWConfig, RewardPoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
@@ -549,7 +549,6 @@ mod tests {
                         timestamp: 0,
                     },
                 },
-                consensus_excluded_keys: ConsensusExcludedKeys::empty(),
                 pow_config: PoWConfig {
                     reward: disabled_reward_config(),
                     blend: BlendPoWConfig {

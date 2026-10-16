@@ -4,6 +4,8 @@ pub mod leader;
 pub mod pow;
 pub mod sdp;
 
+use std::num::NonZeroU64;
+
 use lb_core::{
     crypto::{Hash, ZkHasher},
     events::TxEvent,
@@ -25,13 +27,17 @@ use lb_core::{
     },
     sdp::service_notes::ServiceNotes,
 };
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_log_targets::ledger;
 use lb_mmr::MerkleMountainRange;
 use sdp::Error as SdpLedgerError;
 use tracing::error;
 
-use crate::{Config, EpochState, UtxoTree, mantle::sdp::HeaderEffect};
+use crate::{
+    Config, EpochState, UtxoTree,
+    config::{EraScheduledConfig, config_for_epoch},
+    mantle::sdp::HeaderEffect,
+};
 
 const LOG_TARGET: &str = ledger::mantle::ROOT;
 
@@ -153,12 +159,17 @@ impl LedgerState {
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
         voucher: VoucherCm,
-        config: &Config,
+        eras: &EraScheduledConfig,
     ) -> Result<(Self, HeaderEffect), Error> {
+        let last_config = config_for_epoch(eras, last_epoch_state.epoch);
+        let config = config_for_epoch(eras, epoch_state.epoch);
         self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
-        let (new_sdp, effect) =
-            self.sdp
-                .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
+        let (new_sdp, effect) = self.sdp.try_apply_header(
+            &last_config.sdp_config,
+            &config.sdp_config,
+            last_epoch_state,
+            epoch_state,
+        )?;
         self.sdp = new_sdp;
         self.pow = self
             .pow
@@ -168,18 +179,18 @@ impl LedgerState {
 
     /// Record a newly applied block among the recently seen blocks that
     /// `PoW` reward claims may anchor to, pruning entries that aged out of
-    /// the acceptance window.
+    /// every acceptance window a claim in this block or a later one is
+    /// judged under.
     ///
     /// This runs only on the canonical apply path, where the block's id is
     /// known — a proposer applying the header of a block it is still
     /// building has no id to record (and that block's transactions cannot
     /// anchor to it anyway).
-    pub fn add_seen_block(&mut self, block_hash: Hash, slot: Slot, config: &Config) {
+    pub fn add_seen_block(&mut self, block_hash: Hash, slot: Slot, eras: &EraScheduledConfig) {
+        let slot_window = pow_claim_retention_window(eras, slot);
         self.pow.add_seen_block_slots(block_hash, slot);
-        self.pow
-            .prune_seen_block_slots(slot, config.pow_config.reward.slot_window);
-        self.pow
-            .prune_nullifiers_by_slots(slot, config.pow_config.reward.slot_window);
+        self.pow.prune_seen_block_slots(slot, slot_window);
+        self.pow.prune_nullifiers_by_slots(slot, slot_window);
     }
 
     pub fn try_apply_channel_inscription(
@@ -264,5 +275,52 @@ impl LedgerState {
             )?;
         self.sdp = result;
         Ok((self, events))
+    }
+}
+
+/// The largest acceptance window, in slots, a `PoW` reward claim in a block at
+/// `slot` or in a later block is judged under: a claim is judged under the era
+/// of the epoch it is for, the epoch of its block or the one before, so the
+/// window of the era of the epoch before `slot`'s and of every era after it.
+/// No such claim can reference a block older than that.
+fn pow_claim_retention_window(eras: &EraScheduledConfig, slot: Slot) -> NonZeroU64 {
+    let previous_epoch = Epoch::new(eras.epoch_for_slot(slot).into_inner().saturating_sub(1));
+    let first_era = eras.at_epoch(previous_epoch).era;
+    eras.iter()
+        .filter(|era| era.era >= first_era)
+        .map(|era| era.parameters.pow_config.reward.slot_window)
+        .max()
+        .expect("the era of the previous epoch is scheduled")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{cryptarchia::tests::config, test_utils::schedule};
+
+    #[test]
+    fn the_retention_window_is_the_largest_of_the_previous_epoch_and_every_later_era() {
+        let with_window = |slot_window| {
+            let mut config = config();
+            config.pow_config.reward.slot_window = NonZeroU64::new(slot_window).unwrap();
+            config
+        };
+        // Epochs of 100 slots: era 1 from epoch 2, era 2 from epoch 4.
+        let eras = schedule(
+            with_window(50),
+            [(2, with_window(10)), (4, with_window(30))],
+        );
+        let retention_window =
+            |slot: u64| pow_claim_retention_window(&eras, Slot::from(slot)).get();
+
+        // Epoch 2, the first of era 1, keeps the window of era 0 for the
+        // claims for epoch 1.
+        assert_eq!(retention_window(250), 50);
+        // Epoch 3, the last of era 1, keeps the larger window of era 2 for the
+        // claims of the blocks after it.
+        assert_eq!(retention_window(350), 30);
+        // Epoch 5, whose previous epoch is of era 2 too, no longer keeps the
+        // larger window of era 0.
+        assert_eq!(retention_window(550), 30);
     }
 }

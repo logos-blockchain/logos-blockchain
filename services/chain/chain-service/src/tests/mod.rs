@@ -27,13 +27,13 @@ use lb_core::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
     sdp::ServiceParameters,
 };
-use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
+use lb_cryptarchia_engine::{EpochConfig, EraSchedule, Slot, UncleSlots};
 use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 use lb_ledger::{
     LedgerState,
-    config::{BlendPoWConfig, ConsensusExcludedKeys, ModulusShift, PoWConfig, RewardPoWConfig},
+    config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use lb_storage_service::{
@@ -42,6 +42,7 @@ use lb_storage_service::{
     backend::StorageBackend as _,
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
+use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraTiming};
 use lb_time_service::backends::SystemTimeBackend;
 use lb_utils::{bounded::BoundedVec, math::NonNegativeRatio};
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
@@ -69,7 +70,7 @@ fn cryptarchia_switch_to_online() {
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
         LedgerState::from_utxos([utxo], &config),
-        config,
+        single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     );
 
@@ -147,7 +148,7 @@ async fn get_block_ids_from_memory_and_storage() {
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
         LedgerState::from_utxos([utxo], &config),
-        config,
+        single_era(config),
         lb_cryptarchia_engine::State::Online,
     );
 
@@ -363,7 +364,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
     >::initialize_cryptarchia(
         &recovery_state,
         &bootstrap_config,
-        stored.ledger.config().clone(),
+        Arc::clone(stored.ledger.era_schedule()),
         &relays,
         &new_block_tx,
         &lib_tx,
@@ -453,7 +454,7 @@ async fn recovery_chain_with_tip_ahead_of_current_slot() {
     >::initialize_cryptarchia(
         &recovery_state,
         &bootstrap_config,
-        stored.ledger.config().clone(),
+        Arc::clone(stored.ledger.era_schedule()),
         &relays,
         &new_block_tx,
         &lib_tx,
@@ -568,7 +569,7 @@ async fn get_block_ids_past_recovered_lib() {
     >::initialize_cryptarchia(
         &recovery_state,
         &bootstrap_config,
-        stored.ledger.config().clone(),
+        Arc::clone(stored.ledger.era_schedule()),
         &relays,
         &new_block_tx,
         &lib_tx,
@@ -667,7 +668,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
             [leader_utxo, funding_utxo_a, funding_utxo_b, funding_utxo_c],
             &config,
         ),
-        config,
+        single_era(config),
         lb_cryptarchia_engine::State::Online,
     );
     let tx1 = burn_tx(funding_utxo_a, &zk_key);
@@ -752,7 +753,7 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
         LedgerState::from_utxos([utxo], &config),
-        config,
+        single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     );
 
@@ -833,7 +834,7 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, St
     let cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
         LedgerState::from_utxos([utxo], &config),
-        config,
+        single_era(config),
         lb_cryptarchia_engine::State::Online,
     );
     let (block, _) = try_build_block(
@@ -866,6 +867,24 @@ fn disabled_reward_config() -> RewardPoWConfig {
         share_den: core::num::NonZeroU64::MIN,
         slot_window: core::num::NonZeroU64::new(100).unwrap(),
     }
+}
+
+/// `config` as the only era, from genesis.
+#[must_use]
+pub fn single_era(config: lb_ledger::Config) -> Arc<EraScheduledConfig> {
+    let timing = EraTiming {
+        slot_duration: std::time::Duration::from_secs(1),
+        epoch_length: EpochLength::epoch_length(&config),
+    };
+    Arc::new(
+        EraSchedule::new(
+            time::OffsetDateTime::UNIX_EPOCH,
+            timing,
+            EraEntriesAfterGenesis::empty(),
+        )
+        .expect("a single era resolves")
+        .map(move |_| config.clone()),
+    )
 }
 
 #[must_use]
@@ -911,7 +930,6 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
                 timestamp: 0,
             },
         },
-        consensus_excluded_keys: ConsensusExcludedKeys::empty(),
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
                 base_difficulty: ModulusShift::new::<19>(),
@@ -1053,7 +1071,7 @@ pub fn genesis_cryptarchia(utxo: Utxo) -> Cryptarchia {
     Cryptarchia::from_genesis(
         GENESIS_ID.into(),
         LedgerState::from_utxos([utxo], &config),
-        config,
+        single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     )
 }

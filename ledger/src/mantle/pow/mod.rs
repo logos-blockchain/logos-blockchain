@@ -55,9 +55,9 @@ pub struct RewardPowState {
     /// expires.
     nullifiers: HashTrieMapSync<PowNullifier, Slot>,
     /// Slots of recently seen blocks by hash, retained for the
-    /// window-of-acceptance check and pruned as they age out of the
-    /// configured acceptance window
-    /// ([`slot_window`](crate::config::RewardPoWConfig::slot_window)). Keyed
+    /// window-of-acceptance check and pruned once no acceptance window
+    /// ([`slot_window`](crate::config::RewardPoWConfig::slot_window)) of a
+    /// claim still to come reaches them. Keyed
     /// by the wire-format block hash — the same
     /// value a `ClaimPowRewardOp` anchors to — so consensus state stays
     /// independent of the node's header-id type.

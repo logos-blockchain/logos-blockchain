@@ -16,13 +16,6 @@ use crate::config::{
 
 pub mod serde;
 
-/// The settings a cryptarchia deployment produces in each era: the chain
-/// service's and the leader's.
-type CryptarchiaServicesSettings = (
-    lb_chain_service::CryptarchiaSettings,
-    lb_chain_leader_service::LeaderSettings,
-);
-
 pub struct ServiceConfig {
     pub user: Config,
 }
@@ -76,104 +69,115 @@ impl ServiceConfig {
         }
     }
 
-    /// The settings of the chain service and the leader in every era of
-    /// `eras`.
+    /// The settings of the chain service and the leader: the user's, and the
+    /// ledger config of every era of `eras`, which both share.
     #[must_use]
-    pub fn into_cryptarchia_services_era_schedule(
+    pub fn into_cryptarchia_services_settings(
         self,
         eras: &EraSchedule<EraDefinition>,
         genesis_block: &GenesisBlock,
         recovery_data: &RecoveryData,
-    ) -> EraSchedule<CryptarchiaServicesSettings> {
-        eras.map(|era| {
-            let user = self.user.clone();
-            let definition = &era.parameters;
-            let EraRuleset::V1(parameters) = &definition.ruleset;
-            let deployment = &parameters.cryptarchia;
-            let blend_rewards_params = parameters.blend_reward_params();
-            let ledger_config = lb_ledger::Config {
-                consensus_config: deployment.consensus_config(),
-                epoch_config: EpochConfig {
-                    epoch_period_nonce_buffer: deployment.epoch_config.epoch_period_nonce_buffer,
-                    epoch_period_nonce_stabilization: deployment
-                        .epoch_config
-                        .epoch_period_nonce_stabilization,
-                    epoch_stake_distribution_stabilization: deployment
-                        .epoch_config
-                        .epoch_stake_distribution_stabilization,
+    ) -> (
+        lb_chain_service::CryptarchiaSettings,
+        lb_chain_leader_service::LeaderSettings,
+    ) {
+        let user = self.user;
+        let era_schedule = Arc::new(eras.map(|era| ledger_config_for_era(era.parameters)));
+        // The same in every era, so the genesis era's.
+        let consensus_excluded_keys = {
+            let EraRuleset::V1(genesis_parameters) = &eras.genesis().parameters.ruleset;
+            genesis_parameters
+                .cryptarchia
+                .consensus_excluded_keys
+                .clone()
+        };
+        let chain_service_settings = lb_chain_service::CryptarchiaSettings {
+            bootstrap: lb_chain_service::BootstrapConfig {
+                force_bootstrap: user.service.bootstrap.force_bootstrap,
+                prolonged_bootstrap_period: user.service.bootstrap.prolonged_bootstrap_period,
+                offline_grace_period: lb_chain_service::OfflineGracePeriodConfig {
+                    grace_period: user.service.bootstrap.offline_grace_period.grace_period,
+                    state_recording_interval: user
+                        .service
+                        .bootstrap
+                        .offline_grace_period
+                        .state_recording_interval,
                 },
-                consensus_excluded_keys: deployment.consensus_excluded_keys.clone(),
-                sdp_config: lb_ledger::mantle::sdp::Config {
-                    min_stake: deployment.sdp_config.min_stake,
-                    service_params: Arc::new(
-                        deployment
-                            .sdp_config
-                            .service_params
-                            .iter()
-                            .map(|(service_type, service_params)| {
-                                (
-                                    *service_type,
-                                    ServiceParameters {
-                                        inactivity_period: service_params.inactivity_period,
-                                        epoch: service_params.epoch,
-                                    },
-                                )
-                            })
-                            .collect(),
-                    ),
-                    service_rewards_params: ServiceRewardsParameters {
-                        blend: blend_rewards_params,
-                    },
+            },
+            era_schedule: Arc::clone(&era_schedule),
+            consensus_excluded_keys: consensus_excluded_keys.clone(),
+            recovery_data: recovery_data.clone(),
+            starting_state: genesis_block.clone().into(),
+            sync: lb_chain_service::SyncConfig {
+                block_provider: lb_chain_service::BlockProviderConfig {
+                    batch_size: user.service.sync.block_provider.batch_size,
                 },
-                pow_config: lb_ledger::config::PoWConfig {
-                    blend: lb_ledger::config::BlendPoWConfig {
-                        base_difficulty: deployment.pow_config.blend.base_difficulty,
-                        damping_den_offset: deployment.pow_config.blend.damping_den_offset,
-                        damping_num: deployment.pow_config.blend.damping_num,
-                        max_step: deployment.pow_config.blend.max_step,
-                        target_transactions_per_block: deployment
-                            .pow_config
-                            .blend
-                            .target_transactions_per_block,
-                    },
-                    // Reused verbatim: the deployment mirror already holds the
-                    // validated ledger type.
-                    reward: deployment.pow_config.reward.clone(),
-                },
-            };
+            },
+        };
+        let chain_leader_settings = lb_chain_leader_service::LeaderSettings {
+            era_schedule,
+            consensus_excluded_keys,
+            wallet_config: lb_chain_leader_service::LeaderWalletConfig {
+                funding_pk: user.leader.wallet.funding_pk,
+                max_tx_fee: user.leader.wallet.max_tx_fee,
+            },
+        };
+        (chain_service_settings, chain_leader_settings)
+    }
+}
 
-            let chain_service_settings = lb_chain_service::CryptarchiaSettings {
-                bootstrap: lb_chain_service::BootstrapConfig {
-                    force_bootstrap: user.service.bootstrap.force_bootstrap,
-                    prolonged_bootstrap_period: user.service.bootstrap.prolonged_bootstrap_period,
-                    offline_grace_period: lb_chain_service::OfflineGracePeriodConfig {
-                        grace_period: user.service.bootstrap.offline_grace_period.grace_period,
-                        state_recording_interval: user
-                            .service
-                            .bootstrap
-                            .offline_grace_period
-                            .state_recording_interval,
-                    },
-                },
-                config: ledger_config.clone(),
-                // TODO: This will go once we update the cryptarchia service group to support era
-                // schedules.
-                recovery_data: recovery_data.clone(),
-                starting_state: genesis_block.clone().into(),
-                sync: lb_chain_service::SyncConfig {
-                    block_provider: lb_chain_service::BlockProviderConfig {
-                        batch_size: user.service.sync.block_provider.batch_size,
-                    },
-                },
-            };
-            let chain_leader_settings = lb_chain_leader_service::LeaderSettings {
-                config: ledger_config,
-                wallet_config: lb_chain_leader_service::LeaderWalletConfig {
-                    funding_pk: user.leader.wallet.funding_pk,
-                    max_tx_fee: user.leader.wallet.max_tx_fee,
-                },
-            };
-            (chain_service_settings, chain_leader_settings)
-        })
+/// The ledger config of an era.
+fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
+    let EraRuleset::V1(parameters) = &era.ruleset;
+    let deployment = &parameters.cryptarchia;
+    let blend_rewards_params = parameters.blend_reward_params();
+    lb_ledger::Config {
+        consensus_config: deployment.consensus_config(),
+        epoch_config: EpochConfig {
+            epoch_period_nonce_buffer: deployment.epoch_config.epoch_period_nonce_buffer,
+            epoch_period_nonce_stabilization: deployment
+                .epoch_config
+                .epoch_period_nonce_stabilization,
+            epoch_stake_distribution_stabilization: deployment
+                .epoch_config
+                .epoch_stake_distribution_stabilization,
+        },
+        sdp_config: lb_ledger::mantle::sdp::Config {
+            min_stake: deployment.sdp_config.min_stake,
+            service_params: Arc::new(
+                deployment
+                    .sdp_config
+                    .service_params
+                    .iter()
+                    .map(|(service_type, service_params)| {
+                        (
+                            *service_type,
+                            ServiceParameters {
+                                inactivity_period: service_params.inactivity_period,
+                                epoch: service_params.epoch,
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            service_rewards_params: ServiceRewardsParameters {
+                blend: blend_rewards_params,
+            },
+        },
+        pow_config: lb_ledger::config::PoWConfig {
+            blend: lb_ledger::config::BlendPoWConfig {
+                base_difficulty: deployment.pow_config.blend.base_difficulty,
+                damping_den_offset: deployment.pow_config.blend.damping_den_offset,
+                damping_num: deployment.pow_config.blend.damping_num,
+                max_step: deployment.pow_config.blend.max_step,
+                target_transactions_per_block: deployment
+                    .pow_config
+                    .blend
+                    .target_transactions_per_block,
+            },
+            // Reused verbatim: the deployment mirror already holds the
+            // validated ledger type.
+            reward: deployment.pow_config.reward.clone(),
+        },
     }
 }
