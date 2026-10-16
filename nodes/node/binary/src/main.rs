@@ -4,7 +4,7 @@ use lb_log_targets::node;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use logos_blockchain_node::{
     UserConfig,
-    cli::{CliArgs, Command, build_run_config},
+    cli::{CliArgs, Command, build_run_config_with_cli_args},
     config::deployment::DeploymentSettings,
     get_services_to_start,
     panic::log_and_exit_hook,
@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
         .inspect_err(|e| {
             eprintln!("\nExiting... {e}.\n");
         })?;
-        build_run_config(user_config, cli_args)?
+        build_run_config_with_cli_args(user_config, cli_args)?
     };
     let chain_id = run_config.deployment.chain_id();
     // Only single-era schedules are supported for now, so the node follows the

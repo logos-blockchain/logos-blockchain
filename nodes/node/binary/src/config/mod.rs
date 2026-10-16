@@ -37,6 +37,7 @@ use crate::config::{
     tracing::serde::{
         filter::{EnvConfig, Layer},
         logger::{FileConfig, GelfConfig},
+        metrics::OpenMetricsConfig,
     },
 };
 
@@ -179,6 +180,22 @@ impl From<LogFileAppenderType> for OsStr {
             LogFileAppenderType::RollingMaxFiles => "RollingMaxFiles".into(),
         }
     }
+}
+
+#[derive(Parser, Debug, Default, Clone)]
+pub struct TracingArgs {
+    #[clap(flatten)]
+    pub log: LogArgs,
+
+    #[clap(flatten)]
+    pub metrics: MetricsArgs,
+}
+
+#[derive(Parser, Debug, Default, Clone)]
+pub struct MetricsArgs {
+    /// Enable on-demand `OpenMetrics` rendering
+    #[clap(long = "open-metrics", env = "OPEN_METRICS", value_name = "BOOL")]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Parser, Debug, Default, Clone)]
@@ -342,7 +359,29 @@ pub struct DeploymentArgs {
     pub custom_deployment_path: Option<PathBuf>,
 }
 
-pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Result<()> {
+pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: TracingArgs) -> Result<()> {
+    let TracingArgs {
+        log: log_args,
+        metrics: metrics_args,
+    } = tracing_args;
+
+    update_log(tracing, log_args)?;
+    update_metrics(tracing, &metrics_args);
+
+    Ok(())
+}
+
+const fn update_metrics(tracing: &mut TracingConfig, metrics_args: &MetricsArgs) {
+    let MetricsArgs { enabled } = metrics_args;
+
+    if let Some(enabled) = *enabled {
+        let open_metrics_config = OpenMetricsConfig { enabled };
+
+        tracing.metrics.set_open_metrics(Some(open_metrics_config));
+    }
+}
+
+fn update_log(tracing: &mut TracingConfig, log_args: LogArgs) -> Result<()> {
     let LogArgs {
         backend,
         log_addr: addr,
@@ -353,7 +392,7 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
         file_appender,
         max_files,
         format,
-    } = tracing_args;
+    } = log_args;
 
     if let Some(cli_format) = format {
         tracing.logger.format = cli_format.into();

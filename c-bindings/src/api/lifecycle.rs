@@ -3,7 +3,7 @@ use std::ffi::c_char;
 use lb_c_macros::panic_to_error;
 use lb_node::{
     UserConfig,
-    cli::build_run_config_from_env,
+    cli::build_run_config,
     config::{RunConfig, deployment::DeploymentSettings},
     get_services_to_start, run_node_from_config,
 };
@@ -134,10 +134,12 @@ unsafe fn initialize_lb_node(
     Ok(LogosBlockchainNode::new(app, runtime, &chain_id))
 }
 
-/// Builds the run configuration a node started with these paths would use.
+/// Loads the [`RunConfig`] a node started with these paths would use, without
+/// writing anything back:
 ///
-/// Reads the YAML config, applies the env var overrides, then replaces the
-/// deployment section if `custom_deployment_path` is not null.
+/// 1. Reads the user config YAML at `config_path`.
+/// 2. Applies environment variable overrides.
+/// 3. Replaces the deployment if `custom_deployment_path` is not null.
 ///
 /// # Safety
 ///
@@ -149,7 +151,7 @@ pub(crate) unsafe fn resolve_run_config(
 ) -> StatusResult<RunConfig> {
     let user_config = unsafe { get_user_config(config_path) }?;
 
-    let mut run_config = build_run_config_from_env(user_config).map_err(|e| {
+    let mut run_config = build_run_config(user_config).map_err(|e| {
         OperationStatus::error(
             OperationStatusCode::InitializationError,
             format!("Could not apply environment overrides: {e}"),

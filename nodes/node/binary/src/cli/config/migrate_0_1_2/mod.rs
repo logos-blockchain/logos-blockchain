@@ -7,7 +7,7 @@ use color_eyre::eyre::Result;
 use thiserror::Error;
 
 use crate::{
-    ApiArgs, LogArgs, NetworkArgs,
+    ApiArgs, NetworkArgs, TracingArgs,
     cli::{
         InitArgs,
         config::{init::build_user_config, migrate_0_1_2::config::OldConfig},
@@ -30,7 +30,7 @@ pub struct MigrateArgs {
     pub keystore: PathBuf,
 
     #[clap(flatten)]
-    log: LogArgs,
+    tracing: TracingArgs,
 
     #[clap(flatten)]
     network: NetworkArgs,
@@ -60,7 +60,7 @@ impl MigrateArgs {
             new_config,
             old_config,
             keystore,
-            log: LogArgs::default(),
+            tracing: TracingArgs::default(),
             network: NetworkArgs::default(),
             blend: BlendArgs::default(),
             cryptarchia: CryptarchiaArgs::default(),
@@ -76,7 +76,7 @@ impl From<MigrateArgs> for InitArgs {
         Self {
             output: migrate.new_config,
             keystore: Some(migrate.keystore),
-            log: migrate.log,
+            tracing: migrate.tracing,
             network: migrate.network,
             blend: migrate.blend,
             cryptarchia: migrate.cryptarchia,

@@ -70,7 +70,7 @@ pub fn run(args: InitArgs) -> Result<()> {
 /// it with the wrong key type.
 pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> Result<UserConfig, KeystoreError> {
     let InitArgs {
-        log: log_args,
+        tracing: tracing_args,
         network: network_args,
         blend: blend_args,
         cryptarchia: cryptarchia_args,
@@ -95,7 +95,7 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> Result<UserConf
     update_api(&mut api_config, api_args);
 
     let mut tracing_config = TracingConfig::default();
-    update_tracing(&mut tracing_config, log_args).expect("Cli tracing params can be parsed");
+    update_tracing(&mut tracing_config, tracing_args).expect("Cli tracing params can be parsed");
 
     let initial_peers = network_args.initial_peers.clone();
     let network_config = build_network_config(keystore, network_args)?;

@@ -464,6 +464,7 @@ mod no_node {
                 skip_ibd: (&raw const skip_ibd).cast::<bool>(),
                 log_filter: ptr::null(),
                 kms_file: kms.as_ptr(),
+                enable_open_metrics: ptr::null(),
             })
         };
         assert_eq!(code(status), OperationStatusCode::Ok);
@@ -585,6 +586,7 @@ mod no_node {
                 skip_ibd: &raw const skip_ibd,
                 log_filter: filter.as_ptr(),
                 kms_file: kms.as_ptr(),
+                enable_open_metrics: ptr::null(),
             })
         };
         let (status, message) = consume(status);

@@ -81,7 +81,7 @@ fn max_data_size_by_topic(
 }
 pub use crate::{
     cli::Command,
-    config::{ApiArgs, LogArgs, NetworkArgs, UserConfig},
+    config::{ApiArgs, LogArgs, MetricsArgs, NetworkArgs, TracingArgs, UserConfig},
 };
 
 pub type TracingService = Tracing<RuntimeServiceId>;

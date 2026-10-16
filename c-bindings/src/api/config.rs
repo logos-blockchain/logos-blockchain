@@ -45,6 +45,7 @@ pub struct GenerateConfigArgs {
     pub skip_ibd: *const bool,
     pub log_filter: *const c_char,
     pub kms_file: *const c_char,
+    pub enable_open_metrics: *const bool,
 }
 
 impl GenerateConfigArgs {
@@ -148,6 +149,13 @@ impl GenerateConfigArgs {
         if !value.kms_file.is_null() {
             let kms_file = unsafe { CStr::from_ptr(value.kms_file) };
             init_args.kms_file = Some(kms_file.to_string_lossy().to_string().into());
+        }
+
+        // ---- enable_open_metrics ----
+        if !value.enable_open_metrics.is_null() {
+            // Read as a byte: C can store any value in a `bool`, and anything
+            // but 0 or 1 is not a valid Rust `bool`.
+            init_args.enable_open_metrics = unsafe { *value.enable_open_metrics.cast::<u8>() } != 0;
         }
 
         init_args
@@ -525,6 +533,9 @@ pub unsafe extern "C" fn participate(
 mod test {
     use std::path::Path;
 
+    use lb_node::UserConfig;
+    use lb_tracing_service::MetricsLayerSettings;
+    use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
     use tempfile::TempDir;
 
     use super::*;
@@ -544,6 +555,54 @@ mod test {
 
     fn cstring(path: &Path) -> CString {
         CString::new(path.to_string_lossy().as_bytes()).expect("Path should not contain NUL")
+    }
+
+    fn generate_open_metrics_enabled(enable_open_metrics: *const bool) -> bool {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("user_config.yaml");
+        let output = cstring(&config_path);
+        let kms = cstring(&temp_dir.path().join("keystore.yaml"));
+
+        let status = unsafe {
+            generate_user_config(GenerateConfigArgs {
+                initial_peers: ptr::null(),
+                initial_peers_count: ptr::null(),
+                output: output.as_ptr(),
+                net_port: ptr::null(),
+                blend_port: ptr::null(),
+                http_addr: ptr::null(),
+                external_address: ptr::null(),
+                state_path: ptr::null(),
+                storage_path: ptr::null(),
+                logs_path: ptr::null(),
+                skip_ibd: ptr::null(),
+                log_filter: ptr::null(),
+                kms_file: kms.as_ptr(),
+                enable_open_metrics,
+            })
+        };
+        assert!(status.is_ok(), "Failed to generate config: {status:?}");
+
+        let user_config =
+            deserialize_value_at_path::<UserConfig>(&config_path, OnUnknownKeys::Fail)
+                .expect("Generated config should deserialize");
+        MetricsLayerSettings::from(user_config.tracing.metrics)
+            .open_metrics
+            .enabled
+    }
+
+    #[test]
+    fn generate_user_config_with_enable_open_metrics_enables_open_metrics() {
+        let enable_open_metrics = true;
+
+        assert!(generate_open_metrics_enabled(
+            &raw const enable_open_metrics
+        ));
+    }
+
+    #[test]
+    fn generate_user_config_without_enable_open_metrics_disables_open_metrics() {
+        assert!(!generate_open_metrics_enabled(ptr::null()));
     }
 
     #[test]

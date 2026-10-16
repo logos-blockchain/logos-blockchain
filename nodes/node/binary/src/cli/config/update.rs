@@ -62,7 +62,7 @@ pub fn run(args: UpdateArgs) -> Result<()> {
 
 pub fn update_user_config(user_config: &mut UserConfig, keystore: &Keystore, args: UpdateArgs) {
     let UpdateArgs {
-        log: log_args,
+        tracing: tracing_args,
         network: network_args,
         blend: blend_args,
         cryptarchia: cryptarchia_args,
@@ -76,7 +76,8 @@ pub fn update_user_config(user_config: &mut UserConfig, keystore: &Keystore, arg
 
     update_api(&mut user_config.api, api_args);
 
-    update_tracing(&mut user_config.tracing, log_args).expect("Cli tracing params can be parsed");
+    update_tracing(&mut user_config.tracing, tracing_args)
+        .expect("Cli tracing params can be parsed");
 
     let initial_peers = network_args.initial_peers.clone();
     update_network_config(keystore, &mut user_config.network, network_args);

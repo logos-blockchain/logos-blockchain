@@ -29,6 +29,10 @@ impl Layer {
             open_metrics: None,
         }
     }
+
+    pub const fn set_open_metrics(&mut self, open_metrics: Option<OpenMetricsConfig>) {
+        self.open_metrics = open_metrics;
+    }
 }
 
 impl From<Layer> for MetricsLayerSettings {

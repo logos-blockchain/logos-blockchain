@@ -13,7 +13,7 @@ use tracing::Level;
 
 use crate::{
     UserConfig,
-    cli::{CliArgs, build_run_config_from_env},
+    cli::{CliArgs, build_run_config},
     config::{
         DeploymentSettings, RequiredValues as ConfigRequiredValues,
         blend::{
@@ -160,10 +160,10 @@ fn minimal_user_config() -> UserConfig {
 
 /// Environment variables applied on top of the YAML config must reach the
 /// resulting `RunConfig`, matching the standalone binary's behaviour (which the
-/// c-bindings reuse via `build_run_config_from_env`).
+/// c-bindings reuse via `build_run_config`).
 #[test]
 #[serial_test::serial]
-fn build_run_config_from_env_applies_environment_overrides() {
+fn build_run_config_applies_environment_overrides() {
     let http_host = "127.0.0.1:8080";
     let state_path = "/tmp/env-override-test-state";
 
@@ -175,7 +175,7 @@ fn build_run_config_from_env_applies_environment_overrides() {
     // SAFETY: see above.
     unsafe { std::env::set_var("LOG_LEVEL", "debug") };
 
-    let run_config = build_run_config_from_env(minimal_user_config());
+    let run_config = build_run_config(minimal_user_config());
 
     // Clean up before asserting so a failing assertion can't leak env state.
     // SAFETY: see above.
