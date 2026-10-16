@@ -336,6 +336,13 @@ where
                     error!(target: LOG_TARGET, "Could not send ledger state through channel");
                 });
             }
+            Query::GetLedgerConfig { reply_channel } => {
+                reply_channel
+                    .send(self.cryptarchia.ledger.config().clone())
+                    .unwrap_or_else(|_| {
+                        error!(target: LOG_TARGET, "Could not send ledger config through channel");
+                    });
+            }
             Query::GetSdpDeclarations { reply_channel } => {
                 let tip = self.cryptarchia.tip();
                 let declarations = self

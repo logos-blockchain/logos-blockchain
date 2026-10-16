@@ -306,6 +306,11 @@ where
                                 debug!(target: LOG_TARGET, "Failed to send JoinAsCore reply: {e:?}");
                             });
                         },
+                        ProxyServiceMessage::GetZkId { reply } => {
+                            reply.send(zk_public_key).unwrap_or_else(|e| {
+                                debug!(target: LOG_TARGET, "Failed to send GetZkId reply: {e:?}");
+                            });
+                        },
                         ProxyServiceMessage::Inner(inner_message) => {
                             if let Err(e) = instance.handle_inbound_message(inner_message).await {
                                 error!(target: LOG_TARGET, "Failed to handle inbound message: {e:?}");

@@ -214,6 +214,21 @@ where
         })
     }
 
+    pub async fn get_ledger_config(&self) -> Result<lb_ledger::Config, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(Query::GetLedgerConfig { reply_channel }.into())
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetLedgerConfig"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetLedgerConfig"))
+        })
+    }
+
     /// All declarations in the current SDP registry at the tip, keyed by
     /// declaration id. This is the live registry, not the epoch snapshot.
     pub async fn get_sdp_declarations(

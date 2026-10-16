@@ -36,7 +36,7 @@ macro_rules! api_routes {
             get lb_http_api_common::paths::NETWORK_INFO => crate::api::handlers::libp2p_info, libp2p_info::<RuntimeServiceId>;
             post lb_http_api_common::paths::DIAL_PEER => crate::api::handlers::dial_peer, dial_peer::<RuntimeServiceId>;
             get lb_http_api_common::paths::BLEND_NETWORK_INFO => crate::api::handlers::blend_info, blend_info::<BlendService, RuntimeServiceId>;
-            post lb_http_api_common::paths::BLEND_JOIN_NETWORK => crate::api::handlers::blend_join_network, blend_join_network::<BlendService, RuntimeServiceId>;
+            post lb_http_api_common::paths::BLEND_JOIN_NETWORK => crate::api::handlers::blend_join_network, blend_join_network::<BlendService, WalletService, RuntimeServiceId>;
             get lb_http_api_common::paths::BLEND_PENDING_TRANSACTIONS => crate::api::handlers::blend_pending_transactions, blend_pending_transactions::<BlendService, RuntimeServiceId>;
             post lb_http_api_common::paths::MEMPOOL_ADD_TX => crate::api::handlers::add_tx, add_tx::<MempoolStorageAdapter, RuntimeServiceId>;
             post lb_http_api_common::paths::BLEND_DISPERSE_TRANSACTION => crate::api::handlers::blend_tx, blend_tx::<BlendService, RuntimeServiceId>;
