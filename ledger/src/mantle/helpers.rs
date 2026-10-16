@@ -4,7 +4,7 @@ use lb_core::{
     crypto::{Hash, ZkHash},
     mantle::{
         channel::Channels,
-        ledger::{Declarations, Utxos},
+        ledger::{Declarations, ProviderIndex, Utxos},
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
             leader_claim::{RewardsRoot, VoucherNullifier},
@@ -13,7 +13,7 @@ use lb_core::{
         },
         transactions::{OperationVerificationHelper, VerificationError},
     },
-    sdp::{DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
+    sdp::{Declaration, DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
@@ -67,16 +67,22 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
             ))
     }
 
-    fn get_declarations_by_id(
+    fn get_provider_index_by_service(
         &self,
-        id: &DeclarationId,
-    ) -> Result<&Declarations, VerificationError> {
+        service: ServiceType,
+    ) -> Result<&ProviderIndex, VerificationError> {
         self.ledger_state
             .sdp_ledger()
-            .get_declarations_by_id(id)
+            .get_provider_index_by_service(service)
             .ok_or(VerificationError::SDPVerificationError(
-                SdpError::DeclarationNotFound(*id),
+                SdpError::ServiceNotFound(service),
             ))
+    }
+
+    fn get_declaration_by_id(&self, id: &DeclarationId) -> Result<&Declaration, VerificationError> {
+        self.ledger_state.sdp_ledger().get_declaration(id).ok_or(
+            VerificationError::SDPVerificationError(SdpError::DeclarationNotFound(*id)),
+        )
     }
 
     fn get_min_stake(&self) -> &MinStake {
