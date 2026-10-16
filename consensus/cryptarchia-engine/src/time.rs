@@ -2,7 +2,7 @@ use std::num::NonZero;
 
 pub use lb_time::{
     Epoch, Slot,
-    era::{Era, EraEntry, EraEntryView, EraSchedule},
+    era::{Era, EraEntryView, EraSchedule},
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

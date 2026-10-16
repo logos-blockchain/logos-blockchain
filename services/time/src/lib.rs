@@ -5,7 +5,7 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_log_targets::time as log_targets_time;
-use lb_time::{Epoch, Slot, era::EraSchedules};
+use lb_time::{Epoch, Slot, era::EraTimingSchedule};
 use log::error;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -32,7 +32,7 @@ const LOG_TARGET: &str = log_targets_time::ROOT;
 pub struct TimeServiceInfo {
     pub current_slot: Slot,
     pub current_epoch: Epoch,
-    pub era_schedules: EraSchedules,
+    pub era_schedules: EraTimingSchedule,
 }
 
 impl TimeServiceInfo {
@@ -75,7 +75,7 @@ impl Debug for TimeServiceMessage {
 #[derive(Clone, Debug)]
 pub struct TimeServiceSettings<BackendSettings> {
     pub backend: BackendSettings,
-    pub era_schedule: EraSchedules,
+    pub era_schedule: EraTimingSchedule,
 }
 
 pub struct TimeService<Backend, RuntimeServiceId>
@@ -84,7 +84,7 @@ where
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     backend: Backend,
-    era_schedule: EraSchedules,
+    era_schedule: EraTimingSchedule,
 }
 
 impl<Backend, RuntimeServiceId> ServiceData for TimeService<Backend, RuntimeServiceId>
@@ -171,7 +171,7 @@ fn handle_service_message(
     message: TimeServiceMessage,
     watch_receiver: &watch::Receiver<SlotTick>,
     current_slot_tick: &SlotTick,
-    era_schedule: &EraSchedules,
+    era_schedule: &EraTimingSchedule,
 ) {
     match message {
         TimeServiceMessage::Info { sender } => {
