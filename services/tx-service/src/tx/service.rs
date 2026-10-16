@@ -20,16 +20,17 @@ use lb_core::{
     },
 };
 use lb_log_targets::mempool;
-use lb_network_service::{NetworkService, message::BackendNetworkMsg};
+use lb_network_service::NetworkService;
 use lb_services_utils::{
     overwatch::{RecoveryOperator, recovery::operators::RecoveryBackend as RecoveryBackendTrait},
     wait_until_services_are_ready,
 };
 use lb_storage_service::{StorageService, recovery::StorageRecoveryBackend};
+use lb_time_service::{EraTickStream, TimeService, TimeServiceMessage};
 use lb_utils::tokio::task::spawn;
 use overwatch::{
     OpaqueServiceResourcesHandle,
-    services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
+    services::{AsServiceId, ServiceCore, ServiceData},
 };
 use tokio::sync::{broadcast, oneshot};
 
@@ -88,8 +89,10 @@ pub type TxMempoolService<
 >;
 
 /// A generic tx mempool service which wraps around a mempool, a network
-/// adapter, and a recovery backend. `TimeBackend` is the time backend of the
-/// network service the network adapter talks to.
+/// adapter, and a recovery backend.
+///
+/// `TimeBackend` is the backend of the time service whose eras the mempool and
+/// the network service follow.
 pub struct GenericTxMempoolService<
     Pool,
     NetworkAdapter,
@@ -188,10 +191,14 @@ where
     Pool::Item: Hashable<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
     Pool::Key: PrefixedKey<Prefix: Send + Sync>,
     Pool::Settings: Clone + Sync + Send,
-    NetworkAdapter:
-        NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item, Key = Pool::Key> + Send + Sync,
+    NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item, Key = Pool::Key>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
     NetworkAdapter::Settings: Clone + Send + Sync + 'static,
     RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
+    TimeBackend: lb_time_service::backends::TimeBackend,
     RuntimeServiceId: Display
         + Debug
         + Sync
@@ -199,7 +206,8 @@ where
         + 'static
         + AsServiceId<Self>
         + AsServiceId<NetworkService<NetworkAdapter::Backend, TimeBackend, RuntimeServiceId>>
-        + AsServiceId<StorageService<RuntimeServiceId>>,
+        + AsServiceId<StorageService<RuntimeServiceId>>
+        + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -219,20 +227,51 @@ where
 
         let overwatch_handle = &self.service_resources_handle.overwatch_handle;
 
+        // The pool, its storage and the network adapter start in the era the
+        // clock is in, and follow the eras the clock enters after it.
+        wait_until_services_are_ready!(
+            &overwatch_handle,
+            Some(Duration::from_mins(1)),
+            TimeService<TimeBackend, RuntimeServiceId>
+        )
+        .await?;
+
+        let (current_era, mut era_ticks) = {
+            let time_relay = overwatch_handle
+                .relay::<TimeService<TimeBackend, RuntimeServiceId>>()
+                .await?;
+            let (sender, receiver) = oneshot::channel();
+            time_relay
+                .send(TimeServiceMessage::SubscribeToEras { sender })
+                .await?;
+            let mut era_ticks = receiver.await?;
+            let current_era = era_ticks
+                .next()
+                .await
+                .expect("The era tick stream ended before its first tick")
+                .era;
+            (current_era, era_ticks)
+        };
+
         let storage_relay = overwatch_handle
             .relay::<StorageService<RuntimeServiceId>>()
             .await
             .expect("Storage service relay should be available");
 
-        let storage_adapter =
-            <StorageAdapter as MempoolStorageAdapter<RuntimeServiceId>>::new(storage_relay);
+        let storage_adapter = <StorageAdapter as MempoolStorageAdapter<RuntimeServiceId>>::new(
+            current_era,
+            storage_relay,
+        );
 
         let pool_state = self.initial_state.pool.take();
 
         let mut pool = match pool_state {
-            None => <Pool as MemPoolTrait>::new(settings.pool.clone(), storage_adapter),
+            None => {
+                <Pool as MemPoolTrait>::new(settings.pool.clone(), current_era, storage_adapter)
+            }
             Some(recovered_pool_state) => <Pool as RecoverableMempool>::recover(
                 settings.pool.clone(),
+                current_era,
                 recovered_pool_state,
                 storage_adapter,
             ),
@@ -243,17 +282,17 @@ where
             .await
             .expect("Relay connection with NetworkService should succeed");
 
-        // Queue for network messages
-        let mut network_items = NetworkAdapter::new(
+        let mut network_adapter = NetworkAdapter::new(
             settings_handle
                 .notifier()
                 .get_updated_settings()
                 .network_adapter,
-            network_service_relay.clone(),
+            current_era,
+            network_service_relay,
         )
-        .await
-        .payload_stream()
         .await;
+        // Queue for network messages
+        let mut network_items = network_adapter.payload_stream().await;
 
         self.service_resources_handle.status_updater.notify_ready();
         tracing::info!(
@@ -274,8 +313,9 @@ where
 
         self.run_event_loop(
             &mut pool,
-            network_service_relay,
+            &mut network_adapter,
             &mut network_items,
+            &mut era_ticks,
             &accepted_items_channel_sender,
         )
         .await
@@ -297,7 +337,8 @@ where
     Pool::Item: Hashable<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
     Pool::Key: PrefixedKey<Prefix: Send + Sync>,
     Pool::Settings: Clone,
-    NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item> + Send + Sync,
+    NetworkAdapter:
+        NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item> + Clone + Send + Sync + 'static,
     NetworkAdapter::Settings: Clone + Send + 'static,
     RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: 'static,
@@ -305,10 +346,9 @@ where
     async fn run_event_loop(
         &mut self,
         pool: &mut Pool,
-        network_service_relay: OutboundRelay<
-            BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>,
-        >,
+        network_adapter: &mut NetworkAdapter,
         network_items: &mut Box<dyn futures::Stream<Item = (Pool::Key, Pool::Item)> + Unpin + Send>,
+        era_ticks: &mut EraTickStream,
         accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
     ) -> Result<(), overwatch::DynError>
     where
@@ -320,17 +360,14 @@ where
                 // Queue for relay messages
                 Some(relay_msg) = self.service_resources_handle.inbound_relay.recv() => {
                     let state_updater = self.service_resources_handle.state_updater.clone();
-                    let settings = self
-                        .service_resources_handle
-                        .settings_handle
-                        .notifier()
-                        .get_updated_settings()
-                        .network_adapter;
-
-                    Self::handle_mempool_message(pool, relay_msg, network_service_relay.clone(), state_updater, settings, accepted_items_channel_sender).await;
+                    Self::handle_mempool_message(pool, relay_msg, network_adapter, state_updater, accepted_items_channel_sender).await;
                 }
                 Some((key, item)) = network_items.next() => {
                     Self::handle_network_item(pool, key, item, &self.service_resources_handle.state_updater, accepted_items_channel_sender).await;
+                }
+                Some(era_tick) = era_ticks.next() => {
+                    pool.enter_era(era_tick.era).await;
+                    network_adapter.enter_era(era_tick.era).await;
                 }
             }
         }
@@ -339,9 +376,8 @@ where
     async fn handle_mempool_message(
         pool: &mut Pool,
         message: MempoolMsg<Pool::BlockId, Pool::Item, Pool::Item, Pool::Key>,
-        network_relay: OutboundRelay<BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>>,
+        network_adapter: &NetworkAdapter,
         state_updater: MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
-        settings: NetworkAdapter::Settings,
         accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
     ) where
         Pool::Settings: Send + Sync,
@@ -358,9 +394,8 @@ where
                     key,
                     payload,
                     reply_channel,
-                    network_relay,
+                    network_adapter,
                     state_updater,
-                    settings,
                     accepted_items_channel_sender,
                 )
                 .await;
@@ -409,15 +444,13 @@ where
         }
     }
 
-    #[expect(clippy::too_many_arguments, reason = "categorize args")]
     async fn handle_add_message(
         pool: &mut Pool,
         key: Pool::Key,
         item: Pool::Item,
         reply_channel: oneshot::Sender<Result<(), MempoolError>>,
-        network_relay: OutboundRelay<BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>>,
+        network_adapter: &NetworkAdapter,
         state_updater: MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
-        settings: NetworkAdapter::Settings,
         accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
     ) where
         Pool::Settings: Send + Sync,
@@ -434,8 +467,7 @@ where
                 Self::handle_add_success(
                     pool,
                     &state_updater,
-                    settings,
-                    network_relay,
+                    network_adapter.clone(),
                     item,
                     reply_channel,
                 );
@@ -445,9 +477,9 @@ where
                 // submission (not gossip), re-gossip it so
                 // leader nodes can pick it up.
                 Self::notify_about_accepted_item(accepted_items_channel_sender, item.clone());
+                let network_adapter = network_adapter.clone();
                 spawn("logos/mempool/transaction-regossip", async move {
-                    let adapter = NetworkAdapter::new(settings, network_relay).await;
-                    adapter.send(item).await;
+                    network_adapter.send(item).await;
                 });
                 if let Err(e) = reply_channel.send(Ok(())) {
                     tracing::debug!(target: LOG_TARGET, "Failed to send add reply: {:?}", e);
@@ -518,16 +550,14 @@ where
     fn handle_add_success(
         pool: &Pool,
         state_updater: &MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
-        settings: NetworkAdapter::Settings,
-        network_relay: OutboundRelay<BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>>,
+        network_adapter: NetworkAdapter,
         item_for_broadcast: Pool::Item,
         reply_channel: oneshot::Sender<Result<(), MempoolError>>,
     ) {
         state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
 
         spawn("logos/mempool/transaction-broadcast", async move {
-            let adapter = NetworkAdapter::new(settings, network_relay).await;
-            adapter.send(item_for_broadcast).await;
+            network_adapter.send(item_for_broadcast).await;
         });
 
         if let Err(e) = reply_channel.send(Ok(())) {

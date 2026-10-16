@@ -15,6 +15,7 @@ use lb_core::mantle::{
 };
 use lb_cryptarchia_engine::Slot;
 use lb_log_targets::mempool;
+use lb_time::Era;
 use serde::{Deserialize, Serialize};
 
 use super::Status;
@@ -147,7 +148,7 @@ where
     type BlockId = BlockId;
     type Storage = Storage;
 
-    fn new(settings: Self::Settings, storage: Self::Storage) -> Self {
+    fn new(settings: Self::Settings, _: Era, storage: Self::Storage) -> Self {
         Self {
             pending_items: IndexSet::new(),
             by_prefix: HashMap::new(),
@@ -157,6 +158,10 @@ where
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    async fn enter_era(&mut self, era: Era) {
+        self.storage_adapter.enter_era(era).await;
     }
 
     async fn add_item<I: Into<Self::Item> + Send>(
@@ -322,6 +327,7 @@ where
 
     fn recover(
         settings: <Self as MemPool>::Settings,
+        _: Era,
         state: Self::RecoveryState,
         storage: <Self as MemPool>::Storage,
     ) -> Self {

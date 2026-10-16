@@ -1,3 +1,5 @@
+use std::{collections::HashSet, mem};
+
 use futures::Stream;
 use lb_binary_codec::bincode::{self, DeserializeOp as _, SerializeOp as _};
 use lb_core::block::MAX_BLOCK_TRANSACTIONS_SIZE;
@@ -6,6 +8,7 @@ use lb_network_service::{
     backends::libp2p::{Command, Libp2p, Message, PubSubCommand, TopicHash},
     message::{BackendNetworkMsg, NetworkMsg},
 };
+use lb_time::{Era, era::EraSchedule};
 use overwatch::services::relay::OutboundRelay;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio_stream::StreamExt as _;
@@ -28,9 +31,12 @@ const fn transaction_gossip_size_is_valid(size: usize) -> bool {
     size <= MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE
 }
 
+#[derive(Clone)]
 pub struct Libp2pAdapter<Item, Key, RuntimeServiceId> {
     network_relay: OutboundRelay<BackendNetworkMsg<Libp2p, RuntimeServiceId>>,
     settings: Settings<Key, Item>,
+    /// The topic of the era the adapter is in.
+    current_era_topic: String,
 }
 
 #[async_trait::async_trait]
@@ -47,28 +53,86 @@ where
 
     async fn new(
         settings: Self::Settings,
+        current_era: Era,
         network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
     ) -> Self {
+        let current_era_topic = settings
+            .era_schedule
+            .get(current_era)
+            .expect("The era the adapter starts in should be scheduled")
+            .parameters
+            .topic
+            .clone();
         tracing::debug!(
             target: LOG_TARGET,
-            "Subscribing tx adapter to pubsub topic {}",
-            settings.topic
+            "Subscribing tx adapter to pubsub topic {current_era_topic}"
         );
         network_relay
             .send(NetworkMsg::Process(Command::PubSub(
-                PubSubCommand::Subscribe(settings.topic.clone()),
+                PubSubCommand::Subscribe(current_era_topic.clone()),
             )))
             .await
             .expect("Network backend should be ready");
         Self {
             network_relay,
             settings,
+            current_era_topic,
         }
     }
+
+    async fn enter_era(&mut self, era: Era) {
+        let Some(era_settings) = self.settings.era_schedule.get(era) else {
+            tracing::error!(
+                target: LOG_TARGET,
+                "Asked to enter era {}, which is not scheduled",
+                era.into_inner()
+            );
+            return;
+        };
+        let new_era_topic = era_settings.parameters.topic.clone();
+        if new_era_topic == self.current_era_topic {
+            return;
+        }
+        tracing::info!(
+            target: LOG_TARGET,
+            "Entered era {}: transactions are gossiped on {new_era_topic}",
+            era.into_inner()
+        );
+        let previous_era_topic = mem::replace(&mut self.current_era_topic, new_era_topic.clone());
+        if let Err(error) = self
+            .network_relay
+            .send(NetworkMsg::Process(Command::PubSub(
+                PubSubCommand::Subscribe(new_era_topic),
+            )))
+            .await
+        {
+            tracing::error!(target: LOG_TARGET, "failed to subscribe to topic: {error}");
+        }
+        if let Err(error) = self
+            .network_relay
+            .send(NetworkMsg::Process(Command::PubSub(
+                PubSubCommand::Unsubscribe(previous_era_topic),
+            )))
+            .await
+        {
+            tracing::error!(target: LOG_TARGET, "failed to unsubscribe from topic: {error}");
+        }
+    }
+
     async fn payload_stream(
         &self,
     ) -> Box<dyn Stream<Item = (Self::Key, Self::Payload)> + Unpin + Send> {
-        let topic_hash = TopicHash::from_raw(self.settings.topic.clone());
+        // Gossipsub only hands over the messages of the topics the node is
+        // subscribed to, and the adapter is subscribed to the topic of its
+        // current era only. So the stream keeps the messages of every era's
+        // topic, and follows the adapter from era to era, without requiring any actions
+        // from consumers on era changes.
+        let topic_hashes: HashSet<TopicHash> = self
+            .settings
+            .era_schedule
+            .iter()
+            .map(|era| TopicHash::from_raw(era.parameters.topic.clone()))
+            .collect();
         let id = self.settings.id;
         let (sender, receiver) = tokio::sync::oneshot::channel();
         self.network_relay
@@ -78,7 +142,7 @@ where
 
         let stream = receiver.await.unwrap();
         Box::new(Box::pin(stream.filter_map(move |message| match message {
-            Ok(Message { data, topic, .. }) if topic == topic_hash => {
+            Ok(Message { data, topic, .. }) if topic_hashes.contains(&topic) => {
                 match Item::from_bytes(&data) {
                     Ok(item) => Some((id(&item), item)),
                     Err(e) => {
@@ -109,7 +173,7 @@ where
                 .network_relay
                 .send(NetworkMsg::Process(Command::PubSub(
                     PubSubCommand::Broadcast {
-                        topic: self.settings.topic.clone(),
+                        topic: self.current_era_topic.clone(),
                         message: serialized.to_vec().into_boxed_slice(),
                     },
                 )))
@@ -121,10 +185,19 @@ where
     }
 }
 
+/// The settings of the libp2p adapter: those it keeps for the whole run, and
+/// those that change from era to era.
 #[derive(Clone, Debug)]
 pub struct Settings<K, V> {
-    pub topic: String,
     pub id: fn(&V) -> K,
+    pub era_schedule: EraSchedule<EraSettings>,
+}
+
+/// What the libp2p adapter runs with in an era.
+#[derive(Clone, Debug)]
+pub struct EraSettings {
+    /// The topic transactions are gossiped on.
+    pub topic: String,
 }
 
 #[cfg(test)]

@@ -263,11 +263,9 @@ fn service_settings_receive_recovery_data() {
     let mempool_service_settings = MempoolServiceConfig {
         user: user_config.mempool.clone(),
     }
-    .into_mempool_service_era_schedule(deployment_settings.era_schedule(), &recovery_data);
+    .into_mempool_service_settings(deployment_settings.era_schedule(), &recovery_data);
     assert_eq!(
         mempool_service_settings
-            .genesis()
-            .parameters
             .recovery_data
             .take(MEMPOOL_RECOVERY_MARKER)
             .unwrap(),
