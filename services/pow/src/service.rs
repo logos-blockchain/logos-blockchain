@@ -48,7 +48,7 @@ use lb_ledger::LedgerState;
 use lb_log_targets::pow;
 use lb_services_utils::{
     overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings},
-    wait_until_services_are_ready,
+    wait_until_services_are_ready_with_lifecycle,
 };
 use lb_storage_service::{StorageService, recovery::StorageRecoveryBackend};
 use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend};
@@ -480,7 +480,7 @@ where
         // wallet's known keys, and slot pacing subscribes to the time service's
         // slot clock. Blend is awaited on the same grounds, though it is only
         // used later, to publish claim transactions.
-        wait_until_services_are_ready!(
+        wait_until_services_are_ready_with_lifecycle!(
             &service_resources_handle.overwatch_handle,
             None,
             CryptarchiaService,

@@ -6,7 +6,7 @@ use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInput
 use lb_blend_service::epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait};
 use lb_chain_leader_service::{LeaderMsg, WinningPolEpochSlots};
 use lb_pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
-use lb_services_utils::wait_until_services_are_ready;
+use lb_services_utils::wait_until_services_are_ready_with_lifecycle;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use tokio::sync::oneshot::channel;
 
@@ -31,7 +31,7 @@ where
     async fn subscribe(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     ) -> Option<Self::Stream> {
-        wait_until_services_are_ready!(
+        wait_until_services_are_ready_with_lifecycle!(
             overwatch_handle,
             // No timeout since chain-leader service becomes ready
             // only after switching to Online mode.

@@ -64,7 +64,7 @@ use lb_poq::Quota;
 use lb_sdp_service::SdpMessage;
 use lb_services_utils::{
     overwatch::{RecoveryOperator, recovery::operators::RecoveryBackend as RecoveryBackendTrait},
-    wait_until_services_are_ready,
+    wait_until_services_are_ready_with_lifecycle,
 };
 use lb_time_service::TimeService;
 use overwatch::{
@@ -326,7 +326,7 @@ where
 
         let blend_config = settings_handle.notifier().get_updated_settings();
 
-        wait_until_services_are_ready!(
+        wait_until_services_are_ready_with_lifecycle!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
             NetworkService<_, _>,

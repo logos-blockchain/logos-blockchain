@@ -23,7 +23,7 @@ use lb_log_targets::mempool;
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_services_utils::{
     overwatch::{RecoveryOperator, recovery::operators::RecoveryBackend as RecoveryBackendTrait},
-    wait_until_services_are_ready,
+    wait_until_services_are_ready_with_lifecycle,
 };
 use lb_storage_service::{StorageService, recovery::StorageRecoveryBackend};
 use lb_utils::tokio::task::spawn;
@@ -244,7 +244,7 @@ where
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
 
-        wait_until_services_are_ready!(
+        wait_until_services_are_ready_with_lifecycle!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
             NetworkService<_, _>

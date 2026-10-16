@@ -42,7 +42,7 @@ use lb_log_targets::chain;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
     overwatch::{RecoveryData, RecoveryOperator},
-    wait_until_services_are_ready,
+    wait_until_services_are_ready_with_lifecycle,
 };
 use lb_storage_service::{
     StorageService,
@@ -736,7 +736,7 @@ where
             .notifier()
             .get_updated_settings();
 
-        wait_until_services_are_ready!(
+        wait_until_services_are_ready_with_lifecycle!(
             &self.service_resources_handle.overwatch_handle,
             Some(Duration::from_mins(1)),
             BlockBroadcastService<_>,

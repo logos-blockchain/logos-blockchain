@@ -27,7 +27,7 @@ use lb_key_management_system_service::{
 };
 use lb_log_targets::blend;
 use lb_network_service::NetworkService;
-use lb_services_utils::wait_until_services_are_ready;
+use lb_services_utils::wait_until_services_are_ready_with_lifecycle;
 use lb_time_service::TimeService;
 use overwatch::{
     OpaqueServiceResourcesHandle,
@@ -186,7 +186,7 @@ where
 
         let settings = settings_handle.notifier().get_updated_settings();
 
-        wait_until_services_are_ready!(
+        wait_until_services_are_ready_with_lifecycle!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
             TimeService<_, _>,

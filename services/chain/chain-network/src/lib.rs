@@ -35,7 +35,7 @@ pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
 use lb_log_targets::chain;
 use lb_network_service::NetworkService;
-use lb_services_utils::wait_until_services_are_ready;
+use lb_services_utils::wait_until_services_are_ready_with_lifecycle;
 use lb_storage_service::StorageService;
 use lb_time_service::{TimeService, TimeServiceMessage};
 use lb_tx_service::{
@@ -307,7 +307,7 @@ where
             .get_updated_settings();
 
         // Wait for services (except Chain) to become ready, with timeout
-        wait_until_services_are_ready!(
+        wait_until_services_are_ready_with_lifecycle!(
             &self.service_resources_handle.overwatch_handle,
             Some(Duration::from_mins(1)),
             NetworkService<_, _>,
@@ -316,7 +316,7 @@ where
         )
         .await?;
         // Wait for Chain service to become ready, without timeout
-        wait_until_services_are_ready!(
+        wait_until_services_are_ready_with_lifecycle!(
             &self.service_resources_handle.overwatch_handle,
             None,
             Cryptarchia // becomes ready after recoverying blocks

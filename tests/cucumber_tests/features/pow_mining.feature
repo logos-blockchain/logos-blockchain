@@ -61,11 +61,18 @@ Feature: PoW mining
     # Record the miner's balance, then mine and claim; assert the balance grew.
     And I record the balance of wallet "WALLET_MINER" as "MINER_BASELINE"
     And I start mining on node "NODE_3"
-    # Wait until at least one ticket is claimable, then stop mining before
-    # claiming: at the eased difficulty the miner finds tickets very fast, so
-    # halting it first frees the service loop to process the claim promptly.
+    # Restart while mining is on and a claimable ticket is persisted.
     And node "NODE_3" has at least 1 claimable PoW rewards within 120 seconds
-    And I stop mining on node "NODE_3"
+    Then node "NODE_3" reports PoW mining on
+    # Restart with the ticket persisted. PoW must return ready only after its
+    # existing chain, wallet, time, and Blend prerequisites are ready, and it
+    # must reset the non-persisted mining flag.
+    When I restart node "NODE_3"
+    And node "NODE_3" has at least 1 claimable PoW rewards within 120 seconds
+    Then node "NODE_3" reports PoW mining off
+    When I start mining on node "NODE_3"
+    Then node "NODE_3" reports PoW mining on
+    When I stop mining on node "NODE_3"
     And I claim PoW rewards on node "NODE_3" as "POW_CLAIM_TX" within 120 seconds
     Then transaction "POW_CLAIM_TX" is included on node "NODE_1" in 120 seconds
     # The balance grows by exactly the reward the claim transaction paid to the

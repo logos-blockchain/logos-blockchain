@@ -48,7 +48,7 @@ use lb_log_targets::wallet;
 use lb_mmr::MerklePath;
 use lb_services_utils::{
     overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings},
-    wait_until_services_are_ready,
+    wait_until_services_are_ready_with_lifecycle,
 };
 use lb_storage_service::{api::StorageApi, recovery::StorageRecoveryBackend};
 use lb_utils::{bounded::BoundedError, tokio::task::spawn_blocking};
@@ -440,7 +440,7 @@ where
         } = self;
 
         // Wait for services (except Chain) to become ready, with timeout
-        wait_until_services_are_ready!(
+        wait_until_services_are_ready_with_lifecycle!(
             &service_resources_handle.overwatch_handle,
             Some(Duration::from_mins(1)),
             lb_storage_service::StorageService<_>,
@@ -448,10 +448,10 @@ where
         )
         .await?;
         // Wait for Chain service to become ready, without timeout
-        wait_until_services_are_ready!(
+        wait_until_services_are_ready_with_lifecycle!(
             &service_resources_handle.overwatch_handle,
             None,
-            Cryptarchia // becomes ready after recoverying blocks
+            Cryptarchia // becomes ready after recovering blocks
         )
         .await?;
 
