@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use lb_core::{block::Proposal, mantle::transactions::genesis_tx::ChainId};
+use lb_core::{block::Proposal, header::HeaderId};
 use lb_cryptarchia_engine::time::EraSchedule;
 use lb_libp2p::{ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig};
 use lb_network_service::{
@@ -24,15 +24,16 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
-    /// The settings of the network service on the chain `chain_id`: the user's,
-    /// and in each era of `eras` the era's chain sync protocol and topics.
+    /// The settings of the network service on the chain that starts from the
+    /// genesis block `genesis_id`: the user's, and in each era of `eras` the
+    /// era's chain sync protocol and topics.
     #[must_use]
     pub fn into_network_service_settings(
         self,
-        chain_id: &ChainId,
+        genesis_id: HeaderId,
         eras: &EraSchedule<EraDefinition>,
     ) -> NetworkConfig<Libp2pConfig> {
-        let chain = ProtocolScope::Chain(chain_id);
+        let chain = ProtocolScope::Chain(genesis_id);
         let user = self.user;
         NetworkConfig {
             backend: Libp2pConfig {

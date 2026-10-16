@@ -12,7 +12,7 @@ use crate::{
 };
 
 /// The libp2p protocol and topic names a deployment uses, derived from its
-/// chain ID and fork digest.
+/// genesis block ID and fork digest.
 #[repr(C)]
 pub struct ProtocolNames {
     pub blend: *mut c_char,
@@ -35,7 +35,7 @@ pub struct DeploymentInfo {
 impl DeploymentInfo {
     fn new(deployment: &DeploymentSettings) -> Result<Self, OperationStatus> {
         let deployment_chain_id = deployment.chain_id();
-        let chain = ProtocolScope::Chain(&deployment_chain_id);
+        let chain = ProtocolScope::Chain(deployment.genesis_id());
         let fork = ProtocolScope::Fork(deployment.fork_digest_in_force());
 
         // Every string is built before any of them is turned into a raw

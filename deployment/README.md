@@ -102,8 +102,7 @@ Protocol and gossipsub topic names are not configured: every node derives them
 from its deployment. Blend, chain sync and the cryptarchia and mempool topics are
 named `/logos-blockchain/<fork digest>/<protocol>`, so nodes on different forks
 never talk to each other. Kademlia and identify are named
-`/logos-blockchain/<percent-encoded chain ID>/<protocol>`, so peers of a chain
-still find each other across its forks.
+`/logos-blockchain/<genesis block ID>/<protocol>`, so peers of a chain still find each other across its forks.
 
 ### 1. Template for all deployments (any type)
 Shared blueprints reused by every deployment type; not edited per release.

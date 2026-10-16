@@ -58,11 +58,12 @@ impl DeploymentSettings {
     /// If an era starts beyond the slots or the time this node can represent.
     #[must_use]
     pub fn new(eras: &EraDeclarations, genesis_block: GenesisBlock) -> Self {
-        let genesis_inscription = genesis_block.genesis_tx().cryptarchia_parameter();
-        let (genesis_id, chain_id, genesis_time) = (
+        let (genesis_id, genesis_time) = (
             genesis_block.header().id(),
-            genesis_inscription.chain_id,
-            genesis_inscription.genesis_time,
+            genesis_block
+                .genesis_tx()
+                .cryptarchia_parameter()
+                .genesis_time,
         );
         let mut era_digests = Vec::with_capacity(1);
         // Called in activation order: the fork digest of an era is over the
@@ -70,8 +71,7 @@ impl DeploymentSettings {
         let mut definition = |first_epoch: Epoch, ruleset: &EraRuleset| {
             let digest = EraDigest::compute(first_epoch, ruleset);
             era_digests.push(digest);
-            let fork_digest =
-                ForkDigest::compute(genesis_id, &chain_id, era_digests.iter().copied());
+            let fork_digest = ForkDigest::compute(genesis_id, era_digests.iter().copied());
             EraDefinition {
                 ruleset: ruleset.clone(),
                 digest,
@@ -134,11 +134,12 @@ impl DeploymentSettings {
     }
 
     /// The fork digest of the era in force by the wall clock, which names the
-    /// fork-bound protocols of this deployment's chain now.
+    /// fork-bound protocols of this deployment's chain now: the genesis era's
+    /// before genesis.
     #[must_use]
     pub fn fork_digest_in_force(&self) -> ForkDigest {
         self.eras
-            .at_slot(self.slot_now().unwrap())
+            .at_slot(self.slot_now().unwrap_or(Slot::genesis()))
             .parameters
             .fork_digest
     }
