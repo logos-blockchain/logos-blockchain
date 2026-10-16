@@ -119,10 +119,16 @@ where
             + Display
             + 'static
             + AsServiceId<Cryptarchia>
-            + AsServiceId<NetworkService<NetworkAdapter::Backend, RuntimeServiceId>>
+            + AsServiceId<NetworkService<NetworkAdapter::Backend, TimeBackend, RuntimeServiceId>>
             + AsServiceId<StorageService<RuntimeServiceId>>
             + AsServiceId<
-                TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
+                TxMempoolService<
+                    MempoolNetAdapter,
+                    Mempool,
+                    Mempool::Storage,
+                    TimeBackend,
+                    RuntimeServiceId,
+                >,
             >
             + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
     {
@@ -132,13 +138,13 @@ where
         .await;
         let network_relay = service_resources_handle
             .overwatch_handle
-            .relay::<NetworkService<_, _>>()
+            .relay::<NetworkService<_, _, _>>()
             .await
             .expect("Relay connection with NetworkService should succeed");
 
         let mempool_relay = service_resources_handle
             .overwatch_handle
-            .relay::<TxMempoolService<_, _, _, _>>()
+            .relay::<TxMempoolService<_, _, _, _, _>>()
             .await
             .expect("Relay connection with MempoolService should succeed");
 

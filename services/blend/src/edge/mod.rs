@@ -146,7 +146,7 @@ where
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<ChainService>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
-        + AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
+        + AsServiceId<NetworkService<Dispatcher::Backend, TimeBackend, RuntimeServiceId>>
         + AsServiceId<Dispatcher::MempoolService>
         + AsServiceId<Dispatcher::ChainNetworkService>
         + Display
@@ -191,13 +191,13 @@ where
             Some(Duration::from_mins(1)),
             TimeService<_, _>,
             PreloadKmsService<_>,
-            NetworkService<Dispatcher::Backend, _>
+            NetworkService<Dispatcher::Backend, _, _>
         )
         .await?;
 
         let payload_dispatcher = {
             let network_relay = overwatch_handle
-                .relay::<NetworkService<Dispatcher::Backend, _>>()
+                .relay::<NetworkService<Dispatcher::Backend, _, _>>()
                 .await
                 .expect("Relay with network service should be available.");
             let mempool_relay = overwatch_handle

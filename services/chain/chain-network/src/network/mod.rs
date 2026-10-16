@@ -5,11 +5,11 @@ use std::collections::HashSet;
 use futures::Stream;
 use lb_core::header::HeaderId;
 use lb_cryptarchia_sync::GetTipResponse;
-use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
-use overwatch::{
-    DynError,
-    services::{ServiceData, relay::OutboundRelay},
+use lb_network_service::{
+    backends::NetworkBackend,
+    message::{BackendNetworkMsg, ChainSyncEvent},
 };
+use overwatch::{DynError, services::relay::OutboundRelay};
 
 pub(crate) type BoxedStream<T> = Box<dyn Stream<Item = T> + Send + Unpin>;
 
@@ -23,9 +23,7 @@ pub trait NetworkAdapter<RuntimeServiceId> {
 
     async fn new(
         settings: Self::Settings,
-        network_relay: OutboundRelay<
-            <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
     ) -> Self;
     async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError>;
 

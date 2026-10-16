@@ -368,18 +368,18 @@ mod tests {
         block::Proposal,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
+    use lb_cryptarchia_engine::{EpochConfig, Era, Slot, UncleSlots};
     use lb_ledger::{
         LedgerState,
         config::{BlendPoWConfig, ConsensusExcludedKeys, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
-    use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
-    use overwatch::{
-        overwatch::OverwatchHandle,
-        services::{ServiceData, relay::OutboundRelay},
+    use lb_network_service::{
+        backends::NetworkBackend,
+        message::{BackendNetworkMsg, ChainSyncEvent},
     };
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
+    use overwatch::{overwatch::OverwatchHandle, services::relay::OutboundRelay};
     use tokio_stream::wrappers::BroadcastStream;
 
     use super::*;
@@ -829,9 +829,7 @@ mod tests {
 
         async fn new(
             _settings: Self::Settings,
-            _network_relay: OutboundRelay<
-                <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-            >,
+            _network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         ) -> Self {
             unimplemented!()
         }
@@ -917,12 +915,17 @@ mod tests {
 
         fn new(
             _config: Self::Settings,
+            _current_era: Era,
             _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         ) -> Self {
             unimplemented!()
         }
 
         async fn process(&self, _msg: Self::Message) {
+            unimplemented!()
+        }
+
+        async fn enter_era(&mut self, _era: Era) {
             unimplemented!()
         }
 

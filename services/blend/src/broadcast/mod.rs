@@ -74,7 +74,7 @@ where
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
         + AsServiceId<ChainService>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
-        + AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
+        + AsServiceId<NetworkService<Dispatcher::Backend, TimeBackend, RuntimeServiceId>>
         + AsServiceId<Dispatcher::MempoolService>
         + AsServiceId<Dispatcher::ChainNetworkService>
         + Clone
@@ -113,7 +113,7 @@ where
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
-            NetworkService<_, _>,
+            NetworkService<_, _, _>,
             TimeService<_, _>,
             PreloadKmsService<_>,
             ChainService
@@ -122,7 +122,7 @@ where
 
         let payload_dispatcher = <Dispatcher as PayloadDispatcher<RuntimeServiceId>>::new(
             overwatch_handle
-                .relay::<NetworkService<_, _>>()
+                .relay::<NetworkService<_, _, _>>()
                 .await
                 .expect("Relay with network service should be available."),
             overwatch_handle
@@ -271,7 +271,8 @@ async fn handle_inbound_message<NodeId, Dispatcher, RuntimeServiceId>(
 #[cfg(test)]
 mod tests {
     use futures::{stream, stream::BoxStream};
-    use lb_network_service::backends::NetworkBackend;
+    use lb_cryptarchia_engine::Era;
+    use lb_network_service::{backends::NetworkBackend, message::BackendNetworkMsg};
     use overwatch::{overwatch::OverwatchHandle, services::relay::OutboundRelay};
     use tokio::sync::{mpsc, oneshot};
     use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
@@ -311,9 +312,7 @@ mod tests {
         type Settings = ();
 
         fn new(
-            _: OutboundRelay<
-                <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-            >,
+            _: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
             _: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
             _: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
             (): Self::Settings,
@@ -341,10 +340,11 @@ mod tests {
         type PubSubEvent = ();
         type ChainSyncEvent = ();
 
-        fn new((): Self::Settings, _: OverwatchHandle<RuntimeServiceId>) -> Self {
+        fn new((): Self::Settings, _: Era, _: OverwatchHandle<RuntimeServiceId>) -> Self {
             Self
         }
         async fn process(&self, _: Self::Message) {}
+        async fn enter_era(&mut self, _: Era) {}
         async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
             unimplemented!()
         }

@@ -265,7 +265,7 @@ where
             State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
         > + Send
         + Sync,
-    RuntimeServiceId: AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
+    RuntimeServiceId: AsServiceId<NetworkService<Dispatcher::Backend, TimeBackend, RuntimeServiceId>>
         + AsServiceId<Dispatcher::MempoolService>
         + AsServiceId<Dispatcher::ChainNetworkService>
         + AsServiceId<SdpService>
@@ -329,7 +329,7 @@ where
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
-            NetworkService<_, _>,
+            NetworkService<_, _, _>,
             TimeService<_, _>,
             SdpService,
             PreloadKmsService<_>
@@ -338,7 +338,7 @@ where
 
         let payload_dispatcher = async {
             let network_relay = overwatch_handle
-                .relay::<NetworkService<_, _>>()
+                .relay::<NetworkService<_, _, _>>()
                 .await
                 .expect("Relay with network service should be available.");
             let mempool_relay = overwatch_handle

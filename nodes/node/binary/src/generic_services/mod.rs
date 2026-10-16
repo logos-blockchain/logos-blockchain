@@ -44,6 +44,7 @@ pub type TxMempoolService<RuntimeServiceId> = lb_tx_service::TxMempoolService<
     MempoolNetworkAdapter<RuntimeServiceId>,
     MempoolPool<RuntimeServiceId>,
     MempoolRocksStorageAdapter,
+    NtpTimeBackend,
     RuntimeServiceId,
 >;
 

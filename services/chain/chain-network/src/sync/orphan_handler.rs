@@ -507,8 +507,11 @@ mod tests {
 
     use futures::stream;
     use lb_cryptarchia_sync::GetTipResponse;
-    use lb_network_service::{NetworkService, backends::mock::Mock, message::ChainSyncEvent};
-    use overwatch::services::{ServiceData, relay::OutboundRelay};
+    use lb_network_service::{
+        backends::mock::Mock,
+        message::{BackendNetworkMsg, ChainSyncEvent},
+    };
+    use overwatch::services::relay::OutboundRelay;
     use tokio::time::timeout;
 
     use super::*;
@@ -652,9 +655,7 @@ mod tests {
 
         async fn new(
             _settings: Self::Settings,
-            _network_relay: OutboundRelay<
-                <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-            >,
+            _network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         ) -> Self {
             Self::new()
         }

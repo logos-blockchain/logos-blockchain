@@ -64,7 +64,7 @@ use lb_sdp_service::{
     mempool::SdpMempoolAdapter, state::SdpStateStorage, wallet::SdpWalletAdapter,
 };
 use lb_storage_service::{StorageService, api::StorageApi};
-use lb_time_service::TimeServiceMessage;
+use lb_time_service::{TimeServiceMessage, backends::NtpTimeBackend};
 use lb_tx_service::{
     MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
@@ -404,12 +404,14 @@ where
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >,
 {
     make_request_and_return_response!(mantle::mantle_mempool_metrics::<
         StorageAdapter,
+        NtpTimeBackend,
         RuntimeServiceId,
     >(&handle))
 }
@@ -458,12 +460,14 @@ where
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >,
 {
     make_request_and_return_response!(mantle::mantle_mempool_status::<
         StorageAdapter,
+        NtpTimeBackend,
         RuntimeServiceId,
     >(&handle, items))
 }
@@ -627,9 +631,11 @@ where
         + Sync
         + Display
         + 'static
-        + AsServiceId<NetworkService<Libp2pNetworkBackend, RuntimeServiceId>>,
+        + AsServiceId<NetworkService<Libp2pNetworkBackend, NtpTimeBackend, RuntimeServiceId>>,
 {
-    make_request_and_return_response!(libp2p::libp2p_info::<RuntimeServiceId>(&handle))
+    make_request_and_return_response!(libp2p::libp2p_info::<NtpTimeBackend, RuntimeServiceId>(
+        &handle
+    ))
 }
 
 #[utoipa::path(
@@ -651,10 +657,11 @@ where
         + Sync
         + Display
         + 'static
-        + AsServiceId<NetworkService<Libp2pNetworkBackend, RuntimeServiceId>>,
+        + AsServiceId<NetworkService<Libp2pNetworkBackend, NtpTimeBackend, RuntimeServiceId>>,
 {
     make_request_and_return_response!(async move {
-        let peer_id = libp2p::connect_peer::<RuntimeServiceId>(&handle, req.addr).await?;
+        let peer_id =
+            libp2p::connect_peer::<NtpTimeBackend, RuntimeServiceId>(&handle, req.addr).await?;
         Ok::<PeerId, overwatch::DynError>(peer_id)
     })
 }
@@ -800,6 +807,7 @@ where
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >,
@@ -813,6 +821,7 @@ where
         >,
         StorageAdapter,
         SignedOps<Preverified, StandardMode>,
+        NtpTimeBackend,
         RuntimeServiceId,
     >(&handle, tx, Hashable::hash))
 }
@@ -861,6 +870,7 @@ where
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >,
@@ -906,6 +916,7 @@ where
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >,
@@ -952,6 +963,7 @@ where
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >,
@@ -970,6 +982,7 @@ where
                 RuntimeServiceId,
             >,
             StorageAdapter,
+            NtpTimeBackend,
             RuntimeServiceId,
         >>()
         .await?;
@@ -1065,6 +1078,7 @@ where
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >,
@@ -1105,6 +1119,7 @@ where
             >,
             StorageAdapter,
             SignedOps<Preverified, StandardMode>,
+            NtpTimeBackend,
             RuntimeServiceId,
         >(&handle, signed_tx, Hashable::hash)
         .await?;
@@ -1999,6 +2014,7 @@ pub mod wallet {
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
             >,
@@ -2036,6 +2052,7 @@ pub mod wallet {
                     >,
                     StorageAdapter,
                     SignedOps<Preverified, StandardMode>,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >(&handle, transaction.clone(), Hashable::hash)
                 .await
@@ -2095,6 +2112,7 @@ pub mod wallet {
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
             >,
@@ -2155,6 +2173,7 @@ pub mod wallet {
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
             >,
@@ -2215,6 +2234,7 @@ pub mod wallet {
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
+                    NtpTimeBackend,
                     RuntimeServiceId,
                 >,
             >,
