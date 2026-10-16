@@ -20,6 +20,7 @@ use tokio_stream::wrappers::WatchStream;
 
 use crate::backends::TimeBackend;
 
+pub mod api;
 pub mod backends;
 mod metrics;
 

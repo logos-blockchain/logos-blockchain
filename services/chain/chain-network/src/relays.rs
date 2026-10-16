@@ -15,7 +15,7 @@ use lb_core::{
 };
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_storage_service::StorageService;
-use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend as TimeBackendTrait};
+use lb_time_service::backends::TimeBackend as TimeBackendTrait;
 use lb_tx_service::{
     MempoolMsg, TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
@@ -30,7 +30,6 @@ use crate::{ChainNetwork, mempool::adapter::MempoolAdapter, network};
 
 type NetworkRelay<NetworkBackend, RuntimeServiceId> =
     OutboundRelay<BackendNetworkMsg<NetworkBackend, RuntimeServiceId>>;
-type TimeRelay = OutboundRelay<TimeServiceMessage>;
 
 pub struct ChainNetworkRelays<
     Cryptarchia,
@@ -47,7 +46,6 @@ pub struct ChainNetworkRelays<
     cryptarchia: CryptarchiaServiceApi<Cryptarchia>,
     network_relay: NetworkRelay<NetworkAdapter::Backend, RuntimeServiceId>,
     mempool_adapter: MempoolAdapter<Mempool::Item>,
-    time_relay: TimeRelay,
     _mempool_adapter: PhantomData<MempoolNetAdapter>,
 }
 
@@ -80,14 +78,12 @@ where
         cryptarchia: CryptarchiaServiceApi<Cryptarchia>,
         network_relay: NetworkRelay<NetworkAdapter::Backend, RuntimeServiceId>,
         mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Mempool::Item, Mempool::Item, TxHash>>,
-        time_relay: TimeRelay,
     ) -> Self {
         let mempool_adapter = MempoolAdapter::new(mempool_relay);
         Self {
             cryptarchia,
             network_relay,
             mempool_adapter,
-            time_relay,
             _mempool_adapter: PhantomData,
         }
     }
@@ -129,8 +125,7 @@ where
                     TimeBackend,
                     RuntimeServiceId,
                 >,
-            >
-            + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
+            >,
     {
         let cryptarchia = CryptarchiaServiceApi::<Cryptarchia>::from_overwatch_handle(
             &service_resources_handle.overwatch_handle,
@@ -148,13 +143,7 @@ where
             .await
             .expect("Relay connection with MempoolService should succeed");
 
-        let time_relay = service_resources_handle
-            .overwatch_handle
-            .relay::<TimeService<_, _>>()
-            .await
-            .expect("Relay connection with TimeService should succeed");
-
-        Self::new(cryptarchia, network_relay, mempool_relay, time_relay)
+        Self::new(cryptarchia, network_relay, mempool_relay)
     }
 
     pub const fn cryptarchia(&self) -> &CryptarchiaServiceApi<Cryptarchia> {
@@ -171,9 +160,5 @@ where
 
     pub const fn mempool_adapter_mut(&mut self) -> &mut MempoolAdapter<Mempool::Item> {
         &mut self.mempool_adapter
-    }
-
-    pub const fn time_relay(&self) -> &TimeRelay {
-        &self.time_relay
     }
 }
