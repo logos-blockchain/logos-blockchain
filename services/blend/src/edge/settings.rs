@@ -11,21 +11,21 @@ use crate::{
 
 /// The edge service's settings: this node's own, the same in every era, the
 /// settings of its backend and its dispatcher, which the node composes, and its
-/// own settings in every era.
+/// own settings in every era, its backend's included.
 #[derive(Clone, Debug)]
-pub struct EdgeServiceSettings<BackendSettings, DispatcherSettings> {
+pub struct EdgeServiceSettings<BackendSettings, BackendEraSettings, DispatcherSettings> {
     /// The non-ephemeral signing key (NSK) corresponding to the public key
     /// registered in the membership (SDP).
     pub non_ephemeral_signing_key_id: KeyId,
     pub abstain_on_failure: bool,
     pub backend: BackendSettings,
     pub dispatcher: DispatcherSettings,
-    pub era_schedule: EraSchedule<EdgeServiceEraSettings>,
+    pub era_schedule: EraSchedule<EdgeServiceEraSettings<BackendEraSettings>>,
 }
 
-/// The edge service's settings in an era.
+/// The edge service's settings in an era, its backend's included.
 #[derive(Clone, Debug)]
-pub struct EdgeServiceEraSettings {
+pub struct EdgeServiceEraSettings<BackendEraSettings> {
     pub time: EraTimingSettings,
     /// `ß_c`: number of blending operations for each locally generated message.
     pub num_blend_layers: NonZeroU64,
@@ -34,9 +34,10 @@ pub struct EdgeServiceEraSettings {
     /// `R_c`: replication factor for data messages.
     pub data_replication_factor: u64,
     pub max_blend_delay_in_rounds: NonZeroU64,
+    pub backend: BackendEraSettings,
 }
 
-impl EdgeServiceEraSettings {
+impl<BackendEraSettings> EdgeServiceEraSettings<BackendEraSettings> {
     pub fn epoch_pow_quota(&self) -> Quota {
         self.num_blend_layers
             .get()

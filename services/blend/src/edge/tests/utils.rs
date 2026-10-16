@@ -21,7 +21,6 @@ use lb_blend::{
         stream::UninitializedFirstReadyStream,
     },
 };
-use lb_cryptarchia_engine::Era;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use overwatch::overwatch::{OverwatchHandle, commands::OverwatchCommand};
 use rand::{RngCore, rngs::OsRng};
@@ -199,7 +198,7 @@ where
 pub fn settings(
     local_id: NodeId,
     minimum_network_size: u64,
-) -> (EdgeServiceEraSettings, RuntimeComponents) {
+) -> (EdgeServiceEraSettings<()>, RuntimeComponents) {
     (
         EdgeServiceEraSettings {
             time: EraTimingSettings {
@@ -215,6 +214,7 @@ pub fn settings(
             minimum_network_size: NonZeroU64::new(minimum_network_size).unwrap(),
             cover: EraCoverTrafficSettings::default(),
             data_replication_factor: 0,
+            backend: (),
         },
         RuntimeComponents {
             non_ephemeral_signing_key: key(local_id).0,
@@ -237,10 +237,11 @@ where
     RuntimeServiceId: Debug + Sync + Display,
 {
     type Settings = NodeIdSender;
+    type EraSettings = ();
 
     fn new<Rng>(
         settings: Self::Settings,
-        _: Era,
+        (): Self::EraSettings,
         _: OverwatchHandle<RuntimeServiceId>,
         membership: Membership<NodeId>,
         _: Rng,
@@ -266,8 +267,6 @@ where
             .id;
         self.sender.send(node_id).await.unwrap();
     }
-
-    async fn enter_era(&mut self, _: Era) {}
 }
 
 pub fn overwatch_handle() -> OverwatchHandle<usize> {

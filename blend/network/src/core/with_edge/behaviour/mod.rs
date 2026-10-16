@@ -135,12 +135,13 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         }
     }
 
+    /// Starts a new epoch, under the settings of the era it opens, if it opens
+    /// one (see [`Self::enter_era`]).
     pub(crate) fn start_new_epoch(
         &mut self,
         new_epoch_info: (Membership<PeerId>, Epoch),
         new_proofs_verifier: ProofsVerifier,
-        // TODO: Group into a component generic over `Config` so it can be shared by core and edge
-        // behaviours.
+        // TODO: Move to its own type which makes this easier to read.
         new_era: Option<((&CommonConfig, &Config), Option<RoundClock>, StreamProtocol)>,
     ) {
         self.current_membership = new_epoch_info.0;
@@ -152,26 +153,49 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         for conn in &peers {
             self.close_substream(*conn);
         }
-        let Some((
-            (new_era_common_config, new_era_edge_config),
-            new_era_round_clock,
-            new_era_protocol_name,
-        )) = new_era
-        else {
-            return;
-        };
-        if let Some(new_era_round_clock) = new_era_round_clock {
-            self.round_clock = new_era_round_clock;
+        if let Some((new_era_config, new_era_round_clock, new_era_protocol_name)) = new_era {
+            self.enter_era(new_era_config, new_era_protocol_name, new_era_round_clock);
         }
-        self.connection_timeout = new_era_edge_config.connection_timeout;
-        self.max_incoming_connections = new_era_edge_config.max_incoming_connections;
-        self.accept_share = RoundShare::new(
+    }
+
+    fn enter_era(
+        &mut self,
+        (new_era_common_config, new_era_edge_config): (&CommonConfig, &Config),
+        new_era_protocol_name: StreamProtocol,
+        new_era_round_clock: Option<RoundClock>,
+    ) {
+        #[expect(
+            clippy::unneeded_field_pattern,
+            reason = "We want to explicitly destructure here so every time we add a new field we need to decide what to do with it on new eras."
+        )]
+        let Self {
+            accept_share,
+            connection_timeout,
+            max_incoming_connections,
+            minimum_network_size,
+            num_blend_layers,
+            protocol_name,
+            round_clock,
+            current_epoch: _,
+            current_membership: _,
+            events: _,
+            pending_poq_verifications: _,
+            proofs_verifier: _,
+            upgraded_edge_peers: _,
+            waker: _,
+        } = self;
+        if let Some(new_era_round_clock) = new_era_round_clock {
+            *round_clock = new_era_round_clock;
+        }
+        *connection_timeout = new_era_edge_config.connection_timeout;
+        *max_incoming_connections = new_era_edge_config.max_incoming_connections;
+        *accept_share = RoundShare::new(
             new_era_edge_config.accepted_connections_per_round,
-            self.round_clock.current_round(),
+            round_clock.current_round(),
         );
-        self.protocol_name = new_era_protocol_name;
-        self.minimum_network_size = new_era_common_config.minimum_network_size;
-        self.num_blend_layers = new_era_common_config.num_blend_layers;
+        *protocol_name = new_era_protocol_name;
+        *minimum_network_size = new_era_common_config.minimum_network_size;
+        *num_blend_layers = new_era_common_config.num_blend_layers;
     }
 
     fn try_wake(&mut self) {

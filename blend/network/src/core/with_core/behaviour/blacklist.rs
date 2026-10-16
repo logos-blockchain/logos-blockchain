@@ -117,7 +117,9 @@ impl PeerBlacklist {
         }
     }
 
-    pub fn enter_era(&mut self, capacity: NonZeroUsize, expiry: RoundCount) {
+    /// Update blacklist parameters and evict any entries that are now above the
+    /// new capacity.
+    pub fn update_parameters(&mut self, capacity: NonZeroUsize, expiry: RoundCount) {
         self.capacity = capacity;
         self.expiry = expiry;
         while self.entries.len() > capacity.get() {
@@ -197,8 +199,8 @@ impl PeerBlacklist {
 
     /// Drops entries that have outlived their expiry, and returns them.
     ///
-    /// Every entry is checked: entries added under different eras' expiries
-    /// do not expire in the order they were added.
+    /// Every entry is checked because a change in expiry duration can result in
+    /// items expiring earlier being added at the tail of the queue.
     pub fn prune_expired_entries(&mut self, now: Round) -> impl Iterator<Item = Entry> {
         let mut expired = Vec::new();
         self.entries.retain(|entry| {
@@ -268,7 +270,7 @@ mod tests {
         blacklist.insert_or_extend(early, BlacklistReason::InvalidProofOfQuota, Round::from(0));
 
         // The new era shortens the window.
-        blacklist.enter_era(CAPACITY, RoundCount::new(NonZeroU128::new(5).unwrap()));
+        blacklist.update_parameters(CAPACITY, RoundCount::new(NonZeroU128::new(5).unwrap()));
         blacklist.insert_or_extend(late, BlacklistReason::InvalidProofOfQuota, Round::from(0));
 
         assert!(!blacklist.contains(&late, Round::from(5)));
@@ -284,7 +286,7 @@ mod tests {
     fn pruning_finds_the_entries_that_expire_out_of_order() {
         let (mut blacklist, early, late) = (blacklist(), PeerId::random(), PeerId::random());
         blacklist.insert_or_extend(early, BlacklistReason::InvalidProofOfQuota, Round::from(0));
-        blacklist.enter_era(CAPACITY, RoundCount::new(NonZeroU128::new(5).unwrap()));
+        blacklist.update_parameters(CAPACITY, RoundCount::new(NonZeroU128::new(5).unwrap()));
         blacklist.insert_or_extend(late, BlacklistReason::InvalidProofOfQuota, Round::from(1));
 
         let expired: Vec<_> = blacklist
@@ -314,7 +316,7 @@ mod tests {
         }
 
         let capacity = NonZeroUsize::new(2).unwrap();
-        blacklist.enter_era(capacity, RoundCount::new(EXPIRY_ROUNDS));
+        blacklist.update_parameters(capacity, RoundCount::new(EXPIRY_ROUNDS));
 
         let now = Round::from(CAPACITY.get() as u128);
         let kept: Vec<_> = peers

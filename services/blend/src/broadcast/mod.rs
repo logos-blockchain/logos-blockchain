@@ -251,7 +251,7 @@ async fn run<NodeId, Dispatcher, RuntimeServiceId>(
                     info!(target: LOG_TARGET, "New membership no longer calls for broadcast mode, shutting down.");
                     return;
                 }
-                if epoch_era.era != era {
+                if epoch_era.era > era {
                     era = epoch_era.era;
                     payload_dispatcher.enter_era(era).await;
                 }

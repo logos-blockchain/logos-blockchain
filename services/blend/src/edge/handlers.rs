@@ -14,7 +14,6 @@ use lb_blend::{
     },
 };
 use lb_chain_service::Epoch;
-use lb_cryptarchia_engine::Era;
 use overwatch::overwatch::OverwatchHandle;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
@@ -54,8 +53,7 @@ where
     /// 2. The local node is not a core node.
     #[expect(clippy::too_many_arguments, reason = "categorize args")]
     pub(super) fn new(
-        era: Era,
-        settings: &EdgeServiceEraSettings,
+        settings: &EdgeServiceEraSettings<Backend::EraSettings>,
         backend_settings: Backend::Settings,
         runtime_components: &RuntimeComponents,
         membership: Membership<NodeId>,
@@ -75,7 +73,7 @@ where
         );
         let backend = Backend::new(
             backend_settings,
-            era,
+            settings.backend.clone(),
             overwatch_handle,
             membership,
             ChaCha20Rng::from_entropy(),

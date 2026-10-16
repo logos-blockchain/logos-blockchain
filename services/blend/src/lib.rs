@@ -269,10 +269,11 @@ where
 
         // The mode of an epoch follows from its membership and the minimum
         // network size of its era.
-        let mut minimum_network_size = era_schedule.at_epoch(epoch).parameters.minimum_network_size;
+        let mut era_minimum_network_size =
+            era_schedule.at_epoch(epoch).parameters.minimum_network_size;
         let mut instance =
             Instance::<CoreService, EdgeService, BroadcastService, RuntimeServiceId>::new(
-                ModeMembership::resolve(membership_info, minimum_network_size).mode(),
+                ModeMembership::resolve(membership_info, era_minimum_network_size).mode(),
                 overwatch_handle,
             )
             .await?;
@@ -290,13 +291,13 @@ where
                     debug!(target: LOG_TARGET, ?epoch_event, "received epoch event");
                     let epoch_event = match epoch_event {
                         EpochEvent::NewEpoch((epoch, membership_info)) => {
-                            minimum_network_size = era_schedule.at_epoch(epoch).parameters.minimum_network_size;
+                            era_minimum_network_size = era_schedule.at_epoch(epoch).parameters.minimum_network_size;
                             EpochEvent::NewEpoch(membership_info)
                         }
                         EpochEvent::TransitionPeriodExpired => EpochEvent::TransitionPeriodExpired,
                     };
                     instance = instance
-                        .handle_epoch_event(epoch_event, overwatch_handle, minimum_network_size)
+                        .handle_epoch_event(epoch_event, overwatch_handle, era_minimum_network_size)
                         .await?;
                 },
                 Some(message) = inbound_relay.next() => {

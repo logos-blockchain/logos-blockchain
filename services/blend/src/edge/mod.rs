@@ -107,7 +107,8 @@ where
     NodeId: Clone,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
-    type Settings = EdgeServiceSettings<Backend::Settings, Dispatcher::Settings>;
+    type Settings =
+        EdgeServiceSettings<Backend::Settings, Backend::EraSettings, Dispatcher::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = ServiceMessage<NodeId>;
@@ -326,9 +327,9 @@ async fn run<Backend, NodeId, ProofsGenerator, Dispatcher, PolInfoProvider, Runt
     mut remaining_public_epoch_stream: impl Stream<Item = EpochEvent<BlendEpoch<NodeId>>> + Unpin,
     mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
     local_node_id: NodeId,
-    era_schedule: EraSchedule<EdgeServiceEraSettings>,
+    era_schedule: EraSchedule<EdgeServiceEraSettings<Backend::EraSettings>>,
     backend_settings: Backend::Settings,
-    local_node: RuntimeComponents,
+    runtime_components: RuntimeComponents,
     abstain_on_failure: bool,
     mut payload_dispatcher: Dispatcher,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
@@ -387,7 +388,7 @@ where
                     // payload dispatcher enters it first, so that the payloads
                     // drained on shutting down leave in it too.
                     let new_era = era_schedule.at_epoch(new_public_epoch_info.0.epoch);
-                    if new_era.era != era.era {
+                    if new_era.era > era.era {
                         payload_dispatcher.enter_era(new_era.era).await;
                     }
                     match CurrentEpoch::try_new(new_public_epoch_info, new_era.parameters) {
@@ -411,7 +412,7 @@ where
                         // its own block needs.
                         Ok(next) => {
                             era = new_era;
-                            current_epoch = next.with_available_secret_info(&mut current_secret_epoch_info, era.era, era.parameters, &backend_settings, &local_node, overwatch_handle.clone());
+                            current_epoch = next.with_available_secret_info(&mut current_secret_epoch_info, era.parameters, &backend_settings, &runtime_components, overwatch_handle.clone());
                         }
                     }
                 }
@@ -424,7 +425,7 @@ where
             }
             Some(new_secret_pol_info) = secret_pol_info_stream.next() => {
                 current_secret_epoch_info = Some(new_secret_pol_info);
-                current_epoch = current_epoch.with_available_secret_info(&mut current_secret_epoch_info, era.era, era.parameters, &backend_settings, &local_node, overwatch_handle.clone());
+                current_epoch = current_epoch.with_available_secret_info(&mut current_secret_epoch_info, era.parameters, &backend_settings, &runtime_components, overwatch_handle.clone());
             }
             Some(message) = inbound_relay.next() => {
                 match message {

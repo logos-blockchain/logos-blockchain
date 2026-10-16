@@ -505,7 +505,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             *current_round = round_clock.current_round();
         }
 
-        blacklist.enter_era(
+        blacklist.update_parameters(
             blacklist_capacity(new_era_core_config.target_peering_degree),
             RoundCount::new(new_era_core_config.liveness_window_in_rounds),
         );

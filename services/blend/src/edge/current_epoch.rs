@@ -11,7 +11,6 @@ use lb_blend::{
     scheduling::message_blend::provers::leader_and_pow::LeaderAndPowProofsGenerator,
 };
 use lb_chain_service::Epoch;
-use lb_cryptarchia_engine::Era;
 use overwatch::overwatch::OverwatchHandle;
 use tracing::debug;
 
@@ -128,7 +127,7 @@ where
     /// accepted, so nothing downstream has to ask again.
     pub fn try_new(
         (info, membership_info): BlendEpoch<NodeId>,
-        settings: &EdgeServiceEraSettings,
+        settings: &EdgeServiceEraSettings<Backend::EraSettings>,
     ) -> Result<Self, Error> {
         let size = membership_info.membership.size();
         let membership =
@@ -155,8 +154,7 @@ where
     pub fn with_available_secret_info(
         self,
         stashed_secret_info: &mut Option<PolEpochInfo>,
-        era: Era,
-        settings: &EdgeServiceEraSettings,
+        settings: &EdgeServiceEraSettings<Backend::EraSettings>,
         backend_settings: &Backend::Settings,
         runtime_components: &RuntimeComponents,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
@@ -167,7 +165,6 @@ where
         {
             return self.with_secret_info(
                 secret_epoch_info,
-                era,
                 settings,
                 backend_settings,
                 runtime_components,
@@ -197,8 +194,7 @@ where
     pub fn with_secret_info(
         self,
         secret_epoch_info: PolEpochInfo,
-        era: Era,
-        settings: &EdgeServiceEraSettings,
+        settings: &EdgeServiceEraSettings<Backend::EraSettings>,
         backend_settings: &Backend::Settings,
         runtime_components: &RuntimeComponents,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
@@ -237,7 +233,6 @@ where
 
         debug!(target: LOG_TARGET, "Creating new handler for epoch {:?}", awaiting.info.epoch);
         let handler = MessageHandler::new(
-            era,
             settings,
             backend_settings.clone(),
             runtime_components,

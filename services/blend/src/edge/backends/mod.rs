@@ -2,7 +2,6 @@ use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     scheduling::membership::Membership,
 };
-use lb_cryptarchia_engine::Era;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use overwatch::overwatch::handle::OverwatchHandle;
 use rand::RngCore;
@@ -15,11 +14,14 @@ pub trait BlendBackend<NodeId, RuntimeServiceId>
 where
     NodeId: Clone,
 {
+    /// The backend's settings that are the same in every era.
     type Settings: Clone + Send + Sync + 'static;
+    /// The backend's settings in one era.
+    type EraSettings: Clone + Send + Sync + 'static;
 
     fn new<Rng>(
         settings: Self::Settings,
-        era: Era,
+        era_settings: Self::EraSettings,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         membership: Membership<NodeId>,
         rng: Rng,
@@ -29,7 +31,6 @@ where
     where
         Rng: RngCore + Send + 'static;
     fn shutdown(self);
-    async fn enter_era(&mut self, era: Era);
     /// Send a message to the blend network.
     async fn send(&self, msg: EncapsulatedMessageWithVerifiedPublicHeader);
 }

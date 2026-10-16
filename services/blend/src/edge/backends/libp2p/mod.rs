@@ -6,13 +6,12 @@ use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     scheduling::membership::Membership,
 };
-use lb_cryptarchia_engine::Era;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_log_targets::blend;
 use libp2p::PeerId;
 use overwatch::overwatch::OverwatchHandle;
 use rand::RngCore;
-pub use settings::Libp2pBlendBackendSettings;
+pub use settings::{Libp2pBlendBackendEraSettings, Libp2pBlendBackendSettings};
 use swarm::BlendSwarm;
 use tokio::sync::mpsc;
 
@@ -34,10 +33,11 @@ const CHANNEL_SIZE: usize = 64;
 #[async_trait::async_trait]
 impl<RuntimeServiceId> BlendBackend<PeerId, RuntimeServiceId> for Libp2pBlendBackend {
     type Settings = Libp2pBlendBackendSettings;
+    type EraSettings = Libp2pBlendBackendEraSettings;
 
     fn new<Rng>(
         settings: Self::Settings,
-        era: Era,
+        era_settings: Self::EraSettings,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         membership: Membership<PeerId>,
         rng: Rng,
@@ -49,20 +49,14 @@ impl<RuntimeServiceId> BlendBackend<PeerId, RuntimeServiceId> for Libp2pBlendBac
         let Libp2pBlendBackendSettings {
             max_dial_attempts_per_peer_per_message,
             replication_factor,
-            protocol_names,
         } = settings;
-        let protocol_name = protocol_names
-            .get(era)
-            .expect("The era of the epoch is scheduled.")
-            .parameters
-            .clone()
-            .into_inner();
+        let Libp2pBlendBackendEraSettings { protocol_name } = era_settings;
         let (swarm_command_sender, swarm_command_receiver) = mpsc::channel(CHANNEL_SIZE);
         let swarm_identity = keypair(&non_ephemeral_signing_key);
         let swarm = BlendSwarm::new(
             max_dial_attempts_per_peer_per_message,
             replication_factor,
-            protocol_name,
+            protocol_name.into_inner(),
             membership,
             rng,
             swarm_command_receiver,
@@ -92,12 +86,6 @@ impl<RuntimeServiceId> BlendBackend<PeerId, RuntimeServiceId> for Libp2pBlendBac
         {
             tracing::error!(target: LOG_TARGET, "Failed to send command to Swarm: {e}");
         }
-    }
-
-    async fn enter_era(&mut self, _era: Era) {
-        // Nothing to do: the edge service builds a backend for every epoch, in
-        // that epoch's era, and an era only starts with an epoch, so a
-        // backend's era never changes.
     }
 }
 

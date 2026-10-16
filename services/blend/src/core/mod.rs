@@ -12,7 +12,6 @@ use async_trait::async_trait;
 use backends::BlendBackend;
 use diagnostics::log_pol_state_handoff;
 use dispatcher::PayloadDispatcher;
-use fork_stream::StreamExt as _;
 use futures::{
     FutureExt as _, Stream, StreamExt as _,
     future::{BoxFuture, join_all},
@@ -612,17 +611,17 @@ where
                     zk_root,
                 }) = ModeMembership::resolve(membership_info, config.minimum_network_size)
                 else {
-                    return Ok(CoreEpochStateInfo::NotCore {
+                    return CoreEpochStateInfo::NotCore {
                         epoch,
                         epoch_nonce: nonce,
-                    });
+                    };
                 };
                 let Some(core_and_path_selectors) = zk_path else {
-                    return Err(MismatchedZkId);
+                    panic!("{MismatchedZkId}");
                 };
                 let core_poq_generator = kms_adapter
                     .core_poq_generator(zk_sk_id.clone(), Box::new(core_and_path_selectors));
-                Ok(CoreEpochInfo {
+                CoreEpochInfo {
                     public: CoreEpochPublicInfo {
                         poq_core_public_inputs: CoreInputs {
                             quota: config.epoch_core_quota(membership_size),
@@ -644,7 +643,7 @@ where
                     },
                     core_poq_generator,
                 }
-                .into())
+                .into()
             },
         )
     }
@@ -653,9 +652,7 @@ where
         Box::pin(UninitializedFirstReadyStream::new(epoch_stream).first())
             .await
             .expect("The current epoch info must be available.");
-    let CoreEpochStateInfo::Core(current_epoch_info) =
-        current_epoch_info.unwrap_or_else(|error| panic!("{error}"))
-    else {
+    let CoreEpochStateInfo::Core(current_epoch_info) = current_epoch_info else {
         panic!("First retrieved epoch for Blend core startup must be available.");
     };
 
@@ -669,18 +666,7 @@ where
     let remaining_epoch_stream = EpochEventStream::new(
         remaining_epoch_stream,
         blend_config.time.epoch_transition_period,
-    )
-    .fork()
-    // Refused out here, not in the stream's own `map`: that runs while
-    // `fork_stream` holds its lock, so a panic under it poisons the lock
-    // and the unwind panics again in `Forked::drop`, aborting instead of
-    // unwinding. `Forked` has released the lock by the time this runs.
-    .map(|event| match event {
-        EpochEvent::NewEpoch(epoch) => {
-            EpochEvent::NewEpoch(epoch.unwrap_or_else(|error| panic!("{error}")))
-        }
-        EpochEvent::TransitionPeriodExpired => EpochEvent::TransitionPeriodExpired,
-    });
+    );
 
     info!(
         target: LOG_TARGET,
@@ -1203,8 +1189,6 @@ where
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Sync + Send,
 {
-    // The stage's current epoch only changes by returning, so the settings of
-    // its era hold for the whole loop.
     let blend_config = blend_configs
         .at_epoch(during_transition.current().epoch_info().epoch)
         .parameters;

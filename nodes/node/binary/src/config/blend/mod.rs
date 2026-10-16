@@ -12,12 +12,14 @@ use lb_blend_service::{
         },
     },
     edge::{
-        backends::libp2p::Libp2pBlendBackendSettings as Libp2pEdgeBlendBackendSettings,
+        backends::libp2p::{
+            Libp2pBlendBackendEraSettings as Libp2pEdgeBlendBackendEraSettings,
+            Libp2pBlendBackendSettings as Libp2pEdgeBlendBackendSettings,
+        },
         settings::{EdgeServiceEraSettings, EdgeServiceSettings},
     },
     settings::{EraOrchestratorSettings, OrchestratorSettings},
 };
-use lb_libp2p::protocol_name::StreamProtocol;
 use lb_services_utils::overwatch::RecoveryData;
 use lb_time::era::EraSchedule;
 
@@ -36,7 +38,11 @@ type DispatcherSettings = EraSchedule<Libp2pBroadcastSettings>;
 type BlendServicesSettings = (
     OrchestratorSettings,
     CoreServiceSettings<Libp2pCoreBlendBackendSettings, DispatcherSettings>,
-    EdgeServiceSettings<Libp2pEdgeBlendBackendSettings, DispatcherSettings>,
+    EdgeServiceSettings<
+        Libp2pEdgeBlendBackendSettings,
+        Libp2pEdgeBlendBackendEraSettings,
+        DispatcherSettings,
+    >,
     BroadcastServiceSettings<DispatcherSettings>,
 );
 
@@ -45,10 +51,9 @@ type BlendServicesSettings = (
 struct BlendEraSettings {
     orchestrator: EraOrchestratorSettings,
     core: CoreServiceEraSettings,
-    edge: EdgeServiceEraSettings,
+    edge: EdgeServiceEraSettings<Libp2pEdgeBlendBackendEraSettings>,
     broadcast: BroadcastServiceEraSettings,
     core_backend: Libp2pCoreBlendBackendEraSettings,
-    edge_backend_protocol: StreamProtocol,
     dispatcher: Libp2pBroadcastSettings,
 }
 
@@ -112,6 +117,9 @@ impl ServiceConfig {
                 cover: core.scheduler.cover.clone(),
                 data_replication_factor,
                 max_blend_delay_in_rounds: core.scheduler.delayer.maximum_release_delay_in_rounds,
+                backend: Libp2pEdgeBlendBackendEraSettings {
+                    protocol_name: protocol_name.clone(),
+                },
             };
 
             BlendEraSettings {
@@ -134,12 +142,11 @@ impl ServiceConfig {
                         .maximum_concurrent_edge_connections(),
                     accepted_edge_connections_per_round: deployment
                         .accepted_edge_connections_per_round(),
-                    protocol_name: protocol_name.clone(),
+                    protocol_name,
                     minimum_network_size,
                     num_blend_layers,
                     time,
                 },
-                edge_backend_protocol: protocol_name,
                 dispatcher: Libp2pBroadcastSettings {
                     topic: fork.to_string_with_name("cryptarchia"),
                 },
@@ -177,7 +184,6 @@ impl ServiceConfig {
                     .backend
                     .max_dial_attempts_per_peer_per_message,
                 replication_factor: user.edge.backend.replication_factor,
-                protocol_names: blend_eras.map(|era| era.parameters.edge_backend_protocol.clone()),
             },
             dispatcher: dispatcher_settings.clone(),
             era_schedule: blend_eras.map(|era| era.parameters.edge.clone()),

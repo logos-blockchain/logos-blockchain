@@ -52,7 +52,8 @@ impl FailureDetector {
         let scheduled_next_deadline = self
             .next_deadline
             .get_or_insert_with(|| Box::pin(sleep_until(deadline)));
-        // A sooner deadline brings the wake-up forward; a later one leaves it.
+        // A sooner deadline brings the wake-up forward; a later one leaves it
+        // unchanged.
         if deadline < scheduled_next_deadline.deadline() {
             scheduled_next_deadline.as_mut().reset(deadline);
         }
@@ -64,9 +65,6 @@ impl FailureDetector {
         }
     }
 
-    /// Stops awaiting every payload whose deadline has passed by `now`, and
-    /// returns those never seen delivered. The detector then wakes at the
-    /// earliest deadline still awaited, if it awaits any.
     fn take_expired_payloads_and_reset_next_deadline(&mut self, now: Instant) -> Vec<DataPayload> {
         let expired = self
             .unacknowledged_blended_payloads

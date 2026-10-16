@@ -4534,7 +4534,6 @@ name = "logos-blockchain-blend-service"
 version = "0.0.0"
 dependencies = [
  "async-trait",
- "fork_stream",
  "futures",
  "hex",
  "libp2p",

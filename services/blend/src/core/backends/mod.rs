@@ -49,7 +49,9 @@ pub trait BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId> {
         msg: EncapsulatedMessageWithVerifiedPublicHeader,
         intended_epoch: Epoch,
     );
-    /// Rotate epoch, and potentially the era as well, if scheduled.
+    /// Rotate epoch, and potentially the era as well, if scheduled. Passing
+    /// them together ensures we rotate all epoch and era based clocks at the
+    /// same time.
     async fn rotate_epoch(
         &mut self,
         new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>,

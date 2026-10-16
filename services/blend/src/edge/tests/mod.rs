@@ -8,7 +8,6 @@ use lb_blend::{
 };
 use lb_chain_service::{Epoch, Slot};
 use lb_core::{crypto::ZkHash, header::HeaderId};
-use lb_cryptarchia_engine::Era;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use tokio::{
     sync::{mpsc, oneshot},
@@ -454,7 +453,6 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
             .unwrap()
             .with_secret_info(
                 secret_2,
-                Era::genesis(),
                 &settings,
                 &node_id_sender,
                 &local,
@@ -472,14 +470,7 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
     let current_epoch: CurrentEpoch<TestBackend, NodeId, MockLeaderProofsGenerator, usize> =
         CurrentEpoch::try_new(public_3, &settings)
             .unwrap()
-            .with_secret_info(
-                secret_3,
-                Era::genesis(),
-                &settings,
-                &node_id_sender,
-                &local,
-                overwatch,
-            );
+            .with_secret_info(secret_3, &settings, &node_id_sender, &local, overwatch);
     assert!(current_epoch.has_handler());
     assert_eq!(current_epoch.info().epoch, Epoch::new(3));
 }
@@ -555,7 +546,6 @@ async fn public_then_private_same_epoch_creates_handler() {
     // Secret for epoch 1 arrives on the *same* epoch value -> handler is built.
     let current_epoch = current_epoch.with_secret_info(
         test_pol_epoch_info(Epoch::new(1)),
-        Era::genesis(),
         &settings,
         &node_id_sender,
         &local,
@@ -590,7 +580,6 @@ async fn private_then_public_same_epoch_creates_handler() {
         .unwrap()
         .with_available_secret_info(
             &mut secret_1,
-            Era::genesis(),
             &settings,
             &node_id_sender,
             &local,
@@ -611,7 +600,6 @@ async fn private_then_public_same_epoch_creates_handler() {
         .unwrap()
         .with_available_secret_info(
             &mut secret_1,
-            Era::genesis(),
             &settings,
             &node_id_sender,
             &local,
@@ -753,7 +741,6 @@ async fn secret_pol_info_arriving_keeps_queued_proposals() {
     // rebuilds the handler and must leave everything else this epoch owns.
     let current_epoch = current_epoch.with_secret_info(
         test_pol_epoch_info(Epoch::new(1)),
-        Era::genesis(),
         &settings,
         &node_id_sender,
         &local,
@@ -790,7 +777,6 @@ async fn secret_pol_info_for_another_epoch_leaves_this_one_alone() {
         .unwrap()
         .with_secret_info(
             test_pol_epoch_info(Epoch::new(1)),
-            Era::genesis(),
             &settings,
             &node_id_sender,
             &local,
@@ -802,7 +788,6 @@ async fn secret_pol_info_for_another_epoch_leaves_this_one_alone() {
     let mut stashed_secret_info = Some(test_pol_epoch_info(Epoch::new(2)));
     let current_epoch = current_epoch.with_available_secret_info(
         &mut stashed_secret_info,
-        Era::genesis(),
         &settings,
         &node_id_sender,
         &local,
