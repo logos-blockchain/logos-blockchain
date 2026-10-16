@@ -874,12 +874,15 @@ pub enum FinalizedOp {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+
     use lb_core::mantle::{
         Op,
         channel::{SlotTimeframe, SlotTimeout},
         ledger::{BoundedInputs, NoteId},
         ops::channel::{
-            ChannelId, MsgId, VerifiedChannelKeys, config::ChannelConfigOp,
+            ChannelId, MsgId, VerifiedChannelKeys,
+            config::{ChannelConfigOp, ChannelConfigOpFields},
             withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
@@ -896,15 +899,16 @@ mod tests {
     }
 
     fn config_op(keys: Vec<Ed25519PublicKey>) -> ChannelConfigOp {
-        ChannelConfigOp {
+        ChannelConfigOp::new(ChannelConfigOpFields {
             channel: ChannelId::from([7; 32]),
             parent: MsgId::root(),
             keys: VerifiedChannelKeys::new_unchecked(keys),
             posting_timeframe: SlotTimeframe::from(15),
             posting_timeout: SlotTimeout::from(3),
-            configuration_threshold: 2,
-            transfer_threshold: 2,
-        }
+            configuration_threshold: NonZero::<u16>::MIN,
+            transfer_threshold: NonZero::new(2).unwrap(),
+        })
+        .unwrap()
     }
 
     #[test]

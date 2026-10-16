@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use lb_binary_codec::canonical::codec_fixtures;
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, UnverifiedEd25519PublicKey,
@@ -15,7 +17,7 @@ use crate::{
         ops::channel::{
             ChannelId, MsgId,
             channel_transfer::ChannelTransferOp,
-            config::ChannelConfigOp,
+            config::{ChannelConfigOp, ChannelConfigOpFields},
             deposit::{DepositOp, Metadata},
             inscribe::InscriptionOp,
             withdraw::ChannelWithdrawOp,
@@ -28,15 +30,16 @@ codec_fixtures!(ChannelId, Self::from([0u8; 32]) => "000000000000000000000000000
 codec_fixtures!(MsgId, Self::from([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000");
 codec_fixtures!(
     ChannelConfigOp,
-    Self {
+    Self::new(ChannelConfigOpFields {
         channel: ChannelId::from([0u8; 32]),
         parent: MsgId::from([0u8; 32]),
         keys: [Ed25519PublicKey::from_bytes(&[1u8; _]).unwrap()].into(),
         posting_timeframe: SlotTimeframe::from(0u32),
         posting_timeout: SlotTimeout::from(0u32),
-        configuration_threshold: 0u16,
-        transfer_threshold: 0u16,
-    } => "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000101010101010101010101010101010101010101010101010101010101010101000000000000000000000000",
+        configuration_threshold: NonZero::<u16>::MIN,
+        transfer_threshold: NonZero::<u16>::MIN,
+    })
+    .unwrap() => "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000101010101010101010101010101010101010101010101010101010101010101000000000000000001000100",
     CHANNEL_CONFIG.clone() => CHANNEL_CONFIG_PAYLOAD_HEX,
 );
 codec_fixtures!(

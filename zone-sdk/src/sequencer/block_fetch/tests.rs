@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use lb_core::{
     crypto::Hash,
     events::{DepositNote, DepositRecreatedNotes},
@@ -9,7 +11,7 @@ use lb_core::{
             OpProof,
             channel::{
                 VerifiedChannelKeys,
-                config::ChannelConfigOp,
+                config::{ChannelConfigOp, ChannelConfigOpFields},
                 deposit::{DepositOp, Metadata},
                 inscribe::InscriptionOp,
                 withdraw::ChannelWithdrawOp,
@@ -670,15 +672,16 @@ fn extract_finalized_items_surfaces_standalone_withdraw() {
 
 fn channel_config(channel_id: ChannelId, parent: MsgId) -> ChannelConfigOp {
     let signer = Ed25519Key::from_bytes(&[0u8; 32]).public_key();
-    ChannelConfigOp {
+    ChannelConfigOp::new(ChannelConfigOpFields {
         channel: channel_id,
         parent,
         keys: VerifiedChannelKeys::try_from(vec![signer]).unwrap(),
         posting_timeframe: SlotTimeframe::from(0u32),
         posting_timeout: SlotTimeout::from(0u32),
-        configuration_threshold: 1,
-        transfer_threshold: 1,
-    }
+        configuration_threshold: NonZero::<u16>::MIN,
+        transfer_threshold: NonZero::<u16>::MIN,
+    })
+    .unwrap()
 }
 
 fn dummy_pending_tx(seed: u8) -> SignedOps<Unverified, StandardMode> {
@@ -1512,8 +1515,11 @@ async fn foreign_config_is_adopted_kept_through_un_mine_and_orphaned_by_a_rival(
     // Z <- R(cfg') tip: cfg' takes the config slot cfg chained on.
     let ch = ChannelId::from([0u8; 32]);
     let cfg = unverified_tx_with_ops(vec![Op::ChannelConfig(channel_config(ch, MsgId::root()))]);
-    let mut rival_op = channel_config(ch, MsgId::root());
-    rival_op.posting_timeframe = SlotTimeframe::from(1u32);
+    let rival_op = ChannelConfigOp::new(ChannelConfigOpFields {
+        posting_timeframe: SlotTimeframe::from(1u32),
+        ..channel_config(ch, MsgId::root()).into()
+    })
+    .unwrap();
     let rival = unverified_tx_with_ops(vec![Op::ChannelConfig(rival_op)]);
     let (cfg_hash, rival_hash) = (cfg.hash(), rival.hash());
     let ba = api_block(1, 0, 1, vec![cfg]);

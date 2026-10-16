@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{num::NonZero, sync::Arc};
 
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::Slot;
 #[cfg(any(test, feature = "test-utils"))]
 use lb_key_management_system_keys::keys::Ed25519Key;
@@ -32,20 +32,111 @@ use crate::{
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+/// A channel configuration.
+///
+/// Only a well-formed configuration can be built: both thresholds are non-zero
+/// and the configuration threshold does not exceed the number of accredited
+/// keys, which also keeps the key set non-empty. [`Self::new`] checks this, and
+/// so do the canonical decoding and the serde deserialization.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "ChannelConfigOpFields")]
 pub struct ChannelConfigOp {
-    pub channel: ChannelId,
-    pub parent: MsgId,
+    channel: ChannelId,
+    parent: MsgId,
     // This op is not used in genesis, so we can force channel updates to only use valid (e.g.,
     // non-weak) public keys.
+    keys: VerifiedChannelKeys,
+    posting_timeframe: SlotTimeframe,
+    posting_timeout: SlotTimeout,
+    configuration_threshold: NonZero<u16>,
+    transfer_threshold: NonZero<u16>,
+}
+
+/// The fields of a [`ChannelConfigOp`], before [`ChannelConfigOp::new`] checks
+/// them.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+pub struct ChannelConfigOpFields {
+    pub channel: ChannelId,
+    pub parent: MsgId,
     pub keys: VerifiedChannelKeys,
     pub posting_timeframe: SlotTimeframe,
     pub posting_timeout: SlotTimeout,
-    pub configuration_threshold: u16,
-    pub transfer_threshold: u16,
+    pub configuration_threshold: NonZero<u16>,
+    pub transfer_threshold: NonZero<u16>,
 }
 
 impl ChannelConfigOp {
+    /// Builds a channel configuration from its fields.
+    ///
+    /// Returns [`Error::InvalidChannelConfig`] if the configuration threshold
+    /// exceeds the number of accredited keys.
+    pub fn new(fields: ChannelConfigOpFields) -> Result<Self, Error> {
+        let ChannelConfigOpFields {
+            channel,
+            parent,
+            keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            transfer_threshold,
+        } = fields;
+        let operation = Self {
+            channel,
+            parent,
+            keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            transfer_threshold,
+        };
+        if !operation.has_reachable_configuration_threshold() {
+            return Err(Error::InvalidChannelConfig);
+        }
+        Ok(operation)
+    }
+
+    /// The configuration threshold must be reachable with the accredited keys,
+    /// otherwise the channel would be locked out of any future
+    /// reconfiguration.
+    fn has_reachable_configuration_threshold(&self) -> bool {
+        usize::from(self.configuration_threshold.get()) <= self.keys.len()
+    }
+
+    #[must_use]
+    pub const fn channel(&self) -> ChannelId {
+        self.channel
+    }
+
+    #[must_use]
+    pub const fn parent(&self) -> MsgId {
+        self.parent
+    }
+
+    #[must_use]
+    pub const fn keys(&self) -> &VerifiedChannelKeys {
+        &self.keys
+    }
+
+    #[must_use]
+    pub const fn posting_timeframe(&self) -> &SlotTimeframe {
+        &self.posting_timeframe
+    }
+
+    #[must_use]
+    pub const fn posting_timeout(&self) -> &SlotTimeout {
+        &self.posting_timeout
+    }
+
+    #[must_use]
+    pub const fn configuration_threshold(&self) -> NonZero<u16> {
+        self.configuration_threshold
+    }
+
+    #[must_use]
+    pub const fn transfer_threshold(&self) -> NonZero<u16> {
+        self.transfer_threshold
+    }
+
     #[must_use]
     pub fn id(&self) -> MsgId {
         let mut hasher = Hasher::new();
@@ -66,9 +157,94 @@ impl ChannelConfigOp {
             .into(),
             posting_timeframe: SlotTimeframe::from(10u32),
             posting_timeout: SlotTimeout::from(11u32),
-            configuration_threshold: 12,
-            transfer_threshold: 13,
+            configuration_threshold: NonZero::new(2).unwrap(),
+            transfer_threshold: NonZero::new(13).unwrap(),
         }
+    }
+}
+
+impl TryFrom<ChannelConfigOpFields> for ChannelConfigOp {
+    type Error = Error;
+
+    fn try_from(fields: ChannelConfigOpFields) -> Result<Self, Self::Error> {
+        Self::new(fields)
+    }
+}
+
+impl From<ChannelConfigOp> for ChannelConfigOpFields {
+    fn from(operation: ChannelConfigOp) -> Self {
+        let ChannelConfigOp {
+            channel,
+            parent,
+            keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            transfer_threshold,
+        } = operation;
+        Self {
+            channel,
+            parent,
+            keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            transfer_threshold,
+        }
+    }
+}
+
+// The fields in order, as `#[derive(BinaryCodec)]` would encode them. Decoding
+// goes through `ChannelConfigOp::new`, so it rejects what `new` rejects.
+impl BinaryEncode for ChannelConfigOp {
+    fn encoded_length(&self) -> usize {
+        self.channel.encoded_length()
+            + self.parent.encoded_length()
+            + self.keys.encoded_length()
+            + self.posting_timeframe.encoded_length()
+            + self.posting_timeout.encoded_length()
+            + self.configuration_threshold.encoded_length()
+            + self.transfer_threshold.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.channel.encode_into(out);
+        self.parent.encode_into(out);
+        self.keys.encode_into(out);
+        self.posting_timeframe.encode_into(out);
+        self.posting_timeout.encode_into(out);
+        self.configuration_threshold.encode_into(out);
+        self.transfer_threshold.encode_into(out);
+    }
+}
+
+impl BinaryDecode for ChannelConfigOp {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, channel) = <ChannelId as BinaryDecode>::decode(input, &())?;
+        let (input, parent) = <MsgId as BinaryDecode>::decode(input, &())?;
+        let (input, keys) = <VerifiedChannelKeys as BinaryDecode>::decode(input, &())?;
+        let (input, posting_timeframe) = <SlotTimeframe as BinaryDecode>::decode(input, &())?;
+        let (input, posting_timeout) = <SlotTimeout as BinaryDecode>::decode(input, &())?;
+        let (input, configuration_threshold) = <NonZero<u16> as BinaryDecode>::decode(input, &())?;
+        let (input, transfer_threshold) = <NonZero<u16> as BinaryDecode>::decode(input, &())?;
+        let operation = Self::new(ChannelConfigOpFields {
+            channel,
+            parent,
+            keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            transfer_threshold,
+        })
+        .map_err(|_| {
+            DecodeError::invalid_value::<Self>("configuration threshold above the key count")
+        })?;
+        Ok((input, operation))
     }
 }
 
@@ -108,11 +284,11 @@ impl PreverifiableOperation<StandardMode>
     fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
         let operation = self.operation();
 
-        // Check config is well-formed
-        if operation.configuration_threshold == 0
-            || operation.transfer_threshold == 0
-            || operation.keys.is_empty()
-        {
+        // Check config is well-formed. Zero thresholds cannot be represented,
+        // and a configuration threshold above the key count (which includes an
+        // empty key set) is already rejected when the operation is built or
+        // decoded. Check it here too, as a backstop.
+        if !operation.has_reachable_configuration_threshold() {
             return Err(Error::InvalidChannelConfig);
         }
 
@@ -213,12 +389,12 @@ impl<Mode: VerificationMode> ExecutableOperation
         );
         if let Some(channel) = context.channels.channels.get_mut(&operation.channel) {
             channel.accredited_keys = Arc::new(keys);
-            channel.configuration_threshold = operation.configuration_threshold;
+            channel.configuration_threshold = operation.configuration_threshold.get();
             channel.tip_sequencer = 0;
             channel.tip_sequencer_starting_slot = context.block_slot;
             channel.posting_timeframe = operation.posting_timeframe.clone();
             channel.posting_timeout = operation.posting_timeout.clone();
-            channel.transfer_threshold = operation.transfer_threshold;
+            channel.transfer_threshold = operation.transfer_threshold.get();
             channel.tip_slot = context.block_slot;
             channel.config_tip_hash = operation.id();
         } else {
@@ -226,14 +402,14 @@ impl<Mode: VerificationMode> ExecutableOperation
                 operation.channel,
                 ChannelState {
                     accredited_keys: Arc::new(keys),
-                    configuration_threshold: operation.configuration_threshold,
+                    configuration_threshold: operation.configuration_threshold.get(),
                     tip_message: MsgId::root(),
                     config_tip_hash: operation.id(),
                     tip_slot: context.block_slot,
                     tip_sequencer: 0,
                     tip_sequencer_starting_slot: context.block_slot,
                     posting_timeframe: operation.posting_timeframe.clone(),
-                    transfer_threshold: operation.transfer_threshold,
+                    transfer_threshold: operation.transfer_threshold.get(),
                     posting_timeout: operation.posting_timeout.clone(),
                 },
             );
@@ -244,6 +420,8 @@ impl<Mode: VerificationMode> ExecutableOperation
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
+
     use super::*;
     use crate::mantle::{
         TxHash, gas::test_utils::FixedThresholds,
@@ -283,8 +461,8 @@ mod tests {
             keys: Ed25519Key::from_bytes(&[1; 32]).public_key().into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
+            configuration_threshold: NonZero::<u16>::MIN,
+            transfer_threshold: NonZero::<u16>::MIN,
         }
     }
 
@@ -332,38 +510,6 @@ mod tests {
     }
 
     #[test]
-    fn preverify_rejects_a_zero_configuration_threshold() {
-        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
-            ChannelConfigOp {
-                configuration_threshold: 0,
-                ..ChannelConfigOp::sample()
-            },
-            ChannelMultiSigProof::sample_with_signatures(1),
-        );
-
-        assert_eq!(
-            signed_operation.preverify(&()),
-            Err(Error::InvalidChannelConfig)
-        );
-    }
-
-    #[test]
-    fn preverify_rejects_a_zero_transfer_threshold() {
-        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
-            ChannelConfigOp {
-                transfer_threshold: 0,
-                ..ChannelConfigOp::sample()
-            },
-            ChannelMultiSigProof::sample_with_signatures(1),
-        );
-
-        assert_eq!(
-            signed_operation.preverify(&()),
-            Err(Error::InvalidChannelConfig)
-        );
-    }
-
-    #[test]
     fn preverify_rejects_an_empty_accredited_key_set() {
         let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
             ChannelConfigOp {
@@ -377,6 +523,143 @@ mod tests {
             signed_operation.preverify(&()),
             Err(Error::InvalidChannelConfig)
         );
+    }
+
+    #[test]
+    fn preverify_rejects_a_configuration_threshold_above_the_key_count() {
+        let operation = ChannelConfigOp::sample();
+        let configuration_threshold =
+            NonZero::new(u16::try_from(operation.keys.len() + 1).unwrap()).unwrap();
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            ChannelConfigOp {
+                configuration_threshold,
+                ..operation
+            },
+            ChannelMultiSigProof::sample_with_signatures(1),
+        );
+
+        assert_eq!(
+            signed_operation.preverify(&()),
+            Err(Error::InvalidChannelConfig)
+        );
+    }
+
+    #[test]
+    fn preverify_accepts_a_configuration_threshold_equal_to_the_key_count() {
+        let operation = ChannelConfigOp::sample();
+        let configuration_threshold =
+            NonZero::new(u16::try_from(operation.keys.len()).unwrap()).unwrap();
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            ChannelConfigOp {
+                configuration_threshold,
+                ..operation
+            },
+            ChannelMultiSigProof::sample_with_signatures(1),
+        );
+
+        assert_eq!(signed_operation.preverify(&()), Ok(()));
+    }
+
+    fn with_configuration_threshold(configuration_threshold: u16) -> ChannelConfigOpFields {
+        ChannelConfigOpFields {
+            configuration_threshold: NonZero::new(configuration_threshold).unwrap(),
+            ..ChannelConfigOp::sample().into()
+        }
+    }
+
+    #[test]
+    fn new_rejects_a_configuration_threshold_above_the_key_count() {
+        assert_eq!(
+            ChannelConfigOp::new(with_configuration_threshold(3)),
+            Err(Error::InvalidChannelConfig)
+        );
+    }
+
+    #[test]
+    fn new_accepts_a_configuration_threshold_up_to_the_key_count() {
+        for configuration_threshold in [1, 2] {
+            let operation =
+                ChannelConfigOp::new(with_configuration_threshold(configuration_threshold))
+                    .unwrap();
+            assert_eq!(
+                operation.configuration_threshold().get(),
+                configuration_threshold
+            );
+        }
+    }
+
+    /// The sample encoding with its two trailing thresholds replaced.
+    fn encoding_with_thresholds(configuration_threshold: u16, transfer_threshold: u16) -> Vec<u8> {
+        let mut encoded = ChannelConfigOp::sample().encode_to_vec();
+        let thresholds = encoded.len() - 4;
+        encoded.truncate(thresholds);
+        encoded.extend_from_slice(&configuration_threshold.to_le_bytes());
+        encoded.extend_from_slice(&transfer_threshold.to_le_bytes());
+        encoded
+    }
+
+    #[test]
+    fn decode_round_trips_a_valid_configuration() {
+        let operation = ChannelConfigOp::sample();
+        let encoded = operation.encode();
+
+        assert_eq!(encoded.as_ref(), encoding_with_thresholds(2, 13).as_slice());
+        assert_eq!(ChannelConfigOp::decode_all(&encoded, &()), Ok(operation));
+    }
+
+    #[test]
+    fn decode_rejects_a_zero_threshold() {
+        for encoded in [
+            encoding_with_thresholds(0, 13),
+            encoding_with_thresholds(2, 0),
+        ] {
+            assert!(matches!(
+                ChannelConfigOp::decode_all(&encoded, &()),
+                Err(DecodeError::InvalidValue { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn decode_rejects_a_configuration_threshold_above_the_key_count() {
+        assert!(matches!(
+            ChannelConfigOp::decode_all(&encoding_with_thresholds(3, 13), &()),
+            Err(DecodeError::InvalidValue { .. })
+        ));
+    }
+
+    #[test]
+    fn deserialize_rejects_what_new_rejects() {
+        let json = serde_json::to_value(ChannelConfigOp::sample()).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ChannelConfigOp>(json.clone()).unwrap(),
+            ChannelConfigOp::sample()
+        );
+
+        for (field, value) in [
+            ("configuration_threshold", 0),
+            ("transfer_threshold", 0),
+            ("configuration_threshold", 3),
+        ] {
+            let mut invalid = json.clone();
+            invalid[field] = value.into();
+            assert!(serde_json::from_value::<ChannelConfigOp>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn bincode_deserialize_rejects_a_configuration_threshold_above_the_key_count() {
+        let operation = ChannelConfigOp::sample();
+        let valid = operation.to_bytes().unwrap();
+        assert_eq!(ChannelConfigOp::from_bytes(&valid).unwrap(), operation);
+
+        let invalid = ChannelConfigOp {
+            configuration_threshold: NonZero::new(3).unwrap(),
+            ..operation
+        }
+        .to_bytes()
+        .unwrap();
+        assert!(ChannelConfigOp::from_bytes(&invalid).is_err());
     }
 
     #[test]
@@ -534,7 +817,7 @@ mod tests {
             accredited_keys: Arc::new(UnverifiedChannelKeys::new_unchecked(
                 operation.keys.iter().map(|k| k.into_unverified()).collect(),
             )),
-            configuration_threshold: operation.configuration_threshold,
+            configuration_threshold: operation.configuration_threshold.get(),
             tip_message: MsgId::root(),
             config_tip_hash: operation.id(),
             tip_slot: block_slot,
@@ -542,7 +825,7 @@ mod tests {
             tip_sequencer_starting_slot: block_slot,
             posting_timeframe: operation.posting_timeframe.clone(),
             posting_timeout: operation.posting_timeout.clone(),
-            transfer_threshold: operation.transfer_threshold,
+            transfer_threshold: operation.transfer_threshold.get(),
         }
     }
 

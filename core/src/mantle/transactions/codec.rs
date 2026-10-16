@@ -35,7 +35,7 @@ pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasCon
                 // The ledger enforces exactly `configuration_threshold` proofs,
                 // which is 0 for a channel that does not exist yet.
                 OpRef::ChannelConfig(operation) => calculate_channel_multi_sig_proof_byte_size(
-                    thresholds.configuration_threshold(&operation.channel),
+                    thresholds.configuration_threshold(&operation.channel()),
                 ),
 
                 // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
@@ -70,7 +70,7 @@ pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasCon
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, num::NonZero};
 
     use ark_ff::AdditiveGroup as _;
     use lb_binary_codec::canonical::{BinaryDecodeExt as _, DecodeError};
@@ -94,8 +94,8 @@ mod tests {
             ops::{
                 ZkAndEd25519Proof,
                 channel::{
-                    ChannelId, MsgId, VerifiedChannelKeys,
-                    config::ChannelConfigOp,
+                    ChannelId, MsgId,
+                    config::{ChannelConfigOp, ChannelConfigOpFields},
                     inscribe::{self, Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
@@ -196,15 +196,18 @@ mod tests {
                 parent: MsgId::from([0x00; 32]),
                 signer: signing_key.public_key().into_unverified(),
             }),
-            Op::ChannelConfig(ChannelConfigOp {
-                channel: ChannelId::from([0x22; 32]),
-                parent: MsgId::from([0x33; 32]),
-                keys: signing_key.public_key().into(),
-                posting_timeframe: 1.into(),
-                posting_timeout: 2.into(),
-                configuration_threshold: 3,
-                transfer_threshold: 4,
-            }),
+            Op::ChannelConfig(
+                ChannelConfigOp::new(ChannelConfigOpFields {
+                    channel: ChannelId::from([0x22; 32]),
+                    parent: MsgId::from([0x33; 32]),
+                    keys: signing_key.public_key().into(),
+                    posting_timeframe: 1.into(),
+                    posting_timeout: 2.into(),
+                    configuration_threshold: NonZero::<u16>::MIN,
+                    transfer_threshold: NonZero::new(4).unwrap(),
+                })
+                .unwrap(),
+            ),
         ]);
 
         let tx_hash = tx.hash();
@@ -365,7 +368,7 @@ mod tests {
         let signing_key2 = Ed25519Key::from_bytes(&[2; 32]);
         let signing_key3 = Ed25519Key::from_bytes(&[3; 32]);
 
-        let config_op = ChannelConfigOp {
+        let config_op = ChannelConfigOp::new(ChannelConfigOpFields {
             channel: ChannelId::from([0xFF; 32]),
             parent: MsgId::from([0xAA; 32]),
             keys: [
@@ -376,9 +379,10 @@ mod tests {
             .into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
-            configuration_threshold: 0,
-            transfer_threshold: 0,
-        };
+            configuration_threshold: NonZero::<u16>::MIN,
+            transfer_threshold: NonZero::<u16>::MIN,
+        })
+        .unwrap();
 
         let mantle_tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op)]);
 
@@ -522,15 +526,16 @@ mod tests {
             signer: signing_key.public_key().into_unverified(),
         };
 
-        let config_op = ChannelConfigOp {
+        let config_op = ChannelConfigOp::new(ChannelConfigOpFields {
             channel: ChannelId::from([0xCC; 32]),
             parent: MsgId::from([0xDD; 32]),
             keys: signing_key.public_key().into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
-            configuration_threshold: 0,
-            transfer_threshold: 0,
-        };
+            configuration_threshold: NonZero::<u16>::MIN,
+            transfer_threshold: NonZero::<u16>::MIN,
+        })
+        .unwrap();
 
         let blend_proof = ActivityProof {
             epoch: u32::MAX.into(),
@@ -620,15 +625,16 @@ mod tests {
             signer: signing_key1.public_key().into_unverified(),
         };
 
-        let config_op = ChannelConfigOp {
+        let config_op = ChannelConfigOp::new(ChannelConfigOpFields {
             channel: ChannelId::from([0x33; 32]),
             parent: MsgId::from([0x44; 32]),
             keys: [signing_key1.public_key(), signing_key2.public_key()].into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
-            configuration_threshold: 0,
-            transfer_threshold: 0,
-        };
+            configuration_threshold: NonZero::<u16>::MIN,
+            transfer_threshold: NonZero::<u16>::MIN,
+        })
+        .unwrap();
 
         let service_note_sk = ZkKey::from(BigUint::from(1u64));
         let transfer_op = TransferOp {
@@ -784,15 +790,18 @@ mod tests {
     #[test]
     fn test_encode_reject_excessive_op_count() {
         let ops = vec![
-            Op::ChannelConfig(ChannelConfigOp {
-                channel: ChannelId::from([0x22; 32]),
-                parent: MsgId::from([0x33; 32]),
-                keys: Ed25519Key::from_bytes(&[1; 32]).public_key().into(),
-                posting_timeframe: 0.into(),
-                posting_timeout: 0.into(),
-                configuration_threshold: 0,
-                transfer_threshold: 0,
-            });
+            Op::ChannelConfig(
+                ChannelConfigOp::new(ChannelConfigOpFields {
+                    channel: ChannelId::from([0x22; 32]),
+                    parent: MsgId::from([0x33; 32]),
+                    keys: Ed25519Key::from_bytes(&[1; 32]).public_key().into(),
+                    posting_timeframe: 0.into(),
+                    posting_timeout: 0.into(),
+                    configuration_threshold: NonZero::<u16>::MIN,
+                    transfer_threshold: NonZero::<u16>::MIN,
+                })
+                .unwrap()
+            );
             u8::MAX as usize + 1
         ];
 
@@ -858,18 +867,11 @@ mod tests {
 
     #[test]
     fn test_decode_reject_zero_key_count() {
-        let encoded_config_op = ChannelConfigOp {
-            channel: ChannelId::from([0x22; 32]),
-            parent: MsgId::from([0x33; 32]),
-            // Using `new_unchecked` to bypass the constructor check since we're testing
-            // `decode` directly.
-            keys: VerifiedChannelKeys::new_unchecked([].into()),
-            posting_timeframe: 0.into(),
-            posting_timeout: 0.into(),
-            configuration_threshold: 0,
-            transfer_threshold: 0,
-        }
-        .encode();
+        // An empty key set cannot be built, so write the encoding by hand: the
+        // channel id and the parent, then a zero key count.
+        let mut encoded_config_op = [0x22; 32].to_vec();
+        encoded_config_op.extend_from_slice(&[0x33; 32]);
+        encoded_config_op.extend_from_slice(&0u16.encode());
 
         let err = ChannelConfigOp::decode(&encoded_config_op).unwrap_err();
         assert!(matches!(err, DecodeError::LengthOutOfBounds { len: 0, .. }));
@@ -901,23 +903,18 @@ mod tests {
             valid_input.extend_from_slice(&pk.to_bytes());
         }
 
-        // Posting Timeframe (32 bytes)
-        valid_input.extend_from_slice(&[0; 32]);
+        // Posting Timeframe and Posting Timeout (4 bytes each)
+        valid_input.extend_from_slice(&[0; 8]);
 
-        // Posting Timeout (32 bytes)
-        valid_input.extend_from_slice(&[0; 32]);
-
-        // Configuration Threshold (16 bytes)
-        valid_input.extend_from_slice(&[0; 16]);
-
-        // Withdraw Threshold (16 bytes)
-        valid_input.extend_from_slice(&[0; 16]);
+        // Configuration and Transfer Thresholds (2 bytes each)
+        valid_input.extend_from_slice(&1u16.encode());
+        valid_input.extend_from_slice(&1u16.encode());
 
         let result = ChannelConfigOp::decode(&valid_input);
         assert!(result.is_ok(), "Should accept max key count: {result:?}");
 
         let (_, set_keys_op) = result.unwrap();
-        assert_eq!(set_keys_op.keys.len(), u16::MAX as usize);
+        assert_eq!(set_keys_op.keys().len(), u16::MAX as usize);
     }
 
     #[test]

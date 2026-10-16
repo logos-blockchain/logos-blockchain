@@ -907,8 +907,10 @@ where
         let channel = ledger
             .mantle_ledger()
             .channels()
-            .channel_state(&set_keys_op.channel)
-            .ok_or(WalletServiceError::MissingChannelState(set_keys_op.channel))?;
+            .channel_state(&set_keys_op.channel())
+            .ok_or(WalletServiceError::MissingChannelState(
+                set_keys_op.channel(),
+            ))?;
 
         let authorized_key = channel.accredited_keys[0]; // First key is authorized key (guaranteed non-empty)
         let Ok(validated_public_key) = Ed25519PublicKey::try_from(authorized_key) else {

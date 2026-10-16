@@ -360,7 +360,7 @@ mod tests {
         ]);
         let context = OpsGasContext::new(
             [(ChannelWithdrawOp::sample().channel_id, TRANSFER_THRESHOLD)].into(),
-            [(ChannelConfigOp::sample().channel, CONFIGURATION_THRESHOLD)].into(),
+            [(ChannelConfigOp::sample().channel(), CONFIGURATION_THRESHOLD)].into(),
             GasPrices::new(1, 0),
         );
 

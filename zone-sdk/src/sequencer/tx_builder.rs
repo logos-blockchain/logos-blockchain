@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use lb_core::{
     mantle::{
         SignedOps, TxHash,
@@ -7,7 +9,7 @@ use lb_core::{
             Op, OpProof, OpRef,
             channel::{
                 ChannelId, ChannelKeyIndex, MsgId, VerifiedChannelKeys,
-                config::ChannelConfigOp,
+                config::{ChannelConfigOp, ChannelConfigOpFields},
                 inscribe::{Inscription, InscriptionOp},
             },
         },
@@ -365,15 +367,25 @@ pub(super) async fn build_and_fund_config<Node>(
 where
     Node: adapter::Node + Sync,
 {
-    let config_op = ChannelConfigOp {
+    // Reject a config the ledger would reject before funding it.
+    let key_count = keys.len();
+    let non_zero = |threshold: u16, name: &str| {
+        NonZero::new(threshold).ok_or_else(|| Error::Network(format!("{name} must be at least 1")))
+    };
+    let config_op = ChannelConfigOp::new(ChannelConfigOpFields {
         channel: channel_id,
         parent,
         keys,
         posting_timeframe,
         posting_timeout,
-        configuration_threshold,
-        transfer_threshold,
-    };
+        configuration_threshold: non_zero(configuration_threshold, "configuration_threshold")?,
+        transfer_threshold: non_zero(transfer_threshold, "transfer_threshold")?,
+    })
+    .map_err(|_| {
+        Error::Network(format!(
+            "configuration_threshold {configuration_threshold} exceeds the {key_count} accredited keys"
+        ))
+    })?;
 
     let (config_tx, transfer_proof, _) =
         fund_ops(node, funding, vec![Op::ChannelConfig(config_op)]).await?;

@@ -576,13 +576,15 @@ pub fn channel_configs(
     let tx_hash = tx.op_refs().hash();
     tx.op_refs_iter()
         .filter_map(|op| match op {
-            OpRef::ChannelConfig(config) if config.channel == channel_id => Some(InscriptionInfo {
-                tx_hash,
-                parent_msg: config.parent,
-                this_msg: config.id(),
-                payload: Inscription::new_unchecked(Vec::new()),
-                signer: None,
-            }),
+            OpRef::ChannelConfig(config) if config.channel() == channel_id => {
+                Some(InscriptionInfo {
+                    tx_hash,
+                    parent_msg: config.parent(),
+                    this_msg: config.id(),
+                    payload: Inscription::new_unchecked(Vec::new()),
+                    signer: None,
+                })
+            }
             _ => None,
         })
         .collect()
@@ -885,10 +887,10 @@ fn extract_finalized_items(
                     };
                     ops.push(FinalizedOp::Inscription(info));
                 }
-                OpRef::ChannelConfig(config) if config.channel == channel_id => {
+                OpRef::ChannelConfig(config) if config.channel() == channel_id => {
                     ops.push(FinalizedOp::Config(InscriptionInfo {
                         tx_hash,
-                        parent_msg: config.parent,
+                        parent_msg: config.parent(),
                         this_msg: config.id(),
                         payload: Inscription::new_unchecked(Vec::new()),
                         signer: None,
@@ -1147,7 +1149,7 @@ pub(super) fn classify_channel_tx(
                 });
                 *block_tip = Some(this_msg);
             }
-            OpRef::ChannelConfig(config) if config.channel == channel_id => {
+            OpRef::ChannelConfig(config) if config.channel() == channel_id => {
                 configs += 1;
                 // Configs sit on the separate config lineage — `this_msg` is a
                 // config id, `parent_msg` its config parent, payload empty.
@@ -1156,7 +1158,7 @@ pub(super) fn classify_channel_tx(
                 // node's single tip.
                 config_entries.push(InscriptionInfo {
                     tx_hash,
-                    parent_msg: config.parent,
+                    parent_msg: config.parent(),
                     this_msg: config.id(),
                     payload: [].into(),
                     signer: None,
@@ -1235,7 +1237,7 @@ pub(super) fn is_pure_config<Mode: VerificationMode>(
     let mut transfers = 0usize;
     for op in tx.op_refs_iter() {
         match op {
-            OpRef::ChannelConfig(config) if config.channel == channel_id => configs += 1,
+            OpRef::ChannelConfig(config) if config.channel() == channel_id => configs += 1,
             OpRef::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => return false,
             OpRef::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => return false,
             OpRef::Transfer(_) => transfers += 1,
@@ -1267,7 +1269,7 @@ fn touches_channel_tip<State: VerificationState, Mode: VerificationMode>(
 ) -> bool {
     tx.op_refs().iter().any(|op| match op {
         OpRef::ChannelInscribe(inscribe) => inscribe.channel_id == channel_id,
-        OpRef::ChannelConfig(set_keys) => set_keys.channel == channel_id,
+        OpRef::ChannelConfig(set_keys) => set_keys.channel() == channel_id,
         _ => false,
     })
 }
