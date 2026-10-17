@@ -1,7 +1,7 @@
 use std::{collections::HashSet, fmt::Debug};
 
 use lb_core::header::HeaderId;
-use lb_cryptarchia_sync::{BlocksResponse, TipResponse};
+use lb_cryptarchia_sync::{BlocksProviderResponse, TipProviderResponse};
 use tokio::sync::{mpsc::Sender, oneshot};
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -26,7 +26,7 @@ pub type BackendNetworkMsg<Backend, RuntimeServiceId> = NetworkMsg<
 
 #[derive(Debug, Clone)]
 pub enum ChainSyncEvent {
-    ProvideBlocksRequest {
+    BlocksRequest {
         /// Return blocks up to `target_block`.
         target_block: HeaderId,
         /// The local canonical chain latest block.
@@ -36,10 +36,10 @@ pub enum ChainSyncEvent {
         /// The list of additional blocks that the requester has.
         additional_blocks: HashSet<HeaderId>,
         /// Channel to send blocks to network.
-        reply_sender: Sender<BlocksResponse>,
+        reply_sender: Sender<BlocksProviderResponse>,
     },
-    ProvideTipRequest {
+    TipRequest {
         /// Channel to send the latest tip to the network.
-        reply_sender: Sender<TipResponse>,
+        reply_sender: Sender<TipProviderResponse>,
     },
 }

@@ -86,9 +86,8 @@ mod tests {
     use super::*;
     use crate::libp2p::{
         messages::{
-            DownloadBlocksRequest, DownloadBlocksResponse,
-            MAX_DOWNLOAD_BLOCKS_RESPONSE_BINCODE_SIZE, MAX_REQUEST_MESSAGE_BINCODE_SIZE,
-            RequestMessage,
+            BlocksRequest, BlocksResponse, MAX_BLOCKS_RESPONSE_BINCODE_SIZE,
+            MAX_REQUEST_MESSAGE_BINCODE_SIZE, RequestMessage,
         },
         provider::MAX_ADDITIONAL_BLOCKS,
     };
@@ -129,10 +128,8 @@ mod tests {
 
     #[tokio::test]
     async fn sender_rejects_messages_above_message_limit() {
-        let message = DownloadBlocksResponse::Block(Bytes::from(vec![
-            0u8;
-            MAX_DOWNLOAD_BLOCKS_RESPONSE_BINCODE_SIZE
-        ]));
+        let message =
+            BlocksResponse::Block(Bytes::from(vec![0u8; MAX_BLOCKS_RESPONSE_BINCODE_SIZE]));
         let mut writer = futures::io::Cursor::new(Vec::new());
 
         let error = pack_to_writer(&message, &mut writer).await.unwrap_err();
@@ -163,7 +160,7 @@ mod tests {
 
     #[tokio::test]
     async fn receiver_accepts_a_valid_frame() {
-        let request = RequestMessage::DownloadBlocksRequest(DownloadBlocksRequest::new(
+        let request = RequestMessage::Blocks(BlocksRequest::new(
             [0; 32].into(),
             [1; 32].into(),
             [2; 32].into(),
@@ -179,6 +176,6 @@ mod tests {
         let decoded = unpack_from_reader::<RequestMessage, _>(&mut futures::io::Cursor::new(frame))
             .await
             .unwrap();
-        assert!(matches!(decoded, RequestMessage::DownloadBlocksRequest(_)));
+        assert!(matches!(decoded, RequestMessage::Blocks(_)));
     }
 }

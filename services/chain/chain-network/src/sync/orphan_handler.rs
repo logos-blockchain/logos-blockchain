@@ -506,7 +506,7 @@ mod tests {
     };
 
     use futures::stream;
-    use lb_cryptarchia_sync::GetTipResponse;
+    use lb_cryptarchia_sync::TipResponse;
     use lb_network_service::{NetworkService, backends::mock::Mock, message::ChainSyncEvent};
     use overwatch::services::{ServiceData, relay::OutboundRelay};
     use tokio::time::timeout;
@@ -573,7 +573,12 @@ mod tests {
         }
     }
 
-    async fn receive_blocks<S>(stream: &mut Pin<&mut S>, expected_count: usize) -> Vec<TestBlock>
+    /// Collects up to `expected_count` blocks from `stream`, stopping early if
+    /// the stream ends or 100ms pass.
+    async fn collect_next_blocks<S>(
+        stream: &mut Pin<&mut S>,
+        expected_count: usize,
+    ) -> Vec<TestBlock>
     where
         S: Stream<Item = TestBlock> + Unpin,
     {
@@ -667,11 +672,11 @@ mod tests {
             unimplemented!()
         }
 
-        async fn request_tip(&self, _peer: Self::PeerId) -> Result<GetTipResponse, DynError> {
+        async fn request_tip(&self, _peer: Self::PeerId) -> Result<TipResponse, DynError> {
             unimplemented!()
         }
 
-        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {
+        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<TipResponse> {
             Box::new(stream::empty())
         }
 
@@ -795,7 +800,7 @@ mod tests {
             .unwrap();
 
         let mut downloader = pin::pin!(downloader);
-        let received_blocks = receive_blocks(&mut downloader, 4).await;
+        let received_blocks = collect_next_blocks(&mut downloader, 4).await;
         assert_eq!(&received_blocks, &chain[0..=3]);
 
         // Only one request should have fired — the one for the non-rejected
@@ -1020,7 +1025,7 @@ mod tests {
             .unwrap();
 
         let mut downloader = pin::pin!(downloader);
-        let received_blocks = receive_blocks(&mut downloader, 6).await;
+        let received_blocks = collect_next_blocks(&mut downloader, 6).await;
 
         let first_block = received_blocks.first().unwrap();
         let is_orphan_2_first = *first_block == chain[0];
@@ -1050,7 +1055,7 @@ mod tests {
             .unwrap();
 
         let mut downloader = pin::pin!(downloader);
-        let received_blocks = receive_blocks(&mut downloader, 6).await;
+        let received_blocks = collect_next_blocks(&mut downloader, 6).await;
 
         let first_block = received_blocks.first().unwrap();
         let is_orphan_2_first = *first_block == chain[0];
@@ -1075,7 +1080,7 @@ mod tests {
             .unwrap();
 
         let mut downloader = pin::pin!(downloader);
-        let received_blocks = receive_blocks(&mut downloader, 5).await;
+        let received_blocks = collect_next_blocks(&mut downloader, 5).await;
 
         assert_eq!(&received_blocks, &chain);
     }
@@ -1095,7 +1100,7 @@ mod tests {
 
         let mut downloader = pin::pin!(downloader);
 
-        let received_blocks = receive_blocks(&mut downloader, 10).await;
+        let received_blocks = collect_next_blocks(&mut downloader, 10).await;
 
         let received_ids: Vec<_> = received_blocks.iter().collect();
         let expected_ids: Vec<_> = chain[0..6].iter().collect();
@@ -1139,7 +1144,7 @@ mod tests {
         let downloader_mut = downloader.as_mut().get_mut();
         downloader_mut.cancel_active_download();
 
-        let additional_blocks = receive_blocks(&mut downloader, 3).await;
+        let additional_blocks = collect_next_blocks(&mut downloader, 3).await;
         received_blocks.extend(additional_blocks);
 
         assert_eq!(received_blocks.len(), 4);
@@ -1227,7 +1232,7 @@ mod tests {
             downloader.as_mut().get_mut().cancel_active_download();
         }
 
-        let additional_blocks = receive_blocks(&mut downloader, 4).await;
+        let additional_blocks = collect_next_blocks(&mut downloader, 4).await;
         received_blocks.extend(additional_blocks);
 
         let is_from_orphan1 = received_blocks[0] == chain[0];
@@ -1255,7 +1260,7 @@ mod tests {
 
         let mut downloader = pin::pin!(downloader);
 
-        let first_batch = receive_blocks(&mut downloader, 3).await;
+        let first_batch = collect_next_blocks(&mut downloader, 3).await;
         let expected = &chain[0..=2];
         assert_eq!(&first_batch, expected);
 
@@ -1265,7 +1270,7 @@ mod tests {
             .enqueue_orphan(chain[5], None, TEST_TIP.into(), TEST_LIB.into())
             .unwrap();
 
-        let second_batch = receive_blocks(&mut downloader, 3).await;
+        let second_batch = collect_next_blocks(&mut downloader, 3).await;
         let expected = &chain[3..=5];
         assert_eq!(&second_batch, expected);
 
@@ -1284,7 +1289,7 @@ mod tests {
             .unwrap();
 
         let mut downloader = pin::pin!(downloader);
-        let received_blocks = receive_blocks(&mut downloader, 3).await;
+        let received_blocks = collect_next_blocks(&mut downloader, 3).await;
 
         assert_eq!(&received_blocks, &chain[0..=2]);
 

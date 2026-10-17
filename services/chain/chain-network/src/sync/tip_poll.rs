@@ -3,7 +3,7 @@ use lb_chain_service::{
     Slot,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
-use lb_cryptarchia_sync::{GetTipResponse, HeaderId};
+use lb_cryptarchia_sync::{HeaderId, TipResponse};
 use lb_time_service::SlotTick;
 use overwatch::DynError;
 use tracing::{debug, warn};
@@ -15,7 +15,7 @@ use crate::{TipPollConfig, metrics, network::NetworkAdapter, sync::LOG_TARGET};
 /// Fires on a slot-tick cadence (`params.cadence_slots`, ≈ one expected
 /// block interval). When the local tip has fallen behind the current slot
 /// by more than `params.lag_threshold_slots`, it samples a handful of
-/// peers with `GetTip` and returns the most-advanced tip that is strictly
+/// peers with tip requests and returns the most-advanced tip that is strictly
 /// ahead of the local height. The caller is expected to hand it to the
 /// orphan downloader, which performs the actual catch-up download and
 /// full validation.
@@ -45,7 +45,7 @@ where
     let info = lagging_local_info(cryptarchia, current_slot, params.lag_threshold_slots).await?;
     metrics::tip_poll_triggered_total();
 
-    let tips: Vec<GetTipResponse> = network_adapter
+    let tips: Vec<TipResponse> = network_adapter
         .sample_tips(params.max_peers)
         .await
         .collect()
@@ -106,13 +106,13 @@ where
 /// strictly ahead of `local_height`. Ties on height are broken by the higher
 /// slot. `Failure` responses are ignored. Returns `(height, slot, tip)`.
 fn select_catchup_tip(
-    tips: impl IntoIterator<Item = GetTipResponse>,
+    tips: impl IntoIterator<Item = TipResponse>,
     local_height: u64,
 ) -> Option<(u64, Slot, HeaderId)> {
     tips.into_iter()
         .filter_map(|resp| match resp {
-            GetTipResponse::Tip { tip, slot, height } => Some((height, slot, tip)),
-            GetTipResponse::Failure(reason) => {
+            TipResponse::Tip { tip, slot, height } => Some((height, slot, tip)),
+            TipResponse::Failure(reason) => {
                 debug!(target: LOG_TARGET, %reason, "tip poll: peer reported failure");
                 None
             }
@@ -134,7 +134,7 @@ pub struct TipPollParams {
     pub cadence_slots: u64,
     /// Lag, in slots, beyond which we proactively poll peers for their tip.
     pub lag_threshold_slots: u64,
-    /// Maximum number of peers to sample with `GetTip` per poll.
+    /// Maximum number of peers to sample with a tip request per poll.
     pub max_peers: usize,
 }
 
@@ -179,12 +179,12 @@ impl TipPollParams {
 
 #[cfg(test)]
 mod tests {
-    use lb_cryptarchia_sync::GetTipResponseReason;
+    use lb_cryptarchia_sync::TipResponseFailureReason;
 
     use super::*;
 
-    fn tip(height: u64, slot: u64, id: u8) -> GetTipResponse {
-        GetTipResponse::Tip {
+    fn tip(height: u64, slot: u64, id: u8) -> TipResponse {
+        TipResponse::Tip {
             tip: HeaderId::from([id; 32]),
             slot: Slot::new(slot),
             height,
@@ -215,9 +215,9 @@ mod tests {
     #[test]
     fn select_catchup_tip_skips_failures() {
         let tips = vec![
-            GetTipResponse::Failure(GetTipResponseReason::NodeNotOnline),
+            TipResponse::Failure(TipResponseFailureReason::NodeNotOnline),
             tip(20, 500, 7),
-            GetTipResponse::Failure(GetTipResponseReason::NodeNotOnline),
+            TipResponse::Failure(TipResponseFailureReason::NodeNotOnline),
         ];
         let (height, _, id) = select_catchup_tip(tips, 5).expect("a tip ahead exists");
         assert_eq!(height, 20);

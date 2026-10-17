@@ -23,7 +23,7 @@ use lb_core::{
     sdp::ServiceType,
 };
 use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
-use lb_cryptarchia_sync::{BlocksUnavailableReason, GetTipResponseReason, ProviderResponse};
+use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse, TipResponseFailureReason};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::api::StorageApi;
@@ -1297,7 +1297,7 @@ pub fn persist_recovery_state(
 async fn reject_chain_sync_event(event: ChainSyncEvent) {
     debug!(target: LOG_TARGET, "rejecting chainsync event");
     match event {
-        ChainSyncEvent::ProvideBlocksRequest { reply_sender, .. } => {
+        ChainSyncEvent::BlocksRequest { reply_sender, .. } => {
             let response = ProviderResponse::Unavailable {
                 reason: BlocksUnavailableReason::Unknown,
             };
@@ -1305,17 +1305,17 @@ async fn reject_chain_sync_event(event: ChainSyncEvent) {
                 error!(target: LOG_TARGET, %err, "failed to send chain sync response");
             }
         }
-        ChainSyncEvent::ProvideTipRequest { reply_sender } => {
+        ChainSyncEvent::TipRequest { reply_sender } => {
             send_chain_sync_rejection(reply_sender).await;
         }
     }
 }
 
 async fn send_chain_sync_rejection<ResponseType>(
-    sender: mpsc::Sender<ProviderResponse<ResponseType, GetTipResponseReason>>,
+    sender: mpsc::Sender<ProviderResponse<ResponseType, TipResponseFailureReason>>,
 ) {
     let response = ProviderResponse::Unavailable {
-        reason: GetTipResponseReason::NodeNotOnline,
+        reason: TipResponseFailureReason::NodeNotOnline,
     };
     if let Err(err) = sender.send(response).await {
         error!(target: LOG_TARGET, %err, "failed to send chain sync response");
