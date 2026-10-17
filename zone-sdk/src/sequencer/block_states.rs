@@ -14,6 +14,7 @@ use lb_core::{
         SignedOps,
         ledger::{NoteId, verification_mode::StandardMode},
         ops::channel::MsgId,
+        traits::Hashable as _,
         transactions::{hash::TxHash, states::Unverified},
     },
 };
@@ -152,27 +153,23 @@ pub struct BlockStates {
     parent_map: HashMap<HeaderId, HeaderId>,
     /// Current LIB for pruning.
     current_lib: HeaderId,
-    /// Per L1 block channel content (unfinalized window), canonical or not.
-    block_txs: HashMap<HeaderId, StoredBlock>,
+    /// Per L1 block channel txs (unfinalized window), canonical or not; the
+    /// lineage entries point into them and pending entries share their bytes.
+    block_txs: HashMap<HeaderId, Vec<Arc<BlockChannelTx>>>,
     finalized: Finalized,
 }
 
-/// One stored L1 block's channel content.
-#[derive(Debug, Default)]
-struct StoredBlock {
-    /// Channel-touching txs, classified at block scan; the lineage entries
-    /// point into them.
-    channel_txs: Vec<Arc<BlockChannelTx>>,
-    /// Mirrorable channel txs, the source for (re-)mirroring into pending
-    /// whenever the block is on the canonical path; pending entries share
-    /// the same bytes.
-    signed_txs: Vec<SharedTx>,
+/// A channel-touching tx with its tip-advancing content, classified once at
+/// block scan and stored per block.
+#[derive(Debug, Clone)]
+pub struct BlockChannelTx {
+    pub tx: SharedTx,
+    pub kind: ChannelTxKind,
 }
 
-/// A channel-touching tx's tip-advancing content, classified once at block
-/// scan and stored per block.
+/// The classified shape of a [`BlockChannelTx`].
 #[derive(Debug, Clone)]
-pub enum BlockChannelTx {
+pub enum ChannelTxKind {
     /// `publish` shape: a single inscription.
     Inscription(InscriptionInfo),
     /// `publish_atomic_withdraw` shape: an inscription + its withdraws.
@@ -185,13 +182,12 @@ pub enum BlockChannelTx {
     /// advance the message tip.
     Config(InscriptionInfo),
     /// A shape the SDK cannot produce (bundled deposits, multi-inscribe,
-    /// custom-built txs). Kept whole — updates hand the tx back to the
-    /// caller's own recovery logic — along with its inscriptions in op order
+    /// custom-built txs). Updates hand the tx back whole to the caller's own
+    /// recovery logic, along with its inscriptions in op order
     /// (`message_entries`) and any `ChannelConfig` ops it carries
     /// (`config_entries`), which sit on the separate config lineage and never
     /// advance the message tip.
     Custom {
-        tx: SharedTx,
         message_entries: Vec<InscriptionInfo>,
         config_entries: Vec<InscriptionInfo>,
     },
@@ -200,12 +196,12 @@ pub enum BlockChannelTx {
 impl BlockChannelTx {
     /// The tip-advancing entries of this tx, in op order.
     pub fn infos(&self) -> &[InscriptionInfo] {
-        match self {
-            Self::Inscription(i) => std::slice::from_ref(i),
-            Self::AtomicWithdraw(a) => std::slice::from_ref(&a.inscription),
-            Self::PinDeposit(a) => std::slice::from_ref(&a.inscription),
-            Self::Config(_) => &[],
-            Self::Custom {
+        match &self.kind {
+            ChannelTxKind::Inscription(i) => std::slice::from_ref(i),
+            ChannelTxKind::AtomicWithdraw(a) => std::slice::from_ref(&a.inscription),
+            ChannelTxKind::PinDeposit(a) => std::slice::from_ref(&a.inscription),
+            ChannelTxKind::Config(_) => &[],
+            ChannelTxKind::Custom {
                 message_entries, ..
             } => message_entries,
         }
@@ -215,21 +211,21 @@ impl BlockChannelTx {
     /// the config lineage (`this_msg` = config id, `parent_msg` = config
     /// parent) and do not advance the message tip. The clean
     /// `Inscription`/`AtomicWithdraw` shapes carry none; a pure config is a
-    /// [`Self::Config`]; mixed/unknown configs ride in [`Self::Custom`].
+    /// [`ChannelTxKind::Config`]; mixed/unknown configs ride in
+    /// [`ChannelTxKind::Custom`].
     pub fn config_entries(&self) -> &[InscriptionInfo] {
-        match self {
-            Self::Inscription(_) | Self::AtomicWithdraw(_) | Self::PinDeposit(_) => &[],
-            Self::Config(c) => std::slice::from_ref(c),
-            Self::Custom { config_entries, .. } => config_entries,
+        match &self.kind {
+            ChannelTxKind::Inscription(_)
+            | ChannelTxKind::AtomicWithdraw(_)
+            | ChannelTxKind::PinDeposit(_) => &[],
+            ChannelTxKind::Config(c) => std::slice::from_ref(c),
+            ChannelTxKind::Custom { config_entries, .. } => config_entries,
         }
     }
 
     #[must_use]
-    pub fn tx_hash(&self) -> Option<TxHash> {
-        self.infos()
-            .first()
-            .or_else(|| self.config_entries().first())
-            .map(|i| i.tx_hash)
+    pub fn tx_hash(&self) -> TxHash {
+        self.tx.hash()
     }
 }
 
@@ -348,9 +344,8 @@ impl BlockStates {
             },
         );
 
-        // Store the block's classified channel txs
         if !channel_txs.is_empty() {
-            self.block_txs.entry(block_id).or_default().channel_txs = channel_txs;
+            self.block_txs.insert(block_id, channel_txs);
         }
     }
 
@@ -416,10 +411,7 @@ impl BlockStates {
 
         let mut queue = VecDeque::from([(self.current_lib, None)]);
         while let Some((block, parent)) = queue.pop_front() {
-            let txs = self
-                .block_txs
-                .get(&block)
-                .map_or(&[][..], |stored| stored.channel_txs.as_slice());
+            let txs = self.block_txs.get(&block).map_or(&[][..], Vec::as_slice);
             let lineage = Lineage::extend(parent.as_ref(), txs);
             if let Some(state) = self.block_states.get_mut(&block) {
                 state.lineage = lineage.clone();
@@ -593,41 +585,35 @@ impl BlockStates {
         })
     }
 
-    /// Keep a block's mirrorable signed channel txs.
-    pub fn store_signed_txs(&mut self, block: HeaderId, txs: Vec<SharedTx>) {
-        if !txs.is_empty() {
-            self.block_txs.entry(block).or_default().signed_txs = txs;
-        }
-    }
-
-    /// Signed channel txs on `tip`'s branch strictly above LIB, oldest block
-    /// first.
-    pub fn signed_txs_on_branch(&self, tip: HeaderId) -> impl Iterator<Item = &SharedTx> {
+    /// Channel txs on `tip`'s branch strictly above LIB, oldest block first.
+    pub fn channel_txs_on_branch(
+        &self,
+        tip: HeaderId,
+    ) -> impl Iterator<Item = &Arc<BlockChannelTx>> {
         self.branch_blocks_above_lib(tip)
             .into_iter()
             .filter_map(|id| self.block_txs.get(&id))
-            .flat_map(|block| block.signed_txs.iter())
+            .flatten()
     }
 
-    /// A mined channel tx by hash, with the signed txs of its block.
-    pub fn channel_tx(&self, tx_hash: TxHash) -> Option<(&[SharedTx], &BlockChannelTx)> {
-        self.block_txs.values().find_map(|block| {
-            block
-                .channel_txs
-                .iter()
-                .find(|tx| tx.tx_hash() == Some(tx_hash))
-                .map(|tx| (block.signed_txs.as_slice(), &**tx))
-        })
+    /// A mined channel tx by hash.
+    pub fn channel_tx(&self, tx_hash: TxHash) -> Option<&BlockChannelTx> {
+        self.block_txs
+            .values()
+            .flatten()
+            .find(|tx| tx.tx_hash() == tx_hash)
+            .map(|tx| &**tx)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use lb_common_http_client::Slot;
+    use lb_core::mantle::{Op, ops::channel::ChannelId};
     use lb_groth16::Fr;
 
     use super::*;
-    use crate::test_support::header_id;
+    use crate::test_support::{header_id, inscribe_op, unverified_tx_with_ops};
 
     fn process(blocks: &mut BlockStates, block: HeaderId, parent: HeaderId, lib: HeaderId) {
         blocks.insert(block, parent, [], Vec::new(), Vec::new());
@@ -669,12 +655,20 @@ mod tests {
         }
     }
 
+    fn stored(kind: ChannelTxKind) -> BlockChannelTx {
+        let op = inscribe_op(ChannelId::from([0; 32]), MsgId::root(), b"");
+        BlockChannelTx {
+            tx: Arc::new(unverified_tx_with_ops(vec![Op::ChannelInscribe(op)])),
+            kind,
+        }
+    }
+
     fn inscription(parent: u8, this: u8) -> BlockChannelTx {
-        BlockChannelTx::Inscription(entry(parent, this))
+        stored(ChannelTxKind::Inscription(entry(parent, this)))
     }
 
     fn config(parent: u8, this: u8) -> BlockChannelTx {
-        BlockChannelTx::Config(entry(parent, this))
+        stored(ChannelTxKind::Config(entry(parent, this)))
     }
 
     fn ids(infos: Vec<InscriptionInfo>) -> Vec<MsgId> {

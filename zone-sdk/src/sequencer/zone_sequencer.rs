@@ -35,7 +35,7 @@ use tracing::{debug, info, warn};
 use super::{
     TARGET,
     block_fetch::classify_channel_tx,
-    block_states::{BlockChannelTx, SharedTx},
+    block_states::{ChannelTxKind, SharedTx},
     channel_wallet::select_channel_notes,
     client::SequencerClient,
     handle::SequencerHandle,
@@ -1801,13 +1801,13 @@ pub(super) fn track_pending_tx(
     channel_id: ChannelId,
 ) -> Result<Option<MsgId>, ParentTaken> {
     let tx: SharedTx = tx.into();
-    match classify_channel_tx(&tx, channel_id, &mut None) {
-        Some(BlockChannelTx::Inscription(i)) => {
+    match classify_channel_tx(&tx, channel_id, &mut None).map(|classified| classified.kind) {
+        Some(ChannelTxKind::Inscription(i)) => {
             let this_msg = i.this_msg;
             state.submit_inscription(tx, i.parent_msg, this_msg, i.payload)?;
             Ok(Some(this_msg))
         }
-        Some(BlockChannelTx::AtomicWithdraw(aw)) => {
+        Some(ChannelTxKind::AtomicWithdraw(aw)) => {
             let this_msg = aw.inscription.this_msg;
             state.submit_atomic_withdraw(
                 tx,
@@ -1819,7 +1819,7 @@ pub(super) fn track_pending_tx(
             )?;
             Ok(Some(this_msg))
         }
-        Some(BlockChannelTx::PinDeposit(ad)) => {
+        Some(ChannelTxKind::PinDeposit(ad)) => {
             let this_msg = ad.inscription.this_msg;
             state.submit_pin_deposit(
                 tx,

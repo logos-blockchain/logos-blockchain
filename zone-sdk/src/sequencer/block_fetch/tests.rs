@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use lb_core::{
     crypto::Hash,
     events::{DepositNote, DepositRecreatedNotes},
@@ -216,17 +218,17 @@ fn deposit_plus_inscription_is_adopted_as_custom() {
     let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(dep), Op::ChannelInscribe(inscribe)]);
     let tx_hash = tx.hash();
 
-    let classified = classify_channel_txs(&shared(&tx), channel_id);
+    let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
     assert_eq!(classified.len(), 1);
     assert!(
-        matches!(&classified[0], BlockChannelTx::Custom { message_entries, .. } if message_entries.len() == 1)
+        matches!(&classified[0].kind, ChannelTxKind::Custom { message_entries, .. } if message_entries.len() == 1)
     );
 
     let genesis = header_id(0);
     let block = header_id(1);
     let mut state = TxState::new(genesis, MsgId::root());
     let old_lineage = state.channel_lineage(genesis);
-    mirror_channel_txs(&mut state, &classified, &shared(&tx), channel_id);
+    mirror_channel_txs(&mut state, &classified, channel_id);
     state.process_block(
         block,
         genesis,
@@ -294,11 +296,11 @@ fn inscribe_plus_identity_transfer_is_pin_deposit() {
     }]);
     let old_lineage = state.channel_lineage(genesis);
 
-    let mut classified = classify_channel_txs(&shared(&tx), channel_id);
-    demote_non_identity_pin_deposits(&mut classified, &shared(&tx), channel_id, &state);
-    assert!(matches!(&classified[0], BlockChannelTx::PinDeposit(_)));
+    let mut classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
+    demote_non_identity_pin_deposits(&mut classified, channel_id, &state);
+    assert!(matches!(&classified[0].kind, ChannelTxKind::PinDeposit(_)));
 
-    mirror_channel_txs(&mut state, &classified, &shared(&tx), channel_id);
+    mirror_channel_txs(&mut state, &classified, channel_id);
     state.process_block(
         block,
         genesis,
@@ -357,13 +359,13 @@ fn inscribe_plus_non_identity_transfer_is_custom() {
     }]);
     let old_lineage = state.channel_lineage(genesis);
 
-    let mut classified = classify_channel_txs(&shared(&tx), channel_id);
-    demote_non_identity_pin_deposits(&mut classified, &shared(&tx), channel_id, &state);
+    let mut classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
+    demote_non_identity_pin_deposits(&mut classified, channel_id, &state);
     assert!(
-        matches!(&classified[0], BlockChannelTx::Custom { message_entries, .. } if message_entries.len() == 1)
+        matches!(&classified[0].kind, ChannelTxKind::Custom { message_entries, .. } if message_entries.len() == 1)
     );
 
-    mirror_channel_txs(&mut state, &classified, &shared(&tx), channel_id);
+    mirror_channel_txs(&mut state, &classified, channel_id);
     state.process_block(
         block,
         genesis,
@@ -444,10 +446,10 @@ fn mixed_config_tx_is_custom_but_advances_the_config_tip() {
     let tx_hash = tx.hash();
 
     // Classification keeps the config in `config_entries`.
-    let classified = classify_channel_txs(&shared(&tx), channel_id);
+    let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
     assert_eq!(classified.len(), 1);
-    match &classified[0] {
-        BlockChannelTx::Custom { config_entries, .. } => {
+    match &classified[0].kind {
+        ChannelTxKind::Custom { config_entries, .. } => {
             assert_eq!(config_entries.len(), 1);
             assert_eq!(config_entries[0].this_msg, config_id);
         }
@@ -487,17 +489,17 @@ fn multi_inscribe_tx_advances_tip_and_delivers_adopted_entries() {
     ]);
     let tx_hash = tx.hash();
 
-    let classified = classify_channel_txs(&shared(&tx), channel_id);
+    let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
     assert_eq!(classified.len(), 1);
     assert!(
-        matches!(&classified[0], BlockChannelTx::Custom { message_entries, .. } if message_entries.len() == 2)
+        matches!(&classified[0].kind, ChannelTxKind::Custom { message_entries, .. } if message_entries.len() == 2)
     );
 
     let genesis = header_id(0);
     let block = header_id(1);
     let mut state = TxState::new(genesis, MsgId::root());
     let old_lineage = state.channel_lineage(genesis);
-    mirror_channel_txs(&mut state, &classified, &shared(&tx), channel_id);
+    mirror_channel_txs(&mut state, &classified, channel_id);
     state.process_block(
         block,
         genesis,
@@ -552,14 +554,17 @@ fn adopted_bundle_carries_its_withdraws() {
     ]);
     let tx_hash = tx.hash();
 
-    let classified = classify_channel_txs(&shared(&tx), channel_id);
-    assert!(matches!(classified[0], BlockChannelTx::AtomicWithdraw(_)));
+    let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
+    assert!(matches!(
+        classified[0].kind,
+        ChannelTxKind::AtomicWithdraw(_)
+    ));
 
     let genesis = header_id(0);
     let block = header_id(1);
     let mut state = TxState::new(genesis, MsgId::root());
     let old_lineage = state.channel_lineage(genesis);
-    mirror_channel_txs(&mut state, &classified, &shared(&tx), channel_id);
+    mirror_channel_txs(&mut state, &classified, channel_id);
     state.process_block(
         block,
         genesis,
@@ -725,7 +730,7 @@ fn config_in_block_does_not_advance_channel_tip() {
         .unwrap();
 
     let extracted = run_with_timeout(std::time::Duration::from_secs(2), move || {
-        classify_channel_txs(&shared(&tx), channel_id)
+        classify_channel_txs(std::slice::from_ref(&tx), channel_id)
     });
     state.process_block(
         block,
@@ -1098,11 +1103,6 @@ struct Driven {
     common_prefix: Vec<ChannelUpdateTx>,
 }
 
-/// One tx as a block's shared channel txs.
-fn shared(tx: &SignedOps<Unverified, StandardMode>) -> Vec<SharedTx> {
-    vec![Arc::new(tx.clone())]
-}
-
 /// Run `events` as the actor would: handle each, then the shed passes.
 async fn drive(
     state: &mut Option<TxState>,
@@ -1202,6 +1202,91 @@ async fn fork_block_inscription_is_adopted_on_the_switch() {
     assert!(
         s.pending_txs(be.header.id).is_empty(),
         "nothing to resubmit: both are safe at the tip"
+    );
+}
+
+/// A fork block's tx is re-mirrored as it was classified when the block was
+/// stored, so the pending set and the view agree. The pin-deposit shape was
+/// demoted to `Custom` because its note was unknown when the block arrived;
+/// the deposit landing later does not re-type it on the switch.
+#[tokio::test]
+async fn fork_switch_mirrors_the_stored_classification() {
+    // G <- B1(a) <- B2(deposit n, y) canonical; B1 <- F(pin of n) fork;
+    // F <- E: F wins; B2 <- B3: F loses, y takes the pin's parent and the
+    // pin is shed as stored.
+    let ch = ChannelId::from([0u8; 32]);
+    let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
+    let n = NoteId::from(Fr::from(1010u64));
+    let (a_id, a_tx) = ins(ch, MsgId::root(), b"a");
+    let (_, y_tx) = ins(ch, a_id, b"y");
+    let pin = unverified_tx_with_ops(vec![
+        Op::ChannelInscribe(inscribe_op(ch, a_id, b"pin")),
+        Op::ChannelTransfer(ChannelTransferOp {
+            channel_id: ch,
+            inputs: BoundedInputs::from(n).into(),
+            outputs: Outputs::new([Note::new(50, pk)]),
+        }),
+    ]);
+    let pin_hash = pin.hash();
+    let dep = deposit_op(ch, 1, Metadata::try_from(b"d".to_vec()).unwrap());
+    let dep_tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(dep.clone())]);
+    let b1 = api_block(1, 0, 1, vec![a_tx]);
+    let f = api_block(2, 1, 2, vec![pin]);
+    let b2 = api_block(3, 1, 3, vec![dep_tx.clone(), y_tx]);
+    let e = api_block(4, 2, 4, Vec::new());
+    let b3 = api_block(5, 3, 5, Vec::new());
+    let node = MockNode {
+        events: HashMap::from([(
+            header_id(3),
+            deposit_event(
+                &dep_tx,
+                &dep,
+                50,
+                vec![DepositNote {
+                    note_id: n,
+                    value: 50,
+                    pk,
+                }],
+            ),
+        )]),
+        ..MockNode::default()
+    };
+
+    let mut state = None;
+    let r = drive_with(
+        &node,
+        &mut state,
+        ch,
+        &[
+            live_event(&b1),
+            fork_event(&f, &b1),
+            live_event(&b2),
+            live_event(&e),
+            live_event(&b3),
+        ],
+    )
+    .await;
+
+    let switched = r[3]
+        .result
+        .channel_update
+        .as_ref()
+        .expect("F's branch wins");
+    assert!(
+        matches!(switched.adopted.as_slice(), [ChannelUpdateTx::Custom(tx)] if tx.hash() == pin_hash),
+        "stored as Custom: the note was unknown when F arrived"
+    );
+    assert!(
+        r[4].shed.is_empty(),
+        "not re-typed to a pin deposit on the switch"
+    );
+    assert_eq!(
+        r[4].shed_other
+            .iter()
+            .map(|tx| tx.hash())
+            .collect::<Vec<_>>(),
+        vec![pin_hash],
+        "shed the way it was mirrored"
     );
 }
 
