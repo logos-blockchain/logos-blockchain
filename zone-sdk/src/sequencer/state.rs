@@ -33,7 +33,7 @@ fn inscription_signer(
 
 use super::{
     block_fetch::{channel_configs, channel_inscriptions, channel_transfers, is_pure_config},
-    block_states::{BlockChannelTx, BlockStates, NoteOp, SharedTx},
+    block_states::{BlockChannelTx, BlockStates, ChannelTxKind, NoteOp, SharedTx},
     types::{
         AtomicWithdrawInfo, ChannelNote, ChannelUpdateTx, ChannelWalletView, Error,
         InscriptionInfo, PendingFunding, PendingTx, PinDepositInfo, WithdrawInfo,
@@ -892,10 +892,6 @@ impl TxState {
         self.blocks.config_tip_at(block_id)
     }
 
-    pub fn store_block_signed_txs(&mut self, block: HeaderId, txs: Vec<SharedTx>) {
-        self.blocks.store_signed_txs(block, txs);
-    }
-
     /// Pending txs eligible for resubmission: not yet safe at tip AND
     /// part of the local suffix reachable from canonical channel tip.
     ///
@@ -1494,31 +1490,29 @@ impl TxState {
     /// `None` for entries with no payload to apply — their effects reach
     /// consumers through the channel view.
     fn to_update_tx(&self, info: &InscriptionInfo) -> Option<ChannelUpdateTx> {
-        if let Some((signed_txs, block_tx)) = self.blocks.channel_tx(info.tx_hash) {
-            return match block_tx {
-                BlockChannelTx::AtomicWithdraw(a) => {
+        if let Some(block_tx) = self.blocks.channel_tx(info.tx_hash) {
+            return match &block_tx.kind {
+                ChannelTxKind::AtomicWithdraw(a) => {
                     Some(ChannelUpdateTx::AtomicWithdraw(a.clone()))
                 }
-                BlockChannelTx::PinDeposit(a) => Some(ChannelUpdateTx::PinDeposit(a.clone())),
-                BlockChannelTx::Inscription(_) => Some(ChannelUpdateTx::Inscription(info.clone())),
-                BlockChannelTx::Config(_) => signed_txs
-                    .iter()
-                    .find(|tx| tx.hash() == info.tx_hash)
-                    .map(|tx| ChannelUpdateTx::Config((**tx).clone())),
-                BlockChannelTx::Custom {
-                    tx,
+                ChannelTxKind::PinDeposit(a) => Some(ChannelUpdateTx::PinDeposit(a.clone())),
+                ChannelTxKind::Inscription(_) => Some(ChannelUpdateTx::Inscription(info.clone())),
+                ChannelTxKind::Config(_) => {
+                    Some(ChannelUpdateTx::Config(SignedOps::clone(&block_tx.tx)))
+                }
+                ChannelTxKind::Custom {
                     message_entries,
                     config_entries,
                 } => (message_entries
                     .iter()
                     .any(|entry| !entry.payload.is_empty())
                     || !config_entries.is_empty())
-                .then(|| ChannelUpdateTx::Custom((**tx).clone())),
+                .then(|| ChannelUpdateTx::Custom(SignedOps::clone(&block_tx.tx))),
             };
         }
         // Not in any held block — the lineage bridged through a pending link.
         if let Some(other) = self.pending_other.get(&info.tx_hash) {
-            let tx = (*other.signed_tx).clone();
+            let tx = SignedOps::clone(&other.signed_tx);
             return Some(if other.pure_config {
                 ChannelUpdateTx::Config(tx)
             } else {
@@ -1575,13 +1569,13 @@ impl TxState {
         self.blocks.restore_finalized_notes(notes);
     }
 
-    /// Signed channel txs on `tip`'s branch strictly above LIB (finalized never
+    /// Channel txs on `tip`'s branch strictly above LIB (finalized never
     /// returns to pending) that pending lacks; empty in steady state.
     #[must_use]
-    pub fn untracked_signed_txs_on_branch(&self, tip: HeaderId) -> Vec<SharedTx> {
+    pub fn untracked_channel_txs_on_branch(&self, tip: HeaderId) -> Vec<Arc<BlockChannelTx>> {
         self.blocks
-            .signed_txs_on_branch(tip)
-            .filter(|tx| !self.is_tracked(&tx.hash()))
+            .channel_txs_on_branch(tip)
+            .filter(|tx| !self.is_tracked(&tx.tx_hash()))
             .cloned()
             .collect()
     }
@@ -1677,6 +1671,14 @@ mod tests {
 
     use super::*;
     use crate::test_support::header_id;
+
+    /// A mined channel tx as the block store holds it.
+    fn stored(tx: &SignedOps<Unverified, StandardMode>, kind: ChannelTxKind) -> BlockChannelTx {
+        BlockChannelTx {
+            tx: Arc::new(tx.clone()),
+            kind,
+        }
+    }
 
     fn make_dummy_tx(data: u8) -> SignedOps<Unverified, StandardMode> {
         make_dummy_tx_on(MsgId::root(), data)
@@ -2645,7 +2647,7 @@ mod tests {
     }
 
     /// Wrap a pure config tx as it is classified when mined: a clean
-    /// [`BlockChannelTx::Config`] on the config lineage (the mixed/unknown
+    /// [`ChannelTxKind::Config`] on the config lineage (the mixed/unknown
     /// `Custom { config_entries }` shape is exercised separately in
     /// `mixed_config_tx_is_custom_but_advances_the_config_tip`).
     fn config_block_tx(
@@ -2653,13 +2655,16 @@ mod tests {
         this_msg: MsgId,
         parent: MsgId,
     ) -> BlockChannelTx {
-        BlockChannelTx::Config(InscriptionInfo {
-            tx_hash: tx.hash(),
-            parent_msg: parent,
-            this_msg,
-            payload: [].into(),
-            signer: None,
-        })
+        stored(
+            tx,
+            ChannelTxKind::Config(InscriptionInfo {
+                tx_hash: tx.hash(),
+                parent_msg: parent,
+                this_msg,
+                payload: [].into(),
+                signer: None,
+            }),
+        )
     }
 
     /// Once a rival config lands on-branch and moves the config tip, our
@@ -2777,14 +2782,16 @@ mod tests {
             payload: [].into(),
             signer: None,
         };
-        let custom = BlockChannelTx::Custom {
-            tx: tx.clone().into(),
-            message_entries: Vec::new(),
-            config_entries: vec![
-                config_entry(MsgId::root(), msg_id(1)),
-                config_entry(msg_id(1), msg_id(2)),
-            ],
-        };
+        let custom = stored(
+            &tx,
+            ChannelTxKind::Custom {
+                message_entries: Vec::new(),
+                config_entries: vec![
+                    config_entry(MsgId::root(), msg_id(1)),
+                    config_entry(msg_id(1), msg_id(2)),
+                ],
+            },
+        );
         state.process_block(b1, genesis, genesis, vec![], vec![custom], Vec::new());
         let update = state
             .detect_channel_update(&[], b1, &HashSet::new())
@@ -2981,7 +2988,7 @@ mod tests {
             genesis,
             genesis,
             vec![p1],
-            vec![BlockChannelTx::Inscription(m1)],
+            vec![stored(&make_dummy_tx(1), ChannelTxKind::Inscription(m1))],
             Vec::new(),
         );
 
@@ -3043,7 +3050,10 @@ mod tests {
             genesis,
             genesis,
             vec![],
-            vec![BlockChannelTx::Inscription(m_info)],
+            vec![stored(
+                &make_dummy_tx(1),
+                ChannelTxKind::Inscription(m_info),
+            )],
             Vec::new(),
         );
 
@@ -3116,7 +3126,10 @@ mod tests {
             block1,
             genesis,
             vec![c1_tx_hash],
-            vec![BlockChannelTx::Inscription(c1_inscription)],
+            vec![stored(
+                &make_dummy_tx(99),
+                ChannelTxKind::Inscription(c1_inscription),
+            )],
             Vec::new(),
         );
 
@@ -3225,7 +3238,10 @@ mod tests {
             block1,
             genesis,
             vec![],
-            vec![BlockChannelTx::Inscription(c1_inscription)],
+            vec![stored(
+                &make_dummy_tx(99),
+                ChannelTxKind::Inscription(c1_inscription),
+            )],
             Vec::new(),
         );
 

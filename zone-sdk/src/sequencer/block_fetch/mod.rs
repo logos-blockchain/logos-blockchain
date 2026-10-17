@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
 use lb_common_http_client::{ApiBlock, ProcessedBlockEvent, Slot};
 use lb_core::{
@@ -29,7 +26,7 @@ use tracing::{debug, error};
 
 use super::{
     TARGET,
-    block_states::{BlockChannelTx, NoteOp, SharedTx},
+    block_states::{BlockChannelTx, ChannelTxKind, NoteOp, SharedTx},
     channel_wallet::note_ops_from_txs,
     state::{ChannelUpdateInfo, PendingBundle, TxState},
     types::{
@@ -121,8 +118,6 @@ struct PreparedBlockEvent<'a> {
     /// `canonical_backfill` and applied after the event block.
     tip_backfill: Vec<(ApiBlock, Vec<NoteOp>)>,
     our_txs: Vec<TxHash>,
-    /// The live block's channel txs, shared with the store and pending.
-    signed_txs: Vec<SharedTx>,
     channel_txs: Vec<BlockChannelTx>,
     /// Channel-note ops of the live block, computed in the prepare phase.
     note_ops: Vec<NoteOp>,
@@ -201,8 +196,7 @@ where
         .filter(|tx| touches_channel_tip(tx, channel_id))
         .map(|tx| tx.op_refs().hash())
         .collect();
-    let signed_txs = shared_channel_txs(&event.block.transactions, channel_id);
-    let channel_txs = classify_channel_txs(&signed_txs, channel_id);
+    let channel_txs = classify_channel_txs(&event.block.transactions, channel_id);
 
     // Deposit events + wallet note ops for the live block: fetched here (the
     // prepare phase) so the apply phase mutates state without any `.await`.
@@ -259,7 +253,6 @@ where
         canonical_backfill,
         tip_backfill,
         our_txs,
-        signed_txs,
         channel_txs,
         note_ops,
         deposits,
@@ -302,7 +295,6 @@ fn apply_prepared_block_event(
         canonical_backfill,
         tip_backfill,
         our_txs,
-        signed_txs,
         mut channel_txs,
         note_ops,
         deposits,
@@ -341,15 +333,14 @@ fn apply_prepared_block_event(
 
     // Re-type unsound pin-deposits to `Custom` before they are stored
     // or mirrored, so both the `adopted` surface and the pending set agree.
-    demote_non_identity_pin_deposits(&mut channel_txs, &signed_txs, channel_id, s);
+    demote_non_identity_pin_deposits(&mut channel_txs, channel_id, s);
 
     // Pending = canonical channel txs above LIB + our own unmined publishes:
     // mirror only the canonical tip; a fork's content joins from the store if
     // its branch wins.
     if block.header.id == tip {
-        mirror_channel_txs(s, &channel_txs, &signed_txs, channel_id);
+        mirror_channel_txs(s, &channel_txs, channel_id);
     }
-    s.store_block_signed_txs(block.header.id, signed_txs);
 
     // Process the actual event block
     s.process_block(
@@ -414,64 +405,41 @@ fn apply_prepared_block_event(
 }
 
 /// (Re-)mirror stored blocks now on the canonical path: arrived as a fork,
-/// backfilled, or shed on an earlier switch.
+/// backfilled, or shed on an earlier switch. Mirrored as stored, so the
+/// pending set and the view share one classification.
 fn mirror_branch_from_store(s: &mut TxState, tip: HeaderId, channel_id: ChannelId) {
-    let untracked = s.untracked_signed_txs_on_branch(tip);
-    if untracked.is_empty() {
-        return;
-    }
-    // Classified one tx at a time: the untracked txs span blocks and skip
-    // the tracked ones (e.g. a re-funded publish's original landing next to
-    // entries pending still holds), so they need not chain off each other
-    // and the in-block order check of `classify_channel_txs` does not apply.
-    let mut classified: Vec<BlockChannelTx> = untracked
-        .iter()
-        .filter_map(|tx| classify_channel_tx(tx, channel_id, &mut None))
-        .collect();
-    demote_non_identity_pin_deposits(&mut classified, &untracked, channel_id, s);
-    mirror_channel_txs(s, &classified, &untracked, channel_id);
+    let untracked = s.untracked_channel_txs_on_branch(tip);
+    mirror_channel_txs(s, untracked.iter().map(Arc::as_ref), channel_id);
 }
 
-/// Mirror a block's channel txs into the pending set (insert-if-absent) so a
-/// later retry re-posts the original bytes.
-fn mirror_channel_txs(
+/// Mirror channel txs into the pending set (insert-if-absent) so a later
+/// retry re-posts the original bytes.
+fn mirror_channel_txs<'a>(
     state: &mut TxState,
-    classified: &[BlockChannelTx],
-    transactions: &[SharedTx],
+    classified: impl IntoIterator<Item = &'a BlockChannelTx>,
     channel_id: ChannelId,
 ) {
-    let by_hash: HashMap<TxHash, &SharedTx> =
-        transactions.iter().map(|tx| (tx.hash(), tx)).collect();
     for block_tx in classified {
-        let (info, bundle) = match block_tx {
-            BlockChannelTx::Inscription(i) => (i, PendingBundle::Plain),
-            BlockChannelTx::AtomicWithdraw(a) => (
+        let (info, bundle) = match &block_tx.kind {
+            ChannelTxKind::Inscription(i) => (i, PendingBundle::Plain),
+            ChannelTxKind::AtomicWithdraw(a) => (
                 &a.inscription,
                 PendingBundle::Withdraw {
                     withdraws: a.withdraws.clone(),
                     outputs: a.outputs.clone(),
                 },
             ),
-            BlockChannelTx::PinDeposit(a) => (
+            ChannelTxKind::PinDeposit(a) => (
                 &a.inscription,
                 PendingBundle::PinDeposit(a.consumed_notes.clone()),
             ),
-            BlockChannelTx::Config(_) | BlockChannelTx::Custom { .. } => {
-                let tx_hash = block_tx
-                    .tx_hash()
-                    .expect("custom and config shapes carry their tx hash");
-                let tx = by_hash
-                    .get(&tx_hash)
-                    .expect("classified entries come from these transactions");
-                state.observe_other_tx(Arc::clone(tx), channel_id);
+            ChannelTxKind::Config(_) | ChannelTxKind::Custom { .. } => {
+                state.observe_other_tx(Arc::clone(&block_tx.tx), channel_id);
                 continue;
             }
         };
-        let tx = by_hash
-            .get(&info.tx_hash)
-            .expect("classified entries come from these transactions");
         state.observe_channel_inscription(
-            Arc::clone(tx),
+            Arc::clone(&block_tx.tx),
             info.parent_msg,
             info.this_msg,
             info.payload.clone(),
@@ -480,28 +448,21 @@ fn mirror_channel_txs(
     }
 }
 
-/// Re-type any [`BlockChannelTx::PinDeposit`] whose transfer is
+/// Re-type any [`ChannelTxKind::PinDeposit`] whose transfer is
 /// not a 1:1 identity re-creation of its consumed notes as `Custom` — a split,
 /// merge, re-value or re-key would make `consumed_notes` misdescribe the
 /// deposit. Runs before the classification is stored or mirrored.
 fn demote_non_identity_pin_deposits(
     channel_txs: &mut [BlockChannelTx],
-    transactions: &[SharedTx],
     channel_id: ChannelId,
     state: &TxState,
 ) {
-    let by_hash: HashMap<TxHash, &SharedTx> =
-        transactions.iter().map(|tx| (tx.hash(), tx)).collect();
     for block_tx in channel_txs.iter_mut() {
-        let BlockChannelTx::PinDeposit(a) = block_tx else {
+        let ChannelTxKind::PinDeposit(a) = &block_tx.kind else {
             continue;
         };
-        let tx = by_hash
-            .get(&a.tx_hash)
-            .expect("classified entries come from these transactions");
-        if !is_identity_deposit_transfer(state, tx, channel_id) {
-            *block_tx = BlockChannelTx::Custom {
-                tx: Arc::clone(tx),
+        if !is_identity_deposit_transfer(state, &block_tx.tx, channel_id) {
+            block_tx.kind = ChannelTxKind::Custom {
                 message_entries: vec![a.inscription.clone()],
                 config_entries: Vec::new(),
             };
@@ -689,14 +650,13 @@ where
             .map(|tx| tx.op_refs().hash())
             .collect();
 
-        let signed_txs = shared_channel_txs(&block.transactions, channel_id);
-        let mut channel_txs = classify_channel_txs(&signed_txs, channel_id);
+        let mut channel_txs = classify_channel_txs(&block.transactions, channel_id);
         // Below-LIB blocks feed the lineage walk too, so on first sync (empty
         // old lineage) they surface as `adopted` — demote here as well. A
         // same-batch deposit isn't applied yet, so its inscription can only
         // under-label to `Custom`, which is safe.
         if let Some(state) = state {
-            demote_non_identity_pin_deposits(&mut channel_txs, &signed_txs, channel_id, state);
+            demote_non_identity_pin_deposits(&mut channel_txs, channel_id, state);
         }
 
         // Fetch + validate deposit events for this block BEFORE mutating
@@ -1085,26 +1045,11 @@ fn apply_backfilled_block(
         .map(|tx| tx.op_refs().hash())
         .collect();
 
-    let signed_txs = shared_channel_txs(&block.transactions, channel_id);
-    let mut channel_txs = classify_channel_txs(&signed_txs, channel_id);
-    demote_non_identity_pin_deposits(&mut channel_txs, &signed_txs, channel_id, state);
+    let mut channel_txs = classify_channel_txs(&block.transactions, channel_id);
+    demote_non_identity_pin_deposits(&mut channel_txs, channel_id, state);
 
     // Use current state lib to avoid premature finalization
     state.process_block(block_id, parent_id, lib, our_txs, channel_txs, note_ops);
-    state.store_block_signed_txs(block_id, signed_txs);
-}
-
-/// The block's channel txs (any tip-advancing op for the channel), each
-/// owned once: the store, the pending set and a `Custom` entry share them.
-fn shared_channel_txs(
-    transactions: &[SignedOps<Unverified, StandardMode>],
-    channel_id: ChannelId,
-) -> Vec<SharedTx> {
-    transactions
-        .iter()
-        .filter(|tx| touches_channel_tip(tx, channel_id))
-        .map(|tx| Arc::new(tx.clone()))
-        .collect()
 }
 
 /// Classify a block's channel-touching txs in tx-then-op order: a `publish`
@@ -1121,11 +1066,16 @@ fn shared_channel_txs(
 /// must equal the running in-block tip. A mismatch panics rather than
 /// silently re-deriving order, because the same node bug could produce an
 /// undetectable mis-ordering elsewhere.
-fn classify_channel_txs(txs: &[SharedTx], channel_id: ChannelId) -> Vec<BlockChannelTx> {
+fn classify_channel_txs(
+    txs: &[SignedOps<Unverified, StandardMode>],
+    channel_id: ChannelId,
+) -> Vec<BlockChannelTx> {
     // Running in-block channel tip, for the chain-order assertion.
     let mut block_tip: Option<MsgId> = None;
     txs.iter()
-        .filter_map(|tx| classify_channel_tx(tx, channel_id, &mut block_tip))
+        .filter(|tx| touches_channel_tip(tx, channel_id))
+        .map(|tx| Arc::new(tx.clone()))
+        .filter_map(|tx| classify_channel_tx(&tx, channel_id, &mut block_tip))
         .collect()
 }
 
@@ -1204,49 +1154,50 @@ pub(super) fn classify_channel_tx(
     }
 
     let clean = !foreign_ops && transfers <= 1;
-    Some(
-        if clean && inscribes == 1 && configs == 0 && channel_transfers <= 1 {
-            let inscription = entries.pop().expect("exactly one inscribe entry");
-            match (withdraws.is_empty(), channel_transfers) {
-                // `[inscribe, channel_transfer, withdraw…]`. Only re-issue of our
-                // own orphaned bundle needs the outputs; an observed one has none.
-                (false, _) => BlockChannelTx::AtomicWithdraw(AtomicWithdrawInfo {
-                    tx_hash,
-                    inscription,
-                    withdraws,
-                    outputs: Outputs::empty(),
-                }),
-                // `[inscribe, channel_transfer]` — transfer consumes the deposited note.
-                (true, 1) => BlockChannelTx::PinDeposit(PinDepositInfo {
-                    tx_hash,
-                    inscription,
-                    consumed_notes: channel_transfer_inputs
-                        .expect("channel_transfers == 1 implies a captured transfer"),
-                }),
-                (true, _) => BlockChannelTx::Inscription(inscription),
-            }
-        } else if clean
-            && configs == 1
-            && inscribes == 0
-            && withdraws.is_empty()
-            && channel_transfers == 0
-        {
-            // A pure single-config tx — the config-lineage analogue of a clean
-            // single inscription.
-            BlockChannelTx::Config(config_entries.pop().expect("exactly one config entry"))
-        } else {
-            BlockChannelTx::Custom {
-                tx: Arc::clone(tx),
-                message_entries: entries,
-                config_entries,
-            }
-        },
-    )
+    let kind = if clean && inscribes == 1 && configs == 0 && channel_transfers <= 1 {
+        let inscription = entries.pop().expect("exactly one inscribe entry");
+        match (withdraws.is_empty(), channel_transfers) {
+            // `[inscribe, channel_transfer, withdraw…]`. Only re-issue of our
+            // own orphaned bundle needs the outputs; an observed one has none.
+            (false, _) => ChannelTxKind::AtomicWithdraw(AtomicWithdrawInfo {
+                tx_hash,
+                inscription,
+                withdraws,
+                outputs: Outputs::empty(),
+            }),
+            // `[inscribe, channel_transfer]` — transfer consumes the deposited note.
+            (true, 1) => ChannelTxKind::PinDeposit(PinDepositInfo {
+                tx_hash,
+                inscription,
+                consumed_notes: channel_transfer_inputs
+                    .expect("channel_transfers == 1 implies a captured transfer"),
+            }),
+            (true, _) => ChannelTxKind::Inscription(inscription),
+        }
+    } else if clean
+        && configs == 1
+        && inscribes == 0
+        && withdraws.is_empty()
+        && channel_transfers == 0
+    {
+        // A pure single-config tx — the config-lineage analogue of a clean
+        // single inscription.
+        ChannelTxKind::Config(config_entries.pop().expect("exactly one config entry"))
+    } else {
+        ChannelTxKind::Custom {
+            message_entries: entries,
+            config_entries,
+        }
+    };
+    Some(BlockChannelTx {
+        tx: Arc::clone(tx),
+        kind,
+    })
 }
 
 /// Whether `tx` is a clean single-config tx for `channel_id` — the same
 /// config-only shape [`classify_channel_tx`] reports as
-/// [`BlockChannelTx::Config`]. Mirrors that rule so a shed config is typed the
+/// [`ChannelTxKind::Config`]. Mirrors that rule so a shed config is typed the
 /// same way it was classified on chain.
 pub(super) fn is_pure_config<Mode: VerificationMode>(
     tx: &SignedOps<Unverified, Mode>,
