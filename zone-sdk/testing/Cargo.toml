@@ -1,0 +1,31 @@
+[package]
+categories  = { workspace = true }
+description = "Deterministic simulated-node harness and scenario suite for the Logos blockchain Zone SDK"
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-zone-sdk-testing"
+publish     = false
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait                      = { workspace = true }
+futures                          = { workspace = true }
+lb-common-http-client            = { workspace = true }
+lb-core                          = { features = ["test-utils"], workspace = true }
+lb-http-api-common               = { workspace = true }
+lb-key-management-system-service = { workspace = true }
+lb-zone-sdk                      = { workspace = true }
+num-bigint                       = { workspace = true }
+thiserror                        = { workspace = true }
+tokio                            = { features = ["macros", "rt", "sync", "test-util", "time"], workspace = true }
+tracing                          = { workspace = true }
+tracing-subscriber               = { features = ["env-filter", "fmt"], workspace = true }
+
+[dev-dependencies]
+proptest = { features = ["std"], workspace = true }
