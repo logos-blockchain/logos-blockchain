@@ -1,9 +1,9 @@
 //! The unfinalized L1 window as the channel sees it: every block above LIB
-//! with its parent link, its cumulative safe set, its cumulative channel-note
-//! set and its classified channel content, plus the finalized tips and note
-//! set the branch reads fall back to.
+//! with its parent link, its cumulative safe set, note set and channel
+//! lineage, and its classified channel content, plus the finalized tips and
+//! note set the branch reads fall back to.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use lb_core::{
     header::HeaderId,
@@ -14,13 +14,14 @@ use lb_core::{
         transactions::{hash::TxHash, states::Unverified},
     },
 };
-use rpds::{HashTrieMapSync, HashTrieSetSync};
+use rpds::{HashTrieMapSync, HashTrieSetSync, ListSync};
 
 use super::types::{
     AtomicWithdrawInfo, ChannelNote, ChannelWalletView, InscriptionInfo, PinDepositInfo,
 };
 
 type NoteSet = HashTrieMapSync<NoteId, ChannelNote>;
+pub type SafeSet = HashTrieSetSync<TxHash>;
 
 /// One channel-note mutation, in on-chain execution order.
 #[derive(Debug, Clone)]
@@ -34,14 +35,81 @@ pub(super) enum NoteOp {
 #[derive(Debug, Clone, Default)]
 struct BlockState {
     /// Tx hashes mined on the branch through this block.
-    safe_set: HashTrieSetSync<TxHash>,
+    safe_set: SafeSet,
     /// Channel notes alive at this block.
+    notes: NoteSet,
+    /// The channel lineage on the branch through this block.
+    lineage: Lineage,
+}
+
+/// A message-lineage position: an entry's id and its lineage-parent.
+#[derive(Debug, Clone, Copy)]
+struct MsgTip {
+    this_msg: MsgId,
+    parent_msg: MsgId,
+}
+
+/// The channel lineage at a block, above the LIB block's parent: the tips
+/// of both lineages and every entry, shared with the parent block.
+#[derive(Debug, Clone, Default)]
+struct Lineage {
+    /// The newest message entry, `None` when the window has none.
+    msg_tip: Option<MsgTip>,
+    /// The newest config entry, `None` when the window has none.
+    config_tip: Option<MsgId>,
+    /// Message and config entries in op order, newest first.
+    entries: ListSync<InscriptionInfo>,
+}
+
+impl Lineage {
+    /// The lineage after `channel_txs` on top of `parent`, or on top of an
+    /// empty window when the parent is unknown.
+    fn extend(parent: Option<&Self>, channel_txs: &[BlockChannelTx]) -> Self {
+        let mut lineage = parent.cloned().unwrap_or_default();
+        for tx in channel_txs {
+            for info in tx.infos() {
+                lineage.msg_tip = Some(MsgTip {
+                    this_msg: info.this_msg,
+                    parent_msg: info.parent_msg,
+                });
+                lineage.entries = lineage.entries.push_front(info.clone());
+            }
+            for info in tx.config_entries() {
+                lineage.config_tip = Some(info.this_msg);
+                lineage.entries = lineage.entries.push_front(info.clone());
+            }
+        }
+        lineage
+    }
+}
+
+/// The finalized side of the channel: what branch reads fall back to when
+/// the unfinalized window has nothing newer.
+#[derive(Debug)]
+struct Finalized {
+    /// Last finalized channel tip — used as parent when pending is empty.
+    msg: MsgId,
+    /// Lineage-parent of the entry behind [`Self::msg`] — the finalized
+    /// entry is matched as a `(this_msg, parent_msg)` pair. `None` when the
+    /// finalized entry is unknown (fresh state or checkpoint restore); the
+    /// finalized-prefix search then matches nothing (see
+    /// `TxState::finalized_prefix_ids`).
+    parent_msg: Option<MsgId>,
+    /// The config-lineage tip at LIB — the newest config finalized so far, or
+    /// [`MsgId::root`] when none has finalized (or is unknown after a
+    /// checkpoint restore). Seeds the landable set in
+    /// `TxState::shed_stale_pending_configs` so a pending config chaining on
+    /// the finalized config tip is not falsely orphaned.
+    config: MsgId,
+    /// The note set at the LIB block. Splits a branch's notes into finalized
+    /// and unfinalized, seeds a parentless block and is exported for
+    /// checkpointing.
     notes: NoteSet,
 }
 
 #[derive(Debug)]
 pub struct BlockStates {
-    /// Per-block cumulative safe sets and note sets.
+    /// Per-block cumulative state.
     block_states: BTreeMap<HeaderId, BlockState>,
     /// Block parent relationships for pruning.
     parent_map: HashMap<HeaderId, HeaderId>,
@@ -51,24 +119,7 @@ pub struct BlockStates {
     current_lib: HeaderId,
     /// Per L1 block channel content (unfinalized window), canonical or not.
     block_txs: HashMap<HeaderId, StoredBlock>,
-    /// Last finalized channel tip — used as parent when pending is empty.
-    finalized_msg: MsgId,
-    /// Lineage-parent of the entry behind [`Self::finalized_msg`] — the
-    /// finalized entry is matched as a `(this_msg, parent_msg)` pair. `None`
-    /// when the finalized entry is unknown (fresh state or checkpoint
-    /// restore); the finalized-prefix search then matches nothing (see
-    /// `TxState::finalized_prefix_ids`).
-    finalized_parent_msg: Option<MsgId>,
-    /// The config-lineage tip at LIB — the newest config finalized so far, or
-    /// [`MsgId::root`] when none has finalized (or is unknown after a
-    /// checkpoint restore). Seeds the landable set in
-    /// `TxState::shed_stale_pending_configs` so a pending config chaining on
-    /// the finalized config tip is not falsely orphaned.
-    finalized_config: MsgId,
-    /// The note set at the LIB block. Splits a branch's notes into finalized
-    /// and unfinalized, seeds a parentless block and is exported for
-    /// checkpointing.
-    finalized_notes: NoteSet,
+    finalized: Finalized,
 }
 
 /// One stored L1 block's channel content.
@@ -140,11 +191,6 @@ impl BlockChannelTx {
         }
     }
 
-    /// The entry this tx leaves the channel at (its last tip-advancing op).
-    fn tip_entry(&self) -> Option<&InscriptionInfo> {
-        self.infos().last()
-    }
-
     #[must_use]
     pub fn tx_hash(&self) -> Option<TxHash> {
         self.infos()
@@ -164,10 +210,12 @@ impl BlockStates {
             parent_map: HashMap::new(),
             current_lib: lib,
             block_txs: HashMap::new(),
-            finalized_msg,
-            finalized_parent_msg: None,
-            finalized_config: MsgId::root(),
-            finalized_notes: NoteSet::new_sync(),
+            finalized: Finalized {
+                msg: finalized_msg,
+                parent_msg: None,
+                config: MsgId::root(),
+                notes: NoteSet::new_sync(),
+            },
         }
     }
 
@@ -186,13 +234,13 @@ impl BlockStates {
     /// The finalized channel tip; see [`Self::set_finalized_msg`].
     #[must_use]
     pub const fn finalized_msg(&self) -> MsgId {
-        self.finalized_msg
+        self.finalized.msg
     }
 
     /// The lineage-parent of the finalized channel tip, `None` when unknown.
     #[must_use]
     pub const fn finalized_parent_msg(&self) -> Option<MsgId> {
-        self.finalized_parent_msg
+        self.finalized.parent_msg
     }
 
     /// Update the finalized channel tip from backfilled finalized history.
@@ -200,15 +248,15 @@ impl BlockStates {
     /// genuinely unknown (disables the finalized-prefix mask until the next
     /// boundary move records a parent).
     pub const fn set_finalized_msg(&mut self, msg: MsgId, parent: Option<MsgId>) {
-        self.finalized_msg = msg;
-        self.finalized_parent_msg = parent;
+        self.finalized.msg = msg;
+        self.finalized.parent_msg = parent;
     }
 
     /// The finalized config-lineage tip (the newest config at/below LIB). Read
     /// for checkpointing; restored via [`Self::set_finalized_config`].
     #[must_use]
     pub const fn finalized_config(&self) -> MsgId {
-        self.finalized_config
+        self.finalized.config
     }
 
     /// Restore/refresh the finalized config-lineage tip — from a checkpoint on
@@ -216,7 +264,7 @@ impl BlockStates {
     /// resets to [`MsgId::root`] on restart, and `config_tip_at` can fall back
     /// to a stale parent once the config's block is pruned below LIB.
     pub const fn set_finalized_config(&mut self, config: MsgId) {
-        self.finalized_config = config;
+        self.finalized.config = config;
     }
 
     /// Record `block_id` under `parent_id` with its classified channel txs;
@@ -245,7 +293,8 @@ impl BlockStates {
         // once the branch turns canonical and the store re-mirrors them.
         let parent = self.block_states.get(&parent_id);
         let mut safe_set = parent.map(|p| p.safe_set.clone()).unwrap_or_default();
-        let mut notes = parent.map_or_else(|| self.finalized_notes.clone(), |p| p.notes.clone());
+        let mut notes = parent.map_or_else(|| self.finalized.notes.clone(), |p| p.notes.clone());
+        let lineage = Lineage::extend(parent.map(|p| &p.lineage), &channel_txs);
 
         for tx in our_txs {
             safe_set = safe_set.insert(tx);
@@ -256,8 +305,14 @@ impl BlockStates {
                 NoteOp::Remove(id) => notes.remove(&id),
             };
         }
-        self.block_states
-            .insert(block_id, BlockState { safe_set, notes });
+        self.block_states.insert(
+            block_id,
+            BlockState {
+                safe_set,
+                notes,
+                lineage,
+            },
+        );
 
         // Store the block's classified channel txs
         if !channel_txs.is_empty() {
@@ -266,28 +321,22 @@ impl BlockStates {
     }
 
     /// Move LIB to `lib`: advance the finalized tips and note set, prune the
-    /// blocks at or below the old window and drop finalized hashes from the
-    /// safe sets. `is_pending` marks hashes still tracked as pending, which
-    /// stay in the sets.
+    /// blocks at or below the old window, drop finalized hashes from the
+    /// safe sets and rebase the lineages on the new LIB block. `is_pending`
+    /// marks hashes still tracked as pending, which stay in the sets.
     pub fn advance_lib(&mut self, lib: HeaderId, is_pending: impl Fn(&TxHash) -> bool) {
-        // Compute finalized_msg BEFORE pruning — walk from new LIB
-        // backwards to find the latest inscription in the finalized range.
-        // Keep its lineage-parent too: the (id, parent) pair is what
-        // identifies the finalized position in `finalized_prefix_ids`.
-        if let Some((msg, parent)) = self
-            .channel_tip_entry_at(lib)
-            .map(|entry| (entry.this_msg, entry.parent_msg))
-        {
-            self.finalized_msg = msg;
-            self.finalized_parent_msg = Some(parent);
-        }
-        // Advance the finalized config tip too (same pre-prune walk), so a
-        // pending config chaining on it stays landable after LIB moves.
-        if let Some(config) = self.config_tip_entry_at(lib) {
-            self.finalized_config = config.this_msg;
-        }
+        // The new LIB block's tips are the finalized ones; the (id, parent)
+        // pair identifies the finalized position in `finalized_prefix_ids`.
+        // A window without entries keeps the previous tips.
         if let Some(state) = self.block_states.get(&lib) {
-            self.finalized_notes = state.notes.clone();
+            if let Some(tip) = state.lineage.msg_tip {
+                self.finalized.msg = tip.this_msg;
+                self.finalized.parent_msg = Some(tip.parent_msg);
+            }
+            if let Some(config) = state.lineage.config_tip {
+                self.finalized.config = config;
+            }
+            self.finalized.notes = state.notes.clone();
         }
 
         // Prune ancestors of new lib (but not lib itself)
@@ -317,6 +366,34 @@ impl BlockStates {
 
         self.prune_orphans(lib);
         self.current_lib = lib;
+        self.rebase_lineages();
+    }
+
+    /// Rebuild every block's lineage from the LIB block's own entries up, so
+    /// the entries of pruned ancestors are released. Children extend their
+    /// rebuilt parent, which keeps the sharing between forks.
+    fn rebase_lineages(&mut self) {
+        let mut children: HashMap<HeaderId, Vec<HeaderId>> = HashMap::new();
+        for (&block, &parent) in &self.parent_map {
+            if block != self.current_lib {
+                children.entry(parent).or_default().push(block);
+            }
+        }
+
+        let mut queue = VecDeque::from([(self.current_lib, None)]);
+        while let Some((block, parent)) = queue.pop_front() {
+            let txs = self
+                .block_txs
+                .get(&block)
+                .map_or(&[][..], |stored| stored.channel_txs.as_slice());
+            let lineage = Lineage::extend(parent.as_ref(), txs);
+            if let Some(state) = self.block_states.get_mut(&block) {
+                state.lineage = lineage.clone();
+            }
+            for &child in children.get(&block).into_iter().flatten() {
+                queue.push_back((child, Some(lineage.clone())));
+            }
+        }
     }
 
     /// The channel's note set at `tip`, split into the notes also in the
@@ -325,11 +402,11 @@ impl BlockStates {
     pub fn notes_at(&self, tip: Option<HeaderId>) -> ChannelWalletView {
         let notes = tip
             .and_then(|tip| self.block_states.get(&tip))
-            .map_or(&self.finalized_notes, |state| &state.notes);
+            .map_or(&self.finalized.notes, |state| &state.notes);
         let (finalized, unfinalized): (Vec<_>, Vec<_>) = notes
             .values()
             .cloned()
-            .partition(|note| self.finalized_notes.contains_key(&note.note_id));
+            .partition(|note| self.finalized.notes.contains_key(&note.note_id));
         ChannelWalletView {
             finalized,
             unfinalized,
@@ -341,7 +418,7 @@ impl BlockStates {
     /// and any tracked copy is authoritative regardless of branch — enough
     /// to recover a consumed note's value/key.
     pub fn find_note(&self, id: &NoteId) -> Option<&ChannelNote> {
-        self.finalized_notes.get(id).or_else(|| {
+        self.finalized.notes.get(id).or_else(|| {
             self.block_states
                 .values()
                 .find_map(|state| state.notes.get(id))
@@ -350,7 +427,7 @@ impl BlockStates {
 
     /// The finalized note set, for checkpointing.
     pub fn finalized_notes(&self) -> Vec<ChannelNote> {
-        self.finalized_notes.values().cloned().collect()
+        self.finalized.notes.values().cloned().collect()
     }
 
     /// Restore the finalized note set from a checkpoint; the LIB block
@@ -360,7 +437,7 @@ impl BlockStates {
         if let Some(state) = self.block_states.get_mut(&self.current_lib) {
             state.notes = notes.clone();
         }
-        self.finalized_notes = notes;
+        self.finalized.notes = notes;
     }
 
     /// Remove orphaned blocks whose parent was pruned.
@@ -391,11 +468,12 @@ impl BlockStates {
         }
     }
 
-    /// Tx hashes mined on `tip`'s branch (its cumulative safe set).
-    pub fn safe_at(&self, tip: HeaderId) -> HashSet<TxHash> {
+    /// Tx hashes mined on `tip`'s branch (its cumulative safe set); empty at
+    /// an unknown tip.
+    pub fn safe_at(&self, tip: HeaderId) -> SafeSet {
         self.block_states
             .get(&tip)
-            .map(|s| s.safe_set.iter().copied().collect())
+            .map(|s| s.safe_set.clone())
             .unwrap_or_default()
     }
 
@@ -414,113 +492,40 @@ impl BlockStates {
         blocks
     }
 
-    /// Derive the channel tip `MsgId` at a given L1 block by walking backwards
-    /// through the block tree and finding the most recent inscription.
-    /// Returns `finalized_msg` if no inscriptions are found in the
-    /// unfinalized window.
+    fn lineage_at(&self, block_id: HeaderId) -> Option<&Lineage> {
+        self.block_states.get(&block_id).map(|state| &state.lineage)
+    }
+
+    /// The channel tip at a block: the newest message entry on its branch
+    /// within the unfinalized window, or [`Self::finalized_msg`] when the
+    /// window has none.
     #[must_use]
     pub fn channel_tip_at(&self, block_id: HeaderId) -> MsgId {
-        self.channel_tip_entry_at(block_id)
-            .map_or(self.finalized_msg, |entry| entry.this_msg)
+        self.lineage_at(block_id)
+            .and_then(|lineage| lineage.msg_tip)
+            .map_or(self.finalized.msg, |tip| tip.this_msg)
     }
 
-    /// Like [`Self::channel_tip_at`], but returns the tip-advancing entry
-    /// itself so callers can also learn its lineage-parent. `None` when no
-    /// entry exists in the walked window (the finalized boundary applies).
-    fn channel_tip_entry_at(&self, block_id: HeaderId) -> Option<&InscriptionInfo> {
-        let mut current = block_id;
-        loop {
-            if let Some(block) = self.block_txs.get(&current)
-                && let Some(entry) = block
-                    .channel_txs
-                    .iter()
-                    .rev()
-                    .find_map(BlockChannelTx::tip_entry)
-            {
-                return Some(entry);
-            }
-
-            if current == self.current_lib {
-                return None;
-            }
-
-            match self.parent_map.get(&current) {
-                Some(&parent) => current = parent,
-                None => return None,
-            }
-        }
-    }
-
-    /// The config-lineage tip entry at a block: the most recent config in the
-    /// walked window (block → LIB). Mirrors [`Self::channel_tip_entry_at`] but
-    /// over the config lineage; `None` when no config exists in the window.
-    fn config_tip_entry_at(&self, block_id: HeaderId) -> Option<&InscriptionInfo> {
-        let mut current = block_id;
-        loop {
-            if let Some(block) = self.block_txs.get(&current)
-                && let Some(entry) = block
-                    .channel_txs
-                    .iter()
-                    .rev()
-                    .find_map(|tx| tx.config_entries().last())
-            {
-                return Some(entry);
-            }
-
-            if current == self.current_lib {
-                return None;
-            }
-
-            match self.parent_map.get(&current) {
-                Some(&parent) => current = parent,
-                None => return None,
-            }
-        }
-    }
-
-    /// The config-lineage tip at a block: the most recent config in the walked
-    /// window (block → LIB), or [`Self::finalized_config`] if none. Derived
-    /// only from blocks we have processed, so — unlike the node's single config
-    /// tip — it never races ahead of local state.
+    /// The config-lineage tip at a block: the newest config on its branch
+    /// within the unfinalized window, or [`Self::finalized_config`] when the
+    /// window has none. Derived only from blocks we have processed, so —
+    /// unlike the node's single config tip — it never races ahead of local
+    /// state.
     #[must_use]
     pub fn config_tip_at(&self, block_id: HeaderId) -> MsgId {
-        self.config_tip_entry_at(block_id)
-            .map_or(self.finalized_config, |entry| entry.this_msg)
+        self.lineage_at(block_id)
+            .and_then(|lineage| lineage.config_tip)
+            .unwrap_or(self.finalized.config)
     }
 
     /// All tip-advancing entries on a branch back to LIB, oldest first:
     /// message entries and config entries, in op order.
     pub fn infos_on_branch(&self, tip: HeaderId) -> Vec<InscriptionInfo> {
-        let mut blocks = Vec::new();
-        let mut current = tip;
-
-        loop {
-            blocks.push(current);
-            if current == self.current_lib {
-                break;
-            }
-            match self.parent_map.get(&current) {
-                Some(&parent) => current = parent,
-                None => break,
-            }
-        }
-
-        blocks.reverse();
-        blocks
-            .into_iter()
-            .flat_map(|block_id| {
-                self.block_txs
-                    .get(&block_id)
-                    .map_or_else(Vec::new, |block| {
-                        block
-                            .channel_txs
-                            .iter()
-                            .flat_map(|tx| tx.infos().iter().chain(tx.config_entries()))
-                            .cloned()
-                            .collect()
-                    })
-            })
-            .collect()
+        self.lineage_at(tip).map_or_else(Vec::new, |lineage| {
+            let mut entries: Vec<_> = lineage.entries.iter().cloned().collect();
+            entries.reverse();
+            entries
+        })
     }
 
     /// Keep a block's mirrorable signed channel txs.
@@ -591,6 +596,99 @@ mod tests {
 
     fn add(seed: u64, value: u64) -> NoteOp {
         NoteOp::Add(note(seed, value))
+    }
+
+    fn msg_id(n: u8) -> MsgId {
+        let mut bytes = [0u8; 32];
+        bytes[0] = n;
+        MsgId::from(bytes)
+    }
+
+    fn entry(parent: u8, this: u8) -> InscriptionInfo {
+        InscriptionInfo {
+            tx_hash: TxHash([this; 32]),
+            parent_msg: msg_id(parent),
+            this_msg: msg_id(this),
+            payload: [].into(),
+            signer: None,
+        }
+    }
+
+    fn inscription(parent: u8, this: u8) -> BlockChannelTx {
+        BlockChannelTx::Inscription(entry(parent, this))
+    }
+
+    fn config(parent: u8, this: u8) -> BlockChannelTx {
+        BlockChannelTx::Config(entry(parent, this))
+    }
+
+    fn ids(infos: Vec<InscriptionInfo>) -> Vec<MsgId> {
+        infos.into_iter().map(|i| i.this_msg).collect()
+    }
+
+    #[test]
+    fn lineage_reads_follow_the_branch() {
+        // genesis <- a1 [m1] <- a2 [c11] <- a3 []
+        //                   <- b1 [m2]
+        let genesis = header_id(0);
+        let (a1, a2, a3, b1) = (header_id(1), header_id(2), header_id(3), header_id(10));
+        let mut blocks = BlockStates::new(genesis, MsgId::root());
+        blocks.insert(a1, genesis, [], vec![inscription(0, 1)], Vec::new());
+        blocks.insert(a2, a1, [], vec![config(0, 11)], Vec::new());
+        blocks.insert(a3, a2, [], Vec::new(), Vec::new());
+        blocks.insert(b1, a1, [], vec![inscription(1, 2)], Vec::new());
+
+        assert_eq!(blocks.channel_tip_at(a3), msg_id(1));
+        assert_eq!(blocks.config_tip_at(a3), msg_id(11));
+        assert_eq!(ids(blocks.infos_on_branch(a3)), [msg_id(1), msg_id(11)]);
+
+        assert_eq!(blocks.channel_tip_at(b1), msg_id(2));
+        assert_eq!(blocks.config_tip_at(b1), MsgId::root());
+        assert_eq!(ids(blocks.infos_on_branch(b1)), [msg_id(1), msg_id(2)]);
+    }
+
+    #[test]
+    fn lib_advance_finalizes_the_tips_and_rebases_the_lineages() {
+        // genesis <- a1 [m1] <- a2 [c11] <- a3 [m2]; LIB moves to a2.
+        let genesis = header_id(0);
+        let (a1, a2, a3) = (header_id(1), header_id(2), header_id(3));
+        let mut blocks = BlockStates::new(genesis, MsgId::root());
+        blocks.insert(a1, genesis, [], vec![inscription(0, 1)], Vec::new());
+        blocks.insert(a2, a1, [], vec![config(0, 11)], Vec::new());
+        blocks.insert(a3, a2, [], vec![inscription(1, 2)], Vec::new());
+        blocks.advance_lib(a2, |_| false);
+
+        assert_eq!(blocks.finalized_msg(), msg_id(1));
+        assert_eq!(blocks.finalized_parent_msg(), Some(MsgId::root()));
+        assert_eq!(blocks.finalized_config(), msg_id(11));
+
+        assert_eq!(
+            blocks.channel_tip_at(a2),
+            msg_id(1),
+            "the finalized tip serves a window without message entries"
+        );
+        assert_eq!(ids(blocks.infos_on_branch(a2)), [msg_id(11)]);
+        assert_eq!(
+            ids(blocks.infos_on_branch(a3)),
+            [msg_id(11), msg_id(2)],
+            "entries below LIB leave the branch"
+        );
+    }
+
+    #[test]
+    fn parentless_block_reads_only_its_own_entries() {
+        let genesis = header_id(0);
+        let (a1, x, y) = (header_id(1), header_id(2), header_id(3));
+        let unknown = header_id(99);
+        let mut blocks = BlockStates::new(genesis, MsgId::root());
+        blocks.insert(a1, genesis, [], vec![inscription(0, 1)], Vec::new());
+        blocks.insert(x, unknown, [], vec![inscription(1, 2)], Vec::new());
+        blocks.insert(y, unknown, [], Vec::new(), Vec::new());
+
+        assert_eq!(blocks.channel_tip_at(x), msg_id(2));
+        assert_eq!(ids(blocks.infos_on_branch(x)), [msg_id(2)]);
+        assert_eq!(blocks.channel_tip_at(y), MsgId::root());
+        assert!(blocks.infos_on_branch(y).is_empty());
     }
 
     #[test]
