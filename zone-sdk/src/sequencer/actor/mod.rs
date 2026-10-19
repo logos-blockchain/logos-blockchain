@@ -14,7 +14,9 @@ use tracing::{debug, error, info, warn};
 
 use super::{
     TARGET,
-    block_fetch::{BlockEventResult, classify_shed_other, handle_block_event, orphan_from_shed},
+    block_fetch::{
+        BlockEventResult, classify_shed_other, common_prefix, handle_block_event, orphan_from_shed,
+    },
     slot_clock::{SlotClock, slot_to_u64},
     state::{ChannelUpdateInfo, RefundCandidate, TxState},
     tx_builder::{fund_builder, sign_own_tx},
@@ -583,7 +585,7 @@ where
         let BlockEventResult {
             finalized_items,
             channel_update,
-            common_prefix,
+            view_before,
             deposits,
         } = result;
         let (adopted, mut orphaned) = match channel_update {
@@ -644,11 +646,14 @@ where
         let channel_update = if orphaned.is_empty() {
             ChannelUpdate::Extension { adopted }
         } else {
-            // The view was captured before the shed passes; whatever they
-            // orphaned has left it.
-            let shed: HashSet<TxHash> = orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
-            let mut common_prefix = common_prefix;
-            common_prefix.retain(|tx| !shed.contains(&tx.tx_hash()));
+            // Read after the shed passes, so whatever they orphaned has
+            // already left the view.
+            let common_prefix = match (self.state.as_ref(), self.current_tip) {
+                (Some(state), Some(tip)) => {
+                    common_prefix(state, tip, self.channel_id, &view_before)
+                }
+                _ => Vec::new(),
+            };
             ChannelUpdate::Conflict {
                 common_prefix,
                 adopted,
