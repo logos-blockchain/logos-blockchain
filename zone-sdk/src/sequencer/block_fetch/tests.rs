@@ -291,12 +291,12 @@ fn inscribe_plus_identity_transfer_is_pin_deposit() {
     let genesis = header_id(0);
     let block = header_id(1);
     let mut state = TxState::new(genesis, MsgId::root());
-    state.apply_finalized_note_ops(vec![NoteOp::Add(ChannelNote {
+    state.restore_channel_notes(vec![ChannelNote {
         note_id: input_id,
         value: 50,
         pk,
         slot: Slot::from(0),
-    })]);
+    }]);
     let old_lineage = state.channel_lineage(genesis);
 
     let mut classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
@@ -364,12 +364,12 @@ fn inscribe_plus_non_identity_transfer_is_custom() {
     let genesis = header_id(0);
     let block = header_id(1);
     let mut state = TxState::new(genesis, MsgId::root());
-    state.apply_finalized_note_ops(vec![NoteOp::Add(ChannelNote {
+    state.restore_channel_notes(vec![ChannelNote {
         note_id: input_id,
         value: 50,
         pk,
         slot: Slot::from(0),
-    })]);
+    }]);
     let old_lineage = state.channel_lineage(genesis);
 
     let mut classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);

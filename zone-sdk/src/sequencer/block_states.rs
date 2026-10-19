@@ -1,6 +1,7 @@
 //! The unfinalized L1 window as the channel sees it: every block above LIB
-//! with its parent link, its cumulative safe set and its classified channel
-//! content, plus the finalized tips the lineage walks fall back to.
+//! with its parent link, its cumulative safe set, its cumulative channel-note
+//! set and its classified channel content, plus the finalized tips and note
+//! set the branch reads fall back to.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -8,22 +9,45 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedOps,
-        ledger::verification_mode::StandardMode,
+        ledger::{NoteId, verification_mode::StandardMode},
         ops::channel::MsgId,
         transactions::{hash::TxHash, states::Unverified},
     },
 };
-use rpds::HashTrieSetSync;
+use rpds::{HashTrieMapSync, HashTrieSetSync};
 
-use super::types::{AtomicWithdrawInfo, InscriptionInfo, PinDepositInfo};
+use super::types::{
+    AtomicWithdrawInfo, ChannelNote, ChannelWalletView, InscriptionInfo, PinDepositInfo,
+};
+
+type NoteSet = HashTrieMapSync<NoteId, ChannelNote>;
+
+/// One channel-note mutation, in on-chain execution order.
+#[derive(Debug, Clone)]
+pub(super) enum NoteOp {
+    Add(ChannelNote),
+    Remove(NoteId),
+}
+
+/// One block's cumulative state, built from its parent's plus the block's
+/// own content.
+#[derive(Debug, Clone, Default)]
+struct BlockState {
+    /// Tx hashes mined on the branch through this block.
+    safe_set: HashTrieSetSync<TxHash>,
+    /// Channel notes alive at this block.
+    notes: NoteSet,
+}
 
 #[derive(Debug)]
 pub struct BlockStates {
-    /// Per-block cumulative safe sets.
-    block_states: BTreeMap<HeaderId, HashTrieSetSync<TxHash>>,
+    /// Per-block cumulative safe sets and note sets.
+    block_states: BTreeMap<HeaderId, BlockState>,
     /// Block parent relationships for pruning.
     parent_map: HashMap<HeaderId, HeaderId>,
-    /// Current LIB for pruning.
+    /// Current LIB for pruning. On a cold start this is the node's LIB until
+    /// the replay of the history below it reaches a block, from then on the
+    /// newest finalized block processed.
     current_lib: HeaderId,
     /// Per L1 block channel content (unfinalized window), canonical or not.
     block_txs: HashMap<HeaderId, StoredBlock>,
@@ -41,6 +65,10 @@ pub struct BlockStates {
     /// `TxState::shed_stale_pending_configs` so a pending config chaining on
     /// the finalized config tip is not falsely orphaned.
     finalized_config: MsgId,
+    /// The note set at the LIB block. Splits a branch's notes into finalized
+    /// and unfinalized, seeds a parentless block and is exported for
+    /// checkpointing.
+    finalized_notes: NoteSet,
 }
 
 /// One stored L1 block's channel content.
@@ -130,7 +158,7 @@ impl BlockStates {
     #[must_use]
     pub fn new(lib: HeaderId, finalized_msg: MsgId) -> Self {
         let mut block_states = BTreeMap::new();
-        block_states.insert(lib, HashTrieSetSync::new_sync());
+        block_states.insert(lib, BlockState::default());
         Self {
             block_states,
             parent_map: HashMap::new(),
@@ -139,6 +167,7 @@ impl BlockStates {
             finalized_msg,
             finalized_parent_msg: None,
             finalized_config: MsgId::root(),
+            finalized_notes: NoteSet::new_sync(),
         }
     }
 
@@ -191,36 +220,44 @@ impl BlockStates {
     }
 
     /// Record `block_id` under `parent_id` with its classified channel txs;
-    /// `our_txs` are the hashes that become safe at this block.
+    /// `our_txs` are the hashes that become safe at this block and
+    /// `note_ops` the channel-note changes it applies, in execution order.
     pub fn insert(
         &mut self,
         block_id: HeaderId,
         parent_id: HeaderId,
         our_txs: impl IntoIterator<Item = TxHash>,
         channel_txs: Vec<BlockChannelTx>,
+        note_ops: Vec<NoteOp>,
     ) {
         // Store parent relationship for pruning
         self.parent_map.insert(block_id, parent_id);
 
-        // Build cumulative safe set from parent. Parent may be missing
+        // Build cumulative state from the parent. Parent may be missing
         // when blocks are processed from slot-range backfill and LIB has
-        // advanced between batches (pruning the parent). Starting with an
-        // empty set is conservative: txs show as "pending" until seen in
-        // a subsequent block with a known parent.
+        // advanced between batches (pruning the parent). Starting the safe
+        // set empty is conservative: txs show as "pending" until seen in a
+        // subsequent block with a known parent. Notes start from the
+        // finalized set, the most complete set known below the block.
         //
         // Every channel-tip-touching tx joins the set, tracked or not: a fork
         // block is not mirrored on arrival, and its txs must read as mined
         // once the branch turns canonical and the store re-mirrors them.
-        let mut safe_set = self
-            .block_states
-            .get(&parent_id)
-            .cloned()
-            .unwrap_or_default();
+        let parent = self.block_states.get(&parent_id);
+        let mut safe_set = parent.map(|p| p.safe_set.clone()).unwrap_or_default();
+        let mut notes = parent.map_or_else(|| self.finalized_notes.clone(), |p| p.notes.clone());
 
         for tx in our_txs {
             safe_set = safe_set.insert(tx);
         }
-        self.block_states.insert(block_id, safe_set);
+        for op in note_ops {
+            notes = match op {
+                NoteOp::Add(note) => notes.insert(note.note_id, note),
+                NoteOp::Remove(id) => notes.remove(&id),
+            };
+        }
+        self.block_states
+            .insert(block_id, BlockState { safe_set, notes });
 
         // Store the block's classified channel txs
         if !channel_txs.is_empty() {
@@ -228,15 +265,11 @@ impl BlockStates {
         }
     }
 
-    /// Move LIB to `lib`: advance the finalized tips, prune the blocks at or
-    /// below the old window and drop finalized hashes from the safe sets.
-    /// `is_pending` marks hashes still tracked as pending, which stay in the
-    /// sets. Returns the pruned blocks.
-    pub fn advance_lib(
-        &mut self,
-        lib: HeaderId,
-        is_pending: impl Fn(&TxHash) -> bool,
-    ) -> Vec<HeaderId> {
+    /// Move LIB to `lib`: advance the finalized tips and note set, prune the
+    /// blocks at or below the old window and drop finalized hashes from the
+    /// safe sets. `is_pending` marks hashes still tracked as pending, which
+    /// stay in the sets.
+    pub fn advance_lib(&mut self, lib: HeaderId, is_pending: impl Fn(&TxHash) -> bool) {
         // Compute finalized_msg BEFORE pruning — walk from new LIB
         // backwards to find the latest inscription in the finalized range.
         // Keep its lineage-parent too: the (id, parent) pair is what
@@ -253,40 +286,85 @@ impl BlockStates {
         if let Some(config) = self.config_tip_entry_at(lib) {
             self.finalized_config = config.this_msg;
         }
+        if let Some(state) = self.block_states.get(&lib) {
+            self.finalized_notes = state.notes.clone();
+        }
 
-        let mut pruned = Vec::new();
         // Prune ancestors of new lib (but not lib itself)
         let mut prune_cursor = self.parent_map.get(&lib).copied();
         while let Some(b) = prune_cursor {
             self.block_states.remove(&b);
             self.block_txs.remove(&b);
-            pruned.push(b);
             prune_cursor = self.parent_map.remove(&b);
         }
 
         // Remove finalized tx hashes from all safe sets. Using remove
         // (rather than rebuild) preserves rpds memory sharing between
         // block states for non-finalized txs.
-        if let Some(lib_safe_set) = self.block_states.get(&lib) {
-            let finalized_hashes: Vec<TxHash> = lib_safe_set
+        if let Some(lib_state) = self.block_states.get(&lib) {
+            let finalized_hashes: Vec<TxHash> = lib_state
+                .safe_set
                 .iter()
                 .filter(|hash| !is_pending(hash))
                 .copied()
                 .collect();
-            for safe_set in self.block_states.values_mut() {
+            for state in self.block_states.values_mut() {
                 for tx_hash in &finalized_hashes {
-                    *safe_set = safe_set.remove(tx_hash);
+                    state.safe_set = state.safe_set.remove(tx_hash);
                 }
             }
         }
 
-        self.prune_orphans(lib, &mut pruned);
+        self.prune_orphans(lib);
         self.current_lib = lib;
-        pruned
+    }
+
+    /// The channel's note set at `tip`, split into the notes also in the
+    /// finalized set and the rest; the finalized set alone when `tip` is
+    /// `None` or unknown.
+    pub fn notes_at(&self, tip: Option<HeaderId>) -> ChannelWalletView {
+        let notes = tip
+            .and_then(|tip| self.block_states.get(&tip))
+            .map_or(&self.finalized_notes, |state| &state.notes);
+        let (finalized, unfinalized): (Vec<_>, Vec<_>) = notes
+            .values()
+            .cloned()
+            .partition(|note| self.finalized_notes.contains_key(&note.note_id));
+        ChannelWalletView {
+            finalized,
+            unfinalized,
+        }
+    }
+
+    /// A tracked note by id, in the finalized set or at any stored block. A
+    /// `NoteId` is a content commitment, so `id → (value, pk)` is a function
+    /// and any tracked copy is authoritative regardless of branch — enough
+    /// to recover a consumed note's value/key.
+    pub fn find_note(&self, id: &NoteId) -> Option<&ChannelNote> {
+        self.finalized_notes.get(id).or_else(|| {
+            self.block_states
+                .values()
+                .find_map(|state| state.notes.get(id))
+        })
+    }
+
+    /// The finalized note set, for checkpointing.
+    pub fn finalized_notes(&self) -> Vec<ChannelNote> {
+        self.finalized_notes.values().cloned().collect()
+    }
+
+    /// Restore the finalized note set from a checkpoint; the LIB block
+    /// starts from it.
+    pub fn restore_finalized_notes(&mut self, notes: Vec<ChannelNote>) {
+        let notes: NoteSet = notes.into_iter().map(|n| (n.note_id, n)).collect();
+        if let Some(state) = self.block_states.get_mut(&self.current_lib) {
+            state.notes = notes.clone();
+        }
+        self.finalized_notes = notes;
     }
 
     /// Remove orphaned blocks whose parent was pruned.
-    fn prune_orphans(&mut self, lib: HeaderId, pruned: &mut Vec<HeaderId>) {
+    fn prune_orphans(&mut self, lib: HeaderId) {
         loop {
             let orphans: Vec<_> = self
                 .parent_map
@@ -309,7 +387,6 @@ impl BlockStates {
                 self.block_states.remove(&orphan);
                 self.block_txs.remove(&orphan);
                 self.parent_map.remove(&orphan);
-                pruned.push(orphan);
             }
         }
     }
@@ -318,7 +395,7 @@ impl BlockStates {
     pub fn safe_at(&self, tip: HeaderId) -> HashSet<TxHash> {
         self.block_states
             .get(&tip)
-            .map(|s| s.iter().copied().collect())
+            .map(|s| s.safe_set.iter().copied().collect())
             .unwrap_or_default()
     }
 
@@ -486,14 +563,96 @@ impl BlockStates {
 
 #[cfg(test)]
 mod tests {
+    use lb_common_http_client::Slot;
+    use lb_groth16::Fr;
+
     use super::*;
     use crate::test_support::header_id;
 
     fn process(blocks: &mut BlockStates, block: HeaderId, parent: HeaderId, lib: HeaderId) {
-        blocks.insert(block, parent, [], Vec::new());
+        blocks.insert(block, parent, [], Vec::new(), Vec::new());
         if lib != blocks.lib() {
             blocks.advance_lib(lib, |_| false);
         }
+    }
+
+    fn note_id(seed: u64) -> NoteId {
+        NoteId::from(Fr::from(seed))
+    }
+
+    fn note(seed: u64, value: u64) -> ChannelNote {
+        ChannelNote {
+            note_id: note_id(seed),
+            value,
+            pk: Fr::from(seed).into(),
+            slot: Slot::from(1),
+        }
+    }
+
+    fn add(seed: u64, value: u64) -> NoteOp {
+        NoteOp::Add(note(seed, value))
+    }
+
+    #[test]
+    fn notes_view_layers_the_branch_over_the_finalized_set() {
+        // LIB holds n1. Branch A spends n1 and adds n2; branch B adds n3 and
+        // leaves n1 untouched.
+        let genesis = header_id(0);
+        let a1 = header_id(1);
+        let b1 = header_id(2);
+        let mut blocks = BlockStates::new(genesis, MsgId::root());
+        blocks.restore_finalized_notes(vec![note(1, 10)]);
+        blocks.insert(
+            a1,
+            genesis,
+            [],
+            Vec::new(),
+            vec![NoteOp::Remove(note_id(1)), add(2, 20)],
+        );
+        blocks.insert(b1, genesis, [], Vec::new(), vec![add(3, 30)]);
+
+        let at_a = blocks.notes_at(Some(a1));
+        assert!(
+            at_a.finalized.is_empty(),
+            "finalized note spent on branch A"
+        );
+        assert_eq!(at_a.unfinalized.len(), 1);
+        assert_eq!(at_a.unfinalized[0].note_id, note_id(2));
+
+        let at_b = blocks.notes_at(Some(b1));
+        assert_eq!(at_b.finalized.len(), 1);
+        assert_eq!(at_b.finalized[0].note_id, note_id(1));
+        assert_eq!(at_b.unfinalized.len(), 1);
+        assert_eq!(at_b.unfinalized[0].note_id, note_id(3));
+    }
+
+    #[test]
+    fn unfinalized_note_spent_within_the_branch_never_surfaces() {
+        let genesis = header_id(0);
+        let a1 = header_id(1);
+        let a2 = header_id(2);
+        let mut blocks = BlockStates::new(genesis, MsgId::root());
+        blocks.insert(a1, genesis, [], Vec::new(), vec![add(1, 10)]);
+        blocks.insert(a2, a1, [], Vec::new(), vec![NoteOp::Remove(note_id(1))]);
+
+        let view = blocks.notes_at(Some(a2));
+        assert_eq!(view.finalized, []);
+        assert_eq!(view.unfinalized, []);
+    }
+
+    #[test]
+    fn finalized_notes_roundtrip_through_restore() {
+        let genesis = header_id(0);
+        let mut blocks = BlockStates::new(genesis, MsgId::root());
+        blocks.restore_finalized_notes(vec![note(1, 10), note(2, 20)]);
+        let mut exported = blocks.finalized_notes();
+        exported.sort_by_key(|n| n.note_id);
+
+        let mut restored = BlockStates::new(genesis, MsgId::root());
+        restored.restore_finalized_notes(exported.clone());
+        let mut roundtripped = restored.finalized_notes();
+        roundtripped.sort_by_key(|n| n.note_id);
+        assert_eq!(exported, roundtripped);
     }
 
     #[test]

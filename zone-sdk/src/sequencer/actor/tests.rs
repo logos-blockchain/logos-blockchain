@@ -1230,12 +1230,26 @@ fn track_pending_tx_falls_back_to_other_when_no_inscribe_for_channel() {
     );
 }
 
-/// Cold start with a channel inscription at slot 0 (genesis): the
-/// sequencer must include that slot in its initial backfill and emit it
-/// in a `Finalized` state change. Regression guard for the off-by-one fix
-/// where `backfill_from = lib_slot + 1` silently skipped genesis.
+/// Cold start with a channel inscription and a deposit at slot 0
+/// (genesis), and the node's LIB far enough that the replay takes two
+/// batches. The genesis slot is included in the backfill and emitted in a
+/// `Finalized` state change (regression guard for the off-by-one where
+/// `backfill_from = lib_slot + 1` skipped it), and the checkpoint published
+/// after the first batch already carries the deposit's note with LIB at the
+/// last replayed block, so a restart from it loses nothing.
 #[tokio::test]
 async fn cold_start_backfills_genesis_slot() {
+    use std::collections::HashMap;
+
+    use lb_core::{
+        events::DepositNote,
+        mantle::{NoteId, ops::channel::deposit::Metadata},
+    };
+    use lb_groth16::Fr;
+    use lb_key_management_system_service::keys::ZkPublicKey;
+
+    use crate::test_support::deposit_event;
+
     let channel_id = ChannelId::from([7; 32]);
     let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
 
@@ -1250,62 +1264,114 @@ async fn cold_start_backfills_genesis_slot() {
     let expected_msg_id = inscribe.id();
     let genesis_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(inscribe)]);
     let genesis_tx_hash = genesis_tx.hash();
+    let deposit = DepositOp {
+        channel_id,
+        inputs: BoundedInputs::from(NoteId::from(Fr::from(1u64))).into(),
+        metadata: Metadata::try_from(vec![1u8]).unwrap(),
+    };
+    let deposit_tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(deposit.clone())]);
+    let note_id = NoteId::from(Fr::from(1001u64));
+    let note = DepositNote {
+        note_id,
+        value: 50,
+        pk: ZkPublicKey::from(Fr::from(7u64)),
+    };
 
-    let genesis_block = api_block(1, 0, 0, vec![genesis_tx]);
-    // Empty block at slot 1 so the block stream advances and the
-    // sequencer signals `Ready`, giving the test a clean exit signal.
-    let live_block = api_block(2, 1, 1, Vec::new());
+    let genesis_block = api_block(1, 0, 0, vec![genesis_tx, deposit_tx.clone()]);
+    // LIB at slot 150: the replay runs as two 100-slot batches.
+    let lib_block = api_block(2, 1, 150, Vec::new());
+    // Empty live block so the block stream advances and the sequencer
+    // signals `Ready`, giving the test a clean exit signal.
+    let live_block = api_block(3, 2, 151, Vec::new());
 
     let node = MockNode {
-        lib: genesis_block.header.id,
-        tip: genesis_block.header.id,
+        lib: lib_block.header.id,
+        lib_slot: lib_block.header.slot,
+        tip: lib_block.header.id,
         scripts: scripts(vec![StreamScript {
             events: vec![ProcessedBlockEvent {
                 block: live_block.clone(),
                 tip: live_block.header.id,
                 tip_slot: live_block.header.slot,
-                lib: genesis_block.header.id,
-                lib_slot: Slot::genesis(),
+                lib: lib_block.header.id,
+                lib_slot: lib_block.header.slot,
             }],
             then: StreamEnd::Hang,
         }]),
-        immutable: vec![genesis_block],
+        immutable: vec![genesis_block.clone(), lib_block.clone()],
+        events: HashMap::from([(
+            genesis_block.header.id,
+            deposit_event(&deposit_tx, &deposit, 50, vec![note]),
+        )]),
         ..MockNode::default()
     };
     let mut sequencer =
         ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), None);
 
     let mut finalized_items: Vec<FinalizedTx> = Vec::new();
+    let mut checkpoints = Vec::new();
     loop {
         match sequencer.next_event().await {
             Event::Ready => break,
-            Event::BlocksProcessed { finalized, .. } => {
+            Event::BlocksProcessed {
+                finalized,
+                checkpoint,
+                ..
+            } => {
                 assert!(
                     sequencer.channel_history().is_none(),
                     "finalized backfill does not know the live branch yet"
                 );
                 finalized_items.extend(finalized);
+                checkpoints.push(checkpoint);
             }
             Event::TurnNotification { .. } => {}
         }
     }
 
+    assert_genesis_inscription_finalized(&finalized_items, genesis_tx_hash, expected_msg_id);
+    assert!(checkpoints.len() >= 2, "one checkpoint per backfill batch");
     assert_eq!(
-        finalized_items.len(),
-        1,
-        "expected exactly one finalized tx from genesis backfill"
+        checkpoints[0].lib, genesis_block.header.id,
+        "LIB follows the replay"
     );
-    let t = &finalized_items[0];
-    assert_eq!(t.tx_hash, genesis_tx_hash);
+    assert_eq!(checkpoints[0].lib_slot, Slot::from(100));
+    assert_eq!(
+        notes(&checkpoints[0]),
+        vec![(note_id, 50)],
+        "the deposit read in the first batch is checkpointed"
+    );
+    assert_eq!(checkpoints[1].lib, lib_block.header.id);
+    assert_eq!(notes(&checkpoints[1]), vec![(note_id, 50)]);
+}
+
+/// The one finalized tx with `tx_hash` carries a single root inscription
+/// with `msg_id`.
+fn assert_genesis_inscription_finalized(items: &[FinalizedTx], tx_hash: TxHash, msg_id: MsgId) {
+    let inscriptions: Vec<_> = items.iter().filter(|t| t.tx_hash == tx_hash).collect();
+    assert_eq!(
+        inscriptions.len(),
+        1,
+        "expected exactly one finalized inscription tx from genesis backfill"
+    );
+    let t = inscriptions[0];
     assert_eq!(t.ops.len(), 1);
     match &t.ops[0] {
         FinalizedOp::Inscription(info) => {
-            assert_eq!(info.tx_hash, genesis_tx_hash);
+            assert_eq!(info.tx_hash, tx_hash);
             assert_eq!(info.parent_msg, MsgId::root());
-            assert_eq!(info.this_msg, expected_msg_id);
+            assert_eq!(info.this_msg, msg_id);
         }
         other => panic!("expected Inscription, got {other:?}"),
     }
+}
+
+/// A checkpoint's channel notes as `(id, value)` pairs.
+fn notes(cp: &SequencerCheckpoint) -> Vec<(lb_core::mantle::NoteId, lb_core::mantle::Value)> {
+    cp.channel_notes
+        .iter()
+        .map(|n| (n.note_id, n.value))
+        .collect()
 }
 
 /// The finalized config tip must survive the real persistence path —
