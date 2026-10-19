@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use lb_core::{
     header::HeaderId,
     mantle::{
         Note, Op, SignedOps, Utxo,
         channel::{SlotTimeframe, SlotTimeout},
-        ledger::{BoundedInputs, verification_mode::StandardMode},
+        ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
         ops::{
             OpProof, OpProofRef, OpRef,
             channel::{
@@ -25,7 +27,7 @@ use tokio::sync::{mpsc, watch};
 use super::{
     super::{
         block_fetch::ViewBefore,
-        block_states::BlockChannelTx,
+        block_states::{BlockChannelTx, ChannelTxKind},
         state::PendingBundle,
         types::{FinalizedOp, InscriptionInfo, SequencerConfig},
         zone_sequencer::track_pending_tx,
@@ -1718,14 +1720,20 @@ async fn update_variant_follows_orphaned() {
 
     // Block 1 on LIB mines entry 1; the view at the tip is that entry.
     let mined = inscribe_op(channel_id, MsgId::root(), b"1");
+    let mined_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(mined.clone())]);
     let lib = sequencer.state.as_ref().unwrap().lib();
     sequencer.state.as_mut().unwrap().process_block(
         header_id(1),
         lib,
         lib,
         std::iter::empty(),
-        vec![BlockChannelTx::Inscription(info_of(&mined))],
+        vec![BlockChannelTx::new(
+            Arc::new(mined_tx.clone()),
+            mined_tx.hash(),
+            ChannelTxKind::Inscription(info_of(&mined)),
+        )],
         Vec::new(),
+        vec![],
     );
     sequencer.current_tip = Some(header_id(1));
     let adopted = ChannelUpdateTx::Inscription(info_of(&inscribe_op(channel_id, mined.id(), b"3")));
@@ -2004,6 +2012,7 @@ async fn submit_atomic_bundle_rejects_a_bundle_prepared_by_another_sequencer() {
         signer: preparer.public_key(),
         kind: PreparedBundleKind::PinDeposit {
             consumed_notes: BoundedInputs::from(NoteId::from(Fr::from(1u64))).into(),
+            outputs: Outputs::empty(),
         },
         sign_payload: sign_payload.clone(),
         accredited_keys: vec![

@@ -35,7 +35,7 @@ use tracing::{debug, info, warn};
 use super::{
     TARGET,
     block_fetch::classify_channel_tx,
-    block_states::{BlockChannelTx, SharedTx},
+    block_states::{ChannelTxKind, SharedTx},
     channel_wallet::select_channel_notes,
     client::SequencerClient,
     handle::SequencerHandle,
@@ -1072,6 +1072,7 @@ where
 
         let transfer_op = self.build_deposit_transfer(&consumed_notes)?;
         let consumed_inputs = transfer_op.inputs.clone();
+        let outputs = transfer_op.outputs.clone();
 
         let (ops, parent, msg_id) =
             self.wrap_bundle_ops(&inscribe, vec![Op::ChannelTransfer(transfer_op)]);
@@ -1098,6 +1099,7 @@ where
             inscribe,
             PreparedBundleKind::PinDeposit {
                 consumed_notes: consumed_inputs,
+                outputs,
             },
         ))
     }
@@ -1282,12 +1284,16 @@ where
                     withdraws.clone(),
                     outputs.clone(),
                 )?,
-            PreparedBundleKind::PinDeposit { consumed_notes } => state.submit_pin_deposit(
+            PreparedBundleKind::PinDeposit {
+                consumed_notes,
+                outputs,
+            } => state.submit_pin_deposit(
                 signed_tx.clone(),
                 parent,
                 msg_id,
                 inscribe.clone(),
                 consumed_notes.clone(),
+                outputs.clone(),
             )?,
         }
         // Only a bundle this sequencer signs alone can be re-funded on
@@ -1322,13 +1328,15 @@ where
                     outputs,
                 })
             }
-            PreparedBundleKind::PinDeposit { consumed_notes } => {
-                PendingTx::PinDeposit(PinDepositInfo {
-                    tx_hash,
-                    inscription,
-                    consumed_notes,
-                })
-            }
+            PreparedBundleKind::PinDeposit {
+                consumed_notes,
+                outputs,
+            } => PendingTx::PinDeposit(PinDepositInfo {
+                tx_hash,
+                inscription,
+                consumed_notes,
+                outputs,
+            }),
         };
 
         Ok((PublishResult { tx }, checkpoint))
@@ -1801,13 +1809,13 @@ pub(super) fn track_pending_tx(
     channel_id: ChannelId,
 ) -> Result<Option<MsgId>, ParentTaken> {
     let tx: SharedTx = tx.into();
-    match classify_channel_tx(&tx, channel_id, &mut None) {
-        Some(BlockChannelTx::Inscription(i)) => {
+    match classify_channel_tx(&tx, channel_id, &mut None).map(|classified| classified.kind) {
+        Some(ChannelTxKind::Inscription(i)) => {
             let this_msg = i.this_msg;
             state.submit_inscription(tx, i.parent_msg, this_msg, i.payload)?;
             Ok(Some(this_msg))
         }
-        Some(BlockChannelTx::AtomicWithdraw(aw)) => {
+        Some(ChannelTxKind::AtomicWithdraw(aw)) => {
             let this_msg = aw.inscription.this_msg;
             state.submit_atomic_withdraw(
                 tx,
@@ -1819,7 +1827,7 @@ pub(super) fn track_pending_tx(
             )?;
             Ok(Some(this_msg))
         }
-        Some(BlockChannelTx::PinDeposit(ad)) => {
+        Some(ChannelTxKind::PinDeposit(ad)) => {
             let this_msg = ad.inscription.this_msg;
             state.submit_pin_deposit(
                 tx,
@@ -1827,6 +1835,7 @@ pub(super) fn track_pending_tx(
                 this_msg,
                 ad.inscription.payload,
                 ad.consumed_notes,
+                ad.outputs,
             )?;
             Ok(Some(this_msg))
         }

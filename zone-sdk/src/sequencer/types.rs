@@ -268,6 +268,7 @@ pub enum PreparedBundleKind {
     },
     PinDeposit {
         consumed_notes: Inputs,
+        outputs: Outputs,
     },
 }
 
@@ -319,7 +320,8 @@ pub enum WithdrawInputs {
 ///   }`.
 /// - [`ChannelUpdateTx::PinDeposit`] →
 ///   [`publish_pin_deposit`](super::SequencerHandle::publish_pin_deposit) with
-///   `info.inscription.payload` and `info.consumed_notes`.
+///   `info.inscription.payload` and `info.consumed_notes`, which re-creates the
+///   notes 1:1; `info.outputs` shows whether the original did.
 /// - [`ChannelUpdateTx::Config`] / [`ChannelUpdateTx::Custom`] →
 ///   caller-recovered; the SDK cannot re-sign a multi-sig config or rebuild a
 ///   custom tx, so it never auto-resubmits them.
@@ -508,8 +510,8 @@ pub enum Error {
 )]
 pub enum Event {
     /// Fires per ingested block. Carries how the channel view moved
-    /// (`channel_update`), the deposits observed in this block, and the
-    /// finalized txs; any of them may be empty. Cold-start
+    /// (`channel_update`), the deposits that turned canonical with it, and
+    /// the finalized txs; any of them may be empty. Cold-start
     /// backfill emits one `BlocksProcessed` per batch with an empty
     /// [`ChannelUpdate::Extension`]: it walks finalized history, so there is
     /// no view change to report.
@@ -722,11 +724,18 @@ pub struct PinDepositInfo {
     /// The channel notes the bundled transfer consumes (the deposit being
     /// pinned). Recovering an orphaned bundle re-supplies these.
     pub consumed_notes: Inputs,
+    /// The notes the bundled transfer re-creates, in op order. A
+    /// `publish_pin_deposit` bundle re-creates `consumed_notes` 1:1; a
+    /// custom-built one may not.
+    pub outputs: Outputs,
 }
 
-/// A channel deposit observed in a finalized L1 block. Sequencers do not
-/// publish deposits — these are pure observations enriched with the deposit
-/// `amount` from the chain events API.
+/// A channel deposit observed in an L1 block.
+///
+/// Sequencers do not publish deposits — these are pure observations enriched
+/// with the deposit `amount` from the chain events API. Reported in
+/// `BlocksProcessed::deposits` each time its block joins the canonical chain,
+/// like an adopted inscription, and in `finalized` once final.
 #[derive(Debug, Clone)]
 pub struct DepositInfo {
     /// The transaction hash containing this deposit op.
