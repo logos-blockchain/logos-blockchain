@@ -705,15 +705,41 @@ async fn step_run_blend_sdp_declaration_api(
     step: &Step,
     declarer_node_name: String,
 ) -> StepResult {
-    let user_config_path = node_user_config_path(world, &declarer_node_name)?;
-    let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
     let service_note_id =
         wait_for_blend_funded_note(world, &declarer_node_name, blend_zk_pk).await?;
 
+    declare_blend_core_via_api(world, step, &declarer_node_name, Some(service_note_id)).await
+}
+
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Required to be mutable by cucumber step function signature"
+)]
+#[then(expr = "I declare node {string} as blend core node via the API without a service note")]
+async fn step_run_blend_sdp_declaration_api_without_note(
+    world: &mut CucumberWorld,
+    step: &Step,
+    declarer_node_name: String,
+) -> StepResult {
+    let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
+    wait_for_blend_funded_note(world, &declarer_node_name, blend_zk_pk).await?;
+
+    declare_blend_core_via_api(world, step, &declarer_node_name, None).await
+}
+
+async fn declare_blend_core_via_api(
+    world: &CucumberWorld,
+    step: &Step,
+    declarer_node_name: &str,
+    service_note_id: Option<lb_core::mantle::NoteId>,
+) -> StepResult {
+    let user_config_path = node_user_config_path(world, declarer_node_name)?;
+    let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
+
     let declarer_node_client = world
         .nodes_info
-        .get(&declarer_node_name)
+        .get(declarer_node_name)
         .ok_or_else(|| StepError::LogicalError {
             message: format!("Node '{declarer_node_name}' not found in world state"),
         })?

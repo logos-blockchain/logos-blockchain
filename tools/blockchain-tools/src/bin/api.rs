@@ -148,7 +148,7 @@ async fn post_blend_declaration(
             &node_address,
             JoinBlendRequestBody {
                 locator: blend_addr,
-                service_note_id,
+                service_note_id: Some(service_note_id),
             },
         )
         .await

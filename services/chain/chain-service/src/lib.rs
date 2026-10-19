@@ -183,6 +183,9 @@ pub enum Query {
         block_id: HeaderId,
         reply_channel: oneshot::Sender<Option<LedgerState>>,
     },
+    GetLedgerConfig {
+        reply_channel: oneshot::Sender<lb_ledger::Config>,
+    },
     /// Returns all declarations in the current SDP registry, not snapshot
     GetSdpDeclarations {
         reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
