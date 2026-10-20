@@ -31,6 +31,11 @@ use super::tx_builder::sign_prepared;
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
+/// Unmined inscriptions the node may hold at once, which bounds how many a
+/// block can carry: past it, publishes queue in the sequencer until those
+/// ahead land. Inscriptions are small next to the block size cap, so this
+/// is set by what the wallet can fund at once, not by block space.
+const DEFAULT_MAX_PENDING_PUBLISH_DEPTH: usize = 100;
 /// Long enough that a merely slow tx is not rebuilt: a valid tx the node
 /// holds lands within a few blocks, so one unmined this long is stuck.
 const DEFAULT_STALE_REFUND_SLOTS: u64 = 30;
@@ -423,7 +428,7 @@ impl SequencerConfig {
             reconnect_delay: DEFAULT_RECONNECT_DELAY,
             publish_channel_capacity: DEFAULT_PUBLISH_CHANNEL_CAPACITY,
             min_slots_remaining_in_turn: 1,
-            max_pending_publish_depth: 10,
+            max_pending_publish_depth: DEFAULT_MAX_PENDING_PUBLISH_DEPTH,
             stale_refund_slots: DEFAULT_STALE_REFUND_SLOTS,
             funding,
         }

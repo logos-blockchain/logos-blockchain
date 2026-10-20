@@ -501,23 +501,44 @@ impl TxState {
     /// Own pending inscriptions not mined on `tip`'s branch and funded more
     /// than `window` LIB slots ago that carry their pre-funding ops: what a
     /// stale-refund rebuilds.
+    ///
+    /// Only entries the node holds or is about to receive qualify: posted
+    /// ones, plus the first `first_post_budget` unposted ones along the
+    /// pending chain — the ones the following resubmit posts for the first
+    /// time. The rest of an unposted backlog is left alone: re-funding it
+    /// reserves a fee note per entry for txs that cannot land until those
+    /// ahead of them do, which starves the wallet. It is re-funded, if
+    /// stale, when its turn to be posted comes.
     #[must_use]
     pub fn refund_candidates(
         &self,
         tip: HeaderId,
         lib_slot: Slot,
         window: u64,
+        first_post_budget: usize,
     ) -> Vec<RefundCandidate> {
         // An unprocessed tip has no safe set: everything would read as unmined.
         if !self.blocks.has_block(&tip) {
             return Vec::new();
         }
         let safe = self.blocks.safe_at(tip);
+        let next_first_posts: HashSet<TxHash> = self
+            .collect_pending_suffix(self.channel_tip_at(tip))
+            .into_iter()
+            .filter(|info| {
+                !safe.contains(&info.tx_hash)
+                    && self.pending.get(&info.tx_hash).is_some_and(|p| !p.posted)
+            })
+            .take(first_post_budget)
+            .map(|info| info.tx_hash)
+            .collect();
         let mut candidates: Vec<RefundCandidate> = self
             .pending
             .iter()
             .filter(|(hash, p)| {
-                !safe.contains(hash) && Self::expired(p.funded_at, lib_slot, window)
+                !safe.contains(hash)
+                    && (p.posted || next_first_posts.contains(hash))
+                    && Self::expired(p.funded_at, lib_slot, window)
             })
             .filter_map(|(hash, p)| {
                 p.pre_fund.clone().map(|pre_fund| RefundCandidate {
@@ -976,10 +997,16 @@ impl TxState {
     }
 
     /// Number of pending channel inscription transactions already posted by
-    /// this runtime.
+    /// this runtime and not yet mined on `tip`'s branch. Mined entries stay
+    /// pending until LIB passes them, but they no longer occupy a publish
+    /// slot: counting them would stall new posts for as long as finality lags.
     #[must_use]
-    pub fn posted_pending_publish_count(&self) -> usize {
-        self.pending.values().filter(|p| p.posted).count()
+    pub fn posted_pending_publish_count(&self, tip: HeaderId) -> usize {
+        let safe = self.blocks.safe_at(tip);
+        self.pending
+            .iter()
+            .filter(|(hash, p)| p.posted && !safe.contains(*hash))
+            .count()
     }
 
     /// Remove pending inscriptions whose lineage does NOT reach the current
@@ -2225,12 +2252,14 @@ mod tests {
         state.stamp_funding(&unfunded, Slot::from(10), None);
 
         assert!(
-            state.refund_candidates(tip, Slot::from(12), 3).is_empty(),
+            state
+                .refund_candidates(tip, Slot::from(12), 3, usize::MAX)
+                .is_empty(),
             "inside the window nothing expires"
         );
         assert!(state.shed_expired(tip, Slot::from(12), 3).0.is_empty());
 
-        let candidates = state.refund_candidates(tip, Slot::from(14), 3);
+        let candidates = state.refund_candidates(tip, Slot::from(14), 3, usize::MAX);
         assert_eq!(
             candidates.iter().map(|c| c.tx_hash).collect::<Vec<_>>(),
             vec![funded],
@@ -2248,6 +2277,84 @@ mod tests {
         assert!(state.pending_inscription(&unfunded).is_none());
     }
 
+    /// Of an expired backlog only what the node holds or is about to receive
+    /// is rebuilt: posted entries, and the next `first_post_budget` unposted
+    /// ones along the chain. The entries queued behind them keep their stale
+    /// funding until their turn to be posted.
+    #[test]
+    fn only_posted_and_next_to_post_entries_are_refunded() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        let mut parent = MsgId::root();
+        let mut chain = Vec::new();
+        for data in 1..=4 {
+            let (hash, msg) = submit_own(&mut state, parent, data);
+            state.stamp_funding(&hash, Slot::from(10), Some(MantleTxBuilder::new()));
+            chain.push(hash);
+            parent = msg;
+        }
+        assert!(state.mark_pending_inscription_posted(&chain[0]));
+
+        let refunded = |budget| {
+            let mut hashes: Vec<TxHash> = state
+                .refund_candidates(tip, Slot::from(100), 3, budget)
+                .into_iter()
+                .map(|c| c.tx_hash)
+                .collect();
+            hashes.sort_unstable_by_key(|hash| hash.0);
+            hashes
+        };
+        let sorted = |mut hashes: Vec<TxHash>| {
+            hashes.sort_unstable_by_key(|hash| hash.0);
+            hashes
+        };
+
+        assert_eq!(
+            refunded(0),
+            vec![chain[0]],
+            "with no first posts left only the posted entry is rebuilt"
+        );
+        assert_eq!(
+            refunded(1),
+            sorted(vec![chain[0], chain[1]]),
+            "the next unposted entry along the chain joins it"
+        );
+        assert_eq!(
+            refunded(usize::MAX),
+            sorted(chain.clone()),
+            "a budget covering the backlog rebuilds all of it"
+        );
+    }
+
+    /// Posted entries already mined on the tip's branch stay pending until
+    /// LIB passes them, but no longer count as in-flight publishes.
+    #[test]
+    fn mined_posted_entries_do_not_count_as_in_flight() {
+        let genesis = header_id(0);
+        let b1 = header_id(1);
+        let mut state = TxState::new(genesis, MsgId::root());
+        let (first, msg) = submit_own(&mut state, MsgId::root(), 1);
+        let (second, _) = submit_own(&mut state, msg, 2);
+        assert!(state.mark_pending_inscription_posted(&first));
+        assert!(state.mark_pending_inscription_posted(&second));
+
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![first],
+            vec![],
+            Vec::new(),
+            vec![],
+        );
+
+        assert_eq!(state.pending_publish_count(), 2);
+        assert_eq!(state.posted_pending_publish_count(genesis), 2);
+        assert_eq!(state.posted_pending_publish_count(b1), 1);
+    }
+
     /// A window of zero disables expiry entirely.
     #[test]
     fn zero_window_never_expires() {
@@ -2260,7 +2367,7 @@ mod tests {
 
         assert!(
             state
-                .refund_candidates(tip, Slot::from(1_000), 0)
+                .refund_candidates(tip, Slot::from(1_000), 0, usize::MAX)
                 .is_empty()
         );
         assert!(state.shed_expired(tip, Slot::from(1_000), 0).0.is_empty());
@@ -2281,11 +2388,15 @@ mod tests {
         state.process_block(b1, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
 
         assert!(
-            state.refund_candidates(a1, Slot::from(100), 3).is_empty(),
+            state
+                .refund_candidates(a1, Slot::from(100), 3, usize::MAX)
+                .is_empty(),
             "mined on the branch"
         );
         assert_eq!(
-            state.refund_candidates(b1, Slot::from(100), 3).len(),
+            state
+                .refund_candidates(b1, Slot::from(100), 3, usize::MAX)
+                .len(),
             1,
             "not mined on this branch"
         );
@@ -2315,7 +2426,7 @@ mod tests {
 
         assert!(
             state
-                .refund_candidates(unseen, Slot::from(100), 3)
+                .refund_candidates(unseen, Slot::from(100), 3, usize::MAX)
                 .is_empty(),
             "the mined entry is not re-funded at an unseen tip"
         );

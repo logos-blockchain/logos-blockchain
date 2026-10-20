@@ -430,7 +430,9 @@ where
     /// our turn with a connected node: a rebuild that then waits for the
     /// turn would only age its fresh fee note. A rebuild of a merely slow tx
     /// is harmless: both claim the same lineage slot, so whichever lands
-    /// first kills the other.
+    /// first kills the other. Unposted entries beyond the next
+    /// `max_pending_publish_depth` posts are not rebuilt; see
+    /// [`TxState::refund_candidates`].
     pub(super) async fn refund_stale_pending(&mut self) {
         let window = self.config.stale_refund_slots;
         if window == 0 || !self.connected || !self.can_publish_inscription_now() {
@@ -439,7 +441,13 @@ where
         let (Some(state), Some(tip)) = (self.state.as_ref(), self.current_tip) else {
             return;
         };
-        let candidates = state.refund_candidates(tip, self.lib_slot, window);
+        // The unposted entries the following `resubmit_pending` may post.
+        let first_post_budget = self
+            .config
+            .max_pending_publish_depth
+            .max(1)
+            .saturating_sub(state.posted_pending_publish_count(tip));
+        let candidates = state.refund_candidates(tip, self.lib_slot, window, first_post_budget);
         let mut changed = false;
         for candidate in candidates {
             if self.posting.contains(&candidate.tx_hash) {
@@ -530,7 +538,7 @@ where
             let max_depth = self.config.max_pending_publish_depth.max(1);
 
             let mut submit = Vec::new();
-            let mut active_publish_count = state.posted_pending_publish_count();
+            let mut active_publish_count = state.posted_pending_publish_count(tip);
 
             for (id, signed_tx) in pending {
                 // Skip txs whose post is already in flight — guards the
