@@ -1,12 +1,16 @@
-use core::num::NonZeroUsize;
+use core::{num::NonZeroUsize, time::Duration};
 
+use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
-    /// The timeout for a single query in seconds
-    pub query_timeout_secs: Option<u64>,
+    /// The timeout for a single query
+    #[serde_as(as = "Option<MinimalBoundedDuration<1, SECOND>>")]
+    pub query_timeout: Option<Duration>,
 
     /// The replication factor to use
     pub replication_factor: Option<NonZeroUsize>,
@@ -26,10 +30,12 @@ pub struct Config {
     /// The caching strategy
     pub caching: Option<CachingSettings>,
 
-    /// The interval in seconds for periodic bootstrap
-    /// If enabled the periodic bootstrap will run every x seconds in addition
+    /// The interval for periodic bootstrap
+    /// If enabled the periodic bootstrap will run at this interval in addition
     /// to the automatic bootstrap that is triggered when a new peer is added
-    pub periodic_bootstrap_interval_secs: Option<u64>,
+    /// `0s` disables periodic bootstrap
+    #[serde_as(as = "Option<MinimalBoundedDuration<0, SECOND>>")]
+    pub periodic_bootstrap_interval: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,5 +67,19 @@ impl From<CachingSettings> for lb_libp2p::config::CachingSettings {
             CachingSettings::Disabled => Self::Disabled,
             CachingSettings::Enabled { max_peers } => Self::Enabled { max_peers },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durations_keep_precision_and_zero_disables_bootstrap() {
+        let config: Config =
+            serde_yaml::from_str("query_timeout: 1500ms\nperiodic_bootstrap_interval: 0s").unwrap();
+        assert_eq!(config.query_timeout, Some(Duration::from_millis(1500)));
+        assert_eq!(config.periodic_bootstrap_interval, Some(Duration::ZERO));
+        assert!(serde_yaml::from_str::<Config>("query_timeout: 250ms").is_err());
     }
 }
