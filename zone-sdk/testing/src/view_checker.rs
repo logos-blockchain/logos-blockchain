@@ -13,22 +13,27 @@ use lb_zone_sdk::{
     sequencer::{ChannelUpdate, ChannelUpdateTx, Event, FinalizedTx, SequencerCheckpoint},
 };
 
+use crate::layers::{Layer, Violations};
+
+fn hashes(entries: &[ChannelUpdateTx]) -> Vec<TxHash> {
+    entries.iter().map(ChannelUpdateTx::tx_hash).collect()
+}
+
 #[derive(Debug, Default)]
 pub struct ViewChecker {
     held: HashSet<TxHash>,
-    violations: Vec<String>,
+    violations: Violations,
 }
 
 impl ViewChecker {
     /// Every violation recorded so far, in order.
     #[must_use]
-    pub fn violations(&self) -> &[String] {
+    pub const fn violations(&self) -> &Violations {
         &self.violations
     }
 
     fn record(&mut self, message: String) {
-        tracing::error!("channel view contract violated: {message}");
-        self.violations.push(message);
+        self.violations.record(Layer::Chain, message);
     }
 
     pub fn observe(&mut self, event: &Event) {
@@ -41,6 +46,18 @@ impl ViewChecker {
         else {
             return;
         };
+        tracing::debug!(
+            lib = ?checkpoint.lib,
+            prefix = ?match channel_update {
+                ChannelUpdate::Conflict { common_prefix, .. } => Some(hashes(common_prefix)),
+                ChannelUpdate::Extension { .. } => None,
+            },
+            adopted = ?hashes(channel_update.adopted()),
+            orphaned = ?hashes(channel_update.orphaned()),
+            finalized = ?finalized.iter().map(|tx| tx.tx_hash).collect::<Vec<_>>(),
+            pending = ?checkpoint.pending_txs.iter().map(|(h, _)| *h).collect::<Vec<_>>(),
+            "block event"
+        );
         match channel_update {
             ChannelUpdate::Extension { adopted } => self.add_extension(adopted),
             ChannelUpdate::Conflict {

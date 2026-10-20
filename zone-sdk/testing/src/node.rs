@@ -189,6 +189,10 @@ struct NewBlock {
     slot: Slot,
     candidates: Vec<SignedOps<Unverified, StandardMode>>,
     mints: Vec<(NoteId, Utxo)>,
+    /// The prices the block's transactions are judged at: the node's
+    /// current ones for a block it mines, the mining node's for one it
+    /// imports.
+    gas_prices: GasPrices,
     force_canonical: bool,
     announce: bool,
 }
@@ -419,6 +423,7 @@ impl SimNode {
             .collect();
         let id = block_id(state.salt, state.next_block);
         state.next_block += 1;
+        let gas_prices = state.gas_prices.clone();
         drop(state.apply_block(
             &parent,
             NewBlock {
@@ -426,6 +431,7 @@ impl SimNode {
                 slot,
                 candidates,
                 mints,
+                gas_prices,
                 force_canonical: spec.force_canonical,
                 announce: spec.announce,
             },
@@ -878,12 +884,13 @@ impl ChainState {
             slot,
             candidates,
             mints,
+            gas_prices,
             force_canonical,
             announce,
         } = block;
         let on_tip = parent.id == self.tip;
         let mut ledger = parent.ledger.clone();
-        ledger.set_gas_prices(self.gas_prices.clone());
+        ledger.set_gas_prices(gas_prices);
         let mut included = parent.included.clone();
         for (note_id, utxo) in &mints {
             ledger.mint(*note_id, *utxo);
@@ -965,6 +972,7 @@ impl ChainState {
                 slot: block.slot,
                 candidates: block.txs.clone(),
                 mints: block.mints.clone(),
+                gas_prices: block.ledger.gas_prices().clone(),
                 force_canonical: false,
                 announce: true,
             },

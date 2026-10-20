@@ -20,7 +20,10 @@ use lb_zone_sdk::{
     sequencer::{ChannelUpdate, ChannelUpdateTx, Event},
 };
 
-use crate::node::SimNode;
+use crate::{
+    layers::{Layer, Violations},
+    node::SimNode,
+};
 
 #[derive(Debug, Default)]
 pub struct Mirror {
@@ -29,7 +32,7 @@ pub struct Mirror {
     /// node once both agree on it.
     lib: Option<HeaderId>,
     pending: HashSet<TxHash>,
-    violations: Vec<String>,
+    violations: Violations,
 }
 
 /// Which lineage of `channel` a tx moves: `Some(true)` for the message
@@ -64,7 +67,7 @@ fn hashes<'a>(
 
 impl Mirror {
     #[must_use]
-    pub fn violations(&self) -> &[String] {
+    pub const fn violations(&self) -> &Violations {
         &self.violations
     }
 
@@ -178,7 +181,6 @@ impl Mirror {
     }
 
     fn record(&mut self, message: String) {
-        tracing::error!("mirror diverged: {message}");
-        self.violations.push(message);
+        self.violations.record(Layer::Chain, message);
     }
 }

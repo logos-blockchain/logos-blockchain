@@ -6,10 +6,10 @@ use std::{fmt::Write as _, time::Duration};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedOps, Utxo,
-        ledger::verification_mode::StandardMode,
+        Note, NoteId, SignedOps, Utxo,
+        ledger::{Outputs, verification_mode::StandardMode},
         ops::channel::{ChannelId, VerifiedChannelKeys, deposit::DepositOp, inscribe::Inscription},
-        traits::Hashable as _,
+        traits::Hashable,
         transactions::states::Unverified,
     },
 };
@@ -18,7 +18,7 @@ use lb_zone_sdk::{
     node_types::TxHash,
     sequencer::{
         ChannelWalletView, FinalizedOp, FinalizedTx, PublishResult, SequencerChannelView,
-        SequencerCheckpoint, SequencerConfig, ZoneSequencer,
+        SequencerCheckpoint, SequencerConfig, WithdrawArg, WithdrawInputs, ZoneSequencer,
     },
 };
 use num_bigint::BigUint;
@@ -26,11 +26,12 @@ use num_bigint::BigUint;
 pub use crate::harness::passive;
 use crate::{
     Harness, SimNode,
+    consumer::ReferenceConsumer,
     harness::{self, RECONNECT_DELAY, funding_config, key},
     node::{BlockSpec, TxSelection},
     policy::{Policy, make_inscription, payload_str},
     txs::{self, TxError},
-    writers::Writer,
+    writers::{self, Writer, WriterOp},
 };
 
 /// How the simulated network behaves between the scenario's steps.
@@ -122,6 +123,12 @@ pub fn seq_key(name: &str) -> Ed25519Key {
         FOREIGN_2 => key(5),
         other => panic!("unknown sequencer {other}"),
     }
+}
+
+/// The reference consumer for sequencer `name`, with nothing planned.
+#[must_use]
+pub fn reference(name: &str) -> Box<dyn Policy> {
+    ReferenceConsumer::boxed(&seq_key(name), Vec::new())
 }
 
 impl World {
@@ -411,9 +418,15 @@ impl World {
     /// the mempool, so the sequencers under test only ever see them mined, in
     /// plain blocks, fork blocks and both partition nodes alike.
     pub fn add_writer(&mut self, name: &str) {
+        self.add_writer_with(name, &writers::OP_CYCLE);
+    }
+
+    /// [`Self::add_writer`] with the writer cycling through `ops` only.
+    pub fn add_writer_with(&mut self, name: &str, ops: &'static [WriterOp]) {
         let recipient = ZkKey::from(BigUint::from(20 + self.writers.len() as u64)).to_public_key();
-        self.writers
-            .push(Writer::new(name, seq_key(name), recipient));
+        let mut writer = Writer::new(name, seq_key(name), recipient);
+        writer.ops = ops;
+        self.writers.push(writer);
     }
 
     /// Let the writers put up to `posts` new transactions into blocks; adds
@@ -496,11 +509,7 @@ impl World {
     }
 
     fn selection(node: &SimNode, posted: Posted) -> TxSelection {
-        let hashes: Vec<TxHash> = node
-            .mempool()
-            .iter()
-            .map(lb_core::mantle::traits::Hashable::hash)
-            .collect();
+        let hashes: Vec<TxHash> = node.mempool().iter().map(Hashable::hash).collect();
         match posted {
             Posted::All => TxSelection::Mempool,
             Posted::None => TxSelection::None,
@@ -528,6 +537,16 @@ impl World {
             force_canonical: false,
             announce,
         });
+        tracing::debug!(
+            block = ?id,
+            ?parent,
+            slot,
+            announce,
+            txs = ?node.block(id).map(|b| b.txs.iter().map(Hashable::hash).collect::<Vec<_>>()),
+            tip = ?node.tip(),
+            lib = ?node.lib(),
+            "mined"
+        );
         self.harness.settle().await;
         id
     }
@@ -986,11 +1005,62 @@ impl World {
             self.user_pk(),
         )
         .await?;
-        let hash = lb_core::mantle::traits::Hashable::hash(&tx);
+        let hash = Hashable::hash(&tx);
         let notes = txs::recreated_channel_notes(&op, utxos);
         self.node().submit(tx);
         self.harness.settle().await;
         Ok((hash, op, notes))
+    }
+
+    /// Finalized channel notes of sequencer `index` covering `amount`,
+    /// largest first; `None` when they do not.
+    #[must_use]
+    pub fn finalized_inputs(&mut self, index: usize, amount: u64) -> Option<Vec<NoteId>> {
+        let mut notes = self.wallet(index).finalized;
+        notes.sort_by(|a, b| b.value.cmp(&a.value).then(a.note_id.cmp(&b.note_id)));
+        let mut covered = 0;
+        let mut inputs = Vec::new();
+        for note in notes {
+            if covered >= amount {
+                break;
+            }
+            covered += note.value;
+            inputs.push(note.note_id);
+        }
+        (covered >= amount).then_some(inputs)
+    }
+
+    /// Sequencer `index` withdraws `amount` to the user under `payload`,
+    /// spending finalized channel notes, or any the SDK picks when
+    /// `unfinalized` is allowed. `None` when it lacks the funds or the node
+    /// refused the transaction.
+    pub async fn withdraw(
+        &mut self,
+        index: usize,
+        amount: u64,
+        unfinalized: bool,
+        payload: &str,
+    ) -> Option<TxHash> {
+        let inputs = if unfinalized {
+            WithdrawInputs::Auto
+        } else {
+            WithdrawInputs::Explicit(self.finalized_inputs(index, amount)?)
+        };
+        let outputs = Outputs::new([Note::new(amount, self.user_pk())]);
+        let result = self
+            .harness
+            .seq(index)
+            .handle()
+            .publish_atomic_withdraw(
+                make_inscription(payload),
+                vec![WithdrawArg { outputs }],
+                inputs,
+            )
+            .await
+            .ok()
+            .map(|(result, _)| result.inscription_id());
+        self.harness.settle().await;
+        result
     }
 
     /// Take the user's notes of exactly these values.
@@ -1037,7 +1107,7 @@ impl World {
     /// End-of-scenario checks: the view contract held everywhere and the
     /// network behaviour actually happened.
     pub fn finish(&self) {
-        self.harness.assert_view_contract();
+        self.harness.assert_layers();
         if self.steps < 7 {
             return;
         }

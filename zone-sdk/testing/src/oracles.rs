@@ -19,7 +19,10 @@ use lb_zone_sdk::{
     sequencer::{ChannelNote, Event, ZoneSequencer},
 };
 
-use crate::node::SimNode;
+use crate::{
+    layers::{Layer, Violations},
+    node::SimNode,
+};
 
 #[derive(Debug, Default)]
 pub struct Oracles {
@@ -32,7 +35,10 @@ pub struct Oracles {
     /// above it are expected, those below were reported in an earlier life
     /// or never (fresh start without history). `None` means genesis.
     finalized_from: Option<HeaderId>,
-    violations: Vec<String>,
+    /// Whether this life resumed an earlier one, so what it reports is
+    /// held to what an uninterrupted sequencer would have reported.
+    resumed: bool,
+    violations: Violations,
 }
 
 /// Whether `tx` carries an op of `channel`.
@@ -53,7 +59,7 @@ fn by_id(notes: &[ChannelNote]) -> BTreeMap<NoteId, Value> {
 
 impl Oracles {
     #[must_use]
-    pub fn violations(&self) -> &[String] {
+    pub const fn violations(&self) -> &Violations {
         &self.violations
     }
 
@@ -62,6 +68,7 @@ impl Oracles {
     pub fn restart_from(&mut self, lib: Option<HeaderId>) {
         self.finalized.clear();
         self.finalized_from = lib;
+        self.resumed = true;
     }
 
     /// Every deposit an event reports must sit on the branch of the tip the
@@ -80,10 +87,10 @@ impl Oracles {
         self.lib = Some(checkpoint.lib);
         for tx in finalized {
             if self.finalized.contains(&tx.tx_hash) {
-                self.record(format!(
-                    "{name}: tx {:?} reported finalized twice",
-                    tx.tx_hash
-                ));
+                self.record(
+                    Layer::Lineage,
+                    format!("{name}: tx {:?} reported finalized twice", tx.tx_hash),
+                );
             }
             self.finalized.push(tx.tx_hash);
         }
@@ -95,10 +102,13 @@ impl Oracles {
                 |tip| node.is_included_at(tip, &deposit.tx_hash),
             );
             if !on_branch {
-                self.record(format!(
-                    "{name}: deposit {:?} reported from a block that is not canonical",
-                    deposit.op_id
-                ));
+                self.record(
+                    Layer::Notes,
+                    format!(
+                        "{name}: deposit {:?} reported from a block that is not canonical",
+                        deposit.op_id
+                    ),
+                );
             }
         }
     }
@@ -136,10 +146,18 @@ impl Oracles {
             .map(Hashable::hash)
             .collect();
         if self.finalized != expected {
-            self.record(format!(
-                "{name}: finalized txs reported {:?} differ from the chain's {:?}",
-                self.finalized, expected
-            ));
+            let layer = if self.resumed {
+                Layer::Restarts
+            } else {
+                Layer::Lineage
+            };
+            self.record(
+                layer,
+                format!(
+                    "{name}: finalized txs reported {:?} differ from the chain's {:?}",
+                    self.finalized, expected
+                ),
+            );
         }
     }
 
@@ -180,14 +198,20 @@ impl Oracles {
         let finalized = by_id(&view.finalized);
         let unfinalized = by_id(&view.unfinalized);
         if finalized != expected_finalized {
-            self.record(format!(
-                "{name}: finalized channel wallet {finalized:?} differs from the ledger's {expected_finalized:?}"
-            ));
+            self.record(
+                Layer::Notes,
+                format!(
+                    "{name}: finalized channel wallet {finalized:?} differs from the ledger's {expected_finalized:?}"
+                ),
+            );
         }
         if unfinalized != expected_unfinalized {
-            self.record(format!(
-                "{name}: unfinalized channel wallet {unfinalized:?} differs from the ledger's {expected_unfinalized:?}"
-            ));
+            self.record(
+                Layer::Notes,
+                format!(
+                    "{name}: unfinalized channel wallet {unfinalized:?} differs from the ledger's {expected_unfinalized:?}"
+                ),
+            );
         }
     }
 
@@ -206,21 +230,26 @@ impl Oracles {
         };
         let (index, _) = state.round_robin(view.current_slot);
         if view.authorized_key_index != Some(index) {
-            self.record(format!(
-                "{name}: view names authorized index {:?} at slot {:?}, round robin says {index}",
-                view.authorized_key_index, view.current_slot
-            ));
+            self.record(
+                Layer::Configs,
+                format!(
+                    "{name}: view names authorized index {:?} at slot {:?}, round robin says {index}",
+                    view.authorized_key_index, view.current_slot
+                ),
+            );
         }
         if view.our_turn_to_write && view.own_key_index != Some(index) {
-            self.record(format!(
-                "{name}: claims the turn at slot {:?} while round robin names index {index}",
-                view.current_slot
-            ));
+            self.record(
+                Layer::Configs,
+                format!(
+                    "{name}: claims the turn at slot {:?} while round robin names index {index}",
+                    view.current_slot
+                ),
+            );
         }
     }
 
-    fn record(&mut self, message: String) {
-        tracing::error!("oracle violated: {message}");
-        self.violations.push(message);
+    fn record(&mut self, layer: Layer, message: String) {
+        self.violations.record(layer, message);
     }
 }

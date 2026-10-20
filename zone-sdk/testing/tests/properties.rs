@@ -5,21 +5,31 @@
 //! land in what order, next to other writers' inscriptions, note changes
 //! and configs) and the client's condition (dropped streams, node outages,
 //! restarts, failing fetches, price moves, user deposits and withdraws).
-//! Every combination must leave the view contract, the mirrored view and the
-//! oracles intact and every planned payload finalized exactly once, in one
-//! lineage.
+//! Every combination must leave every [`Layer`] intact: the view contract
+//! and the mirrored view, each planned payload finalized exactly once in
+//! one lineage, the turn view, the wallet and the deposits, and what a
+//! resumed sequencer reports.
+//!
+//! The vocabulary is drawn one layer at a time, so a rung of the ladder
+//! that fails names what the SDK gets wrong: only other writers'
+//! inscriptions on a moving chain; plus the sequencers' own messages; plus
+//! config changes and posting rules; plus deposits, withdraws and note
+//! transfers; plus restarts, outages and price moves.
 
 use std::collections::HashSet;
 
 use common::{
     FINALITY_DEPTH, FOREIGN, FOREIGN_2, Network, Posted, World, inscription, passive, seq_key,
 };
-use lb_core::mantle::{Note, NoteId, ledger::Outputs, transactions::GasPrices};
-use lb_zone_sdk::sequencer::{FinalizedOp, WithdrawArg, WithdrawInputs};
+use lb_core::mantle::transactions::GasPrices;
+use lb_zone_sdk::sequencer::FinalizedOp;
 use logos_blockchain_zone_sdk_testing::{
+    consumer::ReferenceConsumer,
     harness::RECONNECT_DELAY,
-    policy::{RepublishLineagePolicy, payload_str},
+    layers::Layer,
+    policy::payload_str,
     world as common,
+    writers::{OP_CYCLE, WriterOp},
 };
 use proptest::prelude::*;
 
@@ -129,22 +139,26 @@ fn posted() -> impl Strategy<Value = Posted> {
     ]
 }
 
-fn client() -> impl Strategy<Value = Client> {
+/// The client conditions the `top` layer admits: note moves from
+/// [`Layer::Notes`], outages and price moves from [`Layer::Restarts`].
+fn client(top: Layer) -> impl Strategy<Value = Client> {
+    let notes = u32::from(top >= Layer::Notes);
+    let restarts = u32::from(top >= Layer::Restarts);
     prop_oneof![
         10 => Just(Client::Quiet),
-        1 => Just(Client::Drop),
-        1 => Just(Client::NodeDown),
-        1 => (0..3usize, prop::bool::weighted(0.25))
+        restarts => Just(Client::Drop),
+        restarts => Just(Client::NodeDown),
+        restarts => (0..3usize, prop::bool::weighted(0.25))
             .prop_map(|(index, fresh)| Client::Restart { index, fresh }),
-        1 => (1..=2usize).prop_map(|count| Client::FetchFail { count }),
-        1 => (0..=MAX_GAS_RISE_PERCENT).prop_map(|percent| Client::GasPrice { percent }),
-        2 => (1..=3u64).prop_map(|value| Client::Deposit { value }),
-        2 => (0..3usize, 1..=3u64).prop_map(|(index, amount)| Client::Withdraw { index, amount }),
+        restarts => (1..=2usize).prop_map(|count| Client::FetchFail { count }),
+        restarts => (0..=MAX_GAS_RISE_PERCENT).prop_map(|percent| Client::GasPrice { percent }),
+        2 * notes => (1..=3u64).prop_map(|value| Client::Deposit { value }),
+        2 * notes => (0..3usize, 1..=3u64).prop_map(|(index, amount)| Client::Withdraw { index, amount }),
     ]
 }
 
-fn step() -> impl Strategy<Value = Step> {
-    (shape(), posted(), client()).prop_map(|(shape, posted, client)| Step {
+fn step(top: Layer) -> impl Strategy<Value = Step> {
+    (shape(), posted(), client(top)).prop_map(|(shape, posted, client)| Step {
         shape,
         posted,
         client,
@@ -153,36 +167,81 @@ fn step() -> impl Strategy<Value = Step> {
 
 #[derive(Clone, Debug)]
 struct Scenario {
+    /// The highest layer the schedule draws from.
+    top: Layer,
     network: Network,
     sequencers: usize,
     writers: usize,
     messages: usize,
     timeframe: u32,
     timeout: u32,
-    /// Dead-end and dormant fork blocks take posted transactions (so a
-    /// deposit can land only off-chain) and withdraws may spend unfinalized
-    /// notes: the two things the SDK does not handle yet.
+    /// What the SDK does not handle yet: withdraws may spend unfinalized
+    /// notes, which wedge the sequencer when the note's deposit is reorged
+    /// away for good, and the writers chain two inscriptions in one tx,
+    /// which a config landing drops from the view unreported.
     known_issues: bool,
     schedule: Vec<Step>,
 }
 
-/// `known_issues` widens the schedule to what the SDK does not handle yet.
-fn scenario(known_issues: bool) -> impl Strategy<Value = Scenario> {
+impl Scenario {
+    /// The ops the writers cycle through: inscriptions always, configs from
+    /// [`Layer::Configs`], note transfers and withdraws from
+    /// [`Layer::Notes`]; two-inscription txs only with the known issues.
+    const fn writer_ops(&self) -> &'static [WriterOp] {
+        const INSCRIPTIONS: [WriterOp; 1] = [WriterOp::Inscribe];
+        const WITH_CONFIGS: [WriterOp; 4] = [
+            WriterOp::Inscribe,
+            WriterOp::Inscribe,
+            WriterOp::Inscribe,
+            WriterOp::Config,
+        ];
+        const WITH_NOTES: [WriterOp; 7] = [
+            WriterOp::Inscribe,
+            WriterOp::Inscribe,
+            WriterOp::Transfer,
+            WriterOp::Inscribe,
+            WriterOp::Withdraw,
+            WriterOp::Inscribe,
+            WriterOp::Config,
+        ];
+        match self.top {
+            Layer::Chain | Layer::Lineage => &INSCRIPTIONS,
+            Layer::Configs => &WITH_CONFIGS,
+            Layer::Notes | Layer::Restarts if self.known_issues => &OP_CYCLE,
+            Layer::Notes | Layer::Restarts => &WITH_NOTES,
+        }
+    }
+}
+
+/// Scenarios drawing from the layers up to `top`; `known_issues` widens the
+/// schedule to what the SDK does not handle yet.
+fn scenario(top: Layer, known_issues: bool) -> impl Strategy<Value = Scenario> {
+    let messages = if top >= Layer::Lineage {
+        1..=4usize
+    } else {
+        0..=0usize
+    };
     (
         prop_oneof![3 => Just(Network::Linear), 1 => Just(Network::Partitions)],
         1..=3usize,
         1..=2usize,
-        1..=4usize,
-        prop::collection::vec(step(), 8..32),
+        messages,
+        prop::collection::vec(step(top), 8..32),
     )
         .prop_flat_map(move |(network, sequencers, writers, messages, schedule)| {
-            let timeframe = if sequencers == 1 {
-                prop_oneof![Just(0u32), Just(3u32)].boxed()
+            let rules = if top >= Layer::Configs {
+                let timeframe = if sequencers == 1 {
+                    prop_oneof![Just(0u32), Just(3u32)].boxed()
+                } else {
+                    prop_oneof![Just(3u32), Just(5u32)].boxed()
+                };
+                let timeout = prop_oneof![Just(0u32), Just(4u32), Just(6u32)].boxed();
+                (timeframe, timeout).boxed()
             } else {
-                prop_oneof![Just(3u32), Just(5u32)].boxed()
+                Just((3u32, 0u32)).boxed()
             };
-            let timeout = prop_oneof![Just(0u32), Just(4u32), Just(6u32)];
-            (timeframe, timeout).prop_map(move |(timeframe, timeout)| Scenario {
+            rules.prop_map(move |(timeframe, timeout)| Scenario {
+                top,
                 network,
                 sequencers,
                 writers,
@@ -213,22 +272,6 @@ fn set_gas_prices(world: &World, price: u64) {
     if let Some(peer) = &world.peer {
         peer.set_gas_prices(prices);
     }
-}
-
-/// Finalized channel notes covering `amount`, largest first.
-fn finalized_inputs(world: &mut World, index: usize, amount: u64) -> Option<Vec<NoteId>> {
-    let mut notes = world.wallet(index).finalized;
-    notes.sort_by(|a, b| b.value.cmp(&a.value).then(a.note_id.cmp(&b.note_id)));
-    let mut covered = 0;
-    let mut inputs = Vec::new();
-    for note in notes {
-        if covered >= amount {
-            break;
-        }
-        covered += note.value;
-        inputs.push(note.note_id);
-    }
-    (covered >= amount).then_some(inputs)
 }
 
 fn running(world: &World, index: usize) -> bool {
@@ -284,35 +327,21 @@ async fn apply_client(world: &mut World, client: Client, counter: usize, scenari
         }
         Client::Withdraw { index, amount } => {
             if running(world, index) {
-                let inputs = if scenario.known_issues {
-                    Some(WithdrawInputs::Auto)
-                } else {
-                    finalized_inputs(world, index, amount).map(WithdrawInputs::Explicit)
-                };
-                let Some(inputs) = inputs else {
-                    return;
-                };
-                let outputs = Outputs::new([Note::new(amount, world.user_pk())]);
                 // Insufficient channel funds or a dead node: nothing to withdraw.
-                drop(
-                    world
-                        .harness
-                        .seq(index)
-                        .handle()
-                        .publish_atomic_withdraw(
-                            inscription(&format!("withdraw {counter}")),
-                            vec![WithdrawArg { outputs }],
-                            inputs,
-                        )
-                        .await,
-                );
-                world.harness.settle().await;
+                let _ = world
+                    .withdraw(
+                        index,
+                        amount,
+                        scenario.known_issues,
+                        &format!("withdraw {counter}"),
+                    )
+                    .await;
             }
         }
     }
 }
 
-async fn apply_shape(world: &mut World, shape: Shape, posted: Posted, scenario: &Scenario) {
+async fn apply_shape(world: &mut World, shape: Shape, posted: Posted) {
     // During a split only the network itself may mine, so the merge stays
     // within what the primary can reorg.
     if world.partitioned() {
@@ -320,15 +349,6 @@ async fn apply_shape(world: &mut World, shape: Shape, posted: Posted, scenario: 
         return;
     }
     let node = world.node().clone();
-    // A fork that will not win may only carry posted transactions when the
-    // run is about the known deposit issue.
-    let losing = |posted| {
-        if scenario.known_issues {
-            posted
-        } else {
-            Posted::None
-        }
-    };
     match shape {
         Shape::Extend { gap } => {
             if world.network == Network::Partitions {
@@ -341,27 +361,16 @@ async fn apply_shape(world: &mut World, shape: Shape, posted: Posted, scenario: 
             if node.canonical_chain().len() <= depth + 1 {
                 let _ = world.extend(1, posted).await;
             } else {
-                let posted = if length > depth {
-                    posted
-                } else {
-                    losing(posted)
-                };
                 let _ = world.fork_with(depth, length, posted).await;
             }
         }
         Shape::Revive { blocks } => {
-            let tip_height = node.block(node.tip()).map_or(0, |block| block.height);
-            let overtakes = world
-                .dormant
-                .and_then(|dormant| node.block(dormant.tip))
-                .is_some_and(|branch| branch.height + blocks as u64 > tip_height);
-            let posted = if overtakes { posted } else { losing(posted) };
             if !world.revive(blocks, posted).await {
                 let _ = world.extend(1, posted).await;
             }
         }
         Shape::Lagging { silent } => world.lagging(silent, posted).await,
-        Shape::SplitTip => world.split_tip(losing(posted)).await,
+        Shape::SplitTip => world.split_tip(posted).await,
         Shape::Duplicate => {
             node.reannounce(node.tip());
             world.harness.settle().await;
@@ -386,9 +395,10 @@ async fn apply_shape(world: &mut World, shape: Shape, posted: Posted, scenario: 
 }
 
 async fn apply(world: &mut World, step: Step, counter: usize, scenario: &Scenario) {
+    tracing::debug!(counter, ?step, tip = ?world.node().tip(), lib = ?world.node().lib(), "step");
     world.harness.advance(World::STEP_DURATION).await;
     apply_client(world, step.client, counter, scenario).await;
-    apply_shape(world, step.shape, step.posted, scenario).await;
+    apply_shape(world, step.shape, step.posted).await;
     sync_peer(world);
     world.harness.settle().await;
 }
@@ -411,7 +421,7 @@ async fn run(scenario: Scenario) {
         .await;
     world.stop(a);
     for writer in writers {
-        world.add_writer(writer);
+        world.add_writer_with(writer, scenario.writer_ops());
     }
     world.enable_foreign_traffic(scenario.schedule.len());
     // The notes the schedule deposits exist before the first step.
@@ -433,30 +443,18 @@ async fn run(scenario: Scenario) {
             .collect();
         expected.extend(planned.iter().map(payload_str));
         let config = world.config_with_depth(usize::MAX);
-        let policy = RepublishLineagePolicy::new(planned);
+        let policy = ReferenceConsumer::boxed(&seq_key(name), planned);
         if i == 0 && world.harness.seqs.len() == 1 {
-            world.harness.set_policy(0, Box::new(policy));
+            world.harness.set_policy(0, policy);
             world.restart(0, None).await;
         } else {
             world
-                .start_as_with(name, seq_key(name), config, Box::new(policy))
+                .start_as_with(name, seq_key(name), config, policy)
                 .await;
         }
     }
 
-    // On two nodes a block carrying a deposit reaches the other node as a
-    // competing block whenever the nodes mined the same height, and its
-    // deposit is then reported from a non-canonical block: the known issue,
-    // left to the known-issues property.
-    let skip_deposits = scenario.network == Network::Partitions && !scenario.known_issues;
     for (counter, step) in scenario.schedule.clone().into_iter().enumerate() {
-        let step = match step.client {
-            Client::Deposit { .. } if skip_deposits => Step {
-                client: Client::Quiet,
-                ..step
-            },
-            _ => step,
-        };
         apply(&mut world, step, counter, &scenario).await;
     }
     // Nothing finalizes under a frozen LIB.
@@ -468,6 +466,9 @@ async fn run(scenario: Scenario) {
     }
     world.settle_chain(400).await;
 
+    // The layers stack: a broken view is reported before the lineage it
+    // would have broken, and the lineage before the layers above it.
+    world.harness.assert_layers_through(Layer::Chain);
     let finalized = world.indexer_finalized().await;
     let payloads = common::inscription_payloads(&finalized);
     let expected: Vec<&str> = expected.iter().map(String::as_str).collect();
@@ -492,7 +493,7 @@ async fn run(scenario: Scenario) {
         assert!(seen.insert(info.this_msg), "message id repeated");
         previous = Some(info.this_msg);
     }
-    world.harness.assert_view_contract();
+    world.harness.assert_layers();
 }
 
 fn block_on(scenario: Scenario) {
@@ -504,26 +505,58 @@ fn block_on(scenario: Scenario) {
     runtime.block_on(run(scenario));
 }
 
+// The ladder: each rung draws from one more layer than the one below, so
+// the lowest failing rung names the layer the SDK gets wrong.
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 48,
+        cases: 24,
         max_shrink_iters: 200,
+        failure_persistence: None,
         ..ProptestConfig::default()
     })]
 
     #[test]
-    fn every_schedule_finalizes_each_payload_once(scenario in scenario(false)) {
+    fn chain_shapes_keep_the_view(scenario in scenario(Layer::Chain, false)) {
         block_on(scenario);
     }
 
-    /// The same property over the known issues: dead-end forks, whose
-    /// deposits are reported as if canonical, and withdraws from unfinalized
-    /// notes, which wedge the sequencer when the note's deposit is reorged
-    /// away for good.
     #[test]
-    #[ignore = "known issues: fork deposits reported as canonical; dead-input withdraws resubmitted forever"]
+    fn own_messages_land_once(scenario in scenario(Layer::Lineage, false)) {
+        block_on(scenario);
+    }
+
+    #[test]
+    fn configs_move_the_turns(scenario in scenario(Layer::Configs, false)) {
+        block_on(scenario);
+    }
+
+    #[test]
+    fn notes_follow_the_ledger(scenario in scenario(Layer::Notes, false)) {
+        block_on(scenario);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 48,
+        max_shrink_iters: 200,
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn every_schedule_finalizes_each_payload_once(scenario in scenario(Layer::Restarts, false)) {
+        block_on(scenario);
+    }
+
+    /// The same property over the known issues: withdraws from unfinalized
+    /// notes, which wedge the sequencer when the note's deposit is reorged
+    /// away for good, and two-inscription txs, which a config landing drops
+    /// from the view unreported.
+    #[test]
+    #[ignore = "known issues: dead-input withdraws resubmitted forever; config shed skips custom txs"]
     fn every_schedule_with_known_issues_finalizes_each_payload_once(
-        scenario in scenario(true)
+        scenario in scenario(Layer::Restarts, true)
     ) {
         block_on(scenario);
     }

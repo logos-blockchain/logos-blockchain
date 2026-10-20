@@ -24,6 +24,7 @@ use lb_zone_sdk::{
 use num_bigint::BigUint;
 
 use crate::{
+    layers::{self, Layer},
     mirror::Mirror,
     node::SimNode,
     oracles::Oracles,
@@ -423,30 +424,38 @@ impl Harness {
         replay_finalized(self.node.clone(), self.channel_id)
     }
 
-    /// Every view-contract violation and mirror divergence recorded by any
-    /// sequencer.
-    #[must_use]
-    pub fn violations(&self) -> Vec<String> {
-        self.seqs
-            .iter()
-            .flat_map(|s| {
-                s.checker
-                    .violations()
-                    .iter()
-                    .map(move |v| format!("{}: {v}", s.name))
-                    .chain(s.mirror.violations().iter().cloned())
-                    .chain(s.oracles.violations().iter().cloned())
-            })
-            .collect()
+    /// Every violation any sequencer's checkers recorded, with its layer.
+    pub fn violations(&self) -> impl Iterator<Item = (Layer, String)> {
+        self.seqs.iter().flat_map(|s| {
+            s.checker
+                .violations()
+                .iter()
+                .map(move |(layer, v)| (layer, format!("{}: {v}", s.name)))
+                .chain(s.mirror.violations().iter().map(|(l, v)| (l, v.to_owned())))
+                .chain(
+                    s.oracles
+                        .violations()
+                        .iter()
+                        .map(|(l, v)| (l, v.to_owned())),
+                )
+        })
     }
 
-    pub fn assert_view_contract(&self) {
-        let violations = self.violations();
-        assert!(
-            violations.is_empty(),
-            "channel view contract violated:\n{}",
-            violations.join("\n")
-        );
+    /// Every layer held, or panic naming the lowest broken one.
+    pub fn assert_layers(&self) {
+        self.assert_layers_through(Layer::Restarts);
+    }
+
+    /// Every layer up to and including `top` held; a check of a higher layer
+    /// is left for after the caller's own assertions on `top`.
+    pub fn assert_layers_through(&self, top: Layer) {
+        let violations: Vec<(Layer, String)> = self
+            .violations()
+            .filter(|(layer, _)| *layer <= top)
+            .collect();
+        if let Some(report) = layers::report(violations.iter().map(|(l, v)| (*l, v.as_str()))) {
+            panic!("{report}");
+        }
     }
 }
 

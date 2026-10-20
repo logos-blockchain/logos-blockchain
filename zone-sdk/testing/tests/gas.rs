@@ -1,7 +1,7 @@
 //! The simulated node charges real gas: funded transactions pay what the
 //! ledger prices them at, unfunded ones are evicted, and a price rise is paid.
 
-use common::{Network, World, inscription, passive, seq_key};
+use common::{Network, Posted, World, inscription, passive, seq_key};
 use lb_core::mantle::{
     Op, OpProof, OpRef, SignedOps,
     ops::channel::inscribe::InscriptionOp,
@@ -126,5 +126,45 @@ async fn price_rise_is_paid_by_the_next_publish() {
         world.node().rejected().is_empty(),
         "{:?}",
         world.node().rejected()
+    );
+}
+
+/// A block the peer mined before a price rise is imported by the primary
+/// after it: its transactions are judged at the prices it was mined at, so
+/// the import never rejects a block the network accepted.
+#[tokio::test(start_paused = true)]
+async fn imported_block_keeps_its_mining_prices() {
+    let mut world = World::new(Network::Partitions);
+    let peer = world.peer.clone().expect("peer");
+    let a = world.start("SEQ_A", passive()).await;
+    let first = world.publish_included(a, "opens the channel").await;
+    world.finalize_tx(first).await;
+    world.coin_split(&[5]).await;
+    let _ = peer.import_from(world.node());
+
+    // The user pays the exact fee at these prices.
+    let notes = world.take_user_notes(&[5]);
+    let (hash, _, _) = world.deposit(&notes, "mined before the rise").await;
+    world.node().gossip_with(&peer);
+    let slot = peer.tip_slot().into_inner() + 1;
+    let parent = peer.tip();
+    let _ = world
+        .mine_block_on(&peer, parent, slot, Posted::All, true)
+        .await;
+    assert!(
+        peer.is_included(&hash),
+        "the peer did not mine the deposit: mempool {}, rejected {:?}, same tip {}",
+        peer.mempool().len(),
+        peer.rejected(),
+        peer.tip() == world.node().tip()
+    );
+
+    let dearer = GasPrices::new(110, 110);
+    world.node().set_gas_prices(dearer.clone());
+    peer.set_gas_prices(dearer);
+    assert_eq!(world.node().import_from(&peer), 1, "one block imported");
+    assert!(
+        world.node().is_included(&hash),
+        "the imported block carries the deposit"
     );
 }

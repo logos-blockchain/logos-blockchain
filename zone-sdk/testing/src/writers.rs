@@ -37,7 +37,7 @@ pub enum WriterOp {
 
 /// The op cycle a writer runs through: mostly inscriptions, with note and
 /// config changes in between so forks can carry different notes and rules.
-const OP_CYCLE: [WriterOp; 8] = [
+pub const OP_CYCLE: [WriterOp; 8] = [
     WriterOp::Inscribe,
     WriterOp::Inscribe,
     WriterOp::Transfer,
@@ -59,6 +59,8 @@ pub struct Writer {
     pub recipient: ZkPublicKey,
     /// Transactions this writer put into blocks, in order.
     pub posted: Vec<SignedOps<Unverified, StandardMode>>,
+    /// The ops this writer cycles through.
+    pub ops: &'static [WriterOp],
     built: usize,
 }
 
@@ -70,6 +72,7 @@ impl Writer {
             key,
             recipient,
             posted: Vec::new(),
+            ops: &OP_CYCLE,
             built: 0,
         }
     }
@@ -92,7 +95,7 @@ impl Writer {
     /// The op this writer builds next.
     #[must_use]
     pub const fn next_op(&self) -> WriterOp {
-        OP_CYCLE[self.built % OP_CYCLE.len()]
+        self.ops[self.built % self.ops.len()]
     }
 
     /// A posted transaction that `ledger` (the block's parent) has not

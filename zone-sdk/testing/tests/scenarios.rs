@@ -7,8 +7,13 @@ use std::{
 };
 
 use common::{
-    Network, World, assert_exactly_once_any_order, filtered, filtered_first_occurrence,
-    inscription, passive, seq_key, strs,
+    FOREIGN, Network, World, assert_exactly_once_any_order, filtered, filtered_first_occurrence,
+    inscription, passive, reference, seq_key, strs,
+};
+use drivers::{
+    BalanceAwarePolicy, BundleAnnounce, CustomRepublishPolicy, DepositLifecyclePolicy,
+    DepositWithdrawPolicy, MultiSigBus, MultiSigLifecyclePolicy, SortedConflictPolicy,
+    balance_update_payload, parse_balance_payload, pin_payload, withdraw_payload,
 };
 use lb_core::{
     mantle::{
@@ -21,7 +26,7 @@ use lb_core::{
             transfer::TransferOp,
         },
         traits::Hashable as _,
-        transactions::{Ops, tx_list::OpProofs},
+        transactions::{GasPrices, Ops, tx_list::OpProofs},
     },
     proofs::channel_multi_sig_proof::IndexedSignatures,
 };
@@ -30,16 +35,16 @@ use lb_zone_sdk::sequencer::{
     FinalizedOp, PendingTx, PreparedChannelConfig, SequencerConfig, WithdrawArg, WithdrawInputs,
 };
 use logos_blockchain_zone_sdk_testing::{
+    consumer::ReferenceConsumer,
     harness::RECONNECT_DELAY,
     node::{BlockSpec, TxSelection},
-    policy::{
-        BalanceAwarePolicy, BundleAnnounce, CustomRepublishPolicy, DepositLifecyclePolicy,
-        DepositWithdrawPolicy, MultiSigBus, MultiSigLifecyclePolicy, OrphanRepublishPolicy,
-        RepublishLineagePolicy, SortedConflictPolicy, balance_update_payload,
-        parse_balance_payload, payload_str, pin_payload, withdraw_payload,
-    },
+    policy::payload_str,
     txs, world as common,
+    writers::WriterOp,
 };
+
+#[path = "scenarios/drivers.rs"]
+mod drivers;
 
 /// Run `$body` once per [`Network`].
 macro_rules! scenario {
@@ -270,9 +275,10 @@ async fn concurrent_same_key(network: Network) {
         let planned: Vec<String> = (1..=20).map(|i| format!("{prefix}{i}")).collect();
         expected.extend(planned.clone());
         let config = world.config_with_depth(usize::MAX);
-        let policy = RepublishLineagePolicy::new(planned.iter().map(|p| inscription(p)).collect());
+        let planned = planned.iter().map(|p| inscription(p)).collect();
+        let policy = ReferenceConsumer::boxed(&seq_key("SEQ_A"), planned);
         world
-            .start_as_with(name, seq_key("SEQ_A"), config, Box::new(policy))
+            .start_as_with(name, seq_key("SEQ_A"), config, policy)
             .await;
     }
     world.settle_chain(300).await;
@@ -559,9 +565,7 @@ async fn config_orphans_pending(network: Network) {
     let config = world.config_with_depth(usize::MAX);
     let a = world.start_with("SEQ_A", config.clone(), passive()).await;
     world.config_finalized(a, &["SEQ_B"], 2, 0).await;
-    let b = world
-        .start_with("SEQ_B", config, Box::new(OrphanRepublishPolicy::default()))
-        .await;
+    let b = world.start_with("SEQ_B", config, reference("SEQ_B")).await;
     assert!(
         world
             .step_until(40, |w| not_our_turn_with_pending(w, b, 0))
@@ -614,24 +618,18 @@ scenario!(s12_publish_in_turn, publish_in_turn);
 /// S13: sequencers are added to the rotation one config at a time.
 async fn dynamic_sequencers(network: Network) {
     let mut world = World::new(network);
-    let a = world
-        .start("SEQ_A", Box::new(OrphanRepublishPolicy::default()))
-        .await;
+    let a = world.start("SEQ_A", reference("SEQ_A")).await;
     world.config_finalized(a, &[], 2, 0).await;
     world.wait_turn(a).await;
     world.publish(a, "seq_a-msg1").await.expect("publish");
 
     world.config_finalized(a, &["SEQ_B"], 2, 0).await;
-    let b = world
-        .start("SEQ_B", Box::new(OrphanRepublishPolicy::default()))
-        .await;
+    let b = world.start("SEQ_B", reference("SEQ_B")).await;
     world.wait_turn(b).await;
     world.publish(b, "seq_b-msg1").await.expect("publish");
 
     world.config_finalized(a, &["SEQ_B", "SEQ_C"], 2, 0).await;
-    let c = world
-        .start("SEQ_C", Box::new(OrphanRepublishPolicy::default()))
-        .await;
+    let c = world.start("SEQ_C", reference("SEQ_C")).await;
     world.wait_turn(c).await;
     world.publish(c, "seq_c-msg1").await.expect("publish");
 
@@ -744,7 +742,7 @@ async fn identical_payloads(network: Network) {
                 name,
                 seq_key(name),
                 config,
-                Box::new(RepublishLineagePolicy::new(planned)),
+                ReferenceConsumer::boxed(&seq_key(name), planned),
             )
             .await;
     }
@@ -1160,14 +1158,10 @@ scenario!(s22_custom_multi_inscription, custom_multi_inscription);
 /// recover.
 async fn rekey_by_non_leader(network: Network) {
     let mut world = World::new(network);
-    let a = world
-        .start("SEQ_A", Box::new(OrphanRepublishPolicy::default()))
-        .await;
+    let a = world.start("SEQ_A", reference("SEQ_A")).await;
     world.publish_included(a, "inscription before re-key").await;
     world.config_finalized(a, &["SEQ_B"], 2, 0).await;
-    let b = world
-        .start("SEQ_B", Box::new(OrphanRepublishPolicy::default()))
-        .await;
+    let b = world.start("SEQ_B", reference("SEQ_B")).await;
     world
         .publish(a, "in flight during re-key")
         .await
@@ -1372,9 +1366,7 @@ scenario!(s26_timeout_overrides_timeframe, timeout_overrides_timeframe);
 /// SDK sequencer adopts those entries and keeps chaining after them.
 async fn foreign_sequencer_writes(network: Network) {
     let mut world = World::new(network);
-    let a = world
-        .start("SEQ_A", Box::new(OrphanRepublishPolicy::default()))
-        .await;
+    let a = world.start("SEQ_A", reference("SEQ_A")).await;
     world.config_finalized(a, &["SEQ_C"], 3, 0).await;
     let foreign_key = seq_key("SEQ_C");
     let foreign_index = 1u16;
@@ -1458,11 +1450,9 @@ async fn foreign_sequencer_writes(network: Network) {
 }
 scenario!(s27_foreign_sequencer_writes, foreign_sequencer_writes);
 
-/// Known SDK issue: a deposit mined only in a losing fork block is reported in
-/// `BlocksProcessed::deposits` although it never reached the canonical chain.
-/// The deposit oracle flags it; the test stays ignored until the fix lands.
+/// A deposit mined only in a losing fork block is not reported in
+/// `BlocksProcessed::deposits`: it never reached the canonical chain.
 #[tokio::test(start_paused = true)]
-#[ignore = "known issue: deposits are reported from non-canonical blocks"]
 async fn deposit_in_losing_fork_is_not_reported() {
     let mut world = World::new(Network::Linear);
     world.coin_split(&[7]).await;
@@ -1488,7 +1478,7 @@ async fn deposit_in_losing_fork_is_not_reported() {
         "deposit must not be canonical"
     );
     world.steps(3).await;
-    world.harness.assert_view_contract();
+    world.harness.assert_layers();
 }
 
 /// Two sequencers withdraw against the same channel note; the loser's bundle
@@ -1551,6 +1541,50 @@ scenario!(
     s28_losing_withdraw_race_is_dropped,
     losing_withdraw_race_is_dropped
 );
+
+/// Known SDK issue: a writer's inscription and the two-inscription tx chained
+/// on it are mined, then reorged out while a price rise keeps the writer from
+/// re-landing them, so both sit in the pending tail when the writer's config
+/// lands. The config shed drops the inscription but not the custom tx chained
+/// on it, which leaves the view without being reported orphaned.
+#[tokio::test(start_paused = true)]
+#[ignore = "known issue: the config shed drops a pending inscription but not the custom tx chained on it"]
+async fn config_shed_strands_the_custom_tx_chained_on_a_shed_inscription() {
+    let mut world = World::new(Network::Linear);
+    let a = world.start("SEQ_A", passive()).await;
+    world.config_finalized(a, &[FOREIGN], 1, 0).await;
+    world.add_writer_with(
+        FOREIGN,
+        &[WriterOp::Inscribe, WriterOp::InscribeTwo, WriterOp::Config],
+    );
+    world.enable_foreign_traffic(2);
+    let mined = world
+        .step_until(12, |w| {
+            w.writers[0].posted.len() == 2
+                && w.writers[0]
+                    .posted_hashes()
+                    .all(|h| w.node().is_included(&h))
+        })
+        .await;
+    assert!(
+        mined,
+        "the writer's inscription and custom tx were not mined:\n{}",
+        world.diagnostics()
+    );
+
+    // Too dear to re-land: both stay in the pending tail of the new branch.
+    world.node().set_gas_prices(GasPrices::new(2, 2));
+    world.fork(3).await;
+    world.enable_foreign_traffic(1);
+    world.steps(2).await;
+    let config = world.writers[0].posted_hashes().nth(2);
+    assert!(
+        config.is_some_and(|hash| world.node().is_included(&hash)),
+        "the writer's config did not land:\n{}",
+        world.diagnostics()
+    );
+    world.harness.assert_layers();
+}
 
 /// A withdraw spends the note of an unfinalized deposit; a fork drops the
 /// deposit and the user spends the same input again, so the channel note

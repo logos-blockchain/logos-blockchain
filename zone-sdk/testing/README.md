@@ -32,6 +32,24 @@ cargo test -p logos-blockchain-zone-sdk-testing
   config changes straight into the blocks it mines, plain or fork, so forks
   can carry different notes and rules than the chain they replace. Like a
   sequencer it re-lands its own orphans while the chain would accept them.
+- `src/consumer.rs`: the reference consumer, the least a zone has to do on
+  top of the SDK's contract: publish its planned payloads once ready and
+  re-publish its own orphaned inscriptions, tracking message lineage so an
+  intent lands once however often the chain reorganizes. It uses only the
+  public sequencer API, so it can move into the SDK as the example
+  consumer. `src/policy.rs` holds the `Policy` trait it implements.
+- `src/layers.rs`: what a sequencer must get right, stacked. Each layer is
+  only meaningful when the ones below it hold, so every violation is tagged
+  and a run reports the lowest broken layer: `Chain` (the non-finalized
+  view is the canonical chain's channel content, in order), `Lineage`
+  (finalized txs reported once, in order; each payload finalizes once in
+  one message lineage), `Configs` (the turn view follows the branch's
+  config lineage), `Notes` (the wallet is the ledger's note set, deposits
+  are reported once from canonical blocks), `Restarts` (a sequencer resumed
+  from a checkpoint reports what one that never stopped would).
+- `src/view_checker.rs`: the `ChannelUpdate` contract on every event; with
+  `RUST_LOG=debug` it traces each event's prefix, adopted, orphaned,
+  finalized and pending sets.
 - `src/mirror.rs`: an LEZ-style consumer that rebuilds the channel view from
   `ChannelUpdate`s (append on extension, rebuild on conflict) and is compared
   with the node's canonical chain after every settle.
@@ -42,9 +60,8 @@ cargo test -p logos-blockchain-zone-sdk-testing
   tip), the turn view agrees with `round_robin`, and the finalized history
   it reported is the chain's, once each and in order.
 - `src/harness.rs`: owns the sequencers, polls `next_event` until quiescent,
-  runs each sequencer's policy and the `ChannelUpdate` contract checker
-  inline, and replays finalized history like an indexer.
-- `src/policy.rs`: the consumer policies of the cucumber suite.
+  runs each sequencer's policy and the checkers inline, and replays
+  finalized history like an indexer.
 - `src/world.rs`: scenario helpers, the `Network` behaviours the scenario
   ports run on (linear, shallow forks, deep forks to the finality depth,
   stream drops, delayed inclusion, two partitioning nodes with sequencers on
@@ -53,7 +70,11 @@ cargo test -p logos-blockchain-zone-sdk-testing
   a dormant branch, lagging and split-tip deliveries, and the writers'
   traffic (`add_writer`, `enable_foreign_traffic`).
 - `tests/scenarios.rs`: the zone cucumber scenarios plus posting-timeout and
-  foreign-writer scenarios, each run on every `Network`.
+  foreign-writer scenarios, each run on every `Network`. The consumer logic
+  the cucumber features script (balance-aware and sorted republishing, the
+  deposit and multi-sig lifecycles, custom multi-inscription txs) lives in
+  `tests/scenarios/drivers.rs`, one driver per scenario; every other
+  scenario runs the reference consumer.
 - `tests/gas.rs`: the fee model: paid equals priced, unfunded txs are
   evicted, price rises are paid.
 
@@ -69,18 +90,28 @@ cargo test -p logos-blockchain-zone-sdk-testing
   or two writers share the channel under random posting rules, on one node
   or two partitioning ones. Only invariants are asserted: every planned
   payload finalizes exactly once in one lineage, the sequencers' own
-  pending sets drain, and the view contract, mirror and oracles hold.
-  Failing seeds land in `properties.proptest-regressions` and replay first;
-  `PROPTEST_CASES` raises the volume, `PROPTEST_MAX_SHRINK_ITERS=0` shows a
-  failing input without shrinking, `RUST_LOG=debug` adds the SDK's log.
+  pending sets drain, and every layer holds, reported lowest first.
+  The vocabulary is drawn one layer at a time, so the tests form a ladder
+  and the lowest failing rung names what the SDK gets wrong: only other
+  writers' inscriptions on a moving chain; plus the sequencers' own
+  messages; plus config changes and posting rules; plus deposits, withdraws
+  and note transfers; plus restarts, outages and price moves. No failing
+  seed is persisted: a persisted seed only reproduces its case while the
+  strategy that drew it is unchanged, so the schedule a run shrinks to is
+  the hint for a hand-written scenario that names the mechanism, next to
+  the other scenarios. `PROPTEST_CASES` raises the volume,
+  `PROPTEST_MAX_SHRINK_ITERS=0` shows a failing input without shrinking,
+  `RUST_LOG=debug` adds the SDK's log and the per-event trace.
 
 Known SDK issues are kept as `#[ignore]`d tests with the issue in the reason
 string (`cargo test -- --ignored` runs them); they turn green when the fix
-lands. Today: deposits in dead-end forks are reported as canonical, and a
-pending atomic withdraw whose channel input vanished with a reorged-out
-deposit is re-funded and resubmitted forever while later publishes chain
-behind it. The ignored property widens the vocabulary to both: dead-end
-forks, and withdraws that may spend unfinalized notes.
+lands. Today: a pending atomic withdraw whose channel input vanished with a
+reorged-out deposit is re-funded and resubmitted forever while later
+publishes chain behind it, and a config landing sheds the pending
+inscriptions chained on the channel tip but not a custom (multi-inscription)
+tx chained on one of them, which leaves the view unreported until the next
+event. The ignored property widens the vocabulary to both: withdraws that
+may spend unfinalized notes, and writers' two-inscription txs.
 
 A test needs `#[tokio::test(start_paused = true)]`; SDK timers fire only
 through `Harness::advance`, and `World::step` advances the clock by a little
