@@ -273,23 +273,24 @@ async fn round_robin_queue(chain: Chain, depth: usize, payloads: [&str; 3], unli
     );
 
     world.wait_turn(b).await;
-    let included = if unlimited { 3 } else { 2 };
-    for hash in &hashes[..included] {
-        world.include(*hash).await;
-    }
-    if unlimited {
+    // The depth bounds what is in flight unmined: with depth two the third
+    // message is posted only once the first two have landed, so it cannot
+    // be on chain yet when the second is; unlimited, all three go at once.
+    world.include(hashes[0]).await;
+    world.include(hashes[1]).await;
+    if !unlimited {
         assert!(
-            world.step_until(60, |w| w.pending_count(b) == 0).await,
-            "pending never drained"
-        );
-    } else {
-        assert!(
-            world.step_until(60, |w| w.pending_count(b) == 1).await,
-            "pending never dropped to one"
+            !world.node().is_included(&hashes[2]),
+            "the third message landed before the window drained"
         );
     }
+    world.include(hashes[2]).await;
+    assert!(
+        world.step_until(60, |w| w.pending_count(b) == 0).await,
+        "pending never drained"
+    );
     let payloads_on_chain = world.indexer_payloads().await;
-    assert_exactly_once_any_order(&payloads_on_chain, &payloads[..included]);
+    assert_exactly_once_any_order(&payloads_on_chain, &payloads);
     world.finish();
 }
 

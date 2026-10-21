@@ -198,7 +198,8 @@ pub async fn concurrent_same_key(chain: Chain) {
 }
 scenario!(s06_concurrent_same_key, concurrent_same_key);
 
-/// S9: a depth-limited sequencer waits for its turn and submits pending.
+/// S9: a depth-limited sequencer waits for its turn and submits pending,
+/// the next window once the last one has landed.
 pub async fn round_robin_depth_two(chain: Chain) {
     round_robin_queue(
         chain,
@@ -401,3 +402,46 @@ pub async fn foreign_sequencer_writes(chain: Chain) {
     world.finish();
 }
 scenario!(s27_foreign_sequencer_writes, foreign_sequencer_writes);
+
+/// A backlog deeper than `max_pending_publish_depth` keeps landing while
+/// LIB does not move. Messages queued out of turn are posted by the
+/// resubmit loop, at most the depth at a time; entries mined above LIB
+/// stay pending until finalized but no longer count as in flight (#3858),
+/// so the next window goes out as soon as the last one landed. Before the
+/// fix only one window landed until LIB caught up; on testnet-legacy that
+/// took twenty hours.
+#[tokio::test(start_paused = true)]
+async fn backlog_lands_while_lib_is_frozen() {
+    let mut world = World::with_funding(chains::linear(), 100, 3000);
+    let depth = 10;
+    let config = world.config_with_depth(depth);
+    let a = world.start_with("SEQ_A", config, reference("SEQ_A")).await;
+    world.config_finalized(a, &["SEQ_B"], 3, 0).await;
+    world.start("SEQ_B", reference("SEQ_B")).await;
+    world.wait_not_turn(a).await;
+    let payloads: Vec<String> = (0..3 * depth).map(|i| format!("backlog-{i}")).collect();
+    for payload in &payloads {
+        world.publish(a, payload).await.expect("queued");
+    }
+    world.node().freeze_lib();
+    let landed = world
+        .step_until(20 * depth, |w| {
+            payloads
+                .iter()
+                .all(|payload| w.is_payload_included(payload))
+        })
+        .await;
+    let on_chain = payloads
+        .iter()
+        .filter(|payload| world.is_payload_included(payload))
+        .count();
+    assert!(
+        landed,
+        "only {on_chain} of {} landed under a frozen LIB:\n{}",
+        payloads.len(),
+        world.diagnostics()
+    );
+    world.node().thaw_lib();
+    world.settle_chain(100).await;
+    world.finish();
+}

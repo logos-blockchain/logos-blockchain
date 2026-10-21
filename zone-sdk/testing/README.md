@@ -98,8 +98,8 @@ cargo test -p logos-blockchain-zone-sdk-testing
   by config, posting timeouts), `notes.rs` (deposits, withdraws, pins,
   refunds, the wallet view), `bundles.rs` (multi-sig rounds and hand-built
   custom txs), `tiers.rs` (the catalogue's self-check and the pairs tier)
-  and `known_issues.rs` (ignored single tests with the issue in the reason,
-  including the frozen-LIB backlog stall of #3858). `main.rs` holds the
+  and `known_issues.rs` (ignored single tests with the issue in the
+  reason). `main.rs` holds the
   shared helpers and the `scenario!` macro. Every story runs the reference
   consumer; there are no scripted reaction policies. The balance-aware and
   sorted-republish cucumber scenarios were dropped: what they exercised in
@@ -146,12 +146,11 @@ lands. Today: a pending atomic withdraw whose channel input vanished with a
 reorged-out deposit is re-funded and resubmitted forever while later
 publishes chain behind it; a config landing sheds the pending inscriptions
 chained on the channel tip but not a custom (multi-inscription) tx chained
-on one of them, which leaves the view unreported until the next event; and
-a backlog queued out of turn stalls at `max_pending_publish_depth` while
-LIB does not move, since mined-but-unfinalized entries count as in flight
-(#3858). The ignored property widens the vocabulary to the first two:
-withdraws that may spend unfinalized notes, and writers' two-inscription
-txs.
+on one of them, which leaves the view unreported until the next event. The
+ignored property widens the vocabulary to both: withdraws that may spend
+unfinalized notes, and writers' two-inscription txs. The frozen-LIB backlog
+stall of #3858 was one of these until the fix landed; its story now runs
+green with the others.
 
 A test needs `#[tokio::test(start_paused = true)]`; SDK timers fire only
 through `Harness::advance`, and `World::step` advances the clock by a little

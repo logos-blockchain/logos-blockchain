@@ -34,48 +34,6 @@ async fn deposit_in_losing_fork_is_not_reported() {
     world.harness.assert_layers();
 }
 
-/// Known SDK issue (#3858): a backlog deeper than `max_pending_publish_depth`
-/// stalls while LIB does not move. Messages queued out of turn are posted
-/// by the resubmit loop, at most the depth at a time; entries mined above
-/// LIB stay pending until finalized and count as in flight, so once one
-/// window has landed nothing new is posted until LIB catches up, however
-/// long that takes. On testnet-legacy it took twenty hours.
-#[tokio::test(start_paused = true)]
-#[ignore = "known issue: mined-but-unfinalized entries count against the publish depth (#3858)"]
-async fn backlog_lands_while_lib_is_frozen() {
-    let mut world = World::with_funding(chains::linear(), 100, 3000);
-    let a = world.start("SEQ_A", reference("SEQ_A")).await;
-    world.config_finalized(a, &["SEQ_B"], 3, 0).await;
-    world.start("SEQ_B", reference("SEQ_B")).await;
-    let depth = world.default_config().max_pending_publish_depth;
-    world.wait_not_turn(a).await;
-    let payloads: Vec<String> = (0..3 * depth).map(|i| format!("backlog-{i}")).collect();
-    for payload in &payloads {
-        world.publish(a, payload).await.expect("queued");
-    }
-    world.node().freeze_lib();
-    let landed = world
-        .step_until(20 * depth, |w| {
-            payloads
-                .iter()
-                .all(|payload| w.is_payload_included(payload))
-        })
-        .await;
-    let on_chain = payloads
-        .iter()
-        .filter(|payload| world.is_payload_included(payload))
-        .count();
-    assert!(
-        landed,
-        "only {on_chain} of {} landed under a frozen LIB:\n{}",
-        payloads.len(),
-        world.diagnostics()
-    );
-    world.node().thaw_lib();
-    world.settle_chain(100).await;
-    world.finish();
-}
-
 /// Known SDK issue: a writer's inscription and the two-inscription tx chained
 /// on it are mined, then reorged out while a price rise keeps the writer from
 /// re-landing them, so both sit in the pending tail when the writer's config
