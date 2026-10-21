@@ -99,15 +99,24 @@ impl Default for FileConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LokiConfig {
+    #[serde(default = "default_loki_endpoint")]
     pub endpoint: Url,
+    #[serde(default = "super::default_service_name")]
     pub host_identifier: String,
+}
+
+fn default_loki_endpoint() -> Url {
+    Url::parse("http://localhost:3100").expect("valid URL")
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OtlpConfig {
+    #[serde(default = "super::default_otlp_endpoint")]
     pub endpoint: Url,
+    #[serde(default = "super::default_service_name")]
     pub service_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorization_header: Option<String>,
+    #[serde(default)]
     pub protocol: lb_tracing::OtlpProtocol,
 }

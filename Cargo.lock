@@ -5588,6 +5588,7 @@ version = "0.0.0"
 dependencies = [
  "flate2",
  "logos-blockchain-log-targets",
+ "logos-blockchain-utils",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-http",
@@ -5598,6 +5599,7 @@ dependencies = [
  "prometheus",
  "serde",
  "serde_json",
+ "serde_with",
  "tempfile",
  "tokio",
  "tonic",

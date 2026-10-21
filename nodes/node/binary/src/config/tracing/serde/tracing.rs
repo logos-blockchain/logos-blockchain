@@ -29,12 +29,15 @@ impl From<Layer> for TracingLayerSettings {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OtlpConfig {
+    #[serde(default = "super::default_otlp_endpoint")]
     pub endpoint: Url,
     #[serde(default = "default_sample_ratio")]
     pub sample_ratio: f64,
+    #[serde(default = "super::default_service_name")]
     pub service_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorization_header: Option<String>,
+    #[serde(default)]
     pub protocol: OtlpProtocol,
 }
 

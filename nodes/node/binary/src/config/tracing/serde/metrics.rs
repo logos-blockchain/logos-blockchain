@@ -59,17 +59,19 @@ impl From<Layer> for MetricsLayerSettings {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OtlpConfig {
+    #[serde(default = "super::default_otlp_endpoint")]
     pub endpoint: Url,
+    #[serde(default = "super::default_service_name")]
     pub service_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorization_header: Option<String>,
+    #[serde(default)]
     pub protocol: OtlpProtocol,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct OpenMetricsConfig {
-    /// Explicit flag, since an empty block is ambiguous as an on switch.
-    /// Can be removed if and when more attributes are added.
     pub enabled: bool,
 }
 

@@ -8,7 +8,7 @@ use bytes::Bytes;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_services_utils::overwatch::RecoveryData;
 use lb_tracing::logging::local::TextKind;
-use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
+use lb_utils::yaml::{OnUnknownKeys, deserialize_from_value, deserialize_value_at_path};
 use tracing::Level;
 
 use crate::{
@@ -25,6 +25,7 @@ use crate::{
         },
         keystore::{KeyTitle, Keystore},
         mempool::ServiceConfig as MempoolServiceConfig,
+        network::serde::nat,
         parse_log_filter_layer,
         sdp::{
             ServiceConfig as SdpServiceConfig,
@@ -461,6 +462,32 @@ fn redacted_config_hides_the_keys_and_the_otlp_authorization_headers() {
     assert!(!redacted.contains("Bearer"));
     assert!(!redacted.contains(&hex::encode(config.network.backend.swarm.node_key.as_ref())));
     assert_eq!(redacted.matches("<secret>").count(), 5);
+}
+
+#[test]
+fn nat_config_defaults_its_type_and_rejects_unknown_keys() {
+    let nat = |yaml| {
+        deserialize_from_value::<nat::Config>(
+            serde_yaml::from_str(yaml).unwrap(),
+            OnUnknownKeys::Fail,
+        )
+        .map_err(|error| error.to_string())
+    };
+
+    assert!(matches!(
+        nat("{autonat: {max_candidates: 3}}").unwrap(),
+        nat::Config::Traversal(config) if config.autonat.max_candidates == Some(3)
+    ));
+    assert!(matches!(
+        nat("{type: static, external_address: /ip4/1.2.3.4/udp/1/quic-v1}").unwrap(),
+        nat::Config::Static { .. }
+    ));
+    assert!(
+        nat("{autonat: {probe_intreval: 5s}}")
+            .unwrap_err()
+            .contains("[\"autonat.probe_intreval\"]")
+    );
+    assert!(nat("{type: static, autonat: {}}").is_err());
 }
 
 fn repo_file(path_from_crate_root: &str) -> std::path::PathBuf {

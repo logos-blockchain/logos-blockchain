@@ -8,7 +8,7 @@ use lb_key_management_system_service::{
         Ed25519Key, Key, UnsecuredEd25519Key, UnsecuredZkKey, ZkKey, secured_key::SecuredKey as _,
     },
 };
-use lb_pow_service::ClaimTarget;
+use lb_pow_service::{ClaimTarget, default_claim_threshold};
 use lb_utils::yaml::merge;
 use num_bigint::BigUint;
 use rand::rngs::OsRng;
@@ -17,10 +17,6 @@ use serde_yaml::{Mapping, Value, to_value};
 use thiserror::Error;
 
 const WARNING: &str = "Do not share your secret keys";
-
-/// Balance, in tokens, the generated auto-claim target aims for before it
-/// stops being paid.
-const DEFAULT_POW_CLAIM_THRESHOLD: lb_core::mantle::Value = 2_000_000_000;
 
 #[derive(Serialize, Deserialize, Hash, Eq, PartialEq, Clone, Debug)]
 #[serde(transparent)]
@@ -139,7 +135,7 @@ impl Keystore {
                 "pow.auto_claim.targets",
                 to_value([ClaimTarget {
                     public_key: pow_claim_key.to_public_key(),
-                    threshold: DEFAULT_POW_CLAIM_THRESHOLD,
+                    threshold: default_claim_threshold(),
                 }])?,
             ),
         ];

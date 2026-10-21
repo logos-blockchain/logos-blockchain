@@ -69,7 +69,12 @@ pub struct DeclarationConfig {
     pub provider_id: ProviderId,
     pub zk_id: ZkPublicKey,
     pub locators: Locators,
+    #[serde(default = "default_service_type")]
     pub service_type: ServiceType,
+}
+
+const fn default_service_type() -> ServiceType {
+    ServiceType::BlendNetwork
 }
 
 impl DeclarationConfig {

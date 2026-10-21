@@ -55,17 +55,27 @@ impl From<KBucketInserts> for lb_libp2p::config::KBucketInserts {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", content = "config")]
-pub enum CachingSettings {
-    Disabled,
-    Enabled { max_peers: u16 },
+#[serde(default)]
+pub struct CachingSettings {
+    pub enabled: bool,
+    pub max_peers: u16,
+}
+
+impl Default for CachingSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_peers: 1,
+        }
+    }
 }
 
 impl From<CachingSettings> for lb_libp2p::config::CachingSettings {
-    fn from(value: CachingSettings) -> Self {
-        match value {
-            CachingSettings::Disabled => Self::Disabled,
-            CachingSettings::Enabled { max_peers } => Self::Enabled { max_peers },
+    fn from(CachingSettings { enabled, max_peers }: CachingSettings) -> Self {
+        if enabled {
+            Self::Enabled { max_peers }
+        } else {
+            Self::Disabled
         }
     }
 }
