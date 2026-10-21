@@ -757,6 +757,12 @@ impl SimNode {
         self.lock().mempool.clone()
     }
 
+    /// Funding-wallet notes handed to funded transactions not yet mined.
+    #[must_use]
+    pub fn funding_reserved(&self) -> usize {
+        self.lock().funding.as_ref().map_or(0, |w| w.reserved.len())
+    }
+
     /// Every transaction ever posted, in order.
     #[must_use]
     pub fn posted(&self) -> Vec<SignedOps<Unverified, StandardMode>> {

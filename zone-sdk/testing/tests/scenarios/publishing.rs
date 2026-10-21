@@ -445,3 +445,47 @@ async fn backlog_lands_while_lib_is_frozen() {
     world.settle_chain(100).await;
     world.finish();
 }
+
+/// A stale backlog is re-funded only as far as it will be posted: the
+/// posted window and the next one. While the window cannot land, every
+/// stale window re-funds those and leaves the rest of the queue on its old
+/// notes. Re-funding every queued message instead reserved a fee note per
+/// message per window (#3858); on testnet-legacy that emptied the wallet.
+#[tokio::test(start_paused = true)]
+async fn stale_backlog_reserves_fee_notes_only_for_its_window() {
+    let mut world = World::with_funding(chains::linear(), 400, 3000);
+    let depth = 10usize;
+    let window = 4u64;
+    let config = SequencerConfig {
+        stale_refund_slots: window,
+        ..world.config_with_depth(depth)
+    };
+    let a = world.start_with("SEQ_A", config, reference("SEQ_A")).await;
+    let payloads: Vec<String> = (0..3 * depth).map(|i| format!("backlog-{i}")).collect();
+    for payload in &payloads {
+        world.publish(a, payload).await.expect("queued");
+    }
+    let queued = world.node().funding_reserved();
+    assert_eq!(queued, payloads.len(), "each publish is funded once");
+
+    // Blocks that take nothing: the posted window never lands, LIB moves,
+    // and the stale windows pass with the whole backlog waiting.
+    let windows = 5usize;
+    for _ in 0..windows * usize::try_from(window).expect("fits") {
+        world.extend(1, common::Posted::None).await;
+        world.harness.advance(World::STEP_DURATION).await;
+    }
+    let reserved = world.node().funding_reserved();
+    let refunded = reserved - queued;
+    assert!(
+        refunded <= (windows + 1) * depth,
+        "{refunded} notes re-funded for a backlog of {queued} with depth {depth} over {windows} windows:\n{}",
+        world.diagnostics()
+    );
+    assert!(
+        refunded > 0,
+        "nothing was re-funded; the windows did not pass"
+    );
+    world.settle_chain(300).await;
+    world.finish();
+}
