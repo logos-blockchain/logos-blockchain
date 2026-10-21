@@ -8,13 +8,14 @@ use lb_key_management_system_service::{
         Ed25519Key, Key, UnsecuredEd25519Key, UnsecuredZkKey, ZkKey, secured_key::SecuredKey as _,
     },
 };
-use lb_pow_service::{ClaimTarget, default_claim_threshold};
 use lb_utils::yaml::merge;
 use num_bigint::BigUint;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value, to_value};
 use thiserror::Error;
+
+use crate::config::pow::serde::{ClaimTarget, default_claim_threshold};
 
 const WARNING: &str = "Do not share your secret keys";
 

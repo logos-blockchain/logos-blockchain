@@ -22,7 +22,6 @@ workspace = true
 [dependencies]
 flate2 = { features = ["rust_backend"], workspace = true }
 lb-log-targets = { workspace = true }
-lb-utils = { features = ["time"], workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-appender-tracing = { workspace = true }
 opentelemetry-http = { features = ["reqwest"], workspace = true }
@@ -39,7 +38,6 @@ opentelemetry-semantic-conventions = { workspace = true }
 opentelemetry_sdk = { features = ["logs", "rt-tokio"], workspace = true }
 prometheus = { workspace = true }
 serde = { workspace = true }
-serde_with = { features = ["macros"], workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }

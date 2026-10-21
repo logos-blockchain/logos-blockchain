@@ -244,71 +244,20 @@ pub struct ClaimTarget {
     pub public_key: ZkPublicKey,
     /// Balance, in tokens, this key should reach. Once its on-chain balance is
     /// at or above this, the target is satisfied and no longer paid.
-    #[serde(default = "default_claim_threshold")]
     pub threshold: Value,
-}
-
-#[must_use]
-pub const fn default_claim_threshold() -> Value {
-    2_000_000_000
 }
 
 /// How often the auto-claim ticker fires: on a wall-clock interval, or every
 /// `n` slots of chain progress.
 ///
-/// Reads as `{ unit: seconds, value: 300 }` in both YAML and JSON, where either
-/// field may be left out — `serde_yaml` only accepts an externally-tagged enum
-/// through a `!Seconds`-style tag, which is a poor fit for a configuration
-/// file.
+/// Adjacently tagged so it reads as `{ unit: seconds, value: 300 }` in both
+/// YAML and JSON — `serde_yaml` only accepts an externally-tagged enum through
+/// a `!Seconds`-style tag, which is a poor fit for a configuration file.
 #[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(from = "TickConfig", into = "TickConfig")]
+#[serde(tag = "unit", content = "value", rename_all = "snake_case")]
 pub enum AutoClaimTick {
     Seconds(NonZeroU64),
     Slots(NonZeroU64),
-}
-
-#[derive(Clone, Copy, Serialize, Deserialize)]
-#[serde(default)]
-struct TickConfig {
-    unit: TickUnit,
-    value: NonZeroU64,
-}
-
-#[derive(Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum TickUnit {
-    Seconds,
-    Slots,
-}
-
-impl Default for TickConfig {
-    fn default() -> Self {
-        default_auto_claim_tick().into()
-    }
-}
-
-impl From<TickConfig> for AutoClaimTick {
-    fn from(TickConfig { unit, value }: TickConfig) -> Self {
-        match unit {
-            TickUnit::Seconds => Self::Seconds(value),
-            TickUnit::Slots => Self::Slots(value),
-        }
-    }
-}
-
-impl From<AutoClaimTick> for TickConfig {
-    fn from(tick: AutoClaimTick) -> Self {
-        match tick {
-            AutoClaimTick::Seconds(value) => Self {
-                unit: TickUnit::Seconds,
-                value,
-            },
-            AutoClaimTick::Slots(value) => Self {
-                unit: TickUnit::Slots,
-                value,
-            },
-        }
-    }
 }
 
 /// Default auto-claim period: ten seconds of wall-clock time.

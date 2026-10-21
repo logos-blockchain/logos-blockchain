@@ -1,8 +1,10 @@
 use std::num::NonZeroU64;
 
-use lb_core::mantle::{Value, gas::GasCost};
+use lb_core::{
+    mantle::{Value, gas::GasCost},
+    sdp::{Locators, ProviderId, ServiceType},
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_sdp_service::DeclarationConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -12,6 +14,41 @@ pub struct Config {
     pub wallet: WalletConfig,
     #[serde(default)]
     pub active_message_tracker: ActiveMessageTrackerConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DeclarationConfig {
+    pub provider_id: ProviderId,
+    pub zk_id: ZkPublicKey,
+    pub locators: Locators,
+    #[serde(default = "default_service_type")]
+    pub service_type: ServiceType,
+}
+
+const fn default_service_type() -> ServiceType {
+    ServiceType::BlendNetwork
+}
+
+impl From<DeclarationConfig> for lb_sdp_service::DeclarationConfig {
+    fn from(config: DeclarationConfig) -> Self {
+        Self {
+            provider_id: config.provider_id,
+            zk_id: config.zk_id,
+            locators: config.locators,
+            service_type: config.service_type,
+        }
+    }
+}
+
+impl From<lb_sdp_service::DeclarationConfig> for DeclarationConfig {
+    fn from(config: lb_sdp_service::DeclarationConfig) -> Self {
+        Self {
+            provider_id: config.provider_id,
+            zk_id: config.zk_id,
+            locators: config.locators,
+            service_type: config.service_type,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

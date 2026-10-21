@@ -58,15 +58,24 @@ impl From<Layer> for MetricsLayerSettings {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct OtlpConfig {
-    #[serde(default = "super::default_otlp_endpoint")]
     pub endpoint: Url,
-    #[serde(default = "super::default_service_name")]
     pub service_name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub authorization_header: Option<String>,
-    #[serde(default)]
     pub protocol: OtlpProtocol,
+}
+
+impl Default for OtlpConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: super::default_otlp_endpoint(),
+            service_name: super::default_service_name(),
+            authorization_header: None,
+            protocol: OtlpProtocol::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

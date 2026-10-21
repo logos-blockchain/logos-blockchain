@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use lb_core::{block::Proposal, header::HeaderId};
 use lb_cryptarchia_engine::time::EraSchedule;
 use lb_libp2p::{
-    ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig,
+    ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig, config::CachingSettings,
     protocol_name::ProtocolScope,
 };
 use lb_network_service::{
@@ -46,7 +46,15 @@ impl ServiceConfig {
                     identify_protocol_name: chain.to_stream_protocol_with_name("identify"),
                     gossipsub_config: user.backend.swarm.gossipsub.into(),
                     kademlia_config: KademliaSettings {
-                        caching: user.backend.swarm.kademlia.caching.map(Into::into),
+                        caching: Some(
+                            user.backend
+                                .swarm
+                                .kademlia
+                                .cache_size
+                                .map_or(CachingSettings::Disabled, |max_peers| {
+                                    CachingSettings::Enabled { max_peers }
+                                }),
+                        ),
                         replication_factor: user.backend.swarm.kademlia.replication_factor,
                         parallelism: user.backend.swarm.kademlia.parallelism,
                         disjoint_query_paths: user.backend.swarm.kademlia.disjoint_query_paths,

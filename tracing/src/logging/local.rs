@@ -6,9 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
-use serde_with::serde_as;
 use tracing_appender::{non_blocking::WorkerGuard, rolling::Rotation};
 use tracing_subscriber::fmt::{
     Layer,
@@ -76,15 +74,7 @@ pub fn flush_appenders() {
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum RetentionType {
     None,
-    MaxFiles {
-        #[serde(default = "default_max_files")]
-        max_files: usize,
-    },
-}
-
-#[must_use]
-pub const fn default_max_files() -> usize {
-    10
+    MaxFiles { max_files: usize },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -105,20 +95,10 @@ impl RotationType {
     }
 }
 
-#[serde_as]
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum CompressionType {
     None,
-    Gzip {
-        #[serde(default = "default_compression_threshold")]
-        #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
-        compression_threshold: Duration,
-    },
-}
-
-#[must_use]
-pub const fn default_compression_threshold() -> Duration {
-    Duration::from_hours(2)
+    Gzip { compression_threshold: Duration },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -133,9 +113,7 @@ impl Default for RollingConfig {
     fn default() -> Self {
         Self {
             rotation: RotationType::Hourly,
-            retention: RetentionType::MaxFiles {
-                max_files: default_max_files(),
-            },
+            retention: RetentionType::MaxFiles { max_files: 10 },
             compression: CompressionType::None,
         }
     }

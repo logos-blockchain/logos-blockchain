@@ -435,27 +435,18 @@ fn redacted_config_hides_the_keys_and_the_otlp_authorization_headers() {
     let mut config = minimal_user_config();
     config.tracing.logger.otlp = Some(LoggerOtlpConfig {
         authorization_header: Some("Bearer logs".into()),
-        ..serde_yaml::from_str(
-            "{endpoint: 'http://localhost:4317', service_name: node, protocol: Grpc}",
-        )
-        .unwrap()
+        ..Default::default()
     });
     config.tracing.metrics = MetricsLayer::new(
         Some(MetricsOtlpConfig {
             authorization_header: Some("Bearer metrics".into()),
-            ..serde_yaml::from_str(
-                "{endpoint: 'http://localhost:4317', service_name: node, protocol: Grpc}",
-            )
-            .unwrap()
+            ..Default::default()
         }),
         None,
     );
     config.tracing.tracing = TracingLayer::Otlp(TracingOtlpConfig {
         authorization_header: Some("Bearer traces".into()),
-        ..serde_yaml::from_str(
-            "{endpoint: 'http://localhost:4317', service_name: node, protocol: Grpc}",
-        )
-        .unwrap()
+        ..Default::default()
     });
 
     let redacted = serde_yaml::to_string(&config.redacted().unwrap()).unwrap();

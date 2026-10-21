@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 #[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// The timeout for a single query
@@ -27,8 +27,9 @@ pub struct Config {
     /// The k-bucket insertion strategy
     pub kbucket_inserts: Option<KBucketInserts>,
 
-    /// The caching strategy
-    pub caching: Option<CachingSettings>,
+    /// How many peers closest to a key cache its record; `null` disables
+    /// caching
+    pub cache_size: Option<u16>,
 
     /// The interval for periodic bootstrap
     /// If enabled the periodic bootstrap will run at this interval in addition
@@ -36,6 +37,21 @@ pub struct Config {
     /// `0s` disables periodic bootstrap
     #[serde_as(as = "Option<MinimalBoundedDuration<0, SECOND>>")]
     pub periodic_bootstrap_interval: Option<Duration>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            query_timeout: None,
+            replication_factor: None,
+            parallelism: None,
+            disjoint_query_paths: None,
+            max_packet_size: None,
+            kbucket_inserts: None,
+            cache_size: Some(1),
+            periodic_bootstrap_interval: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,32 +66,6 @@ impl From<KBucketInserts> for lb_libp2p::config::KBucketInserts {
         match value {
             KBucketInserts::OnConnected => Self::OnConnected,
             KBucketInserts::Manual => Self::Manual,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct CachingSettings {
-    pub enabled: bool,
-    pub max_peers: u16,
-}
-
-impl Default for CachingSettings {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            max_peers: 1,
-        }
-    }
-}
-
-impl From<CachingSettings> for lb_libp2p::config::CachingSettings {
-    fn from(CachingSettings { enabled, max_peers }: CachingSettings) -> Self {
-        if enabled {
-            Self::Enabled { max_peers }
-        } else {
-            Self::Disabled
         }
     }
 }

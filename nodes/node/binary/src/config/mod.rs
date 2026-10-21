@@ -14,10 +14,7 @@ use lb_key_management_system_service::{
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::{
     filter::envfilter::{default_envfilter_config, parse_filter_directives},
-    logging::local::{
-        AppenderType, CompressionType, LogFormat, RetentionType, RollingConfig, TextKind,
-        default_compression_threshold, default_max_files,
-    },
+    logging::local::{LogFormat, TextKind},
 };
 use lb_utils::yaml::{OnUnknownKeys, deserialize_from_value, deserialize_value_at_path, merge};
 use num_bigint::BigUint;
@@ -38,7 +35,10 @@ use crate::config::{
     network::serde::nat,
     tracing::serde::{
         filter::{EnvConfig, Layer},
-        logger::{FileConfig, GelfConfig},
+        logger::{
+            AppenderType, CompressionType, FileConfig, GelfConfig, RetentionType, RollingConfig,
+            default_compression_threshold, default_max_files,
+        },
     },
 };
 
