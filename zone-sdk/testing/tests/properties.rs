@@ -15,8 +15,8 @@
 //! inscriptions on a moving chain; plus the sequencers' own messages and
 //! the choices a zone makes about them; plus config changes and posting
 //! rules; plus deposits, withdraws, pins and note transfers; plus restarts,
-//! outages and price moves. Ignored by default: this finds sequences for
-//! the catalogue, it is not the gate.
+//! outages and price moves. A failing roll is shrunk to the smallest
+//! schedule that still fails, which then becomes a hand-written story.
 
 use std::collections::HashSet;
 
@@ -475,25 +475,21 @@ proptest! {
     })]
 
     #[test]
-    #[ignore = "sampled hunt: run locally or on a schedule"]
     fn chain_shapes_keep_the_view(scenario in scenario(Layer::Chain, false)) {
         block_on(scenario);
     }
 
     #[test]
-    #[ignore = "sampled hunt: run locally or on a schedule"]
     fn own_messages_land_once(scenario in scenario(Layer::Lineage, false)) {
         block_on(scenario);
     }
 
     #[test]
-    #[ignore = "sampled hunt: run locally or on a schedule"]
     fn configs_move_the_turns(scenario in scenario(Layer::Configs, false)) {
         block_on(scenario);
     }
 
     #[test]
-    #[ignore = "sampled hunt: run locally or on a schedule"]
     fn notes_follow_the_ledger(scenario in scenario(Layer::Notes, false)) {
         block_on(scenario);
     }
@@ -508,7 +504,6 @@ proptest! {
     })]
 
     #[test]
-    #[ignore = "sampled hunt: run locally or on a schedule"]
     fn every_schedule_finalizes_each_payload_once(scenario in scenario(Layer::Restarts, false)) {
         block_on(scenario);
     }

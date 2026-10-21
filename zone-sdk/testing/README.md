@@ -126,9 +126,8 @@ cargo test -p logos-blockchain-zone-sdk-testing
 - `tests/gas.rs`: the fee model: paid equals priced, unfunded txs are
   evicted, price rises are paid.
 
-- `tests/properties.rs`: the sampled hunt, ignored by default (`cargo test
-  -- --ignored` runs it; meant for a schedule or a local run with
-  `PROPTEST_CASES` raised). A scenario is a list of `Event`s drawn from the
+- `tests/properties.rs`: the property tests, run with everything else
+  (`PROPTEST_CASES` raises the volume). A scenario is a list of `Event`s drawn from the
   whole vocabulary, 16 to 64 of them, applied in order. The
   chain's shape: a block with a slot gap, a fork of random depth and length,
   a revival of the dormant branch, silent blocks before an announced one, a
