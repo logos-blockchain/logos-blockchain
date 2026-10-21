@@ -2,21 +2,22 @@
 //! a sequencer reports about deposits, its channel wallet and its turn must
 //! agree with the node it talks to.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use lb_core::{
+    crypto::Hash,
     header::HeaderId,
     mantle::{
         NoteId, SignedOps, Value,
         ledger::verification_mode::StandardMode,
-        ops::{OpRef, channel::ChannelId},
+        ops::{OpId as _, OpRef, channel::ChannelId},
         traits::Hashable,
         transactions::states::Unverified,
     },
 };
 use lb_zone_sdk::{
     node_types::TxHash,
-    sequencer::{ChannelNote, Event, ZoneSequencer},
+    sequencer::{ChannelNote, Event, FinalizedOp, ZoneSequencer},
 };
 
 use crate::{
@@ -38,6 +39,9 @@ pub struct Oracles {
     /// Whether this life resumed an earlier one, so what it reports is
     /// held to what an uninterrupted sequencer would have reported.
     resumed: bool,
+    /// Every deposit op reported through `deposits` or `finalized`, across
+    /// lives: what the canonical chain holds must appear here eventually.
+    reported_deposits: HashSet<Hash>,
     violations: Violations,
 }
 
@@ -94,7 +98,15 @@ impl Oracles {
             }
             self.finalized.push(tx.tx_hash);
         }
+        for tx in finalized {
+            for op in &tx.ops {
+                if let FinalizedOp::Deposit(deposit) = op {
+                    self.reported_deposits.insert(deposit.op_id);
+                }
+            }
+        }
         for deposit in deposits {
+            self.reported_deposits.insert(deposit.op_id);
             // Before the first pulled event only finalized history has been
             // reported, which is canonical by definition.
             let on_branch = node.pulled_tip().map_or_else(
@@ -129,6 +141,30 @@ impl Oracles {
         self.check_wallet(sequencer, node, channel, name);
         self.check_turn(sequencer, node, channel, name);
         self.check_finalized(node, channel, name);
+        self.check_deposits_reported(node, channel, name);
+    }
+
+    /// Every deposit of `channel` on the canonical chain has been reported,
+    /// through `deposits` when its block turned canonical or through
+    /// `finalized` once LIB passed it.
+    fn check_deposits_reported(&mut self, node: &SimNode, channel: ChannelId, name: &str) {
+        for tx in &node.canonical_txs() {
+            for op in tx.op_refs_iter() {
+                let OpRef::ChannelDeposit(deposit) = op else {
+                    continue;
+                };
+                if deposit.channel_id != channel {
+                    continue;
+                }
+                let op_id = deposit.op_id();
+                if !self.reported_deposits.contains(&op_id) {
+                    self.record(
+                        Layer::Notes,
+                        format!("{name}: canonical deposit {op_id:?} was never reported"),
+                    );
+                }
+            }
+        }
     }
 
     /// The finalized channel txs reported in this life are exactly the

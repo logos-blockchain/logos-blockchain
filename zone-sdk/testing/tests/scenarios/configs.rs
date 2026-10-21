@@ -4,7 +4,8 @@ use super::*;
 
 /// S11: a config landing orphans pending inscriptions which re-adopt in order.
 pub async fn config_orphans_pending(chain: Chain) {
-    let mut world = World::new(chain);
+    // Deep reorgs re-fund the pending configs; enough notes for that.
+    let mut world = World::with_funding(chain, 100, 3000);
     let config = world.config_with_depth(usize::MAX);
     let a = world.start_with("SEQ_A", config.clone(), passive()).await;
     world.config_finalized(a, &["SEQ_B"], 2, 0).await;

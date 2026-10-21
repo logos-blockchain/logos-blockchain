@@ -6,6 +6,7 @@
 
 pub mod chains;
 pub mod consumer;
+pub mod events;
 pub mod harness;
 pub mod layers;
 pub mod ledger;

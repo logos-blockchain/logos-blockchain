@@ -20,7 +20,12 @@ cargo test -p logos-blockchain-zone-sdk-testing
   subscriber misses events). LIB trails the tip by the finality depth, or
   stays frozen like under the bootstrap fork-choice rule and jumps on thaw;
   forks below LIB can be pruned so their blocks are no longer fetchable;
-  fetches can be made to fail; events can be delivered twice. The node
+  fetches can be made to fail; events can be delivered twice. The finality
+  depth is the deployment's `security_param` of 30 (`FINALITY_DEPTH`), so
+  what is mined but not finalized lives as long as it does on the network;
+  the deep-fork chains give the chain a finality depth of plain blocks
+  after a reorg to that depth, since nothing finalizes between two of them
+  otherwise. The node
   applies the ledger rules, so a block never carries an invalid
   transaction, like a leader dropping what went stale. A post validates
   nothing against the ledger and a re-post of what the mempool holds
@@ -52,6 +57,14 @@ cargo test -p logos-blockchain-zone-sdk-testing
   second tier, `chains::pair`, is every ordered pair of the base conditions
   two blocks apart (`for_each_base_condition!`), run on four core stories:
   about two thousand tests, where order is what is tested.
+- `src/events.rs`: one `Event` per operation the world exposes, chain
+  moves, client conditions and the zone's own actions (publish, deposit,
+  withdraw, pin, config, hand-built tx, abandon, burst, adopt, stop and
+  start a sequencer), applied by `World::apply_event`, which resolves what
+  the state cannot do the way the network would: an impossible fork
+  becomes a plain block, an action on an absent sequencer is skipped, a
+  config keeps every running sequencer accredited. A catalogue move is two
+  events; the random hunt draws a list of them.
 - `src/consumer.rs`: the reference consumer, the least a zone has to do on
   top of the SDK's contract: publish its planned payloads once ready and
   re-publish its own orphaned inscriptions, tracking message lineage so an
@@ -70,7 +83,10 @@ cargo test -p logos-blockchain-zone-sdk-testing
   config lineage), `Notes` (the wallet is the ledger's note set, deposits
   are reported once from canonical blocks), `Restarts` (a sequencer resumed
   from a checkpoint reports what one that never stopped would).
-- `src/view_checker.rs`: the `ChannelUpdate` contract on every event; with
+- `src/view_checker.rs`: the `ChannelUpdate` contract on every event, with
+  entries identified by message (the same message lands again under a new
+  tx hash when re-funded or rebuilt, and the contract has consumers dedup
+  by `this_msg`) and by tx hash when they carry none; with
   `RUST_LOG=debug` it traces each event's prefix, adopted, orphaned,
   finalized and pending sets.
 - `src/mirror.rs`: an LEZ-style consumer that rebuilds the channel view from
@@ -78,10 +94,11 @@ cargo test -p logos-blockchain-zone-sdk-testing
   with the node's canonical chain after every settle.
 - `src/oracles.rs`: after every settle, once a sequencer has caught up with
   its node (connected, told about the tip, agreeing on LIB): reported
-  deposits come from canonical blocks, the channel wallet view equals the
-  ledger's channel notes (finalized against LIB, unfinalized against the
-  tip), the turn view agrees with `round_robin`, and the finalized history
-  it reported is the chain's, once each and in order.
+  deposits come from canonical blocks and every canonical deposit has been
+  reported, the channel wallet view equals the ledger's channel notes
+  (finalized against LIB, unfinalized against the tip), the turn view agrees
+  with `round_robin`, and the finalized history it reported is the chain's,
+  once each and in order.
 - `src/harness.rs`: owns the sequencers, polls `next_event` until quiescent,
   runs each sequencer's policy and the checkers inline, and replays
   finalized history like an indexer.
@@ -111,7 +128,8 @@ cargo test -p logos-blockchain-zone-sdk-testing
 
 - `tests/properties.rs`: the sampled hunt, ignored by default (`cargo test
   -- --ignored` runs it; meant for a schedule or a local run with
-  `PROPTEST_CASES` raised). Every step draws three things independently. The
+  `PROPTEST_CASES` raised). A scenario is a list of `Event`s drawn from the
+  whole vocabulary, 16 to 64 of them, applied in order. The
   chain's shape: a block with a slot gap, a fork of random depth and length,
   a revival of the dormant branch, silent blocks before an announced one, a
   tip moved silently behind an announced sibling, a duplicate delivery, LIB

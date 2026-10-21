@@ -1,30 +1,30 @@
-//! Property tests over the three things that shape what a sequencer sees:
-//! the chain's shape (blocks, empty slots, forks of every depth and
-//! outcome, late revivals, lagging and duplicate deliveries, frozen and
-//! jumping LIB, pruning), the blocks' content (which posted transactions
-//! land in what order, next to other writers' inscriptions, note changes
-//! and configs) and the client's condition (dropped streams, node outages,
-//! restarts, failing fetches, price moves, user deposits and withdraws).
-//! Every combination must leave every [`Layer`] intact: the view contract
-//! and the mirrored view, each planned payload finalized exactly once in
-//! one lineage, the turn view, the wallet and the deposits, and what a
-//! resumed sequencer reports.
+//! The sampled hunt: a scenario is a list of events drawn at random from
+//! everything the world can do, applied in order, and judged by the layers
+//! after every one of them. The chain's shape (blocks, empty slots, forks
+//! of every depth and outcome, late revivals, lagging and duplicate
+//! deliveries, frozen and jumping LIB, pruning), the blocks' content (which
+//! posted transactions land in what order, next to other writers'
+//! inscriptions, note changes and configs), the client's condition (dropped
+//! streams, node outages, restarts, failing fetches, price moves) and the
+//! zone's own actions (publishes, bursts, abandoned orphans, adoptions,
+//! configs, deposits, withdraws, pins, hand-built txs, stopping and starting
+//! sequencers) all come from one vocabulary, [`Event`].
 //!
 //! The vocabulary is drawn one layer at a time, so a rung of the ladder
 //! that fails names what the SDK gets wrong: only other writers'
 //! inscriptions on a moving chain; plus the sequencers' own messages and
-//! the choices a zone makes about them (abandon an orphan, burst-publish in
-//! turn, adopt another sequencer's orphans); plus config changes and
-//! posting rules; plus deposits, withdraws and note transfers; plus
-//! restarts, outages and price moves.
+//! the choices a zone makes about them; plus config changes and posting
+//! rules; plus deposits, withdraws, pins and note transfers; plus restarts,
+//! outages and price moves. Ignored by default: this finds sequences for
+//! the catalogue, it is not the gate.
 
-use std::{collections::HashSet, sync::Arc};
+use std::collections::HashSet;
 
-use common::{FINALITY_DEPTH, FOREIGN, FOREIGN_2, Posted, World, inscription, passive, seq_key};
+use common::{FINALITY_DEPTH, FOREIGN, FOREIGN_2, Posted, World, inscription, passive};
 use lb_zone_sdk::sequencer::{FinalizedOp, FinalizedTx};
 use logos_blockchain_zone_sdk_testing::{
     chains::{self, Chain, Condition, Shape},
-    consumer::{Claims, ReferenceConsumer, SharedChoices},
+    events::Event,
     layers::Layer,
     policy::payload_str,
     world as common,
@@ -35,73 +35,15 @@ use proptest::{prelude::*, strategy::Union};
 /// Gas prices every run starts at; large enough that a percent rise is a
 /// different integer price.
 const BASE_GAS_PRICE: u64 = 100;
-/// Largest price rise a step applies: below the funding reserve
+/// Largest price rise an event applies: below the funding reserve
 /// (`FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT`), so a tx funded at the
 /// base price is still paid for after the rise.
 const MAX_GAS_RISE_PERCENT: u64 = 10;
 /// Funding notes cover one atomic bundle at the highest price.
 const FUNDING_NOTE_VALUE: u64 = 500_000;
 
-/// What happens on the client's side of the step.
-#[derive(Clone, Copy, Debug)]
-enum Client {
-    Quiet,
-    /// Every block stream closes; the sequencers reconnect.
-    Drop,
-    /// The primary node goes down for a step: its mempool and funding
-    /// reservations are lost, then it comes back.
-    NodeDown,
-    /// Restart sequencer `index`, from its checkpoint or, with nothing of
-    /// its own pending, from scratch.
-    Restart {
-        index: usize,
-        fresh: bool,
-    },
-    /// The next `count` block fetches fail.
-    FetchFail {
-        count: usize,
-    },
-    /// Gas prices move to `BASE_GAS_PRICE` plus `percent`, in force from the
-    /// next block.
-    GasPrice {
-        percent: u64,
-    },
-    /// A user deposits one pre-minted note of `value` into the channel.
-    Deposit {
-        value: u64,
-    },
-    /// Sequencer `index` withdraws `amount` to the user; a sequencer without
-    /// the funds or the node skips it. Spends finalized notes only, unless
-    /// the scenario allows unfinalized ones.
-    Withdraw {
-        index: usize,
-        amount: u64,
-    },
-    /// Sequencer `index` lets its next orphan die instead of republishing
-    /// it.
-    Abandon {
-        index: usize,
-    },
-    /// Sequencer `index` publishes `count` fresh payloads at once on its
-    /// next turn.
-    Burst {
-        index: usize,
-        count: usize,
-    },
-    /// Sequencer `index` starts or stops republishing other sequencers'
-    /// orphans.
-    Adopt {
-        index: usize,
-        on: bool,
-    },
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Step {
-    shape: Shape,
-    posted: Posted,
-    client: Client,
-}
+const NAMES: [&str; 3] = ["SEQ_A", "SEQ_B", "SEQ_C"];
+const WRITERS: [&str; 2] = [FOREIGN, FOREIGN_2];
 
 fn shape() -> impl Strategy<Value = Shape> {
     let depth = 1..=FINALITY_DEPTH as usize;
@@ -129,75 +71,163 @@ fn posted() -> impl Strategy<Value = Posted> {
     ]
 }
 
-/// The client conditions the `top` layer admits: note moves from
-/// [`Layer::Notes`], outages and price moves from [`Layer::Restarts`].
-fn client(top: Layer) -> impl Strategy<Value = Client> {
+type Arm = (u32, BoxedStrategy<Event>);
+
+/// Payloads distinct across a run with overwhelming probability.
+fn payloads(count: impl Strategy<Value = usize>) -> impl Strategy<Value = Vec<String>> {
+    count
+        .prop_flat_map(|n| prop::collection::vec(any::<u32>(), n))
+        .prop_map(|tags| tags.into_iter().map(|t| format!("event-{t:08x}")).collect())
+}
+
+/// The zone's own actions: publishes, bursts, abandoned orphans, adoptions
+/// and hand-built txs, the last only without a config in play or with the
+/// known issues, since a config landing drops them from the view.
+fn zone_arms(top: Layer, sequencers: usize, known_issues: bool) -> Vec<Arm> {
     let lineage = u32::from(top >= Layer::Lineage);
+    let custom = u32::from(top == Layer::Lineage || known_issues);
+    let index = move || 0..sequencers;
+    vec![
+        (
+            2 * lineage,
+            (index(), payloads(Just(1)))
+                .prop_map(|(index, p)| Event::Publish {
+                    index,
+                    payload: p[0].clone(),
+                })
+                .boxed(),
+        ),
+        (
+            lineage,
+            index().prop_map(|index| Event::Abandon { index }).boxed(),
+        ),
+        (
+            lineage,
+            (index(), payloads(1..=3usize))
+                .prop_map(|(index, payloads)| Event::Burst { index, payloads })
+                .boxed(),
+        ),
+        (
+            lineage,
+            (index(), prop::bool::ANY)
+                .prop_map(|(index, on)| Event::Adopt { index, on })
+                .boxed(),
+        ),
+        (
+            custom,
+            (index(), payloads(1..=3usize))
+                .prop_map(|(index, payloads)| Event::Custom { index, payloads })
+                .boxed(),
+        ),
+    ]
+}
+
+/// Configs and note moves. Every running sequencer stays accredited (the
+/// world adds them), so a config only varies the writers it accredits and
+/// the posting rules, never both zero: that freezes the turn on the first
+/// key.
+fn channel_arms(top: Layer, sequencers: usize, known_issues: bool) -> Vec<Arm> {
+    let configs = u32::from(top >= Layer::Configs);
     let notes = u32::from(top >= Layer::Notes);
+    let index = move || 0..sequencers;
+    let writer_names: Vec<String> = WRITERS.iter().map(|s| (*s).to_owned()).collect();
+    vec![
+        (
+            configs,
+            (
+                index(),
+                prop::sample::subsequence(writer_names, 0..=2usize),
+                prop_oneof![
+                    Just((0u32, 4u32)),
+                    Just((0u32, 6u32)),
+                    Just((3u32, 0u32)),
+                    Just((3u32, 4u32)),
+                    Just((5u32, 0u32)),
+                    Just((5u32, 6u32)),
+                ],
+            )
+                .prop_map(|(index, names, (timeframe, timeout))| Event::Config {
+                    index,
+                    names,
+                    timeframe,
+                    timeout,
+                })
+                .boxed(),
+        ),
+        (2 * notes, Just(Event::Deposit).boxed()),
+        (
+            2 * notes,
+            (index(), 1..=3u64)
+                .prop_map(move |(index, amount)| Event::Withdraw {
+                    index,
+                    amount,
+                    unfinalized: known_issues,
+                })
+                .boxed(),
+        ),
+        (
+            notes,
+            index().prop_map(|index| Event::Pin { index }).boxed(),
+        ),
+    ]
+}
+
+/// Outages, restarts, failing fetches, price moves, stops and starts.
+fn client_arms(top: Layer, sequencers: usize) -> Vec<Arm> {
     let restarts = u32::from(top >= Layer::Restarts);
-    let arms: Vec<(u32, BoxedStrategy<Client>)> = vec![
-        (10, Just(Client::Quiet).boxed()),
-        (
-            lineage,
-            (0..3usize)
-                .prop_map(|index| Client::Abandon { index })
-                .boxed(),
-        ),
-        (
-            lineage,
-            (0..3usize, 1..=3usize)
-                .prop_map(|(index, count)| Client::Burst { index, count })
-                .boxed(),
-        ),
-        (
-            lineage,
-            (0..3usize, prop::bool::ANY)
-                .prop_map(|(index, on)| Client::Adopt { index, on })
-                .boxed(),
-        ),
-        (restarts, Just(Client::Drop).boxed()),
-        (restarts, Just(Client::NodeDown).boxed()),
+    let index = move || 0..sequencers;
+    vec![
+        (restarts, Just(Event::Client(Condition::Drop)).boxed()),
+        (restarts, Just(Event::Client(Condition::NodeDown)).boxed()),
         (
             restarts,
-            (0..3usize, prop::bool::weighted(0.25))
-                .prop_map(|(index, fresh)| Client::Restart { index, fresh })
+            (index(), prop::bool::weighted(0.25))
+                .prop_map(|(index, fresh)| Event::Client(Condition::Restart { index, fresh }))
                 .boxed(),
         ),
         (
             restarts,
             (1..=2usize)
-                .prop_map(|count| Client::FetchFail { count })
+                .prop_map(|count| Event::Client(Condition::FetchFail { count }))
                 .boxed(),
         ),
         (
             restarts,
             (0..=MAX_GAS_RISE_PERCENT)
-                .prop_map(|percent| Client::GasPrice { percent })
+                .prop_map(|percent| {
+                    Event::Client(Condition::GasPrice {
+                        price: BASE_GAS_PRICE * (100 + percent) / 100,
+                    })
+                })
                 .boxed(),
         ),
         (
-            2 * notes,
-            (1..=3u64)
-                .prop_map(|value| Client::Deposit { value })
-                .boxed(),
+            restarts,
+            index().prop_map(|index| Event::Stop { index }).boxed(),
         ),
         (
-            2 * notes,
-            (0..3usize, 1..=3u64)
-                .prop_map(|(index, amount)| Client::Withdraw { index, amount })
-                .boxed(),
+            restarts,
+            index().prop_map(|index| Event::Start { index }).boxed(),
         ),
-    ];
-    // A union rejects a zero weight: the layers below `top` draw nothing.
-    Union::new_weighted(arms.into_iter().filter(|(weight, _)| *weight > 0).collect())
+    ]
 }
 
-fn step(top: Layer) -> impl Strategy<Value = Step> {
-    (shape(), posted(), client(top)).prop_map(|(shape, posted, client)| Step {
-        shape,
-        posted,
-        client,
-    })
+/// One event the `top` layer admits: chain moves at every rung, the zone's
+/// own actions from [`Layer::Lineage`], configs from [`Layer::Configs`],
+/// note moves from [`Layer::Notes`], outages and restarts from
+/// [`Layer::Restarts`].
+fn event(top: Layer, sequencers: usize, known_issues: bool) -> impl Strategy<Value = Event> {
+    let mut arms: Vec<Arm> = vec![(
+        12,
+        (shape(), posted())
+            .prop_map(|(shape, posted)| Event::Chain { shape, posted })
+            .boxed(),
+    )];
+    arms.extend(zone_arms(top, sequencers, known_issues));
+    arms.extend(channel_arms(top, sequencers, known_issues));
+    arms.extend(client_arms(top, sequencers));
+    // A union rejects a zero weight: the layers below `top` draw nothing.
+    Union::new_weighted(arms.into_iter().filter(|(weight, _)| *weight > 0).collect())
 }
 
 #[derive(Clone, Debug)]
@@ -212,10 +242,10 @@ struct Scenario {
     timeout: u32,
     /// What the SDK does not handle yet: withdraws may spend unfinalized
     /// notes, which wedge the sequencer when the note's deposit is reorged
-    /// away for good, and the writers chain two inscriptions in one tx,
-    /// which a config landing drops from the view unreported.
+    /// away for good, and custom txs sit under configs, which a config
+    /// landing drops from the view unreported.
     known_issues: bool,
-    schedule: Vec<Step>,
+    schedule: Vec<Event>,
 }
 
 impl Scenario {
@@ -261,9 +291,8 @@ fn scenario(top: Layer, known_issues: bool) -> impl Strategy<Value = Scenario> {
         1..=3usize,
         1..=2usize,
         messages,
-        prop::collection::vec(step(top), 8..32),
     )
-        .prop_flat_map(move |(chain, sequencers, writers, messages, schedule)| {
+        .prop_flat_map(move |(chain, sequencers, writers, messages)| {
             let rules = if top >= Layer::Configs {
                 let timeframe = if sequencers == 1 {
                     prop_oneof![Just(0u32), Just(3u32)].boxed()
@@ -275,7 +304,8 @@ fn scenario(top: Layer, known_issues: bool) -> impl Strategy<Value = Scenario> {
             } else {
                 Just((3u32, 0u32)).boxed()
             };
-            rules.prop_map(move |(timeframe, timeout)| Scenario {
+            let schedule = prop::collection::vec(event(top, sequencers, known_issues), 16..64);
+            (rules, schedule).prop_map(move |((timeframe, timeout), schedule)| Scenario {
                 top,
                 chain: chain.clone(),
                 sequencers,
@@ -284,13 +314,10 @@ fn scenario(top: Layer, known_issues: bool) -> impl Strategy<Value = Scenario> {
                 timeframe,
                 timeout,
                 known_issues,
-                schedule: schedule.clone(),
+                schedule,
             })
         })
 }
-
-const NAMES: [&str; 3] = ["SEQ_A", "SEQ_B", "SEQ_C"];
-const WRITERS: [&str; 2] = [FOREIGN, FOREIGN_2];
 
 /// Bring the peer node, if any, level with the primary and vice versa.
 fn sync_peer(world: &World) {
@@ -301,102 +328,9 @@ fn sync_peer(world: &World) {
     }
 }
 
-fn running(world: &World, index: usize) -> bool {
-    index < world.harness.seqs.len() && world.harness.seqs[index].is_running()
-}
-
-async fn apply_client(
-    world: &mut World,
-    client: Client,
-    counter: usize,
-    scenario: &Scenario,
-    choices: &[SharedChoices],
-) {
-    match client {
-        Client::Quiet => {}
-        Client::Drop => world.apply_condition(Condition::Drop).await,
-        Client::NodeDown => world.apply_condition(Condition::NodeDown).await,
-        Client::Restart { index, fresh } => {
-            world
-                .apply_condition(Condition::Restart { index, fresh })
-                .await;
-        }
-        Client::FetchFail { count } => {
-            world.apply_condition(Condition::FetchFail { count }).await;
-        }
-        Client::GasPrice { percent } => {
-            world.set_gas_prices(BASE_GAS_PRICE * (100 + percent) / 100);
-        }
-        Client::Deposit { .. } => {
-            if !world.user_utxos.is_empty() {
-                let utxo = world.user_utxos.remove(0);
-                // The user wallet may be out of unreserved fee notes.
-                drop(
-                    world
-                        .try_deposit(&[utxo], &format!("deposit {counter}"))
-                        .await,
-                );
-            }
-        }
-        Client::Withdraw { index, amount } => {
-            if running(world, index) {
-                // Insufficient channel funds or a dead node: nothing to withdraw.
-                let _ = world
-                    .withdraw(
-                        index,
-                        amount,
-                        scenario.known_issues,
-                        &format!("withdraw {counter}"),
-                    )
-                    .await;
-            }
-        }
-        Client::Abandon { index } => {
-            if let Some(choices) = choices.get(index) {
-                choices.lock().expect("choices").abandon_next();
-            }
-        }
-        Client::Burst { index, count } => {
-            if let Some(choices) = choices.get(index) {
-                let payloads = (0..count)
-                    .map(|k| inscription(&format!("{}-burst-{counter}-{k}", NAMES[index])))
-                    .collect();
-                choices.lock().expect("choices").burst(payloads);
-            }
-        }
-        Client::Adopt { index, on } => {
-            if let Some(choices) = choices.get(index) {
-                choices.lock().expect("choices").adopt(on);
-            }
-        }
-    }
-}
-
-async fn apply(
-    world: &mut World,
-    step: Step,
-    counter: usize,
-    scenario: &Scenario,
-    choices: &[SharedChoices],
-) {
-    tracing::debug!(counter, ?step, tip = ?world.node().tip(), lib = ?world.node().lib(), "step");
-    world.harness.advance(World::STEP_DURATION).await;
-    apply_client(world, step.client, counter, scenario, choices).await;
-    // During a split only the network itself may mine, so the merge stays
-    // within what the primary can reorg; plain growth on two nodes is the
-    // chain's own gossip step.
-    if world.partitioned()
-        || (world.chain.is_partitions() && matches!(step.shape, Shape::Extend { .. }))
-    {
-        world.step().await;
-    } else {
-        world.apply_shape(step.shape, step.posted).await;
-    }
-    sync_peer(world);
-    world.harness.settle().await;
-}
-
-async fn run(scenario: Scenario) {
+/// A world with the channel open, the writers accredited and the
+/// sequencers started with their planned payloads; those payloads.
+async fn world_for(scenario: &Scenario) -> (World, Vec<String>) {
     let mut world = World::with_funding(scenario.chain.clone(), 200, FUNDING_NOTE_VALUE);
     // Prices bind from the next block; funding reads them from the tip.
     world.set_gas_prices(BASE_GAS_PRICE);
@@ -404,7 +338,7 @@ async fn run(scenario: Scenario) {
     sync_peer(&world);
     let names = &NAMES[..scenario.sequencers];
     // The writers are always accredited: other sequencers' txs show up
-    // mined in every run, as many as the schedule has steps.
+    // mined in every run, as many as the schedule has events.
     let writers = &WRITERS[..scenario.writers];
     let mut accredited: Vec<&str> = names[1..].to_vec();
     accredited.extend(writers);
@@ -417,50 +351,47 @@ async fn run(scenario: Scenario) {
         world.add_writer_with(writer, scenario.writer_ops());
     }
     world.enable_foreign_traffic(scenario.schedule.len());
-    // The notes the schedule deposits exist before the first step.
-    let deposits: Vec<u64> = scenario
+    // The notes the schedule deposits exist before the first event.
+    let deposits = scenario
         .schedule
         .iter()
-        .filter_map(|step| match step.client {
-            Client::Deposit { value } => Some(value),
-            _ => None,
-        })
-        .collect();
-    if !deposits.is_empty() {
-        world.coin_split(&deposits).await;
+        .filter(|event| matches!(event, Event::Deposit))
+        .count();
+    if deposits > 0 {
+        world.coin_split(&vec![2; deposits]).await;
     }
     let mut expected: Vec<String> = Vec::new();
-    let claims = Claims::default();
-    let choices: Vec<SharedChoices> = names.iter().map(|_| SharedChoices::default()).collect();
-    for (i, name) in names.iter().enumerate() {
+    // SEQ_A was started to open the channel; its slot is reused.
+    world.harness.seqs.clear();
+    for name in names {
         let planned: Vec<_> = (0..scenario.messages)
             .map(|m| inscription(&format!("{name}-{m}")))
             .collect();
         expected.extend(planned.iter().map(payload_str));
-        let config = world.config_with_depth(usize::MAX);
-        let policy = Box::new(
-            ReferenceConsumer::new(&seq_key(name), planned)
-                .with_choices(Arc::clone(&choices[i]), Arc::clone(&claims)),
-        );
-        if i == 0 && world.harness.seqs.len() == 1 {
-            world.harness.set_policy(0, policy);
-            world.restart(0, None).await;
-        } else {
-            world
-                .start_as_with(name, seq_key(name), config, policy)
-                .await;
-        }
+        world.start_reference(name, planned, usize::MAX).await;
     }
+    (world, expected)
+}
 
-    for (counter, step) in scenario.schedule.clone().into_iter().enumerate() {
-        apply(&mut world, step, counter, &scenario, &choices).await;
+async fn run(scenario: Scenario) {
+    let (mut world, mut expected) = world_for(&scenario).await;
+    for event in scenario.schedule.clone() {
+        tracing::debug!(?event, tip = ?world.node().tip(), lib = ?world.node().lib(), "event");
+        world.harness.advance(World::STEP_DURATION).await;
+        world.apply_event(event).await;
+        sync_peer(&world);
+        world.harness.settle().await;
     }
-    // Nothing finalizes under a frozen LIB.
+    // Nothing finalizes under a frozen LIB, and a stopped sequencer never
+    // drains; every sequencer runs for the settle.
     if world.node().is_lib_frozen() {
         world.node().thaw_lib();
         if let Some(peer) = &world.peer {
             peer.thaw_lib();
         }
+    }
+    for index in 0..world.harness.seqs.len() {
+        world.apply_event(Event::Start { index }).await;
     }
     world.settle_chain(400).await;
 
@@ -468,30 +399,34 @@ async fn run(scenario: Scenario) {
     // would have broken, and the lineage before the layers above it.
     world.harness.assert_layers_through(Layer::Chain);
     let finalized = world.indexer_finalized().await;
-    assert_payloads_landed_once(&finalized, expected, &choices);
+    expected.extend(world.event_payloads.published.iter().cloned());
+    assert_payloads_landed_once(&finalized, expected, &world);
     assert_one_lineage(&finalized);
     world.harness.assert_layers();
 }
 
-/// Every planned payload, and every burst that found a turn, finalized
-/// exactly once; an abandoned payload may still land once, through a
-/// revived branch or another sequencer adopting it, but never twice.
+/// Every planned payload, every publish and every burst that found a turn
+/// finalized exactly once; an abandoned payload, a pin or a hand-built tx
+/// may land once, through a revived branch or another sequencer adopting
+/// it, but never twice.
 fn assert_payloads_landed_once(
     finalized: &[FinalizedTx],
     mut expected: Vec<String>,
-    choices: &[SharedChoices],
+    world: &World,
 ) {
     let payloads = common::inscription_payloads(finalized);
-    let mut abandoned: HashSet<String> = HashSet::new();
-    for choices in choices {
+    let mut at_most_once: HashSet<String> =
+        world.event_payloads.at_most_once.iter().cloned().collect();
+    for choices in world.choices() {
         let choices = choices.lock().expect("choices");
         expected.extend(choices.published.iter().map(payload_str));
-        abandoned.extend(choices.abandoned.iter().map(payload_str));
+        at_most_once.extend(choices.abandoned.iter().map(payload_str));
     }
+    expected.extend(at_most_once.iter().cloned());
     for payload in &expected {
         let count = payloads.iter().filter(|p| *p == payload).count();
-        if abandoned.contains(payload) {
-            assert!(count <= 1, "abandoned {payload} finalized {count} times");
+        if at_most_once.contains(payload) {
+            assert!(count <= 1, "{payload} finalized {count} times");
         } else {
             assert_eq!(count, 1, "{payload} finalized {count} times");
         }
@@ -580,8 +515,8 @@ proptest! {
 
     /// The same property over the known issues: withdraws from unfinalized
     /// notes, which wedge the sequencer when the note's deposit is reorged
-    /// away for good, and two-inscription txs, which a config landing drops
-    /// from the view unreported.
+    /// away for good, and custom txs under configs, which a config landing
+    /// drops from the view unreported.
     #[test]
     #[ignore = "known issues: dead-input withdraws resubmitted forever; config shed skips custom txs"]
     fn every_schedule_with_known_issues_finalizes_each_payload_once(

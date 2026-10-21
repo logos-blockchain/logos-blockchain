@@ -7,10 +7,15 @@
 
 use std::collections::HashSet;
 
-use lb_core::mantle::ops::channel::MsgId;
+use lb_core::mantle::{
+    OpRef,
+    ops::channel::{ChannelId, MsgId},
+};
 use lb_zone_sdk::{
     node_types::TxHash,
-    sequencer::{ChannelUpdate, ChannelUpdateTx, Event, FinalizedTx, SequencerCheckpoint},
+    sequencer::{
+        ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, SequencerCheckpoint,
+    },
 };
 
 use crate::layers::{Layer, Violations};
@@ -19,13 +24,49 @@ fn hashes(entries: &[ChannelUpdateTx]) -> Vec<TxHash> {
     entries.iter().map(ChannelUpdateTx::tx_hash).collect()
 }
 
-#[derive(Debug, Default)]
+/// What identifies a view entry across updates: its message, since the
+/// same message lands again under a new tx hash when re-funded or rebuilt
+/// and the contract has consumers dedup by `this_msg`; the tx hash for an
+/// entry carrying no message of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Key {
+    Msg(MsgId),
+    Tx(TxHash),
+}
+
+fn key(entry: &ChannelUpdateTx, channel_id: ChannelId) -> Key {
+    if let Some(info) = entry.inscription() {
+        return Key::Msg(info.this_msg);
+    }
+    let ChannelUpdateTx::Config(signed) = entry else {
+        return Key::Tx(entry.tx_hash());
+    };
+    signed
+        .op_refs_iter()
+        .find_map(|op| match op {
+            OpRef::ChannelConfig(config) if config.channel == channel_id => Some(config.id()),
+            _ => None,
+        })
+        .map_or_else(|| Key::Tx(entry.tx_hash()), Key::Msg)
+}
+
+#[derive(Debug)]
 pub struct ViewChecker {
-    held: HashSet<TxHash>,
+    channel_id: ChannelId,
+    held: HashSet<Key>,
     violations: Violations,
 }
 
 impl ViewChecker {
+    #[must_use]
+    pub fn new(channel_id: ChannelId) -> Self {
+        Self {
+            channel_id,
+            held: HashSet::new(),
+            violations: Violations::default(),
+        }
+    }
+
     /// Every violation recorded so far, in order.
     #[must_use]
     pub const fn violations(&self) -> &Violations {
@@ -53,6 +94,11 @@ impl ViewChecker {
                 ChannelUpdate::Extension { .. } => None,
             },
             adopted = ?hashes(channel_update.adopted()),
+            adopted_msgs = ?channel_update
+                .adopted()
+                .iter()
+                .filter_map(|tx| tx.inscription().map(|i| i.this_msg))
+                .collect::<Vec<_>>(),
             orphaned = ?hashes(channel_update.orphaned()),
             finalized = ?finalized.iter().map(|tx| tx.tx_hash).collect::<Vec<_>>(),
             pending = ?checkpoint.pending_txs.iter().map(|(h, _)| *h).collect::<Vec<_>>(),
@@ -73,10 +119,10 @@ impl ViewChecker {
 
     fn add_extension(&mut self, adopted: &[ChannelUpdateTx]) {
         for tx in adopted {
-            if !self.held.insert(tx.tx_hash()) {
+            if !self.held.insert(key(tx, self.channel_id)) {
                 self.record(format!(
                     "{:?} adopted on an extension while already held",
-                    tx.tx_hash()
+                    key(tx, self.channel_id)
                 ));
             }
         }
@@ -87,19 +133,24 @@ impl ViewChecker {
             self.record("a Conflict with nothing orphaned".to_owned());
         }
         for tx in orphaned {
-            self.held.remove(&tx.tx_hash());
+            self.held.remove(&key(tx, self.channel_id));
         }
     }
 
     fn add_adopted(&mut self, adopted: &[ChannelUpdateTx]) {
         for tx in adopted {
-            self.held.insert(tx.tx_hash());
+            self.held.insert(key(tx, self.channel_id));
         }
     }
 
     fn remove_finalized(&mut self, finalized: &[FinalizedTx]) {
         for tx in finalized {
-            self.held.remove(&tx.tx_hash);
+            self.held.remove(&Key::Tx(tx.tx_hash));
+            for op in &tx.ops {
+                if let FinalizedOp::Inscription(info) | FinalizedOp::Config(info) = op {
+                    self.held.remove(&Key::Msg(info.this_msg));
+                }
+            }
         }
     }
 
@@ -127,19 +178,22 @@ impl ViewChecker {
             seen.insert(info.this_msg);
         }
 
-        let view: HashSet<TxHash> = chain.iter().map(|tx| tx.tx_hash()).collect();
+        let view: HashSet<Key> = chain.iter().map(|tx| key(tx, self.channel_id)).collect();
         let pending: HashSet<TxHash> = checkpoint.pending_txs.iter().map(|(h, _)| *h).collect();
-        for tx in &view {
-            if !self.held.contains(tx) && !pending.contains(tx) {
+        for (tx, k) in chain
+            .iter()
+            .map(|tx| (tx.tx_hash(), key(tx, self.channel_id)))
+        {
+            if !self.held.contains(&k) && !pending.contains(&tx) {
                 messages.push(format!(
-                    "common_prefix carries {tx:?}, which was never adopted and is not pending"
+                    "common_prefix carries {k:?}, which was never adopted and is not pending"
                 ));
             }
         }
-        for tx in &self.held {
-            if !view.contains(tx) {
+        for k in &self.held {
+            if !view.contains(k) {
                 messages.push(format!(
-                    "{tx:?} was adopted and never orphaned or finalized, but left common_prefix"
+                    "{k:?} was adopted and never orphaned or finalized, but left common_prefix"
                 ));
             }
         }

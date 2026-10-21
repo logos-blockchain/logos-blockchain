@@ -468,11 +468,13 @@ async fn stale_backlog_reserves_fee_notes_only_for_its_window() {
     let queued = world.node().funding_reserved();
     assert_eq!(queued, payloads.len(), "each publish is funded once");
 
-    // Blocks that take nothing: the posted window never lands, LIB moves,
-    // and the stale windows pass with the whole backlog waiting.
+    // Blocks that take nothing: the posted window never lands, LIB moves
+    // once it is a finality depth behind, and the stale windows pass with
+    // the whole backlog waiting.
     let windows = 5usize;
-    for _ in 0..windows * usize::try_from(window).expect("fits") {
-        world.extend(1, common::Posted::None).await;
+    let blocks = usize::try_from(common::FINALITY_DEPTH + windows as u64 * window).expect("fits");
+    for _ in 0..blocks {
+        world.extend(1, Posted::None).await;
         world.harness.advance(World::STEP_DURATION).await;
     }
     let reserved = world.node().funding_reserved();
@@ -488,4 +490,61 @@ async fn stale_backlog_reserves_fee_notes_only_for_its_window() {
     );
     world.settle_chain(300).await;
     world.finish();
+}
+
+/// A dormant branch four deep is revived and wins, a twelve-deep branch
+/// stays dormant, then a twenty-deep branch wins. Writers inscribe in every
+/// block, fork blocks included, and re-land or rebuild what a reorg
+/// orphans: a rebuilt inscription lands again as the same message under a
+/// new tx hash, which the view reports as adopted without orphaning the
+/// old hash. The contract is by message, so the view stays whole.
+#[tokio::test(start_paused = true)]
+async fn rebuilt_inscription_lands_as_the_same_message_after_a_deep_reorg() {
+    let mut world = World::with_funding(chains::linear(), 400, 3000);
+    let a = world.start("SEQ_A", passive()).await;
+    world
+        .config_finalized(a, &["SEQ_B", FOREIGN, FOREIGN_2], 3, 0)
+        .await;
+    world.stop(a);
+    world.add_writer_with(FOREIGN, &[WriterOp::Inscribe]);
+    world.add_writer_with(FOREIGN_2, &[WriterOp::Inscribe]);
+    world.enable_foreign_traffic(8);
+    world.harness.set_policy(a, reference("SEQ_A"));
+    world.restart(a, None).await;
+    world.start("SEQ_B", reference("SEQ_B")).await;
+
+    let moves = [
+        (
+            Shape::Fork {
+                depth: 4,
+                length: 2,
+            },
+            Posted::All,
+        ),
+        (Shape::Revive { blocks: 3 }, Posted::All),
+        (
+            Shape::Fork {
+                depth: 12,
+                length: 11,
+            },
+            Posted::Half,
+        ),
+        (Shape::Extend { gap: 1 }, Posted::Reversed),
+        (
+            Shape::Fork {
+                depth: 20,
+                length: 21,
+            },
+            Posted::All,
+        ),
+        (Shape::Extend { gap: 1 }, Posted::All),
+        (Shape::Extend { gap: 1 }, Posted::Reversed),
+        (Shape::Extend { gap: 1 }, Posted::All),
+    ];
+    for (shape, posted) in moves {
+        world.harness.advance(World::STEP_DURATION).await;
+        world.apply_shape(shape, posted).await;
+        world.harness.settle().await;
+    }
+    world.harness.assert_layers_through(Layer::Chain);
 }

@@ -1,14 +1,18 @@
 //! Scenario world: a funded simulated node, a channel owned by `SEQ_A`'s key,
 //! three named sequencer keys and a network behaviour applied on every step.
 
-use std::{fmt::Write as _, time::Duration};
+use std::{fmt::Write as _, sync::Arc, time::Duration};
 
 use lb_core::{
+    crypto::Hash,
     header::HeaderId,
     mantle::{
         Note, NoteId, SignedOps, Utxo,
         ledger::{Outputs, verification_mode::StandardMode},
-        ops::channel::{ChannelId, VerifiedChannelKeys, deposit::DepositOp, inscribe::Inscription},
+        ops::{
+            OpId as _,
+            channel::{ChannelId, VerifiedChannelKeys, deposit::DepositOp, inscribe::Inscription},
+        },
         traits::Hashable,
         transactions::states::Unverified,
     },
@@ -27,7 +31,8 @@ pub use crate::harness::passive;
 use crate::{
     Harness, SimNode,
     chains::{Chain, Condition, Expect, Move, Shape},
-    consumer::ReferenceConsumer,
+    consumer::{Claims, ReferenceConsumer, SharedChoices},
+    events::Event,
     harness::{self, RECONNECT_DELAY, funding_config, key},
     node::{BlockSpec, TxSelection},
     policy::{Policy, make_inscription, payload_str},
@@ -35,7 +40,7 @@ use crate::{
     writers::{self, Writer, WriterOp},
 };
 
-pub const FINALITY_DEPTH: u64 = 3;
+pub const FINALITY_DEPTH: u64 = 30;
 
 /// A submitted deposit: its tx hash, the op and the channel notes it creates.
 pub type Deposit = (TxHash, DepositOp, Vec<Utxo>);
@@ -66,6 +71,29 @@ pub struct World {
     /// it left from; [`Self::revive`] extends it.
     pub dormant: Option<Dormant>,
     steps: usize,
+    /// The choices of each sequencer started through
+    /// [`Self::start_reference`], by index, for [`Event::Abandon`],
+    /// [`Event::Burst`] and [`Event::Adopt`].
+    choices: Vec<Option<SharedChoices>>,
+    claims: Claims,
+    /// Deposits made through [`Self::deposit`]: op id, the channel notes it
+    /// created, and whether a sequencer pinned them.
+    deposits: Vec<(Hash, Vec<NoteId>, bool)>,
+    /// Checkpoints of sequencers stopped by [`Event::Stop`].
+    stopped: Vec<Option<SequencerCheckpoint>>,
+    /// Payloads published through [`Event::Publish`], [`Event::Burst`]
+    /// bursts set and [`Event::Custom`] txs, for a run's final accounting.
+    pub event_payloads: EventPayloads,
+}
+
+/// What the events of a run put into the channel, for its final check.
+#[derive(Debug, Default)]
+pub struct EventPayloads {
+    /// Published through the handle: expected to finalize exactly once.
+    pub published: Vec<String>,
+    /// Submitted as hand-built txs or pins: not republished by the
+    /// reference consumer, so expected at most once.
+    pub at_most_once: Vec<String>,
 }
 
 /// A branch that lost or never caught up.
@@ -102,6 +130,12 @@ pub fn seq_key(name: &str) -> Ed25519Key {
         FOREIGN_2 => key(5),
         other => panic!("unknown sequencer {other}"),
     }
+}
+
+/// The payload a zone pins deposit `op_id` under.
+#[must_use]
+pub fn pin_payload(op_id: &Hash) -> Inscription {
+    make_inscription(&format!("pin deposit {op_id:?}"))
 }
 
 /// The reference consumer for sequencer `name`, with nothing planned.
@@ -164,6 +198,11 @@ impl World {
             channel_keys: None,
             dormant: None,
             steps: 0,
+            choices: Vec::new(),
+            claims: Claims::default(),
+            deposits: Vec::new(),
+            stopped: Vec::new(),
+            event_payloads: EventPayloads::default(),
         }
     }
 
@@ -292,8 +331,35 @@ impl World {
             .await
     }
 
+    /// Start `name` with the reference consumer publishing `planned`, its
+    /// choices reachable by the events; `depth` bounds its publishes.
+    pub async fn start_reference(
+        &mut self,
+        name: &str,
+        planned: Vec<Inscription>,
+        depth: usize,
+    ) -> usize {
+        let choices = SharedChoices::default();
+        let consumer = ReferenceConsumer::new(&seq_key(name), planned)
+            .with_choices(Arc::clone(&choices), Arc::clone(&self.claims));
+        let config = self.config_with_depth(depth);
+        let index = self
+            .start_as_with(name, seq_key(name), config, Box::new(consumer))
+            .await;
+        if self.choices.len() <= index {
+            self.choices.resize_with(index + 1, || None);
+        }
+        self.choices[index] = Some(choices);
+        index
+    }
+
     pub fn stop(&mut self, index: usize) {
         self.harness.stop(index);
+    }
+
+    /// The choices of the sequencers started with [`Self::start_reference`].
+    pub fn choices(&self) -> impl Iterator<Item = &SharedChoices> {
+        self.choices.iter().flatten()
     }
 
     pub async fn restart(&mut self, index: usize, checkpoint: Option<SequencerCheckpoint>) {
@@ -365,18 +431,33 @@ impl World {
         }
         let keys = VerifiedChannelKeys::try_from(keys).expect("keys");
         self.channel_keys = Some(keys.clone());
-        let ((result, _), _) = self
-            .harness
-            .seq(index)
-            .handle()
-            .channel_config(keys, timeframe.into(), timeout.into(), 1, 1)
-            .await
-            .expect("config accepted");
+        let mut attempts = 0;
+        let result = loop {
+            match self
+                .harness
+                .seq(index)
+                .handle()
+                .channel_config(keys.clone(), timeframe.into(), timeout.into(), 1, 1)
+                .await
+            {
+                Ok(((result, _), _)) => break result,
+                Err(error) => {
+                    // Disconnected for a moment, or a dead config still
+                    // holds the parent until it expires: let blocks pass.
+                    attempts += 1;
+                    let limit = 3 * usize::try_from(FINALITY_DEPTH).expect("fits") + 20;
+                    assert!(attempts < limit, "config kept failing: {error}");
+                    self.step().await;
+                }
+            }
+        };
         self.harness.settle().await;
         result.inscription_id()
     }
 
-    /// Submit a config and step until it is finalized.
+    /// Submit a config and step until it is finalized. A deep reorg can
+    /// kill the config's fee note under it, which the SDK keeps re-posting
+    /// until it expires; the zone then submits the config again.
     pub async fn config_finalized(
         &mut self,
         index: usize,
@@ -384,10 +465,27 @@ impl World {
         timeframe: u32,
         timeout: u32,
     ) -> TxHash {
-        let hash = self.submit_config(index, names, timeframe, timeout).await;
-        self.include(hash).await;
-        self.finalize_tx(hash).await;
-        hash
+        let max_steps = 2 * usize::try_from(FINALITY_DEPTH).expect("fits") + 10;
+        for _ in 0..3 {
+            let hash = self.submit_config(index, names, timeframe, timeout).await;
+            let included = self
+                .step_until(max_steps, |w| w.node().is_included(&hash))
+                .await;
+            // Included is not safe: a reorg to the finality depth can still
+            // take it away with its fee note, and then it is submitted again.
+            let finalized = included
+                && self
+                    .step_until(max_steps, |w| {
+                        w.node().is_tx_finalized(&hash) || !w.node().is_included(&hash)
+                    })
+                    .await
+                && self.node().is_tx_finalized(&hash);
+            if finalized {
+                self.finalize_tx(hash).await;
+                return hash;
+            }
+        }
+        panic!("the config never finalized:\n{}", self.diagnostics());
     }
 
     /// Add an accredited writer named `name` (its key is [`seq_key`]'s)
@@ -700,11 +798,27 @@ impl World {
     pub async fn step(&mut self) {
         let n = self.steps;
         self.steps += 1;
+        let started = std::time::Instant::now();
         self.harness.advance(Self::STEP_DURATION).await;
+        let advanced = started.elapsed();
         match self.chain.step(n) {
             Some(mv) => self.apply(mv).await,
             None => self.partition_step().await,
         }
+        tracing::debug!(
+            step = n,
+            advance_us = advanced.as_micros(),
+            total_us = started.elapsed().as_micros(),
+            blocks = self.node().canonical_chain().len(),
+            unfinalized = self.node().unfinalized_txs().len(),
+            events = self
+                .harness
+                .seqs
+                .iter()
+                .map(|s| s.events.len())
+                .sum::<usize>(),
+            "step timing"
+        );
     }
 
     /// Whether the two nodes of the two-node chain are currently split:
@@ -797,6 +911,17 @@ impl World {
         })
     }
 
+    /// Whether an inscription carrying `payload` is finalized.
+    #[must_use]
+    pub fn is_payload_finalized(&self, payload: &str) -> bool {
+        let channel_id = self.channel_id();
+        self.node().finalized_txs().iter().any(|tx| {
+            lb_zone_sdk::sequencer::channel_inscriptions(tx, channel_id)
+                .iter()
+                .any(|info| payload_str(&info.payload) == payload)
+        })
+    }
+
     /// The inscription payloads sequencer `index` still has pending.
     #[must_use]
     pub fn pending_payloads(&self, index: usize) -> Vec<String> {
@@ -827,14 +952,34 @@ impl World {
         }
     }
 
+    /// Step until `hash` is finalized and every running sequencer has seen
+    /// the LIB that finalized it. Bounded by the finality depth: a chain
+    /// that skips blocks needs more steps than blocks.
     pub async fn finalize_tx(&mut self, hash: TxHash) {
+        let max_steps = 4 * usize::try_from(FINALITY_DEPTH).expect("fits") + 10;
         let done = self
-            .step_until(40, |w| {
+            .step_until(max_steps, |w| {
                 w.resubmit_user_tx(hash);
                 w.node().is_tx_finalized(&hash)
             })
             .await;
         assert!(done, "{hash:?} not finalized:\n{}", self.diagnostics());
+        let caught_up = self
+            .step_until(20, |w| {
+                let lib = w.node().lib();
+                (0..w.harness.seqs.len()).all(|i| {
+                    !w.harness.seqs[i].is_running()
+                        || w.harness.seqs[i]
+                            .checkpoint()
+                            .is_some_and(|cp| cp.lib == lib)
+                })
+            })
+            .await;
+        assert!(
+            caught_up,
+            "a sequencer never saw LIB:\n{}",
+            self.diagnostics()
+        );
     }
 
     /// Step until every hash is finalized.
@@ -1022,6 +1167,8 @@ impl World {
         .await?;
         let hash = Hashable::hash(&tx);
         let notes = txs::recreated_channel_notes(&op, utxos);
+        self.deposits
+            .push((op.op_id(), notes.iter().map(Utxo::id).collect(), false));
         self.user_txs.push(tx.clone());
         self.node().submit(tx);
         self.harness.settle().await;
@@ -1130,15 +1277,236 @@ impl World {
     }
 
     /// Apply one catalogue move: the condition, then the chain's move with
-    /// its posted transactions. During a split only the network itself may
-    /// mine, so the merge stays within what the primary can reorg.
+    /// its posted transactions.
     pub async fn apply(&mut self, mv: Move) {
-        self.apply_condition(mv.condition).await;
-        if self.partitioned() {
-            self.partition_step().await;
+        self.apply_event(Event::Client(mv.condition)).await;
+        self.apply_event(Event::Chain {
+            shape: mv.shape,
+            posted: mv.posted,
+        })
+        .await;
+    }
+
+    /// Apply one event, resolving what the state cannot do the way the
+    /// network would. During a split only the network itself may mine, so
+    /// the merge stays within what the primary can reorg; plain growth on
+    /// two nodes is the chain's own gossip step.
+    pub async fn apply_event(&mut self, event: Event) {
+        match event {
+            Event::Chain { shape, posted } => {
+                if self.partitioned()
+                    || (self.chain.is_partitions() && matches!(shape, Shape::Extend { .. }))
+                {
+                    self.partition_step().await;
+                } else {
+                    self.apply_shape(shape, posted).await;
+                }
+            }
+            Event::Client(condition) => self.apply_condition(condition).await,
+            zone => self.apply_zone_event(zone).await,
+        }
+    }
+
+    /// The zone's side of [`Self::apply_event`]: what a sequencer does.
+    async fn apply_zone_event(&mut self, event: Event) {
+        let running = |w: &Self, index: usize| {
+            index < w.harness.seqs.len() && w.harness.seqs[index].is_running()
+        };
+        match event {
+            Event::Chain { .. } | Event::Client(_) => {}
+            Event::Publish { index, payload } => {
+                if running(self, index) && self.publish(index, &payload).await.is_ok() {
+                    self.event_payloads.published.push(payload);
+                }
+            }
+            Event::Deposit => {
+                if !self.user_utxos.is_empty() {
+                    let utxo = self.user_utxos.remove(0);
+                    let tag = self.deposits.len();
+                    // The user wallet may be out of unreserved fee notes.
+                    drop(self.try_deposit(&[utxo], &format!("deposit {tag}")).await);
+                }
+            }
+            Event::Withdraw {
+                index,
+                amount,
+                unfinalized,
+            } => {
+                if running(self, index) {
+                    let tag = self.steps;
+                    let _ = self
+                        .withdraw(index, amount, unfinalized, &format!("withdraw {tag}"))
+                        .await;
+                }
+            }
+            Event::Pin { index } => self.pin_from(index).await,
+            Event::Config {
+                index,
+                names,
+                timeframe,
+                timeout,
+            } => {
+                // A config that drops a running sequencer strands its queue,
+                // and both rules at zero freeze the turn on the first key for
+                // ever (the Mantle round robin): neither is a config a zone
+                // would submit. Every sequencer stays accredited, and rules
+                // both zero are skipped when there is more than one key.
+                if !running(self, index) {
+                    return;
+                }
+                let mut accredited: Vec<String> =
+                    self.harness.seqs.iter().map(|s| s.name.clone()).collect();
+                for name in names {
+                    if !accredited.contains(&name) {
+                        accredited.push(name);
+                    }
+                }
+                if accredited.len() > 1 && timeframe == 0 && timeout == 0 {
+                    return;
+                }
+                let names: Vec<&str> = accredited.iter().map(String::as_str).collect();
+                let _ = self
+                    .try_submit_config(index, &names, timeframe, timeout)
+                    .await;
+            }
+            Event::Custom { index, payloads } => self.custom_from(index, payloads).await,
+            Event::Abandon { index } => {
+                if let Some(Some(choices)) = self.choices.get(index) {
+                    choices.lock().expect("choices").abandon_next();
+                }
+            }
+            Event::Burst { index, payloads } => {
+                if let Some(Some(choices)) = self.choices.get(index) {
+                    choices
+                        .lock()
+                        .expect("choices")
+                        .burst(payloads.iter().map(|p| make_inscription(p)).collect());
+                }
+            }
+            Event::Adopt { index, on } => {
+                if let Some(Some(choices)) = self.choices.get(index) {
+                    choices.lock().expect("choices").adopt(on);
+                }
+            }
+            Event::Stop { index } => {
+                if running(self, index) {
+                    let checkpoint = self.harness.seqs[index].checkpoint();
+                    if self.stopped.len() <= index {
+                        self.stopped.resize_with(index + 1, || None);
+                    }
+                    self.stopped[index] = checkpoint;
+                    self.stop(index);
+                }
+            }
+            Event::Start { index } => {
+                if index < self.harness.seqs.len()
+                    && !self.harness.seqs[index].is_running()
+                    && let Some(checkpoint) = self.stopped.get(index).cloned().flatten()
+                {
+                    self.restart(index, Some(checkpoint)).await;
+                }
+            }
+        }
+    }
+
+    /// Sequencer `index` pins the first unpinned deposit whose notes its
+    /// wallet holds; nothing without one or when the SDK refuses.
+    async fn pin_from(&mut self, index: usize) {
+        if index >= self.harness.seqs.len() || !self.harness.seqs[index].is_running() {
             return;
         }
-        self.apply_shape(mv.shape, mv.posted).await;
+        let wallet = self.wallet(index);
+        let held = |id: &NoteId| {
+            wallet
+                .finalized
+                .iter()
+                .chain(wallet.unfinalized.iter())
+                .any(|n| n.note_id == *id)
+        };
+        let Some(position) = self
+            .deposits
+            .iter()
+            .position(|(_, ids, pinned)| !pinned && !ids.is_empty() && ids.iter().all(held))
+        else {
+            return;
+        };
+        let (op_id, ids, _) = self.deposits[position].clone();
+        let accepted = self
+            .harness
+            .seq(index)
+            .handle()
+            .publish_pin_deposit(pin_payload(&op_id), ids)
+            .await
+            .is_ok();
+        if accepted {
+            self.deposits[position].2 = true;
+            self.event_payloads
+                .at_most_once
+                .push(payload_str(&pin_payload(&op_id)));
+        }
+        self.harness.settle().await;
+    }
+
+    /// Sequencer `index` builds and submits one tx chaining `payloads` on
+    /// its view's tip; nothing when the SDK refuses the parent.
+    async fn custom_from(&mut self, index: usize, payloads: Vec<String>) {
+        if index >= self.harness.seqs.len() || !self.harness.seqs[index].is_running() {
+            return;
+        }
+        let parent = self.view(index).tip_message;
+        let key = self.harness.seqs[index].key.clone();
+        let inscriptions: Vec<Inscription> = payloads.iter().map(|p| make_inscription(p)).collect();
+        let Ok((signed_tx, msg_id)) = txs::build_funded_custom_tx(
+            self.node(),
+            self.channel_id(),
+            &key,
+            self.funding_pk(),
+            &inscriptions,
+            parent,
+        )
+        .await
+        else {
+            return;
+        };
+        if self
+            .harness
+            .seq(index)
+            .handle()
+            .submit_signed_tx(signed_tx, msg_id)
+            .is_ok()
+        {
+            self.event_payloads.at_most_once.extend(payloads);
+        }
+        self.harness.settle().await;
+    }
+
+    /// Submit a config once; `None` when the SDK refuses it right now.
+    pub async fn try_submit_config(
+        &mut self,
+        index: usize,
+        names: &[&str],
+        timeframe: u32,
+        timeout: u32,
+    ) -> Option<TxHash> {
+        let submitter = self.harness.seqs[index].key.public_key();
+        let mut keys = vec![submitter];
+        for name in names {
+            let key = seq_key(name).public_key();
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+        let keys = VerifiedChannelKeys::try_from(keys).ok()?;
+        let ((result, _), _) = self
+            .harness
+            .seq(index)
+            .handle()
+            .channel_config(keys.clone(), timeframe.into(), timeout.into(), 1, 1)
+            .await
+            .ok()?;
+        self.channel_keys = Some(keys);
+        self.harness.settle().await;
+        Some(result.inscription_id())
     }
 
     pub async fn apply_condition(&mut self, condition: Condition) {

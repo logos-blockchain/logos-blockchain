@@ -4,8 +4,8 @@
 use std::collections::{HashMap, HashSet};
 
 use common::{
-    FOREIGN, World, assert_exactly_once_any_order, filtered, filtered_first_occurrence,
-    inscription, passive, reference, seq_key, strs,
+    FOREIGN, FOREIGN_2, Posted, World, assert_exactly_once_any_order, filtered,
+    filtered_first_occurrence, inscription, passive, reference, seq_key, strs,
 };
 use lb_core::{
     crypto::Hash,
@@ -28,10 +28,11 @@ use lb_zone_sdk::sequencer::{
     FinalizedOp, PendingTx, PreparedChannelConfig, SequencerConfig, WithdrawArg, WithdrawInputs,
 };
 use logos_blockchain_zone_sdk_testing::{
-    chains::{self, Chain},
+    chains::{self, Chain, Shape},
     consumer::ReferenceConsumer,
     for_each_base_condition, for_each_chain,
     harness::RECONNECT_DELAY,
+    layers::Layer,
     node::{BlockSpec, TxSelection},
     policy::payload_str,
     txs, world as common,
@@ -274,16 +275,17 @@ async fn round_robin_queue(chain: Chain, depth: usize, payloads: [&str; 3], unli
 
     world.wait_turn(b).await;
     // The depth bounds what is in flight unmined: with depth two the third
-    // message is posted only once the first two have landed, so it cannot
-    // be on chain yet when the second is; unlimited, all three go at once.
+    // message is posted only once one of the first two has landed, so it
+    // cannot be on chain in the block that lands the first; unlimited, all
+    // three go at once.
     world.include(hashes[0]).await;
-    world.include(hashes[1]).await;
     if !unlimited {
         assert!(
             !world.node().is_included(&hashes[2]),
             "the third message landed before the window drained"
         );
     }
+    world.include(hashes[1]).await;
     world.include(hashes[2]).await;
     assert!(
         world.step_until(60, |w| w.pending_count(b) == 0).await,

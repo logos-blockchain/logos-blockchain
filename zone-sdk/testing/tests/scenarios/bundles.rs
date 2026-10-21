@@ -31,33 +31,61 @@ pub async fn multisig_deposit_lifecycle(chain: Chain) {
     let op_id = lb_core::mantle::ops::OpId::op_id(&op);
     let ids: Vec<NoteId> = channel_notes.iter().map(Utxo::id).collect();
 
-    let pinner = wait_wallet_holds(&mut world, &ids, None).await;
-    let prepared = world
-        .harness
-        .seq(pinner)
-        .handle()
-        .prepare_pin_deposit(pin_payload(&op_id), ids)
-        .await
-        .expect("pin prepared");
-    let pin = submit_bundle(&mut world, pinner, prepared, &["SEQ_A", "SEQ_B"]).await;
-    world.include(pin).await;
+    // A reorg to the finality depth can take the deposit's notes away for
+    // a few blocks, and the SDK sheds a bundle whose inputs are gone; the
+    // zone then runs the round again once the notes are back.
+    let pin = payload_str(&pin_payload(&op_id));
+    let pinned = land_bundle(
+        &mut world,
+        &pin,
+        |world, index| {
+            let ids = ids.clone();
+            Box::pin(async move {
+                let prepared = world
+                    .harness
+                    .seq(index)
+                    .handle()
+                    .prepare_pin_deposit(pin_payload(&op_id), ids)
+                    .await
+                    .expect("pin prepared");
+                submit_bundle(world, index, prepared, &["SEQ_A", "SEQ_B"]).await;
+            })
+        },
+        Some(&ids),
+    )
+    .await;
+    assert!(pinned, "the pin never landed:\n{}", world.diagnostics());
 
-    let withdrawer = wait_wallet_holds(&mut world, &[], None).await;
-    let prepared = world
-        .harness
-        .seq(withdrawer)
-        .handle()
-        .prepare_atomic_withdraw(
-            withdraw_payload(&op_id),
-            vec![WithdrawArg {
-                outputs: Outputs::new([Note::new(3, recipient)]),
-            }],
-            WithdrawInputs::Auto,
-        )
-        .await
-        .expect("withdraw prepared");
-    let withdraw = submit_bundle(&mut world, withdrawer, prepared, &["SEQ_B", "SEQ_C"]).await;
-    world.include(withdraw).await;
+    let withdraw = payload_str(&withdraw_payload(&op_id));
+    let withdrawn = land_bundle(
+        &mut world,
+        &withdraw,
+        |world, index| {
+            Box::pin(async move {
+                let prepared = world
+                    .harness
+                    .seq(index)
+                    .handle()
+                    .prepare_atomic_withdraw(
+                        withdraw_payload(&op_id),
+                        vec![WithdrawArg {
+                            outputs: Outputs::new([Note::new(3, recipient)]),
+                        }],
+                        WithdrawInputs::Auto,
+                    )
+                    .await
+                    .expect("withdraw prepared");
+                submit_bundle(world, index, prepared, &["SEQ_B", "SEQ_C"]).await;
+            })
+        },
+        None,
+    )
+    .await;
+    assert!(
+        withdrawn,
+        "the withdraw never landed:\n{}",
+        world.diagnostics()
+    );
     world.settle_chain(400).await;
 
     let payloads = world.indexer_payloads().await;
@@ -134,12 +162,17 @@ pub async fn custom_multi_inscription(chain: Chain) {
             )
             .await
             .expect("custom tx built");
-            world
+            // The SDK may still be re-posting the previous tx on this
+            // parent; then this round waits.
+            if world
                 .harness
                 .seq(*index)
                 .handle()
                 .submit_signed_tx(signed_tx, msg_id)
-                .expect("custom tx submitted");
+                .is_err()
+            {
+                continue;
+            }
             parents.insert(*index, msg_id);
             submitted = true;
         }
@@ -165,3 +198,43 @@ pub async fn custom_multi_inscription(chain: Chain) {
     world.finish();
 }
 scenario!(s22_custom_multi_inscription, custom_multi_inscription);
+
+/// Run `submit` from the sequencer whose wallet holds `notes` (any running
+/// one when empty) until the bundle carrying `payload` is finalized: again
+/// whenever a reorg took the previous attempt away and the SDK shed it.
+/// `false` when it never finalized.
+async fn land_bundle(
+    world: &mut World,
+    payload: &str,
+    submit: impl for<'a> Fn(
+        &'a mut World,
+        usize,
+    ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
+    notes: Option<&[NoteId]>,
+) -> bool {
+    let max_steps = 3 * usize::try_from(common::FINALITY_DEPTH).expect("fits") + 10;
+    // Only the sequencer that signed the bundle can land it again; the
+    // others mirror it and re-post it, which the node refuses out of turn.
+    let mut submitter = None;
+    for _ in 0..4 {
+        if world.is_payload_finalized(payload) {
+            return true;
+        }
+        let held = submitter
+            .is_some_and(|i: usize| world.pending_payloads(i).contains(&payload.to_owned()));
+        if !world.is_payload_included(payload) && !held {
+            let index = wait_wallet_holds(world, notes.unwrap_or(&[]), None).await;
+            submit(world, index).await;
+            submitter = Some(index);
+        }
+        let index = submitter.expect("submitted");
+        let _ = world
+            .step_until(max_steps, |w| {
+                w.is_payload_finalized(payload)
+                    || (!w.is_payload_included(payload)
+                        && !w.pending_payloads(index).contains(&payload.to_owned()))
+            })
+            .await;
+    }
+    world.is_payload_finalized(payload)
+}

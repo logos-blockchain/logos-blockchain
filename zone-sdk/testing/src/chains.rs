@@ -8,7 +8,10 @@
 
 use std::borrow::Cow;
 
-use crate::world::Posted;
+use crate::world::{FINALITY_DEPTH, Posted};
+
+/// The finality depth as a fork depth.
+const K: usize = FINALITY_DEPTH as usize;
 
 /// How the chain moves in one step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,7 +168,7 @@ pub fn base_conditions() -> Vec<(&'static str, Move)> {
         ("reversed_posted", block(Posted::Reversed, Condition::Quiet)),
         ("nothing_posted", block(Posted::None, Condition::Quiet)),
         ("shallow_fork", fork(1, 2)),
-        ("deep_fork", fork(3, 4)),
+        ("deep_fork", fork(K, K + 1)),
         ("fork_tie", fork(1, 1)),
         ("dormant_fork", fork(2, 1)),
         (
@@ -207,11 +210,11 @@ pub fn base_conditions() -> Vec<(&'static str, Move)> {
 }
 
 /// The ordered pair of base conditions `first` and `second`, two blocks
-/// apart, with room to finalize after.
+/// apart, with a finality depth of plain blocks after.
 ///
 /// The second tier of the catalogue, where order matters. A frozen LIB is
-/// thawed and a price move undone before the cycle repeats, so the chain
-/// can settle.
+/// thawed and a price move undone before the cycle repeats, and the plain
+/// blocks let what the pair moved finalize, so the chain can settle.
 #[must_use]
 pub fn pair(first: &str, second: &str) -> Chain {
     let base = base_conditions();
@@ -222,20 +225,20 @@ pub fn pair(first: &str, second: &str) -> Chain {
     };
     let (first_move, second_move) = (find(first), find(second));
     let thaw = mv(Shape::ThawLib, Posted::All, Condition::Quiet);
+    let mut moves = vec![
+        BLOCK,
+        BLOCK,
+        first_move,
+        BLOCK,
+        second_move,
+        BLOCK,
+        thaw,
+        price(1),
+    ];
+    moves.extend(std::iter::repeat_n(BLOCK, K));
     Chain {
         name: Cow::Owned(format!("{first}_then_{second}")),
-        kind: Kind::Pattern(Cow::Owned(vec![
-            BLOCK,
-            BLOCK,
-            first_move,
-            BLOCK,
-            second_move,
-            BLOCK,
-            BLOCK,
-            thaw,
-            price(1),
-            BLOCK,
-        ])),
+        kind: Kind::Pattern(Cow::Owned(moves)),
         expect: Expect::Nothing,
     }
 }
@@ -335,12 +338,21 @@ pub const fn shallow_forks() -> Chain {
     pattern("shallow_forks", &MOVES, Expect::Reorg)
 }
 
-/// Every seventh step a branch from the last finalized block overtakes the
-/// tip, orphaning `FINALITY_DEPTH` blocks at once.
+/// A branch from the last finalized block overtakes the tip, orphaning
+/// `FINALITY_DEPTH` blocks at once.
+///
+/// The chain then runs a finality depth of plain blocks: a reorg that deep
+/// is a rare event, and nothing finalizes between two of them otherwise.
 #[must_use]
-pub const fn deep_forks() -> Chain {
-    const MOVES: [Move; 7] = [BLOCK, BLOCK, BLOCK, BLOCK, fork(3, 4), BLOCK, BLOCK];
-    pattern("deep_forks", &MOVES, Expect::DeepReorg)
+pub fn deep_forks() -> Chain {
+    let mut moves = vec![BLOCK; K + 4];
+    moves.push(fork(K, K + 1));
+    moves.extend([BLOCK, BLOCK]);
+    Chain {
+        name: Cow::Borrowed("deep_forks"),
+        kind: Kind::Pattern(Cow::Owned(moves)),
+        expect: Expect::DeepReorg,
+    }
 }
 
 /// Every fifth step a competing block of the same height takes the mempool

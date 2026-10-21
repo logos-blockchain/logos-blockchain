@@ -157,19 +157,30 @@ pub async fn finalized_withdraw(chain: Chain) {
     world.finalize_tx(hash).await;
 
     let user_pk = world.user_pk();
-    let (result, _) = world
-        .harness
-        .seq(a)
-        .handle()
-        .publish_atomic_withdraw(
-            inscription("Burn 2"),
-            vec![WithdrawArg {
-                outputs: Outputs::new([Note::new(2, user_pk)]),
-            }],
-            WithdrawInputs::Auto,
-        )
-        .await
-        .expect("withdraw accepted");
+    // A failed fetch disconnects the sequencer for a moment; the zone retries.
+    let mut attempts = 0;
+    let result = loop {
+        match world
+            .harness
+            .seq(a)
+            .handle()
+            .publish_atomic_withdraw(
+                inscription("Burn 2"),
+                vec![WithdrawArg {
+                    outputs: Outputs::new([Note::new(2, user_pk)]),
+                }],
+                WithdrawInputs::Auto,
+            )
+            .await
+        {
+            Ok((result, _)) => break result,
+            Err(error) => {
+                attempts += 1;
+                assert!(attempts < 20, "withdraw kept failing: {error}");
+                world.harness.advance(RECONNECT_DELAY).await;
+            }
+        }
+    };
     world.harness.settle().await;
     let PendingTx::AtomicWithdraw(info) = &result.tx else {
         panic!("expected an atomic withdraw, got {:?}", result.tx);

@@ -211,7 +211,7 @@ impl Harness {
             node,
             sequencer: Some(sequencer),
             policy,
-            checker: ViewChecker::default(),
+            checker: ViewChecker::new(self.channel_id),
             mirror: Mirror::default(),
             oracles: Oracles::default(),
             events: Vec::new(),
@@ -313,7 +313,7 @@ impl Harness {
             seq.config.clone(),
             checkpoint,
         ));
-        seq.checker = ViewChecker::default();
+        seq.checker = ViewChecker::new(self.channel_id);
         self.settle_until_ready(index).await;
     }
 
@@ -482,7 +482,8 @@ pub async fn replay_finalized(node: SimNode, channel_id: ChannelId) -> Vec<Final
     let mut idle_rounds = 0;
     // A fetch the node fails sends the reader through a reconnect delay,
     // so idle polls let that delay pass.
-    while idle_rounds < 10 {
+    // A chain that fails fetches makes the reader reconnect several times.
+    while idle_rounds < 60 {
         match poll_event(&mut reader).await {
             Some(Event::Ready) => return finalized,
             Some(Event::BlocksProcessed {
