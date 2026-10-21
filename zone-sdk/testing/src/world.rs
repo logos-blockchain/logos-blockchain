@@ -26,6 +26,7 @@ use num_bigint::BigUint;
 pub use crate::harness::passive;
 use crate::{
     Harness, SimNode,
+    chains::{Chain, Condition, Expect, Move, Shape},
     consumer::ReferenceConsumer,
     harness::{self, RECONNECT_DELAY, funding_config, key},
     node::{BlockSpec, TxSelection},
@@ -33,31 +34,6 @@ use crate::{
     txs::{self, TxError},
     writers::{self, Writer, WriterOp},
 };
-
-/// How the simulated network behaves between the scenario's steps.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Network {
-    /// One block per step, every posted transaction included at once.
-    Linear,
-    /// Every seventh step first mines a competing block on the parent, then
-    /// builds on the fork so the previous tip block is orphaned and its
-    /// transactions return to the mempool.
-    ShallowForks,
-    /// Every seventh step forks from the last finalized block and overtakes
-    /// the tip, orphaning `FINALITY_DEPTH` blocks at once; their transactions
-    /// return to the mempool.
-    DeepForks,
-    /// Every seventh step closes the block streams before mining so the
-    /// sequencers reconnect and catch up.
-    StreamDrops,
-    /// Every fifth block is empty, so transactions wait a block.
-    DelayedInclusion,
-    /// Two nodes that gossip transactions and blocks; every other sequencer
-    /// talks to the peer. Every eleventh step the nodes split for three
-    /// steps, each mining its own branch, and the peer's longer branch wins
-    /// the merge so the primary reorgs onto blocks it never produced.
-    Partitions,
-}
 
 pub const FINALITY_DEPTH: u64 = 3;
 
@@ -70,11 +46,14 @@ pub const USER_FEE_NOTE_VALUE: u64 = 1_000_000;
 
 pub struct World {
     pub harness: Harness,
-    /// The second node of [`Network::Partitions`].
+    /// The second node of the two-node chain.
     pub peer: Option<SimNode>,
-    pub network: Network,
+    pub chain: Chain,
     pub user_key: ZkKey,
     pub user_utxos: Vec<Utxo>,
+    /// Transactions the user submitted; re-submitted while waiting for one
+    /// the node evicted, like a user retrying.
+    user_txs: Vec<SignedOps<Unverified, StandardMode>>,
     /// Accredited sequencers no [`Harness`] runs; see
     /// [`Self::enable_foreign_traffic`].
     pub writers: Vec<Writer>,
@@ -103,7 +82,7 @@ pub enum Posted {
     All,
     /// None.
     None,
-    /// Every other one.
+    /// The first half, in posting order, like a leader short of space.
     Half,
     /// All of them, in reverse order, like a leader ordering differently.
     Reversed,
@@ -134,18 +113,18 @@ pub fn reference(name: &str) -> Box<dyn Policy> {
 impl World {
     /// A node with a funded funding wallet and one mined block, no sequencers.
     #[must_use]
-    pub fn new(network: Network) -> Self {
-        Self::with_funding(network, 30, 1000)
+    pub fn new(chain: Chain) -> Self {
+        Self::with_funding(chain, 30, 1000)
     }
 
     #[must_use]
-    pub fn with_funding(network: Network, notes: usize, value: u64) -> Self {
-        Self::with_funding_values(network, &vec![value; notes])
+    pub fn with_funding(chain: Chain, notes: usize, value: u64) -> Self {
+        Self::with_funding_values(chain, &vec![value; notes])
     }
 
     /// A node whose funding wallet holds exactly these notes.
     #[must_use]
-    pub fn with_funding_values(network: Network, values: &[u64]) -> Self {
+    pub fn with_funding_values(chain: Chain, values: &[u64]) -> Self {
         harness::init_tracing();
         let node = SimNode::new(FINALITY_DEPTH);
         let funding_key = ZkKey::from(BigUint::from(7u64));
@@ -160,7 +139,7 @@ impl World {
             let _ = node.mint(USER_FEE_NOTE_VALUE, user_key.to_public_key());
         }
         let _ = node.mine();
-        let peer = (network == Network::Partitions).then(|| {
+        let peer = chain.is_partitions().then(|| {
             let peer = SimNode::new(FINALITY_DEPTH);
             let _ = peer.import_from(&node);
             let peer_key = ZkKey::from(BigUint::from(8u64));
@@ -176,9 +155,10 @@ impl World {
         Self {
             harness: Harness::new(node, channel_id),
             peer,
-            network,
+            chain,
             user_key,
             user_utxos: Vec::new(),
+            user_txs: Vec::new(),
             writers: Vec::new(),
             foreign_budget: 0,
             channel_keys: None,
@@ -230,7 +210,7 @@ impl World {
     }
 
     /// The node the next started sequencer talks to: the peer for every
-    /// other sequencer under [`Network::Partitions`].
+    /// other sequencer on the two-node chain.
     #[must_use]
     pub fn next_node(&self) -> SimNode {
         match &self.peer {
@@ -473,6 +453,16 @@ impl World {
             }) {
                 return vec![orphan];
             }
+            let mut priced = ledger.clone();
+            priced.set_gas_prices(prices.clone());
+            if let Some(rebuilt) = writer
+                .rebuild(node, &priced, channel_id, funding_pk, slot.into(), |tx| {
+                    node.is_included_at(parent, &tx.hash())
+                })
+                .await
+            {
+                return vec![rebuilt];
+            }
             if *budget == 0 {
                 return Vec::new();
             }
@@ -513,7 +503,10 @@ impl World {
         match posted {
             Posted::All => TxSelection::Mempool,
             Posted::None => TxSelection::None,
-            Posted::Half => TxSelection::Only(hashes.into_iter().step_by(2).collect()),
+            Posted::Half => {
+                let half = hashes.len().div_ceil(2);
+                TxSelection::Only(hashes.into_iter().take(half).collect())
+            }
             Posted::Reversed => TxSelection::Ordered(hashes.into_iter().rev().collect()),
         }
     }
@@ -701,50 +694,20 @@ impl World {
     /// multiple phase-locks a timer that only acts inside a turn window.
     pub const STEP_DURATION: Duration = Duration::from_millis(1100);
 
-    /// Advance the network by one step according to its behaviour. Each step
-    /// also advances the paused clock by [`Self::STEP_DURATION`] so the SDK's
+    /// Advance the chain by one step of the catalogue entry. Each step also
+    /// advances the paused clock by [`Self::STEP_DURATION`] so the SDK's
     /// periodic timers fire at the cadence they would on a live node.
     pub async fn step(&mut self) {
+        let n = self.steps;
         self.steps += 1;
         self.harness.advance(Self::STEP_DURATION).await;
-        let node = self.node().clone();
-        match self.network {
-            Network::Linear => self.mine_on(&node).await,
-            Network::ShallowForks => {
-                if self.steps % 7 == 3 && node.canonical_chain().len() > 2 {
-                    self.fork(1).await;
-                } else {
-                    self.mine_on(&node).await;
-                }
-            }
-            Network::DeepForks => {
-                let depth = usize::try_from(FINALITY_DEPTH).expect("fits");
-                if self.steps % 7 == 5 && node.canonical_chain().len() > depth + 1 {
-                    self.fork(depth).await;
-                } else {
-                    self.mine_on(&node).await;
-                }
-            }
-            Network::StreamDrops => {
-                if self.steps % 7 == 2 {
-                    node.drop_streams();
-                    self.harness.settle().await;
-                    self.harness.advance(RECONNECT_DELAY).await;
-                }
-                self.mine_on(&node).await;
-            }
-            Network::DelayedInclusion => {
-                if self.steps % 5 == 2 {
-                    self.harness.mine_empty().await;
-                } else {
-                    self.mine_on(&node).await;
-                }
-            }
-            Network::Partitions => self.partition_step().await,
+        match self.chain.step(n) {
+            Some(mv) => self.apply(mv).await,
+            None => self.partition_step().await,
         }
     }
 
-    /// Whether the two nodes of [`Network::Partitions`] are currently split:
+    /// Whether the two nodes of the two-node chain are currently split:
     /// extra blocks mined now would widen the divergence past what the
     /// merge can reorg.
     #[must_use]
@@ -752,10 +715,10 @@ impl World {
         self.peer.is_some() && matches!(self.steps % 11, 4 | 5)
     }
 
-    /// One step of [`Network::Partitions`]: gossip and mine on one node, the
+    /// One step of the two-node chain: gossip and mine on one node, the
     /// other imports; during the split both mine alone and the peer gets one
     /// block ahead, so the merge reorgs the primary.
-    async fn partition_step(&mut self) {
+    pub(crate) async fn partition_step(&mut self) {
         let primary = self.node().clone();
         let peer = self.peer.clone().expect("partition network has a peer");
         match self.steps % 11 {
@@ -814,14 +777,62 @@ impl World {
     /// Step until `hash` is on the canonical chain, at most `max_steps` times.
     pub async fn include_within(&mut self, hash: TxHash, max_steps: usize) {
         let done = self
-            .step_until(max_steps, |w| w.node().is_included(&hash))
+            .step_until(max_steps, |w| {
+                w.resubmit_user_tx(hash);
+                w.node().is_included(&hash)
+            })
             .await;
         assert!(done, "{hash:?} not included:\n{}", self.diagnostics());
     }
 
+    /// Whether an inscription carrying `payload` is on the canonical chain:
+    /// what a story waits for when a re-fund may change the tx hash.
+    #[must_use]
+    pub fn is_payload_included(&self, payload: &str) -> bool {
+        let channel_id = self.channel_id();
+        self.node().canonical_txs().iter().any(|tx| {
+            lb_zone_sdk::sequencer::channel_inscriptions(tx, channel_id)
+                .iter()
+                .any(|info| payload_str(&info.payload) == payload)
+        })
+    }
+
+    /// The inscription payloads sequencer `index` still has pending.
+    #[must_use]
+    pub fn pending_payloads(&self, index: usize) -> Vec<String> {
+        let channel_id = self.channel_id();
+        self.harness.seqs[index]
+            .checkpoint()
+            .map(|cp| {
+                cp.pending_txs
+                    .iter()
+                    .flat_map(|(_, tx)| {
+                        lb_zone_sdk::sequencer::channel_inscriptions(tx, channel_id)
+                            .into_iter()
+                            .map(|info| payload_str(&info.payload))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Put a user's transaction the node evicted back into the mempool.
+    fn resubmit_user_tx(&self, hash: TxHash) {
+        let Some(tx) = self.user_txs.iter().find(|tx| tx.hash() == hash) else {
+            return;
+        };
+        let node = self.node();
+        if !node.is_included(&hash) && !node.mempool().iter().any(|t| t.hash() == hash) {
+            node.submit(tx.clone());
+        }
+    }
+
     pub async fn finalize_tx(&mut self, hash: TxHash) {
         let done = self
-            .step_until(40, |w| w.node().is_tx_finalized(&hash))
+            .step_until(40, |w| {
+                w.resubmit_user_tx(hash);
+                w.node().is_tx_finalized(&hash)
+            })
             .await;
         assert!(done, "{hash:?} not finalized:\n{}", self.diagnostics());
     }
@@ -968,6 +979,10 @@ impl World {
             .publish(make_inscription(payload))
             .await
             .map(|(result, _)| result);
+        if let Ok(result) = &result {
+            self.harness
+                .published(index, result.tx.inscription().this_msg);
+        }
         self.harness.settle().await;
         result
     }
@@ -1007,9 +1022,19 @@ impl World {
         .await?;
         let hash = Hashable::hash(&tx);
         let notes = txs::recreated_channel_notes(&op, utxos);
+        self.user_txs.push(tx.clone());
         self.node().submit(tx);
         self.harness.settle().await;
         Ok((hash, op, notes))
+    }
+
+    /// Set the gas prices on every node, in force from the next block.
+    pub fn set_gas_prices(&self, price: u64) {
+        let prices = lb_core::mantle::transactions::GasPrices::new(price, price);
+        self.node().set_gas_prices(prices.clone());
+        if let Some(peer) = &self.peer {
+            peer.set_gas_prices(prices);
+        }
     }
 
     /// Finalized channel notes of sequencer `index` covering `amount`,
@@ -1104,17 +1129,126 @@ impl World {
         panic!("publish of {payload} kept failing:\n{}", self.diagnostics());
     }
 
-    /// End-of-scenario checks: the view contract held everywhere and the
-    /// network behaviour actually happened.
-    pub fn finish(&self) {
-        self.harness.assert_layers();
-        if self.steps < 7 {
+    /// Apply one catalogue move: the condition, then the chain's move with
+    /// its posted transactions. During a split only the network itself may
+    /// mine, so the merge stays within what the primary can reorg.
+    pub async fn apply(&mut self, mv: Move) {
+        self.apply_condition(mv.condition).await;
+        if self.partitioned() {
+            self.partition_step().await;
             return;
         }
-        match self.network {
-            Network::Linear | Network::DelayedInclusion => {}
-            Network::ShallowForks => assert!(self.node().reorgs() > 0, "no reorg happened"),
-            Network::Partitions => {
+        self.apply_shape(mv.shape, mv.posted).await;
+    }
+
+    pub async fn apply_condition(&mut self, condition: Condition) {
+        match condition {
+            Condition::Quiet => {}
+            Condition::Drop => {
+                self.node().drop_streams();
+                if let Some(peer) = &self.peer {
+                    peer.drop_streams();
+                }
+                self.harness.settle().await;
+                self.harness.advance(RECONNECT_DELAY).await;
+            }
+            Condition::NodeDown => {
+                self.node().node_down();
+                self.harness.settle().await;
+                self.harness.advance(Self::STEP_DURATION).await;
+                self.node().node_up();
+                self.harness.advance(RECONNECT_DELAY).await;
+            }
+            Condition::Restart { index, fresh } => {
+                if index < self.harness.seqs.len() && self.harness.seqs[index].is_running() {
+                    // A fresh start forgets pending publishes; the zone would
+                    // re-plan them, which a chain does not model.
+                    let checkpoint = if fresh && self.own_pending(index).is_empty() {
+                        None
+                    } else {
+                        self.harness.seqs[index].checkpoint()
+                    };
+                    self.restart(index, checkpoint).await;
+                }
+            }
+            Condition::FetchFail { count } => self.node().fail_next_fetches(count),
+            Condition::GasPrice { price } => self.set_gas_prices(price),
+        }
+    }
+
+    pub async fn apply_shape(&mut self, shape: Shape, posted: Posted) {
+        let node = self.node().clone();
+        match shape {
+            Shape::Extend { gap } => {
+                let _ = self.extend(gap, posted).await;
+            }
+            Shape::Fork { depth, length } => {
+                if node.canonical_chain().len() <= depth + 1 {
+                    let _ = self.extend(1, posted).await;
+                } else {
+                    let _ = self.fork_with(depth, length, posted).await;
+                }
+            }
+            Shape::Revive { blocks } => {
+                if !self.revive(blocks, posted).await {
+                    let _ = self.extend(1, posted).await;
+                }
+            }
+            Shape::Lagging { silent } => self.lagging(silent, posted).await,
+            Shape::SplitTip => self.split_tip(posted).await,
+            Shape::Duplicate => {
+                node.reannounce(node.tip());
+                self.harness.settle().await;
+            }
+            // LIB only moves with a block on a live node, so both come with
+            // one: the event that carries the new LIB.
+            Shape::FreezeLib => {
+                node.freeze_lib();
+                if let Some(peer) = &self.peer {
+                    peer.freeze_lib();
+                }
+                let _ = self.extend(1, posted).await;
+            }
+            Shape::ThawLib => {
+                node.thaw_lib();
+                if let Some(peer) = &self.peer {
+                    peer.thaw_lib();
+                }
+                let _ = self.extend(1, posted).await;
+            }
+            Shape::Prune => {
+                let _ = node.prune_forks();
+            }
+        }
+    }
+
+    /// End-of-story checks: every layer held everywhere and the chain did
+    /// what its catalogue entry promises.
+    pub fn finish(&self) {
+        self.harness.assert_layers();
+        if self.steps < self.chain.steps_to_expect() {
+            return;
+        }
+        match self.chain.expect {
+            Expect::Nothing => {}
+            Expect::Reorg => assert!(self.node().reorgs() > 0, "no reorg happened"),
+            Expect::DeepReorg => assert!(
+                self.node().deepest_reorg() >= usize::try_from(FINALITY_DEPTH).expect("fits"),
+                "no reorg reached the finality depth (deepest {})",
+                self.node().deepest_reorg()
+            ),
+            Expect::Reconnect => {
+                assert!(self.node().stream_drops() > 0, "no stream drop happened");
+                let reconnected = self.harness.seqs.iter().any(|s| {
+                    s.events
+                        .iter()
+                        .filter(|e| matches!(e, lb_zone_sdk::sequencer::Event::Ready))
+                        .count()
+                        > 1
+                });
+                assert!(reconnected, "no sequencer re-emitted Ready after a drop");
+            }
+            Expect::Merge => {
                 let peer = self.peer.as_ref().expect("peer");
                 assert!(
                     self.node().deepest_reorg() >= 2,
@@ -1129,22 +1263,6 @@ impl World {
                         || posted.iter().any(|tx| self.node().is_included(&tx.hash())),
                     "nothing posted through the peer reached the primary's chain"
                 );
-            }
-            Network::DeepForks => assert!(
-                self.node().deepest_reorg() >= usize::try_from(FINALITY_DEPTH).expect("fits"),
-                "no reorg reached the finality depth (deepest {})",
-                self.node().deepest_reorg()
-            ),
-            Network::StreamDrops => {
-                assert!(self.node().stream_drops() > 0, "no stream drop happened");
-                let reconnected = self.harness.seqs.iter().any(|s| {
-                    s.events
-                        .iter()
-                        .filter(|e| matches!(e, lb_zone_sdk::sequencer::Event::Ready))
-                        .count()
-                        > 1
-                });
-                assert!(reconnected, "no sequencer re-emitted Ready after a drop");
             }
         }
     }

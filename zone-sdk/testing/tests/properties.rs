@@ -12,26 +12,25 @@
 //!
 //! The vocabulary is drawn one layer at a time, so a rung of the ladder
 //! that fails names what the SDK gets wrong: only other writers'
-//! inscriptions on a moving chain; plus the sequencers' own messages; plus
-//! config changes and posting rules; plus deposits, withdraws and note
-//! transfers; plus restarts, outages and price moves.
+//! inscriptions on a moving chain; plus the sequencers' own messages and
+//! the choices a zone makes about them (abandon an orphan, burst-publish in
+//! turn, adopt another sequencer's orphans); plus config changes and
+//! posting rules; plus deposits, withdraws and note transfers; plus
+//! restarts, outages and price moves.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
-use common::{
-    FINALITY_DEPTH, FOREIGN, FOREIGN_2, Network, Posted, World, inscription, passive, seq_key,
-};
-use lb_core::mantle::transactions::GasPrices;
-use lb_zone_sdk::sequencer::FinalizedOp;
+use common::{FINALITY_DEPTH, FOREIGN, FOREIGN_2, Posted, World, inscription, passive, seq_key};
+use lb_zone_sdk::sequencer::{FinalizedOp, FinalizedTx};
 use logos_blockchain_zone_sdk_testing::{
-    consumer::ReferenceConsumer,
-    harness::RECONNECT_DELAY,
+    chains::{self, Chain, Condition, Shape},
+    consumer::{Claims, ReferenceConsumer, SharedChoices},
     layers::Layer,
     policy::payload_str,
     world as common,
     writers::{OP_CYCLE, WriterOp},
 };
-use proptest::prelude::*;
+use proptest::{prelude::*, strategy::Union};
 
 /// Gas prices every run starts at; large enough that a percent rise is a
 /// different integer price.
@@ -42,32 +41,6 @@ const BASE_GAS_PRICE: u64 = 100;
 const MAX_GAS_RISE_PERCENT: u64 = 10;
 /// Funding notes cover one atomic bundle at the highest price.
 const FUNDING_NOTE_VALUE: u64 = 500_000;
-
-/// How the chain moves in one step.
-#[derive(Clone, Copy, Debug)]
-enum Shape {
-    /// One block on the tip, `gap` slots later; a gap above one leaves
-    /// empty slots.
-    Extend { gap: u64 },
-    /// A branch from `depth` blocks below the tip with `length` blocks:
-    /// longer than `depth` it wins, equal it ties and loses, shorter it
-    /// stays dormant.
-    Fork { depth: usize, length: usize },
-    /// Extend the dormant branch by `blocks`, maybe overtaking the tip.
-    Revive { blocks: usize },
-    /// `silent` blocks the node never announces, then one it does.
-    Lagging { silent: usize },
-    /// The tip moves silently and a competing block is announced instead.
-    SplitTip,
-    /// The tip's event delivered again.
-    Duplicate,
-    /// LIB stops advancing, as under the bootstrap fork-choice rule.
-    FreezeLib,
-    /// LIB catches up with the tip at once.
-    ThawLib,
-    /// Forks below LIB are forgotten; their blocks can no longer be fetched.
-    Prune,
-}
 
 /// What happens on the client's side of the step.
 #[derive(Clone, Copy, Debug)]
@@ -103,6 +76,23 @@ enum Client {
     Withdraw {
         index: usize,
         amount: u64,
+    },
+    /// Sequencer `index` lets its next orphan die instead of republishing
+    /// it.
+    Abandon {
+        index: usize,
+    },
+    /// Sequencer `index` publishes `count` fresh payloads at once on its
+    /// next turn.
+    Burst {
+        index: usize,
+        count: usize,
+    },
+    /// Sequencer `index` starts or stops republishing other sequencers'
+    /// orphans.
+    Adopt {
+        index: usize,
+        on: bool,
     },
 }
 
@@ -142,19 +132,64 @@ fn posted() -> impl Strategy<Value = Posted> {
 /// The client conditions the `top` layer admits: note moves from
 /// [`Layer::Notes`], outages and price moves from [`Layer::Restarts`].
 fn client(top: Layer) -> impl Strategy<Value = Client> {
+    let lineage = u32::from(top >= Layer::Lineage);
     let notes = u32::from(top >= Layer::Notes);
     let restarts = u32::from(top >= Layer::Restarts);
-    prop_oneof![
-        10 => Just(Client::Quiet),
-        restarts => Just(Client::Drop),
-        restarts => Just(Client::NodeDown),
-        restarts => (0..3usize, prop::bool::weighted(0.25))
-            .prop_map(|(index, fresh)| Client::Restart { index, fresh }),
-        restarts => (1..=2usize).prop_map(|count| Client::FetchFail { count }),
-        restarts => (0..=MAX_GAS_RISE_PERCENT).prop_map(|percent| Client::GasPrice { percent }),
-        2 * notes => (1..=3u64).prop_map(|value| Client::Deposit { value }),
-        2 * notes => (0..3usize, 1..=3u64).prop_map(|(index, amount)| Client::Withdraw { index, amount }),
-    ]
+    let arms: Vec<(u32, BoxedStrategy<Client>)> = vec![
+        (10, Just(Client::Quiet).boxed()),
+        (
+            lineage,
+            (0..3usize)
+                .prop_map(|index| Client::Abandon { index })
+                .boxed(),
+        ),
+        (
+            lineage,
+            (0..3usize, 1..=3usize)
+                .prop_map(|(index, count)| Client::Burst { index, count })
+                .boxed(),
+        ),
+        (
+            lineage,
+            (0..3usize, prop::bool::ANY)
+                .prop_map(|(index, on)| Client::Adopt { index, on })
+                .boxed(),
+        ),
+        (restarts, Just(Client::Drop).boxed()),
+        (restarts, Just(Client::NodeDown).boxed()),
+        (
+            restarts,
+            (0..3usize, prop::bool::weighted(0.25))
+                .prop_map(|(index, fresh)| Client::Restart { index, fresh })
+                .boxed(),
+        ),
+        (
+            restarts,
+            (1..=2usize)
+                .prop_map(|count| Client::FetchFail { count })
+                .boxed(),
+        ),
+        (
+            restarts,
+            (0..=MAX_GAS_RISE_PERCENT)
+                .prop_map(|percent| Client::GasPrice { percent })
+                .boxed(),
+        ),
+        (
+            2 * notes,
+            (1..=3u64)
+                .prop_map(|value| Client::Deposit { value })
+                .boxed(),
+        ),
+        (
+            2 * notes,
+            (0..3usize, 1..=3u64)
+                .prop_map(|(index, amount)| Client::Withdraw { index, amount })
+                .boxed(),
+        ),
+    ];
+    // A union rejects a zero weight: the layers below `top` draw nothing.
+    Union::new_weighted(arms.into_iter().filter(|(weight, _)| *weight > 0).collect())
 }
 
 fn step(top: Layer) -> impl Strategy<Value = Step> {
@@ -169,7 +204,7 @@ fn step(top: Layer) -> impl Strategy<Value = Step> {
 struct Scenario {
     /// The highest layer the schedule draws from.
     top: Layer,
-    network: Network,
+    chain: Chain,
     sequencers: usize,
     writers: usize,
     messages: usize,
@@ -222,13 +257,13 @@ fn scenario(top: Layer, known_issues: bool) -> impl Strategy<Value = Scenario> {
         0..=0usize
     };
     (
-        prop_oneof![3 => Just(Network::Linear), 1 => Just(Network::Partitions)],
+        prop_oneof![3 => Just(chains::linear()), 1 => Just(chains::partitions())],
         1..=3usize,
         1..=2usize,
         messages,
         prop::collection::vec(step(top), 8..32),
     )
-        .prop_flat_map(move |(network, sequencers, writers, messages, schedule)| {
+        .prop_flat_map(move |(chain, sequencers, writers, messages, schedule)| {
             let rules = if top >= Layer::Configs {
                 let timeframe = if sequencers == 1 {
                     prop_oneof![Just(0u32), Just(3u32)].boxed()
@@ -242,7 +277,7 @@ fn scenario(top: Layer, known_issues: bool) -> impl Strategy<Value = Scenario> {
             };
             rules.prop_map(move |(timeframe, timeout)| Scenario {
                 top,
-                network,
+                chain: chain.clone(),
                 sequencers,
                 writers,
                 messages,
@@ -266,53 +301,31 @@ fn sync_peer(world: &World) {
     }
 }
 
-fn set_gas_prices(world: &World, price: u64) {
-    let prices = GasPrices::new(price, price);
-    world.node().set_gas_prices(prices.clone());
-    if let Some(peer) = &world.peer {
-        peer.set_gas_prices(prices);
-    }
-}
-
 fn running(world: &World, index: usize) -> bool {
     index < world.harness.seqs.len() && world.harness.seqs[index].is_running()
 }
 
-async fn apply_client(world: &mut World, client: Client, counter: usize, scenario: &Scenario) {
+async fn apply_client(
+    world: &mut World,
+    client: Client,
+    counter: usize,
+    scenario: &Scenario,
+    choices: &[SharedChoices],
+) {
     match client {
         Client::Quiet => {}
-        Client::Drop => {
-            world.node().drop_streams();
-            if let Some(peer) = &world.peer {
-                peer.drop_streams();
-            }
-            world.harness.settle().await;
-            world.harness.advance(RECONNECT_DELAY).await;
-        }
-        Client::NodeDown => {
-            world.node().node_down();
-            world.harness.settle().await;
-            world.harness.advance(World::STEP_DURATION).await;
-            world.node().node_up();
-            world.harness.advance(RECONNECT_DELAY).await;
-        }
+        Client::Drop => world.apply_condition(Condition::Drop).await,
+        Client::NodeDown => world.apply_condition(Condition::NodeDown).await,
         Client::Restart { index, fresh } => {
-            if running(world, index) {
-                // A fresh start forgets pending publishes; the zone would
-                // re-plan them, which this schedule does not model.
-                let checkpoint = if fresh && world.own_pending(index).is_empty() {
-                    None
-                } else {
-                    world.harness.seqs[index].checkpoint()
-                };
-                world.restart(index, checkpoint).await;
-            }
+            world
+                .apply_condition(Condition::Restart { index, fresh })
+                .await;
         }
         Client::FetchFail { count } => {
-            world.node().fail_next_fetches(count);
+            world.apply_condition(Condition::FetchFail { count }).await;
         }
         Client::GasPrice { percent } => {
-            set_gas_prices(world, BASE_GAS_PRICE * (100 + percent) / 100);
+            world.set_gas_prices(BASE_GAS_PRICE * (100 + percent) / 100);
         }
         Client::Deposit { .. } => {
             if !world.user_utxos.is_empty() {
@@ -338,75 +351,55 @@ async fn apply_client(world: &mut World, client: Client, counter: usize, scenari
                     .await;
             }
         }
-    }
-}
-
-async fn apply_shape(world: &mut World, shape: Shape, posted: Posted) {
-    // During a split only the network itself may mine, so the merge stays
-    // within what the primary can reorg.
-    if world.partitioned() {
-        world.step().await;
-        return;
-    }
-    let node = world.node().clone();
-    match shape {
-        Shape::Extend { gap } => {
-            if world.network == Network::Partitions {
-                world.step().await;
-            } else {
-                let _ = world.extend(gap, posted).await;
+        Client::Abandon { index } => {
+            if let Some(choices) = choices.get(index) {
+                choices.lock().expect("choices").abandon_next();
             }
         }
-        Shape::Fork { depth, length } => {
-            if node.canonical_chain().len() <= depth + 1 {
-                let _ = world.extend(1, posted).await;
-            } else {
-                let _ = world.fork_with(depth, length, posted).await;
+        Client::Burst { index, count } => {
+            if let Some(choices) = choices.get(index) {
+                let payloads = (0..count)
+                    .map(|k| inscription(&format!("{}-burst-{counter}-{k}", NAMES[index])))
+                    .collect();
+                choices.lock().expect("choices").burst(payloads);
             }
         }
-        Shape::Revive { blocks } => {
-            if !world.revive(blocks, posted).await {
-                let _ = world.extend(1, posted).await;
+        Client::Adopt { index, on } => {
+            if let Some(choices) = choices.get(index) {
+                choices.lock().expect("choices").adopt(on);
             }
-        }
-        Shape::Lagging { silent } => world.lagging(silent, posted).await,
-        Shape::SplitTip => world.split_tip(posted).await,
-        Shape::Duplicate => {
-            node.reannounce(node.tip());
-            world.harness.settle().await;
-        }
-        Shape::FreezeLib => {
-            node.freeze_lib();
-            if let Some(peer) = &world.peer {
-                peer.freeze_lib();
-            }
-        }
-        Shape::ThawLib => {
-            node.thaw_lib();
-            if let Some(peer) = &world.peer {
-                peer.thaw_lib();
-            }
-            world.harness.settle().await;
-        }
-        Shape::Prune => {
-            let _ = node.prune_forks();
         }
     }
 }
 
-async fn apply(world: &mut World, step: Step, counter: usize, scenario: &Scenario) {
+async fn apply(
+    world: &mut World,
+    step: Step,
+    counter: usize,
+    scenario: &Scenario,
+    choices: &[SharedChoices],
+) {
     tracing::debug!(counter, ?step, tip = ?world.node().tip(), lib = ?world.node().lib(), "step");
     world.harness.advance(World::STEP_DURATION).await;
-    apply_client(world, step.client, counter, scenario).await;
-    apply_shape(world, step.shape, step.posted).await;
+    apply_client(world, step.client, counter, scenario, choices).await;
+    // During a split only the network itself may mine, so the merge stays
+    // within what the primary can reorg; plain growth on two nodes is the
+    // chain's own gossip step.
+    if world.partitioned()
+        || (world.chain.is_partitions() && matches!(step.shape, Shape::Extend { .. }))
+    {
+        world.step().await;
+    } else {
+        world.apply_shape(step.shape, step.posted).await;
+    }
     sync_peer(world);
     world.harness.settle().await;
 }
 
 async fn run(scenario: Scenario) {
-    let mut world = World::with_funding(scenario.network, 200, FUNDING_NOTE_VALUE);
+    let mut world = World::with_funding(scenario.chain.clone(), 200, FUNDING_NOTE_VALUE);
     // Prices bind from the next block; funding reads them from the tip.
-    set_gas_prices(&world, BASE_GAS_PRICE);
+    world.set_gas_prices(BASE_GAS_PRICE);
     world.harness.mine().await;
     sync_peer(&world);
     let names = &NAMES[..scenario.sequencers];
@@ -437,13 +430,18 @@ async fn run(scenario: Scenario) {
         world.coin_split(&deposits).await;
     }
     let mut expected: Vec<String> = Vec::new();
+    let claims = Claims::default();
+    let choices: Vec<SharedChoices> = names.iter().map(|_| SharedChoices::default()).collect();
     for (i, name) in names.iter().enumerate() {
         let planned: Vec<_> = (0..scenario.messages)
             .map(|m| inscription(&format!("{name}-{m}")))
             .collect();
         expected.extend(planned.iter().map(payload_str));
         let config = world.config_with_depth(usize::MAX);
-        let policy = ReferenceConsumer::boxed(&seq_key(name), planned);
+        let policy = Box::new(
+            ReferenceConsumer::new(&seq_key(name), planned)
+                .with_choices(Arc::clone(&choices[i]), Arc::clone(&claims)),
+        );
         if i == 0 && world.harness.seqs.len() == 1 {
             world.harness.set_policy(0, policy);
             world.restart(0, None).await;
@@ -455,7 +453,7 @@ async fn run(scenario: Scenario) {
     }
 
     for (counter, step) in scenario.schedule.clone().into_iter().enumerate() {
-        apply(&mut world, step, counter, &scenario).await;
+        apply(&mut world, step, counter, &scenario, &choices).await;
     }
     // Nothing finalizes under a frozen LIB.
     if world.node().is_lib_frozen() {
@@ -470,12 +468,39 @@ async fn run(scenario: Scenario) {
     // would have broken, and the lineage before the layers above it.
     world.harness.assert_layers_through(Layer::Chain);
     let finalized = world.indexer_finalized().await;
-    let payloads = common::inscription_payloads(&finalized);
-    let expected: Vec<&str> = expected.iter().map(String::as_str).collect();
-    common::assert_exactly_once_any_order(&payloads, &expected);
+    assert_payloads_landed_once(&finalized, expected, &choices);
+    assert_one_lineage(&finalized);
+    world.harness.assert_layers();
+}
 
-    // Finalized inscriptions form one chain: each parent is the previous
-    // message, and every message id appears once.
+/// Every planned payload, and every burst that found a turn, finalized
+/// exactly once; an abandoned payload may still land once, through a
+/// revived branch or another sequencer adopting it, but never twice.
+fn assert_payloads_landed_once(
+    finalized: &[FinalizedTx],
+    mut expected: Vec<String>,
+    choices: &[SharedChoices],
+) {
+    let payloads = common::inscription_payloads(finalized);
+    let mut abandoned: HashSet<String> = HashSet::new();
+    for choices in choices {
+        let choices = choices.lock().expect("choices");
+        expected.extend(choices.published.iter().map(payload_str));
+        abandoned.extend(choices.abandoned.iter().map(payload_str));
+    }
+    for payload in &expected {
+        let count = payloads.iter().filter(|p| *p == payload).count();
+        if abandoned.contains(payload) {
+            assert!(count <= 1, "abandoned {payload} finalized {count} times");
+        } else {
+            assert_eq!(count, 1, "{payload} finalized {count} times");
+        }
+    }
+}
+
+/// Finalized inscriptions form one chain: each parent is the previous
+/// message, and every message id appears once.
+fn assert_one_lineage(finalized: &[FinalizedTx]) {
     let mut previous = None;
     let mut seen = HashSet::new();
     for op in finalized.iter().flat_map(|tx| tx.ops.iter()) {
@@ -493,7 +518,6 @@ async fn run(scenario: Scenario) {
         assert!(seen.insert(info.this_msg), "message id repeated");
         previous = Some(info.this_msg);
     }
-    world.harness.assert_layers();
 }
 
 fn block_on(scenario: Scenario) {
@@ -516,21 +540,25 @@ proptest! {
     })]
 
     #[test]
+    #[ignore = "sampled hunt: run locally or on a schedule"]
     fn chain_shapes_keep_the_view(scenario in scenario(Layer::Chain, false)) {
         block_on(scenario);
     }
 
     #[test]
+    #[ignore = "sampled hunt: run locally or on a schedule"]
     fn own_messages_land_once(scenario in scenario(Layer::Lineage, false)) {
         block_on(scenario);
     }
 
     #[test]
+    #[ignore = "sampled hunt: run locally or on a schedule"]
     fn configs_move_the_turns(scenario in scenario(Layer::Configs, false)) {
         block_on(scenario);
     }
 
     #[test]
+    #[ignore = "sampled hunt: run locally or on a schedule"]
     fn notes_follow_the_ledger(scenario in scenario(Layer::Notes, false)) {
         block_on(scenario);
     }
@@ -545,6 +573,7 @@ proptest! {
     })]
 
     #[test]
+    #[ignore = "sampled hunt: run locally or on a schedule"]
     fn every_schedule_finalizes_each_payload_once(scenario in scenario(Layer::Restarts, false)) {
         block_on(scenario);
     }

@@ -2,7 +2,7 @@
 //! reference one is [`crate::consumer::ReferenceConsumer`].
 
 use async_trait::async_trait;
-use lb_core::mantle::ops::channel::inscribe::Inscription;
+use lb_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
 use lb_zone_sdk::sequencer::{
     ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, InscriptionInfo, ZoneSequencer,
 };
@@ -13,6 +13,9 @@ use crate::node::SimNode;
 #[async_trait]
 pub trait Policy: Send {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<SimNode>, event: &Event);
+
+    /// The test published `this_msg` through the sequencer's handle.
+    fn published(&mut self, _this_msg: MsgId) {}
 }
 
 #[must_use]

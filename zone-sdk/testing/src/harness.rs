@@ -12,7 +12,10 @@ use std::{pin::pin, task::Poll, time::Duration};
 
 use lb_core::{
     header::HeaderId,
-    mantle::{gas::GasCost, ops::channel::ChannelId},
+    mantle::{
+        gas::GasCost,
+        ops::channel::{ChannelId, MsgId},
+    },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
 use lb_zone_sdk::{
@@ -284,6 +287,12 @@ impl Harness {
     /// Replace the policy of a running sequencer.
     pub fn set_policy(&mut self, index: usize, policy: Box<dyn Policy>) {
         self.seqs[index].policy = policy;
+    }
+
+    /// Tell sequencer `index`'s policy that the test published `this_msg`
+    /// through its handle, so the policy owns it like its own publishes.
+    pub fn published(&mut self, index: usize, this_msg: MsgId) {
+        self.seqs[index].policy.published(this_msg);
     }
 
     /// Drop the sequencer instance; its log and checker stay for assertions.

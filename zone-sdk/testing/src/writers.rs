@@ -6,13 +6,14 @@
 
 use lb_common_http_client::Slot;
 use lb_core::mantle::{
-    Note, SignedOps,
+    Note, OpRef, SignedOps,
     channel::ChannelState,
     ledger::verification_mode::StandardMode,
-    ops::channel::{ChannelId, VerifiedChannelKeys},
+    ops::channel::{ChannelId, VerifiedChannelKeys, inscribe::Inscription},
     transactions::{GasPrices, states::Unverified},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
+use lb_zone_sdk::sequencer::channel_inscriptions;
 
 use crate::{
     ledger::SimLedger,
@@ -120,6 +121,52 @@ impl Writer {
                 trial.apply_tx(tx, slot).is_ok()
             })
             .cloned()
+    }
+
+    /// A posted inscription the chain will no longer accept as it is (its
+    /// parent slot was taken), rebuilt with the same payloads on the current
+    /// channel tip: what a sequencer does with an orphan it cannot re-land.
+    /// `ledger` carries the prices the block is judged at. Replaces the
+    /// original among the posted transactions.
+    pub async fn rebuild(
+        &mut self,
+        node: &crate::SimNode,
+        ledger: &SimLedger,
+        channel_id: ChannelId,
+        funding_pk: ZkPublicKey,
+        slot: Slot,
+        included: impl Fn(&SignedOps<Unverified, StandardMode>) -> bool,
+    ) -> Option<SignedOps<Unverified, StandardMode>> {
+        let state = ledger.channel(&channel_id)?;
+        let position = self.posted.iter().position(|tx| {
+            if included(tx) {
+                return false;
+            }
+            let inscriptions_only = tx
+                .op_refs_iter()
+                .all(|op| matches!(op, OpRef::ChannelInscribe(_) | OpRef::Transfer(_)));
+            inscriptions_only
+                && ledger
+                    .clone()
+                    .apply_tx(tx, slot)
+                    .is_err_and(|rejection| rejection.reason.contains("invalid parent"))
+        })?;
+        let payloads: Vec<Inscription> = channel_inscriptions(&self.posted[position], channel_id)
+            .into_iter()
+            .map(|info| info.payload)
+            .collect();
+        let (tx, _) = txs::build_funded_custom_tx(
+            node,
+            channel_id,
+            &self.key,
+            funding_pk,
+            &payloads,
+            state.tip_message,
+        )
+        .await
+        .ok()?;
+        self.posted[position] = tx.clone();
+        Some(tx)
     }
 
     /// Build the next op against `ledger`, the state of the block's parent;

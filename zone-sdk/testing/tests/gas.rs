@@ -1,7 +1,7 @@
 //! The simulated node charges real gas: funded transactions pay what the
 //! ledger prices them at, unfunded ones are evicted, and a price rise is paid.
 
-use common::{Network, Posted, World, inscription, passive, seq_key};
+use common::{Posted, World, inscription, passive, seq_key};
 use lb_core::mantle::{
     Op, OpProof, OpRef, SignedOps,
     ops::channel::inscribe::InscriptionOp,
@@ -9,7 +9,7 @@ use lb_core::mantle::{
     transactions::{GasPrices, Ops, tx_list::OpProofs},
 };
 use lb_zone_sdk::node_types::TxHash;
-use logos_blockchain_zone_sdk_testing::{SimNode, world as common};
+use logos_blockchain_zone_sdk_testing::{SimNode, chains, world as common};
 
 /// Fee the included `hash` paid: transfer inputs minus outputs, read from the
 /// ledger before its block.
@@ -41,7 +41,7 @@ fn fee_paid(node: &SimNode, hash: &TxHash) -> (u64, u64) {
 
 #[tokio::test(start_paused = true)]
 async fn funded_inscription_pays_its_gas_cost() {
-    let mut world = World::new(Network::Linear);
+    let mut world = World::new(chains::linear());
     let a = world.start("SEQ_A", passive()).await;
     let hash = world.publish_included(a, "priced").await;
     let (paid, priced) = fee_paid(world.node(), &hash);
@@ -57,7 +57,7 @@ async fn funded_inscription_pays_its_gas_cost() {
 
 #[tokio::test(start_paused = true)]
 async fn unfunded_inscription_is_evicted() {
-    let mut world = World::new(Network::Linear);
+    let mut world = World::new(chains::linear());
     let a = world.start("SEQ_A", passive()).await;
     let first = world.publish_included(a, "funded").await;
     world.finalize_tx(first).await;
@@ -103,7 +103,7 @@ async fn unfunded_inscription_is_evicted() {
 
 #[tokio::test(start_paused = true)]
 async fn price_rise_is_paid_by_the_next_publish() {
-    let mut world = World::new(Network::Linear);
+    let mut world = World::new(chains::linear());
     let a = world.start("SEQ_A", passive()).await;
     let cheap = world.publish_included(a, "cheap").await;
     // Prices take effect with the next block, like a storage-market update.
@@ -134,7 +134,7 @@ async fn price_rise_is_paid_by_the_next_publish() {
 /// the import never rejects a block the network accepted.
 #[tokio::test(start_paused = true)]
 async fn imported_block_keeps_its_mining_prices() {
-    let mut world = World::new(Network::Partitions);
+    let mut world = World::new(chains::partitions());
     let peer = world.peer.clone().expect("peer");
     let a = world.start("SEQ_A", passive()).await;
     let first = world.publish_included(a, "opens the channel").await;

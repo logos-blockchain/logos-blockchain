@@ -4,6 +4,7 @@
 //!
 //! [`ZoneSequencer`]: lb_zone_sdk::sequencer::ZoneSequencer
 
+pub mod chains;
 pub mod consumer;
 pub mod harness;
 pub mod layers;

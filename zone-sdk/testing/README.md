@@ -22,7 +22,9 @@ cargo test -p logos-blockchain-zone-sdk-testing
   forks below LIB can be pruned so their blocks are no longer fetchable;
   fetches can be made to fail; events can be delivered twice. The node
   applies the ledger rules, so a block never carries an invalid
-  transaction, like a leader dropping what went stale. Handles are tagged
+  transaction, like a leader dropping what went stale. A post validates
+  nothing against the ledger and a re-post of what the mempool holds
+  succeeds, as on the node. Handles are tagged
   per subscriber so a test knows which tip each sequencer has been told
   about. Several nodes form a network: `import_from` adopts another node's
   blocks, `gossip_with` exchanges mempools.
@@ -32,12 +34,33 @@ cargo test -p logos-blockchain-zone-sdk-testing
   config changes straight into the blocks it mines, plain or fork, so forks
   can carry different notes and rules than the chain they replace. Like a
   sequencer it re-lands its own orphans while the chain would accept them.
+- `src/chains.rs`: the catalogue. The SDK sees one thing, an ordered
+  stream of block events plus the answers to its own calls, so a network
+  condition is a shape of that stream and the shapes that matter are a
+  list: linear growth, empty slots, half and reversed posting, delayed
+  inclusion, shallow and deep forks, ties, a dormant branch revived, split
+  tips, lagging and duplicate deliveries, LIB frozen then jumping, forks
+  pruned, stream drops, node outages, restarts from checkpoint and from
+  scratch, failing fetches, price moves, and the orderings known to matter
+  (a fork after a price rise, a restart or a drop under a dormant fork,
+  forks under a frozen LIB), plus two partitioning nodes. Each entry is a
+  named, deterministic sequence of moves applied cyclically, and every
+  story runs on every entry through the `scenario!` macro. Each entry
+  promises what it shows (a reorg, a reconnect, a merge) and
+  `World::finish` checks the promise once the story ran three cycles;
+  `s00_chain_does_what_it_says` checks it on its own for every entry. The
+  second tier, `chains::pair`, is every ordered pair of the base conditions
+  two blocks apart (`for_each_base_condition!`), run on four core stories:
+  about two thousand tests, where order is what is tested.
 - `src/consumer.rs`: the reference consumer, the least a zone has to do on
   top of the SDK's contract: publish its planned payloads once ready and
   re-publish its own orphaned inscriptions, tracking message lineage so an
-  intent lands once however often the chain reorganizes. It uses only the
-  public sequencer API, so it can move into the SDK as the example
-  consumer. `src/policy.rs` holds the `Policy` trait it implements.
+  intent lands once however often the chain reorganizes. A test can hand it
+  `Choices` to make between steps (abandon an orphan, burst in turn, adopt
+  others' orphans) with `Claims` shared across a run's consumers so an
+  adopted orphan lands once. It uses only the public sequencer API, so it
+  can move into the SDK as the example consumer. `src/policy.rs` holds the
+  `Policy` trait it implements.
 - `src/layers.rs`: what a sequencer must get right, stacked. Each layer is
   only meaningful when the ones below it hold, so every violation is tagged
   and a run reports the lowest broken layer: `Chain` (the non-finalized
@@ -69,16 +92,26 @@ cargo test -p logos-blockchain-zone-sdk-testing
   slot gap, fork of any depth and length (winning, tying or dormant), revive
   a dormant branch, lagging and split-tip deliveries, and the writers'
   traffic (`add_writer`, `enable_foreign_traffic`).
-- `tests/scenarios.rs`: the zone cucumber scenarios plus posting-timeout and
-  foreign-writer scenarios, each run on every `Network`. The consumer logic
-  the cucumber features script (balance-aware and sorted republishing, the
-  deposit and multi-sig lifecycles, custom multi-inscription txs) lives in
-  `tests/scenarios/drivers.rs`, one driver per scenario; every other
-  scenario runs the reference consumer.
+- `tests/scenarios/`: the stories, each run on every chain of the
+  catalogue, by theme: `publishing.rs` (messages, checkpoints, same-key
+  instances, turns, a foreign writer), `configs.rs` (re-keying, orphaning
+  by config, posting timeouts), `notes.rs` (deposits, withdraws, pins,
+  refunds, the wallet view), `bundles.rs` (multi-sig rounds and hand-built
+  custom txs), `tiers.rs` (the catalogue's self-check and the pairs tier)
+  and `known_issues.rs` (ignored single tests with the issue in the reason,
+  including the frozen-LIB backlog stall of #3858). `main.rs` holds the
+  shared helpers and the `scenario!` macro. Every story runs the reference
+  consumer; there are no scripted reaction policies. The balance-aware and
+  sorted-republish cucumber scenarios were dropped: what they exercised in
+  the SDK, a consumer that lets orphans die or picks up another sequencer's,
+  is what the property's Abandon and Adopt steps draw at random, and the
+  rest was the zone's own arithmetic.
 - `tests/gas.rs`: the fee model: paid equals priced, unfunded txs are
   evicted, price rises are paid.
 
-- `tests/properties.rs`: every step draws three things independently. The
+- `tests/properties.rs`: the sampled hunt, ignored by default (`cargo test
+  -- --ignored` runs it; meant for a schedule or a local run with
+  `PROPTEST_CASES` raised). Every step draws three things independently. The
   chain's shape: a block with a slot gap, a fork of random depth and length,
   a revival of the dormant branch, silent blocks before an announced one, a
   tip moved silently behind an announced sibling, a duplicate delivery, LIB
@@ -95,11 +128,15 @@ cargo test -p logos-blockchain-zone-sdk-testing
   and the lowest failing rung names what the SDK gets wrong: only other
   writers' inscriptions on a moving chain; plus the sequencers' own
   messages; plus config changes and posting rules; plus deposits, withdraws
-  and note transfers; plus restarts, outages and price moves. No failing
+  and note transfers; plus restarts, outages and price moves. From the
+  second rung the sequencers also make a zone's choices at random: let an
+  orphan die, burst-publish on the next turn, adopt another sequencer's
+  orphans (`Choices` on the reference consumer). No failing
   seed is persisted: a persisted seed only reproduces its case while the
   strategy that drew it is unchanged, so the schedule a run shrinks to is
-  the hint for a hand-written scenario that names the mechanism, next to
-  the other scenarios. `PROPTEST_CASES` raises the volume,
+  the hint for a hand-written story that names the mechanism, next to the
+  other stories, or for a new catalogue entry when it is a chain shape
+  nobody had listed. `PROPTEST_CASES` raises the volume,
   `PROPTEST_MAX_SHRINK_ITERS=0` shows a failing input without shrinking,
   `RUST_LOG=debug` adds the SDK's log and the per-event trace.
 
@@ -107,11 +144,14 @@ Known SDK issues are kept as `#[ignore]`d tests with the issue in the reason
 string (`cargo test -- --ignored` runs them); they turn green when the fix
 lands. Today: a pending atomic withdraw whose channel input vanished with a
 reorged-out deposit is re-funded and resubmitted forever while later
-publishes chain behind it, and a config landing sheds the pending
-inscriptions chained on the channel tip but not a custom (multi-inscription)
-tx chained on one of them, which leaves the view unreported until the next
-event. The ignored property widens the vocabulary to both: withdraws that
-may spend unfinalized notes, and writers' two-inscription txs.
+publishes chain behind it; a config landing sheds the pending inscriptions
+chained on the channel tip but not a custom (multi-inscription) tx chained
+on one of them, which leaves the view unreported until the next event; and
+a backlog queued out of turn stalls at `max_pending_publish_depth` while
+LIB does not move, since mined-but-unfinalized entries count as in flight
+(#3858). The ignored property widens the vocabulary to the first two:
+withdraws that may spend unfinalized notes, and writers' two-inscription
+txs.
 
 A test needs `#[tokio::test(start_paused = true)]`; SDK timers fire only
 through `Harness::advance`, and `World::step` advances the clock by a little

@@ -1300,6 +1300,9 @@ impl adapter::Node for SimNode {
         Ok(blocks)
     }
 
+    /// Like the node's mempool, which validates nothing against the ledger
+    /// on add and answers a re-post of what it already holds with success
+    /// (and a re-gossip); everything else is judged at block build.
     async fn post_transaction(
         &self,
         tx: SignedOps<Unverified, StandardMode>,
