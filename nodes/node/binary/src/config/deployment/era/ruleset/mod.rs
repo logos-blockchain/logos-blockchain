@@ -1,5 +1,7 @@
 use core::{num::NonZero, time::Duration};
 
+use lb_core::sdp::{InactivityPeriod, MinStake, ServiceType};
+use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use serde::{Deserialize, Serialize};
 
 pub mod v1;
@@ -50,6 +52,36 @@ impl EraRuleset {
             Self::V1(parameters) => parameters
                 .blend
                 .epoch_transition_slots(parameters.cryptarchia.average_slots_per_block()),
+        }
+    }
+
+    /// The least a node must stake to declare for a service in the era.
+    #[must_use]
+    pub const fn min_stake(&self) -> MinStake {
+        match self {
+            Self::V1(parameters) => parameters.cryptarchia.sdp_config.min_stake,
+        }
+    }
+
+    /// How long a node of `service` can go without proving activity in the
+    /// era, or `None` if the era has no parameters for `service`.
+    #[must_use]
+    pub fn inactivity_period(&self, service: ServiceType) -> Option<InactivityPeriod> {
+        match self {
+            Self::V1(parameters) => parameters
+                .cryptarchia
+                .sdp_config
+                .service_params
+                .get(&service)
+                .map(|service_parameters| service_parameters.inactivity_period),
+        }
+    }
+
+    /// The parameters Blend rewards are computed with in the era.
+    #[must_use]
+    pub fn blend_reward_params(&self) -> RewardsParameters {
+        match self {
+            Self::V1(parameters) => parameters.blend_reward_params(),
         }
     }
 }
