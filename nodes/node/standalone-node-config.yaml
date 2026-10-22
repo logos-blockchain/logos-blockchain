@@ -200,7 +200,7 @@ tracing:
   metrics:
     otlp: null
     open_metrics:
-      enabled: false
+      enabled: true
   console: None
   level: "INFO"
 state:
