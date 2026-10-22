@@ -2,22 +2,31 @@
 //! a sequencer reports about deposits, its channel wallet and its turn must
 //! agree with the node it talks to.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
+use lb_common_http_client::Slot;
 use lb_core::{
     crypto::Hash,
     header::HeaderId,
     mantle::{
         NoteId, SignedOps, Value,
+        channel::ChannelState,
         ledger::verification_mode::StandardMode,
-        ops::{OpId as _, OpRef, channel::ChannelId},
+        ops::{
+            OpId as _, OpRef,
+            channel::{ChannelId, MsgId},
+        },
         traits::Hashable,
         transactions::states::Unverified,
     },
 };
+use lb_key_management_system_service::keys::UnverifiedEd25519PublicKey;
 use lb_zone_sdk::{
     node_types::TxHash,
-    sequencer::{ChannelNote, Event, FinalizedOp, ZoneSequencer},
+    sequencer::{
+        ChannelNote, Event, FinalizedOp, InscriptionInfo, SequencerCheckpoint, ZoneSequencer,
+        channel_inscriptions,
+    },
 };
 
 use crate::{
@@ -42,8 +51,28 @@ pub struct Oracles {
     /// Every deposit op reported through `deposits` or `finalized`, across
     /// lives: what the canonical chain holds must appear here eventually.
     reported_deposits: HashSet<Hash>,
+    /// The sequencer's key, to tell its own inscriptions from the ones it
+    /// tracks for others.
+    own: Option<UnverifiedEd25519PublicKey>,
+    /// The sequencer's `min_slots_remaining_in_turn`.
+    min_slots_remaining_in_turn: u64,
+    /// How many of the node's posts by this sequencer have been judged.
+    judged_posts: usize,
+    /// Hand-built txs the test submitted whole: the SDK posts those without
+    /// a turn, as the caller asked, so they are not judged.
+    exempt: HashSet<TxHash>,
+    /// The slot the sequencer's view named at the previous check: a post
+    /// since then was made at that slot or a later delivered one.
+    last_view_slot: Option<Slot>,
+    /// Consecutive checks each own pending tx was postable and not posted,
+    /// with how often it had been posted when the counting started.
+    unposted: HashMap<TxHash, (usize, usize)>,
     violations: Violations,
 }
+
+/// Checks in a row a postable tx may go unposted: the resubmit timer at
+/// [`crate::harness::RESUBMIT_INTERVAL`] fires every third step.
+const UNPOSTED_CHECKS: usize = 4;
 
 /// Whether `tx` carries an op of `channel`.
 fn touches_channel(tx: &SignedOps<Unverified, StandardMode>, channel: ChannelId) -> bool {
@@ -62,9 +91,229 @@ fn by_id(notes: &[ChannelNote]) -> BTreeMap<NoteId, Value> {
 }
 
 impl Oracles {
+    /// Oracles for the sequencer signing as `own` with the given turn
+    /// margin.
+    #[must_use]
+    pub fn for_sequencer(
+        own: UnverifiedEd25519PublicKey,
+        min_slots_remaining_in_turn: u64,
+    ) -> Self {
+        Self {
+            own: Some(own),
+            min_slots_remaining_in_turn,
+            ..Self::default()
+        }
+    }
+
     #[must_use]
     pub const fn violations(&self) -> &Violations {
         &self.violations
+    }
+
+    /// Leave `hash`, a tx the test built and submitted whole, out of the
+    /// turn and resubmit checks.
+    pub fn exempt(&mut self, hash: TxHash) {
+        self.exempt.insert(hash);
+    }
+
+    /// The inscription of `tx` when it is a plain own publish: one channel
+    /// inscription signed by this sequencer and no other channel op, the
+    /// shape the SDK gates on the turn.
+    fn own_plain_inscription(
+        &self,
+        tx: &SignedOps<Unverified, StandardMode>,
+        channel: ChannelId,
+    ) -> Option<InscriptionInfo> {
+        let own = self.own?;
+        let channel_ops = tx
+            .op_refs_iter()
+            .filter(|op| !matches!(op, OpRef::Transfer(_)))
+            .count();
+        let inscriptions = channel_inscriptions(tx, channel);
+        let [info] = inscriptions.as_slice() else {
+            return None;
+        };
+        (channel_ops == 1 && info.signer == Some(own)).then(|| info.clone())
+    }
+
+    /// Whether the round robin hands this sequencer the turn at `slot` with
+    /// at least the configured margin left, the SDK's own rule.
+    fn own_turn_with_margin(&self, state: &ChannelState, slot: Slot) -> bool {
+        let Some(own) = self.own else {
+            return false;
+        };
+        let Some(index) = state.accredited_keys.iter().position(|key| *key == own) else {
+            return false;
+        };
+        let (authorized, turn_start) = state.round_robin(slot);
+        if usize::from(authorized) != index {
+            return false;
+        }
+        let timeframe = u64::from(u32::from(state.posting_timeframe.clone()));
+        if self.min_slots_remaining_in_turn == 0 || timeframe == 0 {
+            return true;
+        }
+        let closes_at = (turn_start.into_inner() + timeframe)
+            .checked_sub(self.min_slots_remaining_in_turn)
+            .map_or(0, |slot| slot + 1);
+        slot.into_inner() < closes_at
+    }
+
+    /// Every post of an own plain inscription was in turn, with the margin,
+    /// by what the sequencer could know when it posted: its slot is the
+    /// last tip its streams delivered, its channel state is fetched from
+    /// the node's actual tip, so either block's rotation may be the one it
+    /// computed from. A block mined later at another slot may still reject
+    /// the post; that is the chain's doing, not the sequencer's.
+    fn check_posts(&mut self, node: &SimNode, channel: ChannelId, name: &str, view_slot: Slot) {
+        let (posts, count) = node.posts_since(self.judged_posts);
+        self.judged_posts = count;
+        let since = self.last_view_slot.replace(view_slot);
+        for post in posts {
+            let Some(seen) = post.seen else {
+                continue;
+            };
+            if self.exempt.contains(&post.hash)
+                || self.own_plain_inscription(&post.tx, channel).is_none()
+            {
+                continue;
+            }
+            let references = [seen, post.tip];
+            let states: Vec<ChannelState> = references
+                .iter()
+                .filter_map(|block| node.channel_state_at(*block, channel))
+                .collect();
+            if states.is_empty() {
+                // No channel yet: the SDK publishes freely, as it must.
+                continue;
+            }
+            let mut slots: Vec<Slot> = references
+                .iter()
+                .filter_map(|block| node.block_slot(*block))
+                .collect();
+            slots.extend(since);
+            let in_turn = slots.iter().any(|slot| {
+                states
+                    .iter()
+                    .any(|state| self.own_turn_with_margin(state, *slot))
+            });
+            if !in_turn {
+                let own_index = self
+                    .own
+                    .and_then(|own| states[0].accredited_keys.iter().position(|key| *key == own));
+                let rotations: Vec<String> = slots
+                    .iter()
+                    .map(|slot| format!("slot {slot:?}: {:?}", states[0].round_robin(*slot)))
+                    .collect();
+                self.record(
+                    Layer::Configs,
+                    format!(
+                        "{name}: posted {:?} out of its turn or past the turn margin; own index \
+                         {own_index:?}, timeframe {:?}, round robin {}",
+                        post.hash,
+                        states[0].posting_timeframe,
+                        rotations.join(" / ")
+                    ),
+                );
+            }
+        }
+    }
+
+    /// An own plain inscription that is pending, chains on the channel tip
+    /// and whose turn it is must be posted: in the mempool, in a block, or
+    /// posted since the check started. One the node ever rejected is left
+    /// to the stale refund. Unposted for `UNPOSTED_CHECKS` checks in a row
+    /// means it was never re-posted.
+    fn check_resubmit(
+        &mut self,
+        sequencer: &ZoneSequencer<SimNode>,
+        node: &SimNode,
+        channel: ChannelId,
+        name: &str,
+    ) {
+        let Some(checkpoint) = sequencer.checkpoint() else {
+            return;
+        };
+        let Some(state) = node.channel_state_at_tip(channel) else {
+            return;
+        };
+        let slot = node.tip_slot();
+        let mut postable = HashSet::new();
+        for (hash, tx) in &checkpoint.pending_txs {
+            if self.exempt.contains(hash) {
+                continue;
+            }
+            let Some(info) = self.own_plain_inscription(tx, channel) else {
+                continue;
+            };
+            if info.parent_msg != state.tip_message || !self.own_turn_with_margin(&state, slot) {
+                continue;
+            }
+            if node.in_mempool(hash) || node.is_included(hash) || node.rejected_at(hash).is_some() {
+                continue;
+            }
+            let posted = node.post_count(hash);
+            let (checks, since) = self.unposted.entry(*hash).or_insert((0, posted));
+            if posted > *since {
+                *checks = 0;
+                *since = posted;
+                continue;
+            }
+            postable.insert(*hash);
+            *checks += 1;
+            if *checks == UNPOSTED_CHECKS {
+                self.record(
+                    Layer::Lineage,
+                    format!(
+                        "{name}: pending {hash:?} chains on the channel tip in its turn and was \
+                         not posted for {UNPOSTED_CHECKS} checks"
+                    ),
+                );
+            }
+        }
+        self.unposted.retain(|hash, _| postable.contains(hash));
+    }
+
+    /// A restart from `before` restored every own pending inscription the
+    /// chain had not finalized, as the same message under whatever hash a
+    /// re-fund on restore gave it: compare with `after`, the first
+    /// checkpoint of the new life.
+    pub fn check_restored(
+        &mut self,
+        before: &SequencerCheckpoint,
+        after: Option<&SequencerCheckpoint>,
+        orphaned_since: &HashSet<MsgId>,
+        node: &SimNode,
+        channel: ChannelId,
+        name: &str,
+    ) {
+        // Restored, or restored and already shed as orphaned for the zone
+        // to republish: both are the message accounted for.
+        let mut restored: HashSet<MsgId> = after
+            .map(|cp| {
+                cp.pending_txs
+                    .iter()
+                    .flat_map(|(_, tx)| channel_inscriptions(tx, channel))
+                    .map(|info| info.this_msg)
+                    .collect()
+            })
+            .unwrap_or_default();
+        restored.extend(orphaned_since.iter().copied());
+        for (hash, tx) in &before.pending_txs {
+            let Some(info) = self.own_plain_inscription(tx, channel) else {
+                continue;
+            };
+            if node.is_tx_finalized(hash) || restored.contains(&info.this_msg) {
+                continue;
+            }
+            self.record(
+                Layer::Restarts,
+                format!(
+                    "{name}: pending {hash:?} (message {:?}) was not restored from the checkpoint",
+                    info.this_msg
+                ),
+            );
+        }
     }
 
     /// Start a new life of the sequencer from `lib`: what it reports as
@@ -135,6 +384,8 @@ impl Oracles {
         channel: ChannelId,
         name: &str,
     ) {
+        let view_slot = sequencer.subscribe_channel_view().borrow().current_slot;
+        self.check_posts(node, channel, name, view_slot);
         if !sequencer.is_connected() || !node.subscriber_at_tip() || self.lib != Some(node.lib()) {
             return;
         }
@@ -142,6 +393,7 @@ impl Oracles {
         self.check_turn(sequencer, node, channel, name);
         self.check_finalized(node, channel, name);
         self.check_deposits_reported(node, channel, name);
+        self.check_resubmit(sequencer, node, channel, name);
     }
 
     /// Every deposit of `channel` on the canonical chain has been reported,

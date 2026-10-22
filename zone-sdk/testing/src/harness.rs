@@ -8,7 +8,7 @@
 //! on a paused tokio clock (`#[tokio::test(start_paused = true)]`) so SDK
 //! timers only fire through [`Harness::advance`].
 
-use std::{pin::pin, task::Poll, time::Duration};
+use std::{collections::HashSet, pin::pin, task::Poll, time::Duration};
 
 use lb_core::{
     header::HeaderId,
@@ -204,6 +204,8 @@ impl Harness {
             config.clone(),
             checkpoint,
         );
+        let key_pk = key.public_key().into_unverified();
+        let min_slots_remaining_in_turn = config.min_slots_remaining_in_turn;
         self.seqs.push(Seq {
             name: name.to_owned(),
             key,
@@ -213,7 +215,7 @@ impl Harness {
             policy,
             checker: ViewChecker::new(self.channel_id),
             mirror: Mirror::default(),
-            oracles: Oracles::default(),
+            oracles: Oracles::for_sequencer(key_pk, min_slots_remaining_in_turn),
             events: Vec::new(),
         });
         self.seqs.len() - 1
@@ -303,6 +305,8 @@ impl Harness {
     /// Start a fresh instance for slot `index` from `checkpoint`, keeping the
     /// policy, and settle until ready.
     pub async fn restart(&mut self, index: usize, checkpoint: Option<SequencerCheckpoint>) {
+        let checkpoint_before = checkpoint.clone();
+        let events_before = self.seqs[index].events.len();
         let seq = &mut self.seqs[index];
         seq.oracles
             .restart_from(checkpoint.as_ref().map(|cp| cp.lib));
@@ -315,6 +319,27 @@ impl Harness {
         ));
         seq.checker = ViewChecker::new(self.channel_id);
         self.settle_until_ready(index).await;
+        if let Some(before) = checkpoint_before {
+            let seq = &mut self.seqs[index];
+            let after = seq.checkpoint();
+            let orphaned_since: HashSet<MsgId> = seq.events[events_before..]
+                .iter()
+                .filter_map(|event| match event {
+                    Event::BlocksProcessed { channel_update, .. } => Some(channel_update),
+                    _ => None,
+                })
+                .flat_map(|update| update.orphaned().iter())
+                .filter_map(|entry| entry.inscription().map(|info| info.this_msg))
+                .collect();
+            seq.oracles.check_restored(
+                &before,
+                after.as_ref(),
+                &orphaned_since,
+                &seq.node,
+                self.channel_id,
+                &seq.name,
+            );
+        }
     }
 
     /// Poll every running sequencer until none makes progress, then compare

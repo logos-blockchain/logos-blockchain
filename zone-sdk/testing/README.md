@@ -101,7 +101,15 @@ cargo test -p logos-blockchain-zone-sdk-testing
   reported, the channel wallet view equals the ledger's channel notes
   (finalized against LIB, unfinalized against the tip), the turn view agrees
   with `round_robin`, and the finalized history it reported is the chain's,
-  once each and in order.
+  once each and in order. Three judge promptness from what the node can
+  see: every post of an own inscription was in turn, with the configured
+  margin, by the rotation the sequencer could know (the node records the
+  tip each subscriber had been told about at the post); an own pending
+  inscription chaining on the channel tip in its owner's turn is posted
+  within the resubmit interval; a restart from a checkpoint restores every
+  own pending message the chain had not finalized, or sheds it as orphaned.
+  Hand-built txs the test submits whole are exempt, as the SDK posts them
+  without a turn.
 - `src/harness.rs`: owns the sequencers, polls `next_event` until quiescent,
   runs each sequencer's policy and the checkers inline, and replays
   finalized history like an indexer.
@@ -157,8 +165,8 @@ cargo test -p logos-blockchain-zone-sdk-testing
   keeps drawing from the whole vocabulary and anything else that breaks in
   those regions still fails; `--success-output immediate` shows the
   counts. `SIM_EVENTS=min..max` sets the schedule length. A failing
-  seed is written to `proptest-regressions/properties.txt` in this crate
-  and replayed first by the next run, so a rare failure can be rerun with
+  seed is written to `tests/properties.proptest-regressions` and replayed
+  first by the next run, so a rare failure can be rerun with
   more logging; the schedule it prints is the hint for a hand-written
   story that names the mechanism, next to the other stories, or for a new
   catalogue entry when it is a chain shape nobody had listed. The seed

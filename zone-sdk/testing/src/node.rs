@@ -131,6 +131,17 @@ impl Default for BlockSpec {
 }
 
 /// The node's funding wallet, which the SDK asks to pay fees.
+/// One `post_transaction` call, with what the poster could know at the
+/// time: the tip its streams had delivered and the node's actual tip.
+#[derive(Clone, Debug)]
+pub struct Post {
+    pub tag: u64,
+    pub hash: TxHash,
+    pub seen: Option<HeaderId>,
+    pub tip: HeaderId,
+    pub tx: SignedOps<Unverified, StandardMode>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FundingWallet {
     pub pk: ZkPublicKey,
@@ -180,6 +191,9 @@ struct ChainState {
     finality_depth: u64,
     mempool: Vec<SignedOps<Unverified, StandardMode>>,
     posted: Vec<SignedOps<Unverified, StandardMode>>,
+    /// Every post with the subscriber that made it and the tip that
+    /// subscriber had been told about, in order.
+    posts: Vec<Post>,
     rejected: Vec<Rejection>,
     /// The block whose ledger last rejected each tx; gossip does not bring a
     /// tx back while that block is still the tip.
@@ -288,6 +302,7 @@ impl SimNode {
             posted: Vec::new(),
             rejected: Vec::new(),
             rejected_at: HashMap::new(),
+            posts: Vec::new(),
             mints: Vec::new(),
             next_block: 1,
             streams: Vec::new(),
@@ -320,6 +335,60 @@ impl SimNode {
             state: Arc::clone(&self.state),
             tag,
         }
+    }
+
+    /// The posts made through this handle from the `from`th post on the
+    /// node, and the node's post count to continue from.
+    #[must_use]
+    pub fn posts_since(&self, from: usize) -> (Vec<Post>, usize) {
+        let state = self.lock();
+        let posts = state
+            .posts
+            .iter()
+            .skip(from)
+            .filter(|post| post.tag == self.tag)
+            .cloned()
+            .collect();
+        let count = state.posts.len();
+        drop(state);
+        (posts, count)
+    }
+
+    /// How many times `hash` was posted through this handle.
+    #[must_use]
+    pub fn post_count(&self, hash: &TxHash) -> usize {
+        self.lock()
+            .posts
+            .iter()
+            .filter(|post| post.tag == self.tag && post.hash == *hash)
+            .count()
+    }
+
+    /// Whether `hash` sits in the mempool.
+    #[must_use]
+    pub fn in_mempool(&self, hash: &TxHash) -> bool {
+        self.lock().mempool.iter().any(|tx| tx.hash() == *hash)
+    }
+
+    /// The block whose ledger last rejected `hash`, if any.
+    #[must_use]
+    pub fn rejected_at(&self, hash: &TxHash) -> Option<HeaderId> {
+        self.lock().rejected_at.get(hash).copied()
+    }
+
+    /// The slot of block `id`.
+    #[must_use]
+    pub fn block_slot(&self, id: HeaderId) -> Option<Slot> {
+        self.lock().blocks.get(&id).map(|block| block.slot)
+    }
+
+    /// The channel's state as of block `id`.
+    #[must_use]
+    pub fn channel_state_at(&self, id: HeaderId, channel: ChannelId) -> Option<ChannelState> {
+        self.lock()
+            .blocks
+            .get(&id)
+            .and_then(|block| block.ledger.channel(&channel).cloned())
     }
 
     /// The tip named by the last event the streams of this handle's
@@ -1396,6 +1465,15 @@ impl adapter::Node for SimNode {
     ) -> Result<(), lb_common_http_client::Error> {
         let mut state = self.lock();
         state.require_up()?;
+        let seen = state.pulled.get(&self.tag).copied();
+        let tip = state.tip;
+        state.posts.push(Post {
+            tag: self.tag,
+            hash: tx.hash(),
+            seen,
+            tip,
+            tx: tx.clone(),
+        });
         state.posted.push(tx.clone());
         state.push_mempool(tx);
         drop(state);

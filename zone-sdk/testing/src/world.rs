@@ -1589,6 +1589,7 @@ impl World {
         else {
             return;
         };
+        self.harness.seqs[index].oracles.exempt(signed_tx.hash());
         if self
             .harness
             .seq(index)
