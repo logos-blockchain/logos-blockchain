@@ -4,8 +4,8 @@
 use std::collections::{HashMap, HashSet};
 
 use common::{
-    FOREIGN, FOREIGN_2, Posted, World, assert_exactly_once_any_order, filtered,
-    filtered_first_occurrence, inscription, passive, reference, seq_key, strs,
+    FOREIGN, FOREIGN_2, Posted, World, assert_exactly_once_any_order, filtered, inscription,
+    passive, reference, seq_key, strs,
 };
 use lb_core::{
     crypto::Hash,

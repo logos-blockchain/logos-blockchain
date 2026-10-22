@@ -1649,18 +1649,6 @@ pub fn inscription_payloads(finalized: &[FinalizedTx]) -> Vec<String> {
         .collect()
 }
 
-/// `payloads` filtered to `expected`, de-duplicated by first occurrence.
-#[must_use]
-pub fn filtered_first_occurrence(payloads: &[String], expected: &[&str]) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    payloads
-        .iter()
-        .filter(|p| expected.contains(&p.as_str()))
-        .filter(|p| seen.insert((*p).clone()))
-        .cloned()
-        .collect()
-}
-
 /// `payloads` filtered to `expected`, duplicates kept.
 #[must_use]
 pub fn filtered(payloads: &[String], expected: &[&str]) -> Vec<String> {

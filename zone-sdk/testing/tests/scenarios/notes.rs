@@ -133,10 +133,7 @@ pub async fn atomic_deposit_and_inscription(chain: Chain) {
     );
     let payloads = common::inscription_payloads(&finalized);
     let expected = ["initial inscription", "Mint 1 to Alice"];
-    assert_eq!(
-        filtered_first_occurrence(&payloads, &expected),
-        strs(&expected)
-    );
+    assert_eq!(filtered(&payloads, &expected), strs(&expected));
     world.finish();
 }
 scenario!(
@@ -209,10 +206,7 @@ pub async fn finalized_withdraw(chain: Chain) {
     assert!(has_withdraw(&via_events), "withdraw not seen by SEQ_A");
     let payloads = common::inscription_payloads(&finalized);
     let expected = ["initial inscription", "Burn 2"];
-    assert_eq!(
-        filtered_first_occurrence(&payloads, &expected),
-        strs(&expected)
-    );
+    assert_eq!(filtered(&payloads, &expected), strs(&expected));
     world.finish();
 }
 scenario!(s19_finalized_withdraw, finalized_withdraw);
@@ -288,10 +282,7 @@ pub async fn observed_deposit_pinned_and_withdrawn(chain: Chain) {
     );
     let payloads = common::inscription_payloads(&indexed);
     let expected = ["initial inscription", "a1", "a2"];
-    assert_eq!(
-        filtered_first_occurrence(&payloads, &expected),
-        strs(&expected)
-    );
+    assert_eq!(filtered(&payloads, &expected), strs(&expected));
     world.finish();
 }
 scenario!(

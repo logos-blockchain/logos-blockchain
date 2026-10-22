@@ -29,10 +29,7 @@ pub async fn publish_and_index(chain: Chain) {
 
     let payloads = world.indexer_payloads().await;
     let expected = ["Hello, Zone!", "Second message", "Third message"];
-    assert_eq!(
-        filtered_first_occurrence(&payloads, &expected),
-        strs(&expected)
-    );
+    assert_eq!(filtered(&payloads, &expected), strs(&expected));
     world.finish();
 }
 scenario!(s01_publish_and_index, publish_and_index);
@@ -53,10 +50,7 @@ pub async fn resume_from_checkpoint(chain: Chain) {
 
     let expected = ["Message 1", "Message 2", "Message 3", "Message 4"];
     let payloads = world.indexer_payloads().await;
-    assert_eq!(
-        filtered_first_occurrence(&payloads, &expected),
-        strs(&expected)
-    );
+    assert_eq!(filtered(&payloads, &expected), strs(&expected));
     world.finish();
 }
 scenario!(s02_resume_from_checkpoint, resume_from_checkpoint);
@@ -131,10 +125,7 @@ pub async fn publish_while_node_down(chain: Chain) {
 
     let expected = ["After down (1)", "After down (2)", "After down (3)"];
     let payloads = world.indexer_payloads().await;
-    assert_eq!(
-        filtered_first_occurrence(&payloads, &expected),
-        strs(&expected)
-    );
+    assert_eq!(filtered(&payloads, &expected), strs(&expected));
     world.finish();
 }
 scenario!(s04_publish_while_node_down, publish_while_node_down);

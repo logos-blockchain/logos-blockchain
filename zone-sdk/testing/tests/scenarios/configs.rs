@@ -28,10 +28,7 @@ pub async fn config_orphans_pending(chain: Chain) {
 
     let expected = ["cfg-orphan-b1", "cfg-orphan-b2", "cfg-orphan-b3"];
     let payloads = world.indexer_payloads().await;
-    assert_eq!(
-        filtered_first_occurrence(&payloads, &expected),
-        strs(&expected)
-    );
+    assert_eq!(filtered(&payloads, &expected), strs(&expected));
     world.finish();
 }
 scenario!(s11_config_orphans_pending, config_orphans_pending);
@@ -105,7 +102,7 @@ pub async fn timeout_rotates_silent_turn(chain: Chain) {
     world.settle_chain(200).await;
     let payloads = world.indexer_payloads().await;
     assert_eq!(
-        filtered_first_occurrence(&payloads, &["a1", "b1", "a2"]),
+        filtered(&payloads, &["a1", "b1", "a2"]),
         strs(&["a1", "b1", "a2"])
     );
     world.finish();
@@ -137,10 +134,7 @@ pub async fn timeout_overrides_timeframe(chain: Chain) {
     );
     world.settle_chain(200).await;
     let payloads = world.indexer_payloads().await;
-    assert_eq!(
-        filtered_first_occurrence(&payloads, &["a1", "c1"]),
-        strs(&["a1", "c1"])
-    );
+    assert_eq!(filtered(&payloads, &["a1", "c1"]), strs(&["a1", "c1"]));
     world.finish();
 }
 scenario!(s26_timeout_overrides_timeframe, timeout_overrides_timeframe);
