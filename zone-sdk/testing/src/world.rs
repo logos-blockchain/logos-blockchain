@@ -10,7 +10,7 @@ use lb_core::{
         Note, NoteId, SignedOps, Utxo,
         ledger::{Outputs, verification_mode::StandardMode},
         ops::{
-            OpId as _,
+            OpId as _, OpRef,
             channel::{ChannelId, VerifiedChannelKeys, deposit::DepositOp, inscribe::Inscription},
         },
         traits::Hashable,
@@ -34,6 +34,7 @@ use crate::{
     consumer::{Claims, ReferenceConsumer, SharedChoices},
     events::Event,
     harness::{self, RECONNECT_DELAY, funding_config, key},
+    layers::Layer,
     node::{BlockSpec, TxSelection},
     policy::{Policy, make_inscription, payload_str},
     txs::{self, TxError},
@@ -114,6 +115,20 @@ pub enum Posted {
     Half,
     /// All of them, in reverse order, like a leader ordering differently.
     Reversed,
+}
+
+/// What the SDK does not handle yet, recognised from what a run leaves
+/// behind by [`World::known_issue`]; each has an ignored story in
+/// `tests/scenarios/known_issues.rs`. The recognisers go when the fixes
+/// land.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KnownIssue {
+    /// A pending withdraw whose channel input vanished with an orphaned
+    /// deposit is resubmitted forever.
+    DeadInputWithdraw,
+    /// A config landing sheds a pending inscription but not the custom tx
+    /// chained on it, which leaves the view unreported.
+    CustomTxUnderConfigShed,
 }
 
 /// The first writer's name; a second one is [`FOREIGN_2`].
@@ -516,6 +531,12 @@ impl World {
         self.foreign_budget = posts;
     }
 
+    /// No new writer transactions from now on; the writers still re-land
+    /// their orphans.
+    pub const fn end_foreign_traffic(&mut self) {
+        self.foreign_budget = 0;
+    }
+
     /// The writers' transactions for a block on `parent` at `slot`: the one
     /// in turn re-lands an orphan or, with budget left, builds its next op.
     async fn foreign_txs(
@@ -541,22 +562,31 @@ impl World {
             return Vec::new();
         };
         let prices = node.gas_prices();
+        // Like a sequencer, a writer never re-lands a message whose payload
+        // the branch already carries, under whatever hash it got there.
+        let on_branch = node.inscription_payloads_at(parent, channel_id);
+        let landed = |tx: &SignedOps<Unverified, StandardMode>| {
+            if node.is_included_at(parent, &tx.hash()) {
+                return true;
+            }
+            let payloads = lb_zone_sdk::sequencer::channel_inscriptions(tx, channel_id);
+            !payloads.is_empty()
+                && payloads
+                    .iter()
+                    .all(|info| on_branch.contains(&info.payload))
+        };
         let budget = &mut self.foreign_budget;
         for writer in &mut self.writers {
             if !writer.in_turn(&state, slot.into()) {
                 continue;
             }
-            if let Some(orphan) = writer.reland(&ledger, &prices, slot.into(), |tx| {
-                node.is_included_at(parent, &tx.hash())
-            }) {
+            if let Some(orphan) = writer.reland(&ledger, &prices, slot.into(), landed) {
                 return vec![orphan];
             }
             let mut priced = ledger.clone();
             priced.set_gas_prices(prices.clone());
             if let Some(rebuilt) = writer
-                .rebuild(node, &priced, channel_id, funding_pk, slot.into(), |tx| {
-                    node.is_included_at(parent, &tx.hash())
-                })
+                .rebuild(node, &priced, channel_id, funding_pk, slot.into(), landed)
                 .await
             {
                 return vec![rebuilt];
@@ -1017,21 +1047,86 @@ impl World {
     /// own pending in any sequencer and every canonical transaction
     /// finalized. Bounded so a stuck scenario fails instead of looping.
     pub async fn settle_chain(&mut self, max_steps: usize) {
-        let done = self
-            .step_until(max_steps, |w| {
-                w.node().mempool().is_empty()
-                    && w.node().unfinalized_txs().is_empty()
-                    && w.peer
-                        .as_ref()
-                        .is_none_or(|p| p.mempool().is_empty() && p.tip() == w.node().tip())
-                    && (0..w.harness.seqs.len()).all(|index| w.own_pending(index).is_empty())
-            })
-            .await;
+        let done = self.try_settle_chain(max_steps).await;
         assert!(
             done,
             "chain did not settle within {max_steps} steps:\n{}",
             self.diagnostics()
         );
+    }
+
+    /// [`Self::settle_chain`] that reports a stuck chain instead of failing.
+    pub async fn try_settle_chain(&mut self, max_steps: usize) -> bool {
+        self.step_until(max_steps, |w| {
+            w.node().mempool().is_empty()
+                && w.node().unfinalized_txs().is_empty()
+                && w.peer
+                    .as_ref()
+                    .is_none_or(|p| p.mempool().is_empty() && p.tip() == w.node().tip())
+                && (0..w.harness.seqs.len()).all(|index| w.own_pending(index).is_empty())
+        })
+        .await
+    }
+
+    /// The known issue a run ended in, if what it left behind matches one
+    /// and nothing else is wrong: every `Chain` violation is a custom
+    /// (multi-inscription) tx that left the view without being reported
+    /// orphaned, or the chain did not settle (`settled` false) while a
+    /// sequencer holds a withdraw whose channel input is gone from the
+    /// canonical ledger.
+    #[must_use]
+    pub fn known_issue(&self, settled: bool) -> Option<KnownIssue> {
+        let channel = self.channel_id();
+        let pending: Vec<(TxHash, SignedOps<Unverified, StandardMode>)> = self
+            .harness
+            .seqs
+            .iter()
+            .filter_map(harness::Seq::checkpoint)
+            .flat_map(|checkpoint| checkpoint.pending_txs)
+            .collect();
+        let chain_violations: Vec<String> = self
+            .harness
+            .violations()
+            .filter(|(layer, _)| *layer == Layer::Chain)
+            .map(|(_, violation)| violation)
+            .collect();
+        if !chain_violations.is_empty() {
+            // The stranded tx may have expired out of the pending set by
+            // the end of the run; every tx the run saw is still known.
+            let custom_txs: Vec<TxHash> = self
+                .node()
+                .posted()
+                .iter()
+                .chain(self.writers.iter().flat_map(|writer| writer.posted.iter()))
+                .chain(pending.iter().map(|(_, tx)| tx))
+                .filter(|tx| lb_zone_sdk::sequencer::channel_inscriptions(tx, channel).len() >= 2)
+                .map(Hashable::hash)
+                .collect();
+            let stranded_custom_tx = |violation: &String| {
+                violation.ends_with("but left common_prefix")
+                    && custom_txs
+                        .iter()
+                        .any(|hash| violation.contains(&format!("Tx({hash:?})")))
+            };
+            return chain_violations
+                .iter()
+                .all(stranded_custom_tx)
+                .then_some(KnownIssue::CustomTxUnderConfigShed);
+        }
+        if settled {
+            return None;
+        }
+        let ledger = self.node().ledger_at_tip();
+        let dead_input_withdraw = pending.iter().any(|(_, tx)| {
+            tx.op_refs_iter().any(|op| match op {
+                OpRef::ChannelWithdraw(withdraw) => {
+                    withdraw.channel_id == channel
+                        && withdraw.inputs.iter().any(|id| ledger.note(id).is_none())
+                }
+                _ => false,
+            })
+        });
+        dead_input_withdraw.then_some(KnownIssue::DeadInputWithdraw)
     }
 
     /// Where every transaction is, for a failing assertion.
@@ -1040,10 +1135,12 @@ impl World {
         let node = self.node().clone();
         let _ = writeln!(
             out,
-            "tip slot {:?}, lib {:?}, mempool {}",
+            "tip slot {:?}, lib {:?}, mempool {}, funding notes reserved {}, funding available {}",
             node.tip_slot(),
             node.lib(),
-            node.mempool().len()
+            node.mempool().len(),
+            node.funding_reserved(),
+            node.funding_available()
         );
         if let Some(state) = node.channel_state_at_tip(self.channel_id()) {
             let _ = writeln!(out, "channel: {state:?}");
@@ -1069,6 +1166,13 @@ impl World {
                 writer.posted.len(),
                 self.foreign_budget
             );
+            for tx in writer
+                .posted
+                .iter()
+                .filter(|tx| !node.is_included(&tx.hash()))
+            {
+                let _ = writeln!(out, "  {:?} [{}] not canonical", tx.hash(), op_kinds(tx));
+            }
         }
         for rejection in node.rejected().iter().rev().take(10) {
             let _ = writeln!(
@@ -1095,7 +1199,11 @@ impl World {
                             .into_iter()
                             .map(|i| payload_str(&i.payload))
                             .collect();
-                    format!("{hash:?} {payloads:?} included={}", node.is_included(hash))
+                    format!(
+                        "{hash:?} [{}] {payloads:?} included={}",
+                        op_kinds(tx),
+                        node.is_included(hash)
+                    )
                 })
                 .collect();
             let _ = writeln!(
@@ -1634,6 +1742,22 @@ impl World {
             }
         }
     }
+}
+
+/// The kinds of op `tx` carries, in order, for diagnostics.
+fn op_kinds(tx: &SignedOps<Unverified, StandardMode>) -> String {
+    tx.op_refs_iter()
+        .map(|op| match op {
+            OpRef::ChannelInscribe(_) => "inscribe",
+            OpRef::ChannelConfig(_) => "config",
+            OpRef::ChannelDeposit(_) => "deposit",
+            OpRef::ChannelWithdraw(_) => "withdraw",
+            OpRef::ChannelTransfer(_) => "channel-transfer",
+            OpRef::Transfer(_) => "transfer",
+            _ => "other",
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Finalized inscription payloads in order.

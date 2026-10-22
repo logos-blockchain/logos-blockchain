@@ -29,7 +29,10 @@ cargo test -p logos-blockchain-zone-sdk-testing
   applies the ledger rules, so a block never carries an invalid
   transaction, like a leader dropping what went stale. A post validates
   nothing against the ledger and a re-post of what the mempool holds
-  succeeds, as on the node. Handles are tagged
+  succeeds, as on the node. The funding wallet hands out fee notes like
+  the wallet service: a note funded into a transaction is reserved until
+  it is spent in a block or LIB moved `PENDING_NOTE_EXPIRY_BLOCKS` (10)
+  past the reservation, then handed out again. Handles are tagged
   per subscriber so a test knows which tip each sequencer has been told
   about. Several nodes form a network: `import_from` adopts another node's
   blocks, `gossip_with` exchanges mempools.
@@ -128,7 +131,7 @@ cargo test -p logos-blockchain-zone-sdk-testing
 
 - `tests/properties.rs`: the property tests, run with everything else
   (`PROPTEST_CASES` raises the volume). A scenario is a list of `Event`s drawn from the
-  whole vocabulary, 16 to 64 of them, applied in order. The
+  whole vocabulary, 16 to 256 of them, applied in order. The
   chain's shape: a block with a slot gap, a fork of random depth and length,
   a revival of the dormant branch, silent blocks before an announced one, a
   tip moved silently behind an announced sibling, a duplicate delivery, LIB
@@ -148,7 +151,12 @@ cargo test -p logos-blockchain-zone-sdk-testing
   and note transfers; plus restarts, outages and price moves. From the
   second rung the sequencers also make a zone's choices at random: let an
   orphan die, burst-publish on the next turn, adopt another sequencer's
-  orphans (`Choices` on the reference consumer). No failing
+  orphans (`Choices` on the reference consumer). A schedule that runs into
+  a known SDK issue (`World::known_issue` recognises each from what the
+  run left behind) is counted and logged instead of failed, so the hunt
+  keeps drawing from the whole vocabulary and anything else that breaks in
+  those regions still fails; `--success-output immediate` shows the
+  counts. `SIM_EVENTS=min..max` sets the schedule length. No failing
   seed is persisted: a persisted seed only reproduces its case while the
   strategy that drew it is unchanged, so the schedule a run shrinks to is
   the hint for a hand-written story that names the mechanism, next to the
@@ -164,10 +172,10 @@ reorged-out deposit is re-funded and resubmitted forever while later
 publishes chain behind it; a config landing sheds the pending inscriptions
 chained on the channel tip but not a custom (multi-inscription) tx chained
 on one of them, which leaves the view unreported until the next event. The
-ignored property widens the vocabulary to both: withdraws that may spend
-unfinalized notes, and writers' two-inscription txs. The frozen-LIB backlog
-stall of #3858 was one of these until the fix landed; its story now runs
-green with the others.
+property tests draw both, withdraws that may spend unfinalized notes and
+writers' two-inscription txs, and recognise the two outcomes. The
+frozen-LIB backlog stall of #3858 was one of these until the fix landed;
+its story now runs green with the others.
 
 A test needs `#[tokio::test(start_paused = true)]`; SDK timers fire only
 through `Harness::advance`, and `World::step` advances the clock by a little

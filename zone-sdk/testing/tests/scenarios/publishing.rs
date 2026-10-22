@@ -456,7 +456,7 @@ async fn stale_backlog_reserves_fee_notes_only_for_its_window() {
     for payload in &payloads {
         world.publish(a, payload).await.expect("queued");
     }
-    let queued = world.node().funding_reserved();
+    let queued = world.node().funding_handed();
     assert_eq!(queued, payloads.len(), "each publish is funded once");
 
     // Blocks that take nothing: the posted window never lands, LIB moves
@@ -468,8 +468,7 @@ async fn stale_backlog_reserves_fee_notes_only_for_its_window() {
         world.extend(1, Posted::None).await;
         world.harness.advance(World::STEP_DURATION).await;
     }
-    let reserved = world.node().funding_reserved();
-    let refunded = reserved - queued;
+    let refunded = world.node().funding_handed() - queued;
     assert!(
         refunded <= (windows + 1) * depth,
         "{refunded} notes re-funded for a backlog of {queued} with depth {depth} over {windows} windows:\n{}",

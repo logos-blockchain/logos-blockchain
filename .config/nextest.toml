@@ -20,11 +20,12 @@ zone-sdk-sim = { max-threads = 3 }
 filter     = "package(logos-blockchain-zone-sdk-testing)"
 test-group = "zone-sdk-sim"
 
-# The property tests roll dozens of full schedules per test; kill after
-# 2m * 5 = 10m.
+# The property tests roll dozens of schedules of up to 256 events per test,
+# about 90s each here and several minutes on the macOS runner; kill after
+# 3m * 5 = 15m.
 [[profile.default.overrides]]
 filter       = "package(logos-blockchain-zone-sdk-testing) and binary(properties)"
-slow-timeout = { period = "2m", terminate-after = 5 }
+slow-timeout = { period = "3m", terminate-after = 5 }
 
 # For unit tests, kill after 30s * 4 = 2m
 [[profile.default.overrides]]

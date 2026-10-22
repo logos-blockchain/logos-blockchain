@@ -458,13 +458,20 @@ impl Harness {
     /// Every layer up to and including `top` held; a check of a higher layer
     /// is left for after the caller's own assertions on `top`.
     pub fn assert_layers_through(&self, top: Layer) {
+        if let Some(report) = self.layer_report(top) {
+            panic!("{report}");
+        }
+    }
+
+    /// The lowest broken layer up to and including `top`, with its
+    /// violations, if any.
+    #[must_use]
+    pub fn layer_report(&self, top: Layer) -> Option<String> {
         let violations: Vec<(Layer, String)> = self
             .violations()
             .filter(|(layer, _)| *layer <= top)
             .collect();
-        if let Some(report) = layers::report(violations.iter().map(|(l, v)| (*l, v.as_str()))) {
-            panic!("{report}");
-        }
+        layers::report(violations.iter().map(|(l, v)| (*l, v.as_str())))
     }
 }
 

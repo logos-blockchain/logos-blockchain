@@ -136,6 +136,9 @@ pub struct ReferenceConsumer {
     /// Other sequencers' orphans seen and not yet landed again: offered for
     /// adoption on every event, since their owner may abandon them later.
     others: HashMap<Inscription, InscriptionInfo>,
+    /// Own orphans whose republish failed, for instance while the funding
+    /// wallet has nothing free; tried again on the next block.
+    retry: Vec<InscriptionInfo>,
 }
 
 impl ReferenceConsumer {
@@ -150,6 +153,7 @@ impl ReferenceConsumer {
             choices: SharedChoices::default(),
             claims: None,
             others: HashMap::new(),
+            retry: Vec::new(),
         }
     }
 
@@ -217,10 +221,14 @@ impl ReferenceConsumer {
     async fn republish(&mut self, sequencer: &mut ZoneSequencer<SimNode>, info: &InscriptionInfo) {
         match sequencer.handle().publish(info.payload.clone()).await {
             Ok((result, _checkpoint)) => {
-                self.lineage
-                    .record_republish(info.this_msg, result.tx.inscription().this_msg);
+                let republished = result.tx.inscription().this_msg;
+                tracing::debug!(payload = ?info.payload, orphan = ?info.this_msg, ?republished, "republished own orphan");
+                self.lineage.record_republish(info.this_msg, republished);
             }
-            Err(error) => warn!(%error, "Failed to re-publish orphaned zone payload"),
+            Err(error) => {
+                warn!(%error, payload = ?info.payload, "Failed to re-publish orphaned zone payload");
+                self.retry.push(info.clone());
+            }
         }
     }
 }
@@ -254,6 +262,11 @@ impl Policy for ReferenceConsumer {
                 self.lineage
                     .observe_finalized(finalized_inscriptions(finalized).map(|i| i.this_msg));
                 self.lineage.observe(channel_update);
+                for info in std::mem::take(&mut self.retry) {
+                    if !self.lineage.intent_live(&info.this_msg) {
+                        self.republish(sequencer, &info).await;
+                    }
+                }
                 let finalized: HashSet<&Inscription> = finalized_inscriptions(finalized)
                     .map(|i| &i.payload)
                     .collect();
@@ -269,6 +282,7 @@ impl Policy for ReferenceConsumer {
                         continue;
                     };
                     if self.lineage.intent_live(&info.this_msg) {
+                        tracing::debug!(payload = ?info.payload, orphan = ?info.this_msg, "orphan's intent is live; not republished");
                         continue;
                     }
                     // Ours is what we published, not what carries our key:
@@ -281,6 +295,7 @@ impl Policy for ReferenceConsumer {
                         continue;
                     }
                     if !self.claim(&info.payload) {
+                        tracing::debug!(payload = ?info.payload, "own orphan held by another consumer; not republished");
                         continue;
                     }
                     let abandon = {

@@ -134,8 +134,31 @@ impl Default for BlockSpec {
 #[derive(Debug, Clone)]
 pub struct FundingWallet {
     pub pk: ZkPublicKey,
-    /// Notes handed out to funded transactions that are not yet mined.
-    pub reserved: HashSet<NoteId>,
+    /// Notes handed out to funded transactions that are not yet mined, with
+    /// the immutable blocks LIB has gained since each was handed out.
+    pub reserved: HashMap<NoteId, u64>,
+    /// Notes handed out so far, expired or not.
+    pub handed: usize,
+}
+
+/// How much LIB progress a note reservation survives.
+///
+/// The wallet service's `pending_note_expiry_blocks` default: a note funded
+/// into a transaction that stays unmined is handed out again once LIB moved
+/// this many blocks.
+pub const PENDING_NOTE_EXPIRY_BLOCKS: u64 = 10;
+
+impl FundingWallet {
+    /// Age every reservation by `immutable_blocks` and drop the expired.
+    fn expire(&mut self, immutable_blocks: u64) {
+        if immutable_blocks == 0 {
+            return;
+        }
+        self.reserved.retain(|_, age| {
+            *age = age.saturating_add(immutable_blocks);
+            *age < PENDING_NOTE_EXPIRY_BLOCKS
+        });
+    }
 }
 
 /// Distinguishes the blocks and mints of different nodes; genesis is salt 0
@@ -317,7 +340,8 @@ impl SimNode {
     pub fn set_funding_wallet(&self, pk: ZkPublicKey) {
         self.lock().funding = Some(FundingWallet {
             pk,
-            reserved: HashSet::new(),
+            reserved: HashMap::new(),
+            handed: 0,
         });
     }
 
@@ -698,6 +722,32 @@ impl SimNode {
         found
     }
 
+    /// The payloads of every channel inscription on the branch ending at
+    /// `id`.
+    #[must_use]
+    pub fn inscription_payloads_at(
+        &self,
+        id: HeaderId,
+        channel: ChannelId,
+    ) -> HashSet<lb_core::mantle::ops::channel::inscribe::Inscription> {
+        let state = self.lock();
+        let mut payloads = HashSet::new();
+        let mut current = id;
+        while let Some(block) = state.blocks.get(&current) {
+            for tx in &block.txs {
+                for info in lb_zone_sdk::sequencer::channel_inscriptions(tx, channel) {
+                    payloads.insert(info.payload);
+                }
+            }
+            if current == state.genesis {
+                break;
+            }
+            current = block.parent;
+        }
+        drop(state);
+        payloads
+    }
+
     /// Whether `hash` is on the branch ending at block `id`.
     #[must_use]
     pub fn is_included_at(&self, id: HeaderId, hash: &TxHash) -> bool {
@@ -757,10 +807,35 @@ impl SimNode {
         self.lock().mempool.clone()
     }
 
-    /// Funding-wallet notes handed to funded transactions not yet mined.
+    /// Funding-wallet notes handed to funded transactions not yet mined
+    /// whose reservation has not expired.
     #[must_use]
     pub fn funding_reserved(&self) -> usize {
         self.lock().funding.as_ref().map_or(0, |w| w.reserved.len())
+    }
+
+    /// Value of the funding-wallet notes at the tip that are not reserved.
+    #[must_use]
+    pub fn funding_available(&self) -> u64 {
+        let state = self.lock();
+        let Some(wallet) = state.funding.as_ref() else {
+            return 0;
+        };
+        let available = state.blocks[&state.tip]
+            .ledger
+            .notes_of(&wallet.pk)
+            .into_iter()
+            .filter(|(id, _)| !wallet.reserved.contains_key(id))
+            .map(|(_, utxo)| utxo.note.value)
+            .sum();
+        drop(state);
+        available
+    }
+
+    /// Funding-wallet notes handed to funded transactions so far.
+    #[must_use]
+    pub fn funding_handed(&self) -> usize {
+        self.lock().funding.as_ref().map_or(0, |w| w.handed)
     }
 
     /// Every transaction ever posted, in order.
@@ -1040,7 +1115,9 @@ impl ChainState {
         }
         if let Some(wallet) = self.funding.as_mut() {
             let ledger = &self.blocks[&id].ledger;
-            wallet.reserved.retain(|note| ledger.note(note).is_some());
+            wallet
+                .reserved
+                .retain(|note, _| ledger.note(note).is_some());
         }
     }
 
@@ -1067,6 +1144,9 @@ impl ChainState {
             self.ancestors(*candidate).contains(&self.lib),
             "reorg deeper than the finality depth"
         );
+        if let Some(wallet) = self.funding.as_mut() {
+            wallet.expire(candidate_height - lib_height);
+        }
         self.lib = *candidate;
     }
 
@@ -1102,7 +1182,7 @@ impl ChainState {
             .funding_public_keys
             .iter()
             .flat_map(|pk| ledger.notes_of(pk))
-            .filter(|(id, _)| !wallet.reserved.contains(id) && !consumed.contains(id))
+            .filter(|(id, _)| !wallet.reserved.contains_key(id) && !consumed.contains(id))
             .collect();
         candidates.sort_by(|a, b| {
             b.1.note
@@ -1129,7 +1209,8 @@ impl ChainState {
             )));
         }
         let inputs: Vec<NoteId> = funded.ledger_inputs().iter().map(Utxo::id).collect();
-        wallet.reserved.extend(inputs.iter().copied());
+        wallet.reserved.extend(inputs.iter().map(|id| (*id, 0)));
+        wallet.handed += inputs.len();
         let funded_tx = funded
             .build()
             .map_err(|e| server(format!("funding build: {e:?}")))?;

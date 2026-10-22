@@ -18,9 +18,12 @@
 //! outages and price moves. A failing roll is shrunk to the smallest
 //! schedule that still fails, which then becomes a hand-written story.
 
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
-use common::{FINALITY_DEPTH, FOREIGN, FOREIGN_2, Posted, World, inscription, passive};
+use common::{FINALITY_DEPTH, FOREIGN, FOREIGN_2, KnownIssue, Posted, World, inscription, passive};
 use lb_zone_sdk::sequencer::{FinalizedOp, FinalizedTx};
 use logos_blockchain_zone_sdk_testing::{
     chains::{self, Chain, Condition, Shape},
@@ -81,11 +84,9 @@ fn payloads(count: impl Strategy<Value = usize>) -> impl Strategy<Value = Vec<St
 }
 
 /// The zone's own actions: publishes, bursts, abandoned orphans, adoptions
-/// and hand-built txs, the last only without a config in play or with the
-/// known issues, since a config landing drops them from the view.
-fn zone_arms(top: Layer, sequencers: usize, known_issues: bool) -> Vec<Arm> {
+/// and hand-built txs.
+fn zone_arms(top: Layer, sequencers: usize) -> Vec<Arm> {
     let lineage = u32::from(top >= Layer::Lineage);
-    let custom = u32::from(top == Layer::Lineage || known_issues);
     let index = move || 0..sequencers;
     vec![
         (
@@ -114,7 +115,7 @@ fn zone_arms(top: Layer, sequencers: usize, known_issues: bool) -> Vec<Arm> {
                 .boxed(),
         ),
         (
-            custom,
+            lineage,
             (index(), payloads(1..=3usize))
                 .prop_map(|(index, payloads)| Event::Custom { index, payloads })
                 .boxed(),
@@ -126,7 +127,7 @@ fn zone_arms(top: Layer, sequencers: usize, known_issues: bool) -> Vec<Arm> {
 /// world adds them), so a config only varies the writers it accredits and
 /// the posting rules, never both zero: that freezes the turn on the first
 /// key.
-fn channel_arms(top: Layer, sequencers: usize, known_issues: bool) -> Vec<Arm> {
+fn channel_arms(top: Layer, sequencers: usize) -> Vec<Arm> {
     let configs = u32::from(top >= Layer::Configs);
     let notes = u32::from(top >= Layer::Notes);
     let index = move || 0..sequencers;
@@ -157,11 +158,11 @@ fn channel_arms(top: Layer, sequencers: usize, known_issues: bool) -> Vec<Arm> {
         (2 * notes, Just(Event::Deposit).boxed()),
         (
             2 * notes,
-            (index(), 1..=3u64)
-                .prop_map(move |(index, amount)| Event::Withdraw {
+            (index(), 1..=3u64, prop::bool::ANY)
+                .prop_map(move |(index, amount, unfinalized)| Event::Withdraw {
                     index,
                     amount,
-                    unfinalized: known_issues,
+                    unfinalized,
                 })
                 .boxed(),
         ),
@@ -216,15 +217,15 @@ fn client_arms(top: Layer, sequencers: usize) -> Vec<Arm> {
 /// own actions from [`Layer::Lineage`], configs from [`Layer::Configs`],
 /// note moves from [`Layer::Notes`], outages and restarts from
 /// [`Layer::Restarts`].
-fn event(top: Layer, sequencers: usize, known_issues: bool) -> impl Strategy<Value = Event> {
+fn event(top: Layer, sequencers: usize) -> impl Strategy<Value = Event> {
     let mut arms: Vec<Arm> = vec![(
         12,
         (shape(), posted())
             .prop_map(|(shape, posted)| Event::Chain { shape, posted })
             .boxed(),
     )];
-    arms.extend(zone_arms(top, sequencers, known_issues));
-    arms.extend(channel_arms(top, sequencers, known_issues));
+    arms.extend(zone_arms(top, sequencers));
+    arms.extend(channel_arms(top, sequencers));
     arms.extend(client_arms(top, sequencers));
     // A union rejects a zero weight: the layers below `top` draw nothing.
     Union::new_weighted(arms.into_iter().filter(|(weight, _)| *weight > 0).collect())
@@ -240,18 +241,13 @@ struct Scenario {
     messages: usize,
     timeframe: u32,
     timeout: u32,
-    /// What the SDK does not handle yet: withdraws may spend unfinalized
-    /// notes, which wedge the sequencer when the note's deposit is reorged
-    /// away for good, and custom txs sit under configs, which a config
-    /// landing drops from the view unreported.
-    known_issues: bool,
     schedule: Vec<Event>,
 }
 
 impl Scenario {
     /// The ops the writers cycle through: inscriptions always, configs from
-    /// [`Layer::Configs`], note transfers and withdraws from
-    /// [`Layer::Notes`]; two-inscription txs only with the known issues.
+    /// [`Layer::Configs`], note transfers, withdraws and two-inscription txs
+    /// from [`Layer::Notes`].
     const fn writer_ops(&self) -> &'static [WriterOp] {
         const INSCRIPTIONS: [WriterOp; 1] = [WriterOp::Inscribe];
         const WITH_CONFIGS: [WriterOp; 4] = [
@@ -260,27 +256,27 @@ impl Scenario {
             WriterOp::Inscribe,
             WriterOp::Config,
         ];
-        const WITH_NOTES: [WriterOp; 7] = [
-            WriterOp::Inscribe,
-            WriterOp::Inscribe,
-            WriterOp::Transfer,
-            WriterOp::Inscribe,
-            WriterOp::Withdraw,
-            WriterOp::Inscribe,
-            WriterOp::Config,
-        ];
         match self.top {
             Layer::Chain | Layer::Lineage => &INSCRIPTIONS,
             Layer::Configs => &WITH_CONFIGS,
-            Layer::Notes | Layer::Restarts if self.known_issues => &OP_CYCLE,
-            Layer::Notes | Layer::Restarts => &WITH_NOTES,
+            Layer::Notes | Layer::Restarts => &OP_CYCLE,
         }
     }
 }
 
-/// Scenarios drawing from the layers up to `top`; `known_issues` widens the
-/// schedule to what the SDK does not handle yet.
-fn scenario(top: Layer, known_issues: bool) -> impl Strategy<Value = Scenario> {
+/// Events per schedule: `SIM_EVENTS` (`min..max`, default `16..256`). The
+/// long end is what reaches finalization under stacked reorgs, expired fee
+/// note reservations and a drained funding wallet.
+fn schedule_len() -> std::ops::Range<usize> {
+    let spec = std::env::var("SIM_EVENTS").unwrap_or_else(|_| "16..256".into());
+    let (min, max) = spec.split_once("..").expect("SIM_EVENTS is min..max");
+    let (min, max): (usize, usize) = (min.parse().expect("min"), max.parse().expect("max"));
+    assert!(min < max, "SIM_EVENTS needs min < max");
+    min..max
+}
+
+/// Scenarios drawing from the layers up to `top`.
+fn scenario(top: Layer) -> impl Strategy<Value = Scenario> {
     let messages = if top >= Layer::Lineage {
         1..=4usize
     } else {
@@ -304,7 +300,7 @@ fn scenario(top: Layer, known_issues: bool) -> impl Strategy<Value = Scenario> {
             } else {
                 Just((3u32, 0u32)).boxed()
             };
-            let schedule = prop::collection::vec(event(top, sequencers, known_issues), 16..64);
+            let schedule = prop::collection::vec(event(top, sequencers), schedule_len());
             (rules, schedule).prop_map(move |((timeframe, timeout), schedule)| Scenario {
                 top,
                 chain: chain.clone(),
@@ -313,7 +309,6 @@ fn scenario(top: Layer, known_issues: bool) -> impl Strategy<Value = Scenario> {
                 messages,
                 timeframe,
                 timeout,
-                known_issues,
                 schedule,
             })
         })
@@ -331,7 +326,11 @@ fn sync_peer(world: &World) {
 /// A world with the channel open, the writers accredited and the
 /// sequencers started with their planned payloads; those payloads.
 async fn world_for(scenario: &Scenario) -> (World, Vec<String>) {
-    let mut world = World::with_funding(scenario.chain.clone(), 200, FUNDING_NOTE_VALUE);
+    // Every publish, re-fund and bundle reserves a fee note for up to ten
+    // LIB blocks, or for good under a frozen LIB: the wallet grows with the
+    // schedule so a long one is not starved.
+    let funding_notes = 200.max(2 * scenario.schedule.len());
+    let mut world = World::with_funding(scenario.chain.clone(), funding_notes, FUNDING_NOTE_VALUE);
     // Prices bind from the next block; funding reads them from the tip.
     world.set_gas_prices(BASE_GAS_PRICE);
     world.harness.mine().await;
@@ -382,8 +381,10 @@ async fn run(scenario: Scenario) {
         sync_peer(&world);
         world.harness.settle().await;
     }
-    // Nothing finalizes under a frozen LIB, and a stopped sequencer never
-    // drains; every sequencer runs for the settle.
+    // Nothing finalizes under a frozen LIB, a stopped sequencer never
+    // drains, and the writers would inscribe through the settle while their
+    // budget lasts: the schedule is over, so only its content has to land.
+    world.end_foreign_traffic();
     if world.node().is_lib_frozen() {
         world.node().thaw_lib();
         if let Some(peer) = &world.peer {
@@ -393,16 +394,29 @@ async fn run(scenario: Scenario) {
     for index in 0..world.harness.seqs.len() {
         world.apply_event(Event::Start { index }).await;
     }
-    world.settle_chain(400).await;
+    let settled = world.try_settle_chain(400).await;
+    if let Some(issue) = world.known_issue(settled) {
+        record_known_issue(issue, &scenario);
+        return;
+    }
+    assert!(
+        settled,
+        "chain did not settle within 400 steps:\n{}",
+        world.diagnostics()
+    );
 
     // The layers stack: a broken view is reported before the lineage it
     // would have broken, and the lineage before the layers above it.
-    world.harness.assert_layers_through(Layer::Chain);
+    if let Some(report) = world.harness.layer_report(Layer::Chain) {
+        panic!("{report}\n{}", world.diagnostics());
+    }
     let finalized = world.indexer_finalized().await;
     expected.extend(world.event_payloads.published.iter().cloned());
-    assert_payloads_landed_once(&finalized, expected, &world);
+    assert_payloads_landed_once(&finalized, expected, &mut world);
     assert_one_lineage(&finalized);
-    world.harness.assert_layers();
+    if let Some(report) = world.harness.layer_report(Layer::Restarts) {
+        panic!("{report}\n{}", world.diagnostics());
+    }
 }
 
 /// Every planned payload, every publish and every burst that found a turn
@@ -412,7 +426,7 @@ async fn run(scenario: Scenario) {
 fn assert_payloads_landed_once(
     finalized: &[FinalizedTx],
     mut expected: Vec<String>,
-    world: &World,
+    world: &mut World,
 ) {
     let payloads = common::inscription_payloads(finalized);
     let mut at_most_once: HashSet<String> =
@@ -420,16 +434,29 @@ fn assert_payloads_landed_once(
     for choices in world.choices() {
         let choices = choices.lock().expect("choices");
         expected.extend(choices.published.iter().map(payload_str));
-        at_most_once.extend(choices.abandoned.iter().map(payload_str));
+        // An adopted writer's orphan a consumer let die is the writer's to
+        // re-land, beside whoever else adopted it.
+        at_most_once.extend(
+            choices
+                .abandoned
+                .iter()
+                .map(payload_str)
+                .filter(|payload| !WRITERS.iter().any(|writer| payload.starts_with(writer))),
+        );
     }
     expected.extend(at_most_once.iter().cloned());
     for payload in &expected {
         let count = payloads.iter().filter(|p| *p == payload).count();
-        if at_most_once.contains(payload) {
-            assert!(count <= 1, "{payload} finalized {count} times");
+        let once = if at_most_once.contains(payload) {
+            count <= 1
         } else {
-            assert_eq!(count, 1, "{payload} finalized {count} times");
-        }
+            count == 1
+        };
+        assert!(
+            once,
+            "{payload} finalized {count} times:\n{}",
+            world.diagnostics()
+        );
     }
 }
 
@@ -455,6 +482,23 @@ fn assert_one_lineage(finalized: &[FinalizedTx]) {
     }
 }
 
+/// A schedule that ran into a known SDK issue is counted and logged, not
+/// failed: the hunt keeps drawing from the whole vocabulary, and whatever
+/// else breaks in those regions still fails. The count is printed so a run
+/// shows how often it got there (`--no-capture` or `--success-output
+/// immediate`), and reaches zero once the fix lands.
+fn record_known_issue(issue: KnownIssue, scenario: &Scenario) {
+    static HITS: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
+    let hits = HITS[issue as usize].fetch_add(1, Ordering::Relaxed) + 1;
+    eprintln!(
+        "known issue {issue:?}: {hits} schedule(s) so far ({} events, {} sequencers, {} writers)",
+        scenario.schedule.len(),
+        scenario.sequencers,
+        scenario.writers
+    );
+    tracing::warn!(?issue, schedule = ?scenario.schedule, "known issue hit");
+}
+
 fn block_on(scenario: Scenario) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -475,22 +519,22 @@ proptest! {
     })]
 
     #[test]
-    fn chain_shapes_keep_the_view(scenario in scenario(Layer::Chain, false)) {
+    fn chain_shapes_keep_the_view(scenario in scenario(Layer::Chain)) {
         block_on(scenario);
     }
 
     #[test]
-    fn own_messages_land_once(scenario in scenario(Layer::Lineage, false)) {
+    fn own_messages_land_once(scenario in scenario(Layer::Lineage)) {
         block_on(scenario);
     }
 
     #[test]
-    fn configs_move_the_turns(scenario in scenario(Layer::Configs, false)) {
+    fn configs_move_the_turns(scenario in scenario(Layer::Configs)) {
         block_on(scenario);
     }
 
     #[test]
-    fn notes_follow_the_ledger(scenario in scenario(Layer::Notes, false)) {
+    fn notes_follow_the_ledger(scenario in scenario(Layer::Notes)) {
         block_on(scenario);
     }
 }
@@ -504,19 +548,7 @@ proptest! {
     })]
 
     #[test]
-    fn every_schedule_finalizes_each_payload_once(scenario in scenario(Layer::Restarts, false)) {
-        block_on(scenario);
-    }
-
-    /// The same property over the known issues: withdraws from unfinalized
-    /// notes, which wedge the sequencer when the note's deposit is reorged
-    /// away for good, and custom txs under configs, which a config landing
-    /// drops from the view unreported.
-    #[test]
-    #[ignore = "known issues: dead-input withdraws resubmitted forever; config shed skips custom txs"]
-    fn every_schedule_with_known_issues_finalizes_each_payload_once(
-        scenario in scenario(Layer::Restarts, true)
-    ) {
+    fn every_schedule_finalizes_each_payload_once(scenario in scenario(Layer::Restarts)) {
         block_on(scenario);
     }
 }
