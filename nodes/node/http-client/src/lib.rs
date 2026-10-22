@@ -241,9 +241,13 @@ impl CommonHttpClient {
         base_url: Url,
         id: HeaderId,
     ) -> Result<Option<ApiBlock>, Error> {
+        #[expect(
+            clippy::literal_string_with_formatting_args,
+            reason = "Literal axum route placeholder, not a format argument."
+        )]
         let path = BLOCKS_DETAIL
             .trim_start_matches('/')
-            .replace(":id", &id.to_string());
+            .replace("{id}", &id.to_string());
         let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
 
         let mut request = self.client.get(request_url);
@@ -273,9 +277,13 @@ impl CommonHttpClient {
         base_url: Url,
         id: HeaderId,
     ) -> Result<Option<Events>, Error> {
+        #[expect(
+            clippy::literal_string_with_formatting_args,
+            reason = "Literal axum route placeholder, not a format argument."
+        )]
         let path = BLOCK_EVENTS
             .trim_start_matches('/')
-            .replace(":id", &id.to_string());
+            .replace("{id}", &id.to_string());
         let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
 
         let mut request = self.client.get(request_url);
@@ -424,7 +432,7 @@ impl CommonHttpClient {
     ) -> Result<Option<ChannelState>, Error> {
         let path = CHANNEL
             .trim_start_matches('/')
-            .replace(":id", &hex::encode(channel_id.as_ref()));
+            .replace("{id}", &hex::encode(channel_id.as_ref()));
         let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
 
         let mut request = self.client.get(request_url);
@@ -635,7 +643,7 @@ impl CommonHttpClient {
     ) -> Result<WalletBalanceResponseBody, Error> {
         let key_id = hex::encode(fr_to_bytes(zk_pk.as_fr()));
         let mut request_url = base_url
-            .join(&BALANCE.replace(":public_key", &key_id))
+            .join(&BALANCE.replace("{public_key}", &key_id))
             .map_err(Error::Url)?;
 
         if let Some(t) = tip {

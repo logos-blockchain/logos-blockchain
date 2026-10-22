@@ -6,7 +6,7 @@ use std::{
 use ::libp2p::PeerId;
 use axum::{
     Extension, Json,
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, rejection::JsonRejection},
     http::StatusCode,
     response::{IntoResponse as _, Response},
 };
@@ -1516,13 +1516,13 @@ pub async fn pow_claim<PoW, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     // An absent or empty body means "pay the auto-claim target", so the body
     // is optional rather than required.
-    body: Option<Json<pow::PoWClaimRequestBody>>,
+    body: Result<Json<pow::PoWClaimRequestBody>, JsonRejection>,
 ) -> Response
 where
     PoW: PoWServiceData,
     RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
 {
-    let claim_address = body.and_then(|Json(body)| body.claim_address);
+    let claim_address = body.ok().and_then(|Json(body)| body.claim_address);
     make_request_and_return_response!(pow::claim::<PoW, RuntimeServiceId>(&handle, claim_address))
 }
 
