@@ -1091,19 +1091,32 @@ impl World {
             .map(|(_, violation)| violation)
             .collect();
         if !chain_violations.is_empty() {
-            // The stranded tx may have expired out of the pending set by
-            // the end of the run; every tx the run saw is still known.
+            // A hand-built tx is reported whole, keyed by its hash and not by
+            // a message, whatever it carries. The stranded one may have
+            // expired out of the pending set by the end of the run; every tx
+            // the run saw is still known.
             let custom_txs: Vec<TxHash> = self
                 .node()
                 .posted()
                 .iter()
                 .chain(self.writers.iter().flat_map(|writer| writer.posted.iter()))
                 .chain(pending.iter().map(|(_, tx)| tx))
-                .filter(|tx| lb_zone_sdk::sequencer::channel_inscriptions(tx, channel).len() >= 2)
+                .filter(|tx| !lb_zone_sdk::sequencer::channel_inscriptions(tx, channel).is_empty())
                 .map(Hashable::hash)
                 .collect();
+            // The shed that strands it is a config's.
+            let configs_landed = self
+                .node()
+                .canonical_txs()
+                .iter()
+                .filter(|tx| {
+                    tx.op_refs_iter()
+                        .any(|op| matches!(op, OpRef::ChannelConfig(config) if config.channel == channel))
+                })
+                .count();
             let stranded_custom_tx = |violation: &String| {
-                violation.ends_with("but left common_prefix")
+                configs_landed >= 2
+                    && violation.ends_with("but left common_prefix")
                     && custom_txs
                         .iter()
                         .any(|hash| violation.contains(&format!("Tx({hash:?})")))

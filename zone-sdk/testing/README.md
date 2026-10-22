@@ -156,12 +156,14 @@ cargo test -p logos-blockchain-zone-sdk-testing
   run left behind) is counted and logged instead of failed, so the hunt
   keeps drawing from the whole vocabulary and anything else that breaks in
   those regions still fails; `--success-output immediate` shows the
-  counts. `SIM_EVENTS=min..max` sets the schedule length. No failing
-  seed is persisted: a persisted seed only reproduces its case while the
-  strategy that drew it is unchanged, so the schedule a run shrinks to is
-  the hint for a hand-written story that names the mechanism, next to the
-  other stories, or for a new catalogue entry when it is a chain shape
-  nobody had listed. `PROPTEST_CASES` raises the volume,
+  counts. `SIM_EVENTS=min..max` sets the schedule length. A failing
+  seed is written to `proptest-regressions/properties.txt` in this crate
+  and replayed first by the next run, so a rare failure can be rerun with
+  more logging; the schedule it prints is the hint for a hand-written
+  story that names the mechanism, next to the other stories, or for a new
+  catalogue entry when it is a chain shape nobody had listed. The seed
+  file is not kept in git: a seed outlives neither a change to the
+  strategy nor a fix. `PROPTEST_CASES` raises the volume,
   `PROPTEST_MAX_SHRINK_ITERS=0` shows a failing input without shrinking,
   `RUST_LOG=debug` adds the SDK's log and the per-event trace.
 

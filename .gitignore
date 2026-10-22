@@ -61,3 +61,6 @@ testnet/cfgsync/deployment-settings.yaml
 # Commit release template files
 !.github/release/devnet-peers.txt
 !.github/release/testnet-peers.txt
+
+# proptest seeds of failing zone-sdk simulation schedules; replayed locally, never a regression test
+zone-sdk/testing/proptest-regressions/
