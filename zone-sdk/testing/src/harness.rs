@@ -206,6 +206,8 @@ impl Harness {
         );
         let key_pk = key.public_key().into_unverified();
         let min_slots_remaining_in_turn = config.min_slots_remaining_in_turn;
+        let stale_refund_slots = config.stale_refund_slots;
+        let resubmit_interval = config.resubmit_interval;
         self.seqs.push(Seq {
             name: name.to_owned(),
             key,
@@ -215,7 +217,12 @@ impl Harness {
             policy,
             checker: ViewChecker::new(self.channel_id),
             mirror: Mirror::default(),
-            oracles: Oracles::for_sequencer(key_pk, min_slots_remaining_in_turn),
+            oracles: Oracles::for_sequencer(
+                key_pk,
+                min_slots_remaining_in_turn,
+                stale_refund_slots,
+                resubmit_interval,
+            ),
             events: Vec::new(),
         });
         self.seqs.len() - 1

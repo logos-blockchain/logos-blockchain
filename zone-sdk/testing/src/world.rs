@@ -123,9 +123,9 @@ pub enum Posted {
 /// land.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KnownIssue {
-    /// A pending withdraw whose channel input vanished with an orphaned
-    /// deposit is resubmitted forever.
-    DeadInputWithdraw,
+    /// A pending withdraw or pin deposit whose channel input vanished with
+    /// an orphaned deposit is resubmitted forever.
+    DeadInputBundle,
     /// A config landing sheds a pending inscription but not the custom tx
     /// chained on it, which leaves the view unreported.
     CustomTxUnderConfigShed,
@@ -1093,21 +1093,23 @@ impl World {
         if !chain_violations.is_empty() {
             // A hand-built tx is reported whole, keyed by its hash and not by
             // a message, whatever it carries. The stranded one may have
-            // expired out of the pending set by the end of the run; every tx
-            // the run saw is still known.
+            // expired out of the pending set, or been rebuilt by its writer,
+            // by the end of the run; every tx the run saw is still known.
             let custom_txs: Vec<TxHash> = self
                 .node()
                 .posted()
                 .iter()
                 .chain(self.writers.iter().flat_map(|writer| writer.posted.iter()))
+                .chain(self.writers.iter().flat_map(|writer| writer.rebuilt.iter()))
                 .chain(pending.iter().map(|(_, tx)| tx))
                 .filter(|tx| !lb_zone_sdk::sequencer::channel_inscriptions(tx, channel).is_empty())
                 .map(Hashable::hash)
                 .collect();
-            // The shed that strands it is a config's.
+            // The shed that strands it is a config's, on whichever branch
+            // the config landed; a reorg may have taken the config back.
             let configs_landed = self
                 .node()
-                .canonical_txs()
+                .mined_txs()
                 .iter()
                 .filter(|tx| {
                     tx.op_refs_iter()
@@ -1130,16 +1132,20 @@ impl World {
             return None;
         }
         let ledger = self.node().ledger_at_tip();
-        let dead_input_withdraw = pending.iter().any(|(_, tx)| {
+        let dead_input = pending.iter().any(|(_, tx)| {
             tx.op_refs_iter().any(|op| match op {
                 OpRef::ChannelWithdraw(withdraw) => {
                     withdraw.channel_id == channel
                         && withdraw.inputs.iter().any(|id| ledger.note(id).is_none())
                 }
+                OpRef::ChannelTransfer(transfer) => {
+                    transfer.channel_id == channel
+                        && transfer.inputs.iter().any(|id| ledger.note(id).is_none())
+                }
                 _ => false,
             })
         });
-        dead_input_withdraw.then_some(KnownIssue::DeadInputWithdraw)
+        dead_input.then_some(KnownIssue::DeadInputBundle)
     }
 
     /// Where every transaction is, for a failing assertion.

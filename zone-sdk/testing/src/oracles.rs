@@ -2,7 +2,10 @@
 //! a sequencer reports about deposits, its channel wallet and its turn must
 //! agree with the node it talks to.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    time::Duration,
+};
 
 use lb_common_http_client::Slot;
 use lb_core::{
@@ -28,6 +31,7 @@ use lb_zone_sdk::{
         channel_inscriptions,
     },
 };
+use tokio::time::Instant;
 
 use crate::{
     layers::{Layer, Violations},
@@ -56,23 +60,48 @@ pub struct Oracles {
     own: Option<UnverifiedEd25519PublicKey>,
     /// The sequencer's `min_slots_remaining_in_turn`.
     min_slots_remaining_in_turn: u64,
+    /// The sequencer's `stale_refund_slots`.
+    stale_refund_slots: u64,
+    /// The sequencer's resubmit timer: it ticks on the paused clock every
+    /// `resubmit_interval` from `started_at`, when the sequencer was
+    /// initialised, the first tick at once.
+    resubmit_interval: Duration,
+    started_at: Option<Instant>,
+    /// When the previous check ran.
+    last_check: Option<Instant>,
+    /// Each own pending message's current tx hash and funding stamp, from
+    /// the checkpoint: a change is a re-fund, legal only after the window.
+    fundings: HashMap<MsgId, (TxHash, Slot)>,
+    /// Messages reported orphaned since last seen pending: a consumer
+    /// republishing one on the same parent gives it the same id under a
+    /// fresh tx, funded now, which is not a re-fund.
+    orphaned: HashSet<MsgId>,
+    /// For each stale posted own tx, the in-turn ticks it sat un-refunded
+    /// through, and its stamp when the counting started.
+    unrefunded: HashMap<TxHash, (usize, Slot)>,
     /// How many of the node's posts by this sequencer have been judged.
     judged_posts: usize,
     /// Hand-built txs the test submitted whole: the SDK posts those without
     /// a turn, as the caller asked, so they are not judged.
     exempt: HashSet<TxHash>,
-    /// The slot the sequencer's view named at the previous check: a post
-    /// since then was made at that slot or a later delivered one.
-    last_view_slot: Option<Slot>,
-    /// Consecutive checks each own pending tx was postable and not posted,
-    /// with how often it had been posted when the counting started.
+    /// How many events the sequencer's stream had delivered at the previous
+    /// check: a post since was decided at one of the tips delivered since,
+    /// or the one before.
+    judged_delivered: usize,
+    /// Whether the previous check found the sequencer in turn.
+    was_in_turn: bool,
+    /// For each own pending tx chaining on the channel tip, the in-turn
+    /// ticks it waited unposted through, with how often it had been posted
+    /// when the counting started.
     unposted: HashMap<TxHash, (usize, usize)>,
     violations: Violations,
 }
 
-/// Checks in a row a postable tx may go unposted: the resubmit timer at
-/// [`crate::harness::RESUBMIT_INTERVAL`] fires every third step.
-const UNPOSTED_CHECKS: usize = 4;
+/// Checks at which the sequencer was in turn and its resubmit timer had
+/// ticked since the previous check, with a postable or stale tx left as it
+/// was, before that is a violation: the second absorbs a tick that fired
+/// before the block that opened the turn in the same settle.
+const IDLE_TICKS: usize = 2;
 
 /// Whether `tx` carries an op of `channel`.
 fn touches_channel(tx: &SignedOps<Unverified, StandardMode>, channel: ChannelId) -> bool {
@@ -86,23 +115,41 @@ fn touches_channel(tx: &SignedOps<Unverified, StandardMode>, channel: ChannelId)
     })
 }
 
+/// An own pending inscription: its message, tx hash and funding stamp.
+type Funding = (MsgId, TxHash, Slot);
+
 fn by_id(notes: &[ChannelNote]) -> BTreeMap<NoteId, Value> {
     notes.iter().map(|n| (n.note_id, n.value)).collect()
 }
 
 impl Oracles {
     /// Oracles for the sequencer signing as `own` with the given turn
-    /// margin.
+    /// margin and stale window.
     #[must_use]
     pub fn for_sequencer(
         own: UnverifiedEd25519PublicKey,
         min_slots_remaining_in_turn: u64,
+        stale_refund_slots: u64,
+        resubmit_interval: Duration,
     ) -> Self {
         Self {
             own: Some(own),
             min_slots_remaining_in_turn,
+            stale_refund_slots,
+            resubmit_interval,
+            started_at: Some(Instant::now()),
             ..Self::default()
         }
+    }
+
+    /// Ticks of the resubmit timer up to `at`.
+    fn ticks_by(&self, at: Instant) -> u64 {
+        let Some(started_at) = self.started_at else {
+            return 0;
+        };
+        let period = self.resubmit_interval.as_nanos().max(1);
+        u64::try_from(at.saturating_duration_since(started_at).as_nanos() / period + 1)
+            .expect("fits")
     }
 
     #[must_use]
@@ -160,15 +207,18 @@ impl Oracles {
     }
 
     /// Every post of an own plain inscription was in turn, with the margin,
-    /// by what the sequencer could know when it posted: its slot is the
-    /// last tip its streams delivered, its channel state is fetched from
-    /// the node's actual tip, so either block's rotation may be the one it
-    /// computed from. A block mined later at another slot may still reject
-    /// the post; that is the chain's doing, not the sequencer's.
-    fn check_posts(&mut self, node: &SimNode, channel: ChannelId, name: &str, view_slot: Slot) {
+    /// by what the sequencer could know when it posted: its slot is that
+    /// of the last tip its stream delivered, or of the one before when the
+    /// post was decided before the delivery and reached the node after it;
+    /// its channel state is fetched from the node's actual tip, so either
+    /// block's rotation may be the one it computed from. A block mined
+    /// later at another slot may still reject the post; that is the
+    /// chain's doing, not the sequencer's.
+    fn check_posts(&mut self, node: &SimNode, channel: ChannelId, name: &str) {
         let (posts, count) = node.posts_since(self.judged_posts);
         self.judged_posts = count;
-        let since = self.last_view_slot.replace(view_slot);
+        let delivered_before = self.judged_delivered;
+        self.judged_delivered = node.delivered_count();
         for post in posts {
             let Some(seen) = post.seen else {
                 continue;
@@ -189,9 +239,10 @@ impl Oracles {
             }
             let mut slots: Vec<Slot> = references
                 .iter()
+                .chain(&node.delivered_tips(delivered_before.saturating_sub(1), post.delivered))
                 .filter_map(|block| node.block_slot(*block))
                 .collect();
-            slots.extend(since);
+            slots.dedup();
             let in_turn = slots.iter().any(|slot| {
                 states
                     .iter()
@@ -219,17 +270,26 @@ impl Oracles {
         }
     }
 
-    /// An own plain inscription that is pending, chains on the channel tip
-    /// and whose turn it is must be posted: in the mempool, in a block, or
-    /// posted since the check started. One the node ever rejected is left
-    /// to the stale refund. Unposted for `UNPOSTED_CHECKS` checks in a row
-    /// means it was never re-posted.
+    /// An own plain inscription that is pending and chains on the channel
+    /// tip must be posted once its owner's turn comes: in the mempool, in a
+    /// block, or posted since it began waiting. One the node ever rejected
+    /// is left to the stale refund. One waiting as the turn begins is
+    /// re-posted as the sequencer sees the turn, by the next check; one
+    /// that became postable in the turn, on the resubmit timer, within
+    /// [`IDLE_TICKS`] in-turn ticks.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the turn and tick facts of this check"
+    )]
     fn check_resubmit(
         &mut self,
         sequencer: &ZoneSequencer<SimNode>,
         node: &SimNode,
         channel: ChannelId,
         name: &str,
+        in_turn: bool,
+        turn_began: bool,
+        ticked: bool,
     ) {
         let Some(checkpoint) = sequencer.checkpoint() else {
             return;
@@ -237,8 +297,7 @@ impl Oracles {
         let Some(state) = node.channel_state_at_tip(channel) else {
             return;
         };
-        let slot = node.tip_slot();
-        let mut postable = HashSet::new();
+        let mut waiting = HashSet::new();
         for (hash, tx) in &checkpoint.pending_txs {
             if self.exempt.contains(hash) {
                 continue;
@@ -246,32 +305,45 @@ impl Oracles {
             let Some(info) = self.own_plain_inscription(tx, channel) else {
                 continue;
             };
-            if info.parent_msg != state.tip_message || !self.own_turn_with_margin(&state, slot) {
+            if info.parent_msg != state.tip_message {
                 continue;
             }
             if node.in_mempool(hash) || node.is_included(hash) || node.rejected_at(hash).is_some() {
                 continue;
             }
             let posted = node.post_count(hash);
-            let (checks, since) = self.unposted.entry(*hash).or_insert((0, posted));
-            if posted > *since {
-                *checks = 0;
-                *since = posted;
+            waiting.insert(*hash);
+            let was_waiting = self.unposted.contains_key(hash);
+            let (ticks, count) = self.unposted.entry(*hash).or_insert((0, posted));
+            if posted > *count {
+                *ticks = 0;
+                *count = posted;
                 continue;
             }
-            postable.insert(*hash);
-            *checks += 1;
-            if *checks == UNPOSTED_CHECKS {
+            if !in_turn {
+                continue;
+            }
+            let idle = if turn_began && was_waiting {
+                // Waiting as the turn began: the turn's own re-post is due.
+                IDLE_TICKS
+            } else if ticked {
+                *ticks += 1;
+                *ticks
+            } else {
+                *ticks
+            };
+            if idle >= IDLE_TICKS {
+                *ticks = 0;
                 self.record(
                     Layer::Lineage,
                     format!(
-                        "{name}: pending {hash:?} chains on the channel tip in its turn and was \
-                         not posted for {UNPOSTED_CHECKS} checks"
+                        "{name}: pending {hash:?} chains on the channel tip and was not posted in \
+                         its owner's turn"
                     ),
                 );
             }
         }
-        self.unposted.retain(|hash, _| postable.contains(hash));
+        self.unposted.retain(|hash, _| waiting.contains(hash));
     }
 
     /// A restart from `before` restored every own pending inscription the
@@ -322,6 +394,9 @@ impl Oracles {
         self.finalized.clear();
         self.finalized_from = lib;
         self.resumed = true;
+        self.started_at = Some(Instant::now());
+        self.unposted.clear();
+        self.unrefunded.clear();
     }
 
     /// Every deposit an event reports must sit on the branch of the tip the
@@ -330,14 +405,20 @@ impl Oracles {
     pub fn observe(&mut self, event: &Event, node: &SimNode, name: &str) {
         let Event::BlocksProcessed {
             checkpoint,
+            channel_update,
             deposits,
             finalized,
-            ..
         } = event
         else {
             return;
         };
         self.lib = Some(checkpoint.lib);
+        self.orphaned.extend(
+            channel_update
+                .orphaned()
+                .iter()
+                .filter_map(|entry| entry.inscription().map(|info| info.this_msg)),
+        );
         for tx in finalized {
             if self.finalized.contains(&tx.tx_hash) {
                 self.record(
@@ -384,8 +465,13 @@ impl Oracles {
         channel: ChannelId,
         name: &str,
     ) {
-        let view_slot = sequencer.subscribe_channel_view().borrow().current_slot;
-        self.check_posts(node, channel, name, view_slot);
+        let now = Instant::now();
+        let ticked = self
+            .last_check
+            .replace(now)
+            .is_none_or(|previous| self.ticks_by(now) > self.ticks_by(previous));
+        self.check_posts(node, channel, name);
+        self.check_refunds_not_early(sequencer, channel, name);
         if !sequencer.is_connected() || !node.subscriber_at_tip() || self.lib != Some(node.lib()) {
             return;
         }
@@ -393,7 +479,130 @@ impl Oracles {
         self.check_turn(sequencer, node, channel, name);
         self.check_finalized(node, channel, name);
         self.check_deposits_reported(node, channel, name);
-        self.check_resubmit(sequencer, node, channel, name);
+        // Past the gate the stream position is the node's tip: the slot and
+        // channel state there are the sequencer's own.
+        let in_turn = node
+            .channel_state_at_tip(channel)
+            .is_some_and(|state| self.own_turn_with_margin(&state, node.tip_slot()));
+        let turn_began = in_turn && !self.was_in_turn;
+        self.was_in_turn = in_turn;
+        self.check_resubmit(sequencer, node, channel, name, in_turn, turn_began, ticked);
+        self.check_refunds_not_late(sequencer, node, channel, name, in_turn && ticked);
+    }
+
+    /// Own pending plain inscriptions with their funding stamp, from the
+    /// checkpoint; the stamp is the sequencer's LIB slot when the tx was
+    /// funded or last re-funded.
+    fn own_fundings(
+        &self,
+        sequencer: &ZoneSequencer<SimNode>,
+        channel: ChannelId,
+    ) -> Option<(Slot, Vec<Funding>)> {
+        let checkpoint = sequencer.checkpoint()?;
+        let stamps: HashMap<TxHash, Slot> = checkpoint
+            .funding
+            .iter()
+            .map(|record| (record.tx_hash, record.funded_at))
+            .collect();
+        let fundings = checkpoint
+            .pending_txs
+            .iter()
+            .filter(|(hash, _)| !self.exempt.contains(hash))
+            .filter_map(|(hash, tx)| {
+                let info = self.own_plain_inscription(tx, channel)?;
+                Some((info.this_msg, *hash, *stamps.get(hash)?))
+            })
+            .collect();
+        Some((checkpoint.lib_slot, fundings))
+    }
+
+    /// A pending own inscription is re-funded, under a new hash or stamped
+    /// anew after a failed re-fund, only once its stamp is more than
+    /// `stale_refund_slots` LIB slots old: the new stamp, the LIB slot of
+    /// the re-fund, must be that far past the old one.
+    fn check_refunds_not_early(
+        &mut self,
+        sequencer: &ZoneSequencer<SimNode>,
+        channel: ChannelId,
+        name: &str,
+    ) {
+        let Some((_, fundings)) = self.own_fundings(sequencer, channel) else {
+            return;
+        };
+        let window = self.stale_refund_slots;
+        for (msg, hash, funded_at) in fundings {
+            let previous = self.fundings.insert(msg, (hash, funded_at));
+            if self.orphaned.remove(&msg) {
+                continue;
+            }
+            let Some((old_hash, old_stamp)) = previous else {
+                continue;
+            };
+            if funded_at == old_stamp {
+                continue;
+            }
+            let aged = u64::from(funded_at).saturating_sub(u64::from(old_stamp));
+            if window == 0 || aged <= window {
+                self.record(
+                    Layer::Lineage,
+                    format!(
+                        "{name}: message {msg:?} ({old_hash:?} -> {hash:?}) was re-funded \
+                         {aged} LIB slots after its funding, within the stale window of {window}"
+                    ),
+                );
+            }
+        }
+    }
+
+    /// A posted own inscription not mined on the tip's branch whose stamp is
+    /// more than `stale_refund_slots` LIB slots behind the sequencer's LIB
+    /// is re-funded, a new stamp, by the resubmit timer's next tick in its
+    /// owner's turn: `opportunity` is one such tick since the last check.
+    fn check_refunds_not_late(
+        &mut self,
+        sequencer: &ZoneSequencer<SimNode>,
+        node: &SimNode,
+        channel: ChannelId,
+        name: &str,
+        opportunity: bool,
+    ) {
+        let window = self.stale_refund_slots;
+        if window == 0 {
+            return;
+        }
+        let Some((lib_slot, fundings)) = self.own_fundings(sequencer, channel) else {
+            return;
+        };
+        let mut stale = HashSet::new();
+        for (msg, hash, funded_at) in fundings {
+            let age = u64::from(lib_slot).saturating_sub(u64::from(funded_at));
+            if age <= window || node.post_count(&hash) == 0 || node.is_included(&hash) {
+                continue;
+            }
+            stale.insert(hash);
+            let (ticks, stamp) = self.unrefunded.entry(hash).or_insert((0, funded_at));
+            if funded_at != *stamp {
+                *ticks = 0;
+                *stamp = funded_at;
+                continue;
+            }
+            if !opportunity {
+                continue;
+            }
+            *ticks += 1;
+            if *ticks == IDLE_TICKS {
+                *ticks = 0;
+                self.record(
+                    Layer::Lineage,
+                    format!(
+                        "{name}: posted pending {hash:?} (message {msg:?}) funded {age} LIB slots \
+                         ago, past the stale window of {window}, was not re-funded on \
+                         {IDLE_TICKS} resubmit ticks in its owner's turn"
+                    ),
+                );
+            }
+        }
+        self.unrefunded.retain(|hash, _| stale.contains(hash));
     }
 
     /// Every deposit of `channel` on the canonical chain has been reported,

@@ -138,6 +138,8 @@ pub struct Post {
     pub tag: u64,
     pub hash: TxHash,
     pub seen: Option<HeaderId>,
+    /// How many events the poster's stream had delivered by the post.
+    pub delivered: usize,
     pub tip: HeaderId,
     pub tx: SignedOps<Unverified, StandardMode>,
 }
@@ -217,7 +219,7 @@ struct ChainState {
     pruned: usize,
     /// Per subscriber tag, the tip named by the last event its stream handed
     /// out: what that subscriber has been told about so far.
-    pulled: HashMap<u64, HeaderId>,
+    pulled: HashMap<u64, Vec<HeaderId>>,
 }
 
 /// What [`ChainState::apply_block`] appends.
@@ -395,14 +397,31 @@ impl SimNode {
     /// subscriber delivered; `None` before its first event.
     #[must_use]
     pub fn pulled_tip(&self) -> Option<HeaderId> {
-        self.lock().pulled.get(&self.tag).copied()
+        self.lock().last_pulled(self.tag)
+    }
+
+    /// How many events this handle's stream has delivered.
+    #[must_use]
+    pub fn delivered_count(&self) -> usize {
+        self.lock().pulled.get(&self.tag).map_or(0, Vec::len)
+    }
+
+    /// The tips named by the events this handle's stream delivered, from
+    /// the `from`th to before the `to`th.
+    #[must_use]
+    pub fn delivered_tips(&self, from: usize, to: usize) -> Vec<HeaderId> {
+        self.lock()
+            .pulled
+            .get(&self.tag)
+            .map(|log| log[from.min(log.len())..to.min(log.len())].to_vec())
+            .unwrap_or_default()
     }
 
     /// Whether this handle's subscriber has been told about the current tip.
     #[must_use]
     pub fn subscriber_at_tip(&self) -> bool {
         let state = self.lock();
-        state.pulled.get(&self.tag) == Some(&state.tip)
+        state.last_pulled(self.tag) == Some(state.tip)
     }
 
     /// Pay fees from notes owned by `pk`; without this funding is a no-op.
@@ -871,6 +890,20 @@ impl SimNode {
         state.txs_of(&state.ancestors(state.tip), &HashSet::new())
     }
 
+    /// Every transaction in any block, canonical or not, each once.
+    #[must_use]
+    pub fn mined_txs(&self) -> Vec<SignedOps<Unverified, StandardMode>> {
+        let state = self.lock();
+        let mut seen = HashSet::new();
+        state
+            .blocks
+            .values()
+            .flat_map(|block| block.txs.iter())
+            .filter(|tx| seen.insert(tx.hash()))
+            .cloned()
+            .collect()
+    }
+
     #[must_use]
     pub fn mempool(&self) -> Vec<SignedOps<Unverified, StandardMode>> {
         self.lock().mempool.clone()
@@ -961,6 +994,11 @@ impl ChainState {
             .filter(|id| !skip.contains(id))
             .flat_map(|id| self.blocks[id].txs.clone())
             .collect()
+    }
+
+    /// The tip named by the last event delivered to subscriber `tag`.
+    fn last_pulled(&self, tag: u64) -> Option<HeaderId> {
+        self.pulled.get(&tag)?.last().copied()
     }
 
     fn snapshot_event(&self) -> ProcessedBlockEvent {
@@ -1406,7 +1444,9 @@ impl adapter::Node for SimNode {
                 .lock()
                 .expect("sim node lock")
                 .pulled
-                .insert(tag, event.tip);
+                .entry(tag)
+                .or_default()
+                .push(event.tip);
         })))
     }
 
@@ -1465,12 +1505,14 @@ impl adapter::Node for SimNode {
     ) -> Result<(), lb_common_http_client::Error> {
         let mut state = self.lock();
         state.require_up()?;
-        let seen = state.pulled.get(&self.tag).copied();
+        let seen = state.last_pulled(self.tag);
+        let delivered = state.pulled.get(&self.tag).map_or(0, Vec::len);
         let tip = state.tip;
         state.posts.push(Post {
             tag: self.tag,
             hash: tx.hash(),
             seen,
+            delivered,
             tip,
             tx: tx.clone(),
         });

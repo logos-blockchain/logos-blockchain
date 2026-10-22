@@ -60,6 +60,8 @@ pub struct Writer {
     pub recipient: ZkPublicKey,
     /// Transactions this writer put into blocks, in order.
     pub posted: Vec<SignedOps<Unverified, StandardMode>>,
+    /// The originals a rebuild replaced among `posted`, in order.
+    pub rebuilt: Vec<SignedOps<Unverified, StandardMode>>,
     /// The ops this writer cycles through.
     pub ops: &'static [WriterOp],
     built: usize,
@@ -73,6 +75,7 @@ impl Writer {
             key,
             recipient,
             posted: Vec::new(),
+            rebuilt: Vec::new(),
             ops: &OP_CYCLE,
             built: 0,
         }
@@ -165,7 +168,8 @@ impl Writer {
         )
         .await
         .ok()?;
-        self.posted[position] = tx.clone();
+        self.rebuilt
+            .push(std::mem::replace(&mut self.posted[position], tx.clone()));
         Some(tx)
     }
 

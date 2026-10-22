@@ -482,6 +482,71 @@ async fn stale_backlog_reserves_fee_notes_only_for_its_window() {
     world.finish();
 }
 
+/// A posted inscription is re-funded once its funding stamp is more than
+/// `stale_refund_slots` LIB slots old, not at the window: with LIB exactly
+/// that far past the stamp, resubmit ticks in turn leave the stamp as it
+/// is; one LIB slot more and the next tick re-funds.
+#[tokio::test(start_paused = true)]
+async fn stale_refund_fires_one_slot_past_the_window() {
+    let mut world = World::with_funding(chains::linear(), 400, 3000);
+    let window = 4u64;
+    let config = SequencerConfig {
+        stale_refund_slots: window,
+        ..world.default_config()
+    };
+    let a = world.start_with("SEQ_A", config, reference("SEQ_A")).await;
+    world.publish(a, "boundary").await.expect("queued");
+    let stamp = |world: &World| {
+        let checkpoint = world.checkpoint(a);
+        let [funding] = checkpoint.funding.as_slice() else {
+            panic!("one funded pending tx, got {}", checkpoint.funding.len());
+        };
+        u64::from(funding.funded_at)
+    };
+    let lib_slot = |world: &World| {
+        let node = world.node();
+        u64::from(node.block_slot(node.lib()).expect("lib block"))
+    };
+    let funded_at = stamp(&world);
+
+    // Blocks that take nothing, until LIB sits exactly `window` slots past
+    // the stamp.
+    let mut steps = 0;
+    while lib_slot(&world) < funded_at + window {
+        world.extend(1, Posted::None).await;
+        world.harness.advance(World::STEP_DURATION).await;
+        steps += 1;
+        assert!(steps < 100, "LIB never reached the window");
+    }
+    assert_eq!(lib_slot(&world), funded_at + window);
+    world
+        .harness
+        .advance(3 * logos_blockchain_zone_sdk_testing::harness::RESUBMIT_INTERVAL)
+        .await;
+    assert_eq!(
+        stamp(&world),
+        funded_at,
+        "re-funded at the window:\n{}",
+        world.diagnostics()
+    );
+
+    world.extend(1, Posted::None).await;
+    world.harness.advance(World::STEP_DURATION).await;
+    assert_eq!(lib_slot(&world), funded_at + window + 1);
+    world
+        .harness
+        .advance(3 * logos_blockchain_zone_sdk_testing::harness::RESUBMIT_INTERVAL)
+        .await;
+    assert_eq!(
+        stamp(&world),
+        funded_at + window + 1,
+        "not re-funded one slot past the window:\n{}",
+        world.diagnostics()
+    );
+    world.settle_chain(100).await;
+    world.finish();
+}
+
 /// A dormant branch four deep is revived and wins, a twelve-deep branch
 /// stays dormant, then a twenty-deep branch wins. Writers inscribe in every
 /// block, fork blocks included, and re-land or rebuild what a reorg

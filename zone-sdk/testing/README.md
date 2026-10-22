@@ -101,13 +101,19 @@ cargo test -p logos-blockchain-zone-sdk-testing
   reported, the channel wallet view equals the ledger's channel notes
   (finalized against LIB, unfinalized against the tip), the turn view agrees
   with `round_robin`, and the finalized history it reported is the chain's,
-  once each and in order. Three judge promptness from what the node can
-  see: every post of an own inscription was in turn, with the configured
-  margin, by the rotation the sequencer could know (the node records the
-  tip each subscriber had been told about at the post); an own pending
-  inscription chaining on the channel tip in its owner's turn is posted
-  within the resubmit interval; a restart from a checkpoint restores every
-  own pending message the chain had not finalized, or sheds it as orphaned.
+  once each and in order. Four judge promptness on the sequencer's own two
+  clocks, the stream and the paused tokio time its resubmit timer runs on:
+  every post of an own inscription was in turn, with the configured
+  margin, at the stream position the sequencer had reached (the node
+  records the tips each subscriber's stream had delivered by the post); an
+  own pending inscription chaining on the channel tip is posted as its
+  owner sees the turn, or on the timer's next tick in turn, whose instants
+  are known since the timer starts with the sequencer; a posted own
+  inscription left unmined is re-funded neither before its funding stamp
+  is `stale_refund_slots` LIB slots old nor later than the next tick in
+  turn after that (the checkpoint carries each pending tx's stamp and the
+  sequencer's LIB slot); a restart from a checkpoint restores every own
+  pending message the chain had not finalized, or sheds it as orphaned.
   Hand-built txs the test submits whole are exempt, as the SDK posts them
   without a turn.
 - `src/harness.rs`: owns the sequencers, polls `next_event` until quiescent,
@@ -122,7 +128,7 @@ cargo test -p logos-blockchain-zone-sdk-testing
   traffic (`add_writer`, `enable_foreign_traffic`).
 - `tests/scenarios/`: the stories, each run on every chain of the
   catalogue, by theme: `publishing.rs` (messages, checkpoints, same-key
-  instances, turns, a foreign writer), `configs.rs` (re-keying, orphaning
+  instances, turns, a foreign writer, the stale window's edge), `configs.rs` (re-keying, orphaning
   by config, posting timeouts), `notes.rs` (deposits, withdraws, pins,
   refunds, the wallet view), `bundles.rs` (multi-sig rounds and hand-built
   custom txs), `tiers.rs` (the catalogue's self-check and the pairs tier)
@@ -177,9 +183,9 @@ cargo test -p logos-blockchain-zone-sdk-testing
 
 Known SDK issues are kept as `#[ignore]`d tests with the issue in the reason
 string (`cargo test -- --ignored` runs them); they turn green when the fix
-lands. Today: a pending atomic withdraw whose channel input vanished with a
-reorged-out deposit is re-funded and resubmitted forever while later
-publishes chain behind it; a config landing sheds the pending inscriptions
+lands. Today: a pending atomic withdraw or pin deposit whose channel input
+vanished with a reorged-out deposit is re-funded and resubmitted forever
+while later publishes chain behind it; a config landing sheds the pending inscriptions
 chained on the channel tip but not a custom (multi-inscription) tx chained
 on one of them, which leaves the view unreported until the next event. The
 property tests draw both, withdraws that may spend unfinalized notes and
