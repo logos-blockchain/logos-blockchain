@@ -340,22 +340,16 @@ async fn post_withdraw(
 /// # Returns
 ///
 /// The withdrawal on success, or an [`OperationStatus`] error on failure.
-/// Fails with [`OperationStatusCode::NotFound`] if the node has no
+/// Fails with [`OperationStatusCode::NotFound`] if the node has no live
 /// declaration, and right away if the node is not `Online`.
 fn blend_withdraw_sync(node: &LogosBlockchainNode) -> StatusResult<BlendWithdrawal> {
     let overwatch_handle = node.get_overwatch_handle();
     let runtime_handle = node.get_runtime_handle()?;
     runtime_handle.block_on(async {
-        let current_epoch = {
-            let chain_ffi_api = ChainFfiApi::from_overwatch_handle(overwatch_handle).await?;
-            let tip = chain_ffi_api.get_online_tip().await?;
-
-            chain_ffi_api
-                .get_ledger_state(tip)
-                .await?
-                .epoch_state()
-                .epoch
-        };
+        let current_epoch = ChainFfiApi::from_overwatch_handle(overwatch_handle)
+            .await?
+            .get_online_epoch()
+            .await?;
 
         let withdraw_tx_hash = {
             let SdpSubmission { tx_id, .. } = post_withdraw(overwatch_handle).await?;
@@ -394,6 +388,7 @@ fn blend_withdraw_sync(node: &LogosBlockchainNode) -> StatusResult<BlendWithdraw
 ///
 /// This function is unsafe because it dereferences raw pointers.
 #[must_use]
+#[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn blend_withdraw(
     node: *const LogosBlockchainNode,
