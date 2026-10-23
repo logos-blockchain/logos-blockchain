@@ -36,7 +36,7 @@ pub struct CoreInfo<NodeId> {
 pub struct CoreStatus {
     pub session_peers: SessionPeers,
     /// Blending tokens collected in the current epoch.
-    pub tokens_collected: usize,
+    pub tokens_collected_in_current_epoch: usize,
 }
 
 /// The negotiated peers for the current epoch.

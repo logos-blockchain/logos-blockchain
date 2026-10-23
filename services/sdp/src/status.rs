@@ -1,5 +1,5 @@
 use lb_chain_service::{BlendDeclarationStatus, Epoch};
-use lb_core::sdp::{Declaration, DeclarationId, SNAPSHOT_FINALIZATION_DELAY};
+use lb_core::sdp::{Declaration, DeclarationId};
 use lb_ledger::mantle::sdp::rewards::blend::RewardEstimate;
 
 use crate::{
@@ -7,30 +7,38 @@ use crate::{
     activity_submission::{ActivityProofReport, ActivityProofSubmissionError},
 };
 
+/// Where the node's Blend declaration is in its lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclarationState {
+    /// No declaration posted.
     NotDeclared,
     /// Posted, but not in the ledger yet.
     Pending,
-    /// In the ledger, but not yet in an epoch snapshot.
+    /// In the ledger, but not in an epoch snapshot yet.
     Activating,
+    /// In the current epoch's snapshot.
     Active,
+    /// Past `first_epoch_in_snapshot`, but not in the current epoch's snapshot.
     Inactive,
-    /// Withdrawal posted. The node still serves until `withdraw_at`, and the
-    /// locked note unlocks the epoch after.
+    /// Withdrawal posted. Once it lands, the declaration is withdrawn at
+    /// `withdraw_at`, and the locked note unlocks the epoch after.
     Withdrawn,
 }
 
 impl DeclarationState {
-    /// `declared` is whether the SDP service holds a live declaration id. A
-    /// `declaration` without one is a withdrawn declaration still in the
-    /// ledger.
+    /// # Arguments
+    ///
+    /// - `declared`: Whether the SDP service holds a live declaration ID.
+    /// - `declaration`: The declaration in the ledger, if any.
+    /// - `current_epoch`: The epoch of the chain tip.
+    /// - `is_in_snapshot`: Whether the declaration is in the current epoch's
+    ///   snapshot.
     #[must_use]
     fn new(
         declared: bool,
         declaration: Option<&Declaration>,
         current_epoch: Epoch,
-        in_snapshot: bool,
+        is_in_snapshot: bool,
     ) -> Self {
         declaration.map_or(
             if declared {
@@ -41,9 +49,9 @@ impl DeclarationState {
             |declaration| {
                 if !declared || declaration.withdraw_at.is_some() {
                     Self::Withdrawn
-                } else if in_snapshot {
+                } else if is_in_snapshot {
                     Self::Active
-                } else if current_epoch < active_from_epoch(declaration) {
+                } else if current_epoch < declaration.first_epoch_in_snapshot() {
                     Self::Activating
                 } else {
                     Self::Inactive
@@ -53,104 +61,120 @@ impl DeclarationState {
     }
 }
 
-/// Why no activity proof is due for the epoch being paid out.
+/// Why the node owes no activity proof for the activity epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NotRequiredReason {
-    /// The chain is in its first epoch, which has no earlier epoch to pay out.
+pub enum ProofNotRequiredReason {
+    /// The chain is in its first epoch, so there's no activity epoch.
     FirstEpoch,
-    /// The epoch being paid out had fewer providers than the minimum network
-    /// size, so the ledger accepts no activity.
+    /// The activity epoch had fewer providers than the minimum network size,
+    /// so the ledger accepts no proofs for it.
     NetworkBelowMinimum,
-    /// The node was not in the epoch being paid out, as in its first active
-    /// epoch.
+    /// The node wasn't a provider in the activity epoch, as in its first
+    /// active epoch.
     NotInActivityEpoch,
 }
 
-/// Why the activity proof for the epoch being paid out failed.
+/// Why the node's activity proof for the activity epoch isn't in the ledger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FailureReason {
-    /// No activity proof was submitted for the epoch being paid out. Also
-    /// reported briefly after an epoch starts, before the proof is submitted.
+pub enum ProofFailureReason {
+    /// No proof submitted. Also seen briefly at the start of an epoch, before
+    /// the proof is submitted.
     NoProof,
+    /// The node's declaration wasn't found when submitting the proof.
     DeclarationNotFound,
-    TxBuildFailed,
-    PostFailed,
+    /// The proof transaction couldn't be built.
+    TransactionBuildFailed,
+    /// The mempool rejected the proof transaction.
+    MempoolRejected,
 }
 
-/// How this node's activity for the epoch being paid out stands.
+/// The state of the node's activity proof for the activity epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActivityResult {
-    /// Posted, but not accepted by the ledger yet.
+pub enum ProofState {
+    /// Submitted, but not in the ledger yet.
     Pending,
+    /// In the ledger.
     Accepted,
-    Failed(FailureReason),
-    NotRequired(NotRequiredReason),
+    /// Not in the ledger, and not pending.
+    Failed(ProofFailureReason),
+    /// No proof owed.
+    NotRequired(ProofNotRequiredReason),
 }
 
-impl ActivityResult {
-    /// `activity_epoch` is `None` when no epoch is being paid out.
+impl ProofState {
+    /// # Arguments
+    ///
+    /// - `current_epoch`: The epoch of the chain tip.
+    /// - `ledger_proof_status`: The ledger's view of the proof. `None` when
+    ///   there's no activity epoch.
+    /// - `last_activity_proof_report`: The node's last proof submission.
     #[must_use]
     fn new(
         current_epoch: Epoch,
-        activity_epoch: Option<ActivityEpoch>,
+        ledger_proof_status: Option<LedgerProofStatus>,
         last_activity_proof_report: Option<ActivityProofReport>,
     ) -> Self {
-        let Some(activity_epoch) = activity_epoch else {
+        let Some(ledger_proof_status) = ledger_proof_status else {
             if current_epoch == Epoch::new(0) {
-                return Self::NotRequired(NotRequiredReason::FirstEpoch);
+                return Self::NotRequired(ProofNotRequiredReason::FirstEpoch);
             }
-            return Self::NotRequired(NotRequiredReason::NetworkBelowMinimum);
+            return Self::NotRequired(ProofNotRequiredReason::NetworkBelowMinimum);
         };
-        if !activity_epoch.in_activity_epoch {
-            return Self::NotRequired(NotRequiredReason::NotInActivityEpoch);
+        if !ledger_proof_status.in_activity_epoch {
+            return Self::NotRequired(ProofNotRequiredReason::NotInActivityEpoch);
         }
-        if activity_epoch.proof_accepted {
+        if ledger_proof_status.did_submit_proof {
             return Self::Accepted;
         }
         let Some(report) = last_activity_proof_report else {
-            return Self::Failed(FailureReason::NoProof);
+            return Self::Failed(ProofFailureReason::NoProof);
         };
-        if report.epoch != activity_epoch.epoch {
-            return Self::Failed(FailureReason::NoProof);
+        if report.epoch != ledger_proof_status.activity_epoch {
+            return Self::Failed(ProofFailureReason::NoProof);
         }
         match report.submission {
             Ok(_) => Self::Pending,
             Err(ActivityProofSubmissionError::DeclarationNotFound) => {
-                Self::Failed(FailureReason::DeclarationNotFound)
+                Self::Failed(ProofFailureReason::DeclarationNotFound)
             }
             Err(ActivityProofSubmissionError::TransactionBuildFailed) => {
-                Self::Failed(FailureReason::TxBuildFailed)
+                Self::Failed(ProofFailureReason::TransactionBuildFailed)
             }
             Err(ActivityProofSubmissionError::MempoolRejected) => {
-                Self::Failed(FailureReason::PostFailed)
+                Self::Failed(ProofFailureReason::MempoolRejected)
             }
         }
     }
 }
 
-/// The ledger's view of this node in the epoch being paid out.
+/// The ledger's view of the node's activity proof.
 #[derive(Clone, Copy)]
-struct ActivityEpoch {
-    epoch: Epoch,
+struct LedgerProofStatus {
+    /// The epoch being paid out.
+    activity_epoch: Epoch,
+    /// Whether the node was a provider in `activity_epoch`.
     in_activity_epoch: bool,
-    proof_accepted: bool,
+    /// Whether the ledger holds the node's proof.
+    did_submit_proof: bool,
 }
 
-impl From<&RewardEstimate> for ActivityEpoch {
+impl From<&RewardEstimate> for LedgerProofStatus {
     fn from(estimate: &RewardEstimate) -> Self {
         Self {
-            epoch: estimate.activity_epoch,
+            activity_epoch: estimate.activity_epoch,
             in_activity_epoch: estimate.in_activity_epoch,
-            proof_accepted: estimate.did_submit_proof,
+            did_submit_proof: estimate.did_submit_proof,
         }
     }
 }
 
+/// The node's Blend declaration in the ledger.
 #[derive(Debug, Clone)]
 pub struct DeclarationStatus {
     pub id: DeclarationId,
     pub declaration: Declaration,
-    pub active_from_epoch: Epoch,
+    /// The first epoch whose snapshot includes the declaration.
+    pub first_epoch_in_snapshot: Epoch,
 }
 
 impl DeclarationStatus {
@@ -158,48 +182,69 @@ impl DeclarationStatus {
     const fn new(id: DeclarationId, declaration: Declaration) -> Self {
         Self {
             id,
-            active_from_epoch: active_from_epoch(&declaration),
+            first_epoch_in_snapshot: declaration.first_epoch_in_snapshot(),
             declaration,
         }
     }
 }
 
+/// The node's Blend activity.
 #[derive(Debug, Clone, Copy)]
 pub struct ActivityStatus {
-    pub result: ActivityResult,
-    /// The latest epoch an activity message was accepted for.
-    /// Starts at the declaration's activation epoch.
+    /// The epoch being paid out. `None` when there's no activity epoch.
+    pub activity_epoch: Option<Epoch>,
+    /// The state of the activity proof for `activity_epoch`.
+    pub proof_state: ProofState,
+    /// The epoch in which the node's latest activity proof landed. Starts at
+    /// the declaration's `first_epoch_in_snapshot`.
     pub last_active_epoch: Epoch,
 }
 
 impl ActivityStatus {
+    /// # Arguments
+    ///
+    /// - `current_epoch`: The epoch of the chain tip.
+    /// - `status`: The declaration's status in the ledger.
+    /// - `last_activity_proof_report`: The node's last proof submission.
     #[must_use]
     fn new(
         current_epoch: Epoch,
         status: &BlendDeclarationStatus,
         last_activity_proof_report: Option<ActivityProofReport>,
     ) -> Self {
-        let activity_epoch = status.estimate.as_ref().map(ActivityEpoch::from);
+        let ledger_proof_status = status.estimate.as_ref().map(LedgerProofStatus::from);
         Self {
-            result: ActivityResult::new(current_epoch, activity_epoch, last_activity_proof_report),
+            activity_epoch: ledger_proof_status
+                .map(|ledger_proof_status| ledger_proof_status.activity_epoch),
+            proof_state: ProofState::new(
+                current_epoch,
+                ledger_proof_status,
+                last_activity_proof_report,
+            ),
             last_active_epoch: status.declaration.active,
         }
     }
 }
 
-/// This node's Blend declaration and how its activity for the epoch being
-/// paid out stands.
+/// The node's Blend declaration and activity.
 #[derive(Debug, Clone)]
 pub struct BlendStatus {
-    pub epoch: Epoch,
+    /// The epoch of the chain tip.
+    pub current_epoch: Epoch,
     pub declaration_state: DeclarationState,
-    /// `None` while the declaration is not in the ledger.
+    /// `None` while the declaration isn't in the ledger.
     pub declaration: Option<DeclarationStatus>,
-    /// `None` while there's no declaration or it's still activating.
+    /// `None` while the declaration isn't in the ledger, or while it's
+    /// activating.
     pub activity: Option<ActivityStatus>,
 }
 
 impl BlendStatus {
+    /// # Arguments
+    ///
+    /// - `participation`: The node's participation, if any.
+    /// - `last_activity_proof_report`: The node's last proof submission.
+    /// - `chain_status`: The ledger's Blend view at the chain tip.
     #[must_use]
     pub fn new(
         participation: Option<Participation>,
@@ -208,18 +253,20 @@ impl BlendStatus {
     ) -> Self {
         let lb_chain_service::BlendStatus {
             epoch: current_epoch,
-            declaration_status: declaration,
+            declaration_status,
         } = chain_status;
 
         let declaration_state = DeclarationState::new(
             matches!(participation, Some(Participation::Live(_))),
-            declaration.as_ref().map(|status| &status.declaration),
+            declaration_status
+                .as_ref()
+                .map(|status| &status.declaration),
             current_epoch,
-            declaration
+            declaration_status
                 .as_ref()
                 .is_some_and(|status| status.is_in_snapshot),
         );
-        let activity = declaration.as_ref().and_then(|status| {
+        let activity = declaration_status.as_ref().and_then(|status| {
             if declaration_state == DeclarationState::Activating {
                 None
             } else {
@@ -230,18 +277,18 @@ impl BlendStatus {
                 ))
             }
         });
-        let declaration = if let (Some(participation), Some(status)) = (participation, declaration)
-        {
-            Some(DeclarationStatus::new(
-                participation.declaration_id(),
-                status.declaration,
-            ))
-        } else {
-            None
-        };
+        let declaration =
+            if let (Some(participation), Some(status)) = (participation, declaration_status) {
+                Some(DeclarationStatus::new(
+                    participation.declaration_id(),
+                    status.declaration,
+                ))
+            } else {
+                None
+            };
 
         Self {
-            epoch: current_epoch,
+            current_epoch,
             declaration_state,
             declaration,
             activity,
@@ -249,16 +296,12 @@ impl BlendStatus {
     }
 }
 
-const fn active_from_epoch(declaration: &Declaration) -> Epoch {
-    declaration.created.strict_add(SNAPSHOT_FINALIZATION_DELAY)
-}
-
 #[cfg(test)]
 mod tests {
     use lb_core::{
         header::HeaderId,
         mantle::{NoteId, TxHash},
-        sdp::{Locator, Nonce, ProviderId, ServiceType},
+        sdp::{Locator, Nonce, ProviderId, SNAPSHOT_FINALIZATION_DELAY, ServiceType},
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 
@@ -329,32 +372,32 @@ mod tests {
     #[test]
     fn activity_is_not_required_in_the_first_epoch() {
         assert_eq!(
-            ActivityResult::new(Epoch::new(0), None, None),
-            ActivityResult::NotRequired(NotRequiredReason::FirstEpoch)
+            ProofState::new(Epoch::new(0), None, None),
+            ProofState::NotRequired(ProofNotRequiredReason::FirstEpoch)
         );
     }
 
     #[test]
     fn activity_without_an_activity_epoch_later_is_below_minimum() {
         assert_eq!(
-            ActivityResult::new(Epoch::new(3), None, None),
-            ActivityResult::NotRequired(NotRequiredReason::NetworkBelowMinimum)
+            ProofState::new(Epoch::new(3), None, None),
+            ProofState::NotRequired(ProofNotRequiredReason::NetworkBelowMinimum)
         );
     }
 
     #[test]
     fn activity_is_not_required_outside_the_activity_epoch() {
         assert_eq!(
-            ActivityResult::new(
+            ProofState::new(
                 Epoch::new(3),
-                Some(ActivityEpoch {
-                    epoch: Epoch::new(2),
+                Some(LedgerProofStatus {
+                    activity_epoch: Epoch::new(2),
                     in_activity_epoch: false,
-                    proof_accepted: false
+                    did_submit_proof: false
                 }),
                 None
             ),
-            ActivityResult::NotRequired(NotRequiredReason::NotInActivityEpoch)
+            ProofState::NotRequired(ProofNotRequiredReason::NotInActivityEpoch)
         );
     }
 
@@ -369,55 +412,55 @@ mod tests {
         });
 
         assert_eq!(
-            ActivityResult::new(
+            ProofState::new(
                 current_epoch,
-                Some(ActivityEpoch {
-                    epoch,
+                Some(LedgerProofStatus {
+                    activity_epoch: epoch,
                     in_activity_epoch: true,
-                    proof_accepted: true
+                    did_submit_proof: true
                 }),
                 Some(report(epoch, submitted))
             ),
-            ActivityResult::Accepted
+            ProofState::Accepted
         );
         assert_eq!(
-            ActivityResult::new(
+            ProofState::new(
                 current_epoch,
-                Some(ActivityEpoch {
-                    epoch,
+                Some(LedgerProofStatus {
+                    activity_epoch: epoch,
                     in_activity_epoch: true,
-                    proof_accepted: false
+                    did_submit_proof: false
                 }),
                 Some(report(epoch, submitted))
             ),
-            ActivityResult::Pending
+            ProofState::Pending
         );
         assert_eq!(
-            ActivityResult::new(
+            ProofState::new(
                 current_epoch,
-                Some(ActivityEpoch {
-                    epoch,
+                Some(LedgerProofStatus {
+                    activity_epoch: epoch,
                     in_activity_epoch: true,
-                    proof_accepted: false
+                    did_submit_proof: false
                 }),
                 Some(report(
                     epoch,
                     Err(ActivityProofSubmissionError::MempoolRejected)
                 ))
             ),
-            ActivityResult::Failed(FailureReason::PostFailed)
+            ProofState::Failed(ProofFailureReason::MempoolRejected)
         );
         assert_eq!(
-            ActivityResult::new(
+            ProofState::new(
                 current_epoch,
-                Some(ActivityEpoch {
-                    epoch,
+                Some(LedgerProofStatus {
+                    activity_epoch: epoch,
                     in_activity_epoch: true,
-                    proof_accepted: false
+                    did_submit_proof: false
                 }),
                 Some(report(Epoch::new(3), submitted))
             ),
-            ActivityResult::Failed(FailureReason::NoProof)
+            ProofState::Failed(ProofFailureReason::NoProof)
         );
     }
 }
