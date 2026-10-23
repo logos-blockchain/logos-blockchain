@@ -1337,7 +1337,7 @@ where
     let core_info = backend.network_info().await?.core_info?;
     Some(CoreStatus {
         session_peers: SessionPeers::from(&core_info),
-        tokens_collected: recovery_checkpoint
+        tokens_collected_in_current_epoch: recovery_checkpoint
             .current_epoch_token_collector()
             .tokens()
             .len(),
