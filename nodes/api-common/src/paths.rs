@@ -16,6 +16,7 @@ pub const NETWORK_INFO: &str = "/network/info";
 pub const BLEND_NETWORK_INFO: &str = "/blend/info";
 pub const BLEND_JOIN_NETWORK: &str = "/blend/join";
 pub const BLEND_REWARDS: &str = "/blend/rewards";
+pub const BLEND_STATUS: &str = "/blend/status";
 pub const BLEND_DISPERSE_TRANSACTION: &str = "/blend/transactions/disperse";
 pub const BLEND_PENDING_TRANSACTIONS: &str = "/blend/transactions/pending";
 pub const MEMPOOL_ADD_TX: &str = "/mempool/add/tx";

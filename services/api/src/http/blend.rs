@@ -5,20 +5,24 @@ use lb_blend_service::message::{
     CoreStatus, DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage,
 };
 use lb_chain_service::{
-    BlendRewards, State,
+    BlendRewards, Epoch, State,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
-use lb_core::mantle::Value;
+use lb_core::{
+    mantle::{NoteId, Value},
+    sdp::{DeclarationId, ProviderId},
+};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_network_service::backends::libp2p::PeerId;
 use lb_sdp_service::{
-    SdpService, api::SdpServiceApi, mempool::SdpMempoolAdapter, state::SdpStateStorage,
+    SdpService, api::SdpServiceApi, mempool::SdpMempoolAdapter, state::SdpStateStorage, status,
 };
 use overwatch::{
     DynError,
     overwatch::OverwatchHandle,
     services::{AsServiceId, ServiceData},
 };
+use serde::Serialize;
 use tokio::sync::oneshot;
 
 pub async fn blend_info<BlendService, RuntimeServiceId>(
@@ -136,7 +140,7 @@ where
 pub async fn blend_join_network<BlendService, RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,
     locator: lb_core::sdp::Locator,
-    service_note_id: lb_core::mantle::NoteId,
+    service_note_id: NoteId,
 ) -> Result<lb_sdp_service::SdpSubmission, DynError>
 where
     BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
@@ -271,6 +275,262 @@ where
         .await?
         .ok_or_else(|| DynError::from("The node has no Blend declaration in the ledger."))?;
     Ok(rewards)
+}
+
+/// Where the node's Blend declaration is in its lifecycle.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclarationState {
+    /// No declaration posted.
+    NotDeclared,
+    /// Posted, but not in the ledger yet.
+    Pending,
+    /// In the ledger, but not in an epoch snapshot yet.
+    Activating,
+    /// In the current epoch's snapshot.
+    Active,
+    /// Past `first_epoch_in_snapshot`, but not in the current epoch's snapshot.
+    Inactive,
+    /// Withdrawal posted. Once it lands, the declaration is withdrawn at
+    /// `withdraw_at`, and the locked note unlocks the epoch after.
+    Withdrawn,
+}
+
+impl From<status::DeclarationState> for DeclarationState {
+    fn from(state: status::DeclarationState) -> Self {
+        match state {
+            status::DeclarationState::NotDeclared => Self::NotDeclared,
+            status::DeclarationState::Pending => Self::Pending,
+            status::DeclarationState::Activating => Self::Activating,
+            status::DeclarationState::Active => Self::Active,
+            status::DeclarationState::Inactive => Self::Inactive,
+            status::DeclarationState::Withdrawn => Self::Withdrawn,
+        }
+    }
+}
+
+/// The state of the node's activity proof for the activity epoch.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProofState {
+    /// Submitted, but not in the ledger yet.
+    Pending,
+    /// In the ledger.
+    Accepted,
+    /// Not in the ledger, and not pending.
+    Failed,
+    /// No proof owed.
+    NotRequired,
+}
+
+/// Why a [`ProofState`] is `Failed` or `NotRequired`.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProofReason {
+    /// `Failed`: no proof submitted. Also seen briefly at the start of an
+    /// epoch, before the proof is submitted.
+    NoProof,
+    /// `Failed`: the node's declaration wasn't found when submitting the
+    /// proof.
+    DeclarationNotFound,
+    /// `Failed`: the proof transaction couldn't be built.
+    TransactionBuildFailed,
+    /// `Failed`: the mempool rejected the proof transaction.
+    MempoolRejected,
+    /// `NotRequired`: the chain is in its first epoch, so there's no activity
+    /// epoch.
+    FirstEpoch,
+    /// `NotRequired`: the activity epoch had fewer providers than the minimum
+    /// network size, so the ledger accepts no proofs for it.
+    NetworkBelowMinimum,
+    /// `NotRequired`: the node wasn't a provider in the activity epoch, as in
+    /// its first active epoch.
+    NotInActivityEpoch,
+}
+
+impl From<status::ProofFailureReason> for ProofReason {
+    fn from(reason: status::ProofFailureReason) -> Self {
+        match reason {
+            status::ProofFailureReason::NoProof => Self::NoProof,
+            status::ProofFailureReason::DeclarationNotFound => Self::DeclarationNotFound,
+            status::ProofFailureReason::TransactionBuildFailed => Self::TransactionBuildFailed,
+            status::ProofFailureReason::MempoolRejected => Self::MempoolRejected,
+        }
+    }
+}
+
+impl From<status::ProofNotRequiredReason> for ProofReason {
+    fn from(reason: status::ProofNotRequiredReason) -> Self {
+        match reason {
+            status::ProofNotRequiredReason::FirstEpoch => Self::FirstEpoch,
+            status::ProofNotRequiredReason::NetworkBelowMinimum => Self::NetworkBelowMinimum,
+            status::ProofNotRequiredReason::NotInActivityEpoch => Self::NotInActivityEpoch,
+        }
+    }
+}
+
+/// The node's Blend declaration in the ledger.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeclarationStatus {
+    pub id: DeclarationId,
+    pub provider_id: ProviderId,
+    pub zk_id: ZkPublicKey,
+    /// The note locked by the declaration.
+    pub locked_note_id: NoteId,
+    /// The epoch of the block that contained the declaration.
+    pub created_epoch: Epoch,
+    /// The first epoch whose snapshot includes the declaration.
+    pub first_epoch_in_snapshot: Epoch,
+    /// The epoch at which the declaration is scheduled to be withdrawn. `None`
+    /// until the withdrawal lands.
+    pub withdraw_at: Option<Epoch>,
+}
+
+impl From<status::DeclarationStatus> for DeclarationStatus {
+    fn from(status: status::DeclarationStatus) -> Self {
+        let declaration = status.declaration;
+        Self {
+            id: status.id,
+            provider_id: declaration.provider_id,
+            zk_id: declaration.zk_id,
+            locked_note_id: declaration.service_note_id,
+            created_epoch: declaration.created,
+            first_epoch_in_snapshot: status.first_epoch_in_snapshot,
+            withdraw_at: declaration.withdraw_at,
+        }
+    }
+}
+
+/// The node's Blend activity.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct ActivityStatus {
+    /// The epoch being paid out. `None` when there's no activity epoch.
+    pub activity_epoch: Option<Epoch>,
+    /// The state of the activity proof for `activity_epoch`.
+    pub proof_state: ProofState,
+    /// Set when `proof_state` is `Failed` or `NotRequired`.
+    pub proof_reason: Option<ProofReason>,
+    /// The epoch in which the node's latest activity proof landed. Starts at
+    /// the declaration's `first_epoch_in_snapshot`.
+    pub last_active_epoch: Epoch,
+}
+
+impl From<status::ActivityStatus> for ActivityStatus {
+    fn from(status: status::ActivityStatus) -> Self {
+        let (proof_state, proof_reason) = match status.proof_state {
+            status::ProofState::Pending => (ProofState::Pending, None),
+            status::ProofState::Accepted => (ProofState::Accepted, None),
+            status::ProofState::Failed(reason) => (ProofState::Failed, Some(reason.into())),
+            status::ProofState::NotRequired(reason) => {
+                (ProofState::NotRequired, Some(reason.into()))
+            }
+        };
+        Self {
+            activity_epoch: status.activity_epoch,
+            proof_state,
+            proof_reason,
+            last_active_epoch: status.last_active_epoch,
+        }
+    }
+}
+
+/// The negotiated peers for the current epoch.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct SessionPeers {
+    pub total: usize,
+    pub healthy: usize,
+}
+
+impl From<lb_blend_service::message::SessionPeers> for SessionPeers {
+    fn from(peers: lb_blend_service::message::SessionPeers) -> Self {
+        Self {
+            total: peers.total,
+            healthy: peers.healthy,
+        }
+    }
+}
+
+/// The node's Blend status.
+#[derive(Debug, Clone, Serialize)]
+pub struct BlendStatus {
+    /// Whether the node is a core node, as opposed to an edge node.
+    pub is_core: bool,
+    pub declaration_state: DeclarationState,
+    /// The epoch of the chain tip.
+    pub current_epoch: Epoch,
+    /// `None` while the declaration isn't in the ledger.
+    pub declaration: Option<DeclarationStatus>,
+    /// `None` while the declaration isn't in the ledger, or while it's
+    /// activating.
+    pub activity: Option<ActivityStatus>,
+    /// Blending tokens collected in the current epoch. `None` when not a core
+    /// node.
+    pub tokens_collected_in_current_epoch: Option<usize>,
+    /// `None` when not a core node.
+    pub session_peers: Option<SessionPeers>,
+}
+
+impl BlendStatus {
+    fn new(status: status::BlendStatus, core_status: Option<CoreStatus>) -> Self {
+        Self {
+            is_core: core_status.is_some(),
+            declaration_state: status.declaration_state.into(),
+            current_epoch: status.current_epoch,
+            declaration: status.declaration.map(Into::into),
+            activity: status.activity.map(Into::into),
+            tokens_collected_in_current_epoch: core_status
+                .map(|core_status| core_status.tokens_collected_in_current_epoch),
+            session_peers: core_status.map(|core_status| core_status.session_peers.into()),
+        }
+    }
+}
+
+/// Gets this node's Blend status: core or edge, its declaration and its
+/// activity proof for the activity epoch.
+///
+/// # Errors
+///
+/// Fails right away if the chain is not `Online`.
+pub async fn blend_status<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    StateStorage,
+    BlendService,
+    RuntimeServiceId,
+>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+) -> Result<BlendStatus, DynError>
+where
+    MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData<Tx: Send> + Send + Sync + 'static,
+    StateStorage: SdpStateStorage<RuntimeServiceId>,
+    BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
+    RuntimeServiceId: Send
+        + Sync
+        + Debug
+        + Display
+        + 'static
+        + AsServiceId<ChainService>
+        + AsServiceId<BlendService>
+        + AsServiceId<
+            SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>,
+        >,
+{
+    let chain_api = CryptarchiaServiceApi::<ChainService>::from_overwatch_handle(handle).await;
+    if chain_api.info().await?.cryptarchia_info.state != State::Online {
+        return Err(DynError::from("The node is not online yet."));
+    }
+
+    let sdp_api = SdpServiceApi::<
+        SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>,
+    >::from_overwatch_handle(handle)
+    .await;
+    let status = sdp_api.get_blend_status().await?;
+
+    let core_status = blend_core_status::<BlendService, RuntimeServiceId>(handle).await?;
+
+    Ok(BlendStatus::new(status, core_status))
 }
 
 #[cfg(test)]
