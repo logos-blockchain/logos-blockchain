@@ -1,7 +1,7 @@
 //! Scenario world: a funded simulated node, a channel owned by `SEQ_A`'s key,
 //! three named sequencer keys and a network behaviour applied on every step.
 
-use std::{fmt::Write as _, sync::Arc, time::Duration};
+use std::{collections::HashSet, fmt::Write as _, sync::Arc, time::Duration};
 
 use lb_core::{
     crypto::Hash,
@@ -42,6 +42,14 @@ use crate::{
 };
 
 pub const FINALITY_DEPTH: u64 = 30;
+
+/// Quiet steps after which a wait gives up.
+///
+/// Quiet is no new post, no mempool change, no canonical tx and no change
+/// of a sequencer's pending set. A finality depth passes everything that
+/// was going to finalize, so twice that of quiet means what is waited for
+/// will not come.
+pub const STUCK_STEPS: usize = 2 * FINALITY_DEPTH as usize;
 
 /// A submitted deposit: its tx hash, the op and the channel notes it creates.
 pub type Deposit = (TxHash, DepositOp, Vec<Utxo>);
@@ -905,13 +913,43 @@ impl World {
         max: usize,
         mut done: impl FnMut(&mut Self) -> bool,
     ) -> bool {
+        let mut last = self.progress();
+        let mut quiet = 0;
         for _ in 0..max {
             if done(self) {
                 return true;
             }
             self.step().await;
+            let progress = self.progress();
+            if progress == last {
+                quiet += 1;
+                if quiet >= STUCK_STEPS {
+                    return done(self);
+                }
+            } else {
+                quiet = 0;
+                last = progress;
+            }
         }
         done(self)
+    }
+
+    /// What a wait can be waiting on: the distinct txs posted, the mempool,
+    /// the canonical txs and each sequencer's own pending set. Re-posts and
+    /// rejections of the same txs are not progress.
+    fn progress(&self) -> (usize, Vec<TxHash>, usize, Vec<Vec<TxHash>>) {
+        let node = self.node();
+        let posted: HashSet<TxHash> = node.posted().iter().map(Hashable::hash).collect();
+        let mut mempool: Vec<TxHash> = node.mempool().iter().map(Hashable::hash).collect();
+        mempool.sort_unstable_by_key(|hash| hash.0);
+        let pending = (0..self.harness.seqs.len())
+            .map(|index| {
+                let mut pending = self.own_pending(index);
+                pending.sort_unstable_by_key(|hash| hash.0);
+                pending
+            })
+            .collect();
+        (posted.len(), mempool, node.canonical_txs().len(), pending)
     }
 
     pub async fn include(&mut self, hash: TxHash) {

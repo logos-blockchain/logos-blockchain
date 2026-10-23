@@ -103,9 +103,11 @@ cargo test -p logos-blockchain-zone-sdk-testing
   with `round_robin`, and the finalized history it reported is the chain's,
   once each and in order. Four judge promptness on the sequencer's own two
   clocks, the stream and the paused tokio time its resubmit timer runs on:
-  every post of an own inscription was in turn, with the configured
-  margin, at the stream position the sequencer had reached (the node
-  records the tips each subscriber's stream had delivered by the post); an
+  every post of an own inscription was made while the sequencer's own
+  view, as published at the stream position of the post or the one before,
+  claimed the turn (the node records the tips each subscriber's stream had
+  delivered by the post), and the view itself names the rotation's
+  sequencer and claims the turn only with the configured margin left; an
   own pending inscription chaining on the channel tip is posted as its
   owner sees the turn, or on the timer's next tick in turn, whose instants
   are known since the timer starts with the sequencer; a posted own

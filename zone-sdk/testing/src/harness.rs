@@ -365,6 +365,8 @@ impl Harness {
                     seq.checker.observe(&event);
                     seq.mirror.observe(&event);
                     seq.oracles.observe(&event, &seq.node, &seq.name);
+                    let view = sequencer.subscribe_channel_view().borrow().clone();
+                    seq.oracles.observe_view(&view);
                     seq.policy.on_event(sequencer, &event).await;
                     seq.events.push(event);
                     budget -= 1;

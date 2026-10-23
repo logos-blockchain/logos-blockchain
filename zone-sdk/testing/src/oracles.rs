@@ -27,8 +27,8 @@ use lb_key_management_system_service::keys::UnverifiedEd25519PublicKey;
 use lb_zone_sdk::{
     node_types::TxHash,
     sequencer::{
-        ChannelNote, Event, FinalizedOp, InscriptionInfo, SequencerCheckpoint, ZoneSequencer,
-        channel_inscriptions,
+        ChannelNote, Event, FinalizedOp, InscriptionInfo, SequencerChannelView,
+        SequencerCheckpoint, ZoneSequencer, channel_inscriptions,
     },
 };
 use tokio::time::Instant;
@@ -84,10 +84,9 @@ pub struct Oracles {
     /// Hand-built txs the test submitted whole: the SDK posts those without
     /// a turn, as the caller asked, so they are not judged.
     exempt: HashSet<TxHash>,
-    /// How many events the sequencer's stream had delivered at the previous
-    /// check: a post since was decided at one of the tips delivered since,
-    /// or the one before.
-    judged_delivered: usize,
+    /// The sequencer's own turn claim at each slot its view named, in the
+    /// order published: what it believed when it decided a post.
+    views: Vec<(Slot, bool)>,
     /// Whether the previous check found the sequencer in turn.
     was_in_turn: bool,
     /// For each own pending tx chaining on the channel tip, the in-turn
@@ -163,6 +162,27 @@ impl Oracles {
         self.exempt.insert(hash);
     }
 
+    /// Record the sequencer's view as published after an event: its slot
+    /// and whether it claims the turn.
+    pub fn observe_view(&mut self, view: &SequencerChannelView) {
+        let claim = (view.current_slot, view.our_turn_to_write);
+        match self.views.last_mut() {
+            Some(last) if last.0 == claim.0 => *last = claim,
+            Some(last) if *last == claim => {}
+            _ => self.views.push(claim),
+        }
+    }
+
+    /// Whether the view the sequencer had published at or before `slot`
+    /// claimed the turn.
+    fn claimed_turn_at(&self, slot: Slot) -> Option<bool> {
+        self.views
+            .iter()
+            .rev()
+            .find(|(view_slot, _)| *view_slot <= slot)
+            .map(|(_, claim)| *claim)
+    }
+
     /// The inscription of `tx` when it is a plain own publish: one channel
     /// inscription signed by this sequencer and no other channel op, the
     /// shape the SDK gates on the turn.
@@ -206,67 +226,44 @@ impl Oracles {
         slot.into_inner() < closes_at
     }
 
-    /// Every post of an own plain inscription was in turn, with the margin,
-    /// by what the sequencer could know when it posted: its slot is that
-    /// of the last tip its stream delivered, or of the one before when the
-    /// post was decided before the delivery and reached the node after it;
-    /// its channel state is fetched from the node's actual tip, so either
-    /// block's rotation may be the one it computed from. A block mined
-    /// later at another slot may still reject the post; that is the
-    /// chain's doing, not the sequencer's.
+    /// Every post of an own plain inscription was made while the sequencer's
+    /// own view claimed the turn: the view published at the stream position
+    /// of the call, or at the one before, since a post decided before a
+    /// delivery reaches the node after it. Whether the view was right is
+    /// [`Self::check_turn`]'s question; whether the node then took the post
+    /// is the chain's.
     fn check_posts(&mut self, node: &SimNode, channel: ChannelId, name: &str) {
         let (posts, count) = node.posts_since(self.judged_posts);
         self.judged_posts = count;
-        let delivered_before = self.judged_delivered;
-        self.judged_delivered = node.delivered_count();
         for post in posts {
-            let Some(seen) = post.seen else {
-                continue;
-            };
-            if self.exempt.contains(&post.hash)
+            if post.delivered == 0
+                || self.exempt.contains(&post.hash)
                 || self.own_plain_inscription(&post.tx, channel).is_none()
             {
                 continue;
             }
-            let references = [seen, post.tip];
-            let states: Vec<ChannelState> = references
-                .iter()
-                .filter_map(|block| node.channel_state_at(*block, channel))
+            let slots: Vec<Slot> = node
+                .delivered_tips(post.delivered.saturating_sub(2), post.delivered)
+                .into_iter()
+                .filter_map(|tip| node.block_slot(tip))
                 .collect();
-            if states.is_empty() {
-                // No channel yet: the SDK publishes freely, as it must.
+            let claims: Vec<Option<bool>> = slots
+                .iter()
+                .map(|slot| self.claimed_turn_at(*slot))
+                .collect();
+            if claims
+                .iter()
+                .any(|claim| claim.is_none_or(|claimed| claimed))
+            {
                 continue;
             }
-            let mut slots: Vec<Slot> = references
-                .iter()
-                .chain(&node.delivered_tips(delivered_before.saturating_sub(1), post.delivered))
-                .filter_map(|block| node.block_slot(*block))
-                .collect();
-            slots.dedup();
-            let in_turn = slots.iter().any(|slot| {
-                states
-                    .iter()
-                    .any(|state| self.own_turn_with_margin(state, *slot))
-            });
-            if !in_turn {
-                let own_index = self
-                    .own
-                    .and_then(|own| states[0].accredited_keys.iter().position(|key| *key == own));
-                let rotations: Vec<String> = slots
-                    .iter()
-                    .map(|slot| format!("slot {slot:?}: {:?}", states[0].round_robin(*slot)))
-                    .collect();
-                self.record(
-                    Layer::Configs,
-                    format!(
-                        "{name}: posted {:?} out of its turn or past the turn margin; own index \
-                         {own_index:?}, timeframe {:?}, round robin {}",
-                        post.hash,
-                        states[0].posting_timeframe,
-                        rotations.join(" / ")
-                    ),
-                );
-            }
+            self.record(
+                Layer::Configs,
+                format!(
+                    "{name}: posted {:?} at stream slots {slots:?} while its own view claimed no turn",
+                    post.hash
+                ),
+            );
         }
     }
 
@@ -741,6 +738,14 @@ impl Oracles {
                 format!(
                     "{name}: claims the turn at slot {:?} while round robin names index {index}",
                     view.current_slot
+                ),
+            );
+        } else if view.our_turn_to_write && !self.own_turn_with_margin(&state, view.current_slot) {
+            self.record(
+                Layer::Configs,
+                format!(
+                    "{name}: claims the turn at slot {:?} with fewer than {} slots left in it",
+                    view.current_slot, self.min_slots_remaining_in_turn
                 ),
             );
         }

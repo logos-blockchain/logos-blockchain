@@ -10,14 +10,16 @@
 filter       = "package(logos-blockchain-chain-leader-service) and test(gas_limited_selection_returns_canonically_applicable_prefix)"
 slow-timeout = { period = "1m", terminate-after = 4 }
 
-# The zone-sdk simulation bed is thousands of CPU-bound tests; cap how many
-# run at once so they do not starve the rest of the suite (the ZK-heavy
-# leader-service test above timed out behind them on the macOS runner).
+# The zone-sdk property tests are a handful of minutes-long CPU-bound tests;
+# cap how many run at once so they do not starve the rest of the suite (the
+# ZK-heavy leader-service test above timed out behind them on the macOS
+# runner). The catalogue stories are a quarter of a second each and run
+# unthrottled.
 [test-groups]
 zone-sdk-sim = { max-threads = 3 }
 
 [[profile.default.overrides]]
-filter     = "package(logos-blockchain-zone-sdk-testing)"
+filter     = "package(logos-blockchain-zone-sdk-testing) and binary(properties)"
 test-group = "zone-sdk-sim"
 
 # The property tests roll dozens of schedules of up to 256 events per test,
