@@ -58,5 +58,4 @@ test-log          = { features = ["trace"], workspace = true }
 tokio             = { features = ["test-util"], workspace = true }
 
 [features]
-default          = []
 tokio-task-names = ["lb-utils/tokio-task-names"]

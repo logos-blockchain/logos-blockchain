@@ -49,8 +49,6 @@ overwatch-derive   = { workspace = true }
 tempfile           = { workspace = true }
 
 [features]
-default = []
-
 # enable to help generate OpenAPI
 openapi          = ["dep:serde_json", "dep:utoipa"]
 tokio-task-names = ["lb-utils/tokio-task-names"]
