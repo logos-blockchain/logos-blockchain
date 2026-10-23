@@ -226,6 +226,7 @@ futures-timer                      = { default-features = false, version = "3.0.
 futures-util                       = { default-features = false, version = "0.3.32" }
 generic-array                      = { default-features = false, version = "1.2" }
 hex                                = { default-features = false, version = "0.4" }
+hickory-resolver                   = { default-features = false, version = "0.25" }
 http                               = { default-features = false, version = "1.3" }
 humantime                          = { default-features = false, version = "2.1" }
 igd-next                           = { default-features = false, version = "0.16.1" }

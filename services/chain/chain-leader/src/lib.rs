@@ -400,13 +400,12 @@ where
         let blend_adapter = BlendAdapter::<BlendService>::new(relays.blend_relay().clone());
 
         // Wait for other services to become ready, with timeout.
-        // (except Chain, ChainNetwork, and Blend)
+        // (except Chain, ChainNetwork, Blend, and Wallet)
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             Some(Duration::from_mins(1)),
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,
-            Wallet,
             PreloadKmsService<_>
         )
         .await?;
@@ -416,7 +415,8 @@ where
             None,
             CryptarchiaService, // becomes ready after recoverying blocks
             ChainNetwork,       // becomes ready after IBD
-            BlendService        // becomes ready after chain becomes online
+            BlendService,       // becomes ready after chain becomes online
+            Wallet              // becomes ready after Chain
         )
         .await?;
 

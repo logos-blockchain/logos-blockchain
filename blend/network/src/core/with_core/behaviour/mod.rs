@@ -516,13 +516,34 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         self.negotiated_peers.len()
     }
 
-    /// How many connections the node should open right now.
+    /// How many connections the node should open right now, besides the ones it
+    /// is already dialing.
     ///
     /// The node opens while it holds fewer than `Φ_CC - 1` live connections,
     /// **or** fewer than `Φ_CC - 2` live ones that it opened itself, as per the
-    /// spec.
+    /// spec. Each peer being dialed counts toward both, unless it is negotiated
+    /// already. A dial whose connection is part way through its handshake holds
+    /// a slot already, and the others take one once they connect.
     #[must_use]
-    pub fn connections_to_open(&self) -> usize {
+    pub fn connections_to_open<'peer>(
+        &self,
+        peers_being_dialed: impl IntoIterator<Item = &'peer PeerId>,
+    ) -> usize {
+        let mut total_ongoing_dials = 0;
+        let mut dials_without_negotiated_slot = 0;
+        for peer_id in peers_being_dialed {
+            if self.negotiated_peers.contains_key(peer_id) {
+                continue;
+            }
+            total_ongoing_dials += 1;
+            if !self
+                .peers_with_handshake_in_progress()
+                .any(|pending| pending == peer_id)
+            {
+                dials_without_negotiated_slot += 1;
+            }
+        }
+
         let live_shortfall = self
             .minimum_live_peers()
             .saturating_sub(self.num_live_peers());
@@ -532,7 +553,11 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
 
         live_shortfall
             .max(dialed_shortfall)
-            .min(self.available_connection_slots())
+            .saturating_sub(total_ongoing_dials)
+            .min(
+                self.available_connection_slots()
+                    .saturating_sub(dials_without_negotiated_slot),
+            )
     }
 
     /// The connections the node could still hold before reaching `Φ_CC + 1`.

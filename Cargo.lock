@@ -4830,6 +4830,7 @@ dependencies = [
  "either",
  "futures",
  "hex",
+ "hickory-resolver",
  "igd-next",
  "libp2p",
  "libp2p-swarm-test",

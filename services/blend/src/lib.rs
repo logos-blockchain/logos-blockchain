@@ -184,12 +184,20 @@ where
         let settings = settings_handle.notifier().get_updated_settings();
         let minimal_network_size = settings.common.minimum_network_size;
 
+        // Wait for services (except Chain and SDP) to become ready, with timeout
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
-            PreloadKmsService<_>,
-            SdpService,
-            <EdgeService as EdgeServiceComponents>::ChainService
+            PreloadKmsService<_>
+        )
+        .await?;
+        // Wait for Chain, which becomes ready after recovering blocks, and SDP,
+        // which becomes ready after Chain, without timeout.
+        wait_until_services_are_ready!(
+            &overwatch_handle,
+            None,
+            <EdgeService as EdgeServiceComponents>::ChainService,
+            SdpService
         )
         .await?;
 
