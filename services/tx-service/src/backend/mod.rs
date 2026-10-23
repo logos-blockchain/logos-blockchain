@@ -3,7 +3,7 @@ pub mod policy;
 pub mod pool;
 
 use core::hash::Hash;
-use std::pin::Pin;
+use std::{collections::HashMap, pin::Pin};
 
 use futures::Stream;
 use lb_core::mantle::transactions::hash::PrefixedKey;
@@ -70,12 +70,19 @@ pub trait MemPool {
     where
         I: IntoIterator<Item = Self::Key> + Send;
 
-    /// Remove items from the mempool..
+    /// Retire the items that block building found inapplicable.
     async fn remove(&mut self, items: &[Self::Key]);
 
-    /// The chain processed block `block_id` at `slot`. This is the pool's
-    /// only notion of chain time, so it also triggers eviction.
-    async fn on_processed_block(&mut self, block_id: Self::BlockId, slot: Slot);
+    /// Retire the items carried by the blocks that entered the canonical
+    /// chain, each mapped to the slot of the block carrying it. They remain
+    /// available for reference resolution until that block becomes immutable.
+    async fn retire_entered_canonical(&mut self, items: HashMap<Self::Key, Slot>);
+
+    /// The chain processed block `block_id` at `slot`, and its latest
+    /// immutable block is at `lib_slot`. This is the pool's only notion of
+    /// chain time, so it also triggers eviction, and the release of the items
+    /// whose block became immutable.
+    async fn on_processed_block(&mut self, block_id: Self::BlockId, slot: Slot, lib_slot: Slot);
 
     fn pending_item_count(&self) -> usize;
     fn last_item_timestamp(&self) -> u64;

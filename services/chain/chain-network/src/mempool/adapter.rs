@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -46,11 +48,14 @@ where
         Ok(())
     }
 
-    async fn remove_transactions(&self, ids: &[TxHash]) -> Result<(), overwatch::DynError> {
+    async fn retire_entered_canonical_transactions(
+        &self,
+        txs: HashMap<TxHash, Slot>,
+    ) -> Result<(), overwatch::DynError> {
         self.mempool_relay
-            .send(MempoolMsg::Remove { ids: ids.to_vec() })
+            .send(MempoolMsg::RetireEnteredCanonical { txs })
             .await
-            .map_err(|error| format!("Could not remove transactions from mempool: {error}"))?;
+            .map_err(|error| format!("Could not retire transactions in mempool: {error}"))?;
 
         Ok(())
     }
@@ -59,9 +64,14 @@ where
         &self,
         block_id: HeaderId,
         slot: Slot,
+        lib_slot: Slot,
     ) -> Result<(), overwatch::DynError> {
         self.mempool_relay
-            .send(MempoolMsg::ProcessedBlock { block_id, slot })
+            .send(MempoolMsg::ProcessedBlock {
+                block_id,
+                slot,
+                lib_slot,
+            })
             .await
             .map_err(|error| format!("Could not notify mempool of processed block: {error}"))?;
 

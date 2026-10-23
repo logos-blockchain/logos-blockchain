@@ -994,6 +994,7 @@ where
         tip,
         newly_canonical_txs,
         reorged_txs,
+        lib_slot,
     } = cryptarchia.apply_block(block).await?;
     debug!(
         target: LOG_TARGET, ?block_id, ?tip,
@@ -1001,16 +1002,21 @@ where
         "block applied; reconciling mempool"
     );
 
-    // Remove txs of every block that entered the canonical chain.
-    // Do this even when there is no tx to remove because this also triggers mempool
-    // TTL eviction.
-    if let Err(err) = mempool.remove_transactions(&newly_canonical_txs).await {
-        error!(target: LOG_TARGET, err, "could not remove transactions from mempool");
+    // Retire txs of every block that entered the canonical chain.
+    if !newly_canonical_txs.is_empty()
+        && let Err(err) = mempool
+            .retire_entered_canonical_transactions(newly_canonical_txs)
+            .await
+    {
+        error!(target: LOG_TARGET, err, "could not retire transactions in mempool");
     }
 
-    // Every applied block advances the mempool's clock, canonical or not: a
-    // block's slot does not depend on the chain it ends up on.
-    if let Err(err) = mempool.notify_processed_block(block_id, block_slot).await {
+    // Notify the mempool to trigger evictions and release txs whose block became
+    // immutable.
+    if let Err(err) = mempool
+        .notify_processed_block(block_id, block_slot, lib_slot)
+        .await
+    {
         error!(target: LOG_TARGET, err, "could not notify mempool of processed block");
     }
 
@@ -1103,7 +1109,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
     use futures::stream;
     use lb_binary_codec::canonical::BinaryDecodeExt as _;
@@ -1148,14 +1154,18 @@ mod tests {
             unimplemented!("resolution never adds")
         }
 
-        async fn remove_transactions(&self, _ids: &[TxHash]) -> Result<(), DynError> {
-            unimplemented!("resolution never removes")
+        async fn retire_entered_canonical_transactions(
+            &self,
+            _txs: HashMap<TxHash, Slot>,
+        ) -> Result<(), DynError> {
+            unimplemented!("resolution never retires")
         }
 
         async fn notify_processed_block(
             &self,
             _block_id: HeaderId,
             _slot: Slot,
+            _lib_slot: Slot,
         ) -> Result<(), DynError> {
             unimplemented!("resolution never processes blocks")
         }

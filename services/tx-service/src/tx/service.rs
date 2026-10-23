@@ -359,8 +359,16 @@ where
                 pool.remove(&ids).await;
                 state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
             }
-            MempoolMsg::ProcessedBlock { block_id, slot } => {
-                pool.on_processed_block(block_id, slot).await;
+            MempoolMsg::RetireEnteredCanonical { txs } => {
+                pool.retire_entered_canonical(txs).await;
+                state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
+            }
+            MempoolMsg::ProcessedBlock {
+                block_id,
+                slot,
+                lib_slot,
+            } => {
+                pool.on_processed_block(block_id, slot, lib_slot).await;
                 state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
             }
             MempoolMsg::Metrics { reply_channel } => {

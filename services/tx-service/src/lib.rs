@@ -5,6 +5,7 @@ pub mod storage;
 pub mod tx;
 
 use std::{
+    collections::HashMap,
     fmt::{Debug, Error, Formatter},
     pin::Pin,
 };
@@ -40,13 +41,18 @@ where
         prefix: Key::Prefix,
         reply_channel: Sender<Result<TxsWithCommonPrefix<Item>, MempoolError>>,
     },
-    Remove {
-        ids: Vec<Key>,
-    },
-    /// The chain processed `block_id` at `slot`.
+    /// Retire the items that block building found inapplicable.
+    Remove { ids: Vec<Key> },
+    /// /// Retire the items carried by the blocks that entered the canonical
+    /// chain, each mapped to the slot of the block carrying it. They remain
+    /// available for reference resolution until that block becomes immutable.
+    RetireEnteredCanonical { txs: HashMap<Key, Slot> },
+    /// The chain processed `block_id` at `slot`, and its latest immutable
+    /// block is at `lib_slot`.
     ProcessedBlock {
         block_id: BlockId,
         slot: Slot,
+        lib_slot: Slot,
     },
     Metrics {
         reply_channel: Sender<MempoolMetrics>,
@@ -80,9 +86,16 @@ where
             }
             Self::Add { payload, .. } => write!(f, "MempoolMsg::Add{{payload: {payload:?}}}"),
             Self::Remove { ids } => write!(f, "MempoolMsg::Prune{{ids: {ids:?}}}"),
-            Self::ProcessedBlock { block_id, slot } => write!(
+            Self::RetireEnteredCanonical { txs } => {
+                write!(f, "MempoolMsg::RetireEnteredCanonical{{txs: {txs:?}}}")
+            }
+            Self::ProcessedBlock {
+                block_id,
+                slot,
+                lib_slot,
+            } => write!(
                 f,
-                "MempoolMsg::ProcessedBlock{{block_id: {block_id:?}, slot: {slot:?}}}"
+                "MempoolMsg::ProcessedBlock{{block_id: {block_id:?}, slot: {slot:?}, lib_slot: {lib_slot:?}}}"
             ),
             Self::Metrics { .. } => write!(f, "MempoolMsg::Metrics"),
             Self::Status { items, .. } => write!(f, "MempoolMsg::Status{{items: {items:?}}}"),

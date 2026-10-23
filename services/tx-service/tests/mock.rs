@@ -375,6 +375,7 @@ fn test_mock_pool_recovery_state() {
     let recovery_state = PoolRecoveryState::<TxHash> {
         pending_items: IndexMap::new(),
         removed_items: BTreeMap::new(),
+        included_in_canonical: HashMap::new(),
         last_item_timestamp: 1_234_567_890,
     };
 
@@ -714,6 +715,166 @@ async fn removing_a_tx_the_pool_never_held_records_nothing() {
     );
 }
 
+fn keys_with_prefix(pool: &InMemoryPool, key: TxHash) -> Vec<TxHash> {
+    pool.keys_by_prefix(&key.key_prefix()).copied().collect()
+}
+
+async fn stored_items(pool: &InMemoryPool, key: TxHash) -> Vec<Ops> {
+    pool.get_items_by_keys([key])
+        .await
+        .expect("storage lookup should succeed")
+        .collect()
+        .await
+}
+
+/// A tx carried by a canonical block stays resolvable until the block becomes
+/// immutable, so a competing proposal that references it still reconstructs.
+#[tokio::test]
+async fn included_tx_resolves_until_its_block_is_immutable() {
+    let mut pool = InMemoryPool::new(
+        MempoolSettings::default(),
+        InMemoryStorageAdapter::default(),
+    );
+    let tx = tx("included");
+    let tx_id = tx.hash();
+    pool.add_item(tx_id, tx.clone())
+        .await
+        .expect("tx should be added");
+
+    pool.retire_entered_canonical(HashMap::from([(tx_id, Slot::from(10u64))]))
+        .await;
+
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
+    assert!(pool.save().included_in_canonical.contains_key(&tx_id));
+    assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
+
+    // The block is not immutable yet.
+    pool.on_processed_block(HeaderId::from([1; 32]), Slot::from(11u64), Slot::from(9u64))
+        .await;
+    assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
+    assert_eq!(stored_items(&pool, tx_id).await, vec![tx]);
+
+    // The block becomes immutable.
+    pool.on_processed_block(
+        HeaderId::from([2; 32]),
+        Slot::from(12u64),
+        Slot::from(10u64),
+    )
+    .await;
+    assert_eq!(keys_with_prefix(&pool, tx_id), vec![]);
+    assert_eq!(stored_items(&pool, tx_id).await, vec![]);
+    assert!(!pool.save().included_in_canonical.contains_key(&tx_id));
+}
+
+/// A tx whose block left the canonical chain is admitted again.
+#[tokio::test]
+async fn reorged_tx_returns_to_pending() {
+    let mut pool = InMemoryPool::new(
+        MempoolSettings::default(),
+        InMemoryStorageAdapter::default(),
+    );
+    let tx = tx("reorged");
+    let tx_id = tx.hash();
+    pool.add_item(tx_id, tx.clone())
+        .await
+        .expect("tx should be added");
+    pool.retire_entered_canonical(HashMap::from([(tx_id, Slot::from(10u64))]))
+        .await;
+
+    pool.add_item(tx_id, tx)
+        .await
+        .expect("a reorged tx should be admitted again");
+
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Pending]);
+    assert!(!pool.save().included_in_canonical.contains_key(&tx_id));
+    assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
+}
+
+/// A tx retired earlier, e.g. as inapplicable, moves to `included_in_canonical`
+/// once a canonical block carries it.
+#[tokio::test]
+async fn removed_tx_entering_the_canonical_chain_moves_to_included() {
+    let mut pool = InMemoryPool::new(
+        MempoolSettings::default(),
+        InMemoryStorageAdapter::default(),
+    );
+    let tx = tx("removed then included");
+    let tx_id = tx.hash();
+    pool.add_item(tx_id, tx).await.expect("tx should be added");
+    pool.remove(&[tx_id]).await;
+
+    pool.retire_entered_canonical(HashMap::from([(tx_id, Slot::from(10u64))]))
+        .await;
+
+    let state = pool.save();
+    assert!(!state.removed_items.contains_key(&tx_id));
+    assert_eq!(
+        state.included_in_canonical.get(&tx_id),
+        Some(&Slot::from(10u64))
+    );
+    assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
+}
+
+/// A tx carried by both a displaced block and an adopted one takes the slot of
+/// the adopted block, so it is released when that block becomes immutable.
+#[tokio::test]
+async fn tx_carried_by_both_branches_takes_the_adopted_block_slot() {
+    let mut pool = InMemoryPool::new(
+        MempoolSettings::default(),
+        InMemoryStorageAdapter::default(),
+    );
+    let tx = tx("carried by both branches");
+    let tx_id = tx.hash();
+    pool.add_item(tx_id, tx).await.expect("tx should be added");
+    pool.retire_entered_canonical(HashMap::from([(tx_id, Slot::from(10u64))]))
+        .await;
+
+    pool.retire_entered_canonical(HashMap::from([(tx_id, Slot::from(12u64))]))
+        .await;
+
+    assert_eq!(
+        pool.save().included_in_canonical.get(&tx_id),
+        Some(&Slot::from(12u64))
+    );
+}
+
+/// A tx the pool never held, e.g. from a downloaded block, has no body to
+/// retain.
+#[tokio::test]
+async fn never_held_tx_entering_the_canonical_chain_is_not_retained() {
+    let mut pool = InMemoryPool::new(
+        MempoolSettings::default(),
+        InMemoryStorageAdapter::default(),
+    );
+    let tx_id = tx("unknown").hash();
+
+    pool.retire_entered_canonical(HashMap::from([(tx_id, Slot::from(10u64))]))
+        .await;
+
+    assert!(pool.save().included_in_canonical.is_empty());
+    assert_eq!(keys_with_prefix(&pool, tx_id), vec![]);
+}
+
+/// A restart keeps the included txs and their prefix index entries.
+#[tokio::test]
+async fn included_tx_remains_resolvable_after_recovery() {
+    let storage = InMemoryStorageAdapter::default();
+    let mut pool = InMemoryPool::new(MempoolSettings::default(), storage.clone());
+    let tx = tx("included");
+    let tx_id = tx.hash();
+    pool.add_item(tx_id, tx.clone())
+        .await
+        .expect("tx should be added");
+    pool.retire_entered_canonical(HashMap::from([(tx_id, Slot::from(10u64))]))
+        .await;
+
+    let pool = InMemoryPool::recover(MempoolSettings::default(), pool.save(), storage);
+
+    assert!(pool.save().included_in_canonical.contains_key(&tx_id));
+    assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
+    assert_eq!(stored_items(&pool, tx_id).await, vec![tx]);
+}
+
 #[test]
 fn local_submission_rejects_oversized_tx() {
     run_with_mock_pool_node(Vec::new(), |settings, _temp_dir| {
@@ -997,8 +1158,12 @@ fn prefix_lookup_tracks_pending_and_removed_txs() {
 /// The pool drives the sweep from processed blocks, so an eviction test is a
 /// sequence of block notifications around the claim's deadline.
 async fn processed_block(pool: &mut InMemoryPool, slot: u64) {
-    pool.on_processed_block(HeaderId::from([0xAB; 32]), Slot::from(slot))
-        .await;
+    pool.on_processed_block(
+        HeaderId::from([0xAB; 32]),
+        Slot::from(slot),
+        Slot::genesis(),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1101,7 +1266,8 @@ async fn claim_with_unknown_anchor_waits_for_its_block() {
 
     // Once the anchor is processed its deadline resolves to slot 131, which
     // the chain already passed.
-    pool.on_processed_block(anchor, Slot::from(100u64)).await;
+    pool.on_processed_block(anchor, Slot::from(100u64), Slot::genesis())
+        .await;
     assert_eq!(pool.status(&[claim_id]), vec![Status::Unknown]);
 }
 
@@ -1152,7 +1318,8 @@ async fn failed_anchor_lookup_keeps_the_resolved_anchors() {
     processed_block(&mut pool, 1_000).await;
     assert_eq!(pool.status(&[failing_only_id]), vec![Status::Pending]);
 
-    pool.on_processed_block(failing, Slot::from(100u64)).await;
+    pool.on_processed_block(failing, Slot::from(100u64), Slot::genesis())
+        .await;
     assert_eq!(pool.status(&[failing_only_id]), vec![Status::Unknown]);
 }
 

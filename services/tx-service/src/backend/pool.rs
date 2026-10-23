@@ -71,7 +71,13 @@ where
 {
     /// Pending item keys mapped to their insertion timestamp in milliseconds.
     pub pending_items: IndexMap<Key, u64>,
+    /// Retired item keys not carried by a canonical block (inapplicable or
+    /// evicted), mapped to their retirement timestamp in milliseconds.
     pub removed_items: BTreeMap<Key, u64>,
+    /// Retired item keys carried by a canonical block that is not yet
+    /// immutable, mapped to the slot of that block.
+    #[serde(default)]
+    pub included_in_canonical: HashMap<Key, Slot>,
     pub last_item_timestamp: u64,
 }
 
@@ -83,18 +89,29 @@ where
     Item: Hashable<Hash: PrefixedKey>,
 {
     pending_items: IndexSet<ItemKey<Item>>,
-    /// Secondary index over [`Self::pending_items`] and
-    /// [`Self::removed_items`], keyed by the hash prefix a block proposal
-    /// would use to refer to a transaction. Retired transactions stay
-    /// indexed until their bodies are pruned, so a competing proposal that
-    /// references one still resolves.
+    /// Secondary index over [`Self::pending_items`],
+    /// [`Self::included_in_canonical`] and [`Self::removed_items`], keyed
+    /// by the hash prefix a block proposal would use to refer to a
+    /// transaction. Retired transactions stay indexed until their bodies
+    /// are deleted, so a competing proposal that references one still
+    /// resolves.
     ///
     /// Buckets are plain vectors: a 128-bit prefix cannot be made to collide at
     /// any feasible cost, so every one holds a single key in practice. A set
     /// would cost a hash table per bucket to deduplicate keys that are already
     /// unique.
     by_prefix: HashMap<<ItemKey<Item> as PrefixedKey>::Prefix, Vec<ItemKey<Item>>>,
+    /// Retired items not carried by a canonical block (inapplicable or
+    /// evicted), mapped to their retirement timestamp in milliseconds. They
+    /// keep their prefix index entry and body for a grace period after
+    /// retirement, unlike [`Self::included_in_canonical`], which keeps them
+    /// until the carrying block becomes immutable.
     removed_items: BTreeMap<ItemKey<Item>, u64>,
+    /// Retired items carried by a canonical block that is not yet immutable,
+    /// mapped to the slot of that block. They keep their prefix index entry
+    /// and body until the block becomes immutable, since until then a
+    /// competing block can carry them too.
+    included_in_canonical: HashMap<ItemKey<Item>, Slot>,
     last_item_timestamp: u64,
     evictor: Evictor<Item, BlockId>,
     storage_adapter: Storage,
@@ -112,6 +129,7 @@ where
             .field("pending_items", &self.pending_items)
             .field("by_prefix", &self.by_prefix)
             .field("removed_items", &self.removed_items)
+            .field("included_in_canonical", &self.included_in_canonical)
             .field("last_item_timestamp", &self.last_item_timestamp)
             .field("storage_adapter", &"<StorageAdapter>")
             .finish_non_exhaustive()
@@ -152,6 +170,7 @@ where
             pending_items: IndexSet::new(),
             by_prefix: HashMap::new(),
             removed_items: BTreeMap::new(),
+            included_in_canonical: HashMap::new(),
             last_item_timestamp: 0,
             evictor: Evictor::new(&settings),
             storage_adapter: storage,
@@ -187,6 +206,7 @@ where
             .map_err(|e| MempoolError::StorageError(format!("{e:?}")))?;
 
         self.removed_items.remove(&key);
+        self.included_in_canonical.remove(&key);
         self.index_by_prefix(&key);
         self.evictor.on_add(&key, &item, timestamp, &block_slots);
         self.pending_items.insert(key);
@@ -242,9 +262,9 @@ where
 
         self.retire(keys.iter().copied(), removed_at, "removed");
 
-        // Removals come from applied canonical blocks and from leaders
-        // dropping unselectable transactions, so they double as a trigger for
-        // eviction alongside processed-block notifications.
+        // Removals come from leaders dropping inapplicable transactions, so
+        // they double as a trigger for eviction alongside processed-block
+        // notifications.
         self.retire(
             self.evictor.select_evictions(removed_at),
             removed_at,
@@ -254,8 +274,31 @@ where
         metrics::mempool_transactions_pending(self.pending_items.len());
     }
 
-    async fn on_processed_block(&mut self, block_id: BlockId, slot: Slot) {
+    async fn retire_entered_canonical(&mut self, items: HashMap<Self::Key, Slot>) {
+        let mut count = 0usize;
+        for (key, slot) in items {
+            let was_pending = self.pending_items.shift_remove(&key);
+            let was_removed = self.removed_items.remove(&key).is_some();
+            let was_included = self.included_in_canonical.contains_key(&key);
+            if !was_pending && !was_removed && !was_included {
+                // The mempool never held the tx, so there is no body to retain.
+                continue;
+            }
+            if was_pending {
+                self.evictor.on_remove(&key);
+                count += 1;
+            }
+            self.included_in_canonical.insert(key, slot);
+        }
+
+        log_retired_items(count, "included", self.pending_items.len());
+        metrics::mempool_transactions_removed(count);
+        metrics::mempool_transactions_pending(self.pending_items.len());
+    }
+
+    async fn on_processed_block(&mut self, block_id: BlockId, slot: Slot, lib_slot: Slot) {
         self.prune_removed_items().await;
+        self.release_immutable(lib_slot).await;
 
         self.evictor.on_processed_block(&block_id, slot);
 
@@ -316,6 +359,7 @@ where
         PoolRecoveryState {
             pending_items: self.evictor.save(),
             removed_items: self.removed_items.clone(),
+            included_in_canonical: self.included_in_canonical.clone(),
             last_item_timestamp: self.last_item_timestamp,
         }
     }
@@ -327,8 +371,17 @@ where
     ) -> Self {
         // `by_prefix` is derived, so it is rebuilt rather than restored.
         let mut by_prefix: HashMap<<ItemKey<Item> as PrefixedKey>::Prefix, Vec<ItemKey<Item>>> =
-            HashMap::with_capacity(state.pending_items.len() + state.removed_items.len());
-        for key in state.pending_items.keys().chain(state.removed_items.keys()) {
+            HashMap::with_capacity(
+                state.pending_items.len()
+                    + state.removed_items.len()
+                    + state.included_in_canonical.len(),
+            );
+        for key in state
+            .pending_items
+            .keys()
+            .chain(state.removed_items.keys())
+            .chain(state.included_in_canonical.keys())
+        {
             let bucket = by_prefix.entry(key.key_prefix()).or_default();
             if !bucket.contains(key) {
                 bucket.push(*key);
@@ -339,6 +392,7 @@ where
             pending_items: state.pending_items.keys().copied().collect(),
             by_prefix,
             removed_items: state.removed_items,
+            included_in_canonical: state.included_in_canonical,
             last_item_timestamp: state.last_item_timestamp,
             evictor: Evictor::recover(&settings, state.pending_items),
             storage_adapter: storage,
@@ -401,8 +455,9 @@ where
         }
     }
 
-    /// The single exit for pending items: every removal — included in a
-    /// block or evicted — goes through here so the evictor stays in sync.
+    /// Retire pending items that are inapplicable or evicted, keeping the
+    /// evictor in sync. Items carried by a canonical block go through
+    /// `retire_entered_canonical` instead.
     ///
     /// A retired item keeps its prefix index entry, and its body, until
     /// [`Self::prune_removed_items`] drops both after the grace period.
@@ -462,18 +517,45 @@ where
             .map(|(key, _)| *key)
             .collect::<Vec<_>>();
 
-        if expired_keys.is_empty() {
+        if !self.delete_retained(&expired_keys).await {
             return;
         }
-
-        if let Err(e) = self.storage_adapter.remove_items(&expired_keys).await {
-            tracing::warn!(target: LOG_TARGET, "Failed to prune removed items from storage: {e:?}");
-            return;
-        }
-
         for key in expired_keys {
             self.removed_items.remove(&key);
-            self.unindex_by_prefix(&key);
+        }
+    }
+
+    /// Delete the bodies of retired `keys` and drop them from the prefix
+    /// index. Returns `false`, leaving everything in place, if storage fails.
+    async fn delete_retained(&mut self, keys: &[ItemKey<Item>]) -> bool {
+        if keys.is_empty() {
+            return true;
+        }
+        if let Err(e) = self.storage_adapter.remove_items(keys).await {
+            tracing::warn!(target: LOG_TARGET, "Failed to delete retired items from storage: {e:?}");
+            return false;
+        }
+        for key in keys {
+            self.unindex_by_prefix(key);
+        }
+        true
+    }
+
+    /// Release the items carried by blocks that became immutable, since no
+    /// competing block can carry them anymore.
+    async fn release_immutable(&mut self, lib_slot: Slot) {
+        let immutable_keys = self
+            .included_in_canonical
+            .iter()
+            .filter(|(_, slot)| **slot <= lib_slot)
+            .map(|(key, _)| *key)
+            .collect::<Vec<_>>();
+
+        if !self.delete_retained(&immutable_keys).await {
+            return;
+        }
+        for key in immutable_keys {
+            self.included_in_canonical.remove(&key);
         }
     }
 }

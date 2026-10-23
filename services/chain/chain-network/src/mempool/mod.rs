@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use lb_core::{
     header::HeaderId,
@@ -12,14 +14,21 @@ pub mod adapter;
 pub trait MempoolAdapter<Tx>: Send + Sync {
     async fn add_transaction(&self, tx: Tx) -> Result<(), overwatch::DynError>;
 
-    async fn remove_transactions(&self, ids: &[TxHash]) -> Result<(), overwatch::DynError>;
+    /// Retire the transactions carried by the blocks that entered the
+    /// canonical chain, each mapped to the slot of the block carrying it.
+    async fn retire_entered_canonical_transactions(
+        &self,
+        txs: HashMap<TxHash, Slot>,
+    ) -> Result<(), overwatch::DynError>;
 
-    /// Tell the mempool that `block_id`, at `slot`, has been processed. The
-    /// mempool has no other notion of chain time.
+    /// Tell the mempool that `block_id`, at `slot`, has been processed, and
+    /// that the latest immutable block is at `lib_slot`. The mempool has no
+    /// other notion of chain time.
     async fn notify_processed_block(
         &self,
         block_id: HeaderId,
         slot: Slot,
+        lib_slot: Slot,
     ) -> Result<(), overwatch::DynError>;
 
     /// The local transactions a single proposal reference could mean.
