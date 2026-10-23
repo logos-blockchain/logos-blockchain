@@ -574,7 +574,7 @@ where
         let sdp_ledger = ledger_state.mantle_ledger().sdp_ledger();
         let declaration = sdp_ledger.get_declaration(declaration_id)?;
         Some(BlendRewards {
-            reward_key: declaration.zk_id,
+            zk_id: declaration.zk_id,
             estimate: sdp_ledger.blend_reward_estimate(&declaration.provider_id),
         })
     }

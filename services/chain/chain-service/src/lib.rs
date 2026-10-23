@@ -270,8 +270,8 @@ pub struct CryptarchiaInfo {
 /// The Blend rewards of a declaration.
 #[derive(Debug, Clone)]
 pub struct BlendRewards {
-    /// The key the rewards are minted to.
-    pub reward_key: ZkPublicKey,
+    /// The declaration's `zk_id`. Rewards are minted to it.
+    pub zk_id: ZkPublicKey,
     /// `None` while no epoch is being paid out.
     pub estimate: Option<RewardEstimate>,
 }
