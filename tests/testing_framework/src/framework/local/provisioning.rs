@@ -767,6 +767,7 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
             backend: config::kms::serde::PreloadKmsBackendSettings {
                 keys: config.kms_config.backend.keys,
             },
+            ..config::kms::serde::Config::default()
         },
         // Mining defaults, auto-claim off: provisioned nodes claim on demand,
         // naming the destination key on each claim request.

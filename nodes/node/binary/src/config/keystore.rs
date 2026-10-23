@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
+use color_eyre::eyre::{Result, eyre};
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::{
     backend::preload::KeyId,
@@ -7,12 +8,19 @@ use lb_key_management_system_service::{
         Ed25519Key, Key, UnsecuredEd25519Key, UnsecuredZkKey, ZkKey, secured_key::SecuredKey as _,
     },
 };
+use lb_pow_service::ClaimTarget;
+use lb_utils::yaml::merge;
 use num_bigint::BigUint;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
+use serde_yaml::{Mapping, Value, to_value};
 use thiserror::Error;
 
 const WARNING: &str = "Do not share your secret keys";
+
+/// Balance, in tokens, the generated auto-claim target aims for before it
+/// stops being paid.
+const DEFAULT_POW_CLAIM_THRESHOLD: lb_core::mantle::Value = 2_000_000_000;
 
 #[derive(Serialize, Deserialize, Hash, Eq, PartialEq, Clone, Debug)]
 #[serde(transparent)]
@@ -68,6 +76,81 @@ pub struct Keystore {
 }
 
 impl Keystore {
+    pub fn load(path: &Path) -> Result<Self> {
+        let yaml = std::fs::read_to_string(path)
+            .map_err(|error| eyre!("Failed to read keystore {}: {error}", path.display()))?;
+        Ok(serde_yaml::from_str(&yaml)?)
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        Ok(std::fs::write(path, serde_yaml::to_string(self)?)?)
+    }
+
+    /// The user config values derived from the predefined keys, as a sparse
+    /// config mapping: the node identity, the key ids and public keys the
+    /// services need, and every key for the KMS.
+    pub fn config_values(&self) -> Result<Value> {
+        let (_, node_key) = self.get_ed25519(KeyTitle::NETWORK_SWARM)?;
+        let (blend_signing_key_id, _) = self.get_required(KeyTitle::BLEND_SIGNING)?;
+        let (blend_zk_key_id, _) = self.get_required(KeyTitle::BLEND_ZK)?;
+        let (_, leader_funding_key) = self.get_zk(KeyTitle::LEADER_FUNDING)?;
+        let (_, sdp_funding_key) = self.get_zk(KeyTitle::SDP_FUNDING)?;
+        let (voucher_master_key_id, _) = self.get_required(KeyTitle::VAUCHER_MASTER)?;
+        let (_, pow_claim_key) = self.get_zk(KeyTitle::POW_CLAIM)?;
+
+        let values = [
+            (
+                "network.backend.swarm.node_key",
+                to_value(hex::encode(node_key.as_bytes()))?,
+            ),
+            (
+                "blend.non_ephemeral_signing_key_id",
+                to_value(blend_signing_key_id)?,
+            ),
+            (
+                "blend.core.zk.secret_key_kms_id",
+                to_value(blend_zk_key_id)?,
+            ),
+            (
+                "cryptarchia.leader.wallet.funding_pk",
+                to_value(leader_funding_key.to_public_key())?,
+            ),
+            (
+                "sdp.wallet.funding_pk",
+                to_value(sdp_funding_key.to_public_key())?,
+            ),
+            (
+                "wallet.voucher_master_key_id",
+                to_value(voucher_master_key_id)?,
+            ),
+            (
+                "wallet.known_keys",
+                to_value(
+                    self.get_all_zk()
+                        .map(|(id, key)| (id, key.to_public_key()))
+                        .collect::<HashMap<_, _>>(),
+                )?,
+            ),
+            (
+                "kms.backend.keys",
+                to_value(self.get_all().collect::<HashMap<_, _>>())?,
+            ),
+            (
+                "pow.auto_claim.targets",
+                to_value([ClaimTarget {
+                    public_key: pow_claim_key.to_public_key(),
+                    threshold: DEFAULT_POW_CLAIM_THRESHOLD,
+                }])?,
+            ),
+        ];
+
+        let mut config = Value::Mapping(Mapping::new());
+        for (path, value) in values {
+            merge(&mut config, nested(path, value));
+        }
+        Ok(config)
+    }
+
     pub fn set(&mut self, name: impl Into<KeyTitle>, key: Key) {
         let key_name = name.into();
         self.public_keys.insert(key_name.clone(), key_id(&key));
@@ -79,6 +162,11 @@ impl Keystore {
         self.secret_keys
             .get_key_value(&name.into())
             .map(|(_, v)| (key_id(v), v))
+    }
+
+    fn get_required(&self, title: &str) -> Result<(KeyId, &Key), KeystoreError> {
+        self.get(title)
+            .ok_or_else(|| KeystoreError::NotFound(title.into()))
     }
 
     pub fn get_all(&self) -> impl Iterator<Item = (KeyId, &Key)> {
@@ -171,6 +259,12 @@ impl Default for Keystore {
 
         keystore
     }
+}
+
+fn nested(path: &str, value: Value) -> Value {
+    path.rsplit('.').fold(value, |value, key| {
+        Value::Mapping(Mapping::from_iter([(key.into(), value)]))
+    })
 }
 
 fn key_id(key: &Key) -> KeyId {

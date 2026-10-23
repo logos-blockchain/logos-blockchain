@@ -1,19 +1,19 @@
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 
+use lb_tracing::logging::local::RollingConfig;
 pub use lb_tracing::logging::local::{AppenderType, LogFormat};
-use lb_tracing::logging::local::{CompressionType, RetentionType, RollingConfig, RotationType};
 use lb_tracing_service::LoggerLayerSettings;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Layers {
     pub file: Option<FileConfig>,
     pub loki: Option<LokiConfig>,
     pub gelf: Option<GelfConfig>,
     pub otlp: Option<OtlpConfig>,
-    #[serde(default)]
     pub format: LogFormat,
     pub stdout: bool,
     pub stderr: bool,
@@ -21,19 +21,8 @@ pub struct Layers {
 
 impl Default for Layers {
     fn default() -> Self {
-        let now = time::OffsetDateTime::now_utc();
-        let date_prefix = now.unix_timestamp().to_string();
-
         Self {
-            file: Some(FileConfig {
-                directory: PathBuf::from("."),
-                prefix: Some(date_prefix.into()),
-                appender_type: AppenderType::Rolling(RollingConfig {
-                    rotation: RotationType::Hourly,
-                    retention: RetentionType::MaxFiles { max_files: 10 },
-                    compression: CompressionType::None,
-                }),
-            }),
+            file: Some(FileConfig::default()),
             stdout: true,
             stderr: false,
             loki: None,
@@ -101,9 +90,9 @@ pub struct FileConfig {
 impl Default for FileConfig {
     fn default() -> Self {
         Self {
-            directory: "./logs".into(),
+            directory: PathBuf::from("."),
             prefix: None,
-            appender_type: AppenderType::Simple,
+            appender_type: AppenderType::Rolling(RollingConfig::default()),
         }
     }
 }
