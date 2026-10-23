@@ -12,6 +12,9 @@ pub use policy::{EvictableTx, EvictionPolicy, PowClaimEvictionSettings};
 pub use pool::{DEFAULT_TX_TTL, Mempool, MempoolSettings, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
 
+/// Admission time of a transaction, as a Unix timestamp in milliseconds.
+pub type AdmissionTime = u64;
+
 #[derive(thiserror::Error, Debug)]
 pub enum MempoolError {
     #[error("Item already in mempool")]

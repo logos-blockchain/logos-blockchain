@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use super::Status;
 use crate::{
     backend::{
-        MemPool, MempoolError, RecoverableMempool,
+        AdmissionTime, MemPool, MempoolError, RecoverableMempool,
         evictor::Evictor,
         policy::{BlockSlots, EvictableTx as _, PowClaimEvictionSettings},
     },
@@ -69,8 +69,9 @@ pub struct PoolRecoveryState<Key>
 where
     Key: Hash + Eq + Ord,
 {
-    /// Pending item keys mapped to their insertion timestamp in milliseconds.
-    pub pending_items: IndexMap<Key, u64>,
+    /// Pending item keys mapped to their admission timestamp in milliseconds,
+    /// oldest first.
+    pub pending_items: IndexMap<Key, AdmissionTime>,
     /// Retired item keys not carried by a canonical block (inapplicable or
     /// evicted), mapped to their retirement timestamp in milliseconds.
     pub removed_items: BTreeMap<Key, u64>,
@@ -88,7 +89,9 @@ pub struct Mempool<BlockId, Item, Storage, RuntimeServiceId>
 where
     Item: Hashable<Hash: PrefixedKey>,
 {
-    pending_items: IndexSet<ItemKey<Item>>,
+    /// Pending items mapped to their admission timestamp in milliseconds,
+    /// oldest first.
+    pending_items: IndexMap<ItemKey<Item>, AdmissionTime>,
     /// Secondary index over [`Self::pending_items`],
     /// [`Self::included_in_canonical`] and [`Self::removed_items`], keyed
     /// by the hash prefix a block proposal would use to refer to a
@@ -167,7 +170,7 @@ where
 
     fn new(settings: Self::Settings, storage: Self::Storage) -> Self {
         Self {
-            pending_items: IndexSet::new(),
+            pending_items: IndexMap::new(),
             by_prefix: HashMap::new(),
             removed_items: BTreeMap::new(),
             included_in_canonical: HashMap::new(),
@@ -185,7 +188,7 @@ where
     ) -> Result<(), MempoolError> {
         self.prune_removed_items().await;
 
-        if self.pending_items.contains(&key) || self.included_in_canonical.contains_key(&key) {
+        if self.pending_items.contains_key(&key) || self.included_in_canonical.contains_key(&key) {
             return Err(MempoolError::ExistingItem);
         }
 
@@ -208,7 +211,7 @@ where
         self.removed_items.remove(&key);
         self.index_by_prefix(&key);
         self.evictor.on_add(&key, &item, timestamp, &block_slots);
-        self.pending_items.insert(key);
+        self.pending_items.insert(key, timestamp);
         self.last_item_timestamp = timestamp;
         tracing::debug!(
             target: LOG_TARGET,
@@ -227,7 +230,7 @@ where
         &self,
         _ancestor_hint: BlockId,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError> {
-        self.get_items_by_keys(self.pending_items.iter().copied())
+        self.get_items_by_keys(self.pending_items.keys().copied())
             .await
     }
 
@@ -265,7 +268,8 @@ where
         // they double as a trigger for eviction alongside processed-block
         // notifications.
         self.retire(
-            self.evictor.select_evictions(removed_at),
+            self.evictor
+                .select_evictions(removed_at, &self.pending_items),
             removed_at,
             "evicted",
         );
@@ -291,7 +295,7 @@ where
 
         let mut count = 0usize;
         for (key, slot) in entered {
-            let was_pending = self.pending_items.shift_remove(&key);
+            let was_pending = self.pending_items.shift_remove(&key).is_some();
             let was_removed = self.removed_items.remove(&key).is_some();
             let was_included = self.included_in_canonical.contains_key(&key);
             if !was_pending && !was_removed && !was_included {
@@ -332,7 +336,11 @@ where
         self.evictor.on_processed_block(&block_id, slot);
 
         let now = current_timestamp_millis();
-        self.retire(self.evictor.select_evictions(now), now, "evicted");
+        self.retire(
+            self.evictor.select_evictions(now, &self.pending_items),
+            now,
+            "evicted",
+        );
 
         metrics::mempool_transactions_pending(self.pending_items.len());
     }
@@ -349,7 +357,7 @@ where
         items
             .iter()
             .map(|key| {
-                if self.pending_items.contains(key) {
+                if self.pending_items.contains_key(key) {
                     Status::Pending
                 } else {
                     Status::Unknown
@@ -386,7 +394,7 @@ where
 
     fn save(&self) -> Self::RecoveryState {
         PoolRecoveryState {
-            pending_items: self.evictor.save(),
+            pending_items: self.pending_items.clone(),
             removed_items: self.removed_items.clone(),
             included_in_canonical: self.included_in_canonical.clone(),
             last_item_timestamp: self.last_item_timestamp,
@@ -418,12 +426,12 @@ where
         }
 
         Self {
-            pending_items: state.pending_items.keys().copied().collect(),
+            pending_items: state.pending_items,
             by_prefix,
             removed_items: state.removed_items,
             included_in_canonical: state.included_in_canonical,
             last_item_timestamp: state.last_item_timestamp,
-            evictor: Evictor::recover(&settings, state.pending_items),
+            evictor: Evictor::new(&settings),
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,
         }
@@ -496,7 +504,7 @@ where
     fn retire(&mut self, keys: impl IntoIterator<Item = ItemKey<Item>>, at: u64, cause: &str) {
         let mut count = 0usize;
         for key in keys {
-            if !self.pending_items.shift_remove(&key) {
+            if self.pending_items.shift_remove(&key).is_none() {
                 continue;
             }
             self.evictor.on_remove(&key);
