@@ -12,6 +12,7 @@ use core::fmt::Debug;
 use std::{fmt::Display, pin::Pin, time::Duration};
 
 use futures::{Stream, StreamExt as _, stream};
+use lb_blend_service::message::proposal_diagnostic_timestamp_unix_ms;
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
 use lb_chain_service::{
     Epoch,
@@ -54,7 +55,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{Level, error, info, instrument, span, trace};
+use tracing::{Level, debug, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
 use tx_selection::{TransactionSelection, select_transactions};
 
@@ -683,6 +684,14 @@ where
         let txs = txs_for_block(valid_tx_stream).await;
 
         let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
+        debug!(
+            target: LOG_TARGET,
+            event = "leader_proposal_created",
+            timestamp_unix_ms = proposal_diagnostic_timestamp_unix_ms(),
+            block_id = %block.header().id(),
+            slot = u64::from(block.header().slot()),
+            "Created local block proposal"
+        );
         if tracing::enabled!(Level::DEBUG) {
             log_sdp_activity_selected_for_proposal(&block, &ledger_state);
         }

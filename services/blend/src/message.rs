@@ -1,9 +1,14 @@
 use core::fmt::{self, Debug, Formatter};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use lb_binary_codec::{bincode::SerializeOp, canonical::BinaryEncode};
 pub use lb_blend::message::MAX_PAYLOAD_BODY_SIZE;
 use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
-use lb_core::{mantle::NoteId, sdp::Locator};
+use lb_core::{
+    crypto::{Digest as _, Hasher},
+    mantle::NoteId,
+    sdp::Locator,
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_sdp_service::SdpSubmission;
 use serde::{Deserialize, Serialize};
@@ -167,6 +172,24 @@ impl DataPayload {
     }
 }
 
+/// Produces a stable digest for the exact canonical proposal bytes carried by
+/// a [`DataPayload::BlockProposal`].
+#[must_use]
+pub fn proposal_diagnostic_digest_from_encoded(encoded_proposal: &[u8]) -> String {
+    hex::encode(Hasher::digest(encoded_proposal))
+}
+
+/// Returns a wall-clock timestamp for correlating proposal diagnostic events.
+#[must_use]
+pub fn proposal_diagnostic_timestamp_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use lb_utils::bounded::UpperBoundedVec;
@@ -184,6 +207,37 @@ mod tests {
             Err(ProposalNotBlendable::TooLarge { size, maximum })
                 if size == MAX_PAYLOAD_BODY_SIZE + 1 && maximum == MAX_PAYLOAD_BODY_SIZE
         ));
+    }
+
+    #[test]
+    fn proposal_diagnostic_digest_correlates_without_changing_payload_bytes() {
+        let proposal =
+            UpperBoundedVec::<u8, { MAX_PAYLOAD_BODY_SIZE }>::new_unchecked(vec![1, 2, 3, 4]);
+        let payload = DataPayload::try_from_proposal(&proposal).expect("proposal fits");
+        let encoded = payload.body().to_vec();
+
+        let submitted_digest = proposal_diagnostic_digest_from_encoded(&encoded);
+        let exit_digest = proposal_diagnostic_digest_from_encoded(payload.body());
+
+        assert_eq!(submitted_digest, exit_digest);
+        assert_eq!(submitted_digest.len(), 64);
+        assert!(
+            submitted_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        );
+        assert_eq!(payload.body(), encoded);
+    }
+
+    #[test]
+    fn different_proposal_bytes_have_different_diagnostic_digests() {
+        let first = [1, 2, 3];
+        let second = [1, 2, 4];
+
+        assert_ne!(
+            proposal_diagnostic_digest_from_encoded(&first),
+            proposal_diagnostic_digest_from_encoded(&second)
+        );
     }
 }
 

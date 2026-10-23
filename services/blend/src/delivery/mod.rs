@@ -44,6 +44,15 @@ pub async fn broadcast_undelivered_messages<Dispatcher, UndeliveredPayloads, Run
         undelivered.len()
     );
     join_all(undelivered.into_iter().map(|payload| {
+        if let DataPayload::BlockProposal(encoded_proposal) = &payload {
+            tracing::debug!(
+                target: LOG_TARGET,
+                event = "blend_proposal_fallback_broadcast",
+                timestamp_unix_ms = crate::message::proposal_diagnostic_timestamp_unix_ms(),
+                proposal_digest = %crate::message::proposal_diagnostic_digest_from_encoded(encoded_proposal),
+                "Blend delivery deadline expired; broadcasting original block proposal directly"
+            );
+        }
         metrics::data_payload_bypassed_blend(payload.payload_type());
         payload_dispatcher.dispatch(payload)
     }))
