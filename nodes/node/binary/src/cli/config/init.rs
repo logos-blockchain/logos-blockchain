@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, WrapErr as _};
 use lb_core::mantle::Value;
 use lb_pow_service::ClaimTarget;
 use libp2p::{Multiaddr, PeerId};
@@ -56,12 +56,23 @@ pub fn run(args: InitArgs) -> Result<()> {
     let user_config = build_user_config(&keystore, args)?;
 
     let user_config_yaml = serde_yaml::to_string(&user_config)?;
-    std::fs::write(&user_config_path, &user_config_yaml)?;
+    write_creating_parent_dirs(&user_config_path, &user_config_yaml, "user config")?;
 
     let keystore_yaml = serde_yaml::to_string(&keystore)?;
-    std::fs::write(&keystore_path, &keystore_yaml)?;
+    write_creating_parent_dirs(&keystore_path, &keystore_yaml, "keystore")?;
 
     Ok(())
+}
+
+/// Writes `contents` to `path`, creating any missing parent directories, and
+/// names the offending path if either step fails.
+fn write_creating_parent_dirs(path: &Path, contents: &str, description: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .wrap_err_with(|| format!("creating {description} directory {}", parent.display()))?;
+    }
+    std::fs::write(path, contents)
+        .wrap_err_with(|| format!("writing {description} to {}", path.display()))
 }
 
 /// # Errors
@@ -246,4 +257,47 @@ fn build_wallet_config(keystore: &Keystore) -> Result<WalletConfig, KeystoreErro
         .collect();
 
     Ok(wallet_config)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn init_args(output: PathBuf) -> InitArgs {
+        InitArgs {
+            output,
+            ..InitArgs::default()
+        }
+    }
+
+    #[test]
+    fn run_creates_missing_output_directories() {
+        let temp_dir = TempDir::new().unwrap();
+        let output_dir = temp_dir.path().join("missing").join("nested");
+        let output = output_dir.join("user_config.yaml");
+
+        run(init_args(output.clone())).unwrap();
+
+        assert!(output.is_file());
+        assert!(output_dir.join("keystore.yaml").is_file());
+    }
+
+    #[test]
+    fn run_error_names_the_unwritable_output_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocking_file = temp_dir.path().join("not_a_directory");
+        std::fs::write(&blocking_file, "").unwrap();
+        let output = blocking_file.join("user_config.yaml");
+
+        let error = run(init_args(output)).unwrap_err();
+
+        assert!(
+            format!("{error:?}").contains(&blocking_file.display().to_string()),
+            "error should name the offending path, got: {error:?}"
+        );
+    }
 }
