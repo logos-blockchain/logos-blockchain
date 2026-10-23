@@ -10,7 +10,7 @@ use core::{fmt::Debug, num::NonZeroUsize};
 use std::{fmt::Display, hash::Hash, time::Instant};
 
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
-use futures::{StreamExt as _, future::join_all};
+use futures::StreamExt as _;
 use lb_chain_service::{
     AppliedBlock,
     api::{ApiError, CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -1002,13 +1002,14 @@ where
         "block applied; reconciling mempool"
     );
 
-    // Retire txs of every block that entered the canonical chain.
-    if !newly_canonical_txs.is_empty()
+    // Retire txs of every block that entered the canonical chain, and let the
+    // mempool admit the reorged txs again.
+    if !(newly_canonical_txs.is_empty() && reorged_txs.is_empty())
         && let Err(err) = mempool
-            .retire_entered_canonical_transactions(newly_canonical_txs)
+            .notify_canonical_chain_updated(newly_canonical_txs, reorged_txs)
             .await
     {
-        error!(target: LOG_TARGET, err, "could not retire transactions in mempool");
+        error!(target: LOG_TARGET, err, "could not notify mempool of canonical chain update");
     }
 
     // Notify the mempool to trigger evictions and release txs whose block became
@@ -1019,17 +1020,6 @@ where
     {
         error!(target: LOG_TARGET, err, "could not notify mempool of processed block");
     }
-
-    // Re-insert reorged txs back into the mempool.
-    join_all(reorged_txs.into_iter().map(|tx| {
-        let mempool_adapter = mempool.clone();
-        async move {
-            if let Err(e) = mempool_adapter.add_transaction(tx).await {
-                error!(target: LOG_TARGET, "Could not reinsert a reorged tx into mempool: {e:?}");
-            }
-        }
-    }))
-    .await;
 
     Ok(())
 }
@@ -1150,15 +1140,12 @@ mod tests {
 
     #[async_trait::async_trait]
     impl MempoolAdapterTrait<HashOnlyTx> for FixedCandidates {
-        async fn add_transaction(&self, _tx: HashOnlyTx) -> Result<(), DynError> {
-            unimplemented!("resolution never adds")
-        }
-
-        async fn retire_entered_canonical_transactions(
+        async fn notify_canonical_chain_updated(
             &self,
-            _txs: HashMap<TxHash, Slot>,
+            _entered: HashMap<TxHash, Slot>,
+            _reorged: Vec<HashOnlyTx>,
         ) -> Result<(), DynError> {
-            unimplemented!("resolution never retires")
+            unimplemented!("resolution never changes the canonical chain")
         }
 
         async fn notify_processed_block(

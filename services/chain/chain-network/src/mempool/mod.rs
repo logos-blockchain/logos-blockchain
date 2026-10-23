@@ -12,13 +12,18 @@ pub mod adapter;
 
 #[async_trait]
 pub trait MempoolAdapter<Tx>: Send + Sync {
-    async fn add_transaction(&self, tx: Tx) -> Result<(), overwatch::DynError>;
-
-    /// Retire the transactions carried by the blocks that entered the
-    /// canonical chain, each mapped to the slot of the block carrying it.
-    async fn retire_entered_canonical_transactions(
+    /// Tell the mempool that the canonical chain was updated, either by growing
+    /// with a new block or by a reorg.
+    ///
+    /// - `entered`: txs carried by the blocks that entered the canonical chain,
+    ///   each mapped to the slot of the block carrying it.
+    /// - `reorged`: txs carried by the blocks that left the canonical chain and
+    ///   not by the blocks now in it, which the mempool admits again. Empty
+    ///   when the chain only grows.
+    async fn notify_canonical_chain_updated(
         &self,
-        txs: HashMap<TxHash, Slot>,
+        entered: HashMap<TxHash, Slot>,
+        reorged: Vec<Tx>,
     ) -> Result<(), overwatch::DynError>;
 
     /// Tell the mempool that `block_id`, at `slot`, has been processed, and

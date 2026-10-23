@@ -185,7 +185,7 @@ where
     ) -> Result<(), MempoolError> {
         self.prune_removed_items().await;
 
-        if self.pending_items.contains(&key) {
+        if self.pending_items.contains(&key) || self.included_in_canonical.contains_key(&key) {
             return Err(MempoolError::ExistingItem);
         }
 
@@ -206,7 +206,6 @@ where
             .map_err(|e| MempoolError::StorageError(format!("{e:?}")))?;
 
         self.removed_items.remove(&key);
-        self.included_in_canonical.remove(&key);
         self.index_by_prefix(&key);
         self.evictor.on_add(&key, &item, timestamp, &block_slots);
         self.pending_items.insert(key);
@@ -274,9 +273,24 @@ where
         metrics::mempool_transactions_pending(self.pending_items.len());
     }
 
-    async fn retire_entered_canonical(&mut self, items: HashMap<Self::Key, Slot>) {
+    async fn on_canonical_chain_updated(
+        &mut self,
+        entered: HashMap<Self::Key, Slot>,
+        reorged: Vec<Self::Item>,
+    ) -> Vec<Self::Item> {
+        // A reorged tx leaves `included_in_canonical` to be admitted again
+        // below. If its admission fails, it is retained in `removed_items`
+        // like any other retired tx.
+        let now = current_timestamp_millis();
+        for item in &reorged {
+            let key = item.hash();
+            if self.included_in_canonical.remove(&key).is_some() {
+                self.removed_items.insert(key, now);
+            }
+        }
+
         let mut count = 0usize;
-        for (key, slot) in items {
+        for (key, slot) in entered {
             let was_pending = self.pending_items.shift_remove(&key);
             let was_removed = self.removed_items.remove(&key).is_some();
             let was_included = self.included_in_canonical.contains_key(&key);
@@ -294,6 +308,21 @@ where
         log_retired_items(count, "included", self.pending_items.len());
         metrics::mempool_transactions_removed(count);
         metrics::mempool_transactions_pending(self.pending_items.len());
+
+        let mut readmitted = Vec::with_capacity(reorged.len());
+        for item in reorged {
+            match self.add_item(item.hash(), item.clone()).await {
+                Ok(()) => readmitted.push(item),
+                // Already pending: the pool didn't hold it when its block
+                // entered the canonical chain, and received it afterwards.
+                Err(MempoolError::ExistingItem) => {}
+                Err(error) => tracing::debug!(
+                    target: LOG_TARGET,
+                    "Could not admit a reorged item again: {error}"
+                ),
+            }
+        }
+        readmitted
     }
 
     async fn on_processed_block(&mut self, block_id: BlockId, slot: Slot, lib_slot: Slot) {
@@ -457,7 +486,7 @@ where
 
     /// Retire pending items that are inapplicable or evicted, keeping the
     /// evictor in sync. Items carried by a canonical block go through
-    /// `retire_entered_canonical` instead.
+    /// `on_canonical_chain_updated` instead.
     ///
     /// A retired item keeps its prefix index entry, and its body, until
     /// [`Self::prune_removed_items`] drops both after the grace period.

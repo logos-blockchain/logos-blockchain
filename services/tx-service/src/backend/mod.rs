@@ -73,10 +73,23 @@ pub trait MemPool {
     /// Retire the items that block building found inapplicable.
     async fn remove(&mut self, items: &[Self::Key]);
 
-    /// Retire the items carried by the blocks that entered the canonical
-    /// chain, each mapped to the slot of the block carrying it. They remain
-    /// available for reference resolution until that block becomes immutable.
-    async fn retire_entered_canonical(&mut self, items: HashMap<Self::Key, Slot>);
+    /// The canonical chain was updated, either by growing with a new block or
+    /// by a reorg.
+    ///
+    /// - `entered`: items carried by the blocks that entered the canonical
+    ///   chain, each mapped to the slot of the block carrying it. They are
+    ///   retired, and remain available for reference resolution until that
+    ///   block becomes immutable.
+    /// - `reorged`: items carried by the blocks that left the canonical chain
+    ///   and not by the blocks now in it. They are no longer retained as
+    ///   included, and are admitted again. Empty when the chain only grows.
+    ///
+    /// Returns the reorged items admitted again, for the caller to broadcast.
+    async fn on_canonical_chain_updated(
+        &mut self,
+        entered: HashMap<Self::Key, Slot>,
+        reorged: Vec<Self::Item>,
+    ) -> Vec<Self::Item>;
 
     /// The chain processed block `block_id` at `slot`, and its latest
     /// immutable block is at `lib_slot`. This is the pool's only notion of

@@ -43,10 +43,20 @@ where
     },
     /// Retire the items that block building found inapplicable.
     Remove { ids: Vec<Key> },
-    /// /// Retire the items carried by the blocks that entered the canonical
-    /// chain, each mapped to the slot of the block carrying it. They remain
-    /// available for reference resolution until that block becomes immutable.
-    RetireEnteredCanonical { txs: HashMap<Key, Slot> },
+    /// The canonical chain was updated, either by growing with a new block or
+    /// by a reorg.
+    ///
+    /// - `entered`: items carried by the blocks that entered the canonical
+    ///   chain, each mapped to the slot of the block carrying it. They are
+    ///   retired, and remain available for reference resolution until that
+    ///   block becomes immutable.
+    /// - `reorged`: items carried by the blocks that left the canonical chain
+    ///   and not by the blocks now in it. They are no longer retained as
+    ///   included, and are admitted again. Empty when the chain only grows.
+    CanonicalChainUpdated {
+        entered: HashMap<Key, Slot>,
+        reorged: Vec<Item>,
+    },
     /// The chain processed `block_id` at `slot`, and its latest immutable
     /// block is at `lib_slot`.
     ProcessedBlock {
@@ -86,9 +96,10 @@ where
             }
             Self::Add { payload, .. } => write!(f, "MempoolMsg::Add{{payload: {payload:?}}}"),
             Self::Remove { ids } => write!(f, "MempoolMsg::Prune{{ids: {ids:?}}}"),
-            Self::RetireEnteredCanonical { txs } => {
-                write!(f, "MempoolMsg::RetireEnteredCanonical{{txs: {txs:?}}}")
-            }
+            Self::CanonicalChainUpdated { entered, reorged } => write!(
+                f,
+                "MempoolMsg::CanonicalChainUpdated{{entered: {entered:?}, reorged: {reorged:?}}}"
+            ),
             Self::ProcessedBlock {
                 block_id,
                 slot,

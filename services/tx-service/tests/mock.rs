@@ -741,7 +741,7 @@ async fn included_tx_resolves_until_its_block_is_immutable() {
         .await
         .expect("tx should be added");
 
-    pool.retire_entered_canonical(HashMap::from([(tx_id, Slot::from(10u64))]))
+    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
         .await;
 
     assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
@@ -778,16 +778,98 @@ async fn reorged_tx_returns_to_pending() {
     pool.add_item(tx_id, tx.clone())
         .await
         .expect("tx should be added");
-    pool.retire_entered_canonical(HashMap::from([(tx_id, Slot::from(10u64))]))
+    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
         .await;
 
-    pool.add_item(tx_id, tx)
-        .await
-        .expect("a reorged tx should be admitted again");
+    let readmitted = pool
+        .on_canonical_chain_updated(HashMap::new(), vec![tx.clone()])
+        .await;
 
+    assert_eq!(readmitted, vec![tx]);
     assert_eq!(pool.status(&[tx_id]), vec![Status::Pending]);
     assert!(!pool.save().included_in_canonical.contains_key(&tx_id));
     assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
+}
+
+/// A reorged tx that is already pending stays pending, and is not returned as
+/// admitted again, so it isn't broadcast twice.
+#[tokio::test]
+async fn reorged_tx_already_pending_is_not_readmitted() {
+    let mut pool = InMemoryPool::new(
+        MempoolSettings::default(),
+        InMemoryStorageAdapter::default(),
+    );
+    let tx = tx("reorged");
+    let tx_id = tx.hash();
+    // The pool didn't hold the tx when its block entered the canonical chain.
+    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
+        .await;
+    pool.add_item(tx_id, tx.clone())
+        .await
+        .expect("tx should be added");
+
+    let readmitted = pool
+        .on_canonical_chain_updated(HashMap::new(), vec![tx])
+        .await;
+
+    assert_eq!(readmitted, vec![]);
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Pending]);
+    assert!(!pool.save().removed_items.contains_key(&tx_id));
+}
+
+/// A reorged tx that is not admitted again, here a claim that expired while
+/// its block was canonical, is retained in `removed_items`, so it stays
+/// resolvable for the grace period.
+#[tokio::test]
+async fn reorged_tx_not_admitted_again_moves_to_removed_items() {
+    let anchor = HeaderId::from([1u8; 32]);
+    let storage = InMemoryStorageAdapter::default().with_block(anchor, 100);
+    let mut pool = InMemoryPool::new(pow_claim_settings(), storage);
+    let claim = claim_tx(anchor);
+    let claim_id = claim.hash();
+    pool.add_item(claim_id, claim.clone())
+        .await
+        .expect("claim tx should be added");
+    pool.on_canonical_chain_updated(HashMap::from([(claim_id, Slot::from(105u64))]), vec![])
+        .await;
+    // The claim's deadline is slot 131.
+    processed_block(&mut pool, 131).await;
+
+    let readmitted = pool
+        .on_canonical_chain_updated(HashMap::new(), vec![claim])
+        .await;
+
+    assert_eq!(readmitted, vec![]);
+    let state = pool.save();
+    assert!(!state.included_in_canonical.contains_key(&claim_id));
+    assert!(state.removed_items.contains_key(&claim_id));
+    assert_eq!(keys_with_prefix(&pool, claim_id), vec![claim_id]);
+}
+
+/// A tx carried by a canonical block is a duplicate at admission, so gossiping
+/// it again doesn't return it to pending.
+#[tokio::test]
+async fn included_tx_is_a_duplicate_at_admission() {
+    let mut pool = InMemoryPool::new(
+        MempoolSettings::default(),
+        InMemoryStorageAdapter::default(),
+    );
+    let tx = tx("included");
+    let tx_id = tx.hash();
+    pool.add_item(tx_id, tx.clone())
+        .await
+        .expect("tx should be added");
+    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
+        .await;
+
+    let error = pool
+        .add_item(tx_id, tx)
+        .await
+        .expect_err("an included tx must be a duplicate");
+
+    assert!(matches!(error, MempoolError::ExistingItem));
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
+    assert!(pool.save().included_in_canonical.contains_key(&tx_id));
 }
 
 /// A tx retired earlier, e.g. as inapplicable, moves to `included_in_canonical`
@@ -803,7 +885,7 @@ async fn removed_tx_entering_the_canonical_chain_moves_to_included() {
     pool.add_item(tx_id, tx).await.expect("tx should be added");
     pool.remove(&[tx_id]).await;
 
-    pool.retire_entered_canonical(HashMap::from([(tx_id, Slot::from(10u64))]))
+    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
         .await;
 
     let state = pool.save();
@@ -826,10 +908,10 @@ async fn tx_carried_by_both_branches_takes_the_adopted_block_slot() {
     let tx = tx("carried by both branches");
     let tx_id = tx.hash();
     pool.add_item(tx_id, tx).await.expect("tx should be added");
-    pool.retire_entered_canonical(HashMap::from([(tx_id, Slot::from(10u64))]))
+    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
         .await;
 
-    pool.retire_entered_canonical(HashMap::from([(tx_id, Slot::from(12u64))]))
+    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(12u64))]), vec![])
         .await;
 
     assert_eq!(
@@ -848,7 +930,7 @@ async fn never_held_tx_entering_the_canonical_chain_is_not_retained() {
     );
     let tx_id = tx("unknown").hash();
 
-    pool.retire_entered_canonical(HashMap::from([(tx_id, Slot::from(10u64))]))
+    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
         .await;
 
     assert!(pool.save().included_in_canonical.is_empty());
@@ -865,7 +947,7 @@ async fn included_tx_remains_resolvable_after_recovery() {
     pool.add_item(tx_id, tx.clone())
         .await
         .expect("tx should be added");
-    pool.retire_entered_canonical(HashMap::from([(tx_id, Slot::from(10u64))]))
+    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
         .await;
 
     let pool = InMemoryPool::recover(MempoolSettings::default(), pool.save(), storage);
