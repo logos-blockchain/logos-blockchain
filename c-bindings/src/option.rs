@@ -3,6 +3,7 @@
 /// Value is not guaranteed.
 /// You should check `is_some` before accessing the value.
 #[repr(C)]
+#[derive(Default)]
 pub struct FfiOption<Value> {
     pub is_some: bool,
     pub value: Value,
